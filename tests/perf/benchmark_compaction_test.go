@@ -28,8 +28,14 @@ func compactionTurnText(i int) string {
 }
 
 // sampleRSS returns the current heap in-use bytes from runtime.MemStats.
-// It calls runtime.GC() first to stabilize the reading by clearing unreachable objects.
+// It calls runtime.GC() twice to stabilize the reading: the first pass
+// promotes finalizer-queued objects and clears reachable garbage, and the
+// second pass collects the floating garbage released by the first. Using
+// HeapInuse from MemStats is more deterministic than OS-level RSS because it
+// measures the Go allocator's view of live heap, which is unaffected by OS
+// memory-overcommit and GC-scheduling jitter.
 func sampleRSS() uint64 {
+	runtime.GC()
 	runtime.GC()
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)

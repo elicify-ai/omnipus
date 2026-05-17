@@ -8,6 +8,29 @@ defaults:
     shell: bash
 
 jobs:
+  typecheck:
+    name: TypeScript Type Check
+    # Runs `tsc -b --noEmit` (project-references build mode) against the repo
+    # root. Note: `tsc --noEmit` (without -b) silently no-ops on a
+    # project-references root (no "include"/"files") and always exits 0. The
+    # `-b` flag is required to actually type-check the referenced sub-projects.
+    # See F6 in the Phase 7 review findings.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run TypeScript type check
+        run: npm run typecheck
+
   wire-types-lint:
     name: Wire-Types Lint
     # Enforces hard-constraint #8 (CLAUDE.md contract-first rule): every wire-

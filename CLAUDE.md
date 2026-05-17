@@ -175,6 +175,29 @@ The lead (you) orchestrates all work by spawning specialized subagents via the A
 - Re-run failed reviews after fixes
 - Only create PR when all reviews pass
 
+## Quality Gates
+
+Before reporting any work done, subagents and the lead must verify all applicable gates pass:
+
+```bash
+# Backend
+export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH
+gofmt -l . | wc -l                                          # must be 0
+golangci-lint run --build-tags=goolm,stdjson                # exit 0
+CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 ./...    # exit 0
+CGO_ENABLED=1 go build -tags goolm,stdjson ./...            # exit 0
+govulncheck ./...                                           # 0 vulnerabilities
+
+# Frontend
+npm run typecheck     # tsc -b --noEmit — exits 0 (see WARNING below)
+npx vitest run        # exit 0
+
+# Contracts
+make verify-contracts  # exit 0
+```
+
+**WARNING — TypeScript typecheck trap.** `tsconfig.json` is a project-references root with no `include`/`files` entries. Running `tsc --noEmit` (without `-b`) is a **silent no-op** — it always exits 0 even when referenced sub-projects have type errors. The correct command is `tsc -b --noEmit`. Use `npm run typecheck` which is wired to the correct command.
+
 ## Build & E2E Testing
 
 ### SPA Embed Pipeline

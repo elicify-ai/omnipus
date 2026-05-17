@@ -21,7 +21,8 @@
     "build": "tsc -b && vite build",
     "build:lib": "tsc -b && vite build --config vite.lib.config.ts",
     "preview": "vite preview",
-    "type-check": "tsc --noEmit",
+    "typecheck": "tsc -b --noEmit",
+    "type-check": "tsc -b --noEmit",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui"

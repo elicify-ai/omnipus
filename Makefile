@@ -341,8 +341,11 @@ gen-contracts:
 lint-wire-types:
 	bash scripts/check-no-handwritten-wire-types.sh
 
-## verify-contracts: Regenerate contracts, run wire-type lint, fail if anything has drifted
+## verify-contracts: Regenerate contracts, run wire-type lint, typecheck TS, fail if anything has drifted
+# Note: `tsc --noEmit` (without -b) is a silent no-op on a project-references
+# root. Always use `tsc -b --noEmit` here and in CI. See F6 / npm run typecheck.
 verify-contracts: gen-contracts lint-wire-types
+	npx tsc -b --noEmit
 	git diff --exit-code -- contracts/ pkg/api/generated/ src/lib/api/generated/
 
 ## help: Show this help message
