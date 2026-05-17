@@ -73,9 +73,9 @@ beforeEach(() => {
     { id: 'mcp-2', name: 'github', transport: 'stdio', status: 'disconnected', tool_count: 0 },
   ])
   vi.mocked(fetchTools).mockResolvedValue([
-    { name: 'exec', category: 'system', description: 'Execute shell commands' },
-    { name: 'web_search', category: 'web', description: 'Search the web' },
-    { name: 'file.read', category: 'fs', description: 'Read a file' },
+    { name: 'exec', scope: 'system', category: 'system', description: 'Execute shell commands', source: 'builtin' },
+    { name: 'web_search', scope: 'general', category: 'web', description: 'Search the web', source: 'builtin' },
+    { name: 'file.read', scope: 'general', category: 'fs', description: 'Read a file', source: 'builtin' },
   ])
   vi.mocked(fetchChannels).mockResolvedValue([])
 })

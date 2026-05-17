@@ -179,8 +179,10 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
   it('Tool mock shape satisfies interface', () => {
     const mock = {
       name: 'system.read_file',
+      scope: 'system' as const,
       category: 'system',
       description: 'Read a file',
+      source: 'builtin' as const,
     } satisfies Tool
 
     expect(mock.category).toBe('system')
@@ -190,10 +192,11 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
 
   it('Channel mock shape satisfies interface', () => {
     const mock = {
-      id: 'webchat',
+      id: 'webchat' as const,
       name: 'Web Chat',
-      transport: 'websocket',
+      transport: 'websocket' as const,
       enabled: true,
+      description: 'Built-in browser chat',
     } satisfies Channel
 
     expect(mock.enabled).toBe(true)

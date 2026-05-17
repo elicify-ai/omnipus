@@ -849,7 +849,7 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
         <AccordionItem value="tools" className="border-0">
             <AccordionTrigger className="px-4 font-headline font-bold text-sm">
               <span>Tools &amp; Permissions</span>
-              {toolsCfg.builtin.policies && Object.keys(toolsCfg.builtin.policies).length > 0 && (
+              {toolsCfg.builtin?.policies && Object.keys(toolsCfg.builtin.policies).length > 0 && (
                 <span className="text-xs text-[var(--color-muted)] font-normal ml-2">
                   {Object.keys(toolsCfg.builtin.policies).length} overrides
                 </span>

@@ -172,6 +172,32 @@ components:
       $ref: ./components/schemas/UploadedFile.yaml
     SandboxConfigUpdate:
       $ref: ./components/schemas/SandboxConfigUpdate.yaml
+    Task:
+      $ref: ./components/schemas/Task.yaml
+    McpServer:
+      $ref: ./components/schemas/McpServer.yaml
+    McpServerCreate:
+      $ref: ./components/schemas/McpServerCreate.yaml
+    AppState:
+      $ref: ./components/schemas/AppState.yaml
+    ValidateTokenResponse:
+      $ref: ./components/schemas/ValidateTokenResponse.yaml
+    DoctorIssue:
+      $ref: ./components/schemas/DoctorIssue.yaml
+    DoctorResult:
+      $ref: ./components/schemas/DoctorResult.yaml
+    DevicePending:
+      $ref: ./components/schemas/DevicePending.yaml
+    DevicePaired:
+      $ref: ./components/schemas/DevicePaired.yaml
+    DevicesResponse:
+      $ref: ./components/schemas/DevicesResponse.yaml
+    BackupEntry:
+      $ref: ./components/schemas/BackupEntry.yaml
+    StorageStats:
+      $ref: ./components/schemas/StorageStats.yaml
+    MeInfo:
+      $ref: ./components/schemas/MeInfo.yaml
   responses:
     400BadRequest:
       description: "Bad request \u2014 missing or invalid field."
@@ -296,20 +322,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - username
-                - role
-                properties:
-                  username:
-                    type: string
-                    example: admin
-                  role:
-                    type: string
-                    enum:
-                    - admin
-                    - user
-                    example: admin
+                $ref: '#/components/schemas/ValidateTokenResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '429':
@@ -2800,7 +2813,7 @@ paths:
     get:
       operationId: getStorageStats
       summary: Get storage statistics
-      description: 'Returns session count and workspace size. May include partial warnings if some agent stores could not be read.
+      description: 'Returns session count, workspace size, and memory entry count. May include partial warnings if some agent stores could not be read.
 
         '
       tags:
@@ -2811,27 +2824,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - session_count
-                - workspace_size_bytes
-                properties:
-                  session_count:
-                    type: integer
-                    minimum: 0
-                    example: 42
-                  workspace_size_bytes:
-                    type: integer
-                    format: int64
-                    minimum: 0
-                    example: 52428800
-                  warnings:
-                    type: array
-                    items:
-                      type: string
-                    description: 'Non-fatal errors encountered while collecting stats.
-
-                      '
+                $ref: '#/components/schemas/StorageStats'
         '405':
           description: Method not allowed.
           content:
@@ -3037,5 +3030,425 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /state:
+    get:
+      operationId: getAppState
+      summary: Get application state
+      description: >
+        Returns onboarding status and optional diagnostic metadata.
+        Available to all authenticated users.
+      tags:
+      - Settings
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Application state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppState'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    patch:
+      operationId: patchAppState
+      summary: Update application state
+      description: >
+        Partial update to application state. Currently only supports marking
+        onboarding complete. CSRF-protected.
+      tags:
+      - Settings
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                onboarding_complete:
+                  type: boolean
+                  description: Mark onboarding as complete.
+                  example: true
+      responses:
+        '200':
+          description: State updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppState'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /me:
+    get:
+      operationId: getMe
+      summary: Get current user info
+      description: Returns the authenticated user's RBAC role. Used for SPA gating.
+      tags:
+      - auth
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Current user information.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeInfo'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /doctor:
+    get:
+      operationId: getDoctorResults
+      summary: Get health check results
+      description: >
+        Returns the most recent health check results. Returns null when no
+        health check has been run yet.
+      tags:
+      - Settings
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Health check results, or an empty object when no check has been run yet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DoctorResult'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    post:
+      operationId: runDoctor
+      summary: Run health check
+      description: Runs a fresh health check and returns the results.
+      tags:
+      - Settings
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Health check results.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DoctorResult'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /devices:
+    get:
+      operationId: listDevices
+      summary: List devices
+      description: >
+        Returns pending pairing requests and already-paired devices.
+        Admin-only.
+      tags:
+      - Settings
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Devices response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DevicesResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+  /tasks:
+    get:
+      operationId: listTasks
+      summary: List tasks
+      description: Returns all tasks, optionally filtered by status. Admin-only.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - queued
+            - assigned
+            - running
+            - completed
+            - failed
+        description: Filter tasks by status.
+      responses:
+        '200':
+          description: Array of tasks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    post:
+      operationId: createTask
+      summary: Create a task
+      description: Creates a new task. Admin-only.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - title
+                - prompt
+              properties:
+                title:
+                  type: string
+                  description: Task title.
+                  example: "Analyze logs"
+                prompt:
+                  type: string
+                  description: Task description / prompt for the agent.
+                  example: "Summarize the last 7 days of gateway logs."
+                agent_id:
+                  type: string
+                  description: Agent to assign the task to.
+                  example: "jim"
+                priority:
+                  type: integer
+                  minimum: 0
+                  description: Task priority (higher = more urgent).
+                  example: 5
+                parent_task_id:
+                  type: string
+                  description: Parent task ID (for creating subtasks).
+      responses:
+        '200':
+          description: Created task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /tasks/{id}:
+    put:
+      operationId: updateTask
+      summary: Update a task
+      description: Updates task fields. Admin-only.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Task'
+      responses:
+        '200':
+          description: Updated task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      operationId: deleteTask
+      summary: Delete a task
+      description: Deletes a task by ID. Admin-only.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '204':
+          description: Task deleted.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /tasks/{id}/subtasks:
+    get:
+      operationId: listSubtasks
+      summary: List subtasks
+      description: Returns all subtasks for a given parent task. Admin-only.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Parent task ID.
+      responses:
+        '200':
+          description: Array of subtasks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /tasks/{id}/start:
+    post:
+      operationId: startTask
+      summary: Start a task
+      description: Assigns and starts a queued task. Admin-only.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '200':
+          description: Task started.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /mcp-servers:
+    get:
+      operationId: listMcpServers
+      summary: List MCP servers
+      description: Returns all configured MCP servers and their connection status.
+      tags:
+      - Tools
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Array of MCP server entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/McpServer'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    post:
+      operationId: addMcpServer
+      summary: Add an MCP server
+      description: Adds a new MCP server to the gateway config. Admin-only.
+      tags:
+      - Tools
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpServerCreate'
+      responses:
+        '200':
+          description: Created MCP server entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpServer'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /mcp-servers/{id}:
+    delete:
+      operationId: deleteMcpServer
+      summary: Delete an MCP server
+      description: Removes an MCP server from the gateway config. Admin-only.
+      tags:
+      - Tools
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: MCP server ID.
+      responses:
+        '204':
+          description: MCP server deleted.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /mcp-servers/{id}/tools:
+    get:
+      operationId: listMcpServerTools
+      summary: List tools for an MCP server
+      description: Returns the list of tool names exposed by a specific MCP server.
+      tags:
+      - Tools
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: MCP server ID.
+      responses:
+        '200':
+          description: Array of tool names.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+                example:
+                  - "search"
+                  - "fetch"
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
 security:
 - BearerAuth: []

@@ -1,0 +1,27 @@
+title: DoctorResult
+description: >
+  Health-check result returned by GET /api/v1/doctor and POST /api/v1/doctor.
+  Contains an overall score and a list of individual findings.
+type: object
+required:
+  - score
+  - issues
+  - checked_at
+properties:
+  score:
+    type: number
+    format: double
+    minimum: 0
+    maximum: 100
+    description: Overall health score (0 = critical issues; 100 = fully healthy).
+    example: 85.0
+  issues:
+    type: array
+    items:
+      $ref: './DoctorIssue.yaml'
+    description: List of health-check findings. Empty when score is 100.
+  checked_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp when this health check was run.
+    example: "2026-05-16T10:00:00Z"

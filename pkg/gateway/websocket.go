@@ -110,7 +110,7 @@ type wsServerFrame struct { // not-wire-format
 }
 
 // wsMediaPart represents a single media attachment in a "media" WebSocket frame.
-type wsMediaPart struct {
+type wsMediaPart struct { // not-wire-format: embedded inside wsServerFrame which is // not-wire-format; never marshaled as a standalone response
 	Type        string `json:"type"`         // "image" | "audio" | "video" | "file"
 	URL         string `json:"url"`          // /api/v1/media/{ref}
 	Filename    string `json:"filename"`     // original filename

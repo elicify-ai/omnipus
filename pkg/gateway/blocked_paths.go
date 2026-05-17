@@ -18,6 +18,8 @@ import "github.com/dapicom-ai/omnipus/pkg/config"
 //
 // and win the whole deployment, because "gateway.users" is one level below
 // the "gateway" top-level key that the flat map guarded.
+//
+//nolint:unused // used in rest.go (!cgo build); lint with goolm,stdjson excludes !cgo files
 var blockedPaths = []config.ConfigKey{
 	"sandbox",
 	"credentials",
@@ -46,6 +48,8 @@ var blockedPaths = []config.ConfigKey{
 // path exactly. A blocked path with ancestors (e.g. "gateway.users") also
 // matches when the request nests the ancestor and sets the leaf
 // (body["gateway"]["users"]).
+//
+//nolint:unused // used in rest.go (!cgo build); lint with goolm,stdjson excludes !cgo files
 func matchBlockedPath(body map[string]any, blocked []config.ConfigKey) (string, bool) {
 	if len(body) == 0 || len(blocked) == 0 {
 		return "", false
@@ -66,6 +70,8 @@ func matchBlockedPath(body map[string]any, blocked []config.ConfigKey) (string, 
 // Each leaf and each intermediate map key contributes a path. Keys that
 // themselves contain dots (dot-path literals) are treated as already-dotted
 // paths and are merged with any prefix from their ancestors.
+//
+//nolint:unused // used in matchBlockedPath; rest.go (!cgo build) is excluded by lint with goolm,stdjson
 func collectPaths(body map[string]any) map[string]struct{} {
 	out := make(map[string]struct{})
 	var walk func(prefix string, v any)

@@ -1,0 +1,41 @@
+title: AppState
+description: >
+  Application state returned by GET /api/v1/state. Reflects whether onboarding
+  has been completed and optional diagnostic metadata.
+type: object
+required:
+  - onboarding_complete
+properties:
+  onboarding_complete:
+    type: boolean
+    description: Whether the first-run onboarding wizard has been completed.
+    example: true
+  last_doctor_run:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp of the last health-check run. Absent if never run.
+    example: "2026-05-16T10:00:00Z"
+  last_doctor_score:
+    type: number
+    format: double
+    description: Score from the last health-check run (0–100). Absent if never run.
+    example: 85.0
+  god_mode_available:
+    type: boolean
+    description: >
+      True when the sandbox mode is "off" (no kernel enforcement). Indicates
+      the gateway is running without sandbox protection.
+    example: false
+  god_mode_opted_in:
+    type: boolean
+    description: >
+      True when the operator has explicitly opted into god mode (sandbox=off).
+      Distinct from god_mode_available to allow UI differentiation.
+    example: false
+  dev_mode_bypass:
+    type: boolean
+    description: >
+      True when gateway.dev_mode_bypass is enabled. Read-only — cannot be set
+      via this endpoint. The SPA uses this to hide controls that are inoperative
+      when bypass is active.
+    example: false

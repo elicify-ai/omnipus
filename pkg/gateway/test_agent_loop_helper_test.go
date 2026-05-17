@@ -22,6 +22,8 @@ import (
 // dir during teardown and TempDir's RemoveAll fails with
 // "directory not empty", causing flaky failures under -count=N or parallel
 // package runs.
+//
+//nolint:unused // called from rest_test.go (!cgo build); lint with goolm,stdjson excludes !cgo test files
 func mustAgentLoop(
 	t *testing.T,
 	cfg *config.Config,

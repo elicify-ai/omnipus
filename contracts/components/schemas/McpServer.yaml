@@ -1,0 +1,50 @@
+title: McpServer
+description: >
+  An MCP server entry as returned by GET /mcp-servers and POST /mcp-servers.
+type: object
+required:
+  - id
+  - name
+  - transport
+  - status
+  - tool_count
+properties:
+  id:
+    type: string
+    description: Unique MCP server identifier.
+    example: "my-mcp-server"
+  name:
+    type: string
+    description: Human-readable server name.
+    example: "My MCP Server"
+  transport:
+    type: string
+    enum:
+      - stdio
+      - sse
+      - websocket
+    description: Transport mechanism used by this MCP server.
+    example: "stdio"
+  status:
+    type: string
+    enum:
+      - connected
+      - disconnected
+      - error
+    description: Current connection status of the MCP server.
+    example: "connected"
+  tool_count:
+    type: integer
+    minimum: 0
+    description: Number of tools exposed by this server.
+    example: 5
+  tools:
+    type: array
+    items:
+      type: string
+    description: >
+      List of tool names exposed by this server. Absent when tool_count is 0
+      or when the server has not yet enumerated its tools.
+    example:
+      - "search"
+      - "fetch"

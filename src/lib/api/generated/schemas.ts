@@ -146,6 +146,40 @@ type AgentCreateRequest = {
   icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
 };
+type DoctorResult = {
+  score: number;
+  issues: Array<DoctorIssue>;
+  checked_at: string;
+};
+type DoctorIssue = {
+  id: string;
+  severity: "high" | "medium" | "low";
+  title: string;
+  description: string;
+  recommendation: string;
+  action_link?: string | undefined;
+  action_label?: string | undefined;
+};
+type DevicesResponse = {
+  pending: Array<DevicePending>;
+  paired: Array<DevicePaired>;
+};
+type DevicePending = {
+  device_id: string;
+  fingerprint: string;
+  pairing_code: string;
+  device_name: string;
+  created_at: string;
+  expires_at: string;
+};
+type DevicePaired = {
+  device_id: string;
+  fingerprint: string;
+  device_name: string;
+  paired_at: string;
+  last_seen_at: string;
+  status: "active" | "revoked";
+};
 
 export const LoginRequest = z
   .object({ username: z.string().min(1), password: z.string().min(1) })
@@ -164,6 +198,9 @@ export const ErrorResponse = z
     code: z.string().optional(),
     details: z.object({}).partial().passthrough().optional(),
   })
+  .passthrough();
+export const ValidateTokenResponse = z
+  .object({ username: z.string(), role: z.enum(["admin", "user"]) })
   .passthrough();
 export const RegisterAdminRequest = z
   .object({
@@ -724,6 +761,15 @@ export const PendingRestartEntry = z
 export const setCredential_Body = z
   .object({ key: z.string(), value: z.string() })
   .passthrough();
+export const StorageStats = z
+  .object({
+    workspace_size_bytes: z.number().int().gte(0),
+    session_count: z.number().int().gte(0),
+    memory_entry_count: z.number().int().gte(0),
+    oldest_session_date: z.string().datetime({ offset: true }).optional(),
+    warnings: z.array(z.string()).optional(),
+  })
+  .passthrough();
 export const GatewayStatus = z
   .object({
     online: z.boolean(),
@@ -778,6 +824,107 @@ export const UploadedFile = z
     content_type: z.string(),
   })
   .passthrough();
+export const AppState = z
+  .object({
+    onboarding_complete: z.boolean(),
+    last_doctor_run: z.string().datetime({ offset: true }).optional(),
+    last_doctor_score: z.number().optional(),
+    god_mode_available: z.boolean().optional(),
+    god_mode_opted_in: z.boolean().optional(),
+    dev_mode_bypass: z.boolean().optional(),
+  })
+  .passthrough();
+export const MeInfo = z
+  .object({ role: z.enum(["admin", "user"]) })
+  .passthrough();
+export const DoctorIssue: z.ZodType<DoctorIssue> = z
+  .object({
+    id: z.string(),
+    severity: z.enum(["high", "medium", "low"]),
+    title: z.string(),
+    description: z.string(),
+    recommendation: z.string(),
+    action_link: z.string().optional(),
+    action_label: z.string().optional(),
+  })
+  .passthrough();
+export const DoctorResult: z.ZodType<DoctorResult> = z
+  .object({
+    score: z.number().gte(0).lte(100),
+    issues: z.array(DoctorIssue),
+    checked_at: z.string().datetime({ offset: true }),
+  })
+  .passthrough();
+export const DevicePending: z.ZodType<DevicePending> = z
+  .object({
+    device_id: z.string(),
+    fingerprint: z.string(),
+    pairing_code: z.string(),
+    device_name: z.string(),
+    created_at: z.string().datetime({ offset: true }),
+    expires_at: z.string().datetime({ offset: true }),
+  })
+  .passthrough();
+export const DevicePaired: z.ZodType<DevicePaired> = z
+  .object({
+    device_id: z.string(),
+    fingerprint: z.string(),
+    device_name: z.string(),
+    paired_at: z.string().datetime({ offset: true }),
+    last_seen_at: z.string().datetime({ offset: true }),
+    status: z.enum(["active", "revoked"]),
+  })
+  .passthrough();
+export const DevicesResponse: z.ZodType<DevicesResponse> = z
+  .object({ pending: z.array(DevicePending), paired: z.array(DevicePaired) })
+  .passthrough();
+export const Task = z
+  .object({
+    id: z.string(),
+    title: z.string(),
+    prompt: z.string(),
+    agent_id: z.string().optional(),
+    agent_name: z.string().optional(),
+    created_by: z.string().optional(),
+    parent_task_id: z.string().optional(),
+    priority: z.number().int().gte(0),
+    status: z.enum(["queued", "assigned", "running", "completed", "failed"]),
+    result: z.string().optional(),
+    artifacts: z.array(z.string()).optional(),
+    session_id: z.string().optional(),
+    trigger_type: z.enum(["manual", "time", "event"]),
+    created_at: z.string().datetime({ offset: true }).optional(),
+    started_at: z.string().datetime({ offset: true }).optional(),
+    completed_at: z.string().datetime({ offset: true }).optional(),
+  })
+  .passthrough();
+export const createTask_Body = z
+  .object({
+    title: z.string(),
+    prompt: z.string(),
+    agent_id: z.string().optional(),
+    priority: z.number().int().gte(0).optional(),
+    parent_task_id: z.string().optional(),
+  })
+  .passthrough();
+export const McpServer = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    transport: z.enum(["stdio", "sse", "websocket"]),
+    status: z.enum(["connected", "disconnected", "error"]),
+    tool_count: z.number().int().gte(0),
+    tools: z.array(z.string()).optional(),
+  })
+  .passthrough();
+export const McpServerCreate = z
+  .object({
+    name: z.string(),
+    command: z.string(),
+    args: z.array(z.string()).optional(),
+    transport: z.enum(["stdio", "sse", "websocket"]),
+  })
+  .passthrough();
 export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
   LoginResponse;
 export const AgentSession = z
@@ -808,6 +955,13 @@ export const RateLimitConfig = z
     max_agent_tool_calls_per_minute: z.number().int().gte(0),
   })
   .partial()
+  .passthrough();
+export const BackupEntry = z
+  .object({
+    filename: z.string(),
+    size_bytes: z.number().int().gte(0),
+    created_at: z.string().datetime({ offset: true }),
+  })
   .passthrough();
 
 const endpoints = makeApi([
@@ -1296,9 +1450,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     description: `Returns the authenticated user&#x27;s username and role when the token is valid. Rate-limited: 30 requests per IP per minute.
 `,
     requestFormat: "json",
-    response: z
-      .object({ username: z.string(), role: z.enum(["admin", "user"]) })
-      .passthrough(),
+    response: ValidateTokenResponse,
     errors: [
       {
         status: 401,
@@ -1602,6 +1754,58 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "get",
+    path: "/devices",
+    alias: "listDevices",
+    description: `Returns pending pairing requests and already-paired devices. Admin-only.
+`,
+    requestFormat: "json",
+    response: DevicesResponse,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/doctor",
+    alias: "getDoctorResults",
+    description: `Returns the most recent health check results. Returns null when no health check has been run yet.
+`,
+    requestFormat: "json",
+    response: DoctorResult,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/doctor",
+    alias: "runDoctor",
+    description: `Runs a fresh health check and returns the results.`,
+    requestFormat: "json",
+    response: DoctorResult,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/health",
     alias: "getHealth",
     description: `Returns HTTP 200 when the gateway is running. No authentication required.
@@ -1612,6 +1816,117 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Not used — gateway is always healthy or not reachable.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/mcp-servers",
+    alias: "listMcpServers",
+    description: `Returns all configured MCP servers and their connection status.`,
+    requestFormat: "json",
+    response: z.array(McpServer),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/mcp-servers",
+    alias: "addMcpServer",
+    description: `Adds a new MCP server to the gateway config. Admin-only.`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: McpServerCreate,
+      },
+    ],
+    response: McpServer,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/mcp-servers/:id",
+    alias: "deleteMcpServer",
+    description: `Removes an MCP server from the gateway config. Admin-only.`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/mcp-servers/:id/tools",
+    alias: "listMcpServerTools",
+    description: `Returns the list of tool names exposed by a specific MCP server.`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(z.string()),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/me",
+    alias: "getMe",
+    description: `Returns the authenticated user&#x27;s RBAC role. Used for SPA gating.`,
+    requestFormat: "json",
+    response: MeInfo,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
     ],
@@ -2597,6 +2912,53 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
   },
   {
     method: "get",
+    path: "/state",
+    alias: "getAppState",
+    description: `Returns onboarding status and optional diagnostic metadata. Available to all authenticated users.
+`,
+    requestFormat: "json",
+    response: AppState,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "patch",
+    path: "/state",
+    alias: "patchAppState",
+    description: `Partial update to application state. Currently only supports marking onboarding complete. CSRF-protected.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z
+          .object({ onboarding_complete: z.boolean() })
+          .partial()
+          .passthrough(),
+      },
+    ],
+    response: AppState,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/status",
     alias: "getGatewayStatus",
     description: `Returns online status, agent/channel counts, daily cost, and the binary version.
@@ -2621,20 +2983,183 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "get",
     path: "/storage/stats",
     alias: "getStorageStats",
-    description: `Returns session count and workspace size. May include partial warnings if some agent stores could not be read.
+    description: `Returns session count, workspace size, and memory entry count. May include partial warnings if some agent stores could not be read.
 `,
     requestFormat: "json",
-    response: z
-      .object({
-        session_count: z.number().int().gte(0),
-        workspace_size_bytes: z.number().int().gte(0),
-        warnings: z.array(z.string()).optional(),
-      })
-      .passthrough(),
+    response: StorageStats,
     errors: [
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/tasks",
+    alias: "listTasks",
+    description: `Returns all tasks, optionally filtered by status. Admin-only.`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "status",
+        type: "Query",
+        schema: z
+          .enum(["queued", "assigned", "running", "completed", "failed"])
+          .optional(),
+      },
+    ],
+    response: z.array(Task),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/tasks",
+    alias: "createTask",
+    description: `Creates a new task. Admin-only.`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: createTask_Body,
+      },
+    ],
+    response: Task,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/tasks/:id",
+    alias: "updateTask",
+    description: `Updates task fields. Admin-only.`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: Task,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Task,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/tasks/:id",
+    alias: "deleteTask",
+    description: `Deletes a task by ID. Admin-only.`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/tasks/:id/start",
+    alias: "startTask",
+    description: `Assigns and starts a queued task. Admin-only.`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/tasks/:id/subtasks",
+    alias: "listSubtasks",
+    description: `Returns all subtasks for a given parent task. Admin-only.`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(Task),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
         schema: ErrorResponse,
       },
     ],

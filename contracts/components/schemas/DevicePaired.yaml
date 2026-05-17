@@ -1,0 +1,42 @@
+title: DevicePaired
+description: >
+  A device that has been successfully paired. Returned as part of the
+  DevicesResponse from GET /api/v1/devices.
+type: object
+required:
+  - device_id
+  - fingerprint
+  - device_name
+  - paired_at
+  - last_seen_at
+  - status
+properties:
+  device_id:
+    type: string
+    description: Unique device identifier.
+    example: "dev_01HXYZ"
+  fingerprint:
+    type: string
+    description: Cryptographic fingerprint of the device's public key.
+    example: "SHA256:abc123..."
+  device_name:
+    type: string
+    description: Human-readable device name.
+    example: "Alice's MacBook"
+  paired_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp when the device was paired.
+    example: "2026-05-16T10:00:00Z"
+  last_seen_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp of the last authenticated request from this device.
+    example: "2026-05-16T11:30:00Z"
+  status:
+    type: string
+    enum:
+      - active
+      - revoked
+    description: Whether this device's access is currently active or revoked.
+    example: "active"

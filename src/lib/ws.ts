@@ -393,7 +393,7 @@ function getWsUrl(): string {
 
 // ── Connection ────────────────────────────────────────────────────────────────
 
-export interface WsConnectionCallbacks {
+export interface WsConnectionCallbacks { // not-wire-format: SPA-only callback interface passed to WsConnection constructor. Never serialized to or from the gateway — purely internal to the SPA's WebSocket connection manager.
   onFrame: (frame: ServerFrame) => void
   onConnected: () => void
   onDisconnected: () => void

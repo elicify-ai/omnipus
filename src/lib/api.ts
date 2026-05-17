@@ -54,8 +54,8 @@ import { z } from 'zod'
 //   POST /channels/:id/test — {success,message} inline (matches schema exactly → wired)
 //   GET /skills             — local Skill type (not in generated schema)
 //   DELETE /skills/:name    — void
-//   GET /mcp-servers        — local McpServer type (not in generated schema)
-//   POST /mcp-servers       — local McpServer type
+//   GET /mcp-servers        — McpServer (generated, contract-first #8)
+//   POST /mcp-servers       — McpServer (generated, contract-first #8)
 //   DELETE /mcp-servers/:id — void
 //   GET /mcp-servers/:id/tools — string[] inline
 //   GET /storage/stats      — local StorageStats type (not in generated schema)
@@ -115,6 +115,14 @@ import {
   UserDeleteResponse as UserDeleteResponseSchema,
   UserResetPasswordResponse as UserResetPasswordResponseSchema,
   UserRoleChangeResponse as UserRoleChangeResponseSchema,
+  // New generated Zod schemas (Phase 7 cleanup — contract-first #8):
+  AppState as AppStateSchema,
+  ValidateTokenResponse as ValidateTokenResponseSchema,
+  DoctorResult as DoctorResultSchema,
+  DevicesResponse as DevicesResponseSchema,
+  BackupEntry as BackupEntrySchema,
+  StorageStats as StorageStatsSchema,
+  MeInfo as MeInfoSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -205,6 +213,22 @@ import type {
   Skill,
   ActivityEvent,
   UploadedFile,
+  AgentToolsCfg,
+  OnboardingCompleteRequest,
+  // New wire types added in Phase 7 cleanup (contract-first #8):
+  Task,
+  McpServer,
+  McpServerCreate,
+  AppState,
+  ValidateTokenResponse,
+  DoctorIssue,
+  DoctorResult,
+  DevicePending,
+  DevicePaired,
+  DevicesResponse,
+  BackupEntry,
+  StorageStats,
+  MeInfo,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -248,6 +272,22 @@ export type {
   Skill,
   ActivityEvent,
   UploadedFile,
+  AgentToolsCfg,
+  OnboardingCompleteRequest,
+  // New wire types added in Phase 7 cleanup (contract-first #8):
+  Task,
+  McpServer,
+  McpServerCreate,
+  AppState,
+  ValidateTokenResponse,
+  DoctorIssue,
+  DoctorResult,
+  DevicePending,
+  DevicePaired,
+  DevicesResponse,
+  BackupEntry,
+  StorageStats,
+  MeInfo,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -457,7 +497,7 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
 
 export type SandboxProfile = 'none' | 'workspace' | 'workspace+net' | 'host' | 'off'
 
-export interface AgentShellPolicy {
+export interface AgentShellPolicy { // not-wire-format: SPA-internal helper type — the shell_policy field on the generated Agent type is an inline anonymous object; this interface is never sent to or received from the gateway as a standalone value
   enable_deny_patterns?: boolean
   custom_deny_patterns?: string[]
 }
@@ -489,7 +529,7 @@ export function fetchAgentSessions(agentId: string): Promise<AgentSession[]> {
 
 // ── Sessions ──────────────────────────────────────────────────────────────────
 
-export interface Session {
+export interface Session { // not-wire-format: SPA transformation type produced by rawToSession(). Flattens the nested stats sub-object from the wire RawSession into top-level fields (message_count, total_tokens, total_cost). The wire shape is the generated Session schema; this SPA shape is intentionally different.
   id: string
   agent_id: string
   title: string
@@ -548,7 +588,7 @@ function rawToSession(raw: RawSession): Session {
   }
 }
 
-export interface Message {
+export interface Message { // not-wire-format: SPA-internal chat message shape. The status enum diverges from the wire Message schema ('streaming'/'done' vs wire's 'ok'/'error'). The tool_calls field references the SPA-internal ToolCall (params field) rather than the wire ToolCall (parameters field). This type is NOT the same as the generated Message schema.
   id: string
   session_id?: string
   role: 'user' | 'assistant' | 'system'
@@ -560,7 +600,7 @@ export interface Message {
   tool_calls?: ToolCall[]
 }
 
-export interface ToolCall {
+export interface ToolCall { // not-wire-format: SPA-internal tool call shape. Uses 'params' for the input parameters while the wire ToolCall schema uses 'parameters'. The status enum also differs (SPA adds 'running'; wire uses 'pending'/'denied'). This type is intentionally different from the generated ToolCall schema.
   id: string
   tool: string
   params: Record<string, unknown>
@@ -601,7 +641,7 @@ export interface ToolCall {
  * transcripts may contain legacy `0.0.0.0` URLs that the SPA rewrites via
  * `rewriteLegacyURL` in `src/lib/preview-url.ts`.
  */
-export interface ServeWorkspaceResult {
+export interface ServeWorkspaceResult { // not-wire-format: parsed from ToolCall.result (typed as unknown on the wire). Not a direct REST or WebSocket response schema — this is a tool-result payload shape that the SPA casts from the opaque result field. See WebServeBlock in chat/tools/.
   /** Relative preview path, e.g. `"/preview/<agent>/<token>/"`. */
   path: string
   /** Absolute URL — preserved for replay safety; may contain legacy hosts. */
@@ -628,7 +668,7 @@ export interface ServeWorkspaceResult {
  * `command` is the command string that was executed.
  * `port` is the local port the dev server is listening on (inside the workspace).
  */
-export interface RunInWorkspaceResult {
+export interface RunInWorkspaceResult { // not-wire-format: parsed from ToolCall.result (typed as unknown on the wire). Not a direct REST or WebSocket response schema — this is a tool-result payload shape that the SPA casts from the opaque result field. See WebServeBlock in chat/tools/.
   /** Relative dev path, e.g. `"/preview/<agent>/<token>/"`. */
   path: string
   /** Absolute URL — preserved for replay safety; may contain legacy hosts. */
@@ -661,7 +701,7 @@ export async function installSkillFromFile(content: string, filename: string): P
   })
 }
 
-export interface SessionDetail {
+export interface SessionDetail { // not-wire-format: SPA-internal detail type. Uses the SPA-internal Session (stats-flattened) and SPA-internal Message (params field), not the wire-format generated SessionDetail. See fetchSessionDetail() which transforms the raw response.
   session: Session
   messages: Message[]
   agent_removed?: boolean
@@ -688,7 +728,7 @@ export function createSession(agentId: string): Promise<Session> {
 // ── Config ────────────────────────────────────────────────────────────────────
 
 // Frontend-shaped config. Mapped from raw backend response via rawToFrontendConfig().
-export interface Config {
+export interface Config { // not-wire-format: SPA-internal configuration shape produced by rawToFrontendConfig(). The backend returns a raw nested JSON object with different field names (e.g. gateway.host instead of gateway.bind_address, nested storage.retention.session_days instead of data.session_retention_days). This type is the SPA's normalised view, not the wire format.
   gateway: {
     bind_address: string
     port: number
@@ -833,24 +873,8 @@ export function rotateGatewayToken(): Promise<{ token: string }> {
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
 
-export interface Task {
-  id: string
-  title: string
-  prompt: string
-  agent_id?: string
-  agent_name?: string
-  created_by?: string
-  parent_task_id?: string
-  priority: number
-  status: 'queued' | 'assigned' | 'running' | 'completed' | 'failed'
-  result?: string
-  artifacts?: string[]
-  session_id?: string
-  trigger_type: 'manual' | 'time' | 'event'
-  created_at?: string
-  started_at?: string
-  completed_at?: string
-}
+// Task — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/Task.yaml.
 
 export function fetchTasks(status?: Task['status']): Promise<Task[]> {
   const qs = status ? '?' + new URLSearchParams({ status }).toString() : ''
@@ -894,34 +918,30 @@ export function fetchGatewayStatus(): Promise<GatewayStatus> {
 
 // ── Tools & Channels ──────────────────────────────────────────────────────────
 
-export interface Tool {
-  name: string
-  category: string
-  description: string
+// Tool — type alias for ToolRegistryEntry (contract-first #8).
+// GET /tools returns ToolRegistryEntry[]; this alias preserves backward compat.
+// See contracts/components/schemas/ToolRegistryEntry.yaml.
+export type Tool = ToolRegistryEntry
+
+export function fetchTools(): Promise<ToolRegistryEntry[]> {
+  return request<ToolRegistryEntry[]>('/tools')
 }
 
-export function fetchTools(): Promise<Tool[]> {
-  return request<Tool[]>('/tools')
+// Channel — type alias for ChannelEntry (contract-first #8).
+// GET /channels returns ChannelEntry[]; this alias preserves backward compat.
+// See contracts/components/schemas/ChannelEntry.yaml.
+export type Channel = ChannelEntry
+
+export function fetchChannels(): Promise<ChannelEntry[]> {
+  return request<ChannelEntry[]>('/channels')
 }
 
-export interface Channel {
-  id: string
-  name: string
-  transport: string
-  enabled: boolean
-  configured?: boolean
+export function enableChannel(id: string): Promise<ChannelEntry> {
+  return request<ChannelEntry>(`/channels/${encodeURIComponent(id)}/enable`, { method: 'PUT' })
 }
 
-export function fetchChannels(): Promise<Channel[]> {
-  return request<Channel[]>('/channels')
-}
-
-export function enableChannel(id: string): Promise<Channel> {
-  return request<Channel>(`/channels/${encodeURIComponent(id)}/enable`, { method: 'PUT' })
-}
-
-export function disableChannel(id: string): Promise<Channel> {
-  return request<Channel>(`/channels/${encodeURIComponent(id)}/disable`, { method: 'PUT' })
+export function disableChannel(id: string): Promise<ChannelEntry> {
+  return request<ChannelEntry>(`/channels/${encodeURIComponent(id)}/disable`, { method: 'PUT' })
 }
 
 export function fetchChannelConfig(id: string): Promise<Record<string, unknown>> {
@@ -948,21 +968,10 @@ export function testChannel(id: string): Promise<{ success: boolean; message: st
 // Skill — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/Skill.yaml.
 
-export interface McpServer {
-  id: string
-  name: string
-  transport: 'stdio' | 'sse' | 'websocket'
-  status: 'connected' | 'disconnected' | 'error'
-  tool_count: number
-  tools?: string[]
-}
-
-export interface McpServerCreate {
-  name: string
-  command: string
-  args?: string[]
-  transport: 'stdio' | 'sse' | 'websocket'
-}
+// McpServer — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/McpServer.yaml.
+// McpServerCreate — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/McpServerCreate.yaml.
 
 export function fetchSkills(): Promise<Skill[]> {
   return request<Skill[]>('/skills')
@@ -990,30 +999,20 @@ export function fetchMcpServerTools(id: string): Promise<string[]> {
 
 // ── Storage Stats ─────────────────────────────────────────────────────────────
 
-export interface StorageStats {
-  workspace_size_bytes: number
-  session_count: number
-  memory_entry_count: number
-  oldest_session_date?: string
-}
+// StorageStats — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/StorageStats.yaml.
 
 export function fetchStorageStats(): Promise<StorageStats> {
-  return request<StorageStats>('/storage/stats')
+  return request<StorageStats>('/storage/stats', undefined, StorageStatsSchema)
 }
 
 // ── App State ─────────────────────────────────────────────────────────────────
 
-export interface AppState {
-  onboarding_complete: boolean
-  last_doctor_run?: string
-  last_doctor_score?: number
-  god_mode_available?: boolean
-  god_mode_opted_in?: boolean
-  dev_mode_bypass?: boolean
-}
+// AppState — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/AppState.yaml.
 
 export function fetchAppState(): Promise<AppState> {
-  return request<AppState>('/state')
+  return request<AppState>('/state', undefined, AppStateSchema)
 }
 
 export function completeOnboarding(): Promise<void> {
@@ -1042,19 +1041,11 @@ export async function registerAdmin(username: string, password: string): Promise
   }, LoginResponseSchema)
 }
 
-export interface CompleteOnboardingRequest {
-  provider: {
-    id: string
-    api_key: string
-    model: string
-  }
-  admin: {
-    username: string
-    password: string
-  }
-}
+// CompleteOnboardingRequest — replaced by OnboardingCompleteRequest from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/OnboardingCompleteRequest.yaml.
+export type CompleteOnboardingRequest = OnboardingCompleteRequest
 
-export async function completeOnboardingTransaction(req: CompleteOnboardingRequest): Promise<LoginResponse> {
+export async function completeOnboardingTransaction(req: OnboardingCompleteRequest): Promise<LoginResponse> {
   return request<LoginResponse>('/onboarding/complete', {
     method: 'POST',
     body: JSON.stringify(req),
@@ -1084,43 +1075,26 @@ export async function probeProvider(
   }, ProbeProviderResponseSchema)
 }
 
-// ValidateTokenResponse: type alias for the auth validate endpoint response.
-// Not in the generated openapi-types; kept as a local type.
-export type ValidateTokenResponse = {
-  username: string
-  role: UserRole
-}
-
-const _validateTokenSchema = z.object({ username: z.string(), role: z.enum(['admin', 'user']) }).passthrough()
+// ValidateTokenResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/ValidateTokenResponse.yaml.
 
 export async function validateToken(): Promise<ValidateTokenResponse> {
-  return request<ValidateTokenResponse>('/auth/validate', undefined, _validateTokenSchema)
+  return request<ValidateTokenResponse>('/auth/validate', undefined, ValidateTokenResponseSchema)
 }
 
 // ── Doctor ────────────────────────────────────────────────────────────────────
 
-export interface DoctorIssue {
-  id: string
-  severity: 'high' | 'medium' | 'low'
-  title: string
-  description: string
-  recommendation: string
-  action_link?: string
-  action_label?: string
-}
-
-export interface DoctorResult {
-  score: number
-  issues: DoctorIssue[]
-  checked_at: string
-}
+// DoctorIssue — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/DoctorIssue.yaml.
+// DoctorResult — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/DoctorResult.yaml.
 
 export function fetchDoctorResults(): Promise<DoctorResult | null> {
-  return request<DoctorResult | null>('/doctor')
+  return request<DoctorResult | null>('/doctor', undefined, DoctorResultSchema.nullable())
 }
 
 export function runDoctor(): Promise<DoctorResult> {
-  return request<DoctorResult>('/doctor', { method: 'POST' })
+  return request<DoctorResult>('/doctor', { method: 'POST' }, DoctorResultSchema)
 }
 
 // ── Activity Feed ─────────────────────────────────────────────────────────────
@@ -1134,7 +1108,7 @@ export function fetchActivity(): Promise<ActivityEvent[]> {
 
 // ── Credentials ───────────────────────────────────────────────────────────────
 
-export interface CredentialKey {
+export interface CredentialKey { // not-wire-format: SPA-internal credential display shape. The wire GET /credentials endpoint returns string[] (key names only); the component accesses .key on each entry. This interface reflects how the SPA displays credential entries but does NOT match the wire format. The wire format is defined inline in the openapi.yaml /credentials GET response schema as string[].
   key: string
   created_at?: string
   updated_at?: string
@@ -1154,48 +1128,28 @@ export function deleteCredential(key: string): Promise<void> {
 
 // ── Devices ───────────────────────────────────────────────────────────────────
 
-export interface DevicePending {
-  device_id: string
-  fingerprint: string
-  pairing_code: string
-  device_name: string
-  created_at: string
-  expires_at: string
-}
-
-export interface DevicePaired {
-  device_id: string
-  fingerprint: string
-  device_name: string
-  paired_at: string
-  last_seen_at: string
-  status: 'active' | 'revoked'
-}
-
-// DevicesResponse: SPA-internal response shape not described in the contract.
-export type DevicesResponse = {
-  pending: DevicePending[]
-  paired: DevicePaired[]
-}
+// DevicePending — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/DevicePending.yaml.
+// DevicePaired — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/DevicePaired.yaml.
+// DevicesResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/DevicesResponse.yaml.
 
 export function fetchDevices(): Promise<DevicesResponse> {
-  return request<DevicesResponse>('/devices')
+  return request<DevicesResponse>('/devices', undefined, DevicesResponseSchema)
 }
 
 // ── Backup / Restore ──────────────────────────────────────────────────────────
 
-export interface BackupEntry {
-  filename: string
-  size_bytes: number
-  created_at: string
-}
+// BackupEntry — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/BackupEntry.yaml.
 
 export function createBackup(): Promise<{ filename: string }> {
   return request('/backup', { method: 'POST' })
 }
 
 export function fetchBackups(): Promise<BackupEntry[]> {
-  return request<BackupEntry[]>('/backups')
+  return request<BackupEntry[]>('/backups', undefined, z.array(BackupEntrySchema))
 }
 
 export function restoreBackup(filename: string): Promise<void> {
@@ -1221,7 +1175,7 @@ export function deleteSession(id: string): Promise<{ success: boolean }> {
 
 // ── About ─────────────────────────────────────────────────────────────────────
 
-export interface AboutInfo {
+export interface AboutInfo { // not-wire-format: SPA-internal backward-compatible subset of AboutResponse. The generated AboutResponse has required fields (uptime, pid, frame_ancestors_fallback) and different optionality for preview_port/preview_listener_enabled. The SPA uses this looser interface to maintain backward compatibility with older gateway versions that may not send all AboutResponse fields.
   version: string
   go_version: string
   os: string
@@ -1290,12 +1244,11 @@ export function updateUserContext(content: string): Promise<void> {
 
 export type UserRole = 'admin' | 'user'
 
-export interface MeInfo {
-  role: UserRole
-}
+// MeInfo — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/MeInfo.yaml.
 
 export async function fetchMe(): Promise<MeInfo> {
-  return request<MeInfo>('/me')
+  return request<MeInfo>('/me', undefined, MeInfoSchema)
 }
 
 // ── File Upload ───────────────────────────────────────────────────────────────
@@ -1392,7 +1345,7 @@ export function fetchPendingRestart(): Promise<PendingRestartEntry[]> {
 // AuditLogToggle is re-exported from generated openapi-types above.
 
 // SPA-internal update response — not a wire type, no generated counterpart.
-export type AuditLogUpdateResponse = {
+export type AuditLogUpdateResponse = { // not-wire-format: SPA-internal shape matching the inline response schema in contracts/openapi.yaml PUT /security/audit-log. Not a named schema component.
   saved: boolean
   requires_restart: boolean
   applied_enabled: boolean
@@ -1415,13 +1368,13 @@ export function updateAuditLog(enabled: boolean): Promise<AuditLogUpdateResponse
 // SkillTrustResponse is re-exported from generated openapi-types above.
 
 // SPA-internal update response — not a wire type, no generated counterpart.
-export type SkillTrustUpdateResponse = {
+export type SkillTrustUpdateResponse = { // not-wire-format: SPA-internal shape matching the inline response schema in contracts/openapi.yaml PUT /security/skill-trust. Not a named schema component.
   saved: boolean
   requires_restart: boolean
   applied_level: SkillTrustLevel
 }
 
-export interface SkillTrustUpdateBody {
+export interface SkillTrustUpdateBody { // not-wire-format: SPA-internal request body helper used with 'satisfies' to type-check the PUT /security/skill-trust request body. The wire schema is defined inline in contracts/openapi.yaml.
   level: SkillTrustLevel
 }
 
@@ -1446,13 +1399,13 @@ export function updateSkillTrust(level: SkillTrustLevel): Promise<SkillTrustUpda
 // PromptGuardResponse is re-exported from generated openapi-types above.
 
 // SPA-internal update response — not a wire type, no generated counterpart.
-export type PromptGuardUpdateResponse = {
+export type PromptGuardUpdateResponse = { // not-wire-format: SPA-internal shape matching the inline response schema in contracts/openapi.yaml PUT /security/prompt-guard. Not a named schema component.
   saved: boolean
   requires_restart: boolean
   applied_level: PromptInjectionLevel
 }
 
-export interface PromptGuardUpdateBody {
+export interface PromptGuardUpdateBody { // not-wire-format: SPA-internal request body helper used with 'satisfies' to type-check the PUT /security/prompt-guard request body. The wire schema is defined inline in contracts/openapi.yaml.
   level: PromptInjectionLevel
 }
 
@@ -1476,13 +1429,13 @@ export function updatePromptGuardLevel(level: PromptInjectionLevel): Promise<Pro
 // Rate limits — adds write support and configures spending/throughput caps.
 // SPA-internal read response — not a generated wire type. The generated
 // RateLimitConfig schema is used for the full config shape.
-export type RateLimitsResponse = {
+export type RateLimitsResponse = { // not-wire-format: SPA-internal shape matching the inline response schema in contracts/openapi.yaml GET/PUT /security/rate-limits. Not a named schema component.
   daily_cost_cap_usd?: number
   max_agent_llm_calls_per_hour?: number
   max_agent_tool_calls_per_minute?: number
 }
 
-export interface RateLimitsUpdateBody {
+export interface RateLimitsUpdateBody { // not-wire-format: SPA-internal request body helper for PUT /security/rate-limits. The wire schema is defined inline in contracts/openapi.yaml.
   daily_cost_cap_usd?: number
   max_agent_llm_calls_per_hour?: number
   max_agent_tool_calls_per_minute?: number
@@ -1511,7 +1464,7 @@ export function updateRateLimits(body: RateLimitsUpdateBody): Promise<RateLimits
 // Entries may be hostname, exact IP, or CIDR range. Empty slice means "block all".
 // SandboxConfigResponse is a richer SPA-internal read shape. The generated SandboxConfig
 // type is the wire schema; this adds SPA-specific fields.
-export type SandboxConfigResponse = {
+export type SandboxConfigResponse = { // not-wire-format: SPA-internal richer shape that adds requires_restart and SPA-specific fields (applied_mode) on top of the wire SandboxConfig schema. The generated SandboxConfig is the base wire type.
   mode?: string
   // applied_mode is the value the gateway is currently enforcing. It differs
   // from `mode` when the operator saved a change but hasn't restarted.
@@ -1533,7 +1486,7 @@ export type SandboxConfigResponse = {
   requires_restart?: boolean
 }
 
-export interface SandboxConfigUpdateBody {
+export interface SandboxConfigUpdateBody { // not-wire-format: SPA-internal request body for PUT /security/sandbox-config. The wire shape is defined by the SandboxConfigUpdate generated schema; this interface adds SPA convenience types (SandboxProfile enum).
   mode?: string
   allow_network_outbound?: boolean
   allowed_paths?: string[]
@@ -1561,12 +1514,12 @@ export function updateSandboxConfig(body: SandboxConfigUpdateBody): Promise<Sand
 // Session scope — controls DM conversation isolation granularity.
 // SessionScopeResponse is re-exported from generated openapi-types above.
 
-export interface SessionScopeUpdateBody {
+export interface SessionScopeUpdateBody { // not-wire-format: SPA-internal request body helper used with 'satisfies' for PUT /security/session-scope. The wire schema is defined inline in contracts/openapi.yaml.
   dm_scope: DMScope
 }
 
 // SPA-internal update response — not a wire type, no generated counterpart.
-export type SessionScopeUpdateResponse = {
+export type SessionScopeUpdateResponse = { // not-wire-format: SPA-internal shape matching the inline response schema in contracts/openapi.yaml PUT /security/session-scope. Not a named schema component.
   saved: boolean
   requires_restart: boolean
   // applied_dm_scope reflects the value currently in effect. Since DM scope is
@@ -1610,12 +1563,12 @@ export function retentionMode(resp: {
 }
 
 // SPA-internal retention read response — not a generated wire type.
-export type RetentionResponse = {
+export type RetentionResponse = { // not-wire-format: SPA-internal shape matching the inline response schema in contracts/openapi.yaml GET /security/retention. Aliases the RetentionConfig generated type (partial fields). Not a named schema component.
   session_days?: number
   disabled?: boolean
 }
 
-export interface RetentionUpdateBody {
+export interface RetentionUpdateBody { // not-wire-format: SPA-internal request body for PUT /security/retention. The wire schema is defined inline in contracts/openapi.yaml.
   session_days?: number
   disabled?: boolean
 }
@@ -1624,7 +1577,7 @@ export interface RetentionUpdateBody {
 // flat {saved, requires_restart, session_days, disabled}. An earlier nested
 // `applied: {...}` shape never shipped — the handler always wrote flat.
 // SPA-internal update response — not a generated wire type.
-export type RetentionUpdateResponse = {
+export type RetentionUpdateResponse = { // not-wire-format: SPA-internal shape matching the inline response schema in contracts/openapi.yaml PUT /security/retention. Not a named schema component.
   saved: boolean
   requires_restart: boolean
   session_days: number
@@ -1659,18 +1612,13 @@ export function triggerRetentionSweep(): Promise<RetentionSweepResponse> {
 }
 
 // Users — list, create, delete, reset password, change role.
-export interface UserEntry {
-  username: string
-  role: UserRole
-  has_password: boolean
-  has_active_token: boolean
-}
+// UserEntry — type alias for the generated User schema (contract-first #8).
+// See contracts/components/schemas/User.yaml.
+export type UserEntry = User
 
-export interface CreateUserBody {
-  username: string
-  role: UserRole
-  password: string
-}
+// CreateUserBody — type alias for the generated UserCreateRequest schema (contract-first #8).
+// See contracts/components/schemas/UserCreateRequest.yaml.
+export type CreateUserBody = UserCreateRequest
 
 // UserCreateResponse, UserDeleteResponse, UserResetPasswordResponse, UserRoleChangeResponse
 // are re-exported from generated openapi-types above.
@@ -1678,13 +1626,13 @@ export interface CreateUserBody {
 export type CreateUserResponse = UserCreateResponse
 export type DeleteUserResponse = UserDeleteResponse
 
-export interface ResetUserPasswordBody {
+export interface ResetUserPasswordBody { // not-wire-format: SPA-internal request body helper used with 'satisfies' for PUT /users/{username}/password. The wire schema is UserResetPasswordRequest (generated).
   password: string
 }
 
 export type ResetUserPasswordResponse = UserResetPasswordResponse
 
-export interface UpdateUserRoleBody {
+export interface UpdateUserRoleBody { // not-wire-format: SPA-internal request body helper used with 'satisfies' for PATCH /users/{username}/role. The wire schema is UserRoleChangeRequest (generated).
   role: UserRole
 }
 
@@ -1741,30 +1689,17 @@ export function fetchExecProxyStatus(): Promise<ExecProxyStatus> {
 
 // ── Agent Tools ───────────────────────────────────────────────────────────────
 
-/**
- * Central registry tool entry (FR-027, FR-029).
- * Replaces the narrower BuiltinTool shape — includes a source discriminator
- * so the UI can badge MCP tools differently from builtin ones.
- */
-export interface RegistryTool {
-  name: string
-  scope: 'system' | 'core' | 'general'
-  category: string
-  description: string
-  /** Origin of the tool. 'builtin' = compiled-in Go tool; 'mcp' = MCP server tool. */
-  source: 'builtin' | 'mcp'
-}
+// RegistryTool — type alias for ToolRegistryEntry (contract-first #8).
+// Central registry tool entry (FR-027, FR-029). Includes a source discriminator
+// so the UI can badge MCP tools differently from builtin ones.
+// See contracts/components/schemas/ToolRegistryEntry.yaml.
+export type RegistryTool = ToolRegistryEntry
 
 /** Backward-compat alias — existing callers that reference BuiltinTool still work. */
 export type BuiltinTool = RegistryTool
 
-export interface AgentToolsCfg {
-  builtin: {
-    default_policy?: 'allow' | 'ask' | 'deny'
-    policies?: Record<string, 'allow' | 'ask' | 'deny'>
-  }
-  mcp?: { servers: { id: string; tools?: string[] }[] }
-}
+// AgentToolsCfg — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/AgentToolsCfg.yaml.
 
 // AgentToolEntry — re-exported from generated openapi-types (no local body needed).
 

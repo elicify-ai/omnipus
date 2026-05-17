@@ -278,28 +278,67 @@ func (e ChannelEntryId) Valid() bool {
 
 // Defines values for ChannelEntryTransport.
 const (
-	Bridge    ChannelEntryTransport = "bridge"
-	Http      ChannelEntryTransport = "http"
-	Serial    ChannelEntryTransport = "serial"
-	Tcp       ChannelEntryTransport = "tcp"
-	Webhook   ChannelEntryTransport = "webhook"
-	Websocket ChannelEntryTransport = "websocket"
+	ChannelEntryTransportBridge    ChannelEntryTransport = "bridge"
+	ChannelEntryTransportHttp      ChannelEntryTransport = "http"
+	ChannelEntryTransportSerial    ChannelEntryTransport = "serial"
+	ChannelEntryTransportTcp       ChannelEntryTransport = "tcp"
+	ChannelEntryTransportWebhook   ChannelEntryTransport = "webhook"
+	ChannelEntryTransportWebsocket ChannelEntryTransport = "websocket"
 )
 
 // Valid indicates whether the value is a known member of the ChannelEntryTransport enum.
 func (e ChannelEntryTransport) Valid() bool {
 	switch e {
-	case Bridge:
+	case ChannelEntryTransportBridge:
 		return true
-	case Http:
+	case ChannelEntryTransportHttp:
 		return true
-	case Serial:
+	case ChannelEntryTransportSerial:
 		return true
-	case Tcp:
+	case ChannelEntryTransportTcp:
 		return true
-	case Webhook:
+	case ChannelEntryTransportWebhook:
 		return true
-	case Websocket:
+	case ChannelEntryTransportWebsocket:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DevicesResponsePairedStatus.
+const (
+	DevicesResponsePairedStatusActive  DevicesResponsePairedStatus = "active"
+	DevicesResponsePairedStatusRevoked DevicesResponsePairedStatus = "revoked"
+)
+
+// Valid indicates whether the value is a known member of the DevicesResponsePairedStatus enum.
+func (e DevicesResponsePairedStatus) Valid() bool {
+	switch e {
+	case DevicesResponsePairedStatusActive:
+		return true
+	case DevicesResponsePairedStatusRevoked:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DoctorResultIssuesSeverity.
+const (
+	DoctorResultIssuesSeverityHigh   DoctorResultIssuesSeverity = "high"
+	DoctorResultIssuesSeverityLow    DoctorResultIssuesSeverity = "low"
+	DoctorResultIssuesSeverityMedium DoctorResultIssuesSeverity = "medium"
+)
+
+// Valid indicates whether the value is a known member of the DoctorResultIssuesSeverity enum.
+func (e DoctorResultIssuesSeverity) Valid() bool {
+	switch e {
+	case DoctorResultIssuesSeverityHigh:
+		return true
+	case DoctorResultIssuesSeverityLow:
+		return true
+	case DoctorResultIssuesSeverityMedium:
 		return true
 	default:
 		return false
@@ -375,6 +414,87 @@ func (e LoginResponseRole) Valid() bool {
 	case LoginResponseRoleAdmin:
 		return true
 	case LoginResponseRoleUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for McpServerStatus.
+const (
+	McpServerStatusConnected    McpServerStatus = "connected"
+	McpServerStatusDisconnected McpServerStatus = "disconnected"
+	McpServerStatusError        McpServerStatus = "error"
+)
+
+// Valid indicates whether the value is a known member of the McpServerStatus enum.
+func (e McpServerStatus) Valid() bool {
+	switch e {
+	case McpServerStatusConnected:
+		return true
+	case McpServerStatusDisconnected:
+		return true
+	case McpServerStatusError:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for McpServerTransport.
+const (
+	McpServerTransportSse       McpServerTransport = "sse"
+	McpServerTransportStdio     McpServerTransport = "stdio"
+	McpServerTransportWebsocket McpServerTransport = "websocket"
+)
+
+// Valid indicates whether the value is a known member of the McpServerTransport enum.
+func (e McpServerTransport) Valid() bool {
+	switch e {
+	case McpServerTransportSse:
+		return true
+	case McpServerTransportStdio:
+		return true
+	case McpServerTransportWebsocket:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for McpServerCreateTransport.
+const (
+	Sse       McpServerCreateTransport = "sse"
+	Stdio     McpServerCreateTransport = "stdio"
+	Websocket McpServerCreateTransport = "websocket"
+)
+
+// Valid indicates whether the value is a known member of the McpServerCreateTransport enum.
+func (e McpServerCreateTransport) Valid() bool {
+	switch e {
+	case Sse:
+		return true
+	case Stdio:
+		return true
+	case Websocket:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MeInfoRole.
+const (
+	MeInfoRoleAdmin MeInfoRole = "admin"
+	MeInfoRoleUser  MeInfoRole = "user"
+)
+
+// Valid indicates whether the value is a known member of the MeInfoRole enum.
+func (e MeInfoRole) Valid() bool {
+	switch e {
+	case MeInfoRoleAdmin:
+		return true
+	case MeInfoRoleUser:
 		return true
 	default:
 		return false
@@ -927,6 +1047,54 @@ func (e SkillTrustResponseLevel) Valid() bool {
 	}
 }
 
+// Defines values for TaskStatus.
+const (
+	TaskStatusAssigned  TaskStatus = "assigned"
+	TaskStatusCompleted TaskStatus = "completed"
+	TaskStatusFailed    TaskStatus = "failed"
+	TaskStatusQueued    TaskStatus = "queued"
+	TaskStatusRunning   TaskStatus = "running"
+)
+
+// Valid indicates whether the value is a known member of the TaskStatus enum.
+func (e TaskStatus) Valid() bool {
+	switch e {
+	case TaskStatusAssigned:
+		return true
+	case TaskStatusCompleted:
+		return true
+	case TaskStatusFailed:
+		return true
+	case TaskStatusQueued:
+		return true
+	case TaskStatusRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskTriggerType.
+const (
+	Event  TaskTriggerType = "event"
+	Manual TaskTriggerType = "manual"
+	Time   TaskTriggerType = "time"
+)
+
+// Valid indicates whether the value is a known member of the TaskTriggerType enum.
+func (e TaskTriggerType) Valid() bool {
+	switch e {
+	case Event:
+		return true
+	case Manual:
+		return true
+	case Time:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ToolRegistryEntryScope.
 const (
 	ToolRegistryEntryScopeCore    ToolRegistryEntryScope = "core"
@@ -1056,6 +1224,24 @@ func (e UserRoleChangeResponseRole) Valid() bool {
 	}
 }
 
+// Defines values for ValidateTokenResponseRole.
+const (
+	ValidateTokenResponseRoleAdmin ValidateTokenResponseRole = "admin"
+	ValidateTokenResponseRoleUser  ValidateTokenResponseRole = "user"
+)
+
+// Valid indicates whether the value is a known member of the ValidateTokenResponseRole enum.
+func (e ValidateTokenResponseRole) Valid() bool {
+	switch e {
+	case ValidateTokenResponseRoleAdmin:
+		return true
+	case ValidateTokenResponseRoleUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GetAgentTools200JSONResponseBodyToolsConfiguredPolicy.
 const (
 	GetAgentTools200JSONResponseBodyToolsConfiguredPolicyAllow GetAgentTools200JSONResponseBodyToolsConfiguredPolicy = "allow"
@@ -1140,24 +1326,6 @@ func (e UpdateAgentTools200JSONResponseBodyToolsEffectivePolicy) Valid() bool {
 	}
 }
 
-// Defines values for ValidateToken200JSONResponseBodyRole.
-const (
-	ValidateToken200JSONResponseBodyRoleAdmin ValidateToken200JSONResponseBodyRole = "admin"
-	ValidateToken200JSONResponseBodyRoleUser  ValidateToken200JSONResponseBodyRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the ValidateToken200JSONResponseBodyRole enum.
-func (e ValidateToken200JSONResponseBodyRole) Valid() bool {
-	switch e {
-	case ValidateToken200JSONResponseBodyRoleAdmin:
-		return true
-	case ValidateToken200JSONResponseBodyRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for DeleteCredential200JSONResponseBodyStatus.
 const (
 	Removed DeleteCredential200JSONResponseBodyStatus = "removed"
@@ -1211,19 +1379,19 @@ func (e UpdatePromptGuardJSONBodyLevel) Valid() bool {
 
 // Defines values for UpdatePromptGuard200JSONResponseBodyAppliedLevel.
 const (
-	High   UpdatePromptGuard200JSONResponseBodyAppliedLevel = "high"
-	Low    UpdatePromptGuard200JSONResponseBodyAppliedLevel = "low"
-	Medium UpdatePromptGuard200JSONResponseBodyAppliedLevel = "medium"
+	UpdatePromptGuard200JSONResponseBodyAppliedLevelHigh   UpdatePromptGuard200JSONResponseBodyAppliedLevel = "high"
+	UpdatePromptGuard200JSONResponseBodyAppliedLevelLow    UpdatePromptGuard200JSONResponseBodyAppliedLevel = "low"
+	UpdatePromptGuard200JSONResponseBodyAppliedLevelMedium UpdatePromptGuard200JSONResponseBodyAppliedLevel = "medium"
 )
 
 // Valid indicates whether the value is a known member of the UpdatePromptGuard200JSONResponseBodyAppliedLevel enum.
 func (e UpdatePromptGuard200JSONResponseBodyAppliedLevel) Valid() bool {
 	switch e {
-	case High:
+	case UpdatePromptGuard200JSONResponseBodyAppliedLevelHigh:
 		return true
-	case Low:
+	case UpdatePromptGuard200JSONResponseBodyAppliedLevelLow:
 		return true
-	case Medium:
+	case UpdatePromptGuard200JSONResponseBodyAppliedLevelMedium:
 		return true
 	default:
 		return false
@@ -1302,6 +1470,33 @@ const (
 func (e ClearAllSessions200JSONResponseBodyStatus) Valid() bool {
 	switch e {
 	case Cleared:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListTasksParamsStatus.
+const (
+	ListTasksParamsStatusAssigned  ListTasksParamsStatus = "assigned"
+	ListTasksParamsStatusCompleted ListTasksParamsStatus = "completed"
+	ListTasksParamsStatusFailed    ListTasksParamsStatus = "failed"
+	ListTasksParamsStatusQueued    ListTasksParamsStatus = "queued"
+	ListTasksParamsStatusRunning   ListTasksParamsStatus = "running"
+)
+
+// Valid indicates whether the value is a known member of the ListTasksParamsStatus enum.
+func (e ListTasksParamsStatus) Valid() bool {
+	switch e {
+	case ListTasksParamsStatusAssigned:
+		return true
+	case ListTasksParamsStatusCompleted:
+		return true
+	case ListTasksParamsStatusFailed:
+		return true
+	case ListTasksParamsStatusQueued:
+		return true
+	case ListTasksParamsStatusRunning:
 		return true
 	default:
 		return false
@@ -1705,6 +1900,27 @@ type AgentUpdateRequest struct {
 // AgentUpdateRequestSandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
 type AgentUpdateRequestSandboxProfile string
 
+// AppState Application state returned by GET /api/v1/state. Reflects whether onboarding has been completed and optional diagnostic metadata.
+type AppState struct {
+	// DevModeBypass True when gateway.dev_mode_bypass is enabled. Read-only — cannot be set via this endpoint. The SPA uses this to hide controls that are inoperative when bypass is active.
+	DevModeBypass *bool `json:"dev_mode_bypass,omitempty"`
+
+	// GodModeAvailable True when the sandbox mode is "off" (no kernel enforcement). Indicates the gateway is running without sandbox protection.
+	GodModeAvailable *bool `json:"god_mode_available,omitempty"`
+
+	// GodModeOptedIn True when the operator has explicitly opted into god mode (sandbox=off). Distinct from god_mode_available to allow UI differentiation.
+	GodModeOptedIn *bool `json:"god_mode_opted_in,omitempty"`
+
+	// LastDoctorRun RFC3339 timestamp of the last health-check run. Absent if never run.
+	LastDoctorRun *time.Time `json:"last_doctor_run,omitempty"`
+
+	// LastDoctorScore Score from the last health-check run (0–100). Absent if never run.
+	LastDoctorScore *float64 `json:"last_doctor_score,omitempty"`
+
+	// OnboardingComplete Whether the first-run onboarding wizard has been completed.
+	OnboardingComplete bool `json:"onboarding_complete"`
+}
+
 // AuditEntry A single audit log record from the JSONL audit log file (~/.omnipus/system/audit.jsonl). Matches the Go pkg/audit.Entry struct.
 type AuditEntry struct {
 	// AgentId ID of the agent that triggered the event. May be absent.
@@ -1779,6 +1995,90 @@ type ChannelEntryId string
 
 // ChannelEntryTransport Transport mechanism used by this channel.
 type ChannelEntryTransport string
+
+// DevicesResponse Response from GET /api/v1/devices. Lists both pending pairing requests and already-paired devices.
+type DevicesResponse struct {
+	// Paired Devices that have been successfully paired.
+	Paired []struct {
+		// DeviceId Unique device identifier.
+		DeviceId string `json:"device_id"`
+
+		// DeviceName Human-readable device name.
+		DeviceName string `json:"device_name"`
+
+		// Fingerprint Cryptographic fingerprint of the device's public key.
+		Fingerprint string `json:"fingerprint"`
+
+		// LastSeenAt RFC3339 timestamp of the last authenticated request from this device.
+		LastSeenAt time.Time `json:"last_seen_at"`
+
+		// PairedAt RFC3339 timestamp when the device was paired.
+		PairedAt time.Time `json:"paired_at"`
+
+		// Status Whether this device's access is currently active or revoked.
+		Status DevicesResponsePairedStatus `json:"status"`
+	} `json:"paired"`
+
+	// Pending Pairing requests awaiting approval.
+	Pending []struct {
+		// CreatedAt RFC3339 timestamp when the pairing request was created.
+		CreatedAt time.Time `json:"created_at"`
+
+		// DeviceId Unique device identifier.
+		DeviceId string `json:"device_id"`
+
+		// DeviceName Human-readable device name provided during pairing.
+		DeviceName string `json:"device_name"`
+
+		// ExpiresAt RFC3339 timestamp when the pairing request expires.
+		ExpiresAt time.Time `json:"expires_at"`
+
+		// Fingerprint Cryptographic fingerprint of the device's public key.
+		Fingerprint string `json:"fingerprint"`
+
+		// PairingCode Short human-readable pairing code displayed to the user.
+		PairingCode string `json:"pairing_code"`
+	} `json:"pending"`
+}
+
+// DevicesResponsePairedStatus Whether this device's access is currently active or revoked.
+type DevicesResponsePairedStatus string
+
+// DoctorResult Health-check result returned by GET /api/v1/doctor and POST /api/v1/doctor. Contains an overall score and a list of individual findings.
+type DoctorResult struct {
+	// CheckedAt RFC3339 timestamp when this health check was run.
+	CheckedAt time.Time `json:"checked_at"`
+
+	// Issues List of health-check findings. Empty when score is 100.
+	Issues []struct {
+		// ActionLabel Display label for the action link.
+		ActionLabel *string `json:"action_label,omitempty"`
+
+		// ActionLink Optional URL or SPA route to navigate to for remediation.
+		ActionLink *string `json:"action_link,omitempty"`
+
+		// Description Full description of the issue and its impact.
+		Description string `json:"description"`
+
+		// Id Unique identifier for this issue type.
+		Id string `json:"id"`
+
+		// Recommendation Recommended remediation action.
+		Recommendation string `json:"recommendation"`
+
+		// Severity Issue severity level.
+		Severity DoctorResultIssuesSeverity `json:"severity"`
+
+		// Title Short human-readable title for the issue.
+		Title string `json:"title"`
+	} `json:"issues"`
+
+	// Score Overall health score (0 = critical issues; 100 = fully healthy).
+	Score float64 `json:"score"`
+}
+
+// DoctorResultIssuesSeverity Issue severity level.
+type DoctorResultIssuesSeverity string
 
 // ErrorResponse Standard error envelope returned by all non-2xx responses.
 type ErrorResponse struct {
@@ -1884,6 +2184,60 @@ type LoginResponse struct {
 
 // LoginResponseRole RBAC role of the authenticated user.
 type LoginResponseRole string
+
+// McpServer An MCP server entry as returned by GET /mcp-servers and POST /mcp-servers.
+type McpServer struct {
+	// Id Unique MCP server identifier.
+	Id string `json:"id"`
+
+	// Name Human-readable server name.
+	Name string `json:"name"`
+
+	// Status Current connection status of the MCP server.
+	Status McpServerStatus `json:"status"`
+
+	// ToolCount Number of tools exposed by this server.
+	ToolCount int `json:"tool_count"`
+
+	// Tools List of tool names exposed by this server. Absent when tool_count is 0 or when the server has not yet enumerated its tools.
+	Tools *[]string `json:"tools,omitempty"`
+
+	// Transport Transport mechanism used by this MCP server.
+	Transport McpServerTransport `json:"transport"`
+}
+
+// McpServerStatus Current connection status of the MCP server.
+type McpServerStatus string
+
+// McpServerTransport Transport mechanism used by this MCP server.
+type McpServerTransport string
+
+// McpServerCreate Request body for POST /mcp-servers. Adds a new MCP server to the gateway config.
+type McpServerCreate struct {
+	// Args Command-line arguments to pass to the server process.
+	Args *[]string `json:"args,omitempty"`
+
+	// Command Command to start the MCP server process (stdio transport).
+	Command string `json:"command"`
+
+	// Name Human-readable server name.
+	Name string `json:"name"`
+
+	// Transport Transport mechanism to use for this MCP server.
+	Transport McpServerCreateTransport `json:"transport"`
+}
+
+// McpServerCreateTransport Transport mechanism to use for this MCP server.
+type McpServerCreateTransport string
+
+// MeInfo Response from GET /api/v1/me. Returns the authenticated user's role, used for RBAC gating in the SPA.
+type MeInfo struct {
+	// Role RBAC role of the current authenticated user.
+	Role MeInfoRole `json:"role"`
+}
+
+// MeInfoRole RBAC role of the current authenticated user.
+type MeInfoRole string
 
 // Message A single transcript entry (session.TranscriptEntry on the Go side). Maps to the Message interface in src/lib/api.ts. The SPA reads this from GET /sessions/{id}/messages.
 type Message struct {
@@ -2578,6 +2932,81 @@ type SkillTrustResponse struct {
 // SkillTrustResponseLevel Current skill trust level. Controls how unverified community skills are handled.
 type SkillTrustResponseLevel string
 
+// StorageStats Storage statistics returned by GET /api/v1/storage/stats. Reports session count, workspace disk usage, memory entry count, and any non-fatal warnings encountered while collecting the stats.
+type StorageStats struct {
+	// MemoryEntryCount Total number of memory entries across all agent stores.
+	MemoryEntryCount int `json:"memory_entry_count"`
+
+	// OldestSessionDate RFC3339 timestamp of the oldest session. Absent when no sessions exist.
+	OldestSessionDate *time.Time `json:"oldest_session_date,omitempty"`
+
+	// SessionCount Total number of sessions across all agent stores.
+	SessionCount int `json:"session_count"`
+
+	// Warnings Non-fatal errors encountered while collecting stats (e.g. unreadable agent stores). The response is still returned when warnings are present.
+	Warnings *[]string `json:"warnings,omitempty"`
+
+	// WorkspaceSizeBytes Total size in bytes of all agent workspace directories.
+	WorkspaceSizeBytes int64 `json:"workspace_size_bytes"`
+}
+
+// Task A task record as returned by GET /tasks, GET /tasks/{id}/subtasks, and POST /tasks. Maps to the task.Task struct on the Go side.
+type Task struct {
+	// AgentId ID of the agent assigned to this task. Absent when unassigned.
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// AgentName Display name of the assigned agent. Absent when unassigned.
+	AgentName *string `json:"agent_name,omitempty"`
+
+	// Artifacts Paths to output files or artifact references produced by the task.
+	Artifacts *[]string `json:"artifacts,omitempty"`
+
+	// CompletedAt RFC3339 timestamp when the task completed or failed. Absent while running.
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+
+	// CreatedAt RFC3339 timestamp when the task was created.
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+
+	// CreatedBy Username of the user who created the task.
+	CreatedBy *string `json:"created_by,omitempty"`
+
+	// Id Unique task identifier (UUID).
+	Id string `json:"id"`
+
+	// ParentTaskId ID of the parent task (for subtasks). Absent on top-level tasks.
+	ParentTaskId *string `json:"parent_task_id,omitempty"`
+
+	// Priority Task priority (higher = more urgent). Default is 0.
+	Priority int `json:"priority"`
+
+	// Prompt Full task description / prompt given to the agent.
+	Prompt string `json:"prompt"`
+
+	// Result Text result produced by the agent on completion. Absent while running.
+	Result *string `json:"result,omitempty"`
+
+	// SessionId Session ID created when the task was started.
+	SessionId *string `json:"session_id,omitempty"`
+
+	// StartedAt RFC3339 timestamp when the task was started. Absent until started.
+	StartedAt *time.Time `json:"started_at,omitempty"`
+
+	// Status Current lifecycle status of the task.
+	Status TaskStatus `json:"status"`
+
+	// Title Human-readable task title.
+	Title string `json:"title"`
+
+	// TriggerType How the task was triggered.
+	TriggerType TaskTriggerType `json:"trigger_type"`
+}
+
+// TaskStatus Current lifecycle status of the task.
+type TaskStatus string
+
+// TaskTriggerType How the task was triggered.
+type TaskTriggerType string
+
 // ToolRegistryEntry A single entry in the central tool registry snapshot returned by GET /api/v1/tools (FR-027).
 type ToolRegistryEntry struct {
 	// Category Tool category prefix derived from the tool name (e.g. "workspace", "browser", "system") or "general".
@@ -2731,6 +3160,18 @@ type UserRoleChangeResponse struct {
 // UserRoleChangeResponseRole The new role.
 type UserRoleChangeResponseRole string
 
+// ValidateTokenResponse Response from GET /api/v1/auth/validate. Confirms the current bearer token is valid and returns the associated user's role.
+type ValidateTokenResponse struct {
+	// Role The RBAC role of the authenticated user.
+	Role ValidateTokenResponseRole `json:"role"`
+
+	// Username The authenticated user's login name.
+	Username string `json:"username"`
+}
+
+// ValidateTokenResponseRole The RBAC role of the authenticated user.
+type ValidateTokenResponseRole string
+
 // N400BadRequest Standard error envelope returned by all non-2xx responses.
 type N400BadRequest = ErrorResponse
 
@@ -2772,9 +3213,6 @@ type UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicy string
 
 // UpdateAgentTools200JSONResponseBodyToolsEffectivePolicy defines parameters for UpdateAgentTools.
 type UpdateAgentTools200JSONResponseBodyToolsEffectivePolicy string
-
-// ValidateToken200JSONResponseBodyRole defines parameters for ValidateToken.
-type ValidateToken200JSONResponseBodyRole string
 
 // ConfigureChannelJSONBody defines parameters for ConfigureChannel.
 type ConfigureChannelJSONBody map[string]interface{}
@@ -2875,6 +3313,39 @@ type ListSessions200JSONResponseBody struct {
 // ClearAllSessions200JSONResponseBodyStatus defines parameters for ClearAllSessions.
 type ClearAllSessions200JSONResponseBodyStatus string
 
+// PatchAppStateJSONBody defines parameters for PatchAppState.
+type PatchAppStateJSONBody struct {
+	// OnboardingComplete Mark onboarding as complete.
+	OnboardingComplete *bool `json:"onboarding_complete,omitempty"`
+}
+
+// ListTasksParams defines parameters for ListTasks.
+type ListTasksParams struct {
+	// Status Filter tasks by status.
+	Status *ListTasksParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+}
+
+// ListTasksParamsStatus defines parameters for ListTasks.
+type ListTasksParamsStatus string
+
+// CreateTaskJSONBody defines parameters for CreateTask.
+type CreateTaskJSONBody struct {
+	// AgentId Agent to assign the task to.
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// ParentTaskId Parent task ID (for creating subtasks).
+	ParentTaskId *string `json:"parent_task_id,omitempty"`
+
+	// Priority Task priority (higher = more urgent).
+	Priority *int `json:"priority,omitempty"`
+
+	// Prompt Task description / prompt for the agent.
+	Prompt string `json:"prompt"`
+
+	// Title Task title.
+	Title string `json:"title"`
+}
+
 // PostToolApprovalJSONBody defines parameters for PostToolApproval.
 type PostToolApprovalJSONBody struct {
 	// Action Action to take on this approval.
@@ -2929,6 +3400,9 @@ type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
 // SetCredentialJSONRequestBody defines body for SetCredential for application/json ContentType.
 type SetCredentialJSONRequestBody SetCredentialJSONBody
 
+// AddMcpServerJSONRequestBody defines body for AddMcpServer for application/json ContentType.
+type AddMcpServerJSONRequestBody = McpServerCreate
+
 // CompleteOnboardingJSONRequestBody defines body for CompleteOnboarding for application/json ContentType.
 type CompleteOnboardingJSONRequestBody = OnboardingCompleteRequest
 
@@ -2970,6 +3444,15 @@ type CreateSessionJSONRequestBody = SessionCreateRequest
 
 // RenameSessionJSONRequestBody defines body for RenameSession for application/json ContentType.
 type RenameSessionJSONRequestBody = SessionRenameRequest
+
+// PatchAppStateJSONRequestBody defines body for PatchAppState for application/json ContentType.
+type PatchAppStateJSONRequestBody PatchAppStateJSONBody
+
+// CreateTaskJSONRequestBody defines body for CreateTask for application/json ContentType.
+type CreateTaskJSONRequestBody CreateTaskJSONBody
+
+// UpdateTaskJSONRequestBody defines body for UpdateTask for application/json ContentType.
+type UpdateTaskJSONRequestBody = Task
 
 // PostToolApprovalJSONRequestBody defines body for PostToolApproval for application/json ContentType.
 type PostToolApprovalJSONRequestBody PostToolApprovalJSONBody
@@ -3131,9 +3614,33 @@ type ServerInterface interface {
 	// Delete a credential
 	// (DELETE /credentials/{key})
 	DeleteCredential(w http.ResponseWriter, r *http.Request, key string)
+	// List devices
+	// (GET /devices)
+	ListDevices(w http.ResponseWriter, r *http.Request)
+	// Get health check results
+	// (GET /doctor)
+	GetDoctorResults(w http.ResponseWriter, r *http.Request)
+	// Run health check
+	// (POST /doctor)
+	RunDoctor(w http.ResponseWriter, r *http.Request)
 	// Health check
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
+	// List MCP servers
+	// (GET /mcp-servers)
+	ListMcpServers(w http.ResponseWriter, r *http.Request)
+	// Add an MCP server
+	// (POST /mcp-servers)
+	AddMcpServer(w http.ResponseWriter, r *http.Request)
+	// Delete an MCP server
+	// (DELETE /mcp-servers/{id})
+	DeleteMcpServer(w http.ResponseWriter, r *http.Request, id string)
+	// List tools for an MCP server
+	// (GET /mcp-servers/{id}/tools)
+	ListMcpServerTools(w http.ResponseWriter, r *http.Request, id string)
+	// Get current user info
+	// (GET /me)
+	GetMe(w http.ResponseWriter, r *http.Request)
 	// Finalize first-run onboarding
 	// (POST /onboarding/complete)
 	CompleteOnboarding(w http.ResponseWriter, r *http.Request)
@@ -3236,12 +3743,36 @@ type ServerInterface interface {
 	// List installed skills
 	// (GET /skills)
 	ListSkills(w http.ResponseWriter, r *http.Request)
+	// Get application state
+	// (GET /state)
+	GetAppState(w http.ResponseWriter, r *http.Request)
+	// Update application state
+	// (PATCH /state)
+	PatchAppState(w http.ResponseWriter, r *http.Request)
 	// Get gateway runtime status
 	// (GET /status)
 	GetGatewayStatus(w http.ResponseWriter, r *http.Request)
 	// Get storage statistics
 	// (GET /storage/stats)
 	GetStorageStats(w http.ResponseWriter, r *http.Request)
+	// List tasks
+	// (GET /tasks)
+	ListTasks(w http.ResponseWriter, r *http.Request, params ListTasksParams)
+	// Create a task
+	// (POST /tasks)
+	CreateTask(w http.ResponseWriter, r *http.Request)
+	// Delete a task
+	// (DELETE /tasks/{id})
+	DeleteTask(w http.ResponseWriter, r *http.Request, id string)
+	// Update a task
+	// (PUT /tasks/{id})
+	UpdateTask(w http.ResponseWriter, r *http.Request, id string)
+	// Start a task
+	// (POST /tasks/{id}/start)
+	StartTask(w http.ResponseWriter, r *http.Request, id string)
+	// List subtasks
+	// (GET /tasks/{id}/subtasks)
+	ListSubtasks(w http.ResponseWriter, r *http.Request, id string)
 	// Resolve a pending tool approval (FR-011, FR-082)
 	// (POST /tool-approvals/{approval_id})
 	PostToolApproval(w http.ResponseWriter, r *http.Request, approvalId string)
@@ -3931,11 +4462,195 @@ func (siw *ServerInterfaceWrapper) DeleteCredential(w http.ResponseWriter, r *ht
 	handler.ServeHTTP(w, r)
 }
 
+// ListDevices operation middleware
+func (siw *ServerInterfaceWrapper) ListDevices(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListDevices(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetDoctorResults operation middleware
+func (siw *ServerInterfaceWrapper) GetDoctorResults(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetDoctorResults(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RunDoctor operation middleware
+func (siw *ServerInterfaceWrapper) RunDoctor(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RunDoctor(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetHealth operation middleware
 func (siw *ServerInterfaceWrapper) GetHealth(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetHealth(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListMcpServers operation middleware
+func (siw *ServerInterfaceWrapper) ListMcpServers(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMcpServers(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AddMcpServer operation middleware
+func (siw *ServerInterfaceWrapper) AddMcpServer(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AddMcpServer(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteMcpServer operation middleware
+func (siw *ServerInterfaceWrapper) DeleteMcpServer(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteMcpServer(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListMcpServerTools operation middleware
+func (siw *ServerInterfaceWrapper) ListMcpServerTools(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListMcpServerTools(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetMe operation middleware
+func (siw *ServerInterfaceWrapper) GetMe(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetMe(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -4717,6 +5432,46 @@ func (siw *ServerInterfaceWrapper) ListSkills(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// GetAppState operation middleware
+func (siw *ServerInterfaceWrapper) GetAppState(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetAppState(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PatchAppState operation middleware
+func (siw *ServerInterfaceWrapper) PatchAppState(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PatchAppState(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetGatewayStatus operation middleware
 func (siw *ServerInterfaceWrapper) GetGatewayStatus(w http.ResponseWriter, r *http.Request) {
 
@@ -4748,6 +5503,193 @@ func (siw *ServerInterfaceWrapper) GetStorageStats(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetStorageStats(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListTasks operation middleware
+func (siw *ServerInterfaceWrapper) ListTasks(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListTasksParams
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTasks(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateTask operation middleware
+func (siw *ServerInterfaceWrapper) CreateTask(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateTask(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteTask operation middleware
+func (siw *ServerInterfaceWrapper) DeleteTask(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteTask(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateTask operation middleware
+func (siw *ServerInterfaceWrapper) UpdateTask(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateTask(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartTask operation middleware
+func (siw *ServerInterfaceWrapper) StartTask(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartTask(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSubtasks operation middleware
+func (siw *ServerInterfaceWrapper) ListSubtasks(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSubtasks(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -5192,7 +6134,15 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/credentials", wrapper.ListCredentials)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/credentials", wrapper.SetCredential)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/credentials/{key}", wrapper.DeleteCredential)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/devices", wrapper.ListDevices)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/doctor", wrapper.GetDoctorResults)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/doctor", wrapper.RunDoctor)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/health", wrapper.GetHealth)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/mcp-servers", wrapper.ListMcpServers)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/mcp-servers", wrapper.AddMcpServer)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/mcp-servers/{id}", wrapper.DeleteMcpServer)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/mcp-servers/{id}/tools", wrapper.ListMcpServerTools)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/onboarding/complete", wrapper.CompleteOnboarding)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/onboarding/probe-provider", wrapper.ProbeProvider)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/preview/{agent_id}/{token}/{path}", wrapper.GetPreview)
@@ -5227,8 +6177,16 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/sessions/{id}", wrapper.RenameSession)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/sessions/{id}/messages", wrapper.GetSessionMessages)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/skills", wrapper.ListSkills)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/state", wrapper.GetAppState)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/state", wrapper.PatchAppState)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/status", wrapper.GetGatewayStatus)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/storage/stats", wrapper.GetStorageStats)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/tasks", wrapper.ListTasks)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tasks", wrapper.CreateTask)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/tasks/{id}", wrapper.DeleteTask)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/tasks/{id}", wrapper.UpdateTask)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tasks/{id}/start", wrapper.StartTask)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/tasks/{id}/subtasks", wrapper.ListSubtasks)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tool-approvals/{approval_id}", wrapper.PostToolApproval)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/tools", wrapper.GetToolRegistry)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/tools/builtin", wrapper.GetBuiltinToolsDeprecated)

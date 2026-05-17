@@ -113,7 +113,10 @@ func initSchemas(t *testing.T) *jsonschema.Compiler {
 			return
 		}
 		if _, statErr := os.Stat(componentSchemaDir); statErr != nil {
-			errSchemaSetup = fmt.Errorf("contracts/components/schemas/ not found at %s: %w", componentSchemaDir, statErr)
+			errSchemaSetup = fmt.Errorf(
+				"contracts/components/schemas/ not found at %s: %w",
+				componentSchemaDir, statErr,
+			)
 			return
 		}
 

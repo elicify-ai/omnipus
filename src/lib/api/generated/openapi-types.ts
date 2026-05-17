@@ -1081,7 +1081,7 @@ export interface paths {
         };
         /**
          * Get storage statistics
-         * @description Returns session count and workspace size. May include partial warnings if some agent stores could not be read.
+         * @description Returns session count, workspace size, and memory entry count. May include partial warnings if some agent stores could not be read.
          */
         get: operations["getStorageStats"];
         put?: never;
@@ -1212,6 +1212,246 @@ export interface paths {
          *     Returns HTTP 201 on success.
          */
         post: operations["uploadFiles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get application state
+         * @description Returns onboarding status and optional diagnostic metadata. Available to all authenticated users.
+         */
+        get: operations["getAppState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update application state
+         * @description Partial update to application state. Currently only supports marking onboarding complete. CSRF-protected.
+         */
+        patch: operations["patchAppState"];
+        trace?: never;
+    };
+    "/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get current user info
+         * @description Returns the authenticated user's RBAC role. Used for SPA gating.
+         */
+        get: operations["getMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/doctor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get health check results
+         * @description Returns the most recent health check results. Returns null when no health check has been run yet.
+         */
+        get: operations["getDoctorResults"];
+        put?: never;
+        /**
+         * Run health check
+         * @description Runs a fresh health check and returns the results.
+         */
+        post: operations["runDoctor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List devices
+         * @description Returns pending pairing requests and already-paired devices. Admin-only.
+         */
+        get: operations["listDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List tasks
+         * @description Returns all tasks, optionally filtered by status. Admin-only.
+         */
+        get: operations["listTasks"];
+        put?: never;
+        /**
+         * Create a task
+         * @description Creates a new task. Admin-only.
+         */
+        post: operations["createTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update a task
+         * @description Updates task fields. Admin-only.
+         */
+        put: operations["updateTask"];
+        post?: never;
+        /**
+         * Delete a task
+         * @description Deletes a task by ID. Admin-only.
+         */
+        delete: operations["deleteTask"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{id}/subtasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List subtasks
+         * @description Returns all subtasks for a given parent task. Admin-only.
+         */
+        get: operations["listSubtasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tasks/{id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a task
+         * @description Assigns and starts a queued task. Admin-only.
+         */
+        post: operations["startTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mcp-servers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List MCP servers
+         * @description Returns all configured MCP servers and their connection status.
+         */
+        get: operations["listMcpServers"];
+        put?: never;
+        /**
+         * Add an MCP server
+         * @description Adds a new MCP server to the gateway config. Admin-only.
+         */
+        post: operations["addMcpServer"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mcp-servers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete an MCP server
+         * @description Removes an MCP server from the gateway config. Admin-only.
+         */
+        delete: operations["deleteMcpServer"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mcp-servers/{id}/tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List tools for an MCP server
+         * @description Returns the list of tool names exposed by a specific MCP server.
+         */
+        get: operations["listMcpServerTools"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3013,6 +3253,444 @@ export interface components {
              */
             shell_deny_patterns?: string[];
         };
+        /**
+         * Task
+         * @description A task record as returned by GET /tasks, GET /tasks/{id}/subtasks, and POST /tasks. Maps to the task.Task struct on the Go side.
+         */
+        Task: {
+            /**
+             * @description Unique task identifier (UUID).
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            id: string;
+            /**
+             * @description Human-readable task title.
+             * @example Analyze logs
+             */
+            title: string;
+            /**
+             * @description Full task description / prompt given to the agent.
+             * @example Summarize the last 7 days of gateway logs.
+             */
+            prompt: string;
+            /**
+             * @description ID of the agent assigned to this task. Absent when unassigned.
+             * @example jim
+             */
+            agent_id?: string;
+            /**
+             * @description Display name of the assigned agent. Absent when unassigned.
+             * @example Jim
+             */
+            agent_name?: string;
+            /**
+             * @description Username of the user who created the task.
+             * @example admin
+             */
+            created_by?: string;
+            /**
+             * @description ID of the parent task (for subtasks). Absent on top-level tasks.
+             * @example parent-task-uuid
+             */
+            parent_task_id?: string;
+            /**
+             * @description Task priority (higher = more urgent). Default is 0.
+             * @example 5
+             */
+            priority: number;
+            /**
+             * @description Current lifecycle status of the task.
+             * @example queued
+             * @enum {string}
+             */
+            status: "queued" | "assigned" | "running" | "completed" | "failed";
+            /**
+             * @description Text result produced by the agent on completion. Absent while running.
+             * @example Found 3 anomalies in the log.
+             */
+            result?: string;
+            /**
+             * @description Paths to output files or artifact references produced by the task.
+             * @example [
+             *       "/workspace/report.pdf"
+             *     ]
+             */
+            artifacts?: string[];
+            /**
+             * @description Session ID created when the task was started.
+             * @example session-uuid
+             */
+            session_id?: string;
+            /**
+             * @description How the task was triggered.
+             * @example manual
+             * @enum {string}
+             */
+            trigger_type: "manual" | "time" | "event";
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp when the task was created.
+             * @example 2026-05-16T10:00:00Z
+             */
+            created_at?: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp when the task was started. Absent until started.
+             * @example 2026-05-16T10:01:00Z
+             */
+            started_at?: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp when the task completed or failed. Absent while running.
+             * @example 2026-05-16T10:05:30Z
+             */
+            completed_at?: string;
+        };
+        /**
+         * McpServer
+         * @description An MCP server entry as returned by GET /mcp-servers and POST /mcp-servers.
+         */
+        McpServer: {
+            /**
+             * @description Unique MCP server identifier.
+             * @example my-mcp-server
+             */
+            id: string;
+            /**
+             * @description Human-readable server name.
+             * @example My MCP Server
+             */
+            name: string;
+            /**
+             * @description Transport mechanism used by this MCP server.
+             * @example stdio
+             * @enum {string}
+             */
+            transport: "stdio" | "sse" | "websocket";
+            /**
+             * @description Current connection status of the MCP server.
+             * @example connected
+             * @enum {string}
+             */
+            status: "connected" | "disconnected" | "error";
+            /**
+             * @description Number of tools exposed by this server.
+             * @example 5
+             */
+            tool_count: number;
+            /**
+             * @description List of tool names exposed by this server. Absent when tool_count is 0 or when the server has not yet enumerated its tools.
+             * @example [
+             *       "search",
+             *       "fetch"
+             *     ]
+             */
+            tools?: string[];
+        };
+        /**
+         * McpServerCreate
+         * @description Request body for POST /mcp-servers. Adds a new MCP server to the gateway config.
+         */
+        McpServerCreate: {
+            /**
+             * @description Human-readable server name.
+             * @example My MCP Server
+             */
+            name: string;
+            /**
+             * @description Command to start the MCP server process (stdio transport).
+             * @example npx @modelcontextprotocol/server-everything
+             */
+            command: string;
+            /**
+             * @description Command-line arguments to pass to the server process.
+             * @example [
+             *       "--port",
+             *       "3000"
+             *     ]
+             */
+            args?: string[];
+            /**
+             * @description Transport mechanism to use for this MCP server.
+             * @example stdio
+             * @enum {string}
+             */
+            transport: "stdio" | "sse" | "websocket";
+        };
+        /**
+         * AppState
+         * @description Application state returned by GET /api/v1/state. Reflects whether onboarding has been completed and optional diagnostic metadata.
+         */
+        AppState: {
+            /**
+             * @description Whether the first-run onboarding wizard has been completed.
+             * @example true
+             */
+            onboarding_complete: boolean;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp of the last health-check run. Absent if never run.
+             * @example 2026-05-16T10:00:00Z
+             */
+            last_doctor_run?: string;
+            /**
+             * Format: double
+             * @description Score from the last health-check run (0–100). Absent if never run.
+             * @example 85
+             */
+            last_doctor_score?: number;
+            /**
+             * @description True when the sandbox mode is "off" (no kernel enforcement). Indicates the gateway is running without sandbox protection.
+             * @example false
+             */
+            god_mode_available?: boolean;
+            /**
+             * @description True when the operator has explicitly opted into god mode (sandbox=off). Distinct from god_mode_available to allow UI differentiation.
+             * @example false
+             */
+            god_mode_opted_in?: boolean;
+            /**
+             * @description True when gateway.dev_mode_bypass is enabled. Read-only — cannot be set via this endpoint. The SPA uses this to hide controls that are inoperative when bypass is active.
+             * @example false
+             */
+            dev_mode_bypass?: boolean;
+        };
+        /**
+         * ValidateTokenResponse
+         * @description Response from GET /api/v1/auth/validate. Confirms the current bearer token is valid and returns the associated user's role.
+         */
+        ValidateTokenResponse: {
+            /**
+             * @description The authenticated user's login name.
+             * @example admin
+             */
+            username: string;
+            /**
+             * @description The RBAC role of the authenticated user.
+             * @example admin
+             * @enum {string}
+             */
+            role: "admin" | "user";
+        };
+        /**
+         * DoctorIssue
+         * @description A single health-check finding returned as part of a DoctorResult. Each issue has a severity, a human-readable title and description, and an optional actionable link.
+         */
+        DoctorIssue: {
+            /**
+             * @description Unique identifier for this issue type.
+             * @example no-provider-configured
+             */
+            id: string;
+            /**
+             * @description Issue severity level.
+             * @example high
+             * @enum {string}
+             */
+            severity: "high" | "medium" | "low";
+            /**
+             * @description Short human-readable title for the issue.
+             * @example No LLM provider configured
+             */
+            title: string;
+            /**
+             * @description Full description of the issue and its impact.
+             * @example No API provider has been configured. The agent cannot generate responses.
+             */
+            description: string;
+            /**
+             * @description Recommended remediation action.
+             * @example Go to Settings > Providers and add an API key.
+             */
+            recommendation: string;
+            /**
+             * @description Optional URL or SPA route to navigate to for remediation.
+             * @example /settings/providers
+             */
+            action_link?: string;
+            /**
+             * @description Display label for the action link.
+             * @example Configure Provider
+             */
+            action_label?: string;
+        };
+        /**
+         * DoctorResult
+         * @description Health-check result returned by GET /api/v1/doctor and POST /api/v1/doctor. Contains an overall score and a list of individual findings.
+         */
+        DoctorResult: {
+            /**
+             * Format: double
+             * @description Overall health score (0 = critical issues; 100 = fully healthy).
+             * @example 85
+             */
+            score: number;
+            /** @description List of health-check findings. Empty when score is 100. */
+            issues: components["schemas"]["DoctorIssue"][];
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp when this health check was run.
+             * @example 2026-05-16T10:00:00Z
+             */
+            checked_at: string;
+        };
+        /**
+         * DevicePending
+         * @description A device pairing request that has not yet been approved. Returned as part of the DevicesResponse from GET /api/v1/devices.
+         */
+        DevicePending: {
+            /**
+             * @description Unique device identifier.
+             * @example dev_01HXYZ
+             */
+            device_id: string;
+            /**
+             * @description Cryptographic fingerprint of the device's public key.
+             * @example SHA256:abc123...
+             */
+            fingerprint: string;
+            /**
+             * @description Short human-readable pairing code displayed to the user.
+             * @example BLUE-TIGER-42
+             */
+            pairing_code: string;
+            /**
+             * @description Human-readable device name provided during pairing.
+             * @example Alice's MacBook
+             */
+            device_name: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp when the pairing request was created.
+             * @example 2026-05-16T10:00:00Z
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp when the pairing request expires.
+             * @example 2026-05-16T10:10:00Z
+             */
+            expires_at: string;
+        };
+        /**
+         * DevicePaired
+         * @description A device that has been successfully paired. Returned as part of the DevicesResponse from GET /api/v1/devices.
+         */
+        DevicePaired: {
+            /**
+             * @description Unique device identifier.
+             * @example dev_01HXYZ
+             */
+            device_id: string;
+            /**
+             * @description Cryptographic fingerprint of the device's public key.
+             * @example SHA256:abc123...
+             */
+            fingerprint: string;
+            /**
+             * @description Human-readable device name.
+             * @example Alice's MacBook
+             */
+            device_name: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp when the device was paired.
+             * @example 2026-05-16T10:00:00Z
+             */
+            paired_at: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp of the last authenticated request from this device.
+             * @example 2026-05-16T11:30:00Z
+             */
+            last_seen_at: string;
+            /**
+             * @description Whether this device's access is currently active or revoked.
+             * @example active
+             * @enum {string}
+             */
+            status: "active" | "revoked";
+        };
+        /**
+         * DevicesResponse
+         * @description Response from GET /api/v1/devices. Lists both pending pairing requests and already-paired devices.
+         */
+        DevicesResponse: {
+            /** @description Pairing requests awaiting approval. */
+            pending: components["schemas"]["DevicePending"][];
+            /** @description Devices that have been successfully paired. */
+            paired: components["schemas"]["DevicePaired"][];
+        };
+        /**
+         * BackupEntry
+         * @description A single backup archive entry returned by GET /api/v1/backups.
+         */
+        BackupEntry: {
+            /**
+             * @description Backup archive filename (e.g. "omnipus-backup-2026-05-16.tar.gz").
+             * @example omnipus-backup-2026-05-16T10-00-00Z.tar.gz
+             */
+            filename: string;
+            /**
+             * Format: int64
+             * @description Archive size in bytes.
+             * @example 1048576
+             */
+            size_bytes: number;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp when the backup was created.
+             * @example 2026-05-16T10:00:00Z
+             */
+            created_at: string;
+        };
+        /**
+         * StorageStats
+         * @description Storage statistics returned by GET /api/v1/storage/stats. Reports session count, workspace disk usage, memory entry count, and any non-fatal warnings encountered while collecting the stats.
+         */
+        StorageStats: {
+            /**
+             * Format: int64
+             * @description Total size in bytes of all agent workspace directories.
+             * @example 52428800
+             */
+            workspace_size_bytes: number;
+            /**
+             * @description Total number of sessions across all agent stores.
+             * @example 42
+             */
+            session_count: number;
+            /**
+             * @description Total number of memory entries across all agent stores.
+             * @example 0
+             */
+            memory_entry_count: number;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp of the oldest session. Absent when no sessions exist.
+             * @example 2026-01-01T00:00:00Z
+             */
+            oldest_session_date?: string;
+            /**
+             * @description Non-fatal errors encountered while collecting stats (e.g. unreadable agent stores). The response is still returned when warnings are present.
+             * @example [
+             *       "workspace size unavailable: permission denied"
+             *     ]
+             */
+            warnings?: string[];
+        };
+        /**
+         * MeInfo
+         * @description Response from GET /api/v1/me. Returns the authenticated user's role, used for RBAC gating in the SPA.
+         */
+        MeInfo: {
+            /**
+             * @description RBAC role of the current authenticated user.
+             * @example admin
+             * @enum {string}
+             */
+            role: "admin" | "user";
+        };
     };
     responses: {
         /** @description Bad request — missing or invalid field. */
@@ -3169,15 +3847,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example admin */
-                        username: string;
-                        /**
-                         * @example admin
-                         * @enum {string}
-                         */
-                        role: "admin" | "user";
-                    };
+                    "application/json": components["schemas"]["ValidateTokenResponse"];
                 };
             };
             401: components["responses"]["401Unauthorized"];
@@ -5716,17 +6386,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example 42 */
-                        session_count: number;
-                        /**
-                         * Format: int64
-                         * @example 52428800
-                         */
-                        workspace_size_bytes: number;
-                        /** @description Non-fatal errors encountered while collecting stats. */
-                        warnings?: string[];
-                    };
+                    "application/json": components["schemas"]["StorageStats"];
                 };
             };
             /** @description Method not allowed. */
@@ -5947,6 +6607,413 @@ export interface operations {
             };
         };
     };
+    getAppState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Application state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppState"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    patchAppState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Mark onboarding as complete.
+                     * @example true
+                     */
+                    onboarding_complete?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description State updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppState"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    getMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current user information. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeInfo"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    getDoctorResults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Health check results, or an empty object when no check has been run yet. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DoctorResult"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    runDoctor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Health check results. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DoctorResult"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    listDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Devices response. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevicesResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+        };
+    };
+    listTasks: {
+        parameters: {
+            query?: {
+                /** @description Filter tasks by status. */
+                status?: "queued" | "assigned" | "running" | "completed" | "failed";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Array of tasks. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    createTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Task title.
+                     * @example Analyze logs
+                     */
+                    title: string;
+                    /**
+                     * @description Task description / prompt for the agent.
+                     * @example Summarize the last 7 days of gateway logs.
+                     */
+                    prompt: string;
+                    /**
+                     * @description Agent to assign the task to.
+                     * @example jim
+                     */
+                    agent_id?: string;
+                    /**
+                     * @description Task priority (higher = more urgent).
+                     * @example 5
+                     */
+                    priority?: number;
+                    /** @description Parent task ID (for creating subtasks). */
+                    parent_task_id?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Created task. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    updateTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Task"];
+            };
+        };
+        responses: {
+            /** @description Updated task. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Task deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    listSubtasks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Parent task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Array of subtasks. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Task"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    startTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Task ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Task started. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    listMcpServers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Array of MCP server entries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServer"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    addMcpServer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerCreate"];
+            };
+        };
+        responses: {
+            /** @description Created MCP server entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServer"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    deleteMcpServer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description MCP server ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description MCP server deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    listMcpServerTools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description MCP server ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Array of tool names. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
 }
 
 // ── Named type re-exports from components.schemas ────────────────────────────
@@ -6010,3 +7077,16 @@ export type Skill = components["schemas"]["Skill"];
 export type ActivityEvent = components["schemas"]["ActivityEvent"];
 export type UploadedFile = components["schemas"]["UploadedFile"];
 export type SandboxConfigUpdate = components["schemas"]["SandboxConfigUpdate"];
+export type Task = components["schemas"]["Task"];
+export type McpServer = components["schemas"]["McpServer"];
+export type McpServerCreate = components["schemas"]["McpServerCreate"];
+export type AppState = components["schemas"]["AppState"];
+export type ValidateTokenResponse = components["schemas"]["ValidateTokenResponse"];
+export type DoctorIssue = components["schemas"]["DoctorIssue"];
+export type DoctorResult = components["schemas"]["DoctorResult"];
+export type DevicePending = components["schemas"]["DevicePending"];
+export type DevicePaired = components["schemas"]["DevicePaired"];
+export type DevicesResponse = components["schemas"]["DevicesResponse"];
+export type BackupEntry = components["schemas"]["BackupEntry"];
+export type StorageStats = components["schemas"]["StorageStats"];
+export type MeInfo = components["schemas"]["MeInfo"];

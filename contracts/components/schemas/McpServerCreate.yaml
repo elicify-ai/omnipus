@@ -1,0 +1,33 @@
+title: McpServerCreate
+description: >
+  Request body for POST /mcp-servers. Adds a new MCP server to the gateway config.
+type: object
+required:
+  - name
+  - command
+  - transport
+properties:
+  name:
+    type: string
+    description: Human-readable server name.
+    example: "My MCP Server"
+  command:
+    type: string
+    description: Command to start the MCP server process (stdio transport).
+    example: "npx @modelcontextprotocol/server-everything"
+  args:
+    type: array
+    items:
+      type: string
+    description: Command-line arguments to pass to the server process.
+    example:
+      - "--port"
+      - "3000"
+  transport:
+    type: string
+    enum:
+      - stdio
+      - sse
+      - websocket
+    description: Transport mechanism to use for this MCP server.
+    example: "stdio"

@@ -1,0 +1,45 @@
+title: DoctorIssue
+description: >
+  A single health-check finding returned as part of a DoctorResult. Each issue
+  has a severity, a human-readable title and description, and an optional
+  actionable link.
+type: object
+required:
+  - id
+  - severity
+  - title
+  - description
+  - recommendation
+properties:
+  id:
+    type: string
+    description: Unique identifier for this issue type.
+    example: "no-provider-configured"
+  severity:
+    type: string
+    enum:
+      - high
+      - medium
+      - low
+    description: Issue severity level.
+    example: "high"
+  title:
+    type: string
+    description: Short human-readable title for the issue.
+    example: "No LLM provider configured"
+  description:
+    type: string
+    description: Full description of the issue and its impact.
+    example: "No API provider has been configured. The agent cannot generate responses."
+  recommendation:
+    type: string
+    description: Recommended remediation action.
+    example: "Go to Settings > Providers and add an API key."
+  action_link:
+    type: string
+    description: Optional URL or SPA route to navigate to for remediation.
+    example: "/settings/providers"
+  action_label:
+    type: string
+    description: Display label for the action link.
+    example: "Configure Provider"
