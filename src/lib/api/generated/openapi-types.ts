@@ -1657,6 +1657,11 @@ export interface components {
             session: components["schemas"]["Session"];
             /** @description Ordered list of transcript entries for this session. */
             messages: components["schemas"]["Message"][];
+            /**
+             * @description True when the agent that owned this session has been deleted from the config. Used by the SPA to display a banner informing the user that the original agent no longer exists. Absent (or false) in the common case.
+             * @example false
+             */
+            agent_removed?: boolean;
         };
         /** @description Body for POST /sessions. Creates a new session for an agent. */
         SessionCreateRequest: {

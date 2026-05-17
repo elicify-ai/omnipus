@@ -39,6 +39,7 @@ type SessionStats = {
 type SessionDetail = {
   session: Session;
   messages: Array<Message>;
+  agent_removed?: boolean | undefined;
 };
 type Message = {
   id: string;
@@ -295,7 +296,11 @@ export const Message: z.ZodType<Message> = z
   })
   .passthrough();
 export const SessionDetail: z.ZodType<SessionDetail> = z
-  .object({ session: Session, messages: z.array(Message) })
+  .object({
+    session: Session,
+    messages: z.array(Message),
+    agent_removed: z.boolean().optional(),
+  })
   .passthrough();
 export const SessionRenameRequest = z
   .object({ title: z.string().min(1).max(256) })
