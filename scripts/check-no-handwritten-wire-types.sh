@@ -9,21 +9,25 @@
 #
 # Rules enforced:
 #
-#   GO: A named top-level struct in pkg/gateway/**/*.go (non-generated) that
-#       (a) has >= 2 fields with `json:` tags AND
-#       (b) whose type name ends in Frame, Response, Request, or Payload
-#       is considered a hand-written wire-format type and is flagged.
+#   GO: Any package-level struct in pkg/gateway/**/*.go (non-generated,
+#       non-test) that has >= 2 fields with `json:` tags is flagged as a
+#       hand-written wire-format type.
 #
-#       Opt-out: add `// not-wire-format` on the same line as `type Foo struct {`
-#                (case-insensitive) to suppress a false positive.
+#       Exclusions:
+#         - Files under pkg/api/generated/ (generated; never flagged)
+#         - Files whose name ends in _test.go
+#         - Structs whose `type Foo struct {` line bears `// not-wire-format`
+#           (case-insensitive) — opt-out for internal helpers that carry
+#           json: tags for non-wire purposes (e.g. logging, config cache).
 #
-#   TS:  An `export interface` declaration in src/lib/**/*.ts (non-generated)
-#        whose name ends in Frame or Response is flagged.
+#   TS:  Any `export interface Foo { … }` or `export type Foo = { … }`
+#        (object-literal form) in src/lib/api.ts or src/lib/ws.ts is flagged
+#        as a hand-written wire-format type.
 #
-#        Re-export type aliases (export type FooFrame = ...) are allowed —
-#        those are explicitly how ws.ts wraps generated types.
-#
-#        Opt-out: add `// not-wire-format` on the same line to suppress.
+#        Allowed (not flagged):
+#          - Re-export type aliases: `export type { X } from '…'`
+#          - Anything inside src/lib/api/generated/ (generated)
+#          - Any line that bears `// not-wire-format` (case-insensitive)
 #
 # Exit code: 0 if no offenders found, 1 if any found.
 #
@@ -33,7 +37,7 @@
 #
 # Performance note: uses only grep/awk/python3 — runs in < 5 seconds on full repo.
 
-set -uo pipefail
+set -euo pipefail
 
 BASELINE_MODE=0
 if [[ "${1:-}" == "--baseline" ]]; then
@@ -56,12 +60,12 @@ emit() {
   FINDINGS=$((FINDINGS + 1))
 }
 
-# ─── Rule 1: Go — named structs with json tags ending in wire-type suffixes ──
+# ─── Rule 1: Go — any package-level struct in pkg/gateway with >= 2 json tags ─
 #
 # Algorithm (single Python pass for speed):
-#   - Skip files under pkg/api/generated/
+#   - Skip files under pkg/api/generated/ and *_test.go files
 #   - For each .go file under pkg/gateway/
-#   - Find lines matching `type <Name>(Frame|Response|Request|Payload) struct`
+#   - Find lines matching `type <Name> struct {`
 #   - That do NOT contain `// not-wire-format` (case-insensitive)
 #   - Then scan the following lines until the closing `}` of the struct body
 #   - Count fields with `json:"` tag
@@ -76,7 +80,7 @@ repo_root = sys.argv[1] if len(sys.argv) > 1 else '.'
 gateway_dir = os.path.join(repo_root, 'pkg', 'gateway')
 generated_dir = os.path.join(repo_root, 'pkg', 'api', 'generated')
 
-WIRE_SUFFIXES = re.compile(r'type\s+\w*(Frame|Response|Request|Payload)\s+struct\s*\{', re.IGNORECASE)
+STRUCT_DEF = re.compile(r'^type\s+(\w+)\s+struct\s*\{')
 NOT_WIRE_FORMAT = re.compile(r'//\s*not-wire-format', re.IGNORECASE)
 JSON_TAG = re.compile(r'`[^`]*json:"[^"`]')
 
@@ -86,8 +90,11 @@ if not os.path.isdir(gateway_dir):
     sys.exit(0)
 
 for dirpath, dirnames, filenames in os.walk(gateway_dir):
-    for fname in filenames:
+    for fname in sorted(filenames):
         if not fname.endswith('.go'):
+            continue
+        # Skip test files
+        if fname.endswith('_test.go'):
             continue
         fpath = os.path.join(dirpath, fname)
         # Skip generated files
@@ -103,7 +110,7 @@ for dirpath, dirnames, filenames in os.walk(gateway_dir):
         i = 0
         while i < len(lines):
             line = lines[i]
-            m = WIRE_SUFFIXES.search(line)
+            m = STRUCT_DEF.search(line)
             if m:
                 # Check opt-out marker on same line
                 if NOT_WIRE_FORMAT.search(line):
@@ -111,8 +118,7 @@ for dirpath, dirnames, filenames in os.walk(gateway_dir):
                     continue
 
                 struct_start_line = i + 1  # 1-indexed
-                type_name_m = re.search(r'type\s+(\w+)\s+struct', line)
-                type_name = type_name_m.group(1) if type_name_m else '?'
+                type_name = m.group(1)
 
                 # Count json-tagged fields in struct body
                 depth = 0
@@ -138,6 +144,13 @@ for f in findings:
 PYEOF
 )
 
+# Capture Python exit status explicitly; abort on unexpected failure.
+_PY_EXIT=$?
+if [[ $_PY_EXIT -ne 0 ]]; then
+  echo "check-no-handwritten-wire-types: ERROR — Go Python sub-pass exited ${_PY_EXIT}" >&2
+  exit 2
+fi
+
 if [[ -n "$GO_OFFENDERS" ]]; then
   while IFS= read -r line; do
     FINDING_LINES+=("$line")
@@ -145,40 +158,82 @@ if [[ -n "$GO_OFFENDERS" ]]; then
   done <<< "$GO_OFFENDERS"
 fi
 
-# ─── Rule 2: TypeScript — export interface ending in Frame or Response ────────
+# ─── Rule 2: TypeScript — export interface or export type = { } in src/lib ───
 #
-# Only flag EXPORT INTERFACE declarations (not type aliases, not re-exports).
-# Files under src/lib/api/generated/ are excluded.
-# Opt-out: `// not-wire-format` on same line.
+# Flags any `export interface Foo { … }` or `export type Foo = { … }`
+# (object-literal body) in src/lib/api.ts and src/lib/ws.ts.
+#
+# NOT flagged:
+#   - Re-exports: `export type { X } from '...'` (no inline body)
+#   - Files under src/lib/api/generated/
+#   - Lines bearing `// not-wire-format`
+#
+# Algorithm (single Python pass for accuracy on multi-line type aliases):
 
-TS_LIB_DIR="${REPO_ROOT}/src/lib"
+TS_OFFENDERS=$(python3 - "$REPO_ROOT" <<'PYEOF'
+import re
+import os
+import sys
 
-if [[ -d "$TS_LIB_DIR" ]]; then
-  while IFS= read -r match; do
-    # match format: path:linenum:content
-    fpath="${match%%:*}"
-    rest="${match#*:}"
-    linenum="${rest%%:*}"
-    content="${rest#*:}"
+repo_root = sys.argv[1] if len(sys.argv) > 1 else '.'
+lib_dir = os.path.join(repo_root, 'src', 'lib')
+generated_dir = os.path.join(repo_root, 'src', 'lib', 'api', 'generated')
 
-    # Skip generated directories
-    if [[ "$fpath" == *"/generated/"* ]]; then
-      continue
-    fi
+# Matches: export interface FooBar {   or   export interface FooBar extends …
+EXPORT_IFACE = re.compile(r'^export\s+interface\s+(\w+)[\s{<]')
+# Matches: export type FooBar = {   (object-literal only, not union/primitives)
+EXPORT_TYPE_OBJ = re.compile(r'^export\s+type\s+(\w+)\s*=\s*\{')
+NOT_WIRE_FORMAT = re.compile(r'//\s*not-wire-format', re.IGNORECASE)
 
-    # Skip opt-out marker
-    if echo "$content" | grep -qi "not-wire-format"; then
-      continue
-    fi
+findings = []
 
-    # Extract interface name
-    iface_name=$(echo "$content" | grep -oP 'export\s+interface\s+\K\w+' || true)
-    relpath="${fpath#$REPO_ROOT/}"
-    emit "$relpath" "$linenum" "ts-wire-type" "hand-written wire-format interface '${iface_name}' — migrate to contracts/components/schemas/ and regenerate"
+# Only check the two designated files
+target_files = [
+    os.path.join(lib_dir, 'api.ts'),
+    os.path.join(lib_dir, 'ws.ts'),
+]
 
-  done < <(grep -rn --include="*.ts" --include="*.tsx" \
-    'export[[:space:]]\+interface[[:space:]]\+[A-Za-z]*\(Frame\|Response\)[[:space:]\n{]' \
-    "$TS_LIB_DIR" 2>/dev/null | grep -v '/generated/' || true)
+for fpath in target_files:
+    if not os.path.isfile(fpath):
+        continue
+    # Skip if somehow inside generated directory
+    if os.path.commonpath([fpath, generated_dir]) == generated_dir:
+        continue
+
+    try:
+        with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
+            lines = f.readlines()
+    except OSError:
+        continue
+
+    for i, line in enumerate(lines):
+        # Check opt-out marker
+        if NOT_WIRE_FORMAT.search(line):
+            continue
+
+        m = EXPORT_IFACE.search(line) or EXPORT_TYPE_OBJ.search(line)
+        if m:
+            type_name = m.group(1)
+            relpath = os.path.relpath(fpath, repo_root)
+            findings.append(f"{relpath}:{i+1}: [ts-wire-type] hand-written wire-format type '{type_name}' — migrate to contracts/components/schemas/ and regenerate")
+
+for f in findings:
+    print(f)
+PYEOF
+)
+
+# Capture Python exit status explicitly; abort on unexpected failure.
+_PY_EXIT=$?
+if [[ $_PY_EXIT -ne 0 ]]; then
+  echo "check-no-handwritten-wire-types: ERROR — TS Python sub-pass exited ${_PY_EXIT}" >&2
+  exit 2
+fi
+
+if [[ -n "$TS_OFFENDERS" ]]; then
+  while IFS= read -r line; do
+    FINDING_LINES+=("$line")
+    FINDINGS=$((FINDINGS + 1))
+  done <<< "$TS_OFFENDERS"
 fi
 
 # ─── Output ───────────────────────────────────────────────────────────────────

@@ -1,10 +1,18 @@
 /**
  * _gen-asyncapi-types.mjs
  *
- * Generates src/lib/api/generated/asyncapi-types.ts from contracts/asyncapi.yaml.
+ * Generates two files from contracts/asyncapi.yaml:
+ *
+ *   1. src/lib/api/generated/asyncapi-types.ts
+ *      TypeScript interfaces for every AsyncAPI component schema.
+ *
+ *   2. src/lib/api/generated/_asyncapi-zod-schemas.generated.ts
+ *      Zod runtime schemas for every AsyncAPI component schema.
+ *      These replace the hand-written scripts/_asyncapi-zod-schemas.ts that
+ *      was previously concatenated by _gen-ts.sh.
  *
  * Approach: parse the AsyncAPI YAML, extract components.schemas, convert each
- * JSON Schema to a TypeScript interface/type using a purpose-built converter.
+ * JSON Schema to TypeScript + Zod using purpose-built converters.
  * This is intentionally minimal — AsyncAPI 3 codegen tooling is immature and
  * the schema set is small enough to convert deterministically.
  *
@@ -82,6 +90,7 @@ const CONTRACTS_DIR = resolveContractsDir();
 
 const asyncapiPath = resolve(CONTRACTS_DIR, "asyncapi.yaml");
 const outPath = resolve(ROOT, "src/lib/api/generated/asyncapi-types.ts");
+const zodOutPath = resolve(ROOT, "src/lib/api/generated/_asyncapi-zod-schemas.generated.ts");
 
 const doc = yaml.load(readFileSync(asyncapiPath, "utf8"));
 const schemas = doc.components?.schemas ?? {};
@@ -150,6 +159,111 @@ function schemaToTs(schema, indent = 0, schemaName = "") {
   }
 
   return "unknown";
+}
+
+// ── JSON Schema → Zod expression converter ───────────────────────────────────
+
+/**
+ * Convert a single JSON Schema node to a Zod expression string.
+ * Uses passthrough() for objects with additionalProperties, strict() otherwise.
+ * All schemas are referenced by their const-names so forward/back references
+ * resolve at expression-evaluation time (they're all `export const` in scope).
+ *
+ * @param schema  JSON Schema node
+ * @param indent  number of leading spaces for the outermost expression line
+ */
+function schemaToZod(schema, indent = 0) {
+  if (!schema) return "z.unknown()";
+
+  const pad = " ".repeat(indent);
+  const propPad = " ".repeat(indent + 4);
+
+  // $ref to sibling schema — reference the generated const name directly
+  if (schema.$ref) {
+    const parts = schema.$ref.split("/");
+    return parts[parts.length - 1];
+  }
+
+  // const literal → z.literal(...)
+  if (schema.const !== undefined) {
+    return `z.literal(${JSON.stringify(schema.const)})`;
+  }
+
+  // enum → z.enum([...]) or z.literal(...) for single-value
+  if (Array.isArray(schema.enum)) {
+    if (schema.enum.length === 1) {
+      return `z.literal(${JSON.stringify(schema.enum[0])})`;
+    }
+    return `z.enum([${schema.enum.map((v) => JSON.stringify(v)).join(", ")}])`;
+  }
+
+  const type = schema.type;
+
+  // Primitives
+  if (type === "boolean") return "z.boolean()";
+
+  if (type === "integer") {
+    let expr = "z.number().int()";
+    if (schema.minimum !== undefined) expr += `.min(${schema.minimum})`;
+    if (schema.maximum !== undefined) expr += `.max(${schema.maximum})`;
+    return expr;
+  }
+
+  if (type === "number") {
+    let expr = "z.number()";
+    if (schema.minimum !== undefined) expr += `.min(${schema.minimum})`;
+    if (schema.maximum !== undefined) expr += `.max(${schema.maximum})`;
+    return expr;
+  }
+
+  if (type === "string") {
+    let expr = "z.string()";
+    if (schema.minLength !== undefined) expr += `.min(${schema.minLength})`;
+    if (schema.maxLength !== undefined) expr += `.max(${schema.maxLength})`;
+    return expr;
+  }
+
+  // Array
+  if (type === "array") {
+    const itemsExpr = schema.items ? schemaToZod(schema.items, indent) : "z.unknown()";
+    let expr = `z.array(${itemsExpr})`;
+    if (schema.minItems !== undefined) expr += `.min(${schema.minItems})`;
+    if (schema.maxItems !== undefined) expr += `.max(${schema.maxItems})`;
+    return expr;
+  }
+
+  // Object
+  if (type === "object" || schema.properties) {
+    const required = new Set(schema.required ?? []);
+    const props = schema.properties ?? {};
+    const hasAdditional =
+      schema.additionalProperties === true ||
+      (typeof schema.additionalProperties === "object" &&
+        schema.additionalProperties !== false);
+
+    if (Object.keys(props).length === 0) {
+      // Empty object with no defined properties — treat as record
+      if (schema.additionalProperties !== false) {
+        return "z.record(z.unknown())";
+      }
+      return `z.object({})${hasAdditional ? ".passthrough()" : ".strict()"}`;
+    }
+
+    const propLines = [];
+    for (const [key, propSchema] of Object.entries(props)) {
+      let propExpr = schemaToZod(propSchema, indent + 2);
+      if (!required.has(key)) {
+        propExpr += ".optional()";
+      }
+      propLines.push(`${propPad}${key}: ${propExpr},`);
+    }
+
+    const closing = hasAdditional ? ".passthrough()" : ".strict()";
+    return `z\n${pad}  .object({\n${propLines.join("\n")}\n${pad}  })\n${pad}  ${closing}`;
+  }
+
+  // Untyped — accept any value
+  return "z.unknown()";
 }
 
 // ── Generate TypeScript output ───────────────────────────────────────────────
@@ -243,3 +357,58 @@ lines.push("");
 const output = lines.join("\n");
 writeFileSync(outPath, output, "utf8");
 console.log(`Generated ${outPath} (${output.split("\n").length} lines)`);
+
+// ── Generate Zod schemas output ───────────────────────────────────────────────
+//
+// Emits src/lib/api/generated/_asyncapi-zod-schemas.generated.ts
+// This replaces the hand-written scripts/_asyncapi-zod-schemas.ts.
+// The generated file is concatenated into schemas.ts by _gen-ts.sh.
+
+// NOTE: This fragment file is concatenated into schemas.ts by _gen-ts.sh.
+// It intentionally references `z` without importing it — the import lives in
+// the OpenAPI-generated prefix of schemas.ts. `// @ts-nocheck` suppresses
+// the standalone TypeScript "cannot find name 'z'" errors for this file.
+const zodLines = [
+  "// @ts-nocheck",
+  "// Fragment — concatenated into schemas.ts by _gen-ts.sh. Do not import directly.",
+  "",
+  "// ── AsyncAPI WebSocket frame schemas ─────────────────────────────────────────",
+  "// Auto-generated from contracts/asyncapi.yaml components.schemas.",
+  "// Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs",
+  "// These extend the REST schemas above with all WS frame types.",
+  "",
+];
+
+// Emit WsFrameType enum schema first
+const wsFrameTypeSchema = schemas["WsFrameType"];
+if (wsFrameTypeSchema?.enum) {
+  const enumVals = wsFrameTypeSchema.enum.map((v) => JSON.stringify(v)).join(", ");
+  zodLines.push(`export const WsFrameType = z.enum([${enumVals}]);`);
+  zodLines.push("");
+}
+
+// Schemas that need passthrough (contain additionalProperties or are free-form)
+// Emitted in definition order; forward refs resolved by hoisting the const.
+for (const [name, schema] of Object.entries(schemas)) {
+  if (name === "WsFrameType") continue;
+  const zodExpr = schemaToZod(schema, 0);
+  zodLines.push(`export const ${name} = ${zodExpr};`);
+  zodLines.push("");
+}
+
+// ── WS frame discriminated union ─────────────────────────────────────────────
+
+zodLines.push("// ── WS frame discriminated union ─────────────────────────────────────────────");
+zodLines.push("");
+zodLines.push("export const WsFrame = z.discriminatedUnion(\"type\", [");
+frameNames.forEach((name) => {
+  zodLines.push(`  ${name},`);
+});
+zodLines.push("]);");
+zodLines.push("");
+zodLines.push("export type WsFrameType = z.infer<typeof WsFrameType>;");
+zodLines.push("export type WsFrame = z.infer<typeof WsFrame>;");
+
+const zodOutput = zodLines.join("\n");
+writeFileSync(zodOutPath, zodOutput, "utf8");
+console.log(`Generated ${zodOutPath} (${zodOutput.split("\n").length} lines)`);

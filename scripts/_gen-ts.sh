@@ -83,7 +83,10 @@ echo "▸ Generating asyncapi-types.ts from contracts/asyncapi.yaml …"
 node "$REPO_ROOT/scripts/_gen-asyncapi-types.mjs"
 
 # ── Step 3: schemas.ts ───────────────────────────────────────────────────────
-# Generate OpenAPI Zod schemas, then append AsyncAPI Zod schemas.
+# Generate OpenAPI Zod schemas, then append the generated AsyncAPI Zod schemas.
+# The AsyncAPI Zod schemas are emitted by _gen-asyncapi-types.mjs (Step 2 above)
+# into $GEN/_asyncapi-zod-schemas.generated.ts. The hand-written
+# scripts/_asyncapi-zod-schemas.ts is no longer used; delete it if still present.
 echo "▸ Generating schemas.ts (Zod) from contracts/openapi.yaml …"
 "$NODE_BIN/openapi-zod-client" \
   "$CONTRACTS/openapi.yaml" \
@@ -92,9 +95,16 @@ echo "▸ Generating schemas.ts (Zod) from contracts/openapi.yaml …"
   --export-types \
   -t "$TEMPLATE"
 
-# Append the AsyncAPI Zod schemas block and write the final file atomically.
-cat "$GEN/_schemas.generated.tmp.ts" "$REPO_ROOT/scripts/_asyncapi-zod-schemas.ts" \
-  > "$GEN/schemas.ts"
+# Append the generated AsyncAPI Zod schemas and write the final file atomically.
+# Strip the `// @ts-nocheck` and "Fragment —" sentinel lines from the fragment
+# before concatenating — those are only meaningful when the fragment is checked
+# standalone by TypeScript; in the merged schemas.ts they are noise/invalid.
+ASYNCAPI_FRAG="$GEN/_asyncapi-zod-schemas.generated.ts"
+ASYNCAPI_FRAG_STRIPPED=$(grep -v '^// @ts-nocheck' "$ASYNCAPI_FRAG" | grep -v '^// Fragment')
+{
+  cat "$GEN/_schemas.generated.tmp.ts"
+  printf '%s\n' "$ASYNCAPI_FRAG_STRIPPED"
+} > "$GEN/schemas.ts"
 rm -f "$GEN/_schemas.generated.tmp.ts"
 echo "  Written: $GEN/schemas.ts"
 
