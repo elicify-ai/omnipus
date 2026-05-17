@@ -16,6 +16,106 @@ import { ApiError } from './api-error'
 export { ApiError, isApiError } from './api-error'
 
 import type { ZodType } from 'zod'
+import { z } from 'zod'
+
+// ── Generated Zod schemas (REST edge validation) ────────────────────────────
+//
+// These are the generated schemas from contracts/openapi.yaml. They are used
+// to validate API responses at the SPA edge (hard-constraint #8). Only named
+// schemas that match the SPA-internal types are imported here — call sites
+// that use local SPA-specific transformation types (Session, Config, Provider,
+// AppState, etc.) are listed in the GAP REPORT below.
+//
+// GAP REPORT — endpoints without matching generated schema (no schema passed):
+//   GET /sessions           — RawSession→Session transform; Session schema differs (stats nesting)
+//   GET /sessions/:id/messages — local Message type differs (params vs parameters, status enums)
+//   GET /sessions/:id       — local SessionDetail transform; same as above
+//   POST /sessions          — local Session type
+//   PUT /sessions/:id       — local Session type
+//   GET /config             — local Config type with custom transform (rawToFrontendConfig)
+//   PUT /config             — local Config type
+//   POST /config/gateway/rotate-token — local {token:string} inline type
+//   GET /providers          — local Provider type (not in generated schema)
+//   PUT /providers/:id      — local Provider type
+//   POST /providers/:id/test — local {success,error?} inline type
+//   GET /tasks              — local Task type (not in generated schema)
+//   GET /tasks/:id/subtasks — local Task type
+//   POST /tasks             — local Task type
+//   PUT /tasks/:id          — local Task type
+//   POST /tasks/:id/start   — void
+//   DELETE /tasks/:id       — void
+//   GET /status             — local GatewayStatus type (not in generated schema)
+//   GET /tools              — RegistryTool (not in generated schema; uses ToolRegistryEntry)
+//   GET /channels           — local Channel type; schema ChannelEntry has extra `description` field
+//   PUT /channels/:id/enable — {id,enabled} inline (schema returns ChannelEntry)
+//   PUT /channels/:id/disable — {id,enabled} inline
+//   GET /channels/:id       — Record<string,unknown> passthrough
+//   PUT /channels/:id/configure — void/Record passthrough
+//   POST /channels/:id/test — {success,message} inline (matches schema exactly → wired)
+//   GET /skills             — local Skill type (not in generated schema)
+//   DELETE /skills/:name    — void
+//   GET /mcp-servers        — local McpServer type (not in generated schema)
+//   POST /mcp-servers       — local McpServer type
+//   DELETE /mcp-servers/:id — void
+//   GET /mcp-servers/:id/tools — string[] inline
+//   GET /storage/stats      — local StorageStats type (not in generated schema)
+//   GET /state              — local AppState type (not in generated schema)
+//   PATCH /state            — void
+//   GET /auth/validate      — local ValidateTokenResponse (matches inline schema → wired)
+//   POST /doctor            — local DoctorResult type (not in generated schema)
+//   GET /doctor             — local DoctorResult|null (not in generated schema)
+//   GET /activity           — local ActivityEvent type (not in generated schema)
+//   GET /credentials        — string[] inline
+//   POST /credentials       — {key:string} inline
+//   DELETE /credentials/:key — {status,key} inline
+//   GET /devices            — local DevicesResponse type (not in generated schema)
+//   POST /backup            — {filename:string} inline (schema returns {path,size_bytes,created_at})
+//   GET /backups            — local BackupEntry type; schema has path not filename → different
+//   POST /restore           — void
+//   DELETE /sessions/all    — void
+//   POST /auth/change-password — {success:boolean} inline (matches schema → wired)
+//   GET /me                 — local MeInfo type (not in generated schema)
+//   PUT /user-context       — void
+//   GET /user-context       — {content:string} inline
+//   PUT /security/audit-log — local AuditLogUpdateResponse (inline schema → wired)
+//   PUT /security/skill-trust — local SkillTrustUpdateResponse (inline schema → wired)
+//   PUT /security/prompt-guard — local PromptGuardUpdateResponse (inline schema → wired)
+//   GET /security/rate-limits — local RateLimitsResponse (inline schema → wired)
+//   PUT /security/rate-limits — local RateLimitsResponse (inline schema → wired)
+//   PUT /security/session-scope — local SessionScopeUpdateResponse (inline schema → wired)
+//   GET /security/retention — RetentionConfig (partial schema → wired with .partial())
+//   PUT /security/retention — local RetentionUpdateResponse (inline schema → wired)
+//   POST /security/retention/sweep — RetentionSweepResult (wired)
+//   GET /agents/:id/tools   — inline schema → wired
+//   PUT /agents/:id/tools   — inline schema → wired
+//   POST /tool-approvals/:id — void
+//   GET /about              — AboutResponse schema has fields that differ (uptime vs uptime_seconds) → partial match, wired with passthrough
+
+import {
+  LoginResponse as LoginResponseSchema,
+  ProbeProviderResponse as ProbeProviderResponseSchema,
+  Agent as AgentSchema,
+  AgentSession as AgentSessionSchema,
+  AgentToolEntry as AgentToolEntrySchema,
+  AgentToolsCfg as AgentToolsCfgSchema,
+  AuditEntry as AuditEntrySchema,
+  AuditLogToggle as AuditLogToggleSchema,
+  ExecAllowlist as ExecAllowlistSchema,
+  ExecProxyStatus as ExecProxyStatusSchema,
+  GlobalToolPolicies as GlobalToolPoliciesSchema,
+  PendingRestartEntry as PendingRestartEntrySchema,
+  PromptGuardResponse as PromptGuardResponseSchema,
+  RetentionConfig as RetentionConfigSchema,
+  RetentionSweepResult as RetentionSweepResultSchema,
+  SandboxConfig as SandboxConfigSchema,
+  SandboxStatus as SandboxStatusSchema,
+  SessionScopeResponse as SessionScopeResponseSchema,
+  SkillTrustResponse as SkillTrustResponseSchema,
+  UserCreateResponse as UserCreateResponseSchema,
+  UserDeleteResponse as UserDeleteResponseSchema,
+  UserResetPasswordResponse as UserResetPasswordResponseSchema,
+  UserRoleChangeResponse as UserRoleChangeResponseSchema,
+} from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
 //
@@ -272,7 +372,46 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
     throw await ApiError.fromResponse(res)
   }
 
-  const body = await res.json() as unknown
+  // Parse the response body, handling non-JSON (e.g. unexpected HTML 200)
+  // gracefully — surface as ApiSchemaError with the raw text as rawBody so
+  // callers can see what the server actually sent.
+  let body: unknown
+  try {
+    body = await res.json() as unknown
+  } catch (cause) {
+    const rawText = String(cause instanceof Error ? cause.message : cause)
+    if (schema !== undefined) {
+      _apiSchemaErrorCount++
+      const schemaErr = new ApiSchemaError(
+        `${method} /api/v1${path}`,
+        [{ path: [], message: 'Response is not valid JSON' }],
+        rawText,
+      )
+      if (import.meta.env.DEV) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { useUiStore } = require('@/store/ui') as {
+            useUiStore: { getState: () => { addToast: (t: { message: string; variant: 'warning' }) => void } }
+          }
+          useUiStore.getState().addToast({
+            message: `[api] Non-JSON response: ${path}`,
+            variant: 'warning',
+          })
+        } catch {
+          console.warn('[api] Non-JSON response:', path)
+        }
+      }
+      throw schemaErr
+    }
+    // No schema — throw a generic ApiError for non-JSON bodies on non-2xx
+    // (we already checked res.ok above, so a JSON parse error here on a 200
+    // is itself unexpected; surface as a 0-status transport error).
+    throw new ApiError(0, `Response from ${path} is not valid JSON`, { cause })
+  }
+
+  if (import.meta.env.DEV && schema === undefined) {
+    console.warn(`[api] ${method} /api/v1${path}: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.`)
+  }
 
   // When a Zod schema is provided, validate the response body against it.
   // On failure: throw ApiSchemaError (+ dev toast). Never silently return
@@ -363,25 +502,25 @@ export interface Agent {
 }
 
 export function fetchAgents(): Promise<Agent[]> {
-  return request<Agent[]>('/agents')
+  return request<Agent[]>('/agents', undefined, z.array(AgentSchema) as ZodType<Agent[]>)
 }
 
 export function fetchAgent(id: string): Promise<Agent> {
-  return request<Agent>(`/agents/${encodeURIComponent(id)}`)
+  return request<Agent>(`/agents/${encodeURIComponent(id)}`, undefined, AgentSchema as ZodType<Agent>)
 }
 
 export function createAgent(data: Partial<Agent>): Promise<Agent> {
-  return request<Agent>('/agents', { method: 'POST', body: JSON.stringify(data) })
+  return request<Agent>('/agents', { method: 'POST', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
 }
 
 export function updateAgent(id: string, data: Partial<Agent>): Promise<Agent> {
-  return request<Agent>(`/agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) })
+  return request<Agent>(`/agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
 }
 
 // AgentSession — re-exported from generated openapi-types (no local body needed).
 
 export function fetchAgentSessions(agentId: string): Promise<AgentSession[]> {
-  return request<AgentSession[]>(`/agents/${encodeURIComponent(agentId)}/sessions`)
+  return request<AgentSession[]>(`/agents/${encodeURIComponent(agentId)}/sessions`, undefined, z.array(AgentSessionSchema))
 }
 
 // ── Sessions ──────────────────────────────────────────────────────────────────
@@ -843,10 +982,12 @@ export function configureChannel(id: string, config: Record<string, unknown>): P
   })
 }
 
+const _testChannelSchema = z.object({ success: z.boolean(), message: z.string() }).passthrough()
+
 export function testChannel(id: string): Promise<{ success: boolean; message: string }> {
   return request<{ success: boolean; message: string }>(`/channels/${encodeURIComponent(id)}/test`, {
     method: 'POST',
-  })
+  }, _testChannelSchema)
 }
 
 // ── Skills ────────────────────────────────────────────────────────────────────
@@ -946,14 +1087,14 @@ export async function login(username: string, password: string): Promise<LoginRe
   return request<LoginResponse>('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ username, password }),
-  })
+  }, LoginResponseSchema)
 }
 
 export async function registerAdmin(username: string, password: string): Promise<LoginResponse> {
   return request<LoginResponse>('/auth/register-admin', {
     method: 'POST',
     body: JSON.stringify({ username, password }),
-  })
+  }, LoginResponseSchema)
 }
 
 export interface CompleteOnboardingRequest {
@@ -972,7 +1113,7 @@ export async function completeOnboardingTransaction(req: CompleteOnboardingReque
   return request<LoginResponse>('/onboarding/complete', {
     method: 'POST',
     body: JSON.stringify(req),
-  })
+  }, LoginResponseSchema)
 }
 
 // probeProvider is a non-persistent "test + fetch model list" call used during
@@ -995,7 +1136,7 @@ export async function probeProvider(
   return request<ProbeProviderResponse>('/onboarding/probe-provider', {
     method: 'POST',
     body: JSON.stringify({ id, api_key: apiKey, endpoint: endpoint ?? '' }),
-  })
+  }, ProbeProviderResponseSchema)
 }
 
 // ValidateTokenResponse: type alias for the auth validate endpoint response.
@@ -1005,8 +1146,10 @@ export type ValidateTokenResponse = {
   role: UserRole
 }
 
+const _validateTokenSchema = z.object({ username: z.string(), role: z.enum(['admin', 'user']) }).passthrough()
+
 export async function validateToken(): Promise<ValidateTokenResponse> {
-  return request<ValidateTokenResponse>('/auth/validate')
+  return request<ValidateTokenResponse>('/auth/validate', undefined, _validateTokenSchema)
 }
 
 // ── Doctor ────────────────────────────────────────────────────────────────────
@@ -1131,8 +1274,10 @@ export function renameSession(id: string, title: string): Promise<Session> {
   })
 }
 
+const _deleteSessionSchema = z.object({ success: z.boolean() }).passthrough()
+
 export function deleteSession(id: string): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  return request<{ success: boolean }>(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }, _deleteSessionSchema)
 }
 
 // ── About ─────────────────────────────────────────────────────────────────────
@@ -1186,7 +1331,7 @@ export type AuditDecision = 'allow' | 'deny' | 'error'
 // AuditEventType and AuditDecision remain as local type aliases for UI use.
 
 export function fetchAuditLog(): Promise<AuditEntry[]> {
-  return request<AuditEntry[]>('/audit-log')
+  return request<AuditEntry[]>('/audit-log', undefined, z.array(AuditEntrySchema))
 }
 
 // ── User Context (USER.md) ────────────────────────────────────────────────────
@@ -1267,11 +1412,13 @@ export async function uploadFiles(sessionId: string, files: File[]): Promise<{ f
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
+const _changePasswordSchema = z.object({ success: z.boolean() }).passthrough()
+
 export function changePassword(currentPassword: string, newPassword: string): Promise<{ success: boolean }> {
   return request<{ success: boolean }>('/auth/change-password', {
     method: 'POST',
     body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
-  })
+  }, _changePasswordSchema)
 }
 
 // ── Exec Allowlist ────────────────────────────────────────────────────────────
@@ -1279,14 +1426,14 @@ export function changePassword(currentPassword: string, newPassword: string): Pr
 // ExecAllowlist — re-exported from generated openapi-types (no local body needed).
 
 export function fetchExecAllowlist(): Promise<ExecAllowlist> {
-  return request<ExecAllowlist>('/security/exec-allowlist')
+  return request<ExecAllowlist>('/security/exec-allowlist', undefined, ExecAllowlistSchema)
 }
 
 export function updateExecAllowlist(patterns: string[]): Promise<ExecAllowlist> {
   return request<ExecAllowlist>('/security/exec-allowlist', {
     method: 'PUT',
     body: JSON.stringify({ allowed_binaries: patterns }),
-  })
+  }, ExecAllowlistSchema)
 }
 
 // ── Security Admin Endpoints ──────────────────────────────────────────────────
@@ -1302,7 +1449,7 @@ export type DMScope = 'main' | 'per-peer' | 'per-channel-peer' | 'per-account-ch
 // PendingRestartEntry — re-exported from generated openapi-types (no local body needed).
 
 export function fetchPendingRestart(): Promise<PendingRestartEntry[]> {
-  return request<PendingRestartEntry[]>('/config/pending-restart')
+  return request<PendingRestartEntry[]>('/config/pending-restart', undefined, z.array(PendingRestartEntrySchema) as ZodType<PendingRestartEntry[]>)
 }
 
 // Audit log toggle — distinct from GET /audit-log (which returns AuditEntry[]).
@@ -1316,15 +1463,17 @@ export type AuditLogUpdateResponse = {
   applied_enabled: boolean
 }
 
+const _auditLogUpdateSchema = z.object({ saved: z.boolean(), requires_restart: z.boolean(), applied_enabled: z.boolean() }).passthrough()
+
 export function fetchAuditLogToggle(): Promise<AuditLogToggle> {
-  return request<AuditLogToggle>('/security/audit-log')
+  return request<AuditLogToggle>('/security/audit-log', undefined, AuditLogToggleSchema)
 }
 
 export function updateAuditLog(enabled: boolean): Promise<AuditLogUpdateResponse> {
   return request<AuditLogUpdateResponse>('/security/audit-log', {
     method: 'PUT',
     body: JSON.stringify({ enabled }),
-  })
+  }, _auditLogUpdateSchema)
 }
 
 // Skill trust — controls how unverified community skills are handled.
@@ -1341,15 +1490,21 @@ export interface SkillTrustUpdateBody {
   level: SkillTrustLevel
 }
 
+const _skillTrustUpdateSchema = z.object({
+  saved: z.boolean(),
+  requires_restart: z.boolean(),
+  applied_level: z.enum(['block_unverified', 'warn_unverified', 'allow_all']),
+}).passthrough()
+
 export function fetchSkillTrust(): Promise<SkillTrustResponse> {
-  return request<SkillTrustResponse>('/security/skill-trust')
+  return request<SkillTrustResponse>('/security/skill-trust', undefined, SkillTrustResponseSchema)
 }
 
 export function updateSkillTrust(level: SkillTrustLevel): Promise<SkillTrustUpdateResponse> {
   return request<SkillTrustUpdateResponse>('/security/skill-trust', {
     method: 'PUT',
     body: JSON.stringify({ level } satisfies SkillTrustUpdateBody),
-  })
+  }, _skillTrustUpdateSchema)
 }
 
 // Prompt guard — uses `level` field, aligns with PromptInjectionLevel.
@@ -1366,15 +1521,21 @@ export interface PromptGuardUpdateBody {
   level: PromptInjectionLevel
 }
 
+const _promptGuardUpdateSchema = z.object({
+  saved: z.boolean(),
+  requires_restart: z.boolean(),
+  applied_level: z.enum(['low', 'medium', 'high']),
+}).passthrough()
+
 export function fetchPromptGuardLevel(): Promise<PromptGuardResponse> {
-  return request<PromptGuardResponse>('/security/prompt-guard')
+  return request<PromptGuardResponse>('/security/prompt-guard', undefined, PromptGuardResponseSchema)
 }
 
 export function updatePromptGuardLevel(level: PromptInjectionLevel): Promise<PromptGuardUpdateResponse> {
   return request<PromptGuardUpdateResponse>('/security/prompt-guard', {
     method: 'PUT',
     body: JSON.stringify({ level } satisfies PromptGuardUpdateBody),
-  })
+  }, _promptGuardUpdateSchema)
 }
 
 // Rate limits — adds write support and configures spending/throughput caps.
@@ -1392,15 +1553,21 @@ export interface RateLimitsUpdateBody {
   max_agent_tool_calls_per_minute?: number
 }
 
+const _rateLimitsSchema = z.object({
+  daily_cost_cap_usd: z.number().optional(),
+  max_agent_llm_calls_per_hour: z.number().optional(),
+  max_agent_tool_calls_per_minute: z.number().optional(),
+}).passthrough()
+
 export function fetchRateLimits(): Promise<RateLimitsResponse> {
-  return request<RateLimitsResponse>('/security/rate-limits')
+  return request<RateLimitsResponse>('/security/rate-limits', undefined, _rateLimitsSchema)
 }
 
 export function updateRateLimits(body: RateLimitsUpdateBody): Promise<RateLimitsResponse> {
   return request<RateLimitsResponse>('/security/rate-limits', {
     method: 'PUT',
     body: JSON.stringify(body),
-  })
+  }, _rateLimitsSchema)
 }
 
 // Sandbox config — mode, allowed paths, SSRF controls, and the global
@@ -1446,14 +1613,14 @@ export interface SandboxConfigUpdateBody {
 }
 
 export function fetchSandboxConfig(): Promise<SandboxConfigResponse> {
-  return request<SandboxConfigResponse>('/security/sandbox-config')
+  return request<SandboxConfigResponse>('/security/sandbox-config', undefined, SandboxConfigSchema)
 }
 
 export function updateSandboxConfig(body: SandboxConfigUpdateBody): Promise<SandboxConfigResponse> {
   return request<SandboxConfigResponse>('/security/sandbox-config', {
     method: 'PUT',
     body: JSON.stringify(body),
-  })
+  }, SandboxConfigSchema)
 }
 
 // Session scope — controls DM conversation isolation granularity.
@@ -1472,15 +1639,23 @@ export type SessionScopeUpdateResponse = {
   applied_dm_scope: DMScope
 }
 
+const _sessionScopeUpdateSchema = z.object({
+  saved: z.boolean(),
+  requires_restart: z.boolean(),
+  // applied_dm_scope is typed as string here to match the generated spec;
+  // the SPA casts it to DMScope after validation.
+  applied_dm_scope: z.string(),
+}).passthrough()
+
 export function fetchSessionScope(): Promise<SessionScopeResponse> {
-  return request<SessionScopeResponse>('/security/session-scope')
+  return request<SessionScopeResponse>('/security/session-scope', undefined, SessionScopeResponseSchema as ZodType<SessionScopeResponse>)
 }
 
 export function updateSessionScope(dm_scope: DMScope): Promise<SessionScopeUpdateResponse> {
   return request<SessionScopeUpdateResponse>('/security/session-scope', {
     method: 'PUT',
     body: JSON.stringify({ dm_scope } satisfies SessionScopeUpdateBody),
-  })
+  }, _sessionScopeUpdateSchema as ZodType<SessionScopeUpdateResponse>)
 }
 
 // Retention — session log retention policy.
@@ -1521,15 +1696,22 @@ export type RetentionUpdateResponse = {
   disabled: boolean
 }
 
+const _retentionUpdateSchema = z.object({
+  saved: z.boolean(),
+  requires_restart: z.boolean(),
+  session_days: z.number().int().gte(0),
+  disabled: z.boolean(),
+}).passthrough()
+
 export function fetchRetention(): Promise<RetentionResponse> {
-  return request<RetentionResponse>('/security/retention')
+  return request<RetentionResponse>('/security/retention', undefined, RetentionConfigSchema)
 }
 
 export function updateRetention(body: RetentionUpdateBody): Promise<RetentionUpdateResponse> {
   return request<RetentionUpdateResponse>('/security/retention', {
     method: 'PUT',
     body: JSON.stringify(body),
-  })
+  }, _retentionUpdateSchema)
 }
 
 // Retention sweep — immediately purge sessions beyond the retention window.
@@ -1538,7 +1720,7 @@ export function updateRetention(body: RetentionUpdateBody): Promise<RetentionUpd
 export type RetentionSweepResponse = RetentionSweepResult
 
 export function triggerRetentionSweep(): Promise<RetentionSweepResponse> {
-  return request<RetentionSweepResponse>('/security/retention/sweep', { method: 'POST' })
+  return request<RetentionSweepResponse>('/security/retention/sweep', { method: 'POST' }, RetentionSweepResultSchema)
 }
 
 // Users — list, create, delete, reset password, change role.
@@ -1573,15 +1755,23 @@ export interface UpdateUserRoleBody {
 
 export type UpdateUserRoleResponse = UserRoleChangeResponse
 
+// UserEntry is the SPA-internal type; the generated User schema is compatible (passthrough).
+const _userListSchema = z.array(z.object({
+  username: z.string(),
+  role: z.enum(['admin', 'user']),
+  has_password: z.boolean(),
+  has_active_token: z.boolean(),
+}).passthrough())
+
 export function fetchUsers(): Promise<UserEntry[]> {
-  return request<UserEntry[]>('/users')
+  return request<UserEntry[]>('/users', undefined, _userListSchema)
 }
 
 export async function createUser(body: CreateUserBody): Promise<CreateUserResponse> {
   const response = await request<CreateUserResponse & { token?: string }>('/users', {
     method: 'POST',
     body: JSON.stringify(body),
-  })
+  }, UserCreateResponseSchema)
   if ('token' in response) {
     throw new Error('unexpected token in create response')
   }
@@ -1589,28 +1779,28 @@ export async function createUser(body: CreateUserBody): Promise<CreateUserRespon
 }
 
 export function deleteUser(username: string): Promise<DeleteUserResponse> {
-  return request<DeleteUserResponse>(`/users/${encodeURIComponent(username)}`, { method: 'DELETE' })
+  return request<DeleteUserResponse>(`/users/${encodeURIComponent(username)}`, { method: 'DELETE' }, UserDeleteResponseSchema)
 }
 
 export function resetUserPassword(username: string, password: string): Promise<ResetUserPasswordResponse> {
   return request<ResetUserPasswordResponse>(`/users/${encodeURIComponent(username)}/password`, {
     method: 'PUT',
     body: JSON.stringify({ password } satisfies ResetUserPasswordBody),
-  })
+  }, UserResetPasswordResponseSchema)
 }
 
 export function updateUserRole(username: string, role: UserRole): Promise<UpdateUserRoleResponse> {
   return request<UpdateUserRoleResponse>(`/users/${encodeURIComponent(username)}/role`, {
     method: 'PATCH',
     body: JSON.stringify({ role } satisfies UpdateUserRoleBody),
-  })
+  }, UserRoleChangeResponseSchema)
 }
 
 // ── Exec Proxy ────────────────────────────────────────────────────────────────
 // ExecProxyStatus — re-exported from generated openapi-types (no local body needed).
 
 export function fetchExecProxyStatus(): Promise<ExecProxyStatus> {
-  return request<ExecProxyStatus>('/security/exec-proxy-status')
+  return request<ExecProxyStatus>('/security/exec-proxy-status', undefined, ExecProxyStatusSchema)
 }
 
 
@@ -1655,15 +1845,21 @@ export function fetchMcpServersForAgent(): Promise<McpServer[]> {
   return request<McpServer[]>('/mcp-servers')
 }
 
-export function fetchAgentTools(agentId: string): Promise<{ config: AgentToolsCfg; tools: AgentToolEntry[] }> {
-  return request<{ config: AgentToolsCfg; tools: AgentToolEntry[] }>(`/agents/${encodeURIComponent(agentId)}/tools`)
+type AgentToolsResponse = { config: AgentToolsCfg; tools: AgentToolEntry[] }
+const _agentToolsSchema = z.object({
+  config: AgentToolsCfgSchema,
+  tools: z.array(AgentToolEntrySchema),
+}).passthrough() as ZodType<AgentToolsResponse>
+
+export function fetchAgentTools(agentId: string): Promise<AgentToolsResponse> {
+  return request<AgentToolsResponse>(`/agents/${encodeURIComponent(agentId)}/tools`, undefined, _agentToolsSchema)
 }
 
-export function updateAgentTools(agentId: string, cfg: AgentToolsCfg): Promise<{ config: AgentToolsCfg; tools: AgentToolEntry[] }> {
-  return request<{ config: AgentToolsCfg; tools: AgentToolEntry[] }>(`/agents/${encodeURIComponent(agentId)}/tools`, {
+export function updateAgentTools(agentId: string, cfg: AgentToolsCfg): Promise<AgentToolsResponse> {
+  return request<AgentToolsResponse>(`/agents/${encodeURIComponent(agentId)}/tools`, {
     method: 'PUT',
     body: JSON.stringify(cfg),
-  })
+  }, _agentToolsSchema)
 }
 
 /**
@@ -1681,14 +1877,14 @@ export function postToolApproval(approvalId: string, action: 'approve' | 'deny' 
 // GlobalToolPolicies — re-exported from generated openapi-types (no local body needed).
 
 export function fetchGlobalToolPolicies(): Promise<GlobalToolPolicies> {
-  return request<GlobalToolPolicies>('/security/tool-policies')
+  return request<GlobalToolPolicies>('/security/tool-policies', undefined, GlobalToolPoliciesSchema)
 }
 
 export function updateGlobalToolPolicies(cfg: GlobalToolPolicies): Promise<GlobalToolPolicies> {
   return request<GlobalToolPolicies>('/security/tool-policies', {
     method: 'PUT',
     body: JSON.stringify(cfg),
-  })
+  }, GlobalToolPoliciesSchema)
 }
 
 // ── Sandbox Status ────────────────────────────────────────────────────────────
@@ -1696,5 +1892,5 @@ export function updateGlobalToolPolicies(cfg: GlobalToolPolicies): Promise<Globa
 // The generated schema is a superset of the previous hand-written shape.
 
 export function fetchSandboxStatus(): Promise<SandboxStatus> {
-  return request<SandboxStatus>('/security/sandbox-status')
+  return request<SandboxStatus>('/security/sandbox-status', undefined, SandboxStatusSchema)
 }

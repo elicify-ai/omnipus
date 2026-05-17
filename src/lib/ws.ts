@@ -7,7 +7,7 @@
 // Hand-written interface declarations for wire-format frames are FORBIDDEN —
 // see CLAUDE.md hard-constraint #8. This file re-exports and aliases only.
 
-import { WsFrame as WsFrameSchema } from '@/lib/api/generated/schemas'
+import { WsFrame as WsFrameSchema, WsFrameType as WsFrameTypeSchema } from '@/lib/api/generated/schemas'
 import type {
   WsFrameType,
   WsFrame,
@@ -142,10 +142,18 @@ export type WsReceiveFrame = ServerFrame
 
 // ── Dropped-frame counter ─────────────────────────────────────────────────────
 //
-// Module-level mutable counter. No locking needed in single-threaded JS.
+// Module-level mutable counters. No locking needed in single-threaded JS.
 // Exported for tests and telemetry.
+//
+// _droppedFrameCount — frames dropped because they failed schema validation
+//   (known type but missing/invalid fields, or client→server frame received).
+// _unknownFrameTypeCount — frames dropped because their `type` field is not
+//   in the WsFrameType enum (forward-compat path: new server frame types not
+//   yet in the spec; logged separately so we can distinguish "spec drift" from
+//   "malformed payload").
 
 let _droppedFrameCount = 0
+let _unknownFrameTypeCount = 0
 
 export function getDroppedFrameCount(): number {
   return _droppedFrameCount
@@ -153,6 +161,31 @@ export function getDroppedFrameCount(): number {
 
 export function resetDroppedFrameCount(): void {
   _droppedFrameCount = 0
+}
+
+export function getUnknownFrameTypeCount(): number {
+  return _unknownFrameTypeCount
+}
+
+export function resetUnknownFrameTypeCount(): void {
+  _unknownFrameTypeCount = 0
+}
+
+// ── Test/dev telemetry hooks ──────────────────────────────────────────────────
+//
+// Expose counters on window.__omnipus_test_hooks in dev and test builds so
+// Playwright tests can assert dropped/unknown frame counts without needing
+// to import the module directly. Not exposed in production builds.
+
+if ((import.meta.env.DEV || import.meta.env.MODE === 'test') && typeof window !== 'undefined') {
+  const w = window as unknown as {
+    __omnipus_test_hooks?: Record<string, unknown>
+  }
+  w.__omnipus_test_hooks ??= {}
+  w.__omnipus_test_hooks.getDroppedFrameCount = getDroppedFrameCount
+  w.__omnipus_test_hooks.resetDroppedFrameCount = resetDroppedFrameCount
+  w.__omnipus_test_hooks.getUnknownFrameTypeCount = getUnknownFrameTypeCount
+  w.__omnipus_test_hooks.resetUnknownFrameTypeCount = resetUnknownFrameTypeCount
 }
 
 // ── Dev-mode toast helper ─────────────────────────────────────────────────────
@@ -181,6 +214,41 @@ function _maybeDevToast(frameType: string, message: string): void {
   }
 }
 
+// ── safeJsonParse ────────────────────────────────────────────────────────────
+//
+// Shared JSON-parse helper. Avoids duplicating try/catch in multiple callers.
+
+function safeJsonParse(data: unknown): { ok: true; raw: unknown } | { ok: false } {
+  if (typeof data === 'string') {
+    try {
+      return { ok: true, raw: JSON.parse(data) }
+    } catch {
+      return { ok: false }
+    }
+  }
+  return { ok: true, raw: data }
+}
+
+// ── Client-frame discriminators ───────────────────────────────────────────────
+//
+// The WsFrame discriminated union includes both client→server and server→client
+// frames. An incoming server message that carries a client-direction `type`
+// (e.g. a spoofed `{type:"auth"}`) would pass Zod validation (the schema covers
+// all directions) but must NOT be forwarded to the SPA frame reducer.
+// CLIENT_FRAME_TYPES is the set of `type` values exclusively used by
+// client→server frames. These are derived from the ClientFrame union in
+// asyncapi-types.ts — kept in sync with the spec by construction.
+
+const CLIENT_FRAME_TYPES = new Set<string>([
+  'auth',
+  'message',
+  'cancel',
+  'exec_approval_response',
+  'ping',
+  'attach_session',
+  'device_pairing_response',
+])
+
 // ── parseFrameSafe ────────────────────────────────────────────────────────────
 //
 // Validates an incoming WebSocket payload against the generated WsFrame Zod
@@ -188,29 +256,23 @@ function _maybeDevToast(frameType: string, message: string): void {
 // any failure. Never throws.
 //
 // Failure modes:
-//   - Non-JSON string              → null, counter++
-//   - No/bad `type` field          → null, counter++
-//   - Known type, missing field    → null, counter++, dev toast
-//   - Unknown type                 → null, counter++
+//   - Non-JSON / bad input         → null, _droppedFrameCount++
+//   - No/bad `type` field          → null, _droppedFrameCount++
+//   - Known type, missing field    → null, _droppedFrameCount++, dev toast
+//   - Unknown type                 → null, _droppedFrameCount++
+//   - Client→server direction type → null, _droppedFrameCount++
 //
 // This is the strict public API for callers (including tests) that want
-// contract-validated frames only. The internal _parseFrameOrPassthrough
-// function (below) additionally accepts unknown-type frames for
-// forward-compatibility with new server frame types not yet in the spec.
+// contract-validated server frames only.
 
 export function parseFrameSafe(data: unknown): WsFrame | null {
-  let raw: unknown
-  if (typeof data === 'string') {
-    try {
-      raw = JSON.parse(data)
-    } catch {
-      _droppedFrameCount++
-      _maybeDevToast('_json_parse', '[ws] Dropped frame: JSON parse error')
-      return null
-    }
-  } else {
-    raw = data
+  const parsed = safeJsonParse(data)
+  if (!parsed.ok) {
+    _droppedFrameCount++
+    _maybeDevToast('_json_parse', '[ws] Dropped frame: JSON parse error')
+    return null
   }
+  const raw = parsed.raw
 
   const frameType =
     raw !== null && typeof raw === 'object' && 'type' in (raw as object)
@@ -237,42 +299,85 @@ export function parseFrameSafe(data: unknown): WsFrame | null {
   return null
 }
 
-// ── _parseFrameOrPassthrough ──────────────────────────────────────────────────
+// ── _parseServerFrame ─────────────────────────────────────────────────────────
 //
-// Used internally by WsConnection.onmessage. Like parseFrameSafe but passes
-// through any object that has a string `type` field even when Zod fails, to
-// preserve forward-compat for frame types not yet described in the spec.
+// Used internally by WsConnection.onmessage. Strict-by-default: validates via
+// parseFrameSafe first. Adds two additional layers:
+//
+// 1. Client→server direction filter: if the `type` field is a client-only
+//    discriminator (e.g. spoofed `{type:"auth"}`), the frame is dropped with
+//    _droppedFrameCount even though Zod accepted it.
+//
+// 2. Forward-compat path: if the `type` field is a non-empty string that is
+//    NOT in the known WsFrameType enum AND not a client-direction type, the
+//    frame is counted in _unknownFrameTypeCount and dropped (dev toast warns
+//    operators that the spec needs updating). This is the only exception to
+//    "drop unknown" — it gives us a distinct signal for "future frame" vs
+//    "malformed frame" vs "client-frame injection".
 
-function _parseFrameOrPassthrough(data: unknown): ServerFrame | null {
-  let raw: unknown
-  if (typeof data === 'string') {
-    try {
-      raw = JSON.parse(data)
-    } catch {
-      _droppedFrameCount++
-      return null
-    }
-  } else {
-    raw = data
+function _parseServerFrame(data: unknown): ServerFrame | null {
+  const parsed = safeJsonParse(data)
+  if (!parsed.ok) {
+    _droppedFrameCount++
+    return null
   }
+  const raw = parsed.raw
 
-  // Try strict schema validation first
+  const frameType =
+    raw !== null && typeof raw === 'object' && 'type' in (raw as object)
+      ? String((raw as Record<string, unknown>).type)
+      : '_unknown'
+
+  // Try strict schema validation first.
   const result = WsFrameSchema.safeParse(raw)
   if (result.success) {
+    // Direction filter: client→server frames that somehow passed Zod must be
+    // dropped. A spoofed `{type:"auth",token:"x"}` is spec-valid but must not
+    // reach the SPA reducer.
+    if (CLIENT_FRAME_TYPES.has(frameType)) {
+      _droppedFrameCount++
+      _maybeDevToast(
+        frameType,
+        `[ws] Dropped client-direction frame received from server (type="${frameType}") — possible injection attempt`,
+      )
+      return null
+    }
     return result.data as ServerFrame
   }
 
-  // Fall back: pass through any object with a string `type` field so the
-  // store's handleFrame switch can silently ignore unknown types.
-  if (
-    raw !== null &&
-    typeof raw === 'object' &&
-    typeof (raw as Record<string, unknown>).type === 'string'
-  ) {
-    return raw as ServerFrame
+  // Forward-compat: unknown type field from a future server frame not yet in
+  // the spec. Count separately so operators can distinguish spec drift from
+  // malformed payloads.
+  //
+  // WsFrameTypeSchema.options is the exhaustive list of known frame type
+  // discriminators from the AsyncAPI spec. Any type string that is NOT in
+  // this list AND NOT a client-direction type is assumed to be a future
+  // server frame — counted separately so operators can track spec drift.
+  //
+  // IMPORTANT: a frame whose type IS in the spec but that failed Zod
+  // validation (e.g. tool_approval_required with args:null) must NOT go
+  // to the forward-compat path — it is a known-type validation failure and
+  // must increment _droppedFrameCount instead.
+  const knownTypes: readonly string[] = WsFrameTypeSchema.options
+  const isKnownType = knownTypes.includes(frameType)
+
+  if (frameType !== '_unknown' && !CLIENT_FRAME_TYPES.has(frameType) && !isKnownType) {
+    _unknownFrameTypeCount++
+    _maybeDevToast(
+      frameType,
+      `[ws] Dropped unknown-type frame (type="${frameType}") — add to spec if this is a new server frame`,
+    )
+    return null
   }
 
+  // Known-type validation failure, client-type validation failure, or no
+  // type field at all — all go to _droppedFrameCount.
   _droppedFrameCount++
+  const first = result.error.issues[0]
+  const desc = first
+    ? `${first.path.join('.') || 'root'}: ${first.message}`
+    : result.error.message
+  _maybeDevToast(frameType, `[ws] Dropped invalid frame (${frameType}): ${desc}`)
   return null
 }
 
@@ -379,7 +484,7 @@ export class WsConnection {
     }
 
     this.ws.onmessage = (event: MessageEvent) => {
-      const parsed = _parseFrameOrPassthrough(event.data as string)
+      const parsed = _parseServerFrame(event.data as string)
       if (parsed === null) {
         this.droppedFrameCount++
         if (this.droppedFrameCount >= this.droppedFrameThreshold) {

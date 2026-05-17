@@ -65,27 +65,28 @@ function createConnectedWs(onFrame: (frame: WsReceiveFrame) => void) {
 
 describe('WsConnection — frame parsing (happy path)', () => {
   it('parses a token frame and calls onFrame with typed object', () => {
-    // Dataset row 1: {"type":"token","content":"Hello"}
+    // Dataset row 1: token frame with required session_id field
     // Traces to: wave5a-wire-ui-spec.md — Scenario: User sends message and receives streaming response
     const onFrame = vi.fn()
     createConnectedWs(onFrame)
-    lastWsInstance.onmessage?.({ data: '{"type":"token","content":"Hello"}' })
-    expect(onFrame).toHaveBeenCalledWith({ type: 'token', content: 'Hello' })
+    lastWsInstance.onmessage?.({ data: '{"type":"token","session_id":"s1","content":"Hello"}' })
+    expect(onFrame).toHaveBeenCalledWith({ type: 'token', session_id: 's1', content: 'Hello' })
   })
 
   it('parses a done frame with stats', () => {
-    // Dataset row 2: {"type":"done","stats":{"tokens":150,"cost":0.02}}
+    // Dataset row 2: done frame with required session_id field
     const onFrame = vi.fn()
     createConnectedWs(onFrame)
-    lastWsInstance.onmessage?.({ data: '{"type":"done","stats":{"tokens":150,"cost":0.02}}' })
+    lastWsInstance.onmessage?.({ data: '{"type":"done","session_id":"s1","stats":{"tokens":150,"cost":0.02}}' })
     expect(onFrame).toHaveBeenCalledWith({
       type: 'done',
+      session_id: 's1',
       stats: { tokens: 150, cost: 0.02 },
     })
   })
 
   it('parses an error frame', () => {
-    // Dataset row 3: {"type":"error","message":"timeout"}
+    // Dataset row 3: error frame (session_id optional)
     const onFrame = vi.fn()
     createConnectedWs(onFrame)
     lastWsInstance.onmessage?.({ data: '{"type":"error","message":"timeout"}' })
@@ -93,14 +94,15 @@ describe('WsConnection — frame parsing (happy path)', () => {
   })
 
   it('parses a tool_call_start frame', () => {
-    // Dataset row 7
+    // Dataset row 7 — includes required session_id
     const onFrame = vi.fn()
     createConnectedWs(onFrame)
     lastWsInstance.onmessage?.({
-      data: '{"type":"tool_call_start","tool":"exec","call_id":"tc_1","params":{"command":"ls"}}',
+      data: '{"type":"tool_call_start","session_id":"s1","tool":"exec","call_id":"tc_1","params":{"command":"ls"}}',
     })
     expect(onFrame).toHaveBeenCalledWith({
       type: 'tool_call_start',
+      session_id: 's1',
       tool: 'exec',
       call_id: 'tc_1',
       params: { command: 'ls' },
@@ -108,11 +110,11 @@ describe('WsConnection — frame parsing (happy path)', () => {
   })
 
   it('parses a tool_call_result frame', () => {
-    // Dataset row 8
+    // Dataset row 8 — includes required session_id and result
     const onFrame = vi.fn()
     createConnectedWs(onFrame)
     lastWsInstance.onmessage?.({
-      data: '{"type":"tool_call_result","tool":"exec","call_id":"tc_1","result":{"exit_code":0},"status":"success"}',
+      data: '{"type":"tool_call_result","session_id":"s1","tool":"exec","call_id":"tc_1","result":{"exit_code":0},"status":"success"}',
     })
     expect(onFrame).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'tool_call_result', tool: 'exec', status: 'success' })
@@ -120,14 +122,15 @@ describe('WsConnection — frame parsing (happy path)', () => {
   })
 
   it('parses an exec_approval_request frame', () => {
-    // Dataset row 9
+    // Dataset row 9 — includes required session_id and id
     const onFrame = vi.fn()
     createConnectedWs(onFrame)
     lastWsInstance.onmessage?.({
-      data: '{"type":"exec_approval_request","command":"rm -rf /tmp","id":"appr_1"}',
+      data: '{"type":"exec_approval_request","session_id":"s1","command":"rm -rf /tmp","id":"appr_1"}',
     })
     expect(onFrame).toHaveBeenCalledWith({
       type: 'exec_approval_request',
+      session_id: 's1',
       command: 'rm -rf /tmp',
       id: 'appr_1',
     })
@@ -138,29 +141,32 @@ describe('WsConnection — frame parsing (happy path)', () => {
 
 describe('WsConnection — frame parsing (edge cases)', () => {
   it('parses a token frame with empty content without crashing', () => {
-    // Dataset row 4: empty token content
+    // Dataset row 4: empty token content — session_id required by strict schema
     const onFrame = vi.fn()
     createConnectedWs(onFrame)
-    lastWsInstance.onmessage?.({ data: '{"type":"token","content":""}' })
-    expect(onFrame).toHaveBeenCalledWith({ type: 'token', content: '' })
+    lastWsInstance.onmessage?.({ data: '{"type":"token","session_id":"s1","content":""}' })
+    expect(onFrame).toHaveBeenCalledWith({ type: 'token', session_id: 's1', content: '' })
   })
 
   it('passes XSS-containing token content as-is to onFrame (renderer handles escaping)', () => {
-    // Dataset row 5: XSS in token content
+    // Dataset row 5: XSS in token content — session_id required by strict schema
     const onFrame = vi.fn()
     createConnectedWs(onFrame)
     const xss = '<script>alert(1)</script>'
-    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'token', content: xss }) })
-    expect(onFrame).toHaveBeenCalledWith({ type: 'token', content: xss })
+    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'token', session_id: 's1', content: xss }) })
+    expect(onFrame).toHaveBeenCalledWith({ type: 'token', session_id: 's1', content: xss })
   })
 
-  it('still calls onFrame for unknown message types (store switch handles ignoring)', () => {
-    // Dataset row 6: unknown type — WsConnection passes through, store ignores in switch
+  it('does NOT call onFrame for unknown message types (strict parsing drops unknown types)', () => {
+    // Dataset row 6: unknown type — WsConnection now drops unknown types and increments
+    // _unknownFrameTypeCount instead of passing through to the store.
+    // This is the correct behaviour: the store switch was only silently ignoring these;
+    // now they are explicitly rejected at the edge with a separate telemetry counter.
     const onFrame = vi.fn()
     createConnectedWs(onFrame)
     lastWsInstance.onmessage?.({ data: '{"type":"unknown_type"}' })
-    // onFrame IS called — the store's handleFrame switch has no default, silently ignores
-    expect(onFrame).toHaveBeenCalledWith({ type: 'unknown_type' })
+    // onFrame must NOT be called — unknown types are dropped at the SPA edge
+    expect(onFrame).not.toHaveBeenCalled()
   })
 
   it('does not call onFrame for malformed JSON and does not throw', () => {

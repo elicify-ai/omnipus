@@ -14,6 +14,7 @@ export type WsFrameType =
   | "ping"
   | "attach_session"
   | "device_pairing_response"
+  | "session_close"
   | "session_started"
   | "token"
   | "done"
@@ -23,6 +24,7 @@ export type WsFrameType =
   | "subagent_start"
   | "subagent_end"
   | "exec_approval_request"
+  | "exec_approval_expired"
   | "task_status_changed"
   | "replay_message"
   | "rate_limit"
@@ -176,6 +178,11 @@ export interface ExecApprovalRequestFrame {
   session_id: string;
   id: string;
   command: string;
+  tool?: string;
+  params?: {
+    [key: string]: unknown;
+  };
+  message?: string;
   working_dir?: string;
   matched_policy?: string;
 }
@@ -304,6 +311,18 @@ export interface DevicePairingRequestFrame {
   session_id?: string;
 }
 
+export interface SessionCloseFrame {
+  type: "session_close";
+  session_id: string;
+}
+
+export interface ExecApprovalExpiredFrame {
+  type: "exec_approval_expired";
+  id: string;
+  session_id: string;
+  message?: string;
+}
+
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
 
 export type WsFrame =
@@ -335,7 +354,9 @@ export type WsFrame =
   | CancelStageFrame
   | SessionCloseAckFrame
   | ExecApprovalResponseAckFrame
-  | DevicePairingRequestFrame;
+  | DevicePairingRequestFrame
+  | SessionCloseFrame
+  | ExecApprovalExpiredFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -372,4 +393,6 @@ export type ServerFrame =
   | CancelStageFrame
   | SessionCloseAckFrame
   | ExecApprovalResponseAckFrame
-  | DevicePairingRequestFrame;
+  | DevicePairingRequestFrame
+  | SessionCloseFrame
+  | ExecApprovalExpiredFrame;

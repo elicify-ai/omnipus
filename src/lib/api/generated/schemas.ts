@@ -39,7 +39,6 @@ type SessionStats = {
 type SessionDetail = {
   session: Session;
   messages: Array<Message>;
-  agent_removed?: boolean | undefined;
 };
 type Message = {
   id: string;
@@ -99,30 +98,6 @@ type Agent = {
     | Partial<{
         enable_deny_patterns: boolean;
         custom_deny_patterns: Array<string>;
-      }>
-    | undefined;
-  fallback_models?: Array<string> | undefined;
-  model_params?:
-    | Partial<{
-        temperature: number;
-        max_tokens: number;
-        top_p: number;
-      }>
-    | undefined;
-  rate_limits?:
-    | Partial<{
-        use_global_defaults: boolean;
-        max_llm_calls_per_hour: number;
-        max_tool_calls_per_minute: number;
-        max_cost_per_day: number;
-      }>
-    | undefined;
-  stats?:
-    | Partial<{
-        total_sessions: number;
-        total_tokens: number;
-        total_cost: number;
-        last_active: string;
       }>
     | undefined;
 };
@@ -296,11 +271,7 @@ export const Message: z.ZodType<Message> = z
   })
   .passthrough();
 export const SessionDetail: z.ZodType<SessionDetail> = z
-  .object({
-    session: Session,
-    messages: z.array(Message),
-    agent_removed: z.boolean().optional(),
-  })
+  .object({ session: Session, messages: z.array(Message) })
   .passthrough();
 export const SessionRenameRequest = z
   .object({ title: z.string().min(1).max(256) })
@@ -417,36 +388,6 @@ export const Agent: z.ZodType<Agent> = z
       .object({
         enable_deny_patterns: z.boolean(),
         custom_deny_patterns: z.array(z.string()),
-      })
-      .partial()
-      .passthrough()
-      .optional(),
-    fallback_models: z.array(z.string()).optional(),
-    model_params: z
-      .object({
-        temperature: z.number(),
-        max_tokens: z.number().int(),
-        top_p: z.number(),
-      })
-      .partial()
-      .passthrough()
-      .optional(),
-    rate_limits: z
-      .object({
-        use_global_defaults: z.boolean(),
-        max_llm_calls_per_hour: z.number().int(),
-        max_tool_calls_per_minute: z.number().int(),
-        max_cost_per_day: z.number(),
-      })
-      .partial()
-      .passthrough()
-      .optional(),
-    stats: z
-      .object({
-        total_sessions: z.number().int(),
-        total_tokens: z.number().int(),
-        total_cost: z.number(),
-        last_active: z.string().datetime({ offset: true }),
       })
       .partial()
       .passthrough()
@@ -615,7 +556,7 @@ export const SandboxConfig = z
   })
   .partial()
   .passthrough();
-export const SandboxConfigUpdate = z
+export const updateSandboxConfig_Body = z
   .object({
     mode: z.enum(["off", "permissive", "enforce"]),
     allow_network_outbound: z.boolean(),
@@ -725,60 +666,6 @@ export const PendingRestartEntry = z
 export const setCredential_Body = z
   .object({ key: z.string(), value: z.string() })
   .passthrough();
-export const GatewayStatus = z
-  .object({
-    online: z.boolean(),
-    agent_count: z.number().int().gte(0),
-    channel_count: z.number().int().gte(0),
-    daily_cost: z.number().gte(0),
-    version: z.string().optional(),
-  })
-  .passthrough();
-export const Provider = z
-  .object({
-    id: z.string(),
-    name: z.string(),
-    display_name: z.string().optional(),
-    status: z.enum(["connected", "disconnected", "error"]),
-    models: z.array(z.string()),
-    warning: z.string().optional(),
-    error: z.string().optional(),
-  })
-  .passthrough();
-export const Skill = z
-  .object({
-    id: z.string(),
-    name: z.string(),
-    version: z.string(),
-    description: z.string().optional(),
-    author: z.string().optional(),
-    verified: z.boolean(),
-    status: z.enum(["active", "disabled", "inactive", "error"]),
-    agent_assignment: z.string().optional(),
-  })
-  .passthrough();
-export const ActivityEvent = z
-  .object({
-    id: z.string(),
-    type: z.string(),
-    agent_id: z.string().optional(),
-    agent_name: z.string().optional(),
-    timestamp: z.string().datetime({ offset: true }),
-    summary: z.string().optional(),
-  })
-  .passthrough();
-export const uploadFiles_Body = z
-  .object({ session_id: z.string(), files: z.array(z.instanceof(File)) })
-  .partial()
-  .passthrough();
-export const UploadedFile = z
-  .object({
-    name: z.string(),
-    path: z.string(),
-    size: z.number().int().gte(0),
-    content_type: z.string(),
-  })
-  .passthrough();
 export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
   LoginResponse;
 export const AgentSession = z
@@ -821,28 +708,6 @@ const endpoints = makeApi([
     requestFormat: "json",
     response: AboutResponse,
     errors: [
-      {
-        status: 405,
-        description: `Method not allowed.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/activity",
-    alias: "getActivity",
-    description: `Returns up to 50 activity events from the last 24 hours, sorted reverse-chronological.
-Includes session_start events from all agent stores and task lifecycle events.
-`,
-    requestFormat: "json",
-    response: z.array(ActivityEvent),
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
       {
         status: 405,
         description: `Method not allowed.`,
@@ -1732,28 +1597,6 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
   },
   {
-    method: "get",
-    path: "/providers",
-    alias: "listProviders",
-    description: `Returns all configured LLM providers with connection status and available model list.
-Model lists are fetched live from each provider&#x27;s upstream /models endpoint when an API key is present.
-`,
-    requestFormat: "json",
-    response: z.array(Provider),
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 405,
-        description: `Method not allowed.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
     method: "post",
     path: "/restore",
     alias: "restoreBackup",
@@ -2120,7 +1963,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         name: "body",
         type: "Body",
-        schema: SandboxConfigUpdate,
+        schema: updateSandboxConfig_Body,
       },
     ],
     response: SandboxConfig,
@@ -2577,49 +2420,6 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
   },
   {
     method: "get",
-    path: "/skills",
-    alias: "listSkills",
-    description: `Returns all skills installed in ~/.omnipus/skills/. Returns an empty array when no skills are installed.
-`,
-    requestFormat: "json",
-    response: z.array(Skill),
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 405,
-        description: `Method not allowed.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/status",
-    alias: "getGatewayStatus",
-    description: `Returns online status, agent/channel counts, daily cost, and the binary version.
-Polled by the SPA StatusBar every 15 seconds.
-`,
-    requestFormat: "json",
-    response: GatewayStatus,
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 405,
-        description: `Method not allowed.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
     path: "/storage/stats",
     alias: "getStorageStats",
     description: `Returns session count and workspace size. May include partial warnings if some agent stores could not be read.
@@ -2723,47 +2523,6 @@ Polled by the SPA StatusBar every 15 seconds.
         status: 404,
         description: `Endpoint removed — use GET /api/v1/tools instead.
 `,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/upload",
-    alias: "uploadFiles",
-    description: `Streams multipart file uploads to disk under ~/.omnipus/uploads/{session_id}/.
-Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory.
-session_id may be supplied as a query parameter or as a form field before the file parts.
-Returns HTTP 201 on success.
-`,
-    requestFormat: "form-data",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: uploadFiles_Body,
-      },
-      {
-        name: "session_id",
-        type: "Query",
-        schema: z.string().optional(),
-      },
-    ],
-    response: z.object({ files: z.array(UploadedFile) }).passthrough(),
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 405,
-        description: `Method not allowed.`,
         schema: ErrorResponse,
       },
     ],

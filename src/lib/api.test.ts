@@ -305,7 +305,8 @@ describe('Security API helpers', () => {
 
   describe('fetchPromptGuardLevel', () => {
     it('GET /api/v1/security/prompt-guard — returns level', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ level: 'medium' as PromptInjectionLevel }))
+      // PromptGuardResponse requires {level, requires_restart} per contracts/openapi.yaml
+      fetchSpy.mockResolvedValueOnce(makeOkResponse({ level: 'medium' as PromptInjectionLevel, requires_restart: false }))
 
       const { fetchPromptGuardLevel } = await import('./api')
       const result = await fetchPromptGuardLevel()
@@ -382,20 +383,22 @@ describe('Security API helpers', () => {
 
   describe('fetchSandboxConfig', () => {
     it('GET /api/v1/security/sandbox-config — returns config', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ mode: 'strict', allowed_paths: ['/tmp'] }))
+      // 'enforce' is a valid SandboxMode per contracts/openapi.yaml (off|permissive|enforce)
+      fetchSpy.mockResolvedValueOnce(makeOkResponse({ mode: 'enforce', allowed_paths: ['/tmp'] }))
 
       const { fetchSandboxConfig } = await import('./api')
       const result = await fetchSandboxConfig()
 
       const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
       expect(url).toContain('/api/v1/security/sandbox-config')
-      expect(result.mode).toBe('strict')
+      expect(result.mode).toBe('enforce')
     })
   })
 
   describe('updateSandboxConfig', () => {
     it('PUT /api/v1/security/sandbox-config — sends CSRF and body', async () => {
-      const body = { mode: 'strict', allowed_paths: ['/tmp'], ssrf: { enabled: true, allow_internal: ['127.0.0.1'] } }
+      // 'permissive' is a valid SandboxMode per contracts/openapi.yaml (off|permissive|enforce)
+      const body = { mode: 'permissive', allowed_paths: ['/tmp'], ssrf: { enabled: true, allow_internal: ['127.0.0.1'] } }
       fetchSpy.mockResolvedValueOnce(makeOkResponse(body))
 
       const { updateSandboxConfig } = await import('./api')
@@ -474,8 +477,10 @@ describe('Security API helpers', () => {
 
   describe('updateRetention', () => {
     it('PUT /api/v1/security/retention — sends CSRF and body', async () => {
+      // The real handler returns flat {saved, requires_restart, session_days, disabled}
+      // (not nested applied: {...}).  The schema requires all four fields.
       fetchSpy.mockResolvedValueOnce(
-        makeOkResponse({ saved: true, requires_restart: false, applied: { session_days: 30 } }),
+        makeOkResponse({ saved: true, requires_restart: false, session_days: 30, disabled: false }),
       )
 
       const { updateRetention } = await import('./api')
@@ -577,7 +582,8 @@ describe('Security API helpers', () => {
 
   describe('deleteUser', () => {
     it('DELETE /api/v1/users/{username} — sends CSRF', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ deleted: true }))
+      // UserDeleteResponse requires {username, deleted} per contracts/openapi.yaml
+      fetchSpy.mockResolvedValueOnce(makeOkResponse({ username: 'alice', deleted: true }))
 
       const { deleteUser } = await import('./api')
       await deleteUser('alice')
@@ -812,5 +818,118 @@ describe('getApiSchemaErrorCount / resetApiSchemaErrorCount', () => {
     resetApiSchemaErrorCount()
     resetApiSchemaErrorCount()
     expect(getApiSchemaErrorCount()).toBe(0)
+  })
+})
+
+// ── Schema validation through real request() call (fix-C) ─────────────────────
+//
+// These tests verify that request() with an explicit Zod schema:
+// 1. Throws ApiSchemaError when the response body fails validation
+// 2. Increments _apiSchemaErrorCount on failure
+// 3. Throws ApiSchemaError when the response body is not valid JSON
+//
+// Tests use the generated LoginResponse schema (a simple well-understood shape)
+// and the live fetchAgents/fetchExecAllowlist functions which now pass schemas.
+
+describe('request() with Zod schema — validation errors', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  function stubCookie2(value: string) {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => value,
+    })
+  }
+
+  function restoreCookie2() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (document as any).cookie
+  }
+
+  beforeEach(() => {
+    resetApiSchemaErrorCount()
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    stubCookie2('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookie2()
+    vi.resetModules()
+  })
+
+  it('fetchAgents: throws ApiSchemaError when body fails Agent schema validation', async () => {
+    // Return a valid JSON body that fails Agent schema (missing required fields)
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify([{ id: 'a', name: 'bad' }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
+
+    const { fetchAgents, ApiSchemaError: ApiSchemaErrorClass, getApiSchemaErrorCount: count } = await import('./api')
+    await expect(fetchAgents()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+    expect(count()).toBe(1)
+  })
+
+  it('fetchAgents: increments _apiSchemaErrorCount on validation failure', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify([{ invalid: true }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
+
+    const { fetchAgents, getApiSchemaErrorCount: count } = await import('./api')
+    try {
+      await fetchAgents()
+    } catch {
+      // expected
+    }
+    expect(count()).toBe(1)
+  })
+
+  it('login: throws ApiSchemaError when body fails LoginResponse schema', async () => {
+    // Return a body missing the required `token` field
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ role: 'admin', username: 'alice' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
+
+    const { login, ApiSchemaError: ApiSchemaErrorClass } = await import('./api')
+    await expect(login('alice', 'pass')).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+  })
+
+  it('login: returns valid data when schema passes', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ token: 'tok', role: 'admin', username: 'alice' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
+
+    const { login, getApiSchemaErrorCount: count } = await import('./api')
+    const result = await login('alice', 'pass')
+    expect(result.token).toBe('tok')
+    expect(count()).toBe(0)
+  })
+
+  it('request() with schema throws ApiSchemaError when body is not JSON (HTML 200)', async () => {
+    // Simulate a server returning an HTML error page with HTTP 200 (misconfigured reverse proxy)
+    fetchSpy.mockResolvedValueOnce(
+      new Response('<!DOCTYPE html><html><body>502 Bad Gateway</body></html>', {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      })
+    )
+
+    const { fetchExecAllowlist, ApiSchemaError: ApiSchemaErrorClass, getApiSchemaErrorCount: count } = await import('./api')
+    await expect(fetchExecAllowlist()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+    expect(count()).toBe(1)
   })
 })

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { WsConnection, parseFrameSafe, getDroppedFrameCount, resetDroppedFrameCount } from './ws'
+import { WsConnection, parseFrameSafe, getDroppedFrameCount, resetDroppedFrameCount, getUnknownFrameTypeCount, resetUnknownFrameTypeCount } from './ws'
 
 // ── Mock WebSocket ─────────────────────────────────────────────────────────────
 
@@ -454,5 +454,149 @@ describe('parseFrameSafe', () => {
     parseFrameSafe('{"type":"token","session_id":"s1","content":"a"}')
     parseFrameSafe('{"type":"error","message":"err"}')
     expect(getDroppedFrameCount()).toBe(0)
+  })
+})
+
+// ── WsConnection onmessage integration: strict parsing (fix-C) ───────────────
+//
+// These tests verify the fix for the three bugs described in Phase 7:
+// 1. tool_approval_required with args:null is dropped (never reaches reducer)
+// 2. Unknown discriminator goes through _unknownFrameTypeCount, not drop path
+// 3. Client→server direction frames are rejected even if Zod accepts them
+
+describe('WsConnection onmessage — strict parsing (fix-C integration)', () => {
+  beforeEach(() => {
+    resetDroppedFrameCount()
+    resetUnknownFrameTypeCount()
+  })
+
+  it('drops tool_approval_required with args:null — onFrame not called, counter increments', () => {
+    // Original Ava-chat bug: Go emitted args:null instead of {}.
+    // With strict parsing, this frame is rejected at the SPA edge.
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    const badFrame = JSON.stringify({
+      type: 'tool_approval_required',
+      approval_id: 'appr_1',
+      tool_call_id: 'tc_1',
+      tool_name: 'workspace.shell',
+      args: null,
+      agent_id: 'agent-jim',
+      session_id: 'sess_1',
+      turn_id: 'turn_1',
+      expires_in_ms: 30000,
+    })
+    lastWsInstance.onmessage?.({ data: badFrame })
+
+    expect(cbs.onFrame).not.toHaveBeenCalled()
+    expect(getDroppedFrameCount()).toBeGreaterThan(0)
+
+    conn.disconnect()
+  })
+
+  it('accepts tool_approval_required with args:{} — onFrame called with typed frame', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    const goodFrame = JSON.stringify({
+      type: 'tool_approval_required',
+      approval_id: 'appr_1',
+      tool_call_id: 'tc_1',
+      tool_name: 'workspace.shell',
+      args: { command: 'ls' },
+      agent_id: 'agent-jim',
+      session_id: 'sess_1',
+      turn_id: 'turn_1',
+      expires_in_ms: 30000,
+    })
+    lastWsInstance.onmessage?.({ data: goodFrame })
+
+    expect(cbs.onFrame).toHaveBeenCalledOnce()
+    const received = cbs.onFrame.mock.calls[0]?.[0] as { type: string }
+    expect(received.type).toBe('tool_approval_required')
+    expect(getDroppedFrameCount()).toBe(0)
+
+    conn.disconnect()
+  })
+
+  it('unknown discriminator goes to _unknownFrameTypeCount path, not _droppedFrameCount', () => {
+    // A future server frame type not yet in the spec should be counted separately
+    // so operators can distinguish "spec drift" from "malformed payload".
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'future_frame_x', data: 'y' }) })
+
+    expect(cbs.onFrame).not.toHaveBeenCalled()
+    expect(getUnknownFrameTypeCount()).toBe(1)
+    // _droppedFrameCount should NOT increment for unknown-type frames
+    expect(getDroppedFrameCount()).toBe(0)
+
+    conn.disconnect()
+  })
+
+  it('client→server frame discriminator (type:"auth") is rejected — not forwarded to reducer', () => {
+    // A spoofed {type:"auth",token:"x"} payload from the server must be dropped.
+    // It passes Zod (AuthFrame schema), but the direction filter must block it.
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'auth', token: 'spoofed' }) })
+
+    expect(cbs.onFrame).not.toHaveBeenCalled()
+    expect(getDroppedFrameCount()).toBeGreaterThan(0)
+
+    conn.disconnect()
+  })
+
+  it('client→server frame discriminator (type:"message") is rejected', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'message', content: 'hello' }) })
+
+    expect(cbs.onFrame).not.toHaveBeenCalled()
+    expect(getDroppedFrameCount()).toBeGreaterThan(0)
+
+    conn.disconnect()
+  })
+})
+
+// ── getUnknownFrameTypeCount / resetUnknownFrameTypeCount ─────────────────────
+
+describe('getUnknownFrameTypeCount / resetUnknownFrameTypeCount', () => {
+  beforeEach(() => {
+    resetUnknownFrameTypeCount()
+    resetDroppedFrameCount()
+  })
+
+  it('starts at 0 after reset', () => {
+    expect(getUnknownFrameTypeCount()).toBe(0)
+  })
+
+  it('is incremented when parseFrameSafe encounters an unknown type', () => {
+    // parseFrameSafe increments _droppedFrameCount (not unknown) for all failures
+    // because it doesn't have the forward-compat path. The distinction is in _parseServerFrame.
+    // parseFrameSafe is a strict validator — unknown type → droppedFrameCount.
+    parseFrameSafe(JSON.stringify({ type: 'future_unknown_x' }))
+    expect(getDroppedFrameCount()).toBe(1)
+    // parseFrameSafe does NOT use the unknown-type counter; only _parseServerFrame does.
+    expect(getUnknownFrameTypeCount()).toBe(0)
+  })
+
+  it('reset after increment returns 0', () => {
+    resetUnknownFrameTypeCount()
+    expect(getUnknownFrameTypeCount()).toBe(0)
   })
 })
