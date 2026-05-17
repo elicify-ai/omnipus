@@ -189,7 +189,10 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
     setHeartbeatInterval(agent.heartbeat_interval ?? 30)
     setSandboxProfile(agent.sandbox_profile)
     setShellDenyPatterns(agent.shell_policy?.custom_deny_patterns ?? [])
-    if (agent.tools_cfg) setToolsCfg(agent.tools_cfg)
+    if (agent.tools_cfg) setToolsCfg((prev) => ({
+      builtin: agent.tools_cfg?.builtin ?? prev.builtin,
+      mcp: agent.tools_cfg?.mcp as AgentToolsCfg['mcp'],
+    }))
     hasHydrated.current = true
   }, [agentId, agent])
 

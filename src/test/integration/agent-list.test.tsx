@@ -23,11 +23,23 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 import { fetchAgents } from '@/lib/api'
 
+const agentDefaults = {
+  soul: '',
+  heartbeat: '',
+  instructions: '',
+  timeout_seconds: 60,
+  max_tool_iterations: 20,
+  steering_mode: 'loop',
+  tool_feedback: true,
+  heartbeat_enabled: false,
+  heartbeat_interval: 300,
+}
+
 const mockAgents = [
-  { id: 'mia', name: 'Mia', type: 'core' as const, locked: true, color: '#6366f1', status: 'active' as const, model: 'claude-opus-4-6', description: 'General purpose assistant' },
-  { id: 'general-assistant', name: 'General Assistant', type: 'core' as const, color: 'green', status: 'active' as const, model: 'claude-sonnet-4-6', description: 'General assistant' },
-  { id: 'researcher', name: 'Researcher', type: 'core' as const, color: 'blue', status: 'idle' as const, model: 'claude-opus-4-6', description: 'Research specialist' },
-  { id: 'content-creator', name: 'Content Creator', type: 'custom' as const, color: 'purple', status: 'idle' as const, model: 'claude-sonnet-4-6', description: 'Content writer' },
+  { id: 'mia', name: 'Mia', type: 'core' as const, locked: true, color: '#6366f1', status: 'active' as const, model: 'claude-opus-4-6', description: 'General purpose assistant', ...agentDefaults },
+  { id: 'general-assistant', name: 'General Assistant', type: 'core' as const, locked: false, color: 'green', status: 'active' as const, model: 'claude-sonnet-4-6', description: 'General assistant', ...agentDefaults },
+  { id: 'researcher', name: 'Researcher', type: 'core' as const, locked: false, color: 'blue', status: 'idle' as const, model: 'claude-opus-4-6', description: 'Research specialist', ...agentDefaults },
+  { id: 'content-creator', name: 'Content Creator', type: 'custom' as const, locked: false, color: 'purple', status: 'idle' as const, model: 'claude-sonnet-4-6', description: 'Content writer', ...agentDefaults },
 ]
 
 function makeClient() {
