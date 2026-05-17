@@ -17,31 +17,9 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
 )
 
-// sandboxConfigPutBody mirrors the partial-update contract for
-// PUT /api/v1/security/sandbox-config. Pointer types allow us to distinguish
-// "omitted" (nil) from "explicitly set to empty list/string" (non-nil).
-// Only fields present in the request body are touched on disk; untouched
-// fields retain their existing values.
-//
-// Accepts both flat fields (ssrf_enabled, ssrf_allow_internal,
-// allow_network_outbound) and nested ssrf object (ssrf.allow_internal).
-// Flat fields take precedence when both are present.
-type sandboxConfigPutBody struct {
-	Mode                 *string                   `json:"mode,omitempty"`
-	AllowNetworkOutbound *bool                     `json:"allow_network_outbound,omitempty"`
-	AllowedPaths         *[]string                 `json:"allowed_paths,omitempty"`
-	SSRFEnabled          *bool                     `json:"ssrf_enabled,omitempty"`
-	SSRFAllowInternal    *[]string                 `json:"ssrf_allow_internal,omitempty"`
-	SSRF                 *sandboxConfigPutBodySSRF `json:"ssrf,omitempty"`
-	// DefaultProfile is the global fallback sandbox profile applied to
-	// new custom agents that do not pick their own SandboxProfile. Maps
-	// to OmnipusSandboxConfig.DefaultProfile (json key: default_profile).
-	DefaultProfile *string `json:"default_profile,omitempty"`
-	// ShellDenyPatterns is the global fallback shell command deny list
-	// (regex per entry). Per-agent CustomDenyPatterns extend this list.
-	// Maps to OmnipusSandboxConfig.ShellDenyPatterns.
-	ShellDenyPatterns *[]string `json:"shell_deny_patterns,omitempty"`
-}
+// SandboxConfigUpdate request body is defined in
+// contracts/components/schemas/SandboxConfigUpdate.yaml and generated into
+// pkg/api/generated/. Use gen.SandboxConfigUpdate directly in putSandboxConfig.
 
 // validSandboxProfiles is the canonical set accepted for default_profile.
 // Mirrors config.SandboxProfile* constants.
@@ -54,12 +32,8 @@ var validSandboxProfiles = map[string]bool{
 	"off":           true,
 }
 
-// sandboxConfigPutBodySSRF carries the nested ssrf sub-object for
-// clients that send ssrf.allow_internal. Flat ssrf_allow_internal takes
-// precedence when both are present in the same request.
-type sandboxConfigPutBodySSRF struct {
-	AllowInternal *[]string `json:"allow_internal,omitempty"`
-}
+// SandboxConfigUpdate.Ssrf (nested) is inlined in the generated type;
+// see contracts/components/schemas/SandboxConfigUpdate.yaml.
 
 // validSandboxModes is the canonical set accepted by putSandboxConfig.
 var validSandboxModes = map[string]bool{
@@ -153,7 +127,7 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	var body sandboxConfigPutBody
+	var body gen.SandboxConfigUpdate
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
@@ -164,14 +138,14 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	changedMode := body.Mode != nil
 	changedAllowNetworkOutbound := body.AllowNetworkOutbound != nil
 	changedAllowedPaths := body.AllowedPaths != nil
-	changedSSRFEnabled := body.SSRFEnabled != nil
+	changedSSRFEnabled := body.SsrfEnabled != nil
 
 	// Resolve allow_internal source: flat field takes precedence over nested.
 	var resolvedAllowInternal *[]string
-	if body.SSRFAllowInternal != nil {
-		resolvedAllowInternal = body.SSRFAllowInternal
-	} else if body.SSRF != nil && body.SSRF.AllowInternal != nil {
-		resolvedAllowInternal = body.SSRF.AllowInternal
+	if body.SsrfAllowInternal != nil {
+		resolvedAllowInternal = body.SsrfAllowInternal
+	} else if body.Ssrf != nil && body.Ssrf.AllowInternal != nil {
+		resolvedAllowInternal = body.Ssrf.AllowInternal
 	}
 	changedAllowInternal := resolvedAllowInternal != nil
 	changedDefaultProfile := body.DefaultProfile != nil
@@ -190,7 +164,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Validate mode value before any disk writes.
 	if changedMode {
-		if !validSandboxModes[*body.Mode] {
+		if !validSandboxModes[string(*body.Mode)] {
 			jsonErr(w, http.StatusBadRequest, `invalid sandbox mode — must be one of "off", "permissive", "enforce"`)
 			return
 		}
@@ -198,7 +172,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Validate default profile value before any disk writes.
 	if changedDefaultProfile {
-		if !validSandboxProfiles[*body.DefaultProfile] {
+		if !validSandboxProfiles[string(*body.DefaultProfile)] {
 			jsonErr(
 				w,
 				http.StatusBadRequest,
@@ -245,7 +219,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 			if s, ok := sandbox["mode"].(string); ok {
 				oldMode = s
 			}
-			sandbox["mode"] = *body.Mode
+			sandbox["mode"] = string(*body.Mode)
 			// Strip any stale legacy "enabled" bool from older configs so
 			// the on-disk shape matches the current schema.
 			delete(sandbox, "enabled")
@@ -266,7 +240,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		if changedSSRFEnabled || changedAllowInternal {
 			ssrf := ensureMap(m, "sandbox", "ssrf")
 			if changedSSRFEnabled {
-				ssrf["enabled"] = *body.SSRFEnabled
+				ssrf["enabled"] = *body.SsrfEnabled
 			}
 			if changedAllowInternal {
 				if raw, ok := ssrf["allow_internal"].([]any); ok {
@@ -283,10 +257,10 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 			if s, ok := sandbox["default_profile"].(string); ok {
 				oldDefaultProfile = s
 			}
-			if *body.DefaultProfile == "" {
+			if string(*body.DefaultProfile) == "" {
 				delete(sandbox, "default_profile")
 			} else {
-				sandbox["default_profile"] = *body.DefaultProfile
+				sandbox["default_profile"] = string(*body.DefaultProfile)
 			}
 		}
 		if changedShellDenyPatterns {
@@ -315,7 +289,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 				if err := audit.EmitSecuritySettingChange(
 					r.Context(), auditLogger,
 					"sandbox.mode",
-					oldMode, *body.Mode,
+					oldMode, string(*body.Mode),
 				); err != nil {
 					slog.Error("rest: audit emit sandbox.mode change", "error", err)
 				}
@@ -342,7 +316,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 				if err := audit.EmitSecuritySettingChange(
 					r.Context(), auditLogger,
 					"sandbox.default_profile",
-					oldDefaultProfile, *body.DefaultProfile,
+					oldDefaultProfile, string(*body.DefaultProfile),
 				); err != nil {
 					slog.Error("rest: audit emit default_profile change", "error", err)
 				}

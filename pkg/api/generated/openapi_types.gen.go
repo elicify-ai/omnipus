@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/oapi-codegen/runtime"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
 const (
@@ -512,6 +513,27 @@ func (e PromptGuardResponseLevel) Valid() bool {
 	}
 }
 
+// Defines values for ProviderStatus.
+const (
+	ProviderStatusConnected    ProviderStatus = "connected"
+	ProviderStatusDisconnected ProviderStatus = "disconnected"
+	ProviderStatusError        ProviderStatus = "error"
+)
+
+// Valid indicates whether the value is a known member of the ProviderStatus enum.
+func (e ProviderStatus) Valid() bool {
+	switch e {
+	case ProviderStatusConnected:
+		return true
+	case ProviderStatusDisconnected:
+		return true
+	case ProviderStatusError:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SandboxConfigDefaultProfile.
 const (
 	SandboxConfigDefaultProfileEmpty        SandboxConfigDefaultProfile = ""
@@ -557,6 +579,57 @@ func (e SandboxConfigMode) Valid() bool {
 	case SandboxConfigModeOff:
 		return true
 	case SandboxConfigModePermissive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SandboxConfigUpdateDefaultProfile.
+const (
+	SandboxConfigUpdateDefaultProfileEmpty        SandboxConfigUpdateDefaultProfile = ""
+	SandboxConfigUpdateDefaultProfileHost         SandboxConfigUpdateDefaultProfile = "host"
+	SandboxConfigUpdateDefaultProfileNone         SandboxConfigUpdateDefaultProfile = "none"
+	SandboxConfigUpdateDefaultProfileOff          SandboxConfigUpdateDefaultProfile = "off"
+	SandboxConfigUpdateDefaultProfileWorkspace    SandboxConfigUpdateDefaultProfile = "workspace"
+	SandboxConfigUpdateDefaultProfileWorkspaceNet SandboxConfigUpdateDefaultProfile = "workspace+net"
+)
+
+// Valid indicates whether the value is a known member of the SandboxConfigUpdateDefaultProfile enum.
+func (e SandboxConfigUpdateDefaultProfile) Valid() bool {
+	switch e {
+	case SandboxConfigUpdateDefaultProfileEmpty:
+		return true
+	case SandboxConfigUpdateDefaultProfileHost:
+		return true
+	case SandboxConfigUpdateDefaultProfileNone:
+		return true
+	case SandboxConfigUpdateDefaultProfileOff:
+		return true
+	case SandboxConfigUpdateDefaultProfileWorkspace:
+		return true
+	case SandboxConfigUpdateDefaultProfileWorkspaceNet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SandboxConfigUpdateMode.
+const (
+	SandboxConfigUpdateModeEnforce    SandboxConfigUpdateMode = "enforce"
+	SandboxConfigUpdateModeOff        SandboxConfigUpdateMode = "off"
+	SandboxConfigUpdateModePermissive SandboxConfigUpdateMode = "permissive"
+)
+
+// Valid indicates whether the value is a known member of the SandboxConfigUpdateMode enum.
+func (e SandboxConfigUpdateMode) Valid() bool {
+	switch e {
+	case SandboxConfigUpdateModeEnforce:
+		return true
+	case SandboxConfigUpdateModeOff:
+		return true
+	case SandboxConfigUpdateModePermissive:
 		return true
 	default:
 		return false
@@ -670,28 +743,28 @@ func (e SessionDetailMessagesStatus) Valid() bool {
 
 // Defines values for SessionDetailMessagesToolCallsStatus.
 const (
-	Cancelled SessionDetailMessagesToolCallsStatus = "cancelled"
-	Denied    SessionDetailMessagesToolCallsStatus = "denied"
-	Error     SessionDetailMessagesToolCallsStatus = "error"
-	Pending   SessionDetailMessagesToolCallsStatus = "pending"
-	Running   SessionDetailMessagesToolCallsStatus = "running"
-	Success   SessionDetailMessagesToolCallsStatus = "success"
+	SessionDetailMessagesToolCallsStatusCancelled SessionDetailMessagesToolCallsStatus = "cancelled"
+	SessionDetailMessagesToolCallsStatusDenied    SessionDetailMessagesToolCallsStatus = "denied"
+	SessionDetailMessagesToolCallsStatusError     SessionDetailMessagesToolCallsStatus = "error"
+	SessionDetailMessagesToolCallsStatusPending   SessionDetailMessagesToolCallsStatus = "pending"
+	SessionDetailMessagesToolCallsStatusRunning   SessionDetailMessagesToolCallsStatus = "running"
+	SessionDetailMessagesToolCallsStatusSuccess   SessionDetailMessagesToolCallsStatus = "success"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesToolCallsStatus enum.
 func (e SessionDetailMessagesToolCallsStatus) Valid() bool {
 	switch e {
-	case Cancelled:
+	case SessionDetailMessagesToolCallsStatusCancelled:
 		return true
-	case Denied:
+	case SessionDetailMessagesToolCallsStatusDenied:
 		return true
-	case Error:
+	case SessionDetailMessagesToolCallsStatusError:
 		return true
-	case Pending:
+	case SessionDetailMessagesToolCallsStatusPending:
 		return true
-	case Running:
+	case SessionDetailMessagesToolCallsStatusRunning:
 		return true
-	case Success:
+	case SessionDetailMessagesToolCallsStatusSuccess:
 		return true
 	default:
 		return false
@@ -721,19 +794,19 @@ func (e SessionDetailMessagesType) Valid() bool {
 
 // Defines values for SessionDetailSessionStatus.
 const (
-	SessionDetailSessionStatusActive      SessionDetailSessionStatus = "active"
-	SessionDetailSessionStatusArchived    SessionDetailSessionStatus = "archived"
-	SessionDetailSessionStatusInterrupted SessionDetailSessionStatus = "interrupted"
+	Active      SessionDetailSessionStatus = "active"
+	Archived    SessionDetailSessionStatus = "archived"
+	Interrupted SessionDetailSessionStatus = "interrupted"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailSessionStatus enum.
 func (e SessionDetailSessionStatus) Valid() bool {
 	switch e {
-	case SessionDetailSessionStatusActive:
+	case Active:
 		return true
-	case SessionDetailSessionStatusArchived:
+	case Archived:
 		return true
-	case SessionDetailSessionStatusInterrupted:
+	case Interrupted:
 		return true
 	default:
 		return false
@@ -803,6 +876,30 @@ func (e SessionScopeResponseDmScope) Valid() bool {
 	case SessionScopeResponseDmScopePerChannelPeer:
 		return true
 	case SessionScopeResponseDmScopePerPeer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillStatus.
+const (
+	SkillStatusActive   SkillStatus = "active"
+	SkillStatusDisabled SkillStatus = "disabled"
+	SkillStatusError    SkillStatus = "error"
+	SkillStatusInactive SkillStatus = "inactive"
+)
+
+// Valid indicates whether the value is a known member of the SkillStatus enum.
+func (e SkillStatus) Valid() bool {
+	switch e {
+	case SkillStatusActive:
+		return true
+	case SkillStatusDisabled:
+		return true
+	case SkillStatusError:
+		return true
+	case SkillStatusInactive:
 		return true
 	default:
 		return false
@@ -1133,57 +1230,6 @@ func (e UpdatePromptGuard200JSONResponseBodyAppliedLevel) Valid() bool {
 	}
 }
 
-// Defines values for UpdateSandboxConfigJSONBodyDefaultProfile.
-const (
-	UpdateSandboxConfigJSONBodyDefaultProfileEmpty        UpdateSandboxConfigJSONBodyDefaultProfile = ""
-	UpdateSandboxConfigJSONBodyDefaultProfileHost         UpdateSandboxConfigJSONBodyDefaultProfile = "host"
-	UpdateSandboxConfigJSONBodyDefaultProfileNone         UpdateSandboxConfigJSONBodyDefaultProfile = "none"
-	UpdateSandboxConfigJSONBodyDefaultProfileOff          UpdateSandboxConfigJSONBodyDefaultProfile = "off"
-	UpdateSandboxConfigJSONBodyDefaultProfileWorkspace    UpdateSandboxConfigJSONBodyDefaultProfile = "workspace"
-	UpdateSandboxConfigJSONBodyDefaultProfileWorkspaceNet UpdateSandboxConfigJSONBodyDefaultProfile = "workspace+net"
-)
-
-// Valid indicates whether the value is a known member of the UpdateSandboxConfigJSONBodyDefaultProfile enum.
-func (e UpdateSandboxConfigJSONBodyDefaultProfile) Valid() bool {
-	switch e {
-	case UpdateSandboxConfigJSONBodyDefaultProfileEmpty:
-		return true
-	case UpdateSandboxConfigJSONBodyDefaultProfileHost:
-		return true
-	case UpdateSandboxConfigJSONBodyDefaultProfileNone:
-		return true
-	case UpdateSandboxConfigJSONBodyDefaultProfileOff:
-		return true
-	case UpdateSandboxConfigJSONBodyDefaultProfileWorkspace:
-		return true
-	case UpdateSandboxConfigJSONBodyDefaultProfileWorkspaceNet:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UpdateSandboxConfigJSONBodyMode.
-const (
-	UpdateSandboxConfigJSONBodyModeEnforce    UpdateSandboxConfigJSONBodyMode = "enforce"
-	UpdateSandboxConfigJSONBodyModeOff        UpdateSandboxConfigJSONBodyMode = "off"
-	UpdateSandboxConfigJSONBodyModePermissive UpdateSandboxConfigJSONBodyMode = "permissive"
-)
-
-// Valid indicates whether the value is a known member of the UpdateSandboxConfigJSONBodyMode enum.
-func (e UpdateSandboxConfigJSONBodyMode) Valid() bool {
-	switch e {
-	case UpdateSandboxConfigJSONBodyModeEnforce:
-		return true
-	case UpdateSandboxConfigJSONBodyModeOff:
-		return true
-	case UpdateSandboxConfigJSONBodyModePermissive:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for UpdateSkillTrustJSONBodyLevel.
 const (
 	UpdateSkillTrustJSONBodyLevelAllowAll        UpdateSkillTrustJSONBodyLevel = "allow_all"
@@ -1358,6 +1404,27 @@ type AboutResponse struct {
 	WarmupTimeoutSeconds int `json:"warmup_timeout_seconds"`
 }
 
+// ActivityEvent A single activity event as returned by GET /activity. Events represent notable runtime occurrences (session starts, task lifecycle changes) from the last 24 hours, returned in reverse-chronological order (max 50 entries).
+type ActivityEvent struct {
+	// AgentId ID of the agent involved in the event (absent for system events).
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// AgentName Display name of the agent involved (absent for system events).
+	AgentName *string `json:"agent_name,omitempty"`
+
+	// Id Opaque event identifier derived from the source entity. E.g. "session-<uuid>", "task-c-<id>", "task-u-<id>".
+	Id string `json:"id"`
+
+	// Summary Human-readable one-line summary of the event (e.g. session title, task title).
+	Summary *string `json:"summary,omitempty"`
+
+	// Timestamp RFC3339 UTC timestamp when the event occurred.
+	Timestamp time.Time `json:"timestamp"`
+
+	// Type Event category. "session_start" = new session began. "task_created" = a task was created. "task_updated" = a task completed or changed status.
+	Type string `json:"type"`
+}
+
 // Agent An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the Go agentResponse struct and the TypeScript Agent interface in src/lib/api.ts. Core (locked) agents suppress soul/instructions in list responses and forbid identity mutations via PUT.
 type Agent struct {
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
@@ -1365,6 +1432,9 @@ type Agent struct {
 
 	// Description Short description of the agent's purpose.
 	Description *string `json:"description,omitempty"`
+
+	// FallbackModels Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
+	FallbackModels *[]string `json:"fallback_models,omitempty"`
 
 	// Heartbeat Contents of HEARTBEAT.md — periodic background instructions. Empty string when not set. Always present on detail responses (never null).
 	Heartbeat string `json:"heartbeat"`
@@ -1393,8 +1463,35 @@ type Agent struct {
 	// Model Model name string used for LLM calls (resolved from defaults when not explicitly set on the agent). May be "provider/model" format for OpenRouter.
 	Model *string `json:"model,omitempty"`
 
+	// ModelParams LLM sampling parameters applied to this agent's requests.
+	ModelParams *struct {
+		// MaxTokens Maximum tokens to generate per turn.
+		MaxTokens *int `json:"max_tokens,omitempty"`
+
+		// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+		Temperature *float64 `json:"temperature,omitempty"`
+
+		// TopP Nucleus sampling probability mass. 1.0 disables nucleus sampling.
+		TopP *float64 `json:"top_p,omitempty"`
+	} `json:"model_params,omitempty"`
+
 	// Name Human-readable display name.
 	Name string `json:"name"`
+
+	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
+	RateLimits *struct {
+		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
+		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
+
+		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
+
+		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
+
+		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
+		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
+	} `json:"rate_limits,omitempty"`
 
 	// SandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. "off" = god-mode (requires --allow-god-mode at gateway boot).
 	SandboxProfile *AgentSandboxProfile `json:"sandbox_profile,omitempty"`
@@ -1410,6 +1507,21 @@ type Agent struct {
 
 	// Soul Contents of SOUL.md — the agent's system prompt. Empty string for locked core agents (prompt is compiled in, not exposed via API). Empty string for draft agents (no SOUL.md written yet). Always present (never null).
 	Soul string `json:"soul"`
+
+	// Stats Aggregate runtime statistics for this agent. Absent when no sessions have been run.
+	Stats *struct {
+		// LastActive RFC3339 timestamp of the last turn completed by this agent.
+		LastActive *time.Time `json:"last_active,omitempty"`
+
+		// TotalCost Lifetime USD cost across all sessions.
+		TotalCost float64 `json:"total_cost"`
+
+		// TotalSessions Lifetime count of sessions created for this agent.
+		TotalSessions int `json:"total_sessions"`
+
+		// TotalTokens Lifetime token count across all sessions.
+		TotalTokens int `json:"total_tokens"`
+	} `json:"stats,omitempty"`
 
 	// Status Current runtime status. "active" = agent is processing a turn. "idle" = ready and waiting. "draft" = SOUL.md is empty (no prompt written yet). "error" is a frontend-added possibility not emitted by the backend today.
 	Status AgentStatus `json:"status"`
@@ -1704,6 +1816,24 @@ type ExecProxyStatus struct {
 	Running bool `json:"running"`
 }
 
+// GatewayStatus Gateway runtime status as returned by GET /status (polled by the frontend StatusBar every 15 seconds). Summarises the number of configured agents and channels plus a daily cost accumulator.
+type GatewayStatus struct {
+	// AgentCount Total number of configured agents (core + custom), including the implicit system agent.
+	AgentCount int `json:"agent_count"`
+
+	// ChannelCount Number of enabled channels including the always-available webchat channel.
+	ChannelCount int `json:"channel_count"`
+
+	// DailyCost Aggregate USD cost accrued today across all agents. Zero when cost tracking is disabled.
+	DailyCost float64 `json:"daily_cost"`
+
+	// Online Always true when the gateway is reachable and the agent loop is running.
+	Online bool `json:"online"`
+
+	// Version Gateway binary version string (e.g. "0.1.0" or the git short-sha for dev builds).
+	Version *string `json:"version,omitempty"`
+}
+
 // GlobalToolPolicies Global tool policy configuration returned by GET /api/v1/security/tool-policies and accepted by PUT /api/v1/security/tool-policies.
 type GlobalToolPolicies struct {
 	// DefaultPolicy Default policy for any tool not listed in policies.
@@ -1932,6 +2062,33 @@ type PromptGuardResponse struct {
 // PromptGuardResponseLevel Current prompt injection detection strictness level.
 type PromptGuardResponseLevel string
 
+// Provider A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue.
+type Provider struct {
+	// DisplayName Branded display name for UI presentation (e.g. "OpenRouter", "Anthropic"). Falls back to name when absent.
+	DisplayName *string `json:"display_name,omitempty"`
+
+	// Error Fatal error message when status is "error". Absent for connected/disconnected providers.
+	Error *string `json:"error,omitempty"`
+
+	// Id Provider identifier (e.g. "anthropic", "openai", "openrouter").
+	Id string `json:"id"`
+
+	// Models Alphabetically sorted list of model IDs available from this provider, fetched from the upstream /models endpoint when an API key is present. Empty array when the upstream fetch fails or no key is configured.
+	Models []string `json:"models"`
+
+	// Name Human-readable provider name (may be the same as id for unknown providers).
+	Name string `json:"name"`
+
+	// Status "connected" when at least one API key is configured for this provider. "disconnected" when no key is available or on the fallback default entry. "error" when the provider is configured but the upstream returned a non-retryable error.
+	Status ProviderStatus `json:"status"`
+
+	// Warning Non-fatal advisory message (e.g. "could not fetch upstream model list: ..."). Absent when there are no warnings.
+	Warning *string `json:"warning,omitempty"`
+}
+
+// ProviderStatus "connected" when at least one API key is configured for this provider. "disconnected" when no key is available or on the fallback default entry. "error" when the provider is configured but the upstream returned a non-retryable error.
+type ProviderStatus string
+
 // RegisterAdminRequest Body for POST /auth/register-admin. Creates the first admin user (fails 409 if one already exists).
 type RegisterAdminRequest struct {
 	// Password Password for the new admin account. Minimum 8 characters.
@@ -2003,6 +2160,42 @@ type SandboxConfigDefaultProfile string
 
 // SandboxConfigMode Configured sandbox enforcement mode.
 type SandboxConfigMode string
+
+// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode, allowed_paths, and default_profile are restart-gated (the response includes requires_restart=true when any of these change). ssrf.allow_internal and shell_deny_patterns are hot-reloaded.
+type SandboxConfigUpdate struct {
+	// AllowNetworkOutbound Allow agent tool calls to make outbound network connections.
+	AllowNetworkOutbound *bool `json:"allow_network_outbound,omitempty"`
+
+	// AllowedPaths List of host filesystem paths the agent is allowed to read/write. Restart-gated. Must be absolute paths; empty list clears all exceptions.
+	AllowedPaths *[]string `json:"allowed_paths,omitempty"`
+
+	// DefaultProfile Default sandbox profile applied to new custom agents that do not pick their own profile. Restart-gated. Empty string means "inherit global default".
+	DefaultProfile *SandboxConfigUpdateDefaultProfile `json:"default_profile,omitempty"`
+
+	// Mode Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
+	Mode *SandboxConfigUpdateMode `json:"mode,omitempty"`
+
+	// ShellDenyPatterns Global fallback list of Go regexp patterns to block in shell commands. Per-agent custom_deny_patterns extend this list. Hot-reloaded.
+	ShellDenyPatterns *[]string `json:"shell_deny_patterns,omitempty"`
+
+	// Ssrf Nested SSRF configuration sub-object. Flat fields take precedence.
+	Ssrf *struct {
+		// AllowInternal CIDR ranges or IP addresses the agent may reach despite SSRF blocking.
+		AllowInternal *[]string `json:"allow_internal,omitempty"`
+	} `json:"ssrf,omitempty"`
+
+	// SsrfAllowInternal Flat version of ssrf.allow_internal. Takes precedence when both are present. CIDR ranges or IP addresses the agent may reach despite SSRF blocking.
+	SsrfAllowInternal *[]string `json:"ssrf_allow_internal,omitempty"`
+
+	// SsrfEnabled Enable SSRF (server-side request forgery) protection for HTTP tool calls.
+	SsrfEnabled *bool `json:"ssrf_enabled,omitempty"`
+}
+
+// SandboxConfigUpdateDefaultProfile Default sandbox profile applied to new custom agents that do not pick their own profile. Restart-gated. Empty string means "inherit global default".
+type SandboxConfigUpdateDefaultProfile string
+
+// SandboxConfigUpdateMode Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
+type SandboxConfigUpdateMode string
 
 // SandboxStatus Runtime sandbox backend status returned by GET /api/v1/security/sandbox-status.
 type SandboxStatus struct {
@@ -2150,6 +2343,9 @@ type SessionCreateRequestType string
 
 // SessionDetail Full session detail as returned by GET /sessions/{id}. Contains the session metadata plus the complete ordered transcript.
 type SessionDetail struct {
+	// AgentRemoved True when the agent that owned this session has been deleted from the config. Used by the SPA to display a banner informing the user that the original agent no longer exists. Absent (or false) in the common case.
+	AgentRemoved *bool `json:"agent_removed,omitempty"`
+
 	// Messages Ordered list of transcript entries for this session.
 	Messages []struct {
 		// AgentId ID of the agent that produced this entry (FR-002). Always present.
@@ -2343,6 +2539,36 @@ type SessionScopeResponse struct {
 // SessionScopeResponseDmScope Current DM session scoping strategy. Controls how incoming direct messages are routed to session threads. Changes require a gateway restart to take effect.
 type SessionScopeResponseDmScope string
 
+// Skill A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata.
+type Skill struct {
+	// AgentAssignment ID of the agent this skill is assigned to, when the skill is bound to a specific agent rather than globally available. Absent for globally assigned skills.
+	AgentAssignment *string `json:"agent_assignment,omitempty"`
+
+	// Author Skill author or publisher name.
+	Author *string `json:"author,omitempty"`
+
+	// Description Short description of what the skill does.
+	Description *string `json:"description,omitempty"`
+
+	// Id Unique skill identifier (typically the skill directory name or npm package name).
+	Id string `json:"id"`
+
+	// Name Human-readable skill name.
+	Name string `json:"name"`
+
+	// Status "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
+	Status SkillStatus `json:"status"`
+
+	// Verified True when the skill has been verified by the Omnipus team. Unverified skills require explicit trust grant before use.
+	Verified bool `json:"verified"`
+
+	// Version Semantic version string (e.g. "1.2.3").
+	Version string `json:"version"`
+}
+
+// SkillStatus "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
+type SkillStatus string
+
 // SkillTrustResponse Skill trust level returned by GET /api/v1/security/skill-trust.
 type SkillTrustResponse struct {
 	// Level Current skill trust level. Controls how unverified community skills are handled.
@@ -2375,6 +2601,21 @@ type ToolRegistryEntryScope string
 
 // ToolRegistryEntrySource Origin of the tool registration. "builtin" = compiled-in Go tool; "mcp" = MCP server tool.
 type ToolRegistryEntrySource string
+
+// UploadedFile Metadata for a single successfully uploaded file, as returned in the POST /upload response body's "files" array. Callers use the path field to construct the /api/v1/uploads/{session_id}/{filename} download URL.
+type UploadedFile struct {
+	// ContentType Detected MIME type of the uploaded file.
+	ContentType string `json:"content_type"`
+
+	// Name Sanitised filename as stored on disk.
+	Name string `json:"name"`
+
+	// Path Relative path within the uploads directory for constructing a download URL. Format: "uploads/{session_id}/{filename}".
+	Path string `json:"path"`
+
+	// Size File size in bytes.
+	Size int64 `json:"size"`
+}
 
 // User Represents a gateway user account as returned by GET /users and POST /users. Password hashes and token hashes are NEVER included in responses — only the boolean presence flags are exposed.
 type User struct {
@@ -2593,26 +2834,6 @@ type UpdateRateLimitsJSONBody struct {
 	MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
 }
 
-// UpdateSandboxConfigJSONBody defines parameters for UpdateSandboxConfig.
-type UpdateSandboxConfigJSONBody struct {
-	AllowNetworkOutbound *bool                                      `json:"allow_network_outbound,omitempty"`
-	AllowedPaths         *[]string                                  `json:"allowed_paths,omitempty"`
-	DefaultProfile       *UpdateSandboxConfigJSONBodyDefaultProfile `json:"default_profile,omitempty"`
-	Mode                 *UpdateSandboxConfigJSONBodyMode           `json:"mode,omitempty"`
-	ShellDenyPatterns    *[]string                                  `json:"shell_deny_patterns,omitempty"`
-	Ssrf                 *struct {
-		AllowInternal *[]string `json:"allow_internal,omitempty"`
-	} `json:"ssrf,omitempty"`
-	SsrfAllowInternal *[]string `json:"ssrf_allow_internal,omitempty"`
-	SsrfEnabled       *bool     `json:"ssrf_enabled,omitempty"`
-}
-
-// UpdateSandboxConfigJSONBodyDefaultProfile defines parameters for UpdateSandboxConfig.
-type UpdateSandboxConfigJSONBodyDefaultProfile string
-
-// UpdateSandboxConfigJSONBodyMode defines parameters for UpdateSandboxConfig.
-type UpdateSandboxConfigJSONBodyMode string
-
 // UpdateSkillTrustJSONBody defines parameters for UpdateSkillTrust.
 type UpdateSkillTrustJSONBody struct {
 	Level UpdateSkillTrustJSONBodyLevel `json:"level"`
@@ -2669,6 +2890,21 @@ type PostToolApproval200JSONResponseBodyAction string
 // PostToolApproval200JSONResponseBodyStatus defines parameters for PostToolApproval.
 type PostToolApproval200JSONResponseBodyStatus string
 
+// UploadFilesMultipartBody defines parameters for UploadFiles.
+type UploadFilesMultipartBody struct {
+	// Files One or more files to upload.
+	Files *[]openapi_types.File `json:"files,omitempty"`
+
+	// SessionId Session ID (alternative to query parameter).
+	SessionId *string `json:"session_id,omitempty"`
+}
+
+// UploadFilesParams defines parameters for UploadFiles.
+type UploadFilesParams struct {
+	// SessionId Session ID to associate the uploaded files with. May also be supplied as a multipart form field.
+	SessionId *string `form:"session_id,omitempty" json:"session_id,omitempty"`
+}
+
 // CreateAgentJSONRequestBody defines body for CreateAgent for application/json ContentType.
 type CreateAgentJSONRequestBody = AgentCreateRequest
 
@@ -2718,7 +2954,7 @@ type UpdateRateLimitsJSONRequestBody UpdateRateLimitsJSONBody
 type UpdateRetentionJSONRequestBody = RetentionConfig
 
 // UpdateSandboxConfigJSONRequestBody defines body for UpdateSandboxConfig for application/json ContentType.
-type UpdateSandboxConfigJSONRequestBody UpdateSandboxConfigJSONBody
+type UpdateSandboxConfigJSONRequestBody = SandboxConfigUpdate
 
 // UpdateSessionScopeJSONRequestBody defines body for UpdateSessionScope for application/json ContentType.
 type UpdateSessionScopeJSONRequestBody = SessionScopeRequest
@@ -2737,6 +2973,9 @@ type RenameSessionJSONRequestBody = SessionRenameRequest
 
 // PostToolApprovalJSONRequestBody defines body for PostToolApproval for application/json ContentType.
 type PostToolApprovalJSONRequestBody PostToolApprovalJSONBody
+
+// UploadFilesMultipartRequestBody defines body for UploadFiles for multipart/form-data ContentType.
+type UploadFilesMultipartRequestBody UploadFilesMultipartBody
 
 // CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
 type CreateUserJSONRequestBody = UserCreateRequest
@@ -2814,6 +3053,9 @@ type ServerInterface interface {
 	// Gateway metadata
 	// (GET /about)
 	GetAbout(w http.ResponseWriter, r *http.Request)
+	// Get recent activity events
+	// (GET /activity)
+	GetActivity(w http.ResponseWriter, r *http.Request)
 	// List all configured agents
 	// (GET /agents)
 	ListAgents(w http.ResponseWriter, r *http.Request)
@@ -2901,6 +3143,9 @@ type ServerInterface interface {
 	// Serve agent-generated preview content (token-auth)
 	// (GET /preview/{agent_id}/{token}/{path})
 	GetPreview(w http.ResponseWriter, r *http.Request, agentId string, token string, path string)
+	// List configured LLM providers
+	// (GET /providers)
+	ListProviders(w http.ResponseWriter, r *http.Request)
 	// Restore from a backup archive
 	// (POST /restore)
 	RestoreBackup(w http.ResponseWriter, r *http.Request)
@@ -2988,6 +3233,12 @@ type ServerInterface interface {
 	// Get session transcript messages
 	// (GET /sessions/{id}/messages)
 	GetSessionMessages(w http.ResponseWriter, r *http.Request, id string)
+	// List installed skills
+	// (GET /skills)
+	ListSkills(w http.ResponseWriter, r *http.Request)
+	// Get gateway runtime status
+	// (GET /status)
+	GetGatewayStatus(w http.ResponseWriter, r *http.Request)
 	// Get storage statistics
 	// (GET /storage/stats)
 	GetStorageStats(w http.ResponseWriter, r *http.Request)
@@ -3000,6 +3251,9 @@ type ServerInterface interface {
 	// Deprecated builtin tool catalog (FR-029)
 	// (GET /tools/builtin)
 	GetBuiltinToolsDeprecated(w http.ResponseWriter, r *http.Request)
+	// Upload files for a session
+	// (POST /upload)
+	UploadFiles(w http.ResponseWriter, r *http.Request, params UploadFilesParams)
 	// List all user accounts
 	// (GET /users)
 	ListUsers(w http.ResponseWriter, r *http.Request)
@@ -3034,6 +3288,26 @@ func (siw *ServerInterfaceWrapper) GetAbout(w http.ResponseWriter, r *http.Reque
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetAbout(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetActivity operation middleware
+func (siw *ServerInterfaceWrapper) GetActivity(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetActivity(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3743,6 +4017,26 @@ func (siw *ServerInterfaceWrapper) GetPreview(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// ListProviders operation middleware
+func (siw *ServerInterfaceWrapper) ListProviders(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListProviders(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // RestoreBackup operation middleware
 func (siw *ServerInterfaceWrapper) RestoreBackup(w http.ResponseWriter, r *http.Request) {
 
@@ -4403,6 +4697,46 @@ func (siw *ServerInterfaceWrapper) GetSessionMessages(w http.ResponseWriter, r *
 	handler.ServeHTTP(w, r)
 }
 
+// ListSkills operation middleware
+func (siw *ServerInterfaceWrapper) ListSkills(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSkills(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetGatewayStatus operation middleware
+func (siw *ServerInterfaceWrapper) GetGatewayStatus(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetGatewayStatus(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetStorageStats operation middleware
 func (siw *ServerInterfaceWrapper) GetStorageStats(w http.ResponseWriter, r *http.Request) {
 
@@ -4486,6 +4820,45 @@ func (siw *ServerInterfaceWrapper) GetBuiltinToolsDeprecated(w http.ResponseWrit
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetBuiltinToolsDeprecated(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UploadFiles operation middleware
+func (siw *ServerInterfaceWrapper) UploadFiles(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, BearerAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UploadFilesParams
+
+	// ------------- Optional query parameter "session_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "session_id", r.URL.Query(), &params.SessionId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "session_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "session_id", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UploadFiles(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -4793,6 +5166,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	}
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/about", wrapper.GetAbout)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/activity", wrapper.GetActivity)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/agents", wrapper.ListAgents)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/agents", wrapper.CreateAgent)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/agents/{id}", wrapper.GetAgent)
@@ -4822,6 +5196,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/onboarding/complete", wrapper.CompleteOnboarding)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/onboarding/probe-provider", wrapper.ProbeProvider)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/preview/{agent_id}/{token}/{path}", wrapper.GetPreview)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/providers", wrapper.ListProviders)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/restore", wrapper.RestoreBackup)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/security/audit-log", wrapper.GetAuditLogToggle)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/security/audit-log", wrapper.UpdateAuditLogToggle)
@@ -4851,10 +5226,13 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/sessions/{id}", wrapper.GetSession)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/sessions/{id}", wrapper.RenameSession)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/sessions/{id}/messages", wrapper.GetSessionMessages)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/skills", wrapper.ListSkills)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/status", wrapper.GetGatewayStatus)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/storage/stats", wrapper.GetStorageStats)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/tool-approvals/{approval_id}", wrapper.PostToolApproval)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/tools", wrapper.GetToolRegistry)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/tools/builtin", wrapper.GetBuiltinToolsDeprecated)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/upload", wrapper.UploadFiles)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/users", wrapper.ListUsers)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/users", wrapper.CreateUser)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/users/{username}", wrapper.DeleteUser)

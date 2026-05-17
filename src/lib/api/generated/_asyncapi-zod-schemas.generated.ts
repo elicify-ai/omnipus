@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "exec_approval_request", "task_status_changed", "replay_message", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "session_close_ack", "exec_approval_response_ack", "device_pairing_request"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "exec_approval_request", "exec_approval_expired", "task_status_changed", "replay_message", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "session_close_ack", "exec_approval_response_ack", "device_pairing_request"]);
 
 export const AuthFrame = z
   .object({
@@ -179,6 +179,9 @@ export const ExecApprovalRequestFrame = z
     session_id: z.string().min(1),
     id: z.string().min(1),
     command: z.string().min(1),
+    tool: z.string().optional(),
+    params: z.record(z.unknown()).optional(),
+    message: z.string().optional(),
     working_dir: z.string().optional(),
     matched_policy: z.string().optional(),
   })
@@ -337,6 +340,22 @@ export const DevicePairingRequestFrame = z
   })
   .strict();
 
+export const SessionCloseFrame = z
+  .object({
+    type: z.literal("session_close"),
+    session_id: z.string().min(1),
+  })
+  .strict();
+
+export const ExecApprovalExpiredFrame = z
+  .object({
+    type: z.literal("exec_approval_expired"),
+    id: z.string().min(1),
+    session_id: z.string().min(1),
+    message: z.string().optional(),
+  })
+  .strict();
+
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
@@ -369,6 +388,8 @@ export const WsFrame = z.discriminatedUnion("type", [
   SessionCloseAckFrame,
   ExecApprovalResponseAckFrame,
   DevicePairingRequestFrame,
+  SessionCloseFrame,
+  ExecApprovalExpiredFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

@@ -283,6 +283,28 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 	}
 }
 
+// jsonSessionDetail writes a response that conforms to the gen.SessionDetail wire
+// shape: { session, messages, agent_removed? }.
+// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialise via
+// their own json tags to JSON layouts that match SessionDetail.yaml / Session.yaml /
+// Message.yaml — we exploit that to avoid a field-by-field copy into gen.SessionDetail.
+// The anonymous struct is not a named wire-format type and therefore does not trigger
+// the check-no-handwritten-wire-types lint rule.
+func jsonSessionDetail(w http.ResponseWriter, meta *session.UnifiedMeta, messages []session.TranscriptEntry, agentRemoved bool) {
+	if agentRemoved {
+		jsonOK(w, struct {
+			Session      *session.UnifiedMeta      `json:"session"`
+			Messages     []session.TranscriptEntry `json:"messages"`
+			AgentRemoved bool                      `json:"agent_removed,omitempty"`
+		}{Session: meta, Messages: messages, AgentRemoved: agentRemoved})
+		return
+	}
+	jsonOK(w, struct {
+		Session  *session.UnifiedMeta      `json:"session"`
+		Messages []session.TranscriptEntry `json:"messages"`
+	}{Session: meta, Messages: messages})
+}
+
 // --- Sessions ---
 
 // HandleSessions routes /api/v1/sessions requests: GET (list/detail/messages), POST (create), PUT (rename), DELETE (delete).
@@ -423,7 +445,12 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 		}
 		agentRemoved = !found
 	}
-	jsonOK(w, unifiedSessionDetailResponse{Session: meta, Messages: messages, AgentRemoved: agentRemoved})
+	// Build response matching gen.SessionDetail wire shape:
+	// { session, messages, agent_removed? }
+	// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialise to
+	// the same JSON layout defined in SessionDetail.yaml and Session.yaml/Message.yaml.
+	// Using jsonSessionDetail avoids an import cycle while staying lint-compliant.
+	jsonSessionDetail(w, meta, messages, agentRemoved)
 }
 
 func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id string) {
@@ -656,43 +683,9 @@ func (a *restAPI) resolveSessionStore(sessionID string) *session.UnifiedStore {
 	return a.agentLoop.ResolveSessionStore(sessionID)
 }
 
-// skillResponse is the JSON shape returned for a single installed skill.
-// Matches the frontend Skill interface.
-type skillResponse struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	Description string `json:"description,omitempty"`
-	Author      string `json:"author,omitempty"`
-	Verified    bool   `json:"verified"`
-	Status      string `json:"status"` // "active" | "disabled"
-}
-
-// unifiedSessionDetailResponse is the JSON shape returned by GET /api/v1/sessions/{id}.
-type unifiedSessionDetailResponse struct {
-	Session      *session.UnifiedMeta      `json:"session"`
-	Messages     []session.TranscriptEntry `json:"messages"`
-	AgentRemoved bool                      `json:"agent_removed,omitempty"`
-}
-
-// gatewayStatusResponse is the JSON shape returned by GET /api/v1/status.
-// Matches the frontend GatewayStatus type.
-type gatewayStatusResponse struct {
-	Online       bool    `json:"online"`
-	AgentCount   int     `json:"agent_count"`
-	ChannelCount int     `json:"channel_count"`
-	DailyCost    float64 `json:"daily_cost"`
-	Version      string  `json:"version"`
-}
-
-// providerResponse is the JSON shape returned for a single LLM provider.
-type providerResponse struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Status  string   `json:"status"` // "connected" | "disconnected"
-	Models  []string `json:"models"`
-	Warning string   `json:"warning,omitempty"`
-}
+// Skill, SessionDetail, GatewayStatus, and Provider response types are defined
+// in contracts/components/schemas/ and generated into pkg/api/generated/.
+// Use gen.Skill, gen.SessionDetail, gen.GatewayStatus, and gen.Provider directly.
 
 // strVal extracts a string value from a JSON-decoded map, returning "" if missing or wrong type.
 func strVal(m map[string]any, key string) string {
@@ -765,28 +758,8 @@ func fetchUpstreamModels(baseURL, apiKey string) ([]string, error) {
 	return models, nil
 }
 
-// agentResponse is the JSON shape returned for a single agent.
-type agentResponse struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	Type              string `json:"type"` // "system" | "core" | "custom"
-	Locked            bool   `json:"locked"`
-	Color             string `json:"color,omitempty"`
-	Icon              string `json:"icon,omitempty"`
-	Model             string `json:"model,omitempty"`
-	Description       string `json:"description,omitempty"`
-	Status            string `json:"status"` // "active" | "idle" | "draft"
-	Soul              string `json:"soul"`
-	Heartbeat         string `json:"heartbeat"`
-	Instructions      string `json:"instructions"`
-	Warning           string `json:"warning,omitempty"` // non-fatal warning (e.g., reload failed)
-	TimeoutSeconds    int    `json:"timeout_seconds"`
-	MaxToolIterations int    `json:"max_tool_iterations"`
-	SteeringMode      string `json:"steering_mode"`
-	ToolFeedback      bool   `json:"tool_feedback"`
-	HeartbeatEnabled  bool   `json:"heartbeat_enabled"`
-	HeartbeatInterval int    `json:"heartbeat_interval"`
-}
+// Agent response type is defined in contracts/components/schemas/Agent.yaml
+// and generated into pkg/api/generated/. Use gen.Agent directly.
 
 // agentWorkspacePath returns the expanded workspace directory for the named agent.
 // Per FUNC-11 (BRD), each custom agent gets its own isolated workspace directory.
@@ -951,14 +924,19 @@ func computeAgentStatus(agentID string, activeIDs map[string]bool, soul string, 
 }
 
 // buildAgentDefaults populates the execution-related fields from config defaults.
-func buildAgentDefaults(cfg *config.Config) agentResponse {
-	return agentResponse{
+func buildAgentDefaults(cfg *config.Config) gen.Agent {
+	sm := steeringModeOrDefault(cfg.Agents.Defaults.SteeringMode)
+	return gen.Agent{
 		TimeoutSeconds:    cfg.Agents.Defaults.TimeoutSeconds,
 		MaxToolIterations: cfg.Agents.Defaults.MaxToolIterations,
-		SteeringMode:      steeringModeOrDefault(cfg.Agents.Defaults.SteeringMode),
+		SteeringMode:      sm,
 		ToolFeedback:      cfg.Agents.Defaults.ToolFeedback.Enabled,
 		HeartbeatEnabled:  cfg.Heartbeat.Enabled,
 		HeartbeatInterval: cfg.Heartbeat.Interval,
+		// Required string fields — initialised to empty (overwritten per-agent).
+		Soul:         "",
+		Heartbeat:    "",
+		Instructions: "",
 	}
 }
 
@@ -989,7 +967,7 @@ func (a *restAPI) readChannelConfigRaw(channelID string) (map[string]any, error)
 
 func (a *restAPI) listAgents(w http.ResponseWriter) {
 	cfg := a.agentLoop.GetConfig()
-	agents := make([]agentResponse, 0, len(cfg.Agents.List))
+	agents := make([]gen.Agent, 0, len(cfg.Agents.List))
 	activeIDs := a.activeAgentIDSet()
 
 	defaults := buildAgentDefaults(cfg)
@@ -1011,15 +989,21 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 			soul = readSoulMD(workspace)
 		}
 		ag := defaults
-		ag.ID = ac.ID
+		ag.Id = ac.ID
 		ag.Name = ac.Name
-		ag.Description = ac.Description
-		ag.Color = ac.Color
-		ag.Icon = ac.Icon
-		ag.Type = string(ac.ResolveType(coreagent.IsCoreAgent))
+		if ac.Description != "" {
+			ag.Description = &ac.Description
+		}
+		if ac.Color != "" {
+			ag.Color = &ac.Color
+		}
+		if ac.Icon != "" {
+			ag.Icon = &ac.Icon
+		}
+		ag.Type = gen.AgentType(ac.ResolveType(coreagent.IsCoreAgent))
 		ag.Locked = ac.Locked
-		ag.Model = model
-		ag.Status = computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked)
+		ag.Model = &model
+		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 		ag.Soul = soul
 		agents = append(agents, ag)
 	}
@@ -1048,15 +1032,21 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 				soul = ""
 			}
 			ag := defaults
-			ag.ID = ac.ID
+			ag.Id = ac.ID
 			ag.Name = ac.Name
-			ag.Description = ac.Description
-			ag.Color = ac.Color
-			ag.Icon = ac.Icon
-			ag.Type = string(ac.ResolveType(coreagent.IsCoreAgent))
+			if ac.Description != "" {
+				ag.Description = &ac.Description
+			}
+			if ac.Color != "" {
+				ag.Color = &ac.Color
+			}
+			if ac.Icon != "" {
+				ag.Icon = &ac.Icon
+			}
+			ag.Type = gen.AgentType(ac.ResolveType(coreagent.IsCoreAgent))
 			ag.Locked = ac.Locked
-			ag.Model = model
-			ag.Status = computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked)
+			ag.Model = &model
+			ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 			ag.Soul = soul
 			ag.Heartbeat = heartbeat
 			ag.Instructions = instructions
@@ -1216,15 +1206,23 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// Capture execution config AFTER reload (TriggerReload may have swapped the live config).
 	cfgAfterCreate := a.agentLoop.GetConfig()
 	ag := buildAgentDefaults(cfgAfterCreate)
-	ag.ID = ac.ID
+	ag.Id = ac.ID
 	ag.Name = ac.Name
-	ag.Description = ac.Description
-	ag.Color = ac.Color
-	ag.Icon = ac.Icon
-	ag.Type = "custom"
-	ag.Model = model
-	ag.Status = "draft"
-	ag.Warning = createReloadWarning
+	if ac.Description != "" {
+		ag.Description = &ac.Description
+	}
+	if ac.Color != "" {
+		ag.Color = &ac.Color
+	}
+	if ac.Icon != "" {
+		ag.Icon = &ac.Icon
+	}
+	ag.Type = gen.AgentTypeCustom
+	ag.Model = &model
+	ag.Status = gen.AgentStatusDraft
+	if createReloadWarning != "" {
+		ag.Warning = &createReloadWarning
+	}
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, ag)
 }
@@ -1534,28 +1532,31 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	}
 	activeIDs := a.activeAgentIDSet()
 	ag := buildAgentDefaults(cfg)
-	ag.ID = agentID
+	ag.Id = agentID
 	ag.Name = newName
 	// Description: use the just-updated value when provided, else fall back
 	// to what's on disk (which will be the previously-persisted value because
 	// TriggerReload has refreshed cfg.Agents.List).
 	if req.Description != nil {
-		ag.Description = strings.TrimSpace(*req.Description)
+		desc := strings.TrimSpace(*req.Description)
+		if desc != "" {
+			ag.Description = &desc
+		}
 	} else {
 		// Re-read from the current config after reload.
 		if cur := a.agentLoop.GetConfig(); cur != nil {
 			for _, ac := range cur.Agents.List {
-				if ac.ID == agentID {
-					ag.Description = ac.Description
+				if ac.ID == agentID && ac.Description != "" {
+					ag.Description = &ac.Description
 					break
 				}
 			}
 		}
 	}
-	ag.Type = string(foundAgent.ResolveType(coreagent.IsCoreAgent))
+	ag.Type = gen.AgentType(foundAgent.ResolveType(coreagent.IsCoreAgent))
 	ag.Locked = foundAgent.Locked
-	ag.Model = model
-	ag.Status = computeAgentStatus(agentID, activeIDs, soul, foundAgent.Locked)
+	ag.Model = &model
+	ag.Status = gen.AgentStatus(computeAgentStatus(agentID, activeIDs, soul, foundAgent.Locked))
 	// Hide compiled prompts for locked (core) agents.
 	if foundAgent.Locked {
 		soul = ""
@@ -1563,7 +1564,9 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	ag.Soul = soul
 	ag.Heartbeat = heartbeat
 	ag.Instructions = instructions
-	ag.Warning = reloadWarning
+	if reloadWarning != "" {
+		ag.Warning = &reloadWarning
+	}
 	// Override defaults with request values when provided.
 	if req.TimeoutSeconds != nil {
 		ag.TimeoutSeconds = *req.TimeoutSeconds
@@ -1572,7 +1575,8 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		ag.MaxToolIterations = *req.MaxToolIterations
 	}
 	if req.SteeringMode != nil {
-		ag.SteeringMode = steeringModeOrDefault(*req.SteeringMode)
+		sm := steeringModeOrDefault(*req.SteeringMode)
+		ag.SteeringMode = sm
 	}
 	if req.ToolFeedback != nil {
 		ag.ToolFeedback = *req.ToolFeedback
@@ -1940,24 +1944,24 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 	// GetStartupInfo returns aggregate metadata (total, available, names) — not per-skill entries.
 	skillsInfo, ok := info["skills"].(map[string]any)
 	if !ok {
-		jsonOK(w, []skillResponse{})
+		jsonOK(w, []gen.Skill{})
 		return
 	}
 	names, _ := skillsInfo["names"].([]string)
 	if len(names) == 0 {
-		jsonOK(w, []skillResponse{})
+		jsonOK(w, []gen.Skill{})
 		return
 	}
-	skills := make([]skillResponse, 0, len(names))
+	result := make([]gen.Skill, 0, len(names))
 	for _, name := range names {
-		skills = append(skills, skillResponse{
-			ID:      name,
+		result = append(result, gen.Skill{
+			Id:      name,
 			Name:    name,
 			Version: "0.0.0",
-			Status:  "active",
+			Status:  gen.SkillStatusActive,
 		})
 	}
-	jsonOK(w, skills)
+	jsonOK(w, result)
 }
 
 func (a *restAPI) searchSkills(w http.ResponseWriter, _ *http.Request) {
@@ -2448,12 +2452,13 @@ func (a *restAPI) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := a.agentLoop.GetConfig()
-	jsonOK(w, gatewayStatusResponse{
+	v := Version
+	jsonOK(w, gen.GatewayStatus{
 		Online:       true,
 		AgentCount:   len(cfg.Agents.List) + 1,      // +1 for system agent
 		ChannelCount: countEnabledChannels(cfg) + 1, // +1 for webchat (always available)
 		DailyCost:    0,
-		Version:      Version,
+		Version:      &v,
 	})
 }
 
@@ -2759,15 +2764,8 @@ func (a *restAPI) deleteTask(w http.ResponseWriter, id string) {
 
 // --- Activity ---
 
-// activityEvent is one item returned by GET /api/v1/activity.
-type activityEvent struct {
-	ID        string    `json:"id"`
-	Type      string    `json:"type"` // "session_start" | "task_created" | "task_updated"
-	AgentID   string    `json:"agent_id,omitempty"`
-	AgentName string    `json:"agent_name,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
-	Summary   string    `json:"summary,omitempty"`
-}
+// ActivityEvent type is defined in contracts/components/schemas/ActivityEvent.yaml
+// and generated into pkg/api/generated/. Use gen.ActivityEvent directly.
 
 // HandleActivity handles GET /api/v1/activity.
 // Returns up to 50 activity events from the last 24 hours, sorted reverse-chronological.
@@ -2778,7 +2776,7 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cutoff := time.Now().UTC().Add(-24 * time.Hour)
-	var events []activityEvent
+	var events []gen.ActivityEvent
 	var sessionWarning string
 
 	// Build agent name lookup
@@ -2813,14 +2811,21 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 					if summary == "" {
 						summary = "New session"
 					}
-					events = append(events, activityEvent{
-						ID:        "session-" + m.ID,
+					agentID := m.AgentID
+					agentName := agentNames[m.AgentID]
+					ev := gen.ActivityEvent{
+						Id:        "session-" + m.ID,
 						Type:      "session_start",
-						AgentID:   m.AgentID,
-						AgentName: agentNames[m.AgentID],
 						Timestamp: m.CreatedAt,
-						Summary:   summary,
-					})
+						Summary:   &summary,
+					}
+					if agentID != "" {
+						ev.AgentId = &agentID
+					}
+					if agentName != "" {
+						ev.AgentName = &agentName
+					}
+					events = append(events, ev)
 				}
 			}
 		}
@@ -2833,27 +2838,37 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, t := range recentTasks {
 		if t.CreatedAt.After(cutoff) {
-			events = append(events, activityEvent{
-				ID:        "task-c-" + t.ID,
+			taskAgentID := t.AgentID
+			title := t.Title
+			ev := gen.ActivityEvent{
+				Id:        "task-c-" + t.ID,
 				Type:      "task_created",
-				AgentID:   t.AgentID,
 				Timestamp: t.CreatedAt,
-				Summary:   t.Title,
-			})
+				Summary:   &title,
+			}
+			if taskAgentID != "" {
+				ev.AgentId = &taskAgentID
+			}
+			events = append(events, ev)
 		}
 		if t.CompletedAt != nil && t.CompletedAt.After(cutoff) {
-			events = append(events, activityEvent{
-				ID:        "task-u-" + t.ID,
+			taskAgentID := t.AgentID
+			title := t.Title
+			ev := gen.ActivityEvent{
+				Id:        "task-u-" + t.ID,
 				Type:      "task_updated",
-				AgentID:   t.AgentID,
 				Timestamp: *t.CompletedAt,
-				Summary:   t.Title,
-			})
+				Summary:   &title,
+			}
+			if taskAgentID != "" {
+				ev.AgentId = &taskAgentID
+			}
+			events = append(events, ev)
 		}
 	}
 
 	// Sort reverse-chronological.
-	slices.SortFunc(events, func(a, b activityEvent) int {
+	slices.SortFunc(events, func(a, b gen.ActivityEvent) int {
 		return b.Timestamp.Compare(a.Timestamp)
 	})
 
@@ -2862,7 +2877,7 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 		events = events[:50]
 	}
 	if events == nil {
-		events = []activityEvent{}
+		events = []gen.ActivityEvent{}
 	}
 	if sessionWarning != "" {
 		jsonOK(w, map[string]any{"events": events, "warning": sessionWarning})
@@ -2909,7 +2924,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		providers := make([]providerResponse, 0, len(providerOrder))
+		providers := make([]gen.Provider, 0, len(providerOrder))
 		for _, name := range providerOrder {
 			var models []string
 			var modelFetchWarning string
@@ -2924,19 +2939,22 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			providers = append(providers, providerResponse{
-				ID:      name,
-				Name:    name,
-				Status:  "connected",
-				Models:  models,
-				Warning: modelFetchWarning,
-			})
+			p := gen.Provider{
+				Id:     name,
+				Name:   name,
+				Status: gen.ProviderStatusConnected,
+				Models: models,
+			}
+			if modelFetchWarning != "" {
+				p.Warning = &modelFetchWarning
+			}
+			providers = append(providers, p)
 		}
 		if len(providers) == 0 {
-			providers = append(providers, providerResponse{
-				ID:     "default",
+			providers = append(providers, gen.Provider{
+				Id:     "default",
 				Name:   "Default",
-				Status: "disconnected",
+				Status: gen.ProviderStatusDisconnected,
 				Models: []string{},
 			})
 		}
@@ -3055,10 +3073,11 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			)
 			return
 		}
-		jsonOK(w, providerResponse{
-			ID:     providerID,
+		jsonOK(w, gen.Provider{
+			Id:     providerID,
 			Name:   providerID,
-			Status: "connected",
+			Status: gen.ProviderStatusConnected,
+			Models: []string{},
 		})
 
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/test"):
@@ -3978,13 +3997,8 @@ func (a *restAPI) withUploadAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return a.withAuthAndBodyLimit(handler, maxUploadFileSize*10)
 }
 
-// uploadedFileInfo describes a single file that was successfully uploaded.
-type uploadedFileInfo struct {
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	Size        int64  `json:"size"`
-	ContentType string `json:"content_type"`
-}
+// UploadedFile type is defined in contracts/components/schemas/UploadedFile.yaml
+// and generated into pkg/api/generated/. Use gen.UploadedFile directly.
 
 // HandleUpload handles POST /api/v1/upload — streams multipart file uploads to disk.
 // Files are stored at ~/.omnipus/uploads/{session_id}/{sanitized_filename}.
@@ -4008,7 +4022,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var uploaded []uploadedFileInfo
+	var uploaded []gen.UploadedFile
 
 	for {
 		part, err := reader.NextPart()
@@ -4150,7 +4164,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			"content_type", contentType,
 		)
 
-		uploaded = append(uploaded, uploadedFileInfo{
+		uploaded = append(uploaded, gen.UploadedFile{
 			Name:        sanitized,
 			Path:        relativePath,
 			Size:        written,

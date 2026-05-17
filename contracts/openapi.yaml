@@ -160,6 +160,18 @@ components:
       $ref: ./components/schemas/AboutResponse.yaml
     HealthResponse:
       $ref: ./components/schemas/HealthResponse.yaml
+    GatewayStatus:
+      $ref: ./components/schemas/GatewayStatus.yaml
+    Provider:
+      $ref: ./components/schemas/Provider.yaml
+    Skill:
+      $ref: ./components/schemas/Skill.yaml
+    ActivityEvent:
+      $ref: ./components/schemas/ActivityEvent.yaml
+    UploadedFile:
+      $ref: ./components/schemas/UploadedFile.yaml
+    SandboxConfigUpdate:
+      $ref: ./components/schemas/SandboxConfigUpdate.yaml
   responses:
     400BadRequest:
       description: "Bad request \u2014 missing or invalid field."
@@ -1883,46 +1895,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                mode:
-                  type: string
-                  enum:
-                  - 'off'
-                  - permissive
-                  - enforce
-                allow_network_outbound:
-                  type: boolean
-                allowed_paths:
-                  type: array
-                  items:
-                    type: string
-                ssrf_enabled:
-                  type: boolean
-                ssrf_allow_internal:
-                  type: array
-                  items:
-                    type: string
-                ssrf:
-                  type: object
-                  properties:
-                    allow_internal:
-                      type: array
-                      items:
-                        type: string
-                default_profile:
-                  type: string
-                  enum:
-                  - ''
-                  - none
-                  - workspace
-                  - workspace+net
-                  - host
-                  - 'off'
-                shell_deny_patterns:
-                  type: array
-                  items:
-                    type: string
+              $ref: '#/components/schemas/SandboxConfigUpdate'
       responses:
         '200':
           description: Updated sandbox configuration.
@@ -2899,6 +2872,165 @@ paths:
                     items:
                       type: string
                     description: "Per-agent errors (non-fatal \u2014 partial removal possible).\n"
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /status:
+    get:
+      operationId: getGatewayStatus
+      summary: Get gateway runtime status
+      description: "Returns online status, agent/channel counts, daily cost, and the binary version.\nPolled by the SPA StatusBar every 15 seconds.\n"
+      tags:
+      - Gateway
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Gateway runtime status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayStatus'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /providers:
+    get:
+      operationId: listProviders
+      summary: List configured LLM providers
+      description: "Returns all configured LLM providers with connection status and available model list.\nModel lists are fetched live from each provider's upstream /models endpoint when an API key is present.\n"
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Array of provider entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Provider'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /skills:
+    get:
+      operationId: listSkills
+      summary: List installed skills
+      description: "Returns all skills installed in ~/.omnipus/skills/. Returns an empty array when no skills are installed.\n"
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Array of installed skills.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Skill'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /activity:
+    get:
+      operationId: getActivity
+      summary: Get recent activity events
+      description: "Returns up to 50 activity events from the last 24 hours, sorted reverse-chronological.\nIncludes session_start events from all agent stores and task lifecycle events.\n"
+      tags:
+      - Activity
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Activity events (reverse-chronological, max 50, last 24 hours).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ActivityEvent'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /upload:
+    post:
+      operationId: uploadFiles
+      summary: Upload files for a session
+      description: "Streams multipart file uploads to disk under ~/.omnipus/uploads/{session_id}/.\nMax file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory.\nsession_id may be supplied as a query parameter or as a form field before the file parts.\nReturns HTTP 201 on success.\n"
+      tags:
+      - Upload
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: session_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Session ID to associate the uploaded files with. May also be supplied as a multipart form field.
+        example: 550e8400-e29b-41d4-a716-446655440000
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                session_id:
+                  type: string
+                  description: Session ID (alternative to query parameter).
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: One or more files to upload.
+      responses:
+        '201':
+          description: Files uploaded successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - files
+                properties:
+                  files:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UploadedFile'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '405':
           description: Method not allowed.
           content:

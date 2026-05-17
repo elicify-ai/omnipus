@@ -100,6 +100,30 @@ type Agent = {
         custom_deny_patterns: Array<string>;
       }>
     | undefined;
+  fallback_models?: Array<string> | undefined;
+  model_params?:
+    | Partial<{
+        temperature: number;
+        max_tokens: number;
+        top_p: number;
+      }>
+    | undefined;
+  rate_limits?:
+    | Partial<{
+        use_global_defaults: boolean;
+        max_llm_calls_per_hour: number;
+        max_tool_calls_per_minute: number;
+        max_cost_per_day: number;
+      }>
+    | undefined;
+  stats?:
+    | {
+        total_sessions: number;
+        total_tokens: number;
+        total_cost: number;
+        last_active?: string | undefined;
+      }
+    | undefined;
 };
 type AgentToolsCfg = Partial<{
   builtin: Partial<{
@@ -392,6 +416,35 @@ export const Agent: z.ZodType<Agent> = z
       .partial()
       .passthrough()
       .optional(),
+    fallback_models: z.array(z.string()).optional(),
+    model_params: z
+      .object({
+        temperature: z.number(),
+        max_tokens: z.number().int(),
+        top_p: z.number(),
+      })
+      .partial()
+      .passthrough()
+      .optional(),
+    rate_limits: z
+      .object({
+        use_global_defaults: z.boolean(),
+        max_llm_calls_per_hour: z.number().int(),
+        max_tool_calls_per_minute: z.number().int(),
+        max_cost_per_day: z.number(),
+      })
+      .partial()
+      .passthrough()
+      .optional(),
+    stats: z
+      .object({
+        total_sessions: z.number().int(),
+        total_tokens: z.number().int(),
+        total_cost: z.number(),
+        last_active: z.string().datetime({ offset: true }).optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z
@@ -556,7 +609,7 @@ export const SandboxConfig = z
   })
   .partial()
   .passthrough();
-export const updateSandboxConfig_Body = z
+export const SandboxConfigUpdate = z
   .object({
     mode: z.enum(["off", "permissive", "enforce"]),
     allow_network_outbound: z.boolean(),
@@ -666,6 +719,60 @@ export const PendingRestartEntry = z
 export const setCredential_Body = z
   .object({ key: z.string(), value: z.string() })
   .passthrough();
+export const GatewayStatus = z
+  .object({
+    online: z.boolean(),
+    agent_count: z.number().int().gte(0),
+    channel_count: z.number().int().gte(0),
+    daily_cost: z.number().gte(0),
+    version: z.string().optional(),
+  })
+  .passthrough();
+export const Provider = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    display_name: z.string().optional(),
+    status: z.enum(["connected", "disconnected", "error"]),
+    models: z.array(z.string()),
+    warning: z.string().optional(),
+    error: z.string().optional(),
+  })
+  .passthrough();
+export const Skill = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    version: z.string(),
+    description: z.string().optional(),
+    author: z.string().optional(),
+    verified: z.boolean(),
+    status: z.enum(["active", "disabled", "inactive", "error"]),
+    agent_assignment: z.string().optional(),
+  })
+  .passthrough();
+export const ActivityEvent = z
+  .object({
+    id: z.string(),
+    type: z.string(),
+    agent_id: z.string().optional(),
+    agent_name: z.string().optional(),
+    timestamp: z.string().datetime({ offset: true }),
+    summary: z.string().optional(),
+  })
+  .passthrough();
+export const uploadFiles_Body = z
+  .object({ session_id: z.string(), files: z.array(z.instanceof(File)) })
+  .partial()
+  .passthrough();
+export const UploadedFile = z
+  .object({
+    name: z.string(),
+    path: z.string(),
+    size: z.number().int().gte(0),
+    content_type: z.string(),
+  })
+  .passthrough();
 export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
   LoginResponse;
 export const AgentSession = z
@@ -708,6 +815,28 @@ const endpoints = makeApi([
     requestFormat: "json",
     response: AboutResponse,
     errors: [
+      {
+        status: 405,
+        description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/activity",
+    alias: "getActivity",
+    description: `Returns up to 50 activity events from the last 24 hours, sorted reverse-chronological.
+Includes session_start events from all agent stores and task lifecycle events.
+`,
+    requestFormat: "json",
+    response: z.array(ActivityEvent),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
       {
         status: 405,
         description: `Method not allowed.`,
@@ -1597,6 +1726,28 @@ const endpoints = makeApi([
     ],
   },
   {
+    method: "get",
+    path: "/providers",
+    alias: "listProviders",
+    description: `Returns all configured LLM providers with connection status and available model list.
+Model lists are fetched live from each provider&#x27;s upstream /models endpoint when an API key is present.
+`,
+    requestFormat: "json",
+    response: z.array(Provider),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "post",
     path: "/restore",
     alias: "restoreBackup",
@@ -1963,7 +2114,7 @@ const endpoints = makeApi([
       {
         name: "body",
         type: "Body",
-        schema: updateSandboxConfig_Body,
+        schema: SandboxConfigUpdate,
       },
     ],
     response: SandboxConfig,
@@ -2420,6 +2571,49 @@ const endpoints = makeApi([
   },
   {
     method: "get",
+    path: "/skills",
+    alias: "listSkills",
+    description: `Returns all skills installed in ~/.omnipus/skills/. Returns an empty array when no skills are installed.
+`,
+    requestFormat: "json",
+    response: z.array(Skill),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/status",
+    alias: "getGatewayStatus",
+    description: `Returns online status, agent/channel counts, daily cost, and the binary version.
+Polled by the SPA StatusBar every 15 seconds.
+`,
+    requestFormat: "json",
+    response: GatewayStatus,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/storage/stats",
     alias: "getStorageStats",
     description: `Returns session count and workspace size. May include partial warnings if some agent stores could not be read.
@@ -2523,6 +2717,47 @@ const endpoints = makeApi([
         status: 404,
         description: `Endpoint removed — use GET /api/v1/tools instead.
 `,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/upload",
+    alias: "uploadFiles",
+    description: `Streams multipart file uploads to disk under ~/.omnipus/uploads/{session_id}/.
+Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory.
+session_id may be supplied as a query parameter or as a form field before the file parts.
+Returns HTTP 201 on success.
+`,
+    requestFormat: "form-data",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: uploadFiles_Body,
+      },
+      {
+        name: "session_id",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+    ],
+    response: z.object({ files: z.array(UploadedFile) }).passthrough(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed.`,
         schema: ErrorResponse,
       },
     ],
@@ -2827,40 +3062,11 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 }
 
 // ── AsyncAPI WebSocket frame schemas ─────────────────────────────────────────
-// Generated from contracts/asyncapi.yaml components.schemas.
+// Auto-generated from contracts/asyncapi.yaml components.schemas.
+// Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum([
-  "auth",
-  "message",
-  "cancel",
-  "exec_approval_response",
-  "ping",
-  "attach_session",
-  "device_pairing_response",
-  "session_started",
-  "token",
-  "done",
-  "error",
-  "tool_call_start",
-  "tool_call_result",
-  "subagent_start",
-  "subagent_end",
-  "exec_approval_request",
-  "task_status_changed",
-  "replay_message",
-  "rate_limit",
-  "media",
-  "agent_switched",
-  "tool_approval_required",
-  "session_state",
-  "system_overload",
-  "replay_warning",
-  "cancel_stage",
-  "session_close_ack",
-  "exec_approval_response_ack",
-  "device_pairing_request",
-]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "exec_approval_request", "exec_approval_expired", "task_status_changed", "replay_message", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "session_close_ack", "exec_approval_response_ack", "device_pairing_request"]);
 
 export const AuthFrame = z
   .object({
@@ -3020,9 +3226,7 @@ export const SubagentEndFrame = z
     status: z.enum(["success", "error", "cancelled", "interrupted", "timeout"]),
     duration_ms: z.number().int().optional(),
     final_result: z.string().optional(),
-    reason: z
-      .enum(["parent_timeout", "parent_cancelled", "parent_done_early", "unknown"])
-      .optional(),
+    reason: z.enum(["parent_timeout", "parent_cancelled", "parent_done_early", "unknown"]).optional(),
     agent_id: z.string().optional(),
     parent_call_id: z.string().optional(),
     message: z.string().optional(),
@@ -3035,6 +3239,9 @@ export const ExecApprovalRequestFrame = z
     session_id: z.string().min(1),
     id: z.string().min(1),
     command: z.string().min(1),
+    tool: z.string().optional(),
+    params: z.record(z.unknown()).optional(),
+    message: z.string().optional(),
     working_dir: z.string().optional(),
     matched_policy: z.string().optional(),
   })
@@ -3193,6 +3400,22 @@ export const DevicePairingRequestFrame = z
   })
   .strict();
 
+export const SessionCloseFrame = z
+  .object({
+    type: z.literal("session_close"),
+    session_id: z.string().min(1),
+  })
+  .strict();
+
+export const ExecApprovalExpiredFrame = z
+  .object({
+    type: z.literal("exec_approval_expired"),
+    id: z.string().min(1),
+    session_id: z.string().min(1),
+    message: z.string().optional(),
+  })
+  .strict();
+
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
@@ -3225,6 +3448,8 @@ export const WsFrame = z.discriminatedUnion("type", [
   SessionCloseAckFrame,
   ExecApprovalResponseAckFrame,
   DevicePairingRequestFrame,
+  SessionCloseFrame,
+  ExecApprovalExpiredFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

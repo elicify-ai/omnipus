@@ -162,16 +162,6 @@ export function resetApiSchemaErrorCount(): void {
 // See CLAUDE.md hard-constraint #8.
 
 // Types where local hand-written body diverges from generated — imported aliased
-// for any internal-file use only. NOT in the re-export block below.
-import type {
-  Agent as _GAgent,
-  AgentToolsCfg as _GAgentToolsCfg,
-  Session as _GSession,
-  SessionDetail as _GSessionDetail,
-  Message as _GMessage,
-  ToolCall as _GToolCall,
-} from '@/lib/api/generated/openapi-types'
-
 // Types whose generated shape is canonical (no local body) — import into scope
 // so function return-type annotations compile, then re-export for consumers.
 import type {
@@ -208,6 +198,13 @@ import type {
   PromptGuardResponse,
   PendingRestartEntry,
   AboutResponse,
+  // Wire types migrated from hand-written interfaces to generated types (contract-first #8):
+  Agent,
+  Provider,
+  GatewayStatus,
+  Skill,
+  ActivityEvent,
+  UploadedFile,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -244,6 +241,13 @@ export type {
   PromptGuardResponse,
   PendingRestartEntry,
   AboutResponse,
+  // Wire types migrated from hand-written interfaces (contract-first #8):
+  Agent,
+  Provider,
+  GatewayStatus,
+  Skill,
+  ActivityEvent,
+  UploadedFile,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -458,48 +462,8 @@ export interface AgentShellPolicy {
   custom_deny_patterns?: string[]
 }
 
-export interface Agent {
-  id: string
-  name: string
-  description: string
-  type: 'core' | 'custom'
-  model: string
-  status: 'active' | 'idle' | 'error' | 'draft'
-  locked?: boolean
-  icon?: string
-  color?: string
-  tools?: string[]
-  tools_cfg?: AgentToolsCfg
-  soul?: string
-  heartbeat?: string
-  instructions?: string
-  fallback_models?: string[]
-  model_params?: {
-    temperature?: number
-    max_tokens?: number
-    top_p?: number
-  }
-  timeout_seconds?: number
-  max_tool_iterations?: number
-  steering_mode?: string
-  tool_feedback?: boolean
-  heartbeat_enabled?: boolean
-  heartbeat_interval?: number
-  rate_limits?: {
-    use_global_defaults: boolean
-    max_llm_calls_per_hour?: number
-    max_tool_calls_per_minute?: number
-    max_cost_per_day?: number
-  }
-  sandbox_profile?: SandboxProfile
-  shell_policy?: AgentShellPolicy
-  stats?: {
-    total_sessions: number
-    total_tokens: number
-    total_cost: number
-    last_active?: string
-  }
-}
+// Agent — re-exported from generated openapi-types (contract-first #8).
+// The generated type is the source of truth; see contracts/components/schemas/Agent.yaml.
 
 export function fetchAgents(): Promise<Agent[]> {
   return request<Agent[]>('/agents', undefined, z.array(AgentSchema) as ZodType<Agent[]>)
@@ -841,14 +805,8 @@ export function updateConfig(data: Partial<Config>): Promise<Config> {
 
 // ── Providers ─────────────────────────────────────────────────────────────────
 
-export interface Provider {
-  id: string
-  name?: string
-  display_name?: string
-  status: 'connected' | 'disconnected' | 'error'
-  models?: string[]
-  error?: string
-}
+// Provider — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/Provider.yaml.
 
 export function fetchProviders(): Promise<Provider[]> {
   return request<Provider[]>('/providers')
@@ -927,13 +885,8 @@ export function deleteTask(id: string): Promise<void> {
 
 // ── Gateway Status ────────────────────────────────────────────────────────────
 
-export interface GatewayStatus {
-  online: boolean
-  agent_count: number
-  channel_count: number
-  daily_cost: number
-  version?: string
-}
+// GatewayStatus — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/GatewayStatus.yaml.
 
 export function fetchGatewayStatus(): Promise<GatewayStatus> {
   return request<GatewayStatus>('/status')
@@ -992,16 +945,8 @@ export function testChannel(id: string): Promise<{ success: boolean; message: st
 
 // ── Skills ────────────────────────────────────────────────────────────────────
 
-export interface Skill {
-  id: string
-  name: string
-  version: string
-  description: string
-  author: string
-  verified: boolean
-  status: 'active' | 'inactive' | 'error'
-  agent_assignment?: string
-}
+// Skill — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/Skill.yaml.
 
 export interface McpServer {
   id: string
@@ -1180,14 +1125,8 @@ export function runDoctor(): Promise<DoctorResult> {
 
 // ── Activity Feed ─────────────────────────────────────────────────────────────
 
-export interface ActivityEvent {
-  id: string
-  type: 'task_created' | 'task_updated' | 'session_started' | 'session_ended' | 'agent_error' | 'tool_called' | 'approval_requested' | (string & {})
-  summary: string
-  timestamp: string
-  agent_id?: string
-  agent_name?: string
-}
+// ActivityEvent — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/ActivityEvent.yaml.
 
 export function fetchActivity(): Promise<ActivityEvent[]> {
   return request<ActivityEvent[]>('/activity')
@@ -1361,12 +1300,8 @@ export async function fetchMe(): Promise<MeInfo> {
 
 // ── File Upload ───────────────────────────────────────────────────────────────
 
-export interface UploadedFile {
-  name: string
-  path: string
-  size: number
-  content_type: string
-}
+// UploadedFile — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/UploadedFile.yaml.
 
 export async function uploadFiles(sessionId: string, files: File[]): Promise<{ files: UploadedFile[] }> {
   const formData = new FormData()

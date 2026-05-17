@@ -23,6 +23,8 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
+
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 )
 
 // seedTestAgents seeds Agents.List for handler tests with an `omnipus-system`
@@ -265,11 +267,11 @@ func TestHandleAgentsCreate(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, w.Code)
 
-	var resp agentResponse
+	var resp gen.Agent
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "Scout", resp.Name)
-	assert.Equal(t, "custom", resp.Type)
-	assert.NotEmpty(t, resp.ID)
+	assert.Equal(t, gen.AgentType("custom"), resp.Type)
+	assert.NotEmpty(t, resp.Id)
 }
 
 // TestHandleAgentsCreateWithExplicitID verifies POST /api/v1/agents creates agent and ignores provided id.
@@ -287,10 +289,10 @@ func TestHandleAgentsCreateWithExplicitID(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, w.Code)
 
-	var resp agentResponse
+	var resp gen.Agent
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "Scout", resp.Name)
-	assert.NotEmpty(t, resp.ID)
+	assert.NotEmpty(t, resp.Id)
 }
 
 // --- HandleSessions tests ---
@@ -547,14 +549,14 @@ func TestAgentListStatus_CustomAgentIdle(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 
-	var agents []agentResponse
+	var agents []gen.Agent
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &agents))
 
 	for _, ag := range agents {
-		if ag.ID == "my-agent" {
+		if ag.Id == "my-agent" {
 			assert.Equal(
 				t,
-				"draft",
+				gen.AgentStatusDraft,
 				ag.Status,
 				"custom agent with no SOUL.md and no active turn must have status 'draft'",
 			)

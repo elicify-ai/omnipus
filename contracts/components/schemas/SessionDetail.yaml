@@ -13,3 +13,10 @@ properties:
     items:
       $ref: './Message.yaml'
     description: Ordered list of transcript entries for this session.
+  agent_removed:
+    type: boolean
+    description: >
+      True when the agent that owned this session has been deleted from the config.
+      Used by the SPA to display a banner informing the user that the original agent
+      no longer exists. Absent (or false) in the common case.
+    example: false

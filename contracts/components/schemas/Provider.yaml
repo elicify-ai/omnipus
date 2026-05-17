@@ -1,0 +1,58 @@
+type: object
+description: >
+  A single LLM provider entry as returned by GET /providers and PUT /providers/{id}.
+  Describes the provider's connection status, the resolved model list, and any
+  non-fatal warnings encountered when fetching the upstream model catalogue.
+required:
+  - id
+  - name
+  - status
+  - models
+properties:
+  id:
+    type: string
+    description: Provider identifier (e.g. "anthropic", "openai", "openrouter").
+    example: "openrouter"
+  name:
+    type: string
+    description: Human-readable provider name (may be the same as id for unknown providers).
+    example: "openrouter"
+  display_name:
+    type: string
+    description: >
+      Branded display name for UI presentation (e.g. "OpenRouter", "Anthropic").
+      Falls back to name when absent.
+    example: "OpenRouter"
+  status:
+    type: string
+    enum:
+      - connected
+      - disconnected
+      - error
+    description: >
+      "connected" when at least one API key is configured for this provider.
+      "disconnected" when no key is available or on the fallback default entry.
+      "error" when the provider is configured but the upstream returned a non-retryable error.
+    example: "connected"
+  models:
+    type: array
+    items:
+      type: string
+    description: >
+      Alphabetically sorted list of model IDs available from this provider,
+      fetched from the upstream /models endpoint when an API key is present.
+      Empty array when the upstream fetch fails or no key is configured.
+    example:
+      - "anthropic/claude-3.5-haiku"
+      - "anthropic/claude-sonnet-4-5"
+  warning:
+    type: string
+    description: >
+      Non-fatal advisory message (e.g. "could not fetch upstream model list: ...").
+      Absent when there are no warnings.
+    example: "could not fetch upstream model list: status 429"
+  error:
+    type: string
+    description: >
+      Fatal error message when status is "error". Absent for connected/disconnected providers.
+    example: "upstream returned 403 Forbidden"
