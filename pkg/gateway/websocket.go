@@ -42,7 +42,9 @@ import (
 const replayLiveBufferCap = 1000
 
 // wsClientFrame is a message sent from the browser to the server over WebSocket.
-type wsClientFrame struct {
+// not-wire-format: this is a server-side inbound decode struct; it is never marshaled
+// as a response. Inbound validation is enforced at the readLoop dispatch site.
+type wsClientFrame struct { // not-wire-format
 	Type      string `json:"type"`                 // "auth" | "message" | "cancel" | "exec_approval_response" | "attach_session" | "session_close" | "device_pairing_response"
 	Token     string `json:"token,omitempty"`      // for "auth"
 	Content   string `json:"content,omitempty"`    // for "message"
@@ -53,25 +55,21 @@ type wsClientFrame struct {
 	DeviceID  string `json:"device_id,omitempty"`  // for "device_pairing_response"
 }
 
-// wsServerFrame is the internal discriminated-union frame type used by the send pipeline
-// and replay subsystem.  Live event construction sites have been migrated to the generated
-// types in pkg/api/generated (see sendConnGenFrame).  This struct is kept because:
+// wsServerFrame is kept for two remaining uses:
 //
-//  1. sendConnFrame and sendRawFrameBytes use it as a channel type for the backpressure
-//     and replay-divert logic (the type of wc.sendCh is chan []byte, not chan wsServerFrame,
-//     so the actual channel is unaffected — but callers such as readLoop error paths and
-//     wsApprovalHook still build wsServerFrame values and call sendConnFrame).
+//  1. sendConnFrame — the legacy send helper still used by error path callers (readLoop
+//     error responses, sendWSFrame pre-auth). These will migrate to sendConnGenFrame.
 //
-//  2. streamReplay (replay.go) accepts func(wsServerFrame) error as its emit callback.
-//     The replay_test.go sliceSink captures wsServerFrame values and tests access named
-//     fields (e.g. f.CallID, f.SpanID).  Changing the signature would require rewriting
-//     all 17 TDD rows of replay tests.
+//  2. replay_test.go sliceSink.all() — decodes JSON bytes back to wsServerFrame for
+//     test assertions. The struct is never constructed as a wire value in replay.go
+//     after the Phase 7 contract-first migration; it exists only as a JSON decode target.
 //
-// TODO(contract-first): when replay_test.go is migrated to use generated types, remove
-// this struct and replace all remaining sendConnFrame callers with sendConnGenFrame.
+// not-wire-format: this struct is retained as a JSON decode helper and for legacy error
+// frame construction sites; it is not the authoritative wire-format definition.
+// Authoritative type is generated from contracts/asyncapi.yaml.
 //
 // Deprecated: new frame construction sites must use pkg/api/generated types and sendConnGenFrame.
-type wsServerFrame struct {
+type wsServerFrame struct { // not-wire-format
 	Type      string `json:"type"`
 	SessionID string `json:"session_id,omitempty"` // present on all session-scoped frames
 
@@ -746,28 +744,18 @@ func (h *WSHandler) handleChatMessage(
 	}
 }
 
-// wsCancelStageFrame is the JSON shape of a "cancel_stage" WebSocket frame sent
-// to the SPA to drive the progressive Stop-button label (FR-21). The dedicated
-// struct avoids polluting wsServerFrame.Status (used by other frame types) and
-// emits the field as "stage" — which is what the SPA reducer reads.
-type wsCancelStageFrame struct {
-	Type      string `json:"type"`
-	SessionID string `json:"session_id"`
-	Stage     string `json:"stage"` // "graceful" | "hard" | "detached"
-}
-
-// sendCancelStageFrame marshals a wsCancelStageFrame and delivers it via wc.sendCh.
+// sendCancelStageFrame marshals a generated.CancelStageFrame and delivers it via wc.sendCh.
 // Mirrors sendConnFrame's non-critical send path (immediate try, then 10ms/50ms
-// backoffs) but uses the dedicated struct so the JSON field is "stage" not "status".
-// Best-effort: marshal/send errors are logged at debug level and do not block the
-// cancel state machine.
+// backoffs) but is non-critical so it does not use sendConnGenFrame's critical-frame
+// timeout path. Best-effort: marshal/send errors are logged at debug level and do not
+// block the cancel state machine.
 func sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
 	if wc == nil {
 		return
 	}
-	data, err := json.Marshal(wsCancelStageFrame{
-		Type:      "cancel_stage",
-		SessionID: sessionID,
+	data, err := json.Marshal(generated.CancelStageFrame{
+		Type:      string(generated.WsFrameTypeCancelStage),
+		SessionId: sessionID,
 		Stage:     stage,
 	})
 	if err != nil {
@@ -934,7 +922,7 @@ func (h *WSHandler) handleAttachSession(
 	// Run replay: emit frames directly into wc.sendCh via emitFn, bypassing the
 	// divert.  W1-10: a per-frame 5 s timeout prevents indefinite blocking when
 	// the client is not draining the socket.
-	emitFn := func(f wsServerFrame) error {
+	emitFn := func(f any) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -975,17 +963,19 @@ func (h *WSHandler) handleAttachSession(
 			"error", replayErr,
 		)
 		// W1-5: emit error + synthetic done so the client clears isReplaying and
-		// re-enables the composer.  Use sendConnFrame (canonical path) because the
-		// divert flag is already cleared above.
-		sendConnFrame(wc, wsServerFrame{
-			Type:      "error",
-			SessionID: attachID,
+		// re-enables the composer.  Use sendConnGenFrame (generated types).
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:      string(generated.WsFrameTypeError),
+			SessionId: &attachID,
 			Message:   "replay aborted: " + replayErr.Error(),
 		})
-		sendConnFrame(wc, wsServerFrame{
-			Type:      "done",
-			SessionID: attachID,
-			Stats:     map[string]any{"replay_error": true},
+		replayErrTrue := true
+		sendConnGenFrame(wc, string(generated.WsFrameTypeDone), generated.DoneFrame{
+			Type:      string(generated.WsFrameTypeDone),
+			SessionId: attachID,
+			Stats: &generated.DoneStats{
+				ReplayError: &replayErrTrue,
+			},
 		})
 		return
 	}
@@ -1168,7 +1158,7 @@ const droppedFramesWarnThreshold = 20
 // generated type from pkg/api/generated. This function is kept for internal use
 // by replay.go (streamReplay signature is locked by test code) and pre-migration
 // call sites in the readLoop error path.
-// TODO(contract-first): remove once all callers migrate to sendConnGenFrame.
+// Remove once all callers migrate to sendConnGenFrame (contract-first migration).
 func sendConnFrame(wc *wsConn, frame wsServerFrame) {
 	data, err := json.Marshal(frame)
 	if err != nil {
@@ -1755,20 +1745,30 @@ func (s *wsStreamer) fanOutToSessionPeers(data []byte) {
 }
 
 func (s *wsStreamer) Finalize(_ context.Context, _ string) error {
-	stats := map[string]any{}
+	// Build the typed DoneStats for the done frame using the generated type.
+	doneStats := &generated.DoneStats{}
 	if dropped := s.conn.droppedTokens.Load(); dropped > 0 {
-		stats["tokens_dropped"] = dropped
+		droppedF := float64(dropped)
+		doneStats.TokensDropped = &droppedF
 	}
 	// Include turn-level token/cost/duration if the agent loop pushed them via
 	// SetTurnStats before this call (issue #12). Zero values are still emitted
 	// so the client can reset the session counters for turns with no LLM usage.
 	s.statsMu.Lock()
-	stats["tokens"] = s.statsTokens
-	stats["cost"] = s.statsCostUSD
-	stats["duration_ms"] = s.statsDuration.Milliseconds()
+	tokensF := float64(s.statsTokens)
+	costF := s.statsCostUSD
+	durF := float64(s.statsDuration.Milliseconds())
 	s.statsMu.Unlock()
-	doneFrame := wsServerFrame{Type: "done", Stats: stats, SessionID: s.sessionID}
-	sendConnFrame(s.conn, doneFrame)
+	doneStats.Tokens = &tokensF
+	doneStats.Cost = &costF
+	doneStats.DurationMs = &durF
+
+	doneFrame := generated.DoneFrame{
+		Type:      string(generated.WsFrameTypeDone),
+		SessionId: s.sessionID,
+		Stats:     doneStats,
+	}
+	sendConnGenFrame(s.conn, string(generated.WsFrameTypeDone), doneFrame)
 	// Cross-browser session attach (#133): a second tab attached mid-turn
 	// needs the done frame too, otherwise its UI stays in "streaming" state
 	// forever even after our token fan-out delivered the full content.

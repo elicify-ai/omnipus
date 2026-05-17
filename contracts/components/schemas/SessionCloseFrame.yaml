@@ -1,0 +1,18 @@
+title: SessionCloseFrame
+description: >
+  Client → server. Explicit request to close a session. The server unregisters
+  the session from the active set, fires CloseSession on the agent loop, and
+  responds with a session_close_ack frame. Requires session_id.
+type: object
+required:
+  - type
+  - session_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: session_close
+  session_id:
+    type: string
+    minLength: 1
+    description: ID of the session to close.

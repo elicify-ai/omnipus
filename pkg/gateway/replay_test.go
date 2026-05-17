@@ -30,24 +30,40 @@ import (
 // Test helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// sliceSink accumulates emitted frames in a slice; safe for single-goroutine use.
+// sliceSink accumulates emitted frames as JSON bytes; safe for single-goroutine use.
+// It stores raw JSON so that tests are not coupled to the internal Go frame type —
+// any generated type emitted through streamReplay can be decoded here.
 type sliceSink struct {
 	mu     sync.Mutex
-	frames []wsServerFrame
+	frames [][]byte
 }
 
-func (s *sliceSink) emit(f wsServerFrame) error {
+// emit accepts any generated frame value, marshals it to JSON, and stores it.
+// This implements the func(any) error signature required by streamReplay.
+func (s *sliceSink) emit(f any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.frames = append(s.frames, f)
+	data, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	s.frames = append(s.frames, data)
 	return nil
 }
 
+// all decodes all accumulated JSON frames into wsServerFrame for test assertions.
+// wsServerFrame is kept as a decode-only test helper — it is never constructed
+// as a wire value; only json.Unmarshal populates it.
 func (s *sliceSink) all() []wsServerFrame {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]wsServerFrame, len(s.frames))
-	copy(out, s.frames)
+	out := make([]wsServerFrame, 0, len(s.frames))
+	for _, raw := range s.frames {
+		var f wsServerFrame
+		if err := json.Unmarshal(raw, &f); err == nil {
+			out = append(out, f)
+		}
+	}
 	return out
 }
 
@@ -636,7 +652,7 @@ func TestReplay_CtxCancelled_StopsCleanly(t *testing.T) {
 	defer cancel() // ensure context is canceled even on test failure
 
 	var emitCount int
-	emitFn := func(f wsServerFrame) error {
+	emitFn := func(_ any) error {
 		emitCount++
 		if emitCount == 3 {
 			cancel() // cancel mid-replay
@@ -912,13 +928,13 @@ func TestReplay_LiveEventBuffer_OrderPreserved(t *testing.T) {
 
 	fn := wsEmitFunc(ctx, wc)
 
-	// Normal emit must succeed.
-	err := fn(wsServerFrame{Type: "replay_message", Role: "user", Content: "hi"})
+	// Normal emit must succeed (use a generated type to verify marshaling works).
+	err := fn(map[string]any{"type": "replay_message", "session_id": "s1", "role": "user", "content": "hi"})
 	require.NoError(t, err)
 
 	// After cancellation, emit must return context error.
 	cancel()
-	err = fn(wsServerFrame{Type: "done"})
+	err = fn(map[string]any{"type": "done", "session_id": "s1"})
 	assert.ErrorIs(t, err, context.Canceled)
 }
 

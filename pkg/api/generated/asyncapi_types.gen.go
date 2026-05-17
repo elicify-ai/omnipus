@@ -90,14 +90,29 @@ type ErrorFrame struct {
 	Type      string  `json:"type"`
 }
 
-// ExecApprovalRequestFrame — Server → client exec approval needed.
+// ExecApprovalExpiredFrame — Server → client exec approval request timed out.
+type ExecApprovalExpiredFrame struct {
+	Id        string  `json:"id"`
+	Message   *string `json:"message,omitempty"`
+	SessionId string  `json:"session_id"`
+	Type      string  `json:"type"`
+}
+
+// ExecApprovalRequestFrame — Server → client exec approval needed. The `command` field carries the tool name for display. Optional `tool` and `params` carry structured tool call information.
 type ExecApprovalRequestFrame struct {
+	// Tool name used as primary display string in the approval modal.
 	Command       string  `json:"command"`
 	Id            string  `json:"id"`
 	MatchedPolicy *string `json:"matched_policy,omitempty"`
-	SessionId     string  `json:"session_id"`
-	Type          string  `json:"type"`
-	WorkingDir    *string `json:"working_dir,omitempty"`
+	// Human-readable approval request message.
+	Message *string `json:"message,omitempty"`
+	// Tool invocation arguments. May be absent for parameter-less tools.
+	Params    map[string]any `json:"params,omitempty"`
+	SessionId string         `json:"session_id"`
+	// Structured tool name (same value as command).
+	Tool       *string `json:"tool,omitempty"`
+	Type       string  `json:"type"`
+	WorkingDir *string `json:"working_dir,omitempty"`
 }
 
 // ExecApprovalResponseAckFrame — Server → client exec approval response acknowledged.
@@ -189,6 +204,12 @@ type SessionCloseAckFrame struct {
 	Id        *string `json:"id,omitempty"`
 	SessionId string  `json:"session_id"`
 	Type      string  `json:"type"`
+}
+
+// SessionCloseFrame — Client → server explicit session close request.
+type SessionCloseFrame struct {
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
 }
 
 // SessionStartedFrame — Server → client new session minted.
@@ -322,6 +343,7 @@ const (
 	WsFrameTypePing                    WsFrameType = "ping"
 	WsFrameTypeAttachSession           WsFrameType = "attach_session"
 	WsFrameTypeDevicePairingResponse   WsFrameType = "device_pairing_response"
+	WsFrameTypeSessionClose            WsFrameType = "session_close"
 	WsFrameTypeSessionStarted          WsFrameType = "session_started"
 	WsFrameTypeToken                   WsFrameType = "token"
 	WsFrameTypeDone                    WsFrameType = "done"
@@ -331,6 +353,7 @@ const (
 	WsFrameTypeSubagentStart           WsFrameType = "subagent_start"
 	WsFrameTypeSubagentEnd             WsFrameType = "subagent_end"
 	WsFrameTypeExecApprovalRequest     WsFrameType = "exec_approval_request"
+	WsFrameTypeExecApprovalExpired     WsFrameType = "exec_approval_expired"
 	WsFrameTypeTaskStatusChanged       WsFrameType = "task_status_changed"
 	WsFrameTypeReplayMessage           WsFrameType = "replay_message"
 	WsFrameTypeRateLimit               WsFrameType = "rate_limit"

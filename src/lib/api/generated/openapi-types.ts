@@ -1112,6 +1112,112 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get gateway runtime status
+         * @description Returns online status, agent/channel counts, daily cost, and the binary version.
+         *     Polled by the SPA StatusBar every 15 seconds.
+         */
+        get: operations["getGatewayStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List configured LLM providers
+         * @description Returns all configured LLM providers with connection status and available model list.
+         *     Model lists are fetched live from each provider's upstream /models endpoint when an API key is present.
+         */
+        get: operations["listProviders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List installed skills
+         * @description Returns all skills installed in ~/.omnipus/skills/. Returns an empty array when no skills are installed.
+         */
+        get: operations["listSkills"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get recent activity events
+         * @description Returns up to 50 activity events from the last 24 hours, sorted reverse-chronological.
+         *     Includes session_start events from all agent stores and task lifecycle events.
+         */
+        get: operations["getActivity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload files for a session
+         * @description Streams multipart file uploads to disk under ~/.omnipus/uploads/{session_id}/.
+         *     Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory.
+         *     session_id may be supplied as a query parameter or as a form field before the file parts.
+         *     Returns HTTP 201 on success.
+         */
+        post: operations["uploadFiles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1551,6 +1657,11 @@ export interface components {
             session: components["schemas"]["Session"];
             /** @description Ordered list of transcript entries for this session. */
             messages: components["schemas"]["Message"][];
+            /**
+             * @description True when the agent that owned this session has been deleted from the config. Used by the SPA to display a banner informing the user that the original agent no longer exists. Absent (or false) in the common case.
+             * @example false
+             */
+            agent_removed?: boolean;
         };
         /** @description Body for POST /sessions. Creates a new session for an agent. */
         SessionCreateRequest: {
@@ -1829,6 +1940,82 @@ export interface components {
                  *     ]
                  */
                 custom_deny_patterns?: string[];
+            };
+            /**
+             * @description Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
+             * @example [
+             *       "anthropic/claude-3.5-haiku"
+             *     ]
+             */
+            fallback_models?: string[];
+            /** @description LLM sampling parameters applied to this agent's requests. */
+            model_params?: {
+                /**
+                 * Format: double
+                 * @description Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+                 * @example 1
+                 */
+                temperature?: number;
+                /**
+                 * @description Maximum tokens to generate per turn.
+                 * @example 4096
+                 */
+                max_tokens?: number;
+                /**
+                 * Format: double
+                 * @description Nucleus sampling probability mass. 1.0 disables nucleus sampling.
+                 * @example 1
+                 */
+                top_p?: number;
+            };
+            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
+            rate_limits?: {
+                /**
+                 * @description When true, global rate limits are used and per-agent overrides are ignored.
+                 * @example true
+                 */
+                use_global_defaults?: boolean;
+                /**
+                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+                 * @example 100
+                 */
+                max_llm_calls_per_hour?: number;
+                /**
+                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+                 * @example 60
+                 */
+                max_tool_calls_per_minute?: number;
+                /**
+                 * Format: double
+                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
+                 * @example 5
+                 */
+                max_cost_per_day?: number;
+            };
+            /** @description Aggregate runtime statistics for this agent. Absent when no sessions have been run. */
+            stats?: {
+                /**
+                 * @description Lifetime count of sessions created for this agent.
+                 * @example 42
+                 */
+                total_sessions?: number;
+                /**
+                 * @description Lifetime token count across all sessions.
+                 * @example 1500000
+                 */
+                total_tokens?: number;
+                /**
+                 * Format: double
+                 * @description Lifetime USD cost across all sessions.
+                 * @example 3.14
+                 */
+                total_cost?: number;
+                /**
+                 * Format: date-time
+                 * @description RFC3339 timestamp of the last turn completed by this agent.
+                 * @example 2026-05-17T14:23:00Z
+                 */
+                last_active?: string;
             };
         };
         /** @description Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts). */
@@ -2595,6 +2782,236 @@ export interface components {
              * @enum {string}
              */
             status: "ok";
+        };
+        /** @description Gateway runtime status as returned by GET /status (polled by the frontend StatusBar every 15 seconds). Summarises the number of configured agents and channels plus a daily cost accumulator. */
+        GatewayStatus: {
+            /**
+             * @description Always true when the gateway is reachable and the agent loop is running.
+             * @example true
+             */
+            online: boolean;
+            /**
+             * @description Total number of configured agents (core + custom), including the implicit system agent.
+             * @example 3
+             */
+            agent_count: number;
+            /**
+             * @description Number of enabled channels including the always-available webchat channel.
+             * @example 2
+             */
+            channel_count: number;
+            /**
+             * Format: double
+             * @description Aggregate USD cost accrued today across all agents. Zero when cost tracking is disabled.
+             * @example 0.042
+             */
+            daily_cost: number;
+            /**
+             * @description Gateway binary version string (e.g. "0.1.0" or the git short-sha for dev builds).
+             * @example 0.1.0
+             */
+            version?: string;
+        };
+        /** @description A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue. */
+        Provider: {
+            /**
+             * @description Provider identifier (e.g. "anthropic", "openai", "openrouter").
+             * @example openrouter
+             */
+            id: string;
+            /**
+             * @description Human-readable provider name (may be the same as id for unknown providers).
+             * @example openrouter
+             */
+            name: string;
+            /**
+             * @description Branded display name for UI presentation (e.g. "OpenRouter", "Anthropic"). Falls back to name when absent.
+             * @example OpenRouter
+             */
+            display_name?: string;
+            /**
+             * @description "connected" when at least one API key is configured for this provider. "disconnected" when no key is available or on the fallback default entry. "error" when the provider is configured but the upstream returned a non-retryable error.
+             * @example connected
+             * @enum {string}
+             */
+            status: "connected" | "disconnected" | "error";
+            /**
+             * @description Alphabetically sorted list of model IDs available from this provider, fetched from the upstream /models endpoint when an API key is present. Empty array when the upstream fetch fails or no key is configured.
+             * @example [
+             *       "anthropic/claude-3.5-haiku",
+             *       "anthropic/claude-sonnet-4-5"
+             *     ]
+             */
+            models: string[];
+            /**
+             * @description Non-fatal advisory message (e.g. "could not fetch upstream model list: ..."). Absent when there are no warnings.
+             * @example could not fetch upstream model list: status 429
+             */
+            warning?: string;
+            /**
+             * @description Fatal error message when status is "error". Absent for connected/disconnected providers.
+             * @example upstream returned 403 Forbidden
+             */
+            error?: string;
+        };
+        /** @description A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata. */
+        Skill: {
+            /**
+             * @description Unique skill identifier (typically the skill directory name or npm package name).
+             * @example web-research
+             */
+            id: string;
+            /**
+             * @description Human-readable skill name.
+             * @example Web Research
+             */
+            name: string;
+            /**
+             * @description Semantic version string (e.g. "1.2.3").
+             * @example 1.2.3
+             */
+            version: string;
+            /**
+             * @description Short description of what the skill does.
+             * @example Gives the agent web search and page extraction capabilities.
+             */
+            description?: string;
+            /**
+             * @description Skill author or publisher name.
+             * @example Omnipus Community
+             */
+            author?: string;
+            /**
+             * @description True when the skill has been verified by the Omnipus team. Unverified skills require explicit trust grant before use.
+             * @example true
+             */
+            verified: boolean;
+            /**
+             * @description "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
+             * @example active
+             * @enum {string}
+             */
+            status: "active" | "disabled" | "inactive" | "error";
+            /**
+             * @description ID of the agent this skill is assigned to, when the skill is bound to a specific agent rather than globally available. Absent for globally assigned skills.
+             * @example jim
+             */
+            agent_assignment?: string;
+        };
+        /** @description A single activity event as returned by GET /activity. Events represent notable runtime occurrences (session starts, task lifecycle changes) from the last 24 hours, returned in reverse-chronological order (max 50 entries). */
+        ActivityEvent: {
+            /**
+             * @description Opaque event identifier derived from the source entity. E.g. "session-<uuid>", "task-c-<id>", "task-u-<id>".
+             * @example session-550e8400-e29b-41d4-a716-446655440000
+             */
+            id: string;
+            /**
+             * @description Event category. "session_start" = new session began. "task_created" = a task was created. "task_updated" = a task completed or changed status.
+             * @example session_start
+             */
+            type: string;
+            /**
+             * @description ID of the agent involved in the event (absent for system events).
+             * @example jim
+             */
+            agent_id?: string;
+            /**
+             * @description Display name of the agent involved (absent for system events).
+             * @example Jim
+             */
+            agent_name?: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC timestamp when the event occurred.
+             * @example 2026-05-17T14:23:00Z
+             */
+            timestamp: string;
+            /**
+             * @description Human-readable one-line summary of the event (e.g. session title, task title).
+             * @example New session
+             */
+            summary?: string;
+        };
+        /** @description Metadata for a single successfully uploaded file, as returned in the POST /upload response body's "files" array. Callers use the path field to construct the /api/v1/uploads/{session_id}/{filename} download URL. */
+        UploadedFile: {
+            /**
+             * @description Sanitised filename as stored on disk.
+             * @example screenshot.png
+             */
+            name: string;
+            /**
+             * @description Relative path within the uploads directory for constructing a download URL. Format: "uploads/{session_id}/{filename}".
+             * @example uploads/550e8400-e29b-41d4-a716-446655440000/screenshot.png
+             */
+            path: string;
+            /**
+             * Format: int64
+             * @description File size in bytes.
+             * @example 204800
+             */
+            size: number;
+            /**
+             * @description Detected MIME type of the uploaded file.
+             * @example image/png
+             */
+            content_type: string;
+        };
+        /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode, allowed_paths, and default_profile are restart-gated (the response includes requires_restart=true when any of these change). ssrf.allow_internal and shell_deny_patterns are hot-reloaded. */
+        SandboxConfigUpdate: {
+            /**
+             * @description Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
+             * @example enforce
+             * @enum {string}
+             */
+            mode?: "off" | "permissive" | "enforce";
+            /**
+             * @description Allow agent tool calls to make outbound network connections.
+             * @example true
+             */
+            allow_network_outbound?: boolean;
+            /**
+             * @description List of host filesystem paths the agent is allowed to read/write. Restart-gated. Must be absolute paths; empty list clears all exceptions.
+             * @example [
+             *       "/home/user/workspace"
+             *     ]
+             */
+            allowed_paths?: string[];
+            /**
+             * @description Enable SSRF (server-side request forgery) protection for HTTP tool calls.
+             * @example true
+             */
+            ssrf_enabled?: boolean;
+            /**
+             * @description Flat version of ssrf.allow_internal. Takes precedence when both are present. CIDR ranges or IP addresses the agent may reach despite SSRF blocking.
+             * @example [
+             *       "10.0.0.1/32"
+             *     ]
+             */
+            ssrf_allow_internal?: string[];
+            /** @description Nested SSRF configuration sub-object. Flat fields take precedence. */
+            ssrf?: {
+                /**
+                 * @description CIDR ranges or IP addresses the agent may reach despite SSRF blocking.
+                 * @example [
+                 *       "10.0.0.1/32"
+                 *     ]
+                 */
+                allow_internal?: string[];
+            };
+            /**
+             * @description Default sandbox profile applied to new custom agents that do not pick their own profile. Restart-gated. Empty string means "inherit global default".
+             * @example workspace
+             * @enum {string}
+             */
+            default_profile?: "" | "none" | "workspace" | "workspace+net" | "host" | "off";
+            /**
+             * @description Global fallback list of Go regexp patterns to block in shell commands. Per-agent custom_deny_patterns extend this list. Hot-reloaded.
+             * @example [
+             *       "rm -rf /",
+             *       "curl.*169\\.254"
+             *     ]
+             */
+            shell_deny_patterns?: string[];
         };
     };
     responses: {
@@ -4250,20 +4667,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    /** @enum {string} */
-                    mode?: "off" | "permissive" | "enforce";
-                    allow_network_outbound?: boolean;
-                    allowed_paths?: string[];
-                    ssrf_enabled?: boolean;
-                    ssrf_allow_internal?: string[];
-                    ssrf?: {
-                        allow_internal?: string[];
-                    };
-                    /** @enum {string} */
-                    default_profile?: "" | "none" | "workspace" | "workspace+net" | "host" | "off";
-                    shell_deny_patterns?: string[];
-                };
+                "application/json": components["schemas"]["SandboxConfigUpdate"];
             };
         };
         responses: {
@@ -5375,6 +5779,174 @@ export interface operations {
             };
         };
     };
+    getGatewayStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Gateway runtime status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GatewayStatus"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Array of provider entries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Provider"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listSkills: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Array of installed skills. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Skill"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getActivity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Activity events (reverse-chronological, max 50, last 24 hours). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityEvent"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    uploadFiles: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Session ID to associate the uploaded files with. May also be supplied as a multipart form field.
+                 * @example 550e8400-e29b-41d4-a716-446655440000
+                 */
+                session_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /** @description Session ID (alternative to query parameter). */
+                    session_id?: string;
+                    /** @description One or more files to upload. */
+                    files?: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Files uploaded successfully. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        files: components["schemas"]["UploadedFile"][];
+                    };
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
 }
 
 // ── Named type re-exports from components.schemas ────────────────────────────
@@ -5432,3 +6004,9 @@ export type PromptGuardResponse = components["schemas"]["PromptGuardResponse"];
 export type PendingRestartEntry = components["schemas"]["PendingRestartEntry"];
 export type AboutResponse = components["schemas"]["AboutResponse"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
+export type GatewayStatus = components["schemas"]["GatewayStatus"];
+export type Provider = components["schemas"]["Provider"];
+export type Skill = components["schemas"]["Skill"];
+export type ActivityEvent = components["schemas"]["ActivityEvent"];
+export type UploadedFile = components["schemas"]["UploadedFile"];
+export type SandboxConfigUpdate = components["schemas"]["SandboxConfigUpdate"];

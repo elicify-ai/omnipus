@@ -12,6 +12,7 @@ enum:
   - ping
   - attach_session
   - device_pairing_response
+  - session_close
   # ── Server → client ─────────────────────────────────────────────────────────
   - session_started
   - token
@@ -32,6 +33,7 @@ enum:
   - system_overload
   - replay_warning
   - cancel_stage
+  - exec_approval_expired
   # ── Server → client (internal / ack) ────────────────────────────────────────
   - session_close_ack
   - exec_approval_response_ack
