@@ -1059,10 +1059,9 @@ func TestContract_PingFrame_Edge(t *testing.T) {
 	mustPassAsyncAPI(t, "PingFrame", FixturePingFrame_Edge())
 }
 
-// ── Phase 7 round-2 — 13 new types from fix-H + 2 from fix-D ────────────────
+// ── Additional type contract tests ───────────────────────────────────────────
 // Each type gets: Populated (mustPass), ZeroValue (mustFail for most),
 // Edge (mustPass), plus NilXxxRejected tests for required array/map fields.
-// Traces to: docs/plan/quizzical-marinating-frog.md — Phase 4 contract test spec
 
 // ── Task ─────────────────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/Task.yaml
@@ -1629,7 +1628,6 @@ func TestContract_MeInfo_Differentiation(t *testing.T) {
 
 // ── ExecApprovalExpiredFrame ──────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/ExecApprovalExpiredFrame.yaml
-// This is the fix-D type — schema existed since fix-D but no fixtures/tests were written.
 
 func TestContract_ExecApprovalExpiredFrame_Populated(t *testing.T) {
 	// All required fields + optional message.
@@ -1666,7 +1664,6 @@ func TestContract_ExecApprovalExpiredFrame_Differentiation(t *testing.T) {
 
 // ── SessionCloseFrame ─────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/SessionCloseFrame.yaml
-// This is the fix-D type — schema existed since fix-D but no fixtures/tests were written.
 
 func TestContract_SessionCloseFrame_Populated(t *testing.T) {
 	// Both required fields set.

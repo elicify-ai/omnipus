@@ -458,14 +458,14 @@ describe('parseFrameSafe', () => {
   })
 })
 
-// ── WsConnection onmessage integration: strict parsing (fix-C) ───────────────
+// ── WsConnection onmessage integration: strict parsing ───────────────────────
 //
-// These tests verify the fix for the three bugs described in Phase 7:
+// These tests verify three behaviors of the discriminated inbound parse:
 // 1. tool_approval_required with args:null is dropped (never reaches reducer)
 // 2. Unknown discriminator goes through _unknownFrameTypeCount, not drop path
 // 3. Client→server direction frames are rejected even if Zod accepts them
 
-describe('WsConnection onmessage — strict parsing (fix-C integration)', () => {
+describe('WsConnection onmessage — strict parsing', () => {
   beforeEach(() => {
     resetDroppedFrameCount()
     resetUnknownFrameTypeCount()
@@ -604,9 +604,7 @@ describe('getUnknownFrameTypeCount / resetUnknownFrameTypeCount', () => {
 
 // ── ClientFrameTypes contract test ────────────────────────────────────────────
 //
-// Traces to: Architect NF-5 — CLIENT_FRAME_TYPES must be generated from spec.
-//
-// This test asserts that:
+// Asserts that:
 // 1. ClientFrameTypes exported from ws.ts equals the generated constant.
 // 2. The set is non-empty (the spec has at least one client→server frame).
 // 3. Every entry in the set passes Zod validation as a valid WsFrame — this
@@ -615,7 +613,7 @@ describe('getUnknownFrameTypeCount / resetUnknownFrameTypeCount', () => {
 // 4. session_close is present (regression guard: it was missing from the
 //    hand-maintained set that this constant replaces).
 
-describe('ClientFrameTypes — contract test (NF-5)', () => {
+describe('ClientFrameTypes — contract test', () => {
   it('ClientFrameTypes exported from ws.ts matches the generated constant', () => {
     // Both imports must refer to the same array contents (same source of truth).
     expect(Array.from(ClientFrameTypes)).toEqual(Array.from(ClientFrameTypesFromGenerated))

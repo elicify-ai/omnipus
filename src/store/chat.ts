@@ -92,7 +92,7 @@ export interface SessionChatState {
   isStreaming: boolean
   /** True from attach_session until first done frame — disables send input during replay. */
   isReplaying: boolean
-  /** W3-9: set when a done frame arrives while isReplaying was true. */
+  /** Set when a done frame arrives while isReplaying was true. */
   replayCompletedForSession: string | null
   sessionTokens: number
   sessionCost: number
@@ -1764,7 +1764,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           break
 
         case 'replay_warning':
-          // V1.B: gateway detected duplicate tool_call_ids in the transcript on
+          // Gateway detected duplicate tool_call_ids in the transcript on
           // replay. Server-only slog.Warn was invisible to operators because
           // the count was buried in done.Stats. One-shot toast surfaces it.
           useUiStore.getState().addToast({

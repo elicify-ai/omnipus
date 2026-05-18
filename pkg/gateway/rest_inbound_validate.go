@@ -55,9 +55,8 @@ import (
 // Returns true if the body was successfully decoded (and validated when enabled).
 // On false the handler must return immediately — the HTTP error was already sent.
 
-// inboundValidatorState holds the once-initialized schema compiler and the
-// compiled schema map. Both fields are written once (under mu) and then
-// read concurrently by all request goroutines.
+// inboundValidatorState holds the compiler (initialized once via sync.Once)
+// and the per-schema compile cache (grown lazily under mu).
 var inboundValidatorState struct {
 	mu       sync.Mutex
 	once     sync.Once
@@ -159,7 +158,7 @@ func validateBodyAgainstSchema(schemaName string, rawJSON []byte) (string, bool)
 	var doc any
 	if err := json.Unmarshal(rawJSON, &doc); err != nil {
 		// If JSON is invalid we still want to report it; the subsequent
-		// json.Decoder call will produce the same error with a better message.
+		// json.Unmarshal call will produce the same error with a better message.
 		return fmt.Sprintf("invalid JSON: %v", err), false
 	}
 

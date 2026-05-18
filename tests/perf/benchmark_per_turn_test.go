@@ -71,7 +71,7 @@ func sendAndMeasure(conn *websocket.Conn, content string) (perTurnLatencies, err
 	}
 
 	// 300 s per-turn deadline: full-suite concurrent load causes goroutine scheduling
-	// starvation that can push individual turns well past 30 s (Phase 7 N3 fix).
+	// starvation that can push individual turns well past 30 s.
 	const perTurnDeadline = 300 * time.Second
 	conn.SetWriteDeadline(time.Now().Add(perTurnDeadline)) //nolint:errcheck
 	sendAt := time.Now()

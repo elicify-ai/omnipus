@@ -1,5 +1,5 @@
 /**
- * global-teardown.ts — T0.2 + T4.3: Fail the run if unauthorized skips occurred
+ * global-teardown.ts — Fail the run if unauthorized skips occurred
  * or if the skip count rises versus the previous-green-main baseline.
  *
  * ## What this teardown does

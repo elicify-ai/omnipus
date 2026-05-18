@@ -80,7 +80,7 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
     // 409 = already complete on this $OMNIPUS_HOME (e.g. second test shard
     // hitting the same instance). Accept ONLY when the body confirms the known
     // sentinel — any other 409 is an unexpected error and must be surfaced.
-    // W3-10: parse the body to distinguish expected "already complete" from
+    // Parse the body to distinguish expected "already complete" from
     // an unexpected 409 (e.g., partial state, schema mismatch).
     if (res.status() === 409) {
       let body: string;

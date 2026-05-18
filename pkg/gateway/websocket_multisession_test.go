@@ -135,7 +135,7 @@ func drainUntilSessionDone(t *testing.T, conn *websocket.Conn, sid string, timeo
 		if err != nil {
 			return false
 		}
-		var f wsServerFrameDecodeHelper
+		var f replayFrameDecoder
 		if err := json.Unmarshal(raw, &f); err != nil {
 			continue
 		}
@@ -215,7 +215,7 @@ func TestWS_MessageWithEmptySessionID_MintsAndAcks(t *testing.T) {
 		if readErr != nil {
 			break
 		}
-		var f wsServerFrameDecodeHelper
+		var f replayFrameDecoder
 		if unmarshalErr := json.Unmarshal(raw, &f); unmarshalErr != nil {
 			continue
 		}
@@ -317,7 +317,7 @@ func TestWS_TwoParallelSessions_NoCrosstalk(t *testing.T) {
 		if err != nil {
 			break
 		}
-		var f wsServerFrameDecodeHelper
+		var f replayFrameDecoder
 		if err := json.Unmarshal(raw, &f); err != nil {
 			continue
 		}
@@ -550,7 +550,7 @@ func TestWS_FrameTaggingCompleteness_AllSessionScopedFramesCarrySessionID(t *tes
 		if err != nil {
 			break
 		}
-		var f wsServerFrameDecodeHelper
+		var f replayFrameDecoder
 		if err := json.Unmarshal(raw, &f); err != nil {
 			continue
 		}

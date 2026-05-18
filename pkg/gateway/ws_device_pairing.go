@@ -86,7 +86,10 @@ func (h *WSHandler) handleDevicePairingResponse(deviceID, decision string) {
 
 	case "reject":
 		pairingStore.Reject(deviceID)
-		slog.Info("ws: device pairing rejected", "device_id", deviceID)
+		slog.Info("ws: device pairing rejected",
+			"device_id", deviceID,
+			"device_name", pending.DeviceName,
+		)
 
 		h.devicePairingRegistry.resolve(deviceID, pairing.PairingDecision{State: pairing.StateRejected})
 
@@ -94,10 +97,6 @@ func (h *WSHandler) handleDevicePairingResponse(deviceID, decision string) {
 		slog.Warn("ws: unknown device_pairing_response decision", "decision", decision)
 		return
 	}
-
-	// pending is used to verify the device existed and was retrieved successfully above.
-	// Its fields are not otherwise needed after the approve/reject action is taken.
-	_ = pending.DeviceID
 }
 
 // generateDeviceToken creates a random device token using crypto/rand.

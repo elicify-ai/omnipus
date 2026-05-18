@@ -532,7 +532,7 @@ func (r *ToolRegistry) List() []string {
 }
 
 // cloneEntry returns a shallow copy of a ToolEntry.
-// W3-13: shared by Clone and CloneExcept so the field list cannot drift between
+// Shared by Clone and CloneExcept so the field list cannot drift between
 // the two methods. When a new field is added to ToolEntry, update ONLY this
 // function and both Clone + CloneExcept pick up the change automatically.
 //

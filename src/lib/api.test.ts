@@ -830,7 +830,7 @@ describe('getApiSchemaErrorCount / resetApiSchemaErrorCount', () => {
   })
 })
 
-// ── Schema validation through real request() call (fix-C) ─────────────────────
+// ── Schema validation through real request() call ───────────────────────────────
 //
 // These tests verify that request() with an explicit Zod schema:
 // 1. Throws ApiSchemaError when the response body fails validation
@@ -915,7 +915,7 @@ describe('request() with Zod schema — validation errors', () => {
   })
 
   it('login: returns valid data when schema passes', async () => {
-    // LoginResponse.token enforces exact-72-char `omnipus_<hex64>` format (fix-N invariant tightening).
+    // LoginResponse.token enforces exact-72-char `omnipus_<hex64>` format.
     const validToken = 'omnipus_' + 'a'.repeat(64)
     fetchSpy.mockResolvedValueOnce(
       new Response(JSON.stringify({ token: validToken, role: 'admin', username: 'alice' }), {
@@ -945,7 +945,7 @@ describe('request() with Zod schema — validation errors', () => {
   })
 })
 
-// ── F-NEW-1: fetchSessionMessages renames parameters → params ──────────────────
+// ── fetchSessionMessages renames parameters → params ─────────────────────────────
 //
 // Regression test for Problem 1. The wire ToolCall schema emits `parameters`
 // (matching Go json tag `json:"parameters,omitempty"`). The SPA ToolCall type
@@ -1112,7 +1112,7 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
   })
 })
 
-// ── F-NEW-2: updateConfig sends wire shape with gateway.host (not bind_address) ─
+// ── updateConfig sends wire shape with gateway.host (not bind_address) ──────────
 //
 // Regression test for Problem 2. Before the fix, updateConfig serialised the
 // SPA-flat Config shape directly. The backend expected `gateway.host` but

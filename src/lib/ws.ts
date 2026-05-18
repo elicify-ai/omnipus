@@ -105,10 +105,9 @@ export type {
 
 // ── WsXxx legacy aliases (active callers only) ───────────────────────────────
 //
-// Only the 8 names actively imported by src/store/chat.ts,
+// Aliases retained for active callers in src/store/chat.ts,
 // src/store/toolApproval.ts, src/components/chat/SubagentBlock.tsx,
-// src/components/agents/ToolApprovalModal.test.tsx, and src/lib/wsParser.test.ts
-// are kept. The remaining 23 dead aliases have been removed.
+// src/components/agents/ToolApprovalModal.test.tsx, and src/lib/wsParser.test.ts.
 // New code should import canonical names from @/lib/api/generated/asyncapi-types.
 
 export type WsSubagentStartFrame = SubagentStartFrame
@@ -118,9 +117,6 @@ export type WsReplayMessageFrame = ReplayMessageFrame
 export type WsRateLimitFrame = RateLimitFrame
 export type WsToolApprovalRequiredFrame = ToolApprovalRequiredFrame
 export type WsSessionStateFrame = SessionStateFrame
-
-// WsSendFrame: union of all client→server frames.
-export type WsSendFrame = ClientFrame
 
 // WsReceiveFrame: union of all server→client frames.
 export type WsReceiveFrame = ServerFrame
@@ -179,7 +175,7 @@ if ((import.meta.env.DEV || import.meta.env.MODE === 'test') && typeof window !=
 // Throttling and store interaction are handled there.
 
 function _maybeDevToast(frameType: string, message: string): void {
-  maybeDevToast(message, frameType)
+  void maybeDevToast(message, frameType)
 }
 
 // ── safeJsonParse ────────────────────────────────────────────────────────────
@@ -374,7 +370,7 @@ export class WsConnection {
   private droppedFrameCount = 0
   private readonly droppedFrameThreshold = 5
 
-  // B1.3c: bound event handler references so they can be removed on disconnect.
+  // Bound event handler references so they can be removed on disconnect.
   private _onVisibilityChange: (() => void) | null = null
   private _onOnline: (() => void) | null = null
   private _onOffline: (() => void) | null = null
@@ -522,7 +518,7 @@ export class WsConnection {
     }
   }
 
-  // B1.3c: attach window-level listeners that trigger reconnect on
+  // Attach window-level listeners that trigger reconnect on
   // visibilitychange (tab re-focused after backgrounding) and online (network
   // recovered). Both fire a reconnect immediately if in disconnected state,
   // resetting the backoff counter so the next attempt is fast.

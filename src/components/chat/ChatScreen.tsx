@@ -678,7 +678,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   //
   // T23 FIX: Two problems existed with the previous implementation:
   //
-  //   Problem 1 — AssistantUI's cancelOnEscape: ComposerPrimitive.Input has cancelOnEscape
+  //   AssistantUI's cancelOnEscape: ComposerPrimitive.Input has cancelOnEscape
   //   defaulting to true, which consumed the Escape keydown before our React onKeyDown
   //   handler saw it. Fixed by passing cancelOnEscape={false} to that component.
   //
@@ -1058,20 +1058,20 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
     refetchOnMount: !isConnected,
   })
 
-  // Sprint I: WS attach_session + streamReplay is the authoritative history loader.
+  // WS attach_session + streamReplay is the authoritative history loader.
   // Skip the REST-based setMessages overwrite when WS replay is active OR has already
   // populated the store — otherwise the filter below strips tool_call frames already
   // attached by the reducer and historical tool-call-badge elements disappear.
   const isReplaying = useChatStore((s) => s.isReplaying)
   const storeMessageCount = useChatStore((s) => s.messages.length)
-  // W3-9: replayCompletedForSession tracks whether WS replay finished for the active session.
+  // replayCompletedForSession tracks whether WS replay finished for the active session.
   // When set, the REST fallback is skipped even if the store has 0 messages (empty session).
   const replayCompletedForSession = useChatStore((s) => s.replayCompletedForSession)
   useEffect(() => {
     if (!historyData) return
     // Don't overwrite during replay — WS frames are the source of truth.
     if (isReplaying) return
-    // W3-9: don't overwrite if WS replay already completed for this session.
+    // Don't overwrite if WS replay already completed for this session.
     // This gates the fallback more precisely than storeMessageCount > 0 alone —
     // an empty session would pass the count check but still had a successful replay.
     if (replayCompletedForSession === activeSessionId) return

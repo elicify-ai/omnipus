@@ -1295,7 +1295,9 @@ func setupAndStartServices(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]string{"error": "endpoint not found"})
+			if err := json.NewEncoder(w).Encode(map[string]string{"error": "endpoint not found"}); err != nil {
+				slog.Debug("404 handler: encode failed", "error", err)
+			}
 		}),
 	)
 

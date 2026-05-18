@@ -188,7 +188,7 @@ type ReplayMessageFrame struct {
 	Type      string  `json:"type"`
 }
 
-// ReplayWarningFrame — Server → client duplicate tool_call_ids detected (V1.B).
+// ReplayWarningFrame — Server → client duplicate tool_call_ids detected.
 type ReplayWarningFrame struct {
 	Message   string              `json:"message"`
 	SessionId string              `json:"session_id"`

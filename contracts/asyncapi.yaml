@@ -392,7 +392,7 @@ operations:
     channel:
       $ref: '#/channels/chat'
     summary: >
-      Transcript contained duplicate tool_call_ids (V1.B). Emitted just before
+      Transcript contained duplicate tool_call_ids. Emitted just before
       the terminal done frame during replay. The SPA shows a one-shot warning
       toast.
     messages:
@@ -1549,7 +1549,7 @@ components:
 
     ReplayWarningFrame:
       title: ReplayWarningFrame
-      description: Server → client duplicate tool_call_ids detected (V1.B).
+      description: Server → client duplicate tool_call_ids detected.
       type: object
       required:
         - type

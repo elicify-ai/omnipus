@@ -1,8 +1,8 @@
 //go:build !cgo
 
-// Package gateway — inbound frame validation tests (fix-I, Part B).
+// Package gateway — inbound frame validation tests.
 //
-// Covers three new behaviors introduced by the discriminated inbound decode:
+// Covers three behaviors of the discriminated inbound decode:
 //   1. TokenFrame serialization — no spurious null/missing fields in the output.
 //   2. Inbound cancel with empty session_id — drops the frame and increments
 //      the inboundDropped counter without crashing the connection.
@@ -28,14 +28,8 @@ import (
 // T4: TokenFrame — no null parts field after migration
 // ---------------------------------------------------------------------------
 
-// TestWS_TokenFrame_NotSerializedAsNullParts verifies that the migrated token
-// frame path produces schema-valid JSON.
-//
-// Before fix-I the old wsServerFrame{Type:"token"} had a []wsMediaPart Parts
-// field that serialised as "parts":null when the slice was nil — a contract
-// violation.  After migration TokenFrame has no Parts field at all, so the
-// serialised output must contain exactly the three schema-mandated keys
-// (type, content, session_id) and nothing else.
+// TestWS_TokenFrame_NotSerializedAsNullParts verifies that the TokenFrame
+// produces schema-valid JSON with no spurious null fields.
 //
 // BDD:
 //
@@ -44,7 +38,6 @@ import (
 //	Then the map contains exactly the keys "type", "content", "session_id"
 //	 and no "parts" key is present.
 //
-// Implements: T4 — token frame schema compliance after wsServerFrame removal.
 // Traces to: pkg/gateway/websocket.go wsStreamer.Update — generated.TokenFrame marshal.
 func TestWS_TokenFrame_NotSerializedAsNullParts(t *testing.T) {
 	frame := generated.TokenFrame{

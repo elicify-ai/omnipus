@@ -210,7 +210,7 @@ func TestSendConnGenFrame_CriticalFrameBypassesBackoff(t *testing.T) {
 
 	select {
 	case raw := <-wcCrit.sendCh:
-		var f wsServerFrameDecodeHelper
+		var f replayFrameDecoder
 		require.NoError(t, json.Unmarshal(raw, &f), "critical frame must be valid JSON")
 		assert.Equal(t, "error", f.Type)
 		assert.Equal(t, "critical-message-A", f.Message,
@@ -230,7 +230,7 @@ func TestSendConnGenFrame_CriticalFrameBypassesBackoff(t *testing.T) {
 
 	select {
 	case raw := <-wcNonCrit.sendCh:
-		var f wsServerFrameDecodeHelper
+		var f replayFrameDecoder
 		require.NoError(t, json.Unmarshal(raw, &f), "non-critical frame must be valid JSON")
 		assert.Equal(t, "token", f.Type,
 			"non-critical frame type must be 'token' — different from critical path")
@@ -305,7 +305,7 @@ outer:
 	for {
 		select {
 		case raw := <-receivedFrames:
-			var f wsServerFrameDecodeHelper
+			var f replayFrameDecoder
 			if json.Unmarshal(raw, &f) != nil {
 				continue
 			}

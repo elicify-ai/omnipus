@@ -157,7 +157,7 @@ func TestWSHandlerInvalidAuth(t *testing.T) {
 	// Read the error frame sent before the server closes.
 	_, resp, err := conn.ReadMessage()
 	require.NoError(t, err, "must receive error frame before connection closes")
-	var frame wsServerFrameDecodeHelper
+	var frame replayFrameDecoder
 	require.NoError(t, json.Unmarshal(resp, &frame))
 	assert.Equal(t, "error", frame.Type)
 	assert.Contains(t, strings.ToLower(frame.Message), "unauthorized")
@@ -327,7 +327,7 @@ func TestWSHandlerAuthRequired_InvalidTokenRejected(t *testing.T) {
 	// Server must send an error frame.
 	_, resp, err := conn.ReadMessage()
 	require.NoError(t, err)
-	var frame wsServerFrameDecodeHelper
+	var frame replayFrameDecoder
 	require.NoError(t, json.Unmarshal(resp, &frame))
 	assert.Equal(t, "error", frame.Type, "must receive error frame for bad token")
 }
@@ -338,7 +338,7 @@ func TestWSHandlerAuthRequired_InvalidTokenRejected(t *testing.T) {
 // with a matching chatID is forwarded to the wsConn's sendCh as a "tool_call_start" frame.
 // BDD: Given an eventForwarder goroutine subscribed to an EventBus with chatID "chat-1",
 // When a ToolExecStartPayload event for chatID "chat-1" is emitted,
-// Then a wsServerFrameDecodeHelper with type "tool_call_start" appears on sendCh.
+// Then a replayFrameDecoder with type "tool_call_start" appears on sendCh.
 // Traces to: pkg/gateway/websocket.go — WSHandler.eventForwarder
 func TestEventForwarder_ForwardsToolExecStart(t *testing.T) {
 	handler, _, _ := newTestWSHandler(t)
@@ -367,7 +367,7 @@ func TestEventForwarder_ForwardsToolExecStart(t *testing.T) {
 
 	select {
 	case raw := <-wc.sendCh:
-		var f wsServerFrameDecodeHelper
+		var f replayFrameDecoder
 		require.NoError(t, json.Unmarshal(raw, &f), "sendCh frame must be valid JSON")
 		assert.Equal(t, "tool_call_start", f.Type, "frame type must be tool_call_start")
 		assert.Equal(t, "call-xyz", f.CallID, "CallID must match ToolCallID")

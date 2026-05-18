@@ -5,9 +5,7 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // Tests for decodeAndValidate — server-side inbound request body schema
-// validation (Problem 1 / Type-design F17).
-//
-// Traces to: fix-Q — REST inbound bodies unvalidated server-side.
+// validation.
 //
 // Strategy: tests exercise decodeAndValidate directly (unit tests) and
 // also drive the real handler entry points with validate_inbound=true to
@@ -138,10 +136,10 @@ func TestDecodeAndValidate_WrongTypeForField(t *testing.T) {
 	assert.Contains(t, resp["error"], "AgentCreateRequest")
 }
 
-// TestDecodeAndValidate_WrongTypeValidateDisabled asserts that with validation
-// disabled the same wrong-type body is silently ignored (Go decodes number
-// to string as empty string per encoding/json behaviour).
-func TestDecodeAndValidate_WrongTypeValidateDisabled(t *testing.T) {
+// TestDecodeAndValidate_WrongTypeValidateDisabled_GoUnmarshalRejects verifies that
+// even with validation disabled, Go's json.Decoder rejects type mismatches
+// (number → string). Verifies the legacy decode path still returns 400.
+func TestDecodeAndValidate_WrongTypeValidateDisabled_GoUnmarshalRejects(t *testing.T) {
 	var dst struct {
 		Name string `json:"name"`
 	}
@@ -149,12 +147,10 @@ func TestDecodeAndValidate_WrongTypeValidateDisabled(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	w := httptest.NewRecorder()
 
-	// Without schema validation, json.Unmarshal silently ignores type mismatch.
 	ok := decodeAndValidate(w, r, "AgentCreateRequest", &dst, false)
 
-	// json.Decoder returns an error for number→string mismatch
-	// (cannot unmarshal number into Go value of type string).
-	// decodeAndValidate returns false and 400 regardless.
+	// json.Decoder returns an error for number→string type mismatch;
+	// decodeAndValidate returns false and 400 regardless of validate flag.
 	assert.False(t, ok)
 }
 

@@ -26,7 +26,7 @@ import (
 // matching frame and any read error.
 // This is needed because the WebSocket server may emit auxiliary frames (e.g.
 // "session_state") between the auth ack and the frame the test is waiting for.
-func readFrameOfType(t *testing.T, conn *websocket.Conn, wantType string, timeout time.Duration) wsServerFrameDecodeHelper {
+func readFrameOfType(t *testing.T, conn *websocket.Conn, wantType string, timeout time.Duration) replayFrameDecoder {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -35,7 +35,7 @@ func readFrameOfType(t *testing.T, conn *websocket.Conn, wantType string, timeou
 		if err != nil {
 			t.Fatalf("readFrameOfType(%q): read error: %v", wantType, err)
 		}
-		var f wsServerFrameDecodeHelper
+		var f replayFrameDecoder
 		if err := json.Unmarshal(raw, &f); err != nil {
 			t.Fatalf("readFrameOfType(%q): unmarshal error: %v", wantType, err)
 		}
@@ -45,7 +45,7 @@ func readFrameOfType(t *testing.T, conn *websocket.Conn, wantType string, timeou
 		// Discard non-matching frame and loop.
 	}
 	t.Fatalf("readFrameOfType(%q): timed out after %v", wantType, timeout)
-	return wsServerFrameDecodeHelper{} // unreachable
+	return replayFrameDecoder{} // unreachable
 }
 
 // ---------------------------------------------------------------------------
@@ -201,7 +201,7 @@ func TestWS_AttachSession_NoErrorOnValidSession(t *testing.T) {
 		if err != nil {
 			break
 		}
-		var f wsServerFrameDecodeHelper
+		var f replayFrameDecoder
 		if json.Unmarshal(raw, &f) != nil {
 			continue
 		}

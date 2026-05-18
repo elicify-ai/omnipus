@@ -23,6 +23,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -444,9 +445,7 @@ func requestIsSecure(r *http.Request) bool {
 func writeCSRFError(w http.ResponseWriter, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	// Encoder guarantees the value is valid JSON regardless of what msg
-	// contains. A post-WriteHeader encode failure is unactionable (the status
-	// is already on the wire); the server's transport layer logs transport
-	// errors, and the caller still sees a 403.
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
+		slog.Debug("writeCSRFError: encode failed", "error", err)
+	}
 }

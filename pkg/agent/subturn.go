@@ -424,7 +424,7 @@ func spawnSubTurn(
 	//   - handoff:   agent switch
 	if baseAgent.Tools != nil {
 		agent.Tools = baseAgent.Tools.CloneExcept(tools.ExcludedSpawn, tools.ExcludedSubagent, tools.ExcludedHandoff)
-		// W3-4: log the constructed registry so operators can debug "my subagent has no tools" issues.
+		// Log the constructed registry so operators can debug "my subagent has no tools" issues.
 		slog.Info("subturn: child registry constructed",
 			"excluded", []string{"spawn", "subagent", "handoff"},
 			"remaining_count", agent.Tools.Count(),
@@ -542,7 +542,7 @@ func spawnSubTurn(
 	// 7. Defer cleanup: deliver result (for async), emit End event, and recover from panics
 	defer func() {
 		if r := recover(); r != nil {
-			// W3-5: include childID in the error message so support can correlate
+			// Include childID in the error message so support can correlate
 			// a user-visible "subturn panicked" back to the logged stack trace.
 			err = fmt.Errorf("subturn %q panicked: %v", childID, r)
 			result = nil

@@ -692,7 +692,7 @@ describe('ChatStore regression: flat tool call without parent_call_id', () => {
   })
 })
 
-// ── Sprint I: replay parity tests ─────────────────────────────────────────────
+// ── Replay parity tests ──────────────────────────────────────────────────────
 
 // TDD row 18: ChatStore_ReplaySequence_MatchesLiveSequence
 // Traces to: sprint-i-historical-replay-fidelity-spec.md FR-I-010

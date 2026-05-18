@@ -1,6 +1,6 @@
 title: ReplayWarningFrame
 description: >
-  Server → client (V1.B). Emitted by replay.go just before the terminal done
+  Server → client. Emitted by replay.go just before the terminal done
   frame when the transcript contained duplicate tool_call_ids. Older duplicate
   copies are silently overwritten on disk; only the latest one is replayed.
   Surfacing the count as a one-shot toast gives the operator visible feedback

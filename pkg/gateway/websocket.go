@@ -48,14 +48,14 @@ type wsTypeOnly struct { //nolint:govet // internal decode helper, not a wire ty
 	Type string `json:"type"`
 }
 
-// wsServerFrameDecodeHelper is retained solely as a JSON-unmarshal target for
+// replayFrameDecoder is retained solely as a JSON-unmarshal target for
 // replay_test.go's sliceSink.all() — it decodes emitted JSON bytes for test
 // assertions. It is never constructed or marshaled as a wire value anywhere in
 // production code; all outbound emission sites use generated types.
 //
 // Fields cover the superset of all server→client frames so that test assertions
 // can inspect any field without knowing the concrete frame type.
-type wsServerFrameDecodeHelper struct { //nolint:govet // not-wire-format: decode-only test assertion target, never emitted over the WebSocket connection
+type replayFrameDecoder struct { //nolint:govet // not-wire-format: decode-only test assertion target, never emitted over the WebSocket connection
 	Type      string `json:"type"`
 	SessionID string `json:"session_id,omitempty"`
 
@@ -957,7 +957,7 @@ func (h *WSHandler) handleAttachSession(
 	rs := computeReplayStats(entries)
 
 	// FR-I-013: structured log at replay start.
-	// W3-2: include orphan/duplicate/truncated counts so the replay_start log
+	// Include orphan/duplicate/truncated counts so the replay_start log
 	// line carries enough context to debug fidelity issues without replay_end.
 	slog.Info("ws: replay_start",
 		"event", "replay_start",
@@ -1023,7 +1023,7 @@ func (h *WSHandler) handleAttachSession(
 		}
 	}
 
-	// W3-3: pass pre-computed rs into streamReplay so it doesn't rebuild
+	// Pass pre-computed rs into streamReplay so it doesn't rebuild
 	// spawnIDsWithChildren for a second time.
 	var mediaStore media.MediaStore
 	if h.agentLoop != nil {
@@ -1064,7 +1064,7 @@ func (h *WSHandler) handleAttachSession(
 	}
 
 	// FR-I-013: structured log at replay end.
-	// W3-2: include the full stats set so replay_end is a self-contained diagnostic record.
+	// Include the full stats set so replay_end is a self-contained diagnostic record.
 	slog.Info("ws: replay_end",
 		"event", "replay_end",
 		"session_id", attachID,

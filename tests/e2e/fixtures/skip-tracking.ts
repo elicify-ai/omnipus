@@ -1,10 +1,6 @@
 /**
  * skip-tracking.ts — Runtime skip governance for the Playwright E2E suite.
  *
- * T0.2: Flipped from record-and-continue to record-and-FAIL.
- * T4.3: Extended with JSON manifest writer, baseline comparison gate, and
- *       SKIP_ALLOWLIST entry validation.
- *
  * ## Skip manifest
  *
  * After every test run, this module writes a JSON manifest to
@@ -12,7 +8,7 @@
  * The manifest captures every `softSkip()` call made during the run, whether
  * authorized (in SKIP_ALLOWLIST) or unauthorized. Direct `test.skip(...)` /
  * `test.fixme(...)` calls bypass this gate today — capture of those is
- * tracked for v0.2 (V2.G) and is the reason the SKIP_ALLOWLIST should also
+ * tracked for v0.2 (#155) and is the reason the SKIP_ALLOWLIST should also
  * cover any test that uses them.
  *
  * ## Baseline comparison gate
@@ -92,18 +88,12 @@ import { execSync } from 'child_process';
 //
 // Empty by default. Add entries only for genuinely tracked issues with a deadline.
 
-// ── V2.G stage 3 — Formally tracked skips ──────────────────────────────────────
+// ── Formally tracked skips ──────────────────────────────────────────────────────
 //
 // These entries document all raw test.skip() and test.fixme() calls in the
-// E2E suite. They are listed here so that when skip-tracking is extended to
-// capture raw test.skip calls (planned for v0.2 / #155 phase V2.G), the gate
-// already has corresponding allow-list entries and will not immediately fail CI.
-//
-// Each entry references the GitHub issue that blocks the underlying feature.
-// The `until` date is the v0.2 target (2026-06-30). Update the date when the
-// issue is resolved or the deadline is formally extended.
-//
-// Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, items 10–11
+// E2E suite. Each entry references the GitHub issue that blocks the underlying
+// feature. Update the `until` date when the issue is resolved or the deadline
+// is formally extended.
 export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?: string }[] = [
   // chat.spec.ts — W1.6 user-approved permanent skip: #105 offline send queue
   {
@@ -223,7 +213,7 @@ export interface SkipManifest {
     test: string;
     reason: string;
     // Only `softSkip()` calls are captured today. `test.skip()` /
-    // `test.fixme()` capture is planned for v0.2 (#155 phase V2.G).
+    // `test.fixme()` capture is planned for v0.2 (#155).
     // When that lands, the corresponding entries must already be in SKIP_ALLOWLIST.
     // The union is intentionally narrow: 'softSkip' only. Do not widen it here
     // until the teardown suite-walk for raw skips is implemented.

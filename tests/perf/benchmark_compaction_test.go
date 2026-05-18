@@ -12,7 +12,7 @@ import (
 )
 
 // compactionTurns is the total number of WS turns driven by compaction tests.
-// Reduced from 500 → 100 (Phase 7 N3 fix): 500 turns caused sporadic i/o timeouts
+// Reduced from 500 → 100: 500 turns caused sporadic i/o timeouts
 // when the full suite runs packages concurrently (go test ./...) because goroutine
 // scheduling starvation can exceed even a 300 s per-turn deadline. 100 turns is
 // sufficient to exercise compaction on the scripted provider — the memory-growth
@@ -108,7 +108,7 @@ func BenchmarkCompactionMemory(b *testing.B) {
 // TestCompactionBoundsMemory drives compactionTurns turns through a scripted session
 // and asserts that RSS at the final turn does not exceed RSS at the quarter-turn
 // mark plus 10 MB. This verifies that compaction is keeping memory bounded as the
-// conversation grows. (Turn count reduced from 500 → 100 in Phase 7 N3 fix.)
+// conversation grows. (Turn count reduced from 500 → 100 to prevent sporadic i/o timeouts.)
 func TestCompactionBoundsMemory(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping in short mode")

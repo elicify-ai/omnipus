@@ -3,7 +3,7 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
   globalSetup: './tests/e2e/global-setup.ts',
-  // T0.2: global teardown validates that no unauthorized skips occurred.
+  // Global teardown validates that no unauthorized skips occurred.
   // If any test called softSkip() without a valid allow-list entry, the teardown
   // reads soft-skips.json and fails the run. This prevents silent skip accumulation.
   globalTeardown: './tests/e2e/global-teardown.ts',

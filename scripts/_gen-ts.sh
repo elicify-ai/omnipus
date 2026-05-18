@@ -114,7 +114,7 @@ echo "  Written: $GEN/schemas.ts"
 
 # ── Quality gates ─────────────────────────────────────────────────────────────
 echo "▸ Verifying TypeScript compilation …"
-npx tsc --noEmit
+npx tsc -b --noEmit
 
 echo "▸ Quality gates:"
 OPENAPI_EXPORTS=$(grep -c "^export" "$GEN/openapi-types.ts")

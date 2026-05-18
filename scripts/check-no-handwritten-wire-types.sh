@@ -27,7 +27,7 @@
 #           helpers that carry json: tags for non-wire purposes (e.g. logging,
 #           config cache). The annotation MUST be followed by a justification
 #           of at least 40 characters, e.g.:
-#             type MyHelper struct { // not-wire-format: internal config cache decoded only at startup, never emitted
+#             type MyHelper struct { // not-wire-format: decode-only test assertion target, never emitted over WS
 #           Annotations with fewer than 40 characters are flagged as
 #           under-documented opt-outs ([go-wire-type-justification]).
 #

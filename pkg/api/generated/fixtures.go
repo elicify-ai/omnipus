@@ -967,10 +967,9 @@ func FixturePingFrame_Edge() PingFrame {
 	}
 }
 
-// ── REST response type fixtures — Phase 7 round-2 additions ─────────────────
+// ── REST response type fixtures ─────────────────────────────────────────────
 //
-// 13 types from fix-H  +  2 types from fix-D (ExecApprovalExpiredFrame, SessionCloseFrame)
-// Traces to: docs/plan/quizzical-marinating-frog.md — Phase 4 contract test spec
+// Covers Task, ExecApprovalExpiredFrame, SessionCloseFrame, and related types.
 
 // ── Task ─────────────────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/Task.yaml

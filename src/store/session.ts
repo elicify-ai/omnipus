@@ -22,7 +22,7 @@ interface SessionStore {
     agentId?: string | null,
     agentType?: 'core' | 'custom' | 'system' | null
   ) => void
-  /** W3-8: proper store action for updating activeAgentType.
+  /** Proper store action for updating activeAgentType.
    *  Replaces direct useSessionStore.setState({ activeAgentType }) call-sites
    *  so future side-effects can be added here without touching callers. */
   setActiveAgentType: (type: 'core' | 'custom' | 'system' | null) => void
@@ -97,7 +97,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     syncForeground()
   },
 
-  // W3-8: dedicated action so future side effects can be added without touching callers.
+  // Dedicated action so future side effects can be added without touching callers.
   setActiveAgentType: (type) => {
     set({ activeAgentType: type })
   },

@@ -34,7 +34,6 @@ import { z } from 'zod'
 //   PUT /channels/:id/configure — void; channel-specific body; no generated schema.
 //   GET /credentials        — wire returns string[]; SPA shape is CredentialKey[]; the
 //     SPA-internal shape is a SPA-only concern, not a generated schema component.
-//   GET /user-context       — {content:string} is an inline schema not promoted to a component.
 //   GET /about              — AboutInfo is a looser SPA-compatibility subset of AboutResponse
 //     (different field names: uptime_seconds vs uptime); cannot validate without false negatives.
 
@@ -62,7 +61,7 @@ import {
   UserDeleteResponse as UserDeleteResponseSchema,
   UserResetPasswordResponse as UserResetPasswordResponseSchema,
   UserRoleChangeResponse as UserRoleChangeResponseSchema,
-  // New generated Zod schemas (Phase 7 cleanup — contract-first #8):
+  // New generated Zod schemas (contract-first #8):
   AppState as AppStateSchema,
   ValidateTokenResponse as ValidateTokenResponseSchema,
   DoctorResult as DoctorResultSchema,
@@ -70,7 +69,7 @@ import {
   BackupEntry as BackupEntrySchema,
   StorageStats as StorageStatsSchema,
   MeInfo as MeInfoSchema,
-  // Problem 3 — newly wired schemas:
+  // Newly wired schemas:
   Provider as ProviderSchema,
   Task as TaskSchema,
   GatewayStatus as GatewayStatusSchema,
@@ -80,11 +79,11 @@ import {
   Skill as SkillSchema,
   McpServer as McpServerSchema,
   ActivityEvent as ActivityEventSchema,
-  // Problem 1 — wire-shape schemas used for raw-to-SPA transform validation:
+  // Wire-shape schemas used for raw-to-SPA transform validation:
   Message as WireMessageSchema,
   Session as WireSessionSchema,
   SessionDetail as WireSessionDetailSchema,
-  // Phase 7 fix-O — newly promoted from inline openapi.yaml schemas:
+  // Newly promoted from inline openapi.yaml schemas:
   AuditLogUpdateResponse as AuditLogUpdateResponseSchema,
   SkillTrustUpdateResponse as SkillTrustUpdateResponseSchema,
   PromptGuardUpdateResponse as PromptGuardUpdateResponseSchema,
@@ -128,7 +127,7 @@ export function resetApiSchemaErrorCount(): void {
 
 // Expose schema error counters on window.__omnipus_test_hooks in DEV/test builds
 // so Playwright tests can assert on validation health without reaching into module
-// internals (F-NEW-4).
+// internals.
 if ((import.meta.env.DEV || import.meta.env.MODE === 'test') && typeof window !== 'undefined') {
   const w = window as unknown as { __omnipus_test_hooks?: Record<string, unknown> }
   w.__omnipus_test_hooks ??= {}
@@ -186,7 +185,7 @@ import type {
   PromptGuardResponse,
   PendingRestartEntry,
   AboutResponse,
-  // Wire types migrated from hand-written interfaces to generated types (contract-first #8):
+  // Wire types migrated from hand-written interfaces to generated types:
   Agent,
   Provider,
   GatewayStatus,
@@ -195,7 +194,7 @@ import type {
   UploadedFile,
   AgentToolsCfg,
   OnboardingCompleteRequest,
-  // New wire types added in Phase 7 cleanup (contract-first #8):
+  // New wire types (contract-first #8):
   Task,
   McpServer,
   McpServerCreate,
@@ -209,7 +208,7 @@ import type {
   BackupEntry,
   StorageStats,
   MeInfo,
-  // Phase 7 fix-O — newly promoted from inline openapi.yaml schemas:
+  // Newly promoted from inline openapi.yaml schemas:
   AuditLogUpdateResponse,
   SkillTrustUpdateRequest,
   SkillTrustUpdateResponse,
@@ -257,7 +256,7 @@ export type {
   PromptGuardResponse,
   PendingRestartEntry,
   AboutResponse,
-  // Wire types migrated from hand-written interfaces (contract-first #8):
+  // Wire types migrated from hand-written interfaces:
   Agent,
   Provider,
   GatewayStatus,
@@ -266,7 +265,7 @@ export type {
   UploadedFile,
   AgentToolsCfg,
   OnboardingCompleteRequest,
-  // New wire types added in Phase 7 cleanup (contract-first #8):
+  // New wire types:
   Task,
   McpServer,
   McpServerCreate,
@@ -280,7 +279,7 @@ export type {
   BackupEntry,
   StorageStats,
   MeInfo,
-  // Phase 7 fix-O — newly promoted from inline openapi.yaml schemas:
+  // Promoted from inline openapi.yaml schemas:
   AuditLogUpdateResponse,
   SkillTrustUpdateRequest,
   SkillTrustUpdateResponse,
@@ -435,7 +434,7 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
         [{ path: [], message: 'Response is not valid JSON' }],
         rawText,
       )
-      maybeDevToast(`[api] Non-JSON response: ${path}`, `${method}:${path}:non-json`)
+      void maybeDevToast(`[api] Non-JSON response: ${path}`, `${method}:${path}:non-json`)
       throw schemaErr
     }
     // No schema — throw a generic ApiError for non-JSON bodies on non-2xx
@@ -462,7 +461,7 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
         body,
       )
       const first = schemaErr.zodIssues[0]
-      maybeDevToast(`[api] Schema mismatch: ${path} — ${first?.message ?? 'unknown'}`, `${method}:${path}:schema`)
+      void maybeDevToast(`[api] Schema mismatch: ${path} — ${first?.message ?? 'unknown'}`, `${method}:${path}:schema`)
       throw schemaErr
     }
     return result.data
@@ -659,7 +658,7 @@ export interface RunInWorkspaceResult { // not-wire-format: parsed from ToolCall
   port: number
 }
 
-// ── Wire ToolCall / Message adapters (Problem 1 fix) ─────────────────────────
+// ── Wire ToolCall / Message adapters ─────────────────────────────────────────
 //
 // The wire ToolCall schema uses `parameters` (matching the Go struct tag
 // `json:"parameters,omitempty"`). The SPA-internal ToolCall uses `params`.

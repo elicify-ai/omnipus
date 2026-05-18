@@ -239,7 +239,7 @@ test(
     const deadline = Date.now() + 60_000; // 60s budget for multi-step run
 
     while (Date.now() < deadline) {
-      // W3-11: scoped catch — only swallow stale-locator errors, rethrow others.
+      // Scoped catch — only swallow stale-locator errors, rethrow others.
       const counterText = await stepCounter.textContent().catch((err: unknown) => {
         if (err instanceof Error && (err.message.includes('Element is not attached') || err.message.includes('locator handle is stale'))) return null;
         throw err;
@@ -328,7 +328,7 @@ test(
 
     // Best-effort: IF a SubagentBlock appeared, verify basic UI behavior.
     const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]');
-    // W3-11: scoped catch — only swallow stale-locator errors, rethrow others.
+    // Scoped catch — only swallow stale-locator errors, rethrow others.
     const spawnOccurred = await collapsedBlock.isVisible({ timeout: 5_000 }).catch((err: unknown) => {
       if (err instanceof Error && (err.message.includes('Element is not attached') || err.message.includes('locator handle is stale'))) return false;
       throw err;

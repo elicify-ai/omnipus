@@ -1732,7 +1732,7 @@ func TestInterruptSession_NoActiveTurnIsAttemptOnly(t *testing.T) {
 // When InterruptByChannelChat("telegram", "123", "hint") is called,
 // Then BOTH turns receive requestGracefulInterrupt (gracefulInterrupt=true).
 //
-// Refs: architect N3, FR-6, FR-10.
+// Refs: FR-6, FR-10.
 func TestInterruptByChannelChat_CascadesToSubTurns(t *testing.T) {
 	al, cleanup := newAL(t)
 	defer cleanup()

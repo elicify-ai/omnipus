@@ -33,7 +33,7 @@ const replayResultPreviewBytes = 10 * 1024
 // that unit tests can drive it with a slice-backed sink without a real
 // WebSocket connection.
 //
-// Contract (per Sprint I spec):
+// Contract:
 //   - Compaction entries are skipped (FR-I-006).
 //   - For user/system entries: emit replay_message{role, content, agent_id}.
 //   - For assistant entries: emit replay_message if content is non-empty, then
@@ -48,7 +48,7 @@ const replayResultPreviewBytes = 10 * 1024
 //   - Context cancellation is honored between every frame (FR-I-005).
 //   - Returns after emitting exactly one done frame (FR-I-004).
 //
-// W3-3: rs is the pre-computed replayStats from computeReplayStats. Passing it
+// rs is the pre-computed replayStats from computeReplayStats. Passing it
 // in avoids recomputing spawnIDsWithChildren a second time inside this function.
 // The done frame's Stats map is populated from rs so operators see counts in the
 // WS trace.
@@ -56,17 +56,10 @@ const replayResultPreviewBytes = 10 * 1024
 // The returned error is non-nil only when emit itself returns an error (e.g.
 // context canceled or send-channel full).
 //
-// emit type-safety note: the parameter type is func(any) error rather than a
-// constrained union type because Go generics do not support interface unions as
-// function parameters. All callers pass the gateway WebSocket writer, which
-// marshal-validates every frame via the generated contract_test.go Go contract
-// test before the byte hits the wire. The SPA edge independently validates
-// every incoming payload through the matching Zod schema (see
-// src/lib/api/generated/schemas.ts). These two layers together provide the
-// same runtime guarantee that a hypothetical ServerFrameLike interface would
-// give at compile time, without requiring invasive changes to the generated
-// types. If oapi-codegen adds a sealed-union option for generated frame types,
-// migrate emit to func(generated.ServerFrame) error at that point.
+// emit accepts any generated frame type. Production callers pass the gateway
+// WebSocket writer; tests pass a slice-backed sink — both honor the ServerFrame
+// contract because the Go contract test and SPA Zod schemas independently
+// validate the emitted frames at runtime.
 func streamReplay(
 	ctx context.Context,
 	sessionID string,
@@ -87,7 +80,7 @@ func streamReplay(
 	// spawnIDsPresent: set of ToolCall.IDs where tool == "spawn" AND at least
 	// one other tool call in the transcript has ParentToolCallID == that ID.
 	// This is the signal that the parent span has live children to bracket.
-	// W3-3: reuse the map from the pre-computed stats rather than recomputing.
+	// Reuse the map from the pre-computed stats rather than recomputing.
 	spawnIDsWithChildren := buildSpawnIDsWithChildren(entries)
 
 	// deduped: for each ToolCall.ID keep only the index of the last occurrence
@@ -99,10 +92,10 @@ func streamReplay(
 				continue
 			}
 			if prev, dup := latestByID[string(tc.ID)]; dup {
-				// Warn only once (on the first detected duplicate). Subsequent
-				// occurrences silently overwrite — the last one wins.
-				_ = prev
+				// Duplicate detected — log the previous address for diagnostics; last occurrence wins.
 				slog.Warn("replay: duplicate tool_call_id detected — only latest will emit",
+					"previous_entry_index", prev.entryIdx,
+					"previous_tool_index", prev.tcIdx,
 					"event", "replay_duplicate_tool_call_id",
 					"session_id", sessionID,
 					"tool_call_id", string(tc.ID),
@@ -172,7 +165,7 @@ func streamReplay(
 	}
 
 	// lastSeenAgentID tracks the most recent non-empty AgentID across entries.
-	// Used as fallback when a spawn entry has an empty AgentID (W5-17).
+	// Used as fallback when a spawn entry has an empty AgentID.
 	lastSeenAgentID := ""
 
 	for ei, entry := range entries {
@@ -232,16 +225,15 @@ func streamReplay(
 					"session_id", sessionID,
 					"parent_tool_call_id", tcParentID,
 				)
-				// W3-1: the orphan is emitted as a flat tool call (no ParentCallID on
-				// the wire). This causes the client to take the non-nested rendering
-				// path immediately rather than waiting 10 s for the orphan TTL to expire.
+				// The orphan is emitted as a flat tool call (no ParentCallID on the wire).
+				// This causes the client to take the non-nested rendering path immediately
+				// rather than waiting 10 s for the orphan TTL to expire.
 				// The slog.Warn above records the full context for operator debugging.
 			}
 
 			// Resolve the effective agent ID for this tool call's frames.
-			// W5-17: if the spawn entry has an empty AgentID, fall back to the most
-			// recently seen agent ID in the transcript so the span is never emitted
-			// with a blank agent_id.
+			// If the spawn entry has an empty AgentID, fall back to the most recently
+			// seen agent ID in the transcript so the span is never emitted with a blank agent_id.
 			effectiveAgentID := entry.AgentID
 			if effectiveAgentID == "" {
 				effectiveAgentID = lastSeenAgentID
@@ -314,7 +306,7 @@ func streamReplay(
 			}
 
 			// Regular (non-spawn, or nested) tool call: flat emission.
-			// W3-1: orphan tool calls are emitted WITHOUT ParentCallID so the
+			// Orphan tool calls are emitted WITHOUT ParentCallID so the
 			// client takes the flat non-nested path immediately (not after 10s TTL).
 			parentForFlat := ""
 			if isNested && !isOrphan {
@@ -334,11 +326,10 @@ func streamReplay(
 		}
 	}
 
-	// V1.B: when the transcript contained duplicate tool_call_ids, surface a
-	// one-shot replay_warning frame before the done frame so the SPA can toast
-	// the operator. The full counts still live in done.Stats for diagnostics;
-	// this frame is just the visible UX hook. Server-only `slog.Warn` was
-	// invisible to operators because the counter was buried in done.Stats.
+	// When the transcript contained duplicate tool_call_ids, surface a one-shot
+	// replay_warning frame before the done frame so the SPA can toast the operator.
+	// The full counts still live in done.Stats for diagnostics; this frame is the
+	// visible UX hook.
 	if rs.duplicateToolCallIDCount > 0 {
 		if ctx.Err() != nil {
 			return framesEmitted, ctx.Err()
@@ -356,11 +347,10 @@ func streamReplay(
 		}
 	}
 
-	// FR-I-004: exactly one done frame at the end.
-	// W3-2: populate Stats with the pre-computed counters so operators reading
-	// the WS trace can see orphan / duplicate / truncated counts inline.
-	// W3-2: emit the done frame OUTSIDE emitFrame so it is NOT counted in
-	// framesEmitted — that counter represents content frames only.
+	// FR-I-004: exactly one done frame at the end. Populate Stats with the
+	// pre-computed counters so operators reading the WS trace can see orphan /
+	// duplicate / truncated counts inline. Emitted OUTSIDE emitFrame so it is
+	// NOT counted in framesEmitted — that counter represents content frames only.
 	framesEmittedF := float64(framesEmitted)
 	orphanCountF := float64(rs.orphanCount)
 	dupCountF := float64(rs.duplicateToolCallIDCount)
@@ -642,20 +632,17 @@ func resolveTaskLabel(tc session.ToolCall) string {
 }
 
 // replayStats aggregates metrics from a set of transcript entries for slog.Info.
-// W3-2: extended with three additional counters to improve operator observability.
 type replayStats struct {
-	toolCallCount int
-	spanCount     int
-	// W3-2 additions
+	toolCallCount            int
+	spanCount                int
 	orphanCount              int // tool calls whose ParentToolCallID has no matching spawn-with-children
 	duplicateToolCallIDCount int // tool_call_ids that appear more than once across entries
 	truncatedResultCount     int // tool call results that exceeded replayMaxResultBytes
 }
 
-// computeReplayStats scans entries for logging purposes.
-// W3-3: this function is the single point of computation. streamReplay accepts
-// the pre-computed stats via its signature so the spawnIDsWithChildren map is
-// not rebuilt redundantly on every call.
+// computeReplayStats scans entries and returns aggregate metrics.
+// streamReplay accepts the pre-computed stats via its signature so the
+// spawnIDsWithChildren map is not rebuilt redundantly on every call.
 func computeReplayStats(entries []session.TranscriptEntry) replayStats {
 	var rs replayStats
 	spawnIDsWithChildren := buildSpawnIDsWithChildren(entries)

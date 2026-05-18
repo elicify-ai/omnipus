@@ -43,8 +43,8 @@ func makeTestHook(conn *wsConn, timeout time.Duration) (*wsApprovalHook, *wsAppr
 	}, reg
 }
 
-// unmarshalWSServerFrame decodes raw websocket message bytes into a wsServerFrameDecodeHelper.
-func unmarshalWSServerFrame(b []byte, f *wsServerFrameDecodeHelper) error {
+// unmarshalWSServerFrame decodes raw websocket message bytes into a replayFrameDecoder.
+func unmarshalWSServerFrame(b []byte, f *replayFrameDecoder) error {
 	return json.Unmarshal(b, f)
 }
 
@@ -204,7 +204,7 @@ func TestApprovalHook_HappyPath(t *testing.T) {
 	go func() {
 		select {
 		case frameBytes := <-conn.sendCh:
-			var frame wsServerFrameDecodeHelper
+			var frame replayFrameDecoder
 			if err := unmarshalWSServerFrame(frameBytes, &frame); err != nil {
 				return
 			}
@@ -235,7 +235,7 @@ func TestApprovalHook_Denial(t *testing.T) {
 	go func() {
 		select {
 		case frameBytes := <-conn.sendCh:
-			var frame wsServerFrameDecodeHelper
+			var frame replayFrameDecoder
 			if err := unmarshalWSServerFrame(frameBytes, &frame); err != nil {
 				return
 			}
@@ -512,7 +512,7 @@ func TestApprovalHook_HappyPath_ExecTool(t *testing.T) {
 	go func() {
 		select {
 		case frameBytes := <-conn.sendCh:
-			var frame wsServerFrameDecodeHelper
+			var frame replayFrameDecoder
 			if err := unmarshalWSServerFrame(frameBytes, &frame); err != nil {
 				return
 			}
@@ -595,7 +595,7 @@ func TestWS_ApprovalResponse_RejectsMismatchedSessionID(t *testing.T) {
 	// An error frame must have been sent.
 	select {
 	case raw := <-wc.sendCh:
-		var frame wsServerFrameDecodeHelper
+		var frame replayFrameDecoder
 		if err := json.Unmarshal(raw, &frame); err != nil {
 			t.Fatalf("could not unmarshal frame: %v", err)
 		}
