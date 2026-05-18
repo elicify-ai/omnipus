@@ -2292,6 +2292,17 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 
 	// Version endpoint — unauthenticated; returns build SHA for frontend version-drift detection (#110).
 	cm.RegisterHTTPHandler("/api/v1/version", http.HandlerFunc(a.HandleVersion))
+
+	// GET /api/v1/me — returns the authenticated user's RBAC role (MeInfo).
+	// Used by the SPA for feature gating (fetchMe in src/lib/api.ts:1250).
+	// Traces to: contracts/components/schemas/MeInfo.yaml.
+	cm.RegisterHTTPHandler("/api/v1/me", a.withAuth(a.HandleMe))
+
+	// GET /api/v1/devices — returns pending pairing requests and paired devices.
+	// Admin-only. Device pairing infrastructure is not yet implemented; the handler
+	// returns valid empty arrays so the SPA DevicesSection renders its empty state
+	// rather than 404-ing. Traces to: contracts/components/schemas/DevicesResponse.yaml.
+	cm.RegisterHTTPHandler("/api/v1/devices", a.adminWrap(a.HandleDevices))
 }
 
 // registerPreviewEndpoints registers /preview/, /serve/, and /dev/ on the
@@ -2482,6 +2493,60 @@ func (a *restAPI) HandleVersion(w http.ResponseWriter, r *http.Request) {
 		"version":   Version,
 		"build_sha": buildSha,
 	})
+}
+
+// --- Me ---
+
+// HandleMe handles GET /api/v1/me. Returns the authenticated user's RBAC role.
+// The role is written into the request context by withAuth; this handler reads
+// it and returns a MeInfo-shaped response (contracts/components/schemas/MeInfo.yaml).
+// Traces to: contracts/openapi.yaml#/paths/~1me/get (operationId: getMe).
+func (a *restAPI) HandleMe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	role := config.UserRoleAdmin // default: dev-mode bypass treats callers as admin
+	if ctxRole, ok := r.Context().Value(RoleContextKey{}).(config.UserRole); ok && ctxRole != "" {
+		role = ctxRole
+	}
+	resp := gen.MeInfo{
+		Role: gen.MeInfoRole(role),
+	}
+	jsonOK(w, resp)
+}
+
+// --- Devices ---
+
+// HandleDevices handles GET /api/v1/devices. Returns pending pairing requests
+// and already-paired devices. Device pairing infrastructure is not yet implemented;
+// this handler returns valid empty arrays so the SPA renders its empty state.
+// Traces to: contracts/openapi.yaml#/paths/~1devices/get (operationId: listDevices).
+// Traces to: contracts/components/schemas/DevicesResponse.yaml.
+func (a *restAPI) HandleDevices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	resp := gen.DevicesResponse{
+		Pending: []struct {
+			CreatedAt   time.Time "json:\"created_at\""
+			DeviceId    string    "json:\"device_id\""
+			DeviceName  string    "json:\"device_name\""
+			ExpiresAt   time.Time "json:\"expires_at\""
+			Fingerprint string    "json:\"fingerprint\""
+			PairingCode string    "json:\"pairing_code\""
+		}{},
+		Paired: []struct {
+			DeviceId    string                          "json:\"device_id\""
+			DeviceName  string                          "json:\"device_name\""
+			Fingerprint string                          "json:\"fingerprint\""
+			LastSeenAt  time.Time                       "json:\"last_seen_at\""
+			PairedAt    time.Time                       "json:\"paired_at\""
+			Status      gen.DevicesResponsePairedStatus "json:\"status\""
+		}{},
+	}
+	jsonOK(w, resp)
 }
 
 // --- Tasks ---
@@ -3144,6 +3209,9 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 // --- MCP Servers ---
 
 // HandleMCPServers handles GET/POST /api/v1/mcp-servers and DELETE /api/v1/mcp-servers/{id}.
+// GET returns McpServer[] shaped from cfg.Tools.MCP.Servers (contracts/components/schemas/McpServer.yaml).
+// POST accepts McpServerCreate (contracts/components/schemas/McpServerCreate.yaml) and
+// returns the newly created McpServer entry.
 func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	sub := strings.TrimPrefix(path, "/api/v1/mcp-servers")
@@ -3151,12 +3219,7 @@ func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.Method == http.MethodGet && sub == "":
-		info := a.agentLoop.GetStartupInfo()
-		if mcpInfo, ok := info["mcp"]; ok {
-			jsonOK(w, mcpInfo)
-			return
-		}
-		jsonOK(w, []any{})
+		a.listMCPServers(w, r)
 
 	case r.Method == http.MethodPost && sub == "":
 		a.addMCPServer(w, r)
@@ -3169,6 +3232,38 @@ func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// listMCPServers reads configured MCP servers from config and returns them as
+// McpServer[] (contracts/components/schemas/McpServer.yaml).
+// Status is always "disconnected" — live connection state is not tracked at
+// the config layer (the MCP manager reconnects at agent loop startup, not per-request).
+func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
+	cfg := a.agentLoop.GetConfig()
+	result := make([]gen.McpServer, 0, len(cfg.Tools.MCP.Servers))
+	for name, srv := range cfg.Tools.MCP.Servers {
+		transport := gen.McpServerTransportStdio
+		switch srv.Type {
+		case "sse":
+			transport = gen.McpServerTransportSse
+		case "http":
+			transport = gen.McpServerTransportHttp
+		}
+		result = append(result, gen.McpServer{
+			Id:        name,
+			Name:      name,
+			Transport: transport,
+			Status:    gen.McpServerStatusDisconnected,
+			ToolCount: 0,
+		})
+	}
+	// Sort for deterministic response order.
+	sort.Slice(result, func(i, j int) bool { return result[i].Id < result[j].Id })
+	jsonOK(w, result)
+}
+
+// addMCPServer handles POST /api/v1/mcp-servers.
+// Accepts McpServerCreate (contracts/components/schemas/McpServerCreate.yaml).
+// Transport must be one of: stdio, sse, http (enforced by enum validation).
+// Returns the new McpServer entry shaped per contracts/components/schemas/McpServer.yaml.
 func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name      string            `json:"name"`
@@ -3192,6 +3287,16 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 	transport := req.Transport
 	if transport == "" {
 		transport = "stdio"
+	}
+	// Validate transport against the contract enum (stdio | sse | http).
+	// The "websocket" value is not supported — reject it early rather than storing
+	// a config entry that the MCP manager will refuse at connection time.
+	switch transport {
+	case "stdio", "sse", "http":
+		// valid
+	default:
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("invalid transport %q: must be one of stdio, sse, http", transport))
+		return
 	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
@@ -3234,15 +3339,25 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
+	// Map the transport string to the generated enum value for the response.
+	var respTransport gen.McpServerTransport
+	switch transport {
+	case "sse":
+		respTransport = gen.McpServerTransportSse
+	case "http":
+		respTransport = gen.McpServerTransportHttp
+	default:
+		respTransport = gen.McpServerTransportStdio
+	}
+	resp := gen.McpServer{
+		Id:        req.Name,
+		Name:      req.Name,
+		Transport: respTransport,
+		Status:    gen.McpServerStatusDisconnected,
+		ToolCount: 0,
+	}
 	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, map[string]any{
-		"name":      req.Name,
-		"command":   req.Command,
-		"args":      req.Args,
-		"env":       req.Env,
-		"transport": transport,
-		"enabled":   true,
-	})
+	jsonOK(w, resp)
 }
 
 func (a *restAPI) deleteMCPServer(w http.ResponseWriter, id string) {
