@@ -460,6 +460,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/version": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Build version and VCS revision
+         * @description Returns the gateway's version string and embedded VCS revision SHA. Used by the frontend to detect version drift and prompt "New version available" (#110). No authentication required.
+         */
+        get: operations["getVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tools": {
         parameters: {
             query?: never;
@@ -912,6 +932,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/config/gateway/rotate-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate the gateway bearer token (admin only)
+         * @description Generates a new cryptographically random 64-hex-character gateway bearer token, persists it to config.json, triggers a hot reload, and returns the new token. The previous token is immediately invalidated. Admin-only; secured by RequireAdmin + RequireNotBypass chain. Use after security incidents or on a regular rotation schedule.
+         */
+        post: operations["rotateGatewayToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/pending-restart": {
         parameters: {
             query?: never;
@@ -1158,6 +1198,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/providers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Add or update an LLM provider configuration
+         * @description Adds or updates an LLM provider entry. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key. The API key is stored encrypted (AES-256-GCM) in credentials.json. Available before and after onboarding.
+         */
+        put: operations["updateProvider"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/providers/{id}/test": {
         parameters: {
             query?: never;
@@ -1192,6 +1252,46 @@ export interface paths {
         get: operations["listSkills"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/skills/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Install a skill from the ClawHub registry
+         * @description Installs a skill by name from the ClawHub registry. Currently returns 501 Not Implemented while the registry integration is in progress.
+         */
+        post: operations["installSkill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a chat message via SSE
+         * @description Sends a user message to the agent and streams the response via Server-Sent Events. The connection stays open until the agent finishes responding or the client disconnects.
+         */
+        post: operations["postChat"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1264,6 +1364,30 @@ export interface paths {
          * @description Partial update to application state. Currently only supports marking onboarding complete. CSRF-protected.
          */
         patch: operations["patchAppState"];
+        trace?: never;
+    };
+    "/user-context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get user context (USER.md content)
+         * @description Returns the current content of USER.md from the default workspace. This file holds workspace-level context about the user (background, preferences, etc.) that is prepended to agent prompts. Returns empty string when the file does not exist. Requires authentication.
+         */
+        get: operations["getUserContext"];
+        /**
+         * Set user context (replace USER.md content)
+         * @description Replaces the entire content of USER.md in the default workspace with the provided string. Passing an empty string clears the file. The new content is returned in the response. Requires authentication.
+         */
+        put: operations["putUserContext"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/me": {
@@ -2324,6 +2448,41 @@ export interface components {
                 }[];
             };
         };
+        /**
+         * AgentToolsUpdateRequest
+         * @description Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.default_policy + builtin.policies) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
+         */
+        AgentToolsUpdateRequest: {
+            /** @description Builtin tool policy configuration for this agent. */
+            builtin?: {
+                /**
+                 * @description Fallback policy applied to any builtin tool not listed in policies. Defaults to "allow" when omitted.
+                 * @enum {string}
+                 */
+                default_policy?: "allow" | "ask" | "deny";
+                /** @description Per-tool policy overrides. Keys are canonical tool names or glob patterns (e.g. "system.*"). Values are "allow", "ask", or "deny". */
+                policies?: {
+                    [key: string]: "allow" | "ask" | "deny";
+                };
+                /**
+                 * @description Legacy format: "explicit" builds a deny-all policy with allow entries for each name in visible[]. "inherit" sets default_policy=allow. Ignored when default_policy is present.
+                 * @enum {string}
+                 */
+                mode?: "explicit" | "inherit";
+                /** @description Legacy format: tool names to allow when mode="explicit". Ignored when default_policy is present. */
+                visible?: string[];
+            };
+            /** @description MCP server bindings for this agent. */
+            mcp?: {
+                /** @description List of MCP server bindings. */
+                servers?: {
+                    /** @description MCP server identifier as registered in config.json. */
+                    id: string;
+                    /** @description Specific tool names to expose from this server. When absent, all tools from the server are available. */
+                    tools?: string[];
+                }[];
+            };
+        };
         /** @description Body for POST /agents. Creates a new custom agent. A UUID is assigned by the server. The agent starts in "draft" status (no SOUL.md written yet). */
         AgentCreateRequest: {
             /**
@@ -3173,8 +3332,9 @@ export interface components {
             /**
              * @description Event category. "session_start" = new session began. "task_created" = a task was created. "task_updated" = a task completed or changed status.
              * @example session_start
+             * @enum {string}
              */
-            type: string;
+            type: "session_start" | "task_created" | "task_updated";
             /**
              * @description ID of the agent involved in the event (absent for system events).
              * @example jim
@@ -3441,6 +3601,15 @@ export interface components {
              * @enum {string}
              */
             transport: "stdio" | "sse" | "http";
+            /**
+             * @description Environment variable overrides passed to the MCP server process. Only applicable for stdio transport. Each key-value pair is injected into the server process environment at startup.
+             * @example {
+             *       "PATH": "/usr/local/bin:/usr/bin"
+             *     }
+             */
+            env?: {
+                [key: string]: string;
+            };
         };
         /**
          * AppState
@@ -4150,6 +4319,260 @@ export interface components {
              * @example failed to read session store for agent jim: permission denied
              */
             warning?: string;
+        };
+        /**
+         * RotateTokenResponse
+         * @description Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
+         */
+        RotateTokenResponse: {
+            /**
+             * @description The new gateway bearer token (64 hex characters, 32 random bytes). Store securely; this is the only time it is returned.
+             * @example a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+             */
+            token: string;
+        };
+        /**
+         * VersionResponse
+         * @description Response from GET /api/v1/version. Returns build identity information. Used by the frontend to detect version drift and show "New version available" prompts (issue #110). No authentication required.
+         */
+        VersionResponse: {
+            /**
+             * @description Omnipus gateway version string (e.g. "0.1.0" or "dev").
+             * @example 0.1.0
+             */
+            version: string;
+            /**
+             * @description VCS revision SHA embedded at build time via debug.ReadBuildInfo(). Value is "dev" when built outside a version-controlled tree or when vcs.revision is not set (e.g. go run).
+             * @example abc1234def5678
+             */
+            build_sha: string;
+        };
+        /**
+         * UserContextRequest
+         * @description Request body for PUT /api/v1/user-context. Replaces the entire content of USER.md in the default workspace. Passing an empty string clears the file.
+         */
+        UserContextRequest: {
+            /**
+             * @description Full replacement content for USER.md. May be empty to clear the file. No maximum length is enforced at the schema level — the underlying filesystem write via fileutil.WriteFileAtomic provides the practical limit.
+             * @example I am a senior Go developer focused on distributed systems.
+             */
+            content: string;
+        };
+        /**
+         * UserContextResponse
+         * @description Response from GET /api/v1/user-context and PUT /api/v1/user-context. Returns the current content of USER.md in the default workspace. An empty string means the file does not exist or has not been written yet.
+         */
+        UserContextResponse: {
+            /**
+             * @description Current content of USER.md. Empty string when the file does not exist or has not been set yet.
+             * @example I am a senior Go developer focused on distributed systems.
+             */
+            content: string;
+        };
+        /**
+         * TaskCreateRequest
+         * @description Request body for POST /api/v1/tasks. Creates a new task. The fields name/description are backward-compat aliases for title/prompt.
+         */
+        TaskCreateRequest: {
+            /**
+             * @description Task title.
+             * @example Analyze logs
+             */
+            title: string;
+            /**
+             * @description Task description / prompt for the agent.
+             * @example Summarize the last 7 days of gateway logs.
+             */
+            prompt?: string;
+            /**
+             * @description Agent to assign the task to.
+             * @example jim
+             */
+            agent_id?: string;
+            /**
+             * @description Task priority (higher = more urgent). Defaults to 3.
+             * @example 5
+             */
+            priority?: number;
+            /**
+             * @description Parent task ID (for creating subtasks).
+             * @example task-uuid-123
+             */
+            parent_task_id?: string;
+            /**
+             * @description How the task was triggered. Defaults to "manual".
+             * @example manual
+             */
+            trigger_type?: string;
+            /**
+             * @description Backward-compat alias for title.
+             * @example Analyze logs
+             */
+            name?: string;
+            /**
+             * @description Backward-compat alias for prompt.
+             * @example Summarize the last 7 days.
+             */
+            description?: string;
+        };
+        /**
+         * TaskUpdateRequest
+         * @description Request body for PUT /api/v1/tasks/{id}. Updates fields on an existing task. All fields are optional — only provided fields are updated. The fields name/description are backward-compat aliases for title/result.
+         */
+        TaskUpdateRequest: {
+            /**
+             * @description New task status.
+             * @example completed
+             */
+            status?: string;
+            /**
+             * @description Task result or output summary.
+             * @example Logs analyzed successfully.
+             */
+            result?: string;
+            /**
+             * @description List of artifact paths produced by the task.
+             * @example [
+             *       "output.txt"
+             *     ]
+             */
+            artifacts?: string[];
+            /**
+             * @description New task title.
+             * @example Updated task title
+             */
+            title?: string;
+            /**
+             * @description Agent to re-assign the task to.
+             * @example jim
+             */
+            agent_id?: string;
+            /**
+             * @description New task priority.
+             * @example 3
+             */
+            priority?: number;
+            /**
+             * Format: date-time
+             * @description When the task started execution.
+             * @example 2026-05-16T10:00:00Z
+             */
+            started_at?: string;
+            /**
+             * Format: date-time
+             * @description When the task completed execution.
+             * @example 2026-05-16T10:05:00Z
+             */
+            completed_at?: string;
+            /**
+             * @description Backward-compat alias for title.
+             * @example Updated task title
+             */
+            name?: string;
+            /**
+             * @description Backward-compat alias for result.
+             * @example Logs analyzed successfully.
+             */
+            description?: string;
+        };
+        /**
+         * ProviderUpdateRequest
+         * @description Request body for PUT /api/v1/providers/{id}. Adds or updates an LLM provider configuration. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key.
+         */
+        ProviderUpdateRequest: {
+            /**
+             * @description API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json. Required when adding a new provider; optional when updating an existing one (omit to leave the current key unchanged).
+             * @example sk-abc123
+             */
+            api_key?: string;
+            /**
+             * @description Default model to use for this provider. Defaults to "default" when not specified on new providers.
+             * @example gpt-4o
+             */
+            model?: string;
+        };
+        /**
+         * AppStatePatchRequest
+         * @description Request body for PATCH /api/v1/state. Partial update to application state. Currently only supports marking onboarding as complete (onboarding_complete must be true — setting it to false is rejected 400).
+         */
+        AppStatePatchRequest: {
+            /**
+             * @description Mark onboarding as complete. Must be true — false is rejected with 400.
+             * @example true
+             */
+            onboarding_complete?: boolean;
+        };
+        /**
+         * SkillInstallRequest
+         * @description Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by name.
+         */
+        SkillInstallRequest: {
+            /**
+             * @description Skill name to install from the ClawHub registry.
+             * @example web-search
+             */
+            name: string;
+        };
+        /**
+         * SseChatRequest
+         * @description Request body for POST /api/v1/chat (SSE streaming endpoint). Sends a user message to the agent and streams the response via Server-Sent Events.
+         */
+        SseChatRequest: {
+            /**
+             * @description The user message to send to the agent. Must not be empty.
+             * @example Hello, what can you help me with today?
+             */
+            message: string;
+        };
+        /**
+         * ToolApprovalActionRequest
+         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, or cancelling it. For tools with RequiresAdminAsk=true the caller must hold the admin role (FR-015).
+         */
+        ToolApprovalActionRequest: {
+            /**
+             * @description Action to take on this approval.
+             * @example approve
+             * @enum {string}
+             */
+            action: "approve" | "deny" | "cancel";
+        };
+        /**
+         * CredentialSetRequest
+         * @description Request body for POST /api/v1/credentials. Stores an encrypted credential. The key must be non-empty; the value is stored AES-256-GCM encrypted.
+         */
+        CredentialSetRequest: {
+            /**
+             * @description Credential key name.
+             * @example OPENAI_API_KEY
+             */
+            key: string;
+            /**
+             * @description Credential value (stored encrypted).
+             * @example sk-abc123...
+             */
+            value: string;
+        };
+        /**
+         * RestoreBackupRequest
+         * @description Request body for POST /api/v1/restore. Extracts a backup tar.gz archive over ~/.omnipus/, skipping config.json to preserve current settings.
+         */
+        RestoreBackupRequest: {
+            /**
+             * @description Name of the backup file (without path). Must not contain path separators or traversal sequences. Must end with .tar.gz.
+             * @example omnipus-backup-20260516T103000Z.tar.gz
+             */
+            filename: string;
+        };
+        /**
+         * AgentOwnershipUpdateRequest
+         * @description Request body for PATCH /api/v1/agents/{id}/ownership. Updates the owner_username field on a custom agent. Admin-only. System and core agents cannot have an owner assigned. Clearing the owner (empty string) requires the X-Confirm-Demote: 1 header.
+         */
+        AgentOwnershipUpdateRequest: {
+            /**
+             * @description Username of the new owner. Empty string clears ownership (requires X-Confirm-Demote: 1 header to prevent accidents).
+             * @example alice
+             */
+            owner_username?: string;
         };
     };
     responses: {
@@ -4896,13 +5319,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    /**
-                     * @description Username of the new owner. Empty string clears ownership (requires X-Confirm-Demote header).
-                     * @example alice
-                     */
-                    owner_username?: string;
-                };
+                "application/json": components["schemas"]["AgentOwnershipUpdateRequest"];
             };
         };
         responses: {
@@ -4996,7 +5413,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AgentToolsCfg"];
+                "application/json": components["schemas"]["AgentToolsUpdateRequest"];
             };
         };
         responses: {
@@ -5123,6 +5540,35 @@ export interface operations {
             };
         };
     };
+    getVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version information. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VersionResponse"];
+                };
+            };
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     getToolRegistry: {
         parameters: {
             query?: never;
@@ -5196,14 +5642,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    /**
-                     * @description Action to take on this approval.
-                     * @example approve
-                     * @enum {string}
-                     */
-                    action: "approve" | "deny" | "cancel";
-                };
+                "application/json": components["schemas"]["ToolApprovalActionRequest"];
             };
         };
         responses: {
@@ -6210,6 +6649,38 @@ export interface operations {
             };
         };
     };
+    rotateGatewayToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description New gateway token (valid immediately). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotateTokenResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     getPendingRestart: {
         parameters: {
             query?: never;
@@ -6425,18 +6896,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    /**
-                     * @description Credential key name.
-                     * @example OPENAI_API_KEY
-                     */
-                    key: string;
-                    /**
-                     * @description Credential value (stored encrypted).
-                     * @example sk-...
-                     */
-                    value: string;
-                };
+                "application/json": components["schemas"]["CredentialSetRequest"];
             };
         };
         responses: {
@@ -6613,13 +7073,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    /**
-                     * @description Name of the backup file (without path).
-                     * @example backup-20260516T103000Z.tar.gz
-                     */
-                    filename: string;
-                };
+                "application/json": components["schemas"]["RestoreBackupRequest"];
             };
         };
         responses: {
@@ -6797,6 +7251,56 @@ export interface operations {
             };
         };
     };
+    updateProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Provider identifier (e.g. "anthropic", "openai", "openrouter").
+                 * @example anthropic
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Provider updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Provider"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            /** @description api_key required for new providers. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Credential store locked. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     testProvider: {
         parameters: {
             query?: never;
@@ -6852,6 +7356,67 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+        };
+    };
+    installSkill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillInstallRequest"];
+            };
+        };
+        responses: {
+            /** @description Skill installed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Skill"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            /** @description Not yet implemented. */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    postChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SseChatRequest"];
+            };
+        };
+        responses: {
+            /** @description SSE stream of agent response frames. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
         };
     };
     getActivity: {
@@ -6960,13 +7525,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    /**
-                     * @description Mark onboarding as complete.
-                     * @example true
-                     */
-                    onboarding_complete?: boolean;
-                };
+                "application/json": components["schemas"]["AppStatePatchRequest"];
             };
         };
         responses: {
@@ -6981,6 +7540,73 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+        };
+    };
+    getUserContext: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current USER.md content (may be empty string). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserContextResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    putUserContext: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserContextRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated USER.md content (echoed back). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserContextResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
         };
     };
     getMe: {
@@ -7101,30 +7727,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    /**
-                     * @description Task title.
-                     * @example Analyze logs
-                     */
-                    title: string;
-                    /**
-                     * @description Task description / prompt for the agent.
-                     * @example Summarize the last 7 days of gateway logs.
-                     */
-                    prompt: string;
-                    /**
-                     * @description Agent to assign the task to.
-                     * @example jim
-                     */
-                    agent_id?: string;
-                    /**
-                     * @description Task priority (higher = more urgent).
-                     * @example 5
-                     */
-                    priority?: number;
-                    /** @description Parent task ID (for creating subtasks). */
-                    parent_task_id?: string;
-                };
+                "application/json": components["schemas"]["TaskCreateRequest"];
             };
         };
         responses: {
@@ -7153,7 +7756,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Task"];
+                "application/json": components["schemas"]["TaskUpdateRequest"];
             };
         };
         responses: {
@@ -7372,6 +7975,7 @@ export type ToolCall = components["schemas"]["ToolCall"];
 export type Attachment = components["schemas"]["Attachment"];
 export type Agent = components["schemas"]["Agent"];
 export type AgentToolsCfg = components["schemas"]["AgentToolsCfg"];
+export type AgentToolsUpdateRequest = components["schemas"]["AgentToolsUpdateRequest"];
 export type AgentCreateRequest = components["schemas"]["AgentCreateRequest"];
 export type AgentUpdateRequest = components["schemas"]["AgentUpdateRequest"];
 export type AgentSession = components["schemas"]["AgentSession"];
@@ -7437,3 +8041,17 @@ export type UploadFilesResponse = components["schemas"]["UploadFilesResponse"];
 export type TaskAcceptedResponse = components["schemas"]["TaskAcceptedResponse"];
 export type AgentOwnerUpdateResponse = components["schemas"]["AgentOwnerUpdateResponse"];
 export type ActivityEventsResponse = components["schemas"]["ActivityEventsResponse"];
+export type RotateTokenResponse = components["schemas"]["RotateTokenResponse"];
+export type VersionResponse = components["schemas"]["VersionResponse"];
+export type UserContextRequest = components["schemas"]["UserContextRequest"];
+export type UserContextResponse = components["schemas"]["UserContextResponse"];
+export type TaskCreateRequest = components["schemas"]["TaskCreateRequest"];
+export type TaskUpdateRequest = components["schemas"]["TaskUpdateRequest"];
+export type ProviderUpdateRequest = components["schemas"]["ProviderUpdateRequest"];
+export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"];
+export type SkillInstallRequest = components["schemas"]["SkillInstallRequest"];
+export type SseChatRequest = components["schemas"]["SseChatRequest"];
+export type ToolApprovalActionRequest = components["schemas"]["ToolApprovalActionRequest"];
+export type CredentialSetRequest = components["schemas"]["CredentialSetRequest"];
+export type RestoreBackupRequest = components["schemas"]["RestoreBackupRequest"];
+export type AgentOwnershipUpdateRequest = components["schemas"]["AgentOwnershipUpdateRequest"];

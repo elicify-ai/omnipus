@@ -15,6 +15,27 @@ const (
 	BearerAuthScopes bearerAuthContextKey = "BearerAuth.Scopes"
 )
 
+// Defines values for ActivityEventType.
+const (
+	SessionStart ActivityEventType = "session_start"
+	TaskCreated  ActivityEventType = "task_created"
+	TaskUpdated  ActivityEventType = "task_updated"
+)
+
+// Valid indicates whether the value is a known member of the ActivityEventType enum.
+func (e ActivityEventType) Valid() bool {
+	switch e {
+	case SessionStart:
+		return true
+	case TaskCreated:
+		return true
+	case TaskUpdated:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentSandboxProfile.
 const (
 	AgentSandboxProfileHost         AgentSandboxProfile = "host"
@@ -1755,8 +1776,11 @@ type ActivityEvent struct {
 	Timestamp time.Time `json:"timestamp"`
 
 	// Type Event category. "session_start" = new session began. "task_created" = a task was created. "task_updated" = a task completed or changed status.
-	Type string `json:"type"`
+	Type ActivityEventType `json:"type"`
 }
+
+// ActivityEventType Event category. "session_start" = new session began. "task_created" = a task was created. "task_updated" = a task completed or changed status.
+type ActivityEventType string
 
 // Agent An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the Go agentResponse struct and the TypeScript Agent interface in src/lib/api.ts. Core (locked) agents suppress soul/instructions in list responses and forbid identity mutations via PUT.
 type Agent struct {
@@ -2891,6 +2915,12 @@ type RetentionUpdateResponse struct {
 	SessionDays int `json:"session_days"`
 }
 
+// RotateTokenResponse Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
+type RotateTokenResponse struct {
+	// Token The new gateway bearer token (64 hex characters, 32 random bytes). Store securely; this is the only time it is returned.
+	Token string `json:"token"`
+}
+
 // SandboxConfig Sandbox configuration returned by GET /api/v1/security/sandbox-config and as part of PUT /api/v1/security/sandbox-config responses.
 type SandboxConfig struct {
 	// AllowNetworkOutbound Whether outbound network access is permitted from the sandbox.
@@ -3644,9 +3674,15 @@ type User struct {
 // UserRole RBAC role. Case-sensitive.
 type UserRole string
 
-// UserContextUpdateRequest Request body for PUT /api/v1/user-context. Replaces the full content of USER.md — the persistent user context injected into every agent prompt.
-type UserContextUpdateRequest struct {
-	// Content New content for USER.md. May be an empty string to clear the user context. No size limit enforced here (1 MB body limit applied by the HTTP layer).
+// UserContextRequest Request body for PUT /api/v1/user-context. Replaces the entire content of USER.md in the default workspace. Passing an empty string clears the file.
+type UserContextRequest struct {
+	// Content Full replacement content for USER.md. May be empty to clear the file. No maximum length is enforced at the schema level — the underlying filesystem write via fileutil.WriteFileAtomic provides the practical limit.
+	Content string `json:"content"`
+}
+
+// UserContextResponse Response from GET /api/v1/user-context and PUT /api/v1/user-context. Returns the current content of USER.md in the default workspace. An empty string means the file does not exist or has not been written yet.
+type UserContextResponse struct {
+	// Content Current content of USER.md. Empty string when the file does not exist or has not been set yet.
 	Content string `json:"content"`
 }
 
@@ -3757,6 +3793,15 @@ type ValidateTokenResponse struct {
 
 // ValidateTokenResponseRole The RBAC role of the authenticated user.
 type ValidateTokenResponseRole string
+
+// VersionResponse Response from GET /api/v1/version. Returns build identity information. Used by the frontend to detect version drift and show "New version available" prompts (issue #110). No authentication required.
+type VersionResponse struct {
+	// BuildSha VCS revision SHA embedded at build time via debug.ReadBuildInfo(). Value is "dev" when built outside a version-controlled tree or when vcs.revision is not set (e.g. go run).
+	BuildSha string `json:"build_sha"`
+
+	// Version Omnipus gateway version string (e.g. "0.1.0" or "dev").
+	Version string `json:"version"`
+}
 
 // N400BadRequest Standard error envelope returned by all non-2xx responses.
 type N400BadRequest = ErrorResponse
@@ -3954,7 +3999,7 @@ type PostToolApprovalJSONRequestBody = ToolApprovalActionRequest
 type UploadFilesMultipartRequestBody UploadFilesMultipartBody
 
 // PutUserContextJSONRequestBody defines body for PutUserContext for application/json ContentType.
-type PutUserContextJSONRequestBody = UserContextUpdateRequest
+type PutUserContextJSONRequestBody = UserContextRequest
 
 // CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
 type CreateUserJSONRequestBody = UserCreateRequest
