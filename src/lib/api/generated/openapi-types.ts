@@ -345,7 +345,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update agent ownership (admin only)
+         * @description Updates the owner_username field on a custom agent. Only admins may call this endpoint. System and core agents cannot have an owner assigned (400). Clearing the owner (empty string) requires the X-Confirm-Demote: 1 header.
+         */
+        patch: operations["patchAgentOwnership"];
         trace?: never;
     };
     "/agents/{id}/sessions": {
@@ -1154,6 +1158,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/providers/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Test provider API key configuration
+         * @description Verifies that an API key is configured for the given provider without making an upstream call. Returns success=false with an error message if no key is configured. Available before and after onboarding.
+         */
+        get: operations["testProvider"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/skills": {
         parameters: {
             query?: never;
@@ -1495,8 +1519,8 @@ export interface components {
         /** @description Returned on successful login, register-admin, or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers, the role of the authenticated user, and the username. */
         LoginResponse: {
             /**
-             * @description Bearer token for subsequent API calls. Prefix with "omnipus_" followed by 64 hex characters. Store in sessionStorage (preferred) or localStorage under the key "omnipus_auth_token".
-             * @example omnipus_a3f...4b2
+             * @description Bearer token for subsequent API calls. Prefix "omnipus_" followed by 64 lowercase hex characters (total 72 chars). Store in sessionStorage (preferred) or localStorage under the key "omnipus_auth_token".
+             * @example omnipus_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
              */
             token: string;
             /**
@@ -1829,7 +1853,7 @@ export interface components {
              */
             channel: string;
             /**
-             * @description List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages).
+             * @description List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
              * @example [
              *       "2026-05-16.jsonl"
              *     ]
@@ -1895,7 +1919,7 @@ export interface components {
         /** @description Full session detail as returned by GET /sessions/{id}. Contains the session metadata plus the complete ordered transcript. */
         SessionDetail: {
             session: components["schemas"]["Session"];
-            /** @description Ordered list of transcript entries for this session. */
+            /** @description Ordered list of transcript entries for this session. Capped at 100000 messages to bound response payload size. */
             messages: components["schemas"]["Message"][];
             /**
              * @description True when the agent that owned this session has been deleted from the config. Used by the SPA to display a banner informing the user that the original agent no longer exists. Absent (or false) in the common case.
@@ -2038,10 +2062,11 @@ export interface components {
         /** @description File attachment associated with a transcript entry. */
         Attachment: {
             /**
-             * @description Attachment category (e.g. "file", "image").
+             * @description Attachment category. Aligned with MediaPart.type enum.
              * @example file
+             * @enum {string}
              */
-            type: string;
+            type: "image" | "audio" | "video" | "file";
             /**
              * @description Relative path within the session workspace.
              * @example output/result.txt
@@ -2328,7 +2353,7 @@ export interface components {
             icon?: string;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
         };
-        /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. */
+        /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400. */
         AgentUpdateRequest: {
             /**
              * @description New display name. Rejected on locked agents.
@@ -2890,7 +2915,7 @@ export interface components {
              */
             running: boolean;
             /**
-             * @description Bound address in "host:port" format. Present only when running is true.
+             * @description Bound address in "host:port" format. Present only when running is true. Backend handler enforces this invariant; OpenAPI 3.0.3 cannot express conditional required fields.
              * @example 127.0.0.1:19000
              */
             address?: string;
@@ -3524,7 +3549,7 @@ export interface components {
              * @example 85
              */
             score: number;
-            /** @description List of health-check findings. Empty when score is 100. */
+            /** @description List of health-check findings. Empty when score is 100. Capped at 100 to bound response size. */
             issues: components["schemas"]["DoctorIssue"][];
             /**
              * Format: date-time
@@ -3615,9 +3640,9 @@ export interface components {
          * @description Response from GET /api/v1/devices. Lists both pending pairing requests and already-paired devices.
          */
         DevicesResponse: {
-            /** @description Pairing requests awaiting approval. */
+            /** @description Pairing requests awaiting approval. Capped at 100. */
             pending: components["schemas"]["DevicePending"][];
-            /** @description Devices that have been successfully paired. */
+            /** @description Devices that have been successfully paired. Capped at 100. */
             paired: components["schemas"]["DevicePaired"][];
         };
         /**
@@ -3703,15 +3728,21 @@ export interface components {
         };
         /**
          * AuditLogUpdateResponse
-         * @description Response from PUT /api/v1/security/audit-log. Audit log state saved; restart required.
+         * @description Response from PUT /api/v1/security/audit-log. Returns save status and the previously active state (restart required to apply).
          */
         AuditLogUpdateResponse: {
-            /** @example true */
+            /**
+             * @description True when the configuration was successfully persisted to disk.
+             * @example true
+             */
             saved: boolean;
-            /** @example true */
+            /**
+             * @description Always true — changing the audit log enabled state requires a restart to swap file handles.
+             * @example true
+             */
             requires_restart: boolean;
             /**
-             * @description Value currently in effect (before this save).
+             * @description The audit log enabled state currently active (before restart takes effect). This is the old value — the new value will take effect after restart.
              * @example true
              */
             applied_enabled: boolean;
@@ -3730,19 +3761,29 @@ export interface components {
         };
         /**
          * SkillTrustUpdateResponse
-         * @description Response from PUT /api/v1/security/skill-trust. Updated skill trust level.
+         * @description Response from PUT /api/v1/security/skill-trust. Returns save status and the now-active skill trust level.
          */
         SkillTrustUpdateResponse: {
-            /** @example true */
+            /**
+             * @description True when the configuration was successfully persisted to disk.
+             * @example true
+             */
             saved: boolean;
-            /** @example false */
+            /**
+             * @description Always false — skill trust is hot-reloaded.
+             * @example false
+             */
             requires_restart: boolean;
             /**
-             * @example block_unverified
+             * @description The skill trust level now active.
+             * @example warn_unverified
              * @enum {string}
              */
             applied_level: "block_unverified" | "warn_unverified" | "allow_all";
-            /** @description Present when allow_all is selected — warns that hash verification is disabled. */
+            /**
+             * @description Present when allow_all is selected — warns that hash verification is disabled.
+             * @example skill_trust=allow_all disables hash verification — configure a trusted skills registry instead
+             */
             warning?: string;
         };
         /**
@@ -3759,19 +3800,29 @@ export interface components {
         };
         /**
          * PromptGuardUpdateResponse
-         * @description Response from PUT /api/v1/security/prompt-guard. Updated prompt injection guard level.
+         * @description Response from PUT /api/v1/security/prompt-guard. Returns save status and the currently active level.
          */
         PromptGuardUpdateResponse: {
-            /** @example true */
+            /**
+             * @description True when the configuration was successfully persisted to disk.
+             * @example true
+             */
             saved: boolean;
-            /** @example false */
+            /**
+             * @description False when hot-reload succeeded. True when hot-reload failed (warning will be present).
+             * @example false
+             */
             requires_restart: boolean;
             /**
+             * @description The prompt guard level now active.
              * @example medium
              * @enum {string}
              */
             applied_level: "low" | "medium" | "high";
-            /** @description Present when hot-reload failed. Restart required to apply. */
+            /**
+             * @description Present when hot-reload failed — config is saved but restart is required.
+             * @example config saved to disk but hot-reload failed; restart the gateway to apply
+             */
             warning?: string;
         };
         /**
@@ -3829,56 +3880,89 @@ export interface components {
         };
         /**
          * RateLimitsUpdateResponse
-         * @description Response from PUT /api/v1/security/rate-limits. Updated rate limit configuration.
+         * @description Response from PUT /api/v1/security/rate-limits. Returns save status and the applied configuration.
          */
         RateLimitsUpdateResponse: {
-            /** @example true */
+            /**
+             * @description True when the configuration was successfully persisted to disk.
+             * @example true
+             */
             saved: boolean;
-            /** @example false */
+            /**
+             * @description Always false for rate limits — they are hot-reloaded. Set to true when hot-reload failed (warning will be present).
+             * @example false
+             */
             requires_restart: boolean;
-            /** @description Applied rate limit values after the update. */
+            /** @description The effective configuration after the update. Present only when hot-reload succeeded. */
             applied?: {
-                /** Format: double */
+                /**
+                 * Format: double
+                 * @description Applied daily cost cap in USD.
+                 * @example 5
+                 */
                 daily_cost_cap_usd?: number;
-                /** Format: int64 */
+                /**
+                 * Format: int64
+                 * @description Applied LLM calls per hour limit.
+                 * @example 100
+                 */
                 max_agent_llm_calls_per_hour?: number;
-                /** Format: int64 */
+                /**
+                 * Format: int64
+                 * @description Applied tool calls per minute limit.
+                 * @example 60
+                 */
                 max_agent_tool_calls_per_minute?: number;
             };
-            /** @description Present when hot-reload failed. */
+            /**
+             * @description Present when hot-reload failed — config is saved but restart is required.
+             * @example config saved to disk but hot-reload failed; restart the gateway to apply
+             */
             warning?: string;
         };
         /**
          * SessionScopeUpdateResponse
-         * @description Response from PUT /api/v1/security/session-scope. Session scope saved; restart required to apply.
+         * @description Response from PUT /api/v1/security/session-scope. Returns save status and the currently active scope (before restart).
          */
         SessionScopeUpdateResponse: {
-            /** @example true */
+            /**
+             * @description True when the configuration was successfully persisted to disk.
+             * @example true
+             */
             saved: boolean;
             /**
-             * @description Always true — session routing requires a gateway restart.
+             * @description Always true — session routing requires a gateway restart to take effect.
              * @example true
              */
             requires_restart: boolean;
             /**
-             * @description The dm_scope currently active (before restart).
+             * @description The dm_scope currently active (the value before restart takes effect).
              * @example per-channel-peer
              */
             applied_dm_scope: string;
-            /** @description Present when hot-reload failed (config saved, restart required). */
+            /**
+             * @description Present when hot-reload failed — config is saved but restart is required.
+             * @example config saved to disk but hot-reload failed; restart the gateway to apply
+             */
             warning?: string;
         };
         /**
          * RetentionUpdateResponse
-         * @description Response from PUT /api/v1/security/retention. Updated retention configuration.
+         * @description Response from PUT /api/v1/security/retention. Returns save status and the currently active retention settings.
          */
         RetentionUpdateResponse: {
-            /** @example true */
+            /**
+             * @description True when the configuration was successfully persisted to disk.
+             * @example true
+             */
             saved: boolean;
-            /** @example false */
+            /**
+             * @description Always false — retention config is hot-reloaded.
+             * @example false
+             */
             requires_restart: boolean;
             /**
-             * @description Applied session retention in days. 0 means use the system default (90 days).
+             * @description Number of days to retain session logs. 0 = system default (90 days).
              * @example 30
              */
             session_days: number;
@@ -3887,6 +3971,185 @@ export interface components {
              * @example false
              */
             disabled: boolean;
+        };
+        /**
+         * AgentToolsResponse
+         * @description Response from GET /api/v1/agents/{id}/tools and PUT /api/v1/agents/{id}/tools. Returns the agent's tool policy configuration plus the effective per-tool policy list.
+         */
+        AgentToolsResponse: {
+            config: components["schemas"]["AgentToolsCfg"];
+            /** @description Per-tool effective policy entries. */
+            tools: components["schemas"]["AgentToolEntry"][];
+            /**
+             * @description Agent classification: "core", "system", or "custom". Informs the UI whether policy editing is allowed.
+             * @example custom
+             * @enum {string}
+             */
+            agent_type?: "core" | "system" | "custom";
+        };
+        /**
+         * ChannelEnabledResponse
+         * @description Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
+         */
+        ChannelEnabledResponse: {
+            /**
+             * @description Channel identifier.
+             * @example telegram
+             */
+            id: string;
+            /**
+             * @description Whether the channel is now enabled.
+             * @example true
+             */
+            enabled: boolean;
+        };
+        /**
+         * ChannelTestResponse
+         * @description Response from POST /api/v1/channels/{id}/test. Returns whether required credentials are configured.
+         */
+        ChannelTestResponse: {
+            /**
+             * @description True when all required credential fields are present.
+             * @example true
+             */
+            success: boolean;
+            /**
+             * @description Human-readable description of the test result.
+             * @example channel "telegram" is configured
+             */
+            message: string;
+        };
+        /**
+         * BackupCreateResponse
+         * @description Response from POST /api/v1/backup. Returns the path, size, and creation time of the new backup archive.
+         */
+        BackupCreateResponse: {
+            /**
+             * @description Absolute path to the backup file.
+             * @example /home/user/.omnipus/backups/backup-20260516T103000Z.tar.gz
+             */
+            path: string;
+            /**
+             * Format: int64
+             * @description Size of the backup file in bytes.
+             * @example 1048576
+             */
+            size_bytes: number;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp when the backup was created.
+             * @example 2026-05-16T10:30:00Z
+             */
+            created_at: string;
+        };
+        /**
+         * OnboardingStatusResponse
+         * @description Response from PATCH /api/v1/state when marking onboarding complete. Confirms that onboarding has been completed.
+         */
+        OnboardingStatusResponse: {
+            /**
+             * @description True when onboarding has been successfully marked as complete.
+             * @example true
+             */
+            onboarding_complete: boolean;
+        };
+        /**
+         * OperationResult
+         * @description Generic success/failure envelope for simple admin operations. Used by endpoints that perform an action and return only whether it succeeded.
+         */
+        OperationResult: {
+            /**
+             * @description True when the operation succeeded.
+             * @example true
+             */
+            success: boolean;
+            /**
+             * @description Human-readable error message. Present only when success=false.
+             * @example no API key configured for this provider
+             */
+            error?: string;
+        };
+        /**
+         * ToolApprovalResponse
+         * @description Response from POST /api/v1/tool-approvals/{approval_id}. Confirms that the approval action was processed.
+         */
+        ToolApprovalResponse: {
+            /**
+             * @description The approval ID that was resolved.
+             * @example appr_abc123
+             */
+            approval_id: string;
+            /**
+             * @description The action that was applied.
+             * @example approve
+             * @enum {string}
+             */
+            action: "approve" | "deny" | "cancel";
+            /**
+             * @description Result status. Always "ok" when the action was accepted.
+             * @example ok
+             * @enum {string}
+             */
+            status: "ok";
+        };
+        /**
+         * UploadFilesResponse
+         * @description Response from POST /api/v1/upload (HTTP 201). Returns the list of uploaded files with their metadata.
+         */
+        UploadFilesResponse: {
+            /** @description Uploaded file metadata entries. */
+            files: components["schemas"]["UploadedFile"][];
+        };
+        /**
+         * TaskAcceptedResponse
+         * @description Response from POST /api/v1/tasks/{id}/start (HTTP 202 Accepted). Confirms that the task has been queued for execution.
+         */
+        TaskAcceptedResponse: {
+            /**
+             * @description Acceptance status. Always "accepted".
+             * @example accepted
+             * @enum {string}
+             */
+            status: "accepted";
+            /**
+             * @description The ID of the task that was accepted for execution.
+             * @example task_abc123
+             */
+            task_id: string;
+        };
+        /**
+         * AgentOwnerUpdateResponse
+         * @description Response from PATCH /api/v1/agents/{id}/ownership. Confirms the ownership change.
+         */
+        AgentOwnerUpdateResponse: {
+            /**
+             * @description True when ownership was successfully updated.
+             * @example true
+             */
+            success: boolean;
+            /**
+             * @description The agent whose ownership was changed.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            agent_id: string;
+            /**
+             * @description The username of the new owner.
+             * @example alice
+             */
+            owner_username: string;
+        };
+        /**
+         * ActivityEventsResponse
+         * @description Response from GET /api/v1/activity when partial data is available with a warning. Returned instead of a plain ActivityEvent array when a session read error occurred.
+         */
+        ActivityEventsResponse: {
+            /** @description Activity events (reverse-chronological, max 50, last 24 hours). */
+            events: components["schemas"]["ActivityEvent"][];
+            /**
+             * @description Present when a non-fatal error occurred while collecting events (e.g. a session store was unreadable). The response is still returned.
+             * @example failed to read session store for agent jim: permission denied
+             */
+            warning?: string;
         };
     };
     responses: {
@@ -4098,10 +4361,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example true */
-                        success: boolean;
-                    };
+                    "application/json": components["schemas"]["OperationResult"];
                 };
             };
             400: components["responses"]["400BadRequest"];
@@ -4621,6 +4881,47 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    patchAgentOwnership: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Agent ID.
+                 * @example 550e8400-e29b-41d4-a716-446655440000
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description Username of the new owner. Empty string clears ownership (requires X-Confirm-Demote header).
+                     * @example alice
+                     */
+                    owner_username?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Ownership updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentOwnerUpdateResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     listAgentSessions: {
         parameters: {
             query?: never;
@@ -4671,31 +4972,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        config: components["schemas"]["AgentToolsCfg"];
-                        /** @description Per-tool effective policy entries. */
-                        tools: {
-                            /**
-                             * @description Tool name.
-                             * @example workspace.shell
-                             */
-                            name: string;
-                            /**
-                             * @description Policy as stored in the agent's tools_cfg.
-                             * @enum {string}
-                             */
-                            configured_policy: "allow" | "ask" | "deny";
-                            /**
-                             * @description Actual policy after fence rules are applied.
-                             * @enum {string}
-                             */
-                            effective_policy: "allow" | "ask" | "deny";
-                            /** @description True when a privilege fence downgraded the configured policy. */
-                            fence_applied: boolean;
-                            /** @description True when the tool requires admin approval regardless of policy. */
-                            requires_admin_ask: boolean;
-                        }[];
-                    };
+                    "application/json": components["schemas"]["AgentToolsResponse"];
                 };
             };
             400: components["responses"]["400BadRequest"];
@@ -4729,18 +5006,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        config: components["schemas"]["AgentToolsCfg"];
-                        tools: {
-                            name: string;
-                            /** @enum {string} */
-                            configured_policy: "allow" | "ask" | "deny";
-                            /** @enum {string} */
-                            effective_policy: "allow" | "ask" | "deny";
-                            fence_applied: boolean;
-                            requires_admin_ask: boolean;
-                        }[];
-                    };
+                    "application/json": components["schemas"]["AgentToolsResponse"];
                 };
             };
             400: components["responses"]["400BadRequest"];
@@ -4947,20 +5213,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example appr_abc123 */
-                        approval_id: string;
-                        /**
-                         * @example approve
-                         * @enum {string}
-                         */
-                        action: "approve" | "deny" | "cancel";
-                        /**
-                         * @example ok
-                         * @enum {string}
-                         */
-                        status: "ok";
-                    };
+                    "application/json": components["schemas"]["ToolApprovalResponse"];
                 };
             };
             /** @description Malformed body or unknown action. */
@@ -5820,12 +6073,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example telegram */
-                        id: string;
-                        /** @example true */
-                        enabled: boolean;
-                    };
+                    "application/json": components["schemas"]["ChannelEnabledResponse"];
                 };
             };
             /** @description Channel ID not found. */
@@ -5860,12 +6108,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example telegram */
-                        id: string;
-                        /** @example false */
-                        enabled: boolean;
-                    };
+                    "application/json": components["schemas"]["ChannelEnabledResponse"];
                 };
             };
             /** @description Channel ID not found. */
@@ -5953,12 +6196,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example true */
-                        success: boolean;
-                        /** @example channel "telegram" is configured */
-                        message: string;
-                    };
+                    "application/json": components["schemas"]["ChannelTestResponse"];
                 };
             };
             /** @description Channel ID not found. */
@@ -6310,24 +6548,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /**
-                         * @description Absolute path to the backup file.
-                         * @example /home/user/.omnipus/backups/backup-20260516T103000Z.tar.gz
-                         */
-                        path: string;
-                        /**
-                         * Format: int64
-                         * @description Size of the backup file in bytes.
-                         * @example 1048576
-                         */
-                        size_bytes: number;
-                        /**
-                         * Format: date-time
-                         * @example 2026-05-16T10:30:00Z
-                         */
-                        created_at: string;
-                    };
+                    "application/json": components["schemas"]["BackupCreateResponse"];
                 };
             };
             /** @description Method not allowed. */
@@ -6576,6 +6797,33 @@ export interface operations {
             };
         };
     };
+    testProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Provider identifier (e.g. "anthropic", "openai").
+                 * @example anthropic
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Provider test result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationResult"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
     listSkills: {
         parameters: {
             query?: never;
@@ -6666,9 +6914,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        files: components["schemas"]["UploadedFile"][];
-                    };
+                    "application/json": components["schemas"]["UploadFilesResponse"];
                 };
             };
             400: components["responses"]["400BadRequest"];
@@ -6985,12 +7231,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Task started. */
-            200: {
+            /** @description Task accepted and queued for execution. */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["TaskAcceptedResponse"];
+                };
             };
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
@@ -7178,3 +7426,14 @@ export type RateLimitsUpdateRequest = components["schemas"]["RateLimitsUpdateReq
 export type RateLimitsUpdateResponse = components["schemas"]["RateLimitsUpdateResponse"];
 export type SessionScopeUpdateResponse = components["schemas"]["SessionScopeUpdateResponse"];
 export type RetentionUpdateResponse = components["schemas"]["RetentionUpdateResponse"];
+export type AgentToolsResponse = components["schemas"]["AgentToolsResponse"];
+export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
+export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
+export type BackupCreateResponse = components["schemas"]["BackupCreateResponse"];
+export type OnboardingStatusResponse = components["schemas"]["OnboardingStatusResponse"];
+export type OperationResult = components["schemas"]["OperationResult"];
+export type ToolApprovalResponse = components["schemas"]["ToolApprovalResponse"];
+export type UploadFilesResponse = components["schemas"]["UploadFilesResponse"];
+export type TaskAcceptedResponse = components["schemas"]["TaskAcceptedResponse"];
+export type AgentOwnerUpdateResponse = components["schemas"]["AgentOwnerUpdateResponse"];
+export type ActivityEventsResponse = components["schemas"]["ActivityEventsResponse"];

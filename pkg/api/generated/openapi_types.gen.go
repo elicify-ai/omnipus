@@ -168,6 +168,111 @@ func (e AgentCreateRequestToolsCfgBuiltinPolicies) Valid() bool {
 	}
 }
 
+// Defines values for AgentToolsResponseAgentType.
+const (
+	AgentToolsResponseAgentTypeCore   AgentToolsResponseAgentType = "core"
+	AgentToolsResponseAgentTypeCustom AgentToolsResponseAgentType = "custom"
+	AgentToolsResponseAgentTypeSystem AgentToolsResponseAgentType = "system"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsResponseAgentType enum.
+func (e AgentToolsResponseAgentType) Valid() bool {
+	switch e {
+	case AgentToolsResponseAgentTypeCore:
+		return true
+	case AgentToolsResponseAgentTypeCustom:
+		return true
+	case AgentToolsResponseAgentTypeSystem:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsResponseConfigBuiltinDefaultPolicy.
+const (
+	AgentToolsResponseConfigBuiltinDefaultPolicyAllow AgentToolsResponseConfigBuiltinDefaultPolicy = "allow"
+	AgentToolsResponseConfigBuiltinDefaultPolicyAsk   AgentToolsResponseConfigBuiltinDefaultPolicy = "ask"
+	AgentToolsResponseConfigBuiltinDefaultPolicyDeny  AgentToolsResponseConfigBuiltinDefaultPolicy = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsResponseConfigBuiltinDefaultPolicy enum.
+func (e AgentToolsResponseConfigBuiltinDefaultPolicy) Valid() bool {
+	switch e {
+	case AgentToolsResponseConfigBuiltinDefaultPolicyAllow:
+		return true
+	case AgentToolsResponseConfigBuiltinDefaultPolicyAsk:
+		return true
+	case AgentToolsResponseConfigBuiltinDefaultPolicyDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsResponseConfigBuiltinPolicies.
+const (
+	AgentToolsResponseConfigBuiltinPoliciesAllow AgentToolsResponseConfigBuiltinPolicies = "allow"
+	AgentToolsResponseConfigBuiltinPoliciesAsk   AgentToolsResponseConfigBuiltinPolicies = "ask"
+	AgentToolsResponseConfigBuiltinPoliciesDeny  AgentToolsResponseConfigBuiltinPolicies = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsResponseConfigBuiltinPolicies enum.
+func (e AgentToolsResponseConfigBuiltinPolicies) Valid() bool {
+	switch e {
+	case AgentToolsResponseConfigBuiltinPoliciesAllow:
+		return true
+	case AgentToolsResponseConfigBuiltinPoliciesAsk:
+		return true
+	case AgentToolsResponseConfigBuiltinPoliciesDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsResponseToolsConfiguredPolicy.
+const (
+	AgentToolsResponseToolsConfiguredPolicyAllow AgentToolsResponseToolsConfiguredPolicy = "allow"
+	AgentToolsResponseToolsConfiguredPolicyAsk   AgentToolsResponseToolsConfiguredPolicy = "ask"
+	AgentToolsResponseToolsConfiguredPolicyDeny  AgentToolsResponseToolsConfiguredPolicy = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsResponseToolsConfiguredPolicy enum.
+func (e AgentToolsResponseToolsConfiguredPolicy) Valid() bool {
+	switch e {
+	case AgentToolsResponseToolsConfiguredPolicyAllow:
+		return true
+	case AgentToolsResponseToolsConfiguredPolicyAsk:
+		return true
+	case AgentToolsResponseToolsConfiguredPolicyDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsResponseToolsEffectivePolicy.
+const (
+	AgentToolsResponseToolsEffectivePolicyAllow AgentToolsResponseToolsEffectivePolicy = "allow"
+	AgentToolsResponseToolsEffectivePolicyAsk   AgentToolsResponseToolsEffectivePolicy = "ask"
+	AgentToolsResponseToolsEffectivePolicyDeny  AgentToolsResponseToolsEffectivePolicy = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsResponseToolsEffectivePolicy enum.
+func (e AgentToolsResponseToolsEffectivePolicy) Valid() bool {
+	switch e {
+	case AgentToolsResponseToolsEffectivePolicyAllow:
+		return true
+	case AgentToolsResponseToolsEffectivePolicyAsk:
+		return true
+	case AgentToolsResponseToolsEffectivePolicyDeny:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentUpdateRequestSandboxProfile.
 const (
 	AgentUpdateRequestSandboxProfileHost         AgentUpdateRequestSandboxProfile = "host"
@@ -495,6 +600,30 @@ func (e MeInfoRole) Valid() bool {
 	}
 }
 
+// Defines values for MessageAttachmentsType.
+const (
+	MessageAttachmentsTypeAudio MessageAttachmentsType = "audio"
+	MessageAttachmentsTypeFile  MessageAttachmentsType = "file"
+	MessageAttachmentsTypeImage MessageAttachmentsType = "image"
+	MessageAttachmentsTypeVideo MessageAttachmentsType = "video"
+)
+
+// Valid indicates whether the value is a known member of the MessageAttachmentsType enum.
+func (e MessageAttachmentsType) Valid() bool {
+	switch e {
+	case MessageAttachmentsTypeAudio:
+		return true
+	case MessageAttachmentsTypeFile:
+		return true
+	case MessageAttachmentsTypeImage:
+		return true
+	case MessageAttachmentsTypeVideo:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageRole.
 const (
 	MessageRoleAssistant MessageRole = "assistant"
@@ -621,6 +750,48 @@ func (e PromptGuardResponseLevel) Valid() bool {
 	case PromptGuardResponseLevelLow:
 		return true
 	case PromptGuardResponseLevelMedium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PromptGuardUpdateRequestLevel.
+const (
+	PromptGuardUpdateRequestLevelHigh   PromptGuardUpdateRequestLevel = "high"
+	PromptGuardUpdateRequestLevelLow    PromptGuardUpdateRequestLevel = "low"
+	PromptGuardUpdateRequestLevelMedium PromptGuardUpdateRequestLevel = "medium"
+)
+
+// Valid indicates whether the value is a known member of the PromptGuardUpdateRequestLevel enum.
+func (e PromptGuardUpdateRequestLevel) Valid() bool {
+	switch e {
+	case PromptGuardUpdateRequestLevelHigh:
+		return true
+	case PromptGuardUpdateRequestLevelLow:
+		return true
+	case PromptGuardUpdateRequestLevelMedium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PromptGuardUpdateResponseAppliedLevel.
+const (
+	PromptGuardUpdateResponseAppliedLevelHigh   PromptGuardUpdateResponseAppliedLevel = "high"
+	PromptGuardUpdateResponseAppliedLevelLow    PromptGuardUpdateResponseAppliedLevel = "low"
+	PromptGuardUpdateResponseAppliedLevelMedium PromptGuardUpdateResponseAppliedLevel = "medium"
+)
+
+// Valid indicates whether the value is a known member of the PromptGuardUpdateResponseAppliedLevel enum.
+func (e PromptGuardUpdateResponseAppliedLevel) Valid() bool {
+	switch e {
+	case PromptGuardUpdateResponseAppliedLevelHigh:
+		return true
+	case PromptGuardUpdateResponseAppliedLevelLow:
+		return true
+	case PromptGuardUpdateResponseAppliedLevelMedium:
 		return true
 	default:
 		return false
@@ -807,6 +978,30 @@ func (e SessionCreateRequestType) Valid() bool {
 	case SessionCreateRequestTypeChat:
 		return true
 	case SessionCreateRequestTypeTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesAttachmentsType.
+const (
+	SessionDetailMessagesAttachmentsTypeAudio SessionDetailMessagesAttachmentsType = "audio"
+	SessionDetailMessagesAttachmentsTypeFile  SessionDetailMessagesAttachmentsType = "file"
+	SessionDetailMessagesAttachmentsTypeImage SessionDetailMessagesAttachmentsType = "image"
+	SessionDetailMessagesAttachmentsTypeVideo SessionDetailMessagesAttachmentsType = "video"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesAttachmentsType enum.
+func (e SessionDetailMessagesAttachmentsType) Valid() bool {
+	switch e {
+	case SessionDetailMessagesAttachmentsTypeAudio:
+		return true
+	case SessionDetailMessagesAttachmentsTypeFile:
+		return true
+	case SessionDetailMessagesAttachmentsTypeImage:
+		return true
+	case SessionDetailMessagesAttachmentsTypeVideo:
 		return true
 	default:
 		return false
@@ -1041,6 +1236,48 @@ func (e SkillTrustResponseLevel) Valid() bool {
 	}
 }
 
+// Defines values for SkillTrustUpdateRequestLevel.
+const (
+	SkillTrustUpdateRequestLevelAllowAll        SkillTrustUpdateRequestLevel = "allow_all"
+	SkillTrustUpdateRequestLevelBlockUnverified SkillTrustUpdateRequestLevel = "block_unverified"
+	SkillTrustUpdateRequestLevelWarnUnverified  SkillTrustUpdateRequestLevel = "warn_unverified"
+)
+
+// Valid indicates whether the value is a known member of the SkillTrustUpdateRequestLevel enum.
+func (e SkillTrustUpdateRequestLevel) Valid() bool {
+	switch e {
+	case SkillTrustUpdateRequestLevelAllowAll:
+		return true
+	case SkillTrustUpdateRequestLevelBlockUnverified:
+		return true
+	case SkillTrustUpdateRequestLevelWarnUnverified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillTrustUpdateResponseAppliedLevel.
+const (
+	AllowAll        SkillTrustUpdateResponseAppliedLevel = "allow_all"
+	BlockUnverified SkillTrustUpdateResponseAppliedLevel = "block_unverified"
+	WarnUnverified  SkillTrustUpdateResponseAppliedLevel = "warn_unverified"
+)
+
+// Valid indicates whether the value is a known member of the SkillTrustUpdateResponseAppliedLevel enum.
+func (e SkillTrustUpdateResponseAppliedLevel) Valid() bool {
+	switch e {
+	case AllowAll:
+		return true
+	case BlockUnverified:
+		return true
+	case WarnUnverified:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskStatus.
 const (
 	TaskStatusAssigned  TaskStatus = "assigned"
@@ -1083,6 +1320,57 @@ func (e TaskTriggerType) Valid() bool {
 	case Manual:
 		return true
 	case Time:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskAcceptedResponseStatus.
+const (
+	Accepted TaskAcceptedResponseStatus = "accepted"
+)
+
+// Valid indicates whether the value is a known member of the TaskAcceptedResponseStatus enum.
+func (e TaskAcceptedResponseStatus) Valid() bool {
+	switch e {
+	case Accepted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ToolApprovalResponseAction.
+const (
+	ToolApprovalResponseActionApprove ToolApprovalResponseAction = "approve"
+	ToolApprovalResponseActionCancel  ToolApprovalResponseAction = "cancel"
+	ToolApprovalResponseActionDeny    ToolApprovalResponseAction = "deny"
+)
+
+// Valid indicates whether the value is a known member of the ToolApprovalResponseAction enum.
+func (e ToolApprovalResponseAction) Valid() bool {
+	switch e {
+	case ToolApprovalResponseActionApprove:
+		return true
+	case ToolApprovalResponseActionCancel:
+		return true
+	case ToolApprovalResponseActionDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ToolApprovalResponseStatus.
+const (
+	Ok ToolApprovalResponseStatus = "ok"
+)
+
+// Valid indicates whether the value is a known member of the ToolApprovalResponseStatus enum.
+func (e ToolApprovalResponseStatus) Valid() bool {
+	switch e {
+	case Ok:
 		return true
 	default:
 		return false
@@ -1236,90 +1524,6 @@ func (e ValidateTokenResponseRole) Valid() bool {
 	}
 }
 
-// Defines values for GetAgentTools200JSONResponseBodyToolsConfiguredPolicy.
-const (
-	GetAgentTools200JSONResponseBodyToolsConfiguredPolicyAllow GetAgentTools200JSONResponseBodyToolsConfiguredPolicy = "allow"
-	GetAgentTools200JSONResponseBodyToolsConfiguredPolicyAsk   GetAgentTools200JSONResponseBodyToolsConfiguredPolicy = "ask"
-	GetAgentTools200JSONResponseBodyToolsConfiguredPolicyDeny  GetAgentTools200JSONResponseBodyToolsConfiguredPolicy = "deny"
-)
-
-// Valid indicates whether the value is a known member of the GetAgentTools200JSONResponseBodyToolsConfiguredPolicy enum.
-func (e GetAgentTools200JSONResponseBodyToolsConfiguredPolicy) Valid() bool {
-	switch e {
-	case GetAgentTools200JSONResponseBodyToolsConfiguredPolicyAllow:
-		return true
-	case GetAgentTools200JSONResponseBodyToolsConfiguredPolicyAsk:
-		return true
-	case GetAgentTools200JSONResponseBodyToolsConfiguredPolicyDeny:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for GetAgentTools200JSONResponseBodyToolsEffectivePolicy.
-const (
-	GetAgentTools200JSONResponseBodyToolsEffectivePolicyAllow GetAgentTools200JSONResponseBodyToolsEffectivePolicy = "allow"
-	GetAgentTools200JSONResponseBodyToolsEffectivePolicyAsk   GetAgentTools200JSONResponseBodyToolsEffectivePolicy = "ask"
-	GetAgentTools200JSONResponseBodyToolsEffectivePolicyDeny  GetAgentTools200JSONResponseBodyToolsEffectivePolicy = "deny"
-)
-
-// Valid indicates whether the value is a known member of the GetAgentTools200JSONResponseBodyToolsEffectivePolicy enum.
-func (e GetAgentTools200JSONResponseBodyToolsEffectivePolicy) Valid() bool {
-	switch e {
-	case GetAgentTools200JSONResponseBodyToolsEffectivePolicyAllow:
-		return true
-	case GetAgentTools200JSONResponseBodyToolsEffectivePolicyAsk:
-		return true
-	case GetAgentTools200JSONResponseBodyToolsEffectivePolicyDeny:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicy.
-const (
-	UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicyAllow UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicy = "allow"
-	UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicyAsk   UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicy = "ask"
-	UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicyDeny  UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicy = "deny"
-)
-
-// Valid indicates whether the value is a known member of the UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicy enum.
-func (e UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicy) Valid() bool {
-	switch e {
-	case UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicyAllow:
-		return true
-	case UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicyAsk:
-		return true
-	case UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicyDeny:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UpdateAgentTools200JSONResponseBodyToolsEffectivePolicy.
-const (
-	UpdateAgentTools200JSONResponseBodyToolsEffectivePolicyAllow UpdateAgentTools200JSONResponseBodyToolsEffectivePolicy = "allow"
-	UpdateAgentTools200JSONResponseBodyToolsEffectivePolicyAsk   UpdateAgentTools200JSONResponseBodyToolsEffectivePolicy = "ask"
-	UpdateAgentTools200JSONResponseBodyToolsEffectivePolicyDeny  UpdateAgentTools200JSONResponseBodyToolsEffectivePolicy = "deny"
-)
-
-// Valid indicates whether the value is a known member of the UpdateAgentTools200JSONResponseBodyToolsEffectivePolicy enum.
-func (e UpdateAgentTools200JSONResponseBodyToolsEffectivePolicy) Valid() bool {
-	switch e {
-	case UpdateAgentTools200JSONResponseBodyToolsEffectivePolicyAllow:
-		return true
-	case UpdateAgentTools200JSONResponseBodyToolsEffectivePolicyAsk:
-		return true
-	case UpdateAgentTools200JSONResponseBodyToolsEffectivePolicyDeny:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for DeleteCredential200JSONResponseBodyStatus.
 const (
 	Removed DeleteCredential200JSONResponseBodyStatus = "removed"
@@ -1344,90 +1548,6 @@ const (
 func (e RestoreBackup200JSONResponseBodyStatus) Valid() bool {
 	switch e {
 	case Restored:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UpdatePromptGuardJSONBodyLevel.
-const (
-	UpdatePromptGuardJSONBodyLevelHigh   UpdatePromptGuardJSONBodyLevel = "high"
-	UpdatePromptGuardJSONBodyLevelLow    UpdatePromptGuardJSONBodyLevel = "low"
-	UpdatePromptGuardJSONBodyLevelMedium UpdatePromptGuardJSONBodyLevel = "medium"
-)
-
-// Valid indicates whether the value is a known member of the UpdatePromptGuardJSONBodyLevel enum.
-func (e UpdatePromptGuardJSONBodyLevel) Valid() bool {
-	switch e {
-	case UpdatePromptGuardJSONBodyLevelHigh:
-		return true
-	case UpdatePromptGuardJSONBodyLevelLow:
-		return true
-	case UpdatePromptGuardJSONBodyLevelMedium:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UpdatePromptGuard200JSONResponseBodyAppliedLevel.
-const (
-	UpdatePromptGuard200JSONResponseBodyAppliedLevelHigh   UpdatePromptGuard200JSONResponseBodyAppliedLevel = "high"
-	UpdatePromptGuard200JSONResponseBodyAppliedLevelLow    UpdatePromptGuard200JSONResponseBodyAppliedLevel = "low"
-	UpdatePromptGuard200JSONResponseBodyAppliedLevelMedium UpdatePromptGuard200JSONResponseBodyAppliedLevel = "medium"
-)
-
-// Valid indicates whether the value is a known member of the UpdatePromptGuard200JSONResponseBodyAppliedLevel enum.
-func (e UpdatePromptGuard200JSONResponseBodyAppliedLevel) Valid() bool {
-	switch e {
-	case UpdatePromptGuard200JSONResponseBodyAppliedLevelHigh:
-		return true
-	case UpdatePromptGuard200JSONResponseBodyAppliedLevelLow:
-		return true
-	case UpdatePromptGuard200JSONResponseBodyAppliedLevelMedium:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UpdateSkillTrustJSONBodyLevel.
-const (
-	UpdateSkillTrustJSONBodyLevelAllowAll        UpdateSkillTrustJSONBodyLevel = "allow_all"
-	UpdateSkillTrustJSONBodyLevelBlockUnverified UpdateSkillTrustJSONBodyLevel = "block_unverified"
-	UpdateSkillTrustJSONBodyLevelWarnUnverified  UpdateSkillTrustJSONBodyLevel = "warn_unverified"
-)
-
-// Valid indicates whether the value is a known member of the UpdateSkillTrustJSONBodyLevel enum.
-func (e UpdateSkillTrustJSONBodyLevel) Valid() bool {
-	switch e {
-	case UpdateSkillTrustJSONBodyLevelAllowAll:
-		return true
-	case UpdateSkillTrustJSONBodyLevelBlockUnverified:
-		return true
-	case UpdateSkillTrustJSONBodyLevelWarnUnverified:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UpdateSkillTrust200JSONResponseBodyAppliedLevel.
-const (
-	AllowAll        UpdateSkillTrust200JSONResponseBodyAppliedLevel = "allow_all"
-	BlockUnverified UpdateSkillTrust200JSONResponseBodyAppliedLevel = "block_unverified"
-	WarnUnverified  UpdateSkillTrust200JSONResponseBodyAppliedLevel = "warn_unverified"
-)
-
-// Valid indicates whether the value is a known member of the UpdateSkillTrust200JSONResponseBodyAppliedLevel enum.
-func (e UpdateSkillTrust200JSONResponseBodyAppliedLevel) Valid() bool {
-	switch e {
-	case AllowAll:
-		return true
-	case BlockUnverified:
-		return true
-	case WarnUnverified:
 		return true
 	default:
 		return false
@@ -1512,42 +1632,6 @@ func (e PostToolApprovalJSONBodyAction) Valid() bool {
 	case PostToolApprovalJSONBodyActionCancel:
 		return true
 	case PostToolApprovalJSONBodyActionDeny:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for PostToolApproval200JSONResponseBodyAction.
-const (
-	PostToolApproval200JSONResponseBodyActionApprove PostToolApproval200JSONResponseBodyAction = "approve"
-	PostToolApproval200JSONResponseBodyActionCancel  PostToolApproval200JSONResponseBodyAction = "cancel"
-	PostToolApproval200JSONResponseBodyActionDeny    PostToolApproval200JSONResponseBodyAction = "deny"
-)
-
-// Valid indicates whether the value is a known member of the PostToolApproval200JSONResponseBodyAction enum.
-func (e PostToolApproval200JSONResponseBodyAction) Valid() bool {
-	switch e {
-	case PostToolApproval200JSONResponseBodyActionApprove:
-		return true
-	case PostToolApproval200JSONResponseBodyActionCancel:
-		return true
-	case PostToolApproval200JSONResponseBodyActionDeny:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for PostToolApproval200JSONResponseBodyStatus.
-const (
-	Ok PostToolApproval200JSONResponseBodyStatus = "ok"
-)
-
-// Valid indicates whether the value is a known member of the PostToolApproval200JSONResponseBodyStatus enum.
-func (e PostToolApproval200JSONResponseBodyStatus) Valid() bool {
-	switch e {
-	case Ok:
 		return true
 	default:
 		return false
@@ -1818,6 +1902,18 @@ type AgentCreateRequestToolsCfgBuiltinDefaultPolicy string
 // AgentCreateRequestToolsCfgBuiltinPolicies defines model for AgentCreateRequest.ToolsCfg.Builtin.Policies.
 type AgentCreateRequestToolsCfgBuiltinPolicies string
 
+// AgentOwnerUpdateResponse Response from PATCH /api/v1/agents/{id}/ownership. Confirms the ownership change.
+type AgentOwnerUpdateResponse struct {
+	// AgentId The agent whose ownership was changed.
+	AgentId string `json:"agent_id"`
+
+	// OwnerUsername The username of the new owner.
+	OwnerUsername string `json:"owner_username"`
+
+	// Success True when ownership was successfully updated.
+	Success bool `json:"success"`
+}
+
 // AgentToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 type AgentToolsCfg struct {
 	// Builtin Controls builtin tool visibility for this agent.
@@ -1842,7 +1938,70 @@ type AgentToolsCfg struct {
 	} `json:"mcp,omitempty"`
 }
 
-// AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents.
+// AgentToolsResponse Response from GET /api/v1/agents/{id}/tools and PUT /api/v1/agents/{id}/tools. Returns the agent's tool policy configuration plus the effective per-tool policy list.
+type AgentToolsResponse struct {
+	// AgentType Agent classification: "core", "system", or "custom". Informs the UI whether policy editing is allowed.
+	AgentType *AgentToolsResponseAgentType `json:"agent_type,omitempty"`
+
+	// Config Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
+	Config struct {
+		// Builtin Controls builtin tool visibility for this agent.
+		Builtin *struct {
+			// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
+			DefaultPolicy *AgentToolsResponseConfigBuiltinDefaultPolicy `json:"default_policy,omitempty"`
+
+			// Policies Per-tool policy overrides. Keys are tool names or glob patterns (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
+			Policies *map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
+		} `json:"builtin,omitempty"`
+
+		// Mcp MCP server bindings for this agent.
+		Mcp *struct {
+			// Servers List of MCP server bindings.
+			Servers *[]struct {
+				// Id MCP server identifier as registered in config.json.
+				Id string `json:"id"`
+
+				// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
+				Tools *[]string `json:"tools,omitempty"`
+			} `json:"servers,omitempty"`
+		} `json:"mcp,omitempty"`
+	} `json:"config"`
+
+	// Tools Per-tool effective policy entries.
+	Tools []struct {
+		// ConfiguredPolicy The policy as written in the agent's config (before fence application).
+		ConfiguredPolicy AgentToolsResponseToolsConfiguredPolicy `json:"configured_policy"`
+
+		// EffectivePolicy The policy actually enforced at LLM-call time after fence and global policy overrides are applied.
+		EffectivePolicy AgentToolsResponseToolsEffectivePolicy `json:"effective_policy"`
+
+		// FenceApplied True when the tool requires admin approval (RequiresAdminAsk=true), the agent type is "custom", and the configured policy was "allow" but was downgraded to "ask" by the admin-ask fence (FR-061).
+		FenceApplied bool `json:"fence_applied"`
+
+		// Name Canonical tool name.
+		Name string `json:"name"`
+
+		// RequiresAdminAsk True when the tool's RequiresAdminAsk() returns true — the tool always needs an admin to approve its use.
+		RequiresAdminAsk bool `json:"requires_admin_ask"`
+	} `json:"tools"`
+}
+
+// AgentToolsResponseAgentType Agent classification: "core", "system", or "custom". Informs the UI whether policy editing is allowed.
+type AgentToolsResponseAgentType string
+
+// AgentToolsResponseConfigBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
+type AgentToolsResponseConfigBuiltinDefaultPolicy string
+
+// AgentToolsResponseConfigBuiltinPolicies defines model for AgentToolsResponse.Config.Builtin.Policies.
+type AgentToolsResponseConfigBuiltinPolicies string
+
+// AgentToolsResponseToolsConfiguredPolicy The policy as written in the agent's config (before fence application).
+type AgentToolsResponseToolsConfiguredPolicy string
+
+// AgentToolsResponseToolsEffectivePolicy The policy actually enforced at LLM-call time after fence and global policy overrides are applied.
+type AgentToolsResponseToolsEffectivePolicy string
+
+// AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400.
 type AgentUpdateRequest struct {
 	// Description New description. Rejected on locked agents. Empty string removes it.
 	Description *string `json:"description,omitempty"`
@@ -1957,6 +2116,36 @@ type AuditLogToggle struct {
 	Enabled bool `json:"enabled"`
 }
 
+// AuditLogToggleRequest Request body for PUT /api/v1/security/audit-log. Enables or disables audit logging.
+type AuditLogToggleRequest struct {
+	// Enabled Whether audit logging should be enabled.
+	Enabled bool `json:"enabled"`
+}
+
+// AuditLogUpdateResponse Response from PUT /api/v1/security/audit-log. Returns save status and the previously active state (restart required to apply).
+type AuditLogUpdateResponse struct {
+	// AppliedEnabled The audit log enabled state currently active (before restart takes effect). This is the old value — the new value will take effect after restart.
+	AppliedEnabled bool `json:"applied_enabled"`
+
+	// RequiresRestart Always true — changing the audit log enabled state requires a restart to swap file handles.
+	RequiresRestart bool `json:"requires_restart"`
+
+	// Saved True when the configuration was successfully persisted to disk.
+	Saved bool `json:"saved"`
+}
+
+// BackupCreateResponse Response from POST /api/v1/backup. Returns the path, size, and creation time of the new backup archive.
+type BackupCreateResponse struct {
+	// CreatedAt RFC3339 timestamp when the backup was created.
+	CreatedAt time.Time `json:"created_at"`
+
+	// Path Absolute path to the backup file.
+	Path string `json:"path"`
+
+	// SizeBytes Size of the backup file in bytes.
+	SizeBytes int64 `json:"size_bytes"`
+}
+
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
 type ChangePasswordRequest struct {
 	// CurrentPassword The user's current password for verification.
@@ -1964,6 +2153,15 @@ type ChangePasswordRequest struct {
 
 	// NewPassword The new password. Minimum 8 characters.
 	NewPassword string `json:"new_password"`
+}
+
+// ChannelEnabledResponse Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
+type ChannelEnabledResponse struct {
+	// Enabled Whether the channel is now enabled.
+	Enabled bool `json:"enabled"`
+
+	// Id Channel identifier.
+	Id string `json:"id"`
 }
 
 // ChannelEntry A communication channel entry returned by GET /api/v1/channels.
@@ -1990,9 +2188,18 @@ type ChannelEntryId string
 // ChannelEntryTransport Transport mechanism used by this channel.
 type ChannelEntryTransport string
 
+// ChannelTestResponse Response from POST /api/v1/channels/{id}/test. Returns whether required credentials are configured.
+type ChannelTestResponse struct {
+	// Message Human-readable description of the test result.
+	Message string `json:"message"`
+
+	// Success True when all required credential fields are present.
+	Success bool `json:"success"`
+}
+
 // DevicesResponse Response from GET /api/v1/devices. Lists both pending pairing requests and already-paired devices.
 type DevicesResponse struct {
-	// Paired Devices that have been successfully paired.
+	// Paired Devices that have been successfully paired. Capped at 100.
 	Paired []struct {
 		// DeviceId Unique device identifier.
 		DeviceId string `json:"device_id"`
@@ -2013,7 +2220,7 @@ type DevicesResponse struct {
 		Status DevicesResponsePairedStatus `json:"status"`
 	} `json:"paired"`
 
-	// Pending Pairing requests awaiting approval.
+	// Pending Pairing requests awaiting approval. Capped at 100.
 	Pending []struct {
 		// CreatedAt RFC3339 timestamp when the pairing request was created.
 		CreatedAt time.Time `json:"created_at"`
@@ -2043,7 +2250,7 @@ type DoctorResult struct {
 	// CheckedAt RFC3339 timestamp when this health check was run.
 	CheckedAt time.Time `json:"checked_at"`
 
-	// Issues List of health-check findings. Empty when score is 100.
+	// Issues List of health-check findings. Empty when score is 100. Capped at 100 to bound response size.
 	Issues []struct {
 		// ActionLabel Display label for the action link.
 		ActionLabel *string `json:"action_label,omitempty"`
@@ -2100,7 +2307,7 @@ type ExecAllowlist struct {
 
 // ExecProxyStatus Runtime state of the exec SSRF proxy returned by GET /api/v1/security/exec-proxy-status (SEC-28).
 type ExecProxyStatus struct {
-	// Address Bound address in "host:port" format. Present only when running is true.
+	// Address Bound address in "host:port" format. Present only when running is true. Backend handler enforces this invariant; OpenAPI 3.0.3 cannot express conditional required fields.
 	Address *string `json:"address,omitempty"`
 
 	// Enabled Whether the exec proxy is configured to run (cfg.Tools.Exec.EnableProxy).
@@ -2166,7 +2373,7 @@ type LoginResponse struct {
 	// Role RBAC role of the authenticated user.
 	Role LoginResponseRole `json:"role"`
 
-	// Token Bearer token for subsequent API calls. Prefix with "omnipus_" followed by 64 hex characters. Store in sessionStorage (preferred) or localStorage under the key "omnipus_auth_token".
+	// Token Bearer token for subsequent API calls. Prefix "omnipus_" followed by 64 lowercase hex characters (total 72 chars). Store in sessionStorage (preferred) or localStorage under the key "omnipus_auth_token".
 	Token string `json:"token"`
 
 	// Username The authenticated user's login name.
@@ -2249,8 +2456,8 @@ type Message struct {
 		// Size File size in bytes.
 		Size int64 `json:"size"`
 
-		// Type Attachment category (e.g. "file", "image").
-		Type string `json:"type"`
+		// Type Attachment category. Aligned with MediaPart.type enum.
+		Type MessageAttachmentsType `json:"type"`
 	} `json:"attachments,omitempty"`
 
 	// Content Raw markdown/text content of the message.
@@ -2308,6 +2515,9 @@ type Message struct {
 	Type *MessageType `json:"type,omitempty"`
 }
 
+// MessageAttachmentsType Attachment category. Aligned with MediaPart.type enum.
+type MessageAttachmentsType string
+
 // MessageRole Author role. Absent on compaction entries.
 type MessageRole string
 
@@ -2349,7 +2559,7 @@ type OnboardingCompleteResponse struct {
 	// Role RBAC role of the authenticated user.
 	Role OnboardingCompleteResponseRole `json:"role"`
 
-	// Token Bearer token for subsequent API calls. Prefix with "omnipus_" followed by 64 hex characters. Store in sessionStorage (preferred) or localStorage under the key "omnipus_auth_token".
+	// Token Bearer token for subsequent API calls. Prefix "omnipus_" followed by 64 lowercase hex characters (total 72 chars). Store in sessionStorage (preferred) or localStorage under the key "omnipus_auth_token".
 	Token string `json:"token"`
 
 	// Username The authenticated user's login name.
@@ -2361,6 +2571,15 @@ type OnboardingCompleteResponse struct {
 
 // OnboardingCompleteResponseRole RBAC role of the authenticated user.
 type OnboardingCompleteResponseRole string
+
+// OperationResult Generic success/failure envelope for simple admin operations. Used by endpoints that perform an action and return only whether it succeeded.
+type OperationResult struct {
+	// Error Human-readable error message. Present only when success=false.
+	Error *string `json:"error,omitempty"`
+
+	// Success True when the operation succeeded.
+	Success bool `json:"success"`
+}
 
 // PendingRestartEntry A single config key that has been written to disk but not yet applied — the running value diverges from the persisted value. Returned in the array from GET /api/v1/config/pending-restart.
 type PendingRestartEntry struct {
@@ -2410,6 +2629,33 @@ type PromptGuardResponse struct {
 // PromptGuardResponseLevel Current prompt injection detection strictness level.
 type PromptGuardResponseLevel string
 
+// PromptGuardUpdateRequest Request body for PUT /api/v1/security/prompt-guard. Updates the prompt injection detection strictness level.
+type PromptGuardUpdateRequest struct {
+	// Level New prompt injection detection strictness level.
+	Level PromptGuardUpdateRequestLevel `json:"level"`
+}
+
+// PromptGuardUpdateRequestLevel New prompt injection detection strictness level.
+type PromptGuardUpdateRequestLevel string
+
+// PromptGuardUpdateResponse Response from PUT /api/v1/security/prompt-guard. Returns save status and the currently active level.
+type PromptGuardUpdateResponse struct {
+	// AppliedLevel The prompt guard level now active.
+	AppliedLevel PromptGuardUpdateResponseAppliedLevel `json:"applied_level"`
+
+	// RequiresRestart False when hot-reload succeeded. True when hot-reload failed (warning will be present).
+	RequiresRestart bool `json:"requires_restart"`
+
+	// Saved True when the configuration was successfully persisted to disk.
+	Saved bool `json:"saved"`
+
+	// Warning Present when hot-reload failed — config is saved but restart is required.
+	Warning *string `json:"warning,omitempty"`
+}
+
+// PromptGuardUpdateResponseAppliedLevel The prompt guard level now active.
+type PromptGuardUpdateResponseAppliedLevel string
+
 // Provider A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue.
 type Provider struct {
 	// DisplayName Branded display name for UI presentation (e.g. "OpenRouter", "Anthropic"). Falls back to name when absent.
@@ -2437,6 +2683,58 @@ type Provider struct {
 // ProviderStatus "connected" when at least one API key is configured for this provider. "disconnected" when no key is available or on the fallback default entry. "error" when the provider is configured but the upstream returned a non-retryable error.
 type ProviderStatus string
 
+// RateLimitsResponse Response from GET /api/v1/security/rate-limits. Returns the current rate-limit configuration and the live daily LLM cost.
+type RateLimitsResponse struct {
+	// DailyCostCap Configured daily cost cap in USD. 0 means unlimited.
+	DailyCostCap float64 `json:"daily_cost_cap"`
+
+	// DailyCostUsd Live daily LLM cost accumulated so far today.
+	DailyCostUsd float64 `json:"daily_cost_usd"`
+	Enabled      bool    `json:"enabled"`
+
+	// MaxAgentLlmCallsPerHour Maximum LLM calls per hour across all agents. 0 means unlimited.
+	MaxAgentLlmCallsPerHour int64 `json:"max_agent_llm_calls_per_hour"`
+
+	// MaxAgentToolCallsPerMinute Maximum tool calls per minute across all agents. 0 means unlimited.
+	MaxAgentToolCallsPerMinute int64 `json:"max_agent_tool_calls_per_minute"`
+}
+
+// RateLimitsUpdateRequest Request body for PUT /api/v1/security/rate-limits. Partial update — any subset of the three cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded.
+type RateLimitsUpdateRequest struct {
+	// DailyCostCapUsd Daily cost cap in USD. 0 = unlimited.
+	DailyCostCapUsd *float64 `json:"daily_cost_cap_usd,omitempty"`
+
+	// MaxAgentLlmCallsPerHour Maximum LLM calls per hour. 0 = unlimited.
+	MaxAgentLlmCallsPerHour *int64 `json:"max_agent_llm_calls_per_hour,omitempty"`
+
+	// MaxAgentToolCallsPerMinute Maximum tool calls per minute. 0 = unlimited.
+	MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
+}
+
+// RateLimitsUpdateResponse Response from PUT /api/v1/security/rate-limits. Returns save status and the applied configuration.
+type RateLimitsUpdateResponse struct {
+	// Applied The effective configuration after the update. Present only when hot-reload succeeded.
+	Applied *struct {
+		// DailyCostCapUsd Applied daily cost cap in USD.
+		DailyCostCapUsd *float64 `json:"daily_cost_cap_usd,omitempty"`
+
+		// MaxAgentLlmCallsPerHour Applied LLM calls per hour limit.
+		MaxAgentLlmCallsPerHour *int64 `json:"max_agent_llm_calls_per_hour,omitempty"`
+
+		// MaxAgentToolCallsPerMinute Applied tool calls per minute limit.
+		MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
+	} `json:"applied,omitempty"`
+
+	// RequiresRestart Always false for rate limits — they are hot-reloaded. Set to true when hot-reload failed (warning will be present).
+	RequiresRestart bool `json:"requires_restart"`
+
+	// Saved True when the configuration was successfully persisted to disk.
+	Saved bool `json:"saved"`
+
+	// Warning Present when hot-reload failed — config is saved but restart is required.
+	Warning *string `json:"warning,omitempty"`
+}
+
 // RegisterAdminRequest Body for POST /auth/register-admin. Creates the first admin user (fails 409 if one already exists).
 type RegisterAdminRequest struct {
 	// Password Password for the new admin account. Minimum 8 characters.
@@ -2462,6 +2760,21 @@ type RetentionSweepResult struct {
 
 	// SkippedReason Present when the sweep was skipped without removing anything. Currently only "disabled" (retention is configured as disabled).
 	SkippedReason *string `json:"skipped_reason,omitempty"`
+}
+
+// RetentionUpdateResponse Response from PUT /api/v1/security/retention. Returns save status and the currently active retention settings.
+type RetentionUpdateResponse struct {
+	// Disabled When true, retention sweeps are disabled and session logs are kept forever.
+	Disabled bool `json:"disabled"`
+
+	// RequiresRestart Always false — retention config is hot-reloaded.
+	RequiresRestart bool `json:"requires_restart"`
+
+	// Saved True when the configuration was successfully persisted to disk.
+	Saved bool `json:"saved"`
+
+	// SessionDays Number of days to retain session logs. 0 = system default (90 days).
+	SessionDays int `json:"session_days"`
 }
 
 // SandboxConfig Sandbox configuration returned by GET /api/v1/security/sandbox-config and as part of PUT /api/v1/security/sandbox-config responses.
@@ -2625,7 +2938,7 @@ type Session struct {
 	// Model LLM model name used in this session (may be empty for legacy sessions).
 	Model *string `json:"model,omitempty"`
 
-	// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages).
+	// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 	Partitions []string `json:"partitions"`
 
 	// ProjectId Associated project ID (optional, future v0.3 feature).
@@ -2694,7 +3007,7 @@ type SessionDetail struct {
 	// AgentRemoved True when the agent that owned this session has been deleted from the config. Used by the SPA to display a banner informing the user that the original agent no longer exists. Absent (or false) in the common case.
 	AgentRemoved *bool `json:"agent_removed,omitempty"`
 
-	// Messages Ordered list of transcript entries for this session.
+	// Messages Ordered list of transcript entries for this session. Capped at 100000 messages to bound response payload size.
 	Messages []struct {
 		// AgentId ID of the agent that produced this entry (FR-002). Always present.
 		AgentId string `json:"agent_id"`
@@ -2710,8 +3023,8 @@ type SessionDetail struct {
 			// Size File size in bytes.
 			Size int64 `json:"size"`
 
-			// Type Attachment category (e.g. "file", "image").
-			Type string `json:"type"`
+			// Type Attachment category. Aligned with MediaPart.type enum.
+			Type SessionDetailMessagesAttachmentsType `json:"type"`
 		} `json:"attachments,omitempty"`
 
 		// Content Raw markdown/text content of the message.
@@ -2798,7 +3111,7 @@ type SessionDetail struct {
 		// Model LLM model name used in this session (may be empty for legacy sessions).
 		Model *string `json:"model,omitempty"`
 
-		// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages).
+		// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 		Partitions []string `json:"partitions"`
 
 		// ProjectId Associated project ID (optional, future v0.3 feature).
@@ -2845,6 +3158,9 @@ type SessionDetail struct {
 	} `json:"session"`
 }
 
+// SessionDetailMessagesAttachmentsType Attachment category. Aligned with MediaPart.type enum.
+type SessionDetailMessagesAttachmentsType string
+
 // SessionDetailMessagesRole Author role. Absent on compaction entries.
 type SessionDetailMessagesRole string
 
@@ -2887,6 +3203,21 @@ type SessionScopeResponse struct {
 // SessionScopeResponseDmScope Current DM session scoping strategy. Controls how incoming direct messages are routed to session threads. Changes require a gateway restart to take effect.
 type SessionScopeResponseDmScope string
 
+// SessionScopeUpdateResponse Response from PUT /api/v1/security/session-scope. Returns save status and the currently active scope (before restart).
+type SessionScopeUpdateResponse struct {
+	// AppliedDmScope The dm_scope currently active (the value before restart takes effect).
+	AppliedDmScope string `json:"applied_dm_scope"`
+
+	// RequiresRestart Always true — session routing requires a gateway restart to take effect.
+	RequiresRestart bool `json:"requires_restart"`
+
+	// Saved True when the configuration was successfully persisted to disk.
+	Saved bool `json:"saved"`
+
+	// Warning Present when hot-reload failed — config is saved but restart is required.
+	Warning *string `json:"warning,omitempty"`
+}
+
 // Skill A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata.
 type Skill struct {
 	// AgentAssignment ID of the agent this skill is assigned to, when the skill is bound to a specific agent rather than globally available. Absent for globally assigned skills.
@@ -2925,6 +3256,33 @@ type SkillTrustResponse struct {
 
 // SkillTrustResponseLevel Current skill trust level. Controls how unverified community skills are handled.
 type SkillTrustResponseLevel string
+
+// SkillTrustUpdateRequest Request body for PUT /api/v1/security/skill-trust. Updates the skill trust level; controls how unverified community skills are handled.
+type SkillTrustUpdateRequest struct {
+	// Level New skill trust level.
+	Level SkillTrustUpdateRequestLevel `json:"level"`
+}
+
+// SkillTrustUpdateRequestLevel New skill trust level.
+type SkillTrustUpdateRequestLevel string
+
+// SkillTrustUpdateResponse Response from PUT /api/v1/security/skill-trust. Returns save status and the now-active skill trust level.
+type SkillTrustUpdateResponse struct {
+	// AppliedLevel The skill trust level now active.
+	AppliedLevel SkillTrustUpdateResponseAppliedLevel `json:"applied_level"`
+
+	// RequiresRestart Always false — skill trust is hot-reloaded.
+	RequiresRestart bool `json:"requires_restart"`
+
+	// Saved True when the configuration was successfully persisted to disk.
+	Saved bool `json:"saved"`
+
+	// Warning Present when allow_all is selected — warns that hash verification is disabled.
+	Warning *string `json:"warning,omitempty"`
+}
+
+// SkillTrustUpdateResponseAppliedLevel The skill trust level now active.
+type SkillTrustUpdateResponseAppliedLevel string
 
 // StorageStats Storage statistics returned by GET /api/v1/storage/stats. Reports session count, workspace disk usage, memory entry count, and any non-fatal warnings encountered while collecting the stats.
 type StorageStats struct {
@@ -3001,6 +3359,36 @@ type TaskStatus string
 // TaskTriggerType How the task was triggered.
 type TaskTriggerType string
 
+// TaskAcceptedResponse Response from POST /api/v1/tasks/{id}/start (HTTP 202 Accepted). Confirms that the task has been queued for execution.
+type TaskAcceptedResponse struct {
+	// Status Acceptance status. Always "accepted".
+	Status TaskAcceptedResponseStatus `json:"status"`
+
+	// TaskId The ID of the task that was accepted for execution.
+	TaskId string `json:"task_id"`
+}
+
+// TaskAcceptedResponseStatus Acceptance status. Always "accepted".
+type TaskAcceptedResponseStatus string
+
+// ToolApprovalResponse Response from POST /api/v1/tool-approvals/{approval_id}. Confirms that the approval action was processed.
+type ToolApprovalResponse struct {
+	// Action The action that was applied.
+	Action ToolApprovalResponseAction `json:"action"`
+
+	// ApprovalId The approval ID that was resolved.
+	ApprovalId string `json:"approval_id"`
+
+	// Status Result status. Always "ok" when the action was accepted.
+	Status ToolApprovalResponseStatus `json:"status"`
+}
+
+// ToolApprovalResponseAction The action that was applied.
+type ToolApprovalResponseAction string
+
+// ToolApprovalResponseStatus Result status. Always "ok" when the action was accepted.
+type ToolApprovalResponseStatus string
+
 // ToolRegistryEntry A single entry in the central tool registry snapshot returned by GET /api/v1/tools (FR-027).
 type ToolRegistryEntry struct {
 	// Category Tool category prefix derived from the tool name (e.g. "workspace", "browser", "system") or "general".
@@ -3025,19 +3413,22 @@ type ToolRegistryEntryScope string
 // ToolRegistryEntrySource Origin of the tool registration. "builtin" = compiled-in Go tool; "mcp" = MCP server tool.
 type ToolRegistryEntrySource string
 
-// UploadedFile Metadata for a single successfully uploaded file, as returned in the POST /upload response body's "files" array. Callers use the path field to construct the /api/v1/uploads/{session_id}/{filename} download URL.
-type UploadedFile struct {
-	// ContentType Detected MIME type of the uploaded file.
-	ContentType string `json:"content_type"`
+// UploadFilesResponse Response from POST /api/v1/upload (HTTP 201). Returns the list of uploaded files with their metadata.
+type UploadFilesResponse struct {
+	// Files Uploaded file metadata entries.
+	Files []struct {
+		// ContentType Detected MIME type of the uploaded file.
+		ContentType string `json:"content_type"`
 
-	// Name Sanitised filename as stored on disk.
-	Name string `json:"name"`
+		// Name Sanitised filename as stored on disk.
+		Name string `json:"name"`
 
-	// Path Relative path within the uploads directory for constructing a download URL. Format: "uploads/{session_id}/{filename}".
-	Path string `json:"path"`
+		// Path Relative path within the uploads directory for constructing a download URL. Format: "uploads/{session_id}/{filename}".
+		Path string `json:"path"`
 
-	// Size File size in bytes.
-	Size int64 `json:"size"`
+		// Size File size in bytes.
+		Size int64 `json:"size"`
+	} `json:"files"`
 }
 
 // User Represents a gateway user account as returned by GET /users and POST /users. Password hashes and token hashes are NEVER included in responses — only the boolean presence flags are exposed.
@@ -3196,17 +3587,11 @@ type N503ServiceUnavailable = ErrorResponse
 // bearerAuthContextKey is the context key for BearerAuth security scheme
 type bearerAuthContextKey string
 
-// GetAgentTools200JSONResponseBodyToolsConfiguredPolicy defines parameters for GetAgentTools.
-type GetAgentTools200JSONResponseBodyToolsConfiguredPolicy string
-
-// GetAgentTools200JSONResponseBodyToolsEffectivePolicy defines parameters for GetAgentTools.
-type GetAgentTools200JSONResponseBodyToolsEffectivePolicy string
-
-// UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicy defines parameters for UpdateAgentTools.
-type UpdateAgentTools200JSONResponseBodyToolsConfiguredPolicy string
-
-// UpdateAgentTools200JSONResponseBodyToolsEffectivePolicy defines parameters for UpdateAgentTools.
-type UpdateAgentTools200JSONResponseBodyToolsEffectivePolicy string
+// PatchAgentOwnershipJSONBody defines parameters for PatchAgentOwnership.
+type PatchAgentOwnershipJSONBody struct {
+	// OwnerUsername Username of the new owner. Empty string clears ownership (requires X-Confirm-Demote header).
+	OwnerUsername *string `json:"owner_username,omitempty"`
+}
 
 // ConfigureChannelJSONBody defines parameters for ConfigureChannel.
 type ConfigureChannelJSONBody map[string]interface{}
@@ -3232,50 +3617,11 @@ type RestoreBackupJSONBody struct {
 // RestoreBackup200JSONResponseBodyStatus defines parameters for RestoreBackup.
 type RestoreBackup200JSONResponseBodyStatus string
 
-// UpdateAuditLogToggleJSONBody defines parameters for UpdateAuditLogToggle.
-type UpdateAuditLogToggleJSONBody struct {
-	Enabled bool `json:"enabled"`
-}
-
 // UpdateExecAllowlistJSONBody defines parameters for UpdateExecAllowlist.
 type UpdateExecAllowlistJSONBody struct {
 	// AllowedBinaries List of allowed binary name patterns.
 	AllowedBinaries []string `json:"allowed_binaries"`
 }
-
-// UpdatePromptGuardJSONBody defines parameters for UpdatePromptGuard.
-type UpdatePromptGuardJSONBody struct {
-	Level UpdatePromptGuardJSONBodyLevel `json:"level"`
-}
-
-// UpdatePromptGuardJSONBodyLevel defines parameters for UpdatePromptGuard.
-type UpdatePromptGuardJSONBodyLevel string
-
-// UpdatePromptGuard200JSONResponseBodyAppliedLevel defines parameters for UpdatePromptGuard.
-type UpdatePromptGuard200JSONResponseBodyAppliedLevel string
-
-// UpdateRateLimitsJSONBody defines parameters for UpdateRateLimits.
-type UpdateRateLimitsJSONBody struct {
-	// DailyCostCapUsd 0 = unlimited.
-	DailyCostCapUsd *float64 `json:"daily_cost_cap_usd,omitempty"`
-
-	// MaxAgentLlmCallsPerHour 0 = unlimited.
-	MaxAgentLlmCallsPerHour *int64 `json:"max_agent_llm_calls_per_hour,omitempty"`
-
-	// MaxAgentToolCallsPerMinute 0 = unlimited.
-	MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
-}
-
-// UpdateSkillTrustJSONBody defines parameters for UpdateSkillTrust.
-type UpdateSkillTrustJSONBody struct {
-	Level UpdateSkillTrustJSONBodyLevel `json:"level"`
-}
-
-// UpdateSkillTrustJSONBodyLevel defines parameters for UpdateSkillTrust.
-type UpdateSkillTrustJSONBodyLevel string
-
-// UpdateSkillTrust200JSONResponseBodyAppliedLevel defines parameters for UpdateSkillTrust.
-type UpdateSkillTrust200JSONResponseBodyAppliedLevel string
 
 // ListSessionsParams defines parameters for ListSessions.
 type ListSessionsParams struct {
@@ -3349,12 +3695,6 @@ type PostToolApprovalJSONBody struct {
 // PostToolApprovalJSONBodyAction defines parameters for PostToolApproval.
 type PostToolApprovalJSONBodyAction string
 
-// PostToolApproval200JSONResponseBodyAction defines parameters for PostToolApproval.
-type PostToolApproval200JSONResponseBodyAction string
-
-// PostToolApproval200JSONResponseBodyStatus defines parameters for PostToolApproval.
-type PostToolApproval200JSONResponseBodyStatus string
-
 // UploadFilesMultipartBody defines parameters for UploadFiles.
 type UploadFilesMultipartBody struct {
 	// Files One or more files to upload.
@@ -3372,6 +3712,9 @@ type UploadFilesParams struct {
 
 // CreateAgentJSONRequestBody defines body for CreateAgent for application/json ContentType.
 type CreateAgentJSONRequestBody = AgentCreateRequest
+
+// PatchAgentOwnershipJSONRequestBody defines body for PatchAgentOwnership for application/json ContentType.
+type PatchAgentOwnershipJSONRequestBody PatchAgentOwnershipJSONBody
 
 // UpdateAgentJSONRequestBody defines body for UpdateAgent for application/json ContentType.
 type UpdateAgentJSONRequestBody = AgentUpdateRequest
@@ -3407,16 +3750,16 @@ type ProbeProviderJSONRequestBody = ProbeProviderRequest
 type RestoreBackupJSONRequestBody RestoreBackupJSONBody
 
 // UpdateAuditLogToggleJSONRequestBody defines body for UpdateAuditLogToggle for application/json ContentType.
-type UpdateAuditLogToggleJSONRequestBody UpdateAuditLogToggleJSONBody
+type UpdateAuditLogToggleJSONRequestBody = AuditLogToggleRequest
 
 // UpdateExecAllowlistJSONRequestBody defines body for UpdateExecAllowlist for application/json ContentType.
 type UpdateExecAllowlistJSONRequestBody UpdateExecAllowlistJSONBody
 
 // UpdatePromptGuardJSONRequestBody defines body for UpdatePromptGuard for application/json ContentType.
-type UpdatePromptGuardJSONRequestBody UpdatePromptGuardJSONBody
+type UpdatePromptGuardJSONRequestBody = PromptGuardUpdateRequest
 
 // UpdateRateLimitsJSONRequestBody defines body for UpdateRateLimits for application/json ContentType.
-type UpdateRateLimitsJSONRequestBody UpdateRateLimitsJSONBody
+type UpdateRateLimitsJSONRequestBody = RateLimitsUpdateRequest
 
 // UpdateRetentionJSONRequestBody defines body for UpdateRetention for application/json ContentType.
 type UpdateRetentionJSONRequestBody = RetentionConfig
@@ -3428,7 +3771,7 @@ type UpdateSandboxConfigJSONRequestBody = SandboxConfigUpdate
 type UpdateSessionScopeJSONRequestBody = SessionScopeRequest
 
 // UpdateSkillTrustJSONRequestBody defines body for UpdateSkillTrust for application/json ContentType.
-type UpdateSkillTrustJSONRequestBody UpdateSkillTrustJSONBody
+type UpdateSkillTrustJSONRequestBody = SkillTrustUpdateRequest
 
 // UpdateGlobalToolPoliciesJSONRequestBody defines body for UpdateGlobalToolPolicies for application/json ContentType.
 type UpdateGlobalToolPoliciesJSONRequestBody = GlobalToolPolicies

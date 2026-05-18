@@ -19,11 +19,6 @@ properties:
     type: string
     description: >
       Bound address in "host:port" format. Present only when running is true.
+      Backend handler enforces this invariant; OpenAPI 3.0.3 cannot express
+      conditional required fields.
     example: "127.0.0.1:19000"
-if:
-  properties:
-    running:
-      const: true
-then:
-  required:
-    - address

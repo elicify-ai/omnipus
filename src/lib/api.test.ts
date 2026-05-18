@@ -406,7 +406,7 @@ describe('Security API helpers', () => {
   describe('updateSandboxConfig', () => {
     it('PUT /api/v1/security/sandbox-config — sends CSRF and body', async () => {
       // 'permissive' is a valid SandboxMode per contracts/openapi.yaml (off|permissive|enforce)
-      const body = { mode: 'permissive', allowed_paths: ['/tmp'], ssrf: { enabled: true, allow_internal: ['127.0.0.1'] } }
+      const body = { mode: 'permissive' as const, allowed_paths: ['/tmp'], ssrf: { enabled: true, allow_internal: ['127.0.0.1'] } }
       fetchSpy.mockResolvedValueOnce(makeOkResponse(body))
 
       const { updateSandboxConfig } = await import('./api')
@@ -424,6 +424,7 @@ describe('Security API helpers', () => {
       fetchSpy.mockResolvedValueOnce(make400Response('invalid config'))
 
       const { updateSandboxConfig } = await import('./api')
+      // @ts-expect-error — deliberately pass an invalid mode to verify error handling
       await expect(updateSandboxConfig({ mode: 'bad' })).rejects.toThrow('400')
     })
   })
@@ -914,8 +915,10 @@ describe('request() with Zod schema — validation errors', () => {
   })
 
   it('login: returns valid data when schema passes', async () => {
+    // LoginResponse.token enforces exact-72-char `omnipus_<hex64>` format (fix-N invariant tightening).
+    const validToken = 'omnipus_' + 'a'.repeat(64)
     fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ token: 'tok', role: 'admin', username: 'alice' }), {
+      new Response(JSON.stringify({ token: validToken, role: 'admin', username: 'alice' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
@@ -923,7 +926,7 @@ describe('request() with Zod schema — validation errors', () => {
 
     const { login, getApiSchemaErrorCount: count } = await import('./api')
     const result = await login('alice', 'pass')
-    expect(result.token).toBe('tok')
+    expect(result.token).toBe(validToken)
     expect(count()).toBe(0)
   })
 
