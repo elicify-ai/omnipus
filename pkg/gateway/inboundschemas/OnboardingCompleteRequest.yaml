@@ -5,6 +5,7 @@ description: >
 required:
   - provider
   - admin
+additionalProperties: false
 properties:
   provider:
     type: object

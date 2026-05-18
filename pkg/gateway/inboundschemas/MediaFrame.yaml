@@ -23,8 +23,10 @@ properties:
   parts:
     type: array
     minItems: 1
+    maxItems: 32
     items:
       $ref: MediaPart.yaml
     description: >
       Non-empty array of media attachments. The server only emits a media frame
-      when at least one part is present.
+      when at least one part is present. Capped at 32 parts per frame to bound
+      SPA render cost and payload size.

@@ -23,6 +23,7 @@ properties:
   tool:
     type: string
     minLength: 1
+    maxLength: 128
     description: Name of the tool that was called.
   call_id:
     type: string
@@ -30,12 +31,14 @@ properties:
     description: Matches the call_id from the preceding tool_call_start frame.
   result:
     description: >
-      The tool's return value. May be any JSON value (object, array, string,
-      number, boolean). When the result exceeded 1 MiB the value is a
-      TruncatedResult sentinel. When marshaling the result failed the value is
-      a MarshalErrorResult sentinel.
+      The tool's return value. May be any non-sentinel JSON value (object, array,
+      string, number, boolean, or null). null is the documented contract for
+      error-status frames (status="error") — the SPA handles result as unknown
+      and does not crash on null. When the result exceeded 1 MiB the value is a
+      TruncatedResult sentinel. When marshaling the result failed the value is a
+      MarshalErrorResult sentinel.
     oneOf:
-      - {}
+      - type: ["object", "array", "string", "number", "boolean", "null"]
       - $ref: TruncatedResult.yaml
       - $ref: MarshalErrorResult.yaml
   status:

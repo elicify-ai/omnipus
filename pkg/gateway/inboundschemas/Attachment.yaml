@@ -8,7 +8,12 @@ required:
 properties:
   type:
     type: string
-    description: Attachment category (e.g. "file", "image").
+    enum:
+      - image
+      - audio
+      - video
+      - file
+    description: Attachment category. Aligned with MediaPart.type enum.
     example: "file"
   path:
     type: string

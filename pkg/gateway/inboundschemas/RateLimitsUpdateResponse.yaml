@@ -1,0 +1,45 @@
+title: RateLimitsUpdateResponse
+description: >
+  Response from PUT /api/v1/security/rate-limits.
+  Returns save status and the applied configuration.
+type: object
+required:
+  - saved
+  - requires_restart
+properties:
+  saved:
+    type: boolean
+    description: True when the configuration was successfully persisted to disk.
+    example: true
+  requires_restart:
+    type: boolean
+    description: >
+      Always false for rate limits — they are hot-reloaded.
+      Set to true when hot-reload failed (warning will be present).
+    example: false
+  applied:
+    type: object
+    description: The effective configuration after the update. Present only when hot-reload succeeded.
+    properties:
+      daily_cost_cap_usd:
+        type: number
+        format: double
+        minimum: 0
+        description: Applied daily cost cap in USD.
+        example: 5.0
+      max_agent_llm_calls_per_hour:
+        type: integer
+        format: int64
+        minimum: 0
+        description: Applied LLM calls per hour limit.
+        example: 100
+      max_agent_tool_calls_per_minute:
+        type: integer
+        format: int64
+        minimum: 0
+        description: Applied tool calls per minute limit.
+        example: 60
+  warning:
+    type: string
+    description: Present when hot-reload failed — config is saved but restart is required.
+    example: config saved to disk but hot-reload failed; restart the gateway to apply

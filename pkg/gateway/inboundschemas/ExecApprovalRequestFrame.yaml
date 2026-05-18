@@ -20,6 +20,7 @@ properties:
   session_id:
     type: string
     minLength: 1
+    maxLength: 128
     description: Session in which approval is needed.
   id:
     type: string
@@ -28,11 +29,14 @@ properties:
   command:
     type: string
     minLength: 1
+    maxLength: 8192
     description: >
       The tool name or shell command requiring approval (e.g. "workspace.shell").
       Used as the primary display string in the approval modal.
+      Maximum 8192 chars to bound display buffer size.
   tool:
     type: string
+    maxLength: 128
     description: >
       Structured tool name, same value as command. Present for programmatic
       consumers that prefer the field name `tool` over `command`.

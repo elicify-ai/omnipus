@@ -1,0 +1,11 @@
+title: AuditLogToggleRequest
+description: >
+  Request body for PUT /api/v1/security/audit-log. Enables or disables audit logging.
+type: object
+required:
+  - enabled
+properties:
+  enabled:
+    type: boolean
+    description: Whether audit logging should be enabled.
+    example: true

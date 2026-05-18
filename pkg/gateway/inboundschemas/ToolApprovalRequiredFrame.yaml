@@ -38,6 +38,7 @@ properties:
   tool_name:
     type: string
     minLength: 1
+    maxLength: 128
     description: Name of the tool requiring approval.
   args:
     type: object
@@ -62,7 +63,10 @@ properties:
     description: The turn ID that contains the paused tool call.
   expires_in_ms:
     type: integer
+    minimum: 0
+    maximum: 86400000
     description: >
       Relative expiry in milliseconds from receipt. The SPA computes
       expiresAt = Date.now() + expires_in_ms. Using a relative delta avoids
-      clock-skew between server and browser (OBS-004).
+      clock-skew between server and browser (OBS-004). Minimum 0 (no negative
+      expiry); maximum 86400000 (24 hours — prevents absurd expiry windows).

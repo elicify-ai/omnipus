@@ -1,0 +1,19 @@
+title: ActivityEventsResponse
+description: >
+  Response from GET /api/v1/activity when partial data is available with a warning.
+  Returned instead of a plain ActivityEvent array when a session read error occurred.
+type: object
+required:
+  - events
+properties:
+  events:
+    type: array
+    description: Activity events (reverse-chronological, max 50, last 24 hours).
+    items:
+      $ref: ActivityEvent.yaml
+  warning:
+    type: string
+    description: >
+      Present when a non-fatal error occurred while collecting events
+      (e.g. a session store was unreadable). The response is still returned.
+    example: "failed to read session store for agent jim: permission denied"

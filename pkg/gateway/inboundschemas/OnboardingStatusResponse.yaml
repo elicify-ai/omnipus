@@ -1,0 +1,12 @@
+title: OnboardingStatusResponse
+description: >
+  Response from PATCH /api/v1/state when marking onboarding complete.
+  Confirms that onboarding has been completed.
+type: object
+required:
+  - onboarding_complete
+properties:
+  onboarding_complete:
+    type: boolean
+    description: True when onboarding has been successfully marked as complete.
+    example: true

@@ -37,10 +37,12 @@ properties:
     description: The policy rule that triggered the rate limit.
   retry_after_seconds:
     type: number
-    description: Suggested back-off duration in seconds before retrying.
+    minimum: 0
+    description: Suggested back-off duration in seconds before retrying. Minimum 0 (no negative back-off).
   agent_id:
     type: string
     description: Agent that triggered the rate limit.
   tool:
     type: string
+    maxLength: 128
     description: Tool involved in the rate-limited call.

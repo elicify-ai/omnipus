@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
@@ -62,7 +63,17 @@ var inboundValidatorState struct {
 	once     sync.Once
 	compiler *jsonschema.Compiler
 	schemas  map[string]*jsonschema.Schema // keyed by schema name (e.g. "AgentCreateRequest")
-	initErr  error
+}
+
+// _inboundSchemaCompileFailures counts how many times compileInboundSchema
+// returned an error. Exposed via InboundSchemaCompileFailures() for
+// observability (health checks, metrics).
+var _inboundSchemaCompileFailures atomic.Uint64
+
+// InboundSchemaCompileFailures returns the cumulative count of schema compile
+// errors since process start.
+func InboundSchemaCompileFailures() uint64 {
+	return _inboundSchemaCompileFailures.Load()
 }
 
 // inboundSchemaLoader is a jsonschema URLLoader that reads embedded YAML schema
@@ -90,9 +101,8 @@ func (inboundSchemaLoader) Load(rawURL string) (any, error) {
 }
 
 // initInboundValidator initializes the singleton schema compiler from the
-// embedded YAML schema files. Called once at first use (lazy init so gateway
-// startup is not delayed when validate_inbound is false).
-func initInboundValidator() (*jsonschema.Compiler, error) {
+// embedded YAML schema files. Called once at first use.
+func initInboundValidator() *jsonschema.Compiler {
 	inboundValidatorState.once.Do(func() {
 		c := jsonschema.NewCompiler()
 		c.UseLoader(jsonschema.SchemeURLLoader{
@@ -100,7 +110,7 @@ func initInboundValidator() (*jsonschema.Compiler, error) {
 		})
 		inboundValidatorState.compiler = c
 	})
-	return inboundValidatorState.compiler, inboundValidatorState.initErr
+	return inboundValidatorState.compiler
 }
 
 // compileInboundSchema returns the compiled jsonschema.Schema for the named
@@ -117,16 +127,14 @@ func compileInboundSchema(name string) (*jsonschema.Schema, error) {
 		return s, nil
 	}
 
-	c, err := initInboundValidator()
-	if err != nil {
-		return nil, fmt.Errorf("inbound validator: init failed: %w", err)
-	}
+	c := initInboundValidator()
 
 	// The loader accepts URLs of the form file:///Filename.yaml (no real path —
 	// the loader strips leading slashes and reads from the embed.FS directly).
 	url := "file:///" + name + ".yaml"
 	s, err := c.Compile(url)
 	if err != nil {
+		_inboundSchemaCompileFailures.Add(1)
 		return nil, fmt.Errorf("inbound validator: compile schema %q: %w", name, err)
 	}
 	inboundValidatorState.schemas[name] = s
@@ -134,30 +142,33 @@ func compileInboundSchema(name string) (*jsonschema.Schema, error) {
 }
 
 // validateBodyAgainstSchema validates rawJSON against the named component schema.
-// Returns a human-readable error string on failure, or "" on success.
-func validateBodyAgainstSchema(schemaName string, rawJSON []byte) string {
+// Returns ("", false) on success.
+// Returns (msg, false) for client-side validation failures (caller responds 400).
+// Returns (msg, true) for server-side schema compile failures (caller responds 500).
+func validateBodyAgainstSchema(schemaName string, rawJSON []byte) (string, bool) {
 	s, err := compileInboundSchema(schemaName)
 	if err != nil {
-		// Schema compilation failure is a server-side misconfiguration — log and
-		// skip validation rather than breaking all requests.
-		slog.Warn("inbound validation: schema compile error — skipping validation",
-			"schema", schemaName, "error", err)
-		return ""
+		// Schema compile failure is a server-side misconfiguration — fail closed.
+		// Do NOT silently pass validation; that would provide no protection at all.
+		slog.Error("inbound validation: schema compile error",
+			"schema", schemaName, "error", err,
+			"compile_failures_total", _inboundSchemaCompileFailures.Load())
+		return "inbound schema unavailable", true
 	}
 
 	var doc any
 	if err := json.Unmarshal(rawJSON, &doc); err != nil {
 		// If JSON is invalid we still want to report it; the subsequent
 		// json.Decoder call will produce the same error with a better message.
-		return fmt.Sprintf("invalid JSON: %v", err)
+		return fmt.Sprintf("invalid JSON: %v", err), false
 	}
 
 	if err := s.Validate(doc); err != nil {
 		// Extract a concise first-error message. The error from jsonschema/v6
 		// is a *jsonschema.ValidationError with a tree of failures.
-		return formatSchemaError(err)
+		return formatSchemaError(err), false
 	}
-	return ""
+	return "", false
 }
 
 // formatSchemaError converts a jsonschema/v6 validation error to a short
@@ -210,8 +221,12 @@ func decodeAndValidate(w http.ResponseWriter, r *http.Request, schemaName string
 		return false
 	}
 
-	if errMsg := validateBodyAgainstSchema(schemaName, raw); errMsg != "" {
-		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("request body does not match schema %s: %s", schemaName, errMsg))
+	if errMsg, serverErr := validateBodyAgainstSchema(schemaName, raw); errMsg != "" {
+		if serverErr {
+			jsonErr(w, http.StatusInternalServerError, "inbound schema unavailable")
+		} else {
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("request body does not match schema %s: %s", schemaName, errMsg))
+		}
 		return false
 	}
 
@@ -220,4 +235,30 @@ func decodeAndValidate(w http.ResponseWriter, r *http.Request, schemaName string
 		return false
 	}
 	return true
+}
+
+// PreCompileAllInboundSchemas compiles every *.yaml file in the embedded
+// inboundschemas.FS and caches the result. It is called during gateway boot,
+// before the HTTP listener starts, so any schema-compile error aborts startup
+// with a clear message naming the failing file rather than surfacing silently
+// at first request.
+//
+// Returns the first compile error encountered, or nil if all schemas compile
+// successfully.
+func PreCompileAllInboundSchemas() error {
+	entries, err := inboundschemas.FS.ReadDir(".")
+	if err != nil {
+		return fmt.Errorf("inbound schema pre-compile: list embedded files: %w", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		// Strip the .yaml extension to get the schema name used as the cache key.
+		name := strings.TrimSuffix(e.Name(), ".yaml")
+		if _, err := compileInboundSchema(name); err != nil {
+			return fmt.Errorf("inbound schema pre-compile: schema %q: %w", e.Name(), err)
+		}
+	}
+	return nil
 }

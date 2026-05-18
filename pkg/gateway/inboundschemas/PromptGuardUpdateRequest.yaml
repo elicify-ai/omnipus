@@ -1,0 +1,16 @@
+title: PromptGuardUpdateRequest
+description: >
+  Request body for PUT /api/v1/security/prompt-guard.
+  Updates the prompt injection detection strictness level.
+type: object
+required:
+  - level
+properties:
+  level:
+    type: string
+    enum:
+      - low
+      - medium
+      - high
+    description: New prompt injection detection strictness level.
+    example: medium

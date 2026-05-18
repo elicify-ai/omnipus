@@ -8,6 +8,7 @@ required:
   - transport
   - enabled
   - description
+additionalProperties: false
 properties:
   id:
     type: string

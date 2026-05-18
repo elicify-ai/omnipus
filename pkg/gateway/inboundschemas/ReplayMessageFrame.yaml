@@ -23,10 +23,15 @@ properties:
     description: Message text.
   role:
     type: string
+    enum:
+      - user
+      - assistant
+      - system
+      - turn_cancelled
     description: >
-      Turn role. Typical values: "user", "assistant", "system".
-      The SPA also receives "turn_cancelled" — a metadata-only role that is
-      skipped (no bubble rendered). Role is normalised to "assistant" if empty.
+      Turn role. The SPA renders bubbles for user/assistant/system and
+      skips turn_cancelled (metadata-only). Role is normalised to "assistant"
+      if empty by the server before emitting.
   id:
     type: string
     description: >

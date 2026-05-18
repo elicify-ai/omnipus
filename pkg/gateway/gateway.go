@@ -593,6 +593,14 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			"skills_available": skillsInfo["available"],
 		})
 
+	// Pre-compile all embedded inbound validation schemas before the HTTP listener
+	// starts. Any schema-compile failure aborts boot immediately with a clear error
+	// rather than silently degrading to no-validation at first request.
+	if err := PreCompileAllInboundSchemas(); err != nil {
+		return fmt.Errorf("gateway: inbound schema pre-compile failed: %w", err)
+	}
+	slog.Info("gateway: inbound schemas pre-compiled successfully")
+
 	// M16 (FR-001/FR-002): pre-instantiate central registries.
 	// BuiltinRegistry is populated here with nil deps (for name/description metadata only).
 	// After sysAgentDeps is wired (below), the registry is re-populated with live deps.

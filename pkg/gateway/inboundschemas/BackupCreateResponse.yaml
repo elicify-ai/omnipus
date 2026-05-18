@@ -1,0 +1,25 @@
+title: BackupCreateResponse
+description: >
+  Response from POST /api/v1/backup.
+  Returns the path, size, and creation time of the new backup archive.
+type: object
+required:
+  - path
+  - size_bytes
+  - created_at
+properties:
+  path:
+    type: string
+    description: Absolute path to the backup file.
+    example: /home/user/.omnipus/backups/backup-20260516T103000Z.tar.gz
+  size_bytes:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Size of the backup file in bytes.
+    example: 1048576
+  created_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp when the backup was created.
+    example: '2026-05-16T10:30:00Z'

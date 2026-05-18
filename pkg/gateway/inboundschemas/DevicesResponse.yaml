@@ -6,14 +6,17 @@ type: object
 required:
   - pending
   - paired
+additionalProperties: false
 properties:
   pending:
     type: array
     items:
       $ref: './DevicePending.yaml'
-    description: Pairing requests awaiting approval.
+    maxItems: 100
+    description: Pairing requests awaiting approval. Capped at 100.
   paired:
     type: array
     items:
       $ref: './DevicePaired.yaml'
-    description: Devices that have been successfully paired.
+    maxItems: 100
+    description: Devices that have been successfully paired. Capped at 100.

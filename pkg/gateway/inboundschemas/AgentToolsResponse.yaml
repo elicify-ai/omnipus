@@ -1,0 +1,26 @@
+title: AgentToolsResponse
+description: >
+  Response from GET /api/v1/agents/{id}/tools and PUT /api/v1/agents/{id}/tools.
+  Returns the agent's tool policy configuration plus the effective per-tool policy list.
+type: object
+required:
+  - config
+  - tools
+properties:
+  config:
+    $ref: AgentToolsCfg.yaml
+  tools:
+    type: array
+    description: Per-tool effective policy entries.
+    items:
+      $ref: AgentToolEntry.yaml
+  agent_type:
+    type: string
+    description: >
+      Agent classification: "core", "system", or "custom".
+      Informs the UI whether policy editing is allowed.
+    enum:
+      - core
+      - system
+      - custom
+    example: custom

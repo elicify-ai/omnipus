@@ -1,0 +1,13 @@
+title: UploadFilesResponse
+description: >
+  Response from POST /api/v1/upload (HTTP 201).
+  Returns the list of uploaded files with their metadata.
+type: object
+required:
+  - files
+properties:
+  files:
+    type: array
+    description: Uploaded file metadata entries.
+    items:
+      $ref: UploadedFile.yaml

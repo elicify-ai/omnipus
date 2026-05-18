@@ -82,9 +82,11 @@ properties:
     type: array
     items:
       type: string
+    maxItems: 3650
     description: >
       List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]).
       Always present as an array (may be empty for new sessions with no messages).
+      One partition per day, so 3650 covers ~10 years of daily partitions.
     example:
       - "2026-05-16.jsonl"
   last_compaction_summary:

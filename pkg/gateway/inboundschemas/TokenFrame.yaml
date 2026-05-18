@@ -16,7 +16,9 @@ properties:
   session_id:
     type: string
     minLength: 1
+    maxLength: 128
     description: Session this token belongs to.
   content:
     type: string
-    description: Partial LLM response text to append.
+    maxLength: 65536
+    description: Partial LLM response text to append. Maximum 64 KiB per token chunk.

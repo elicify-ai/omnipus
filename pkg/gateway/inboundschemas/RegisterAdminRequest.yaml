@@ -3,6 +3,7 @@ description: Body for POST /auth/register-admin. Creates the first admin user (f
 required:
   - username
   - password
+additionalProperties: false
 properties:
   username:
     type: string

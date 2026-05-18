@@ -31,9 +31,11 @@ properties:
     description: The spawn ToolCall.ID that triggered this sub-turn.
   task_label:
     type: string
+    maxLength: 100
     description: >
       Human-readable label for the subagent task, extracted from the spawn
-      call's "label" or "task" parameter (truncated to 60 chars).
+      call's "label" or "task" parameter (truncated to 60 chars by the server;
+      schema allows up to 100 to accommodate edge cases).
   agent_id:
     type: string
     description: Agent running the sub-turn.

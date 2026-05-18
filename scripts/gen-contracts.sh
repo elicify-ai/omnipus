@@ -71,7 +71,16 @@ bash scripts/_gen-go.sh
 # ---------------------------------------------------------------------------
 # Step 4: Format generated Go files (deterministic gofmt)
 # ---------------------------------------------------------------------------
-echo "[gen-contracts] Step 4/4: Formatting generated Go files..."
+echo "[gen-contracts] Step 4/5: Formatting generated Go files..."
 gofmt -w pkg/api/generated/
+
+# ---------------------------------------------------------------------------
+# Step 5: Sync inboundschemas — copy canonical schemas to the embed directory
+# so gateway boot-time validation always reflects the current contract.
+# ---------------------------------------------------------------------------
+echo "[gen-contracts] Step 5/5: Syncing inboundschemas from contracts/components/schemas/..."
+rm -f pkg/gateway/inboundschemas/*.yaml
+cp contracts/components/schemas/*.yaml pkg/gateway/inboundschemas/
+echo "[gen-contracts] Synced $(ls pkg/gateway/inboundschemas/*.yaml | wc -l | tr -d ' ') schema files."
 
 echo "[gen-contracts] Done. All contract artifacts are up to date."
