@@ -443,19 +443,19 @@ func (e McpServerStatus) Valid() bool {
 
 // Defines values for McpServerTransport.
 const (
-	McpServerTransportSse       McpServerTransport = "sse"
-	McpServerTransportStdio     McpServerTransport = "stdio"
-	McpServerTransportWebsocket McpServerTransport = "websocket"
+	McpServerTransportHttp  McpServerTransport = "http"
+	McpServerTransportSse   McpServerTransport = "sse"
+	McpServerTransportStdio McpServerTransport = "stdio"
 )
 
 // Valid indicates whether the value is a known member of the McpServerTransport enum.
 func (e McpServerTransport) Valid() bool {
 	switch e {
+	case McpServerTransportHttp:
+		return true
 	case McpServerTransportSse:
 		return true
 	case McpServerTransportStdio:
-		return true
-	case McpServerTransportWebsocket:
 		return true
 	default:
 		return false
@@ -464,19 +464,19 @@ func (e McpServerTransport) Valid() bool {
 
 // Defines values for McpServerCreateTransport.
 const (
-	Sse       McpServerCreateTransport = "sse"
-	Stdio     McpServerCreateTransport = "stdio"
-	Websocket McpServerCreateTransport = "websocket"
+	Http  McpServerCreateTransport = "http"
+	Sse   McpServerCreateTransport = "sse"
+	Stdio McpServerCreateTransport = "stdio"
 )
 
 // Valid indicates whether the value is a known member of the McpServerCreateTransport enum.
 func (e McpServerCreateTransport) Valid() bool {
 	switch e {
+	case Http:
+		return true
 	case Sse:
 		return true
 	case Stdio:
-		return true
-	case Websocket:
 		return true
 	default:
 		return false
@@ -1914,8 +1914,8 @@ type AppState struct {
 	// LastDoctorRun RFC3339 timestamp of the last health-check run. Absent if never run.
 	LastDoctorRun *time.Time `json:"last_doctor_run,omitempty"`
 
-	// LastDoctorScore Score from the last health-check run (0–100). Absent if never run.
-	LastDoctorScore *float64 `json:"last_doctor_score,omitempty"`
+	// LastDoctorScore Score from the last health-check run (0–100, integer). Absent if never run.
+	LastDoctorScore *int `json:"last_doctor_score,omitempty"`
 
 	// OnboardingComplete Whether the first-run onboarding wizard has been completed.
 	OnboardingComplete bool `json:"onboarding_complete"`
@@ -2202,14 +2202,14 @@ type McpServer struct {
 	// Tools List of tool names exposed by this server. Absent when tool_count is 0 or when the server has not yet enumerated its tools.
 	Tools *[]string `json:"tools,omitempty"`
 
-	// Transport Transport mechanism used by this MCP server.
+	// Transport Transport mechanism used by this MCP server. "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers.
 	Transport McpServerTransport `json:"transport"`
 }
 
 // McpServerStatus Current connection status of the MCP server.
 type McpServerStatus string
 
-// McpServerTransport Transport mechanism used by this MCP server.
+// McpServerTransport Transport mechanism used by this MCP server. "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers.
 type McpServerTransport string
 
 // McpServerCreate Request body for POST /mcp-servers. Adds a new MCP server to the gateway config.
@@ -2223,11 +2223,11 @@ type McpServerCreate struct {
 	// Name Human-readable server name.
 	Name string `json:"name"`
 
-	// Transport Transport mechanism to use for this MCP server.
+	// Transport Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).
 	Transport McpServerCreateTransport `json:"transport"`
 }
 
-// McpServerCreateTransport Transport mechanism to use for this MCP server.
+// McpServerCreateTransport Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).
 type McpServerCreateTransport string
 
 // MeInfo Response from GET /api/v1/me. Returns the authenticated user's role, used for RBAC gating in the SPA.

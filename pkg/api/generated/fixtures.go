@@ -1065,7 +1065,7 @@ func FixtureMcpServer_NilToolsAllowed() McpServer {
 	return McpServer{
 		Id:        "mcp-no-tools",
 		Name:      "Pending Enumeration",
-		Transport: McpServerTransport("websocket"),
+		Transport: McpServerTransport("http"),
 		Status:    McpServerStatus("connected"),
 		ToolCount: 0,
 		Tools:     nil, // valid: tools is optional
@@ -1106,7 +1106,7 @@ func FixtureMcpServerCreate_Edge() McpServerCreate {
 
 func FixtureAppState_Populated() AppState {
 	lastRun := time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC)
-	score := float64(85.0)
+	score := 85
 	godModeAvail := false
 	godModeOptedIn := false
 	devModeBypass := false

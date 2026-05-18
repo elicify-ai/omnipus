@@ -22,8 +22,10 @@ properties:
     enum:
       - stdio
       - sse
-      - websocket
-    description: Transport mechanism used by this MCP server.
+      - http
+    description: >
+      Transport mechanism used by this MCP server. "stdio" for local
+      process-based servers, "sse" or "http" for remote HTTP-based servers.
     example: "stdio"
   status:
     type: string

@@ -16,10 +16,11 @@ properties:
     description: RFC3339 timestamp of the last health-check run. Absent if never run.
     example: "2026-05-16T10:00:00Z"
   last_doctor_score:
-    type: number
-    format: double
-    description: Score from the last health-check run (0–100). Absent if never run.
-    example: 85.0
+    type: integer
+    minimum: 0
+    maximum: 100
+    description: Score from the last health-check run (0–100, integer). Absent if never run.
+    example: 85
   god_mode_available:
     type: boolean
     description: >

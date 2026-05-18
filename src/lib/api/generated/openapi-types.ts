@@ -3362,11 +3362,11 @@ export interface components {
              */
             name: string;
             /**
-             * @description Transport mechanism used by this MCP server.
+             * @description Transport mechanism used by this MCP server. "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers.
              * @example stdio
              * @enum {string}
              */
-            transport: "stdio" | "sse" | "websocket";
+            transport: "stdio" | "sse" | "http";
             /**
              * @description Current connection status of the MCP server.
              * @example connected
@@ -3411,11 +3411,11 @@ export interface components {
              */
             args?: string[];
             /**
-             * @description Transport mechanism to use for this MCP server.
+             * @description Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).
              * @example stdio
              * @enum {string}
              */
-            transport: "stdio" | "sse" | "websocket";
+            transport: "stdio" | "sse" | "http";
         };
         /**
          * AppState
@@ -3434,8 +3434,7 @@ export interface components {
              */
             last_doctor_run?: string;
             /**
-             * Format: double
-             * @description Score from the last health-check run (0–100). Absent if never run.
+             * @description Score from the last health-check run (0–100, integer). Absent if never run.
              * @example 85
              */
             last_doctor_score?: number;

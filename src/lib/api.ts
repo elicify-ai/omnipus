@@ -21,75 +21,21 @@ import { z } from 'zod'
 // ── Generated Zod schemas (REST edge validation) ────────────────────────────
 //
 // These are the generated schemas from contracts/openapi.yaml. They are used
-// to validate API responses at the SPA edge (hard-constraint #8). Only named
-// schemas that match the SPA-internal types are imported here — call sites
-// that use local SPA-specific transformation types (Session, Config, Provider,
-// AppState, etc.) are listed in the GAP REPORT below.
+// to validate API responses at the SPA edge (hard-constraint #8). Callers
+// that need a SPA-internal transform type before passing to consumers are
+// validated against the wire schema first, then transformed.
 //
-// GAP REPORT — endpoints without matching generated schema (no schema passed):
-//   GET /sessions           — RawSession→Session transform; Session schema differs (stats nesting)
-//   GET /sessions/:id/messages — local Message type differs (params vs parameters, status enums)
-//   GET /sessions/:id       — local SessionDetail transform; same as above
-//   POST /sessions          — local Session type
-//   PUT /sessions/:id       — local Session type
-//   GET /config             — local Config type with custom transform (rawToFrontendConfig)
-//   PUT /config             — local Config type
-//   POST /config/gateway/rotate-token — local {token:string} inline type
-//   GET /providers          — local Provider type (not in generated schema)
-//   PUT /providers/:id      — local Provider type
-//   POST /providers/:id/test — local {success,error?} inline type
-//   GET /tasks              — local Task type (not in generated schema)
-//   GET /tasks/:id/subtasks — local Task type
-//   POST /tasks             — local Task type
-//   PUT /tasks/:id          — local Task type
-//   POST /tasks/:id/start   — void
-//   DELETE /tasks/:id       — void
-//   GET /status             — local GatewayStatus type (not in generated schema)
-//   GET /tools              — RegistryTool (not in generated schema; uses ToolRegistryEntry)
-//   GET /channels           — local Channel type; schema ChannelEntry has extra `description` field
-//   PUT /channels/:id/enable — {id,enabled} inline (schema returns ChannelEntry)
-//   PUT /channels/:id/disable — {id,enabled} inline
-//   GET /channels/:id       — Record<string,unknown> passthrough
-//   PUT /channels/:id/configure — void/Record passthrough
-//   POST /channels/:id/test — {success,message} inline (matches schema exactly → wired)
-//   GET /skills             — local Skill type (not in generated schema)
-//   DELETE /skills/:name    — void
-//   GET /mcp-servers        — McpServer (generated, contract-first #8)
-//   POST /mcp-servers       — McpServer (generated, contract-first #8)
-//   DELETE /mcp-servers/:id — void
-//   GET /mcp-servers/:id/tools — string[] inline
-//   GET /storage/stats      — local StorageStats type (not in generated schema)
-//   GET /state              — local AppState type (not in generated schema)
-//   PATCH /state            — void
-//   GET /auth/validate      — local ValidateTokenResponse (matches inline schema → wired)
-//   POST /doctor            — local DoctorResult type (not in generated schema)
-//   GET /doctor             — local DoctorResult|null (not in generated schema)
-//   GET /activity           — local ActivityEvent type (not in generated schema)
-//   GET /credentials        — string[] inline
-//   POST /credentials       — {key:string} inline
-//   DELETE /credentials/:key — {status,key} inline
-//   GET /devices            — local DevicesResponse type (not in generated schema)
-//   POST /backup            — {filename:string} inline (schema returns {path,size_bytes,created_at})
-//   GET /backups            — local BackupEntry type; schema has path not filename → different
-//   POST /restore           — void
-//   DELETE /sessions/all    — void
-//   POST /auth/change-password — {success:boolean} inline (matches schema → wired)
-//   GET /me                 — local MeInfo type (not in generated schema)
-//   PUT /user-context       — void
-//   GET /user-context       — {content:string} inline
-//   PUT /security/audit-log — local AuditLogUpdateResponse (inline schema → wired)
-//   PUT /security/skill-trust — local SkillTrustUpdateResponse (inline schema → wired)
-//   PUT /security/prompt-guard — local PromptGuardUpdateResponse (inline schema → wired)
-//   GET /security/rate-limits — local RateLimitsResponse (inline schema → wired)
-//   PUT /security/rate-limits — local RateLimitsResponse (inline schema → wired)
-//   PUT /security/session-scope — local SessionScopeUpdateResponse (inline schema → wired)
-//   GET /security/retention — RetentionConfig (partial schema → wired with .partial())
-//   PUT /security/retention — local RetentionUpdateResponse (inline schema → wired)
-//   POST /security/retention/sweep — RetentionSweepResult (wired)
-//   GET /agents/:id/tools   — inline schema → wired
-//   PUT /agents/:id/tools   — inline schema → wired
-//   POST /tool-approvals/:id — void
-//   GET /about              — AboutResponse schema has fields that differ (uptime vs uptime_seconds) → partial match, wired with passthrough
+// GAP REPORT — endpoints that genuinely cannot use a generated schema:
+//   GET /config / PUT /config — Config is a deep SPA transform (rawToFrontendConfig /
+//     frontendToRawConfig); no named schema component matches the wire shape exactly.
+//     Wire shape is an untyped JSON object; the transform is the contract.
+//   GET /channels/:id       — Record<string,unknown> passthrough; schema varies per channel.
+//   PUT /channels/:id/configure — void; channel-specific body; no generated schema.
+//   GET /credentials        — wire returns string[]; SPA shape is CredentialKey[]; the
+//     SPA-internal shape is a SPA-only concern, not a generated schema component.
+//   GET /user-context       — {content:string} is an inline schema not promoted to a component.
+//   GET /about              — AboutInfo is a looser SPA-compatibility subset of AboutResponse
+//     (different field names: uptime_seconds vs uptime); cannot validate without false negatives.
 
 import {
   LoginResponse as LoginResponseSchema,
@@ -123,6 +69,19 @@ import {
   BackupEntry as BackupEntrySchema,
   StorageStats as StorageStatsSchema,
   MeInfo as MeInfoSchema,
+  // Problem 3 — newly wired schemas:
+  Provider as ProviderSchema,
+  Task as TaskSchema,
+  GatewayStatus as GatewayStatusSchema,
+  ToolRegistryEntry as ToolRegistryEntrySchema,
+  ChannelEntry as ChannelEntrySchema,
+  Skill as SkillSchema,
+  McpServer as McpServerSchema,
+  ActivityEvent as ActivityEventSchema,
+  // Problem 1 — wire-shape schemas used for raw-to-SPA transform validation:
+  Message as WireMessageSchema,
+  Session as WireSessionSchema,
+  SessionDetail as WireSessionDetailSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -681,17 +640,111 @@ export interface RunInWorkspaceResult { // not-wire-format: parsed from ToolCall
   port: number
 }
 
+// ── Wire ToolCall / Message adapters (Problem 1 fix) ─────────────────────────
+//
+// The wire ToolCall schema uses `parameters` (matching the Go struct tag
+// `json:"parameters,omitempty"`). The SPA-internal ToolCall uses `params`.
+// These adapter types are NOT new wire-format types — they are aliases over
+// the generated Message/ToolCall wire shape used only in the transform layer.
+// They carry a `// not-wire-format` marker as adapter aliases per CLAUDE.md #8.
+
+interface RawToolCall { // not-wire-format: adapter alias over the generated ToolCall wire schema. Used only in rawToToolCall() to rename `parameters`→`params` before the SPA consumer sees it. The wire name is `parameters` (Go json tag); the SPA-internal name is `params` (ToolCall interface above). Never sent to or received as a standalone type from the gateway.
+  id: string
+  tool: string
+  status: 'success' | 'error' | 'pending' | 'denied' | 'running' | 'cancelled'
+  duration_ms?: number
+  parameters?: Record<string, unknown>
+  result?: unknown
+  parent_tool_call_id?: string
+}
+
+interface RawMessage { // not-wire-format: adapter alias over the generated Message wire schema. Used only in rawToMessage() to delegate ToolCall transformation. The wire `status` enum values differ from the SPA's ('ok'|'error'|'interrupted' vs 'streaming'|'done'|'error'|'interrupted'). Never sent to or received as a standalone type from the gateway.
+  id: string
+  type?: 'message' | 'compaction' | 'system'
+  role?: 'user' | 'assistant' | 'system'
+  content?: string
+  summary?: string
+  timestamp: string
+  tokens?: number
+  cost?: number
+  status?: 'ok' | 'error' | 'interrupted'
+  attachments?: Attachment[]
+  tool_calls?: RawToolCall[]
+  agent_id: string
+  messages_compacted?: number
+}
+
+function rawToToolCall(raw: RawToolCall): ToolCall {
+  // Map wire status → SPA status.
+  // Wire values: 'success' | 'error' | 'pending' | 'denied' | 'running' | 'cancelled'
+  // SPA values:  'running' | 'success' | 'error' | 'cancelled'
+  //
+  // 'pending' → 'running': the SPA uses 'running' for in-progress calls; in a
+  //   completed transcript 'pending' should never occur, but we map it safely.
+  // 'denied'  → 'cancelled': the tool call was rejected by policy — the SPA
+  //   has no 'denied' state, so 'cancelled' is the closest accurate status.
+  let status: ToolCall['status']
+  switch (raw.status) {
+    case 'success':
+    case 'error':
+    case 'running':
+    case 'cancelled':
+      status = raw.status
+      break
+    case 'denied':
+      status = 'cancelled'
+      break
+    case 'pending':
+    default:
+      status = 'running'
+      break
+  }
+  return {
+    id: raw.id,
+    tool: raw.tool,
+    status,
+    params: raw.parameters ?? {},
+    result: raw.result,
+    duration_ms: raw.duration_ms,
+    error: undefined,
+  }
+}
+
+function rawToMessage(raw: RawMessage): Message {
+  return {
+    id: raw.id,
+    session_id: undefined,
+    role: raw.role ?? 'assistant',
+    content: raw.content ?? raw.summary ?? '',
+    timestamp: raw.timestamp,
+    tokens: raw.tokens,
+    cost: raw.cost,
+    // Wire status 'ok' maps to SPA 'done'. 'error' and 'interrupted' are direct.
+    status: raw.status === 'ok' ? 'done' : raw.status,
+    tool_calls: raw.tool_calls?.map(rawToToolCall),
+  }
+}
+
 export async function fetchSessions(agentId?: string, type?: Session['type']): Promise<Session[]> {
   const params: Record<string, string> = {}
   if (agentId) params.agent_id = agentId
   if (type) params.type = type
   const qs = Object.keys(params).length > 0 ? '?' + new URLSearchParams(params).toString() : ''
-  const raw = await request<RawSession[]>(`/sessions${qs}`)
+  // Validate against the generated wire Session schema (array variant); the
+  // rawToSession transform runs after validation to flatten the nested stats.
+  const raw = await request<RawSession[]>(`/sessions${qs}`, undefined, z.array(WireSessionSchema) as ZodType<RawSession[]>)
   return raw.map(rawToSession)
 }
 
-export function fetchSessionMessages(sessionId: string): Promise<Message[]> {
-  return request<Message[]>(`/sessions/${encodeURIComponent(sessionId)}/messages`)
+export async function fetchSessionMessages(sessionId: string): Promise<Message[]> {
+  // Validate with the wire Message schema first, then transform each message
+  // so that tool_calls[].parameters is renamed to tool_calls[].params.
+  const raw = await request<RawMessage[]>(
+    `/sessions/${encodeURIComponent(sessionId)}/messages`,
+    undefined,
+    z.array(WireMessageSchema) as ZodType<RawMessage[]>,
+  )
+  return raw.map(rawToMessage)
 }
 
 export async function installSkillFromFile(content: string, filename: string): Promise<void> {
@@ -708,21 +761,28 @@ export interface SessionDetail { // not-wire-format: SPA-internal detail type. U
 }
 
 export async function fetchSessionDetail(sessionId: string): Promise<SessionDetail> {
-  const raw = await request<{ session: RawSession; messages: Message[]; agent_removed?: boolean }>(
+  // Validate with the wire SessionDetail schema (session + messages array),
+  // then transform both the nested session stats and each message's tool_calls.
+  type RawSessionDetail = { session: RawSession; messages: RawMessage[]; agent_removed?: boolean }
+  const raw = await request<RawSessionDetail>(
     `/sessions/${encodeURIComponent(sessionId)}`,
+    undefined,
+    WireSessionDetailSchema as ZodType<RawSessionDetail>,
   )
   return {
     session: rawToSession(raw.session),
-    messages: raw.messages,
+    messages: raw.messages.map(rawToMessage),
     agent_removed: raw.agent_removed,
   }
 }
 
-export function createSession(agentId: string): Promise<Session> {
-  return request<Session>('/sessions', {
+export async function createSession(agentId: string): Promise<Session> {
+  // Wire returns the wire Session shape (nested stats); transform to SPA Session.
+  const raw = await request<RawSession>('/sessions', {
     method: 'POST',
     body: JSON.stringify({ agent_id: agentId }),
-  })
+  }, WireSessionSchema as ZodType<RawSession>)
+  return rawToSession(raw)
 }
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -839,8 +899,65 @@ export async function fetchConfig(): Promise<Config> {
   return rawToFrontendConfig(raw)
 }
 
-export function updateConfig(data: Partial<Config>): Promise<Config> {
-  return request<Config>('/config', { method: 'PUT', body: JSON.stringify(data) })
+// frontendToRawConfig is the inverse of rawToFrontendConfig. It serialises the
+// SPA-shaped Config back to the wire shape the backend expects on PUT /config.
+// The gateway's config.json uses `gateway.host` (not `bind_address`), and the
+// session-retention field lives at `storage.retention.session_days` (not
+// `data.session_retention_days`). Sending the SPA shape directly causes silent
+// data loss — the backend ignores unknown keys.
+//
+// This function only serialises fields the PUT /config handler accepts. It
+// intentionally omits `gateway.dev_mode_bypass` (blocked server-side) and
+// `security.prompt_injection_level` (owned by PUT /security/prompt-guard).
+function frontendToRawConfig(data: Partial<Config>): Record<string, unknown> {
+  const raw: Record<string, unknown> = {}
+  if (data.gateway) {
+    const gw: Record<string, unknown> = {}
+    if (data.gateway.bind_address !== undefined) gw.host = data.gateway.bind_address
+    if (data.gateway.port !== undefined) gw.port = data.gateway.port
+    if (data.gateway.auth_mode !== undefined) gw.auth_mode = data.gateway.auth_mode
+    if (data.gateway.token !== undefined) gw.token = data.gateway.token
+    if (data.gateway.hot_reload !== undefined) gw.hot_reload = data.gateway.hot_reload
+    if (data.gateway.log_level !== undefined) gw.log_level = data.gateway.log_level
+    // dev_mode_bypass is intentionally omitted — PUT /config blocks that field.
+    raw.gateway = gw
+  }
+  if (data.security) {
+    const sec: Record<string, unknown> = {}
+    if (data.security.policy_mode !== undefined) sec.policy_mode = data.security.policy_mode
+    if (data.security.exec_approval !== undefined) sec.exec_approval = data.security.exec_approval
+    // prompt_injection_level intentionally omitted — owned by PUT /security/prompt-guard.
+    if (data.security.daily_cost_cap !== undefined) sec.daily_cost_cap = data.security.daily_cost_cap
+    if (data.security.exec_timeout_seconds !== undefined) sec.exec_timeout_seconds = data.security.exec_timeout_seconds
+    if (data.security.max_background_seconds !== undefined) sec.max_background_seconds = data.security.max_background_seconds
+    if (data.security.enable_deny_patterns !== undefined) sec.enable_deny_patterns = data.security.enable_deny_patterns
+    if (data.security.rate_limits) {
+      sec.rate_limits = { ...data.security.rate_limits }
+    }
+    raw.security = sec
+  }
+  if (data.data) {
+    raw.storage = {
+      retention: {
+        session_days: data.data.session_retention_days,
+      },
+    }
+  }
+  if (data.agents?.defaults) {
+    raw.agents = { defaults: { ...data.agents.defaults } }
+  }
+  return raw
+}
+
+export async function updateConfig(data: Partial<Config>): Promise<Config> {
+  // Translate SPA shape → wire shape before sending, then transform the
+  // raw wire response back to SPA shape on success.
+  const wireBody = frontendToRawConfig(data)
+  const raw = await request<Record<string, unknown>>('/config', {
+    method: 'PUT',
+    body: JSON.stringify(wireBody),
+  })
+  return rawToFrontendConfig(raw)
 }
 
 // ── Providers ─────────────────────────────────────────────────────────────────
@@ -849,7 +966,7 @@ export function updateConfig(data: Partial<Config>): Promise<Config> {
 // See contracts/components/schemas/Provider.yaml.
 
 export function fetchProviders(): Promise<Provider[]> {
-  return request<Provider[]>('/providers')
+  return request<Provider[]>('/providers', undefined, z.array(ProviderSchema) as ZodType<Provider[]>)
 }
 
 export function configureProvider(id: string, apiKey?: string, endpoint?: string, model?: string): Promise<Provider> {
@@ -860,11 +977,13 @@ export function configureProvider(id: string, apiKey?: string, endpoint?: string
   return request<Provider>(`/providers/${id}`, {
     method: 'PUT',
     body: JSON.stringify(body),
-  })
+  }, ProviderSchema as ZodType<Provider>)
 }
 
+const _testProviderSchema = z.object({ success: z.boolean(), error: z.string().optional() }).passthrough()
+
 export function testProvider(id: string): Promise<{ success: boolean; error?: string }> {
-  return request(`/providers/${id}/test`, { method: 'POST' })
+  return request(`/providers/${id}/test`, { method: 'POST' }, _testProviderSchema)
 }
 
 export function rotateGatewayToken(): Promise<{ token: string }> {
@@ -878,11 +997,11 @@ export function rotateGatewayToken(): Promise<{ token: string }> {
 
 export function fetchTasks(status?: Task['status']): Promise<Task[]> {
   const qs = status ? '?' + new URLSearchParams({ status }).toString() : ''
-  return request<Task[]>(`/tasks${qs}`)
+  return request<Task[]>(`/tasks${qs}`, undefined, z.array(TaskSchema) as ZodType<Task[]>)
 }
 
 export function fetchSubtasks(taskId: string): Promise<Task[]> {
-  return request<Task[]>(`/tasks/${encodeURIComponent(taskId)}/subtasks`)
+  return request<Task[]>(`/tasks/${encodeURIComponent(taskId)}/subtasks`, undefined, z.array(TaskSchema) as ZodType<Task[]>)
 }
 
 export function createTask(data: {
@@ -892,11 +1011,11 @@ export function createTask(data: {
   priority?: number
   parent_task_id?: string
 }): Promise<Task> {
-  return request<Task>('/tasks', { method: 'POST', body: JSON.stringify(data) })
+  return request<Task>('/tasks', { method: 'POST', body: JSON.stringify(data) }, TaskSchema as ZodType<Task>)
 }
 
 export function updateTask(id: string, data: Partial<Task>): Promise<Task> {
-  return request<Task>(`/tasks/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) })
+  return request<Task>(`/tasks/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }, TaskSchema as ZodType<Task>)
 }
 
 export function startTask(id: string): Promise<void> {
@@ -913,7 +1032,7 @@ export function deleteTask(id: string): Promise<void> {
 // See contracts/components/schemas/GatewayStatus.yaml.
 
 export function fetchGatewayStatus(): Promise<GatewayStatus> {
-  return request<GatewayStatus>('/status')
+  return request<GatewayStatus>('/status', undefined, GatewayStatusSchema as ZodType<GatewayStatus>)
 }
 
 // ── Tools & Channels ──────────────────────────────────────────────────────────
@@ -924,7 +1043,7 @@ export function fetchGatewayStatus(): Promise<GatewayStatus> {
 export type Tool = ToolRegistryEntry
 
 export function fetchTools(): Promise<ToolRegistryEntry[]> {
-  return request<ToolRegistryEntry[]>('/tools')
+  return request<ToolRegistryEntry[]>('/tools', undefined, z.array(ToolRegistryEntrySchema) as ZodType<ToolRegistryEntry[]>)
 }
 
 // Channel — type alias for ChannelEntry (contract-first #8).
@@ -933,22 +1052,24 @@ export function fetchTools(): Promise<ToolRegistryEntry[]> {
 export type Channel = ChannelEntry
 
 export function fetchChannels(): Promise<ChannelEntry[]> {
-  return request<ChannelEntry[]>('/channels')
+  return request<ChannelEntry[]>('/channels', undefined, z.array(ChannelEntrySchema) as ZodType<ChannelEntry[]>)
 }
 
 export function enableChannel(id: string): Promise<ChannelEntry> {
-  return request<ChannelEntry>(`/channels/${encodeURIComponent(id)}/enable`, { method: 'PUT' })
+  return request<ChannelEntry>(`/channels/${encodeURIComponent(id)}/enable`, { method: 'PUT' }, ChannelEntrySchema as ZodType<ChannelEntry>)
 }
 
 export function disableChannel(id: string): Promise<ChannelEntry> {
-  return request<ChannelEntry>(`/channels/${encodeURIComponent(id)}/disable`, { method: 'PUT' })
+  return request<ChannelEntry>(`/channels/${encodeURIComponent(id)}/disable`, { method: 'PUT' }, ChannelEntrySchema as ZodType<ChannelEntry>)
 }
 
 export function fetchChannelConfig(id: string): Promise<Record<string, unknown>> {
+  // no-schema: channel config structure varies per channel type; no generated schema component.
   return request<Record<string, unknown>>(`/channels/${encodeURIComponent(id)}`)
 }
 
 export function configureChannel(id: string, config: Record<string, unknown>): Promise<void> {
+  // no-schema: void response; channel-specific body.
   return request<void>(`/channels/${encodeURIComponent(id)}/configure`, {
     method: 'PUT',
     body: JSON.stringify(config),
@@ -974,7 +1095,7 @@ export function testChannel(id: string): Promise<{ success: boolean; message: st
 // See contracts/components/schemas/McpServerCreate.yaml.
 
 export function fetchSkills(): Promise<Skill[]> {
-  return request<Skill[]>('/skills')
+  return request<Skill[]>('/skills', undefined, z.array(SkillSchema) as ZodType<Skill[]>)
 }
 
 export function deleteSkill(name: string): Promise<void> {
@@ -982,19 +1103,21 @@ export function deleteSkill(name: string): Promise<void> {
 }
 
 export function fetchMcpServers(): Promise<McpServer[]> {
-  return request<McpServer[]>('/mcp-servers')
+  return request<McpServer[]>('/mcp-servers', undefined, z.array(McpServerSchema) as ZodType<McpServer[]>)
 }
 
 export function addMcpServer(data: McpServerCreate): Promise<McpServer> {
-  return request<McpServer>('/mcp-servers', { method: 'POST', body: JSON.stringify(data) })
+  return request<McpServer>('/mcp-servers', { method: 'POST', body: JSON.stringify(data) }, McpServerSchema as ZodType<McpServer>)
 }
 
 export function deleteMcpServer(id: string): Promise<void> {
   return request<void>(`/mcp-servers/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
+const _mcpServerToolsSchema = z.array(z.string())
+
 export function fetchMcpServerTools(id: string): Promise<string[]> {
-  return request<string[]>(`/mcp-servers/${encodeURIComponent(id)}/tools`)
+  return request<string[]>(`/mcp-servers/${encodeURIComponent(id)}/tools`, undefined, _mcpServerToolsSchema)
 }
 
 // ── Storage Stats ─────────────────────────────────────────────────────────────
@@ -1103,7 +1226,7 @@ export function runDoctor(): Promise<DoctorResult> {
 // See contracts/components/schemas/ActivityEvent.yaml.
 
 export function fetchActivity(): Promise<ActivityEvent[]> {
-  return request<ActivityEvent[]>('/activity')
+  return request<ActivityEvent[]>('/activity', undefined, z.array(ActivityEventSchema) as ZodType<ActivityEvent[]>)
 }
 
 // ── Credentials ───────────────────────────────────────────────────────────────
@@ -1160,11 +1283,13 @@ export function clearAllSessions(): Promise<void> {
   return request<void>('/sessions/all', { method: 'DELETE' })
 }
 
-export function renameSession(id: string, title: string): Promise<Session> {
-  return request<Session>(`/sessions/${encodeURIComponent(id)}`, {
+export async function renameSession(id: string, title: string): Promise<Session> {
+  // Wire returns the wire Session shape (nested stats); transform to SPA Session.
+  const raw = await request<RawSession>(`/sessions/${encodeURIComponent(id)}`, {
     method: 'PUT',
     body: JSON.stringify({ title }),
-  })
+  }, WireSessionSchema as ZodType<RawSession>)
+  return rawToSession(raw)
 }
 
 const _deleteSessionSchema = z.object({ success: z.boolean() }).passthrough()
@@ -1705,14 +1830,14 @@ export type BuiltinTool = RegistryTool
 
 /** Fetch all tools from the central registry (FR-027). Includes both builtin and MCP tools. */
 export function fetchRegistryTools(): Promise<RegistryTool[]> {
-  return request<RegistryTool[]>('/tools')
+  return request<RegistryTool[]>('/tools', undefined, z.array(ToolRegistryEntrySchema) as ZodType<RegistryTool[]>)
 }
 
 /** Backward-compat alias — callers that used fetchBuiltinTools() still work. */
 export const fetchBuiltinTools = fetchRegistryTools
 
 export function fetchMcpServersForAgent(): Promise<McpServer[]> {
-  return request<McpServer[]>('/mcp-servers')
+  return request<McpServer[]>('/mcp-servers', undefined, z.array(McpServerSchema) as ZodType<McpServer[]>)
 }
 
 type AgentToolsResponse = { config: AgentToolsCfg; tools: AgentToolEntry[] }

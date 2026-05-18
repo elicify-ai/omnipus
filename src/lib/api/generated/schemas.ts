@@ -828,7 +828,7 @@ export const AppState = z
   .object({
     onboarding_complete: z.boolean(),
     last_doctor_run: z.string().datetime({ offset: true }).optional(),
-    last_doctor_score: z.number().optional(),
+    last_doctor_score: z.number().int().gte(0).lte(100).optional(),
     god_mode_available: z.boolean().optional(),
     god_mode_opted_in: z.boolean().optional(),
     dev_mode_bypass: z.boolean().optional(),
@@ -911,7 +911,7 @@ export const McpServer = z
   .object({
     id: z.string(),
     name: z.string(),
-    transport: z.enum(["stdio", "sse", "websocket"]),
+    transport: z.enum(["stdio", "sse", "http"]),
     status: z.enum(["connected", "disconnected", "error"]),
     tool_count: z.number().int().gte(0),
     tools: z.array(z.string()).optional(),
@@ -922,7 +922,7 @@ export const McpServerCreate = z
     name: z.string(),
     command: z.string(),
     args: z.array(z.string()).optional(),
-    transport: z.enum(["stdio", "sse", "websocket"]),
+    transport: z.enum(["stdio", "sse", "http"]),
   })
   .passthrough();
 export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =

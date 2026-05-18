@@ -933,3 +933,291 @@ describe('request() with Zod schema — validation errors', () => {
     expect(count()).toBe(1)
   })
 })
+
+// ── F-NEW-1: fetchSessionMessages renames parameters → params ──────────────────
+//
+// Regression test for Problem 1. The wire ToolCall schema emits `parameters`
+// (matching Go json tag `json:"parameters,omitempty"`). The SPA ToolCall type
+// uses `params`. Without the rawToToolCall() transform, params was `undefined`
+// and ToolCallBadge rendered `JSON.stringify(undefined, null, 2)` = "undefined".
+//
+// This test stubs fetch to return the wire shape (with `parameters`) and
+// asserts that the returned Message[].tool_calls[].params is correctly populated.
+
+describe('fetchSessionMessages: wire parameters → SPA params transform', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  function stubCookieLocal(value: string) {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => value,
+    })
+  }
+
+  function restoreCookieLocal() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (document as any).cookie
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    // fetchSessionMessages is a GET, no CSRF needed — but setting the cookie
+    // avoids CSRF guard triggering on any incidental state-changing helpers.
+    stubCookieLocal('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookieLocal()
+    vi.resetModules()
+  })
+
+  it('renames tool_calls[].parameters to tool_calls[].params', async () => {
+    // Wire payload: ToolCall uses `parameters`, not `params`.
+    const wirePayload = [
+      {
+        id: 'msg-1',
+        agent_id: 'agent-1',
+        role: 'assistant',
+        content: 'here is the result',
+        timestamp: '2026-05-18T10:00:00Z',
+        status: 'ok',
+        tool_calls: [
+          {
+            id: 'tc-1',
+            tool: 'foo_tool',
+            status: 'success',
+            parameters: { x: 1, y: 'hello' },
+          },
+        ],
+      },
+    ]
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-abc')
+
+    // The returned message should have the transformed tool call.
+    expect(messages).toHaveLength(1)
+    expect(messages[0].tool_calls).toHaveLength(1)
+    // params must equal the wire `parameters` value — NOT undefined.
+    expect(messages[0].tool_calls![0].params).toEqual({ x: 1, y: 'hello' })
+    // The raw `parameters` key must NOT appear on the SPA type.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((messages[0].tool_calls![0] as any).parameters).toBeUndefined()
+  })
+
+  it('returns empty params ({}) when wire parameters field is absent', async () => {
+    // Wire ToolCall with no parameters field — params should default to {}.
+    const wirePayload = [
+      {
+        id: 'msg-2',
+        agent_id: 'agent-1',
+        role: 'assistant',
+        content: 'done',
+        timestamp: '2026-05-18T10:01:00Z',
+        tool_calls: [
+          {
+            id: 'tc-2',
+            tool: 'bar_tool',
+            status: 'success',
+          },
+        ],
+      },
+    ]
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-xyz')
+
+    expect(messages[0].tool_calls![0].params).toEqual({})
+  })
+
+  it('maps wire status "ok" → SPA status "done"', async () => {
+    const wirePayload = [
+      {
+        id: 'msg-3',
+        agent_id: 'agent-1',
+        role: 'assistant',
+        content: 'test',
+        timestamp: '2026-05-18T10:02:00Z',
+        status: 'ok',
+      },
+    ]
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-status')
+
+    expect(messages[0].status).toBe('done')
+  })
+
+  it('maps wire tool_call status "denied" → SPA status "cancelled"', async () => {
+    const wirePayload = [
+      {
+        id: 'msg-4',
+        agent_id: 'agent-1',
+        role: 'assistant',
+        content: '',
+        timestamp: '2026-05-18T10:03:00Z',
+        tool_calls: [
+          { id: 'tc-denied', tool: 'restricted_tool', status: 'denied' },
+        ],
+      },
+    ]
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-denied')
+
+    expect(messages[0].tool_calls![0].status).toBe('cancelled')
+  })
+})
+
+// ── F-NEW-2: updateConfig sends wire shape with gateway.host (not bind_address) ─
+//
+// Regression test for Problem 2. Before the fix, updateConfig serialised the
+// SPA-flat Config shape directly. The backend expected `gateway.host` but
+// received `gateway.bind_address`. This caused silent data loss.
+//
+// This test asserts that updateConfig translates the SPA-shaped request body
+// to the wire-shaped JSON before sending.
+
+describe('updateConfig: sends wire shape to backend', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  function stubCookieLocal2(value: string) {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => value,
+    })
+  }
+
+  function restoreCookieLocal2() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (document as any).cookie
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    stubCookieLocal2('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookieLocal2()
+    vi.resetModules()
+  })
+
+  it('translates gateway.bind_address → gateway.host in the PUT request body', async () => {
+    // Stub fetch to return a minimal valid raw config response (the server
+    // echoes back the full config after applying the change).
+    const rawConfigResponse = {
+      gateway: { host: '0.0.0.0', port: 8080, auth_mode: 'none' },
+      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      storage: { retention: { session_days: 90 } },
+    }
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(rawConfigResponse), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { updateConfig } = await import('./api')
+    await updateConfig({ gateway: { bind_address: '0.0.0.0', port: 8080, auth_mode: 'none' } })
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(init.body as string) as Record<string, unknown>
+
+    // The body must contain gateway.host, NOT gateway.bind_address.
+    const gw = body.gateway as Record<string, unknown>
+    expect(gw.host).toBe('0.0.0.0')
+    expect(gw.bind_address).toBeUndefined()
+  })
+
+  it('translates data.session_retention_days → storage.retention.session_days', async () => {
+    const rawConfigResponse = {
+      gateway: { host: '127.0.0.1', port: 8080, auth_mode: 'none' },
+      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      storage: { retention: { session_days: 30 } },
+    }
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(rawConfigResponse), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { updateConfig } = await import('./api')
+    await updateConfig({ data: { session_retention_days: 30 } })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(init.body as string) as Record<string, unknown>
+
+    // storage.retention.session_days must be present; data.session_retention_days must not.
+    const storage = body.storage as Record<string, unknown>
+    const retention = storage.retention as Record<string, unknown>
+    expect(retention.session_days).toBe(30)
+    expect(body.data).toBeUndefined()
+  })
+
+  it('does not include dev_mode_bypass in the PUT body (blocked server-side)', async () => {
+    const rawConfigResponse = {
+      gateway: { host: '127.0.0.1', port: 8080, auth_mode: 'none' },
+      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      storage: { retention: { session_days: 90 } },
+    }
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(rawConfigResponse), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { updateConfig } = await import('./api')
+    await updateConfig({
+      gateway: { bind_address: '127.0.0.1', port: 8080, auth_mode: 'none', dev_mode_bypass: true },
+    })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(init.body as string) as Record<string, unknown>
+    const gw = body.gateway as Record<string, unknown>
+    // dev_mode_bypass must never appear in the wire request body.
+    expect(gw.dev_mode_bypass).toBeUndefined()
+  })
+})
