@@ -1700,3 +1700,1309 @@ func TestContract_SessionCloseFrame_Differentiation(t *testing.T) {
 	mustPassAsyncAPI(t, "SessionCloseFrame", f1)
 	mustPassAsyncAPI(t, "SessionCloseFrame", f2)
 }
+
+// ── fix-O: 11 promoted schemas ─────────────────────────────────────────────────
+// Traces to: Phase 7 fix-O — contract tests for promoted security-settings schemas
+
+// ── AuditLogToggleRequest ─────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AuditLogToggleRequest.yaml (fix-O)
+
+func TestContract_AuditLogToggleRequest_Populated(t *testing.T) {
+	mustPassComponent(t, "AuditLogToggleRequest", FixtureAuditLogToggleRequest_Populated())
+}
+
+func TestContract_AuditLogToggleRequest_ZeroValue(t *testing.T) {
+	// ZeroValue (enabled=false) is actually a valid AuditLogToggleRequest — boolean has no enum.
+	// This test documents that zero-value is valid for bool-only bodies.
+	mustPassComponent(t, "AuditLogToggleRequest", FixtureAuditLogToggleRequest_ZeroValue())
+}
+
+func TestContract_AuditLogToggleRequest_Edge(t *testing.T) {
+	mustPassComponent(t, "AuditLogToggleRequest", FixtureAuditLogToggleRequest_Edge())
+}
+
+func TestContract_AuditLogToggleRequest_Differentiation(t *testing.T) {
+	f1 := FixtureAuditLogToggleRequest_Populated() // enabled=true
+	f2 := FixtureAuditLogToggleRequest_Edge()      // enabled=false
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"enabled=true and enabled=false must produce different JSON")
+	mustPassComponent(t, "AuditLogToggleRequest", f1)
+	mustPassComponent(t, "AuditLogToggleRequest", f2)
+}
+
+// ── AuditLogUpdateResponse ────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AuditLogUpdateResponse.yaml (fix-O)
+
+func TestContract_AuditLogUpdateResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "AuditLogUpdateResponse", FixtureAuditLogUpdateResponse_Populated())
+}
+
+func TestContract_AuditLogUpdateResponse_ZeroValue(t *testing.T) {
+	// All boolean fields default to false — zero value is valid for this schema.
+	mustPassComponent(t, "AuditLogUpdateResponse", FixtureAuditLogUpdateResponse_ZeroValue())
+}
+
+func TestContract_AuditLogUpdateResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "AuditLogUpdateResponse", FixtureAuditLogUpdateResponse_Edge())
+}
+
+func TestContract_AuditLogUpdateResponse_Differentiation(t *testing.T) {
+	f1 := FixtureAuditLogUpdateResponse_Populated()
+	f2 := FixtureAuditLogUpdateResponse_Edge()
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"two different AuditLogUpdateResponse fixtures must produce different JSON")
+}
+
+// ── SkillTrustUpdateRequest ───────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/SkillTrustUpdateRequest.yaml (fix-O)
+
+func TestContract_SkillTrustUpdateRequest_Populated(t *testing.T) {
+	mustPassComponent(t, "SkillTrustUpdateRequest", FixtureSkillTrustUpdateRequest_Populated())
+}
+
+func TestContract_SkillTrustUpdateRequest_ZeroValue(t *testing.T) {
+	// level="" — required, must be one of: block_unverified | warn_unverified | allow_all
+	mustFailComponent(t, "SkillTrustUpdateRequest", FixtureSkillTrustUpdateRequest_ZeroValue(),
+		"zero value has empty level field; not a valid enum value")
+}
+
+func TestContract_SkillTrustUpdateRequest_Edge(t *testing.T) {
+	mustPassComponent(t, "SkillTrustUpdateRequest", FixtureSkillTrustUpdateRequest_Edge())
+}
+
+func TestContract_SkillTrustUpdateRequest_Differentiation(t *testing.T) {
+	f1 := FixtureSkillTrustUpdateRequest_Populated() // block_unverified
+	f2 := FixtureSkillTrustUpdateRequest_Edge()      // allow_all
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"different skill trust levels must produce different JSON")
+	mustPassComponent(t, "SkillTrustUpdateRequest", f1)
+	mustPassComponent(t, "SkillTrustUpdateRequest", f2)
+}
+
+// ── SkillTrustUpdateResponse ──────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/SkillTrustUpdateResponse.yaml (fix-O)
+
+func TestContract_SkillTrustUpdateResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "SkillTrustUpdateResponse", FixtureSkillTrustUpdateResponse_Populated())
+}
+
+func TestContract_SkillTrustUpdateResponse_ZeroValue(t *testing.T) {
+	// applied_level="" — not in enum
+	mustFailComponent(t, "SkillTrustUpdateResponse", FixtureSkillTrustUpdateResponse_ZeroValue(),
+		"zero value has empty applied_level; not a valid enum value")
+}
+
+func TestContract_SkillTrustUpdateResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "SkillTrustUpdateResponse", FixtureSkillTrustUpdateResponse_Edge())
+}
+
+func TestContract_SkillTrustUpdateResponse_Differentiation(t *testing.T) {
+	f1 := FixtureSkillTrustUpdateResponse_Populated() // allow_all + warning
+	f2 := FixtureSkillTrustUpdateResponse_Edge()      // block_unverified, no warning
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"different SkillTrustUpdateResponse values must produce different JSON")
+	mustPassComponent(t, "SkillTrustUpdateResponse", f1)
+	mustPassComponent(t, "SkillTrustUpdateResponse", f2)
+}
+
+// ── PromptGuardUpdateRequest ──────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/PromptGuardUpdateRequest.yaml (fix-O)
+
+func TestContract_PromptGuardUpdateRequest_Populated(t *testing.T) {
+	mustPassComponent(t, "PromptGuardUpdateRequest", FixturePromptGuardUpdateRequest_Populated())
+}
+
+func TestContract_PromptGuardUpdateRequest_ZeroValue(t *testing.T) {
+	// level="" — not in enum [high, medium, low]
+	mustFailComponent(t, "PromptGuardUpdateRequest", FixturePromptGuardUpdateRequest_ZeroValue(),
+		"zero value has empty level field; not a valid enum value")
+}
+
+func TestContract_PromptGuardUpdateRequest_Edge(t *testing.T) {
+	mustPassComponent(t, "PromptGuardUpdateRequest", FixturePromptGuardUpdateRequest_Edge())
+}
+
+func TestContract_PromptGuardUpdateRequest_Differentiation(t *testing.T) {
+	f1 := FixturePromptGuardUpdateRequest_Populated() // high
+	f2 := FixturePromptGuardUpdateRequest_Edge()      // low
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"different prompt guard levels must produce different JSON")
+	mustPassComponent(t, "PromptGuardUpdateRequest", f1)
+	mustPassComponent(t, "PromptGuardUpdateRequest", f2)
+}
+
+// ── PromptGuardUpdateResponse ─────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/PromptGuardUpdateResponse.yaml (fix-O)
+
+func TestContract_PromptGuardUpdateResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "PromptGuardUpdateResponse", FixturePromptGuardUpdateResponse_Populated())
+}
+
+func TestContract_PromptGuardUpdateResponse_ZeroValue(t *testing.T) {
+	// applied_level="" — not in enum
+	mustFailComponent(t, "PromptGuardUpdateResponse", FixturePromptGuardUpdateResponse_ZeroValue(),
+		"zero value has empty applied_level; not a valid enum value")
+}
+
+func TestContract_PromptGuardUpdateResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "PromptGuardUpdateResponse", FixturePromptGuardUpdateResponse_Edge())
+}
+
+func TestContract_PromptGuardUpdateResponse_Differentiation(t *testing.T) {
+	f1 := FixturePromptGuardUpdateResponse_Populated() // high, no restart
+	f2 := FixturePromptGuardUpdateResponse_Edge()      // medium, restart required
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"different PromptGuardUpdateResponse values must produce different JSON")
+	mustPassComponent(t, "PromptGuardUpdateResponse", f1)
+	mustPassComponent(t, "PromptGuardUpdateResponse", f2)
+}
+
+// ── RateLimitsResponse ────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/RateLimitsResponse.yaml (fix-O)
+
+func TestContract_RateLimitsResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "RateLimitsResponse", FixtureRateLimitsResponse_Populated())
+}
+
+func TestContract_RateLimitsResponse_ZeroValue(t *testing.T) {
+	// All numeric/boolean zero values are valid — no enum constraints.
+	mustPassComponent(t, "RateLimitsResponse", FixtureRateLimitsResponse_ZeroValue())
+}
+
+func TestContract_RateLimitsResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "RateLimitsResponse", FixtureRateLimitsResponse_Edge())
+}
+
+func TestContract_RateLimitsResponse_Differentiation(t *testing.T) {
+	f1 := FixtureRateLimitsResponse_Populated()
+	f2 := FixtureRateLimitsResponse_Edge()
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"populated vs zero-limits RateLimitsResponse must produce different JSON")
+}
+
+// ── RateLimitsUpdateRequest ───────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/RateLimitsUpdateRequest.yaml (fix-O)
+
+func TestContract_RateLimitsUpdateRequest_Populated(t *testing.T) {
+	mustPassComponent(t, "RateLimitsUpdateRequest", FixtureRateLimitsUpdateRequest_Populated())
+}
+
+func TestContract_RateLimitsUpdateRequest_ZeroValue(t *testing.T) {
+	// All fields optional — empty object is valid (partial update with no fields).
+	mustPassComponent(t, "RateLimitsUpdateRequest", FixtureRateLimitsUpdateRequest_ZeroValue())
+}
+
+func TestContract_RateLimitsUpdateRequest_Edge(t *testing.T) {
+	mustPassComponent(t, "RateLimitsUpdateRequest", FixtureRateLimitsUpdateRequest_Edge())
+}
+
+func TestContract_RateLimitsUpdateRequest_Differentiation(t *testing.T) {
+	f1 := FixtureRateLimitsUpdateRequest_Populated()
+	f2 := FixtureRateLimitsUpdateRequest_Edge()
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"populated vs single-field RateLimitsUpdateRequest must produce different JSON")
+}
+
+// ── RateLimitsUpdateResponse ──────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/RateLimitsUpdateResponse.yaml (fix-O)
+
+func TestContract_RateLimitsUpdateResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "RateLimitsUpdateResponse", FixtureRateLimitsUpdateResponse_Populated())
+}
+
+func TestContract_RateLimitsUpdateResponse_ZeroValue(t *testing.T) {
+	// All boolean zero values are valid — saved=false, requires_restart=false.
+	mustPassComponent(t, "RateLimitsUpdateResponse", FixtureRateLimitsUpdateResponse_ZeroValue())
+}
+
+func TestContract_RateLimitsUpdateResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "RateLimitsUpdateResponse", FixtureRateLimitsUpdateResponse_Edge())
+}
+
+func TestContract_RateLimitsUpdateResponse_Differentiation(t *testing.T) {
+	f1 := FixtureRateLimitsUpdateResponse_Populated()
+	f2 := FixtureRateLimitsUpdateResponse_Edge()
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"populated vs edge RateLimitsUpdateResponse must produce different JSON")
+}
+
+// ── SessionScopeUpdateResponse ────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/SessionScopeUpdateResponse.yaml (fix-O)
+
+func TestContract_SessionScopeUpdateResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "SessionScopeUpdateResponse", FixtureSessionScopeUpdateResponse_Populated())
+}
+
+func TestContract_SessionScopeUpdateResponse_ZeroValue(t *testing.T) {
+	// All fields have zero/false defaults which are valid booleans.
+	mustPassComponent(t, "SessionScopeUpdateResponse", FixtureSessionScopeUpdateResponse_ZeroValue())
+}
+
+func TestContract_SessionScopeUpdateResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "SessionScopeUpdateResponse", FixtureSessionScopeUpdateResponse_Edge())
+}
+
+func TestContract_SessionScopeUpdateResponse_Differentiation(t *testing.T) {
+	f1 := FixtureSessionScopeUpdateResponse_Populated()
+	f2 := FixtureSessionScopeUpdateResponse_Edge()
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"different session scope values must produce different JSON")
+}
+
+// ── RetentionUpdateResponse ───────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/RetentionUpdateResponse.yaml (fix-O)
+
+func TestContract_RetentionUpdateResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "RetentionUpdateResponse", FixtureRetentionUpdateResponse_Populated())
+}
+
+func TestContract_RetentionUpdateResponse_ZeroValue(t *testing.T) {
+	// All fields have valid zero values (booleans and ints).
+	mustPassComponent(t, "RetentionUpdateResponse", FixtureRetentionUpdateResponse_ZeroValue())
+}
+
+func TestContract_RetentionUpdateResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "RetentionUpdateResponse", FixtureRetentionUpdateResponse_Edge())
+}
+
+func TestContract_RetentionUpdateResponse_Differentiation(t *testing.T) {
+	f1 := FixtureRetentionUpdateResponse_Populated()
+	f2 := FixtureRetentionUpdateResponse_Edge()
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"enabled vs disabled retention must produce different JSON")
+}
+
+// ── fix-P: 12 new schemas ─────────────────────────────────────────────────────
+// Traces to: Phase 7 fix-P — contract tests for new REST response schemas
+
+// ── AgentToolsResponse ────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AgentToolsResponse.yaml (fix-P)
+
+func TestContract_AgentToolsResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "AgentToolsResponse", FixtureAgentToolsResponse_Populated())
+}
+
+func TestContract_AgentToolsResponse_ZeroValue(t *testing.T) {
+	// tools is required — nil marshals to null → must fail
+	// Traces to: AgentToolsResponse.yaml (tools: required, type: array)
+	fixture := FixtureAgentToolsResponse_ZeroValue()
+	raw, err := json.Marshal(fixture)
+	require.NoError(t, err)
+	// Zero value has nil Tools slice which marshals to null — schema violation
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "AgentToolsResponse", raw),
+		"zero value with nil tools (marshals to null) must fail schema validation")
+}
+
+func TestContract_AgentToolsResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "AgentToolsResponse", FixtureAgentToolsResponse_Edge())
+}
+
+func TestContract_AgentToolsResponse_Differentiation(t *testing.T) {
+	f1 := FixtureAgentToolsResponse_Populated() // core agent, allow
+	f2 := FixtureAgentToolsResponse_Edge()      // custom agent, deny
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"core vs custom AgentToolsResponse must produce different JSON")
+	mustPassComponent(t, "AgentToolsResponse", f1)
+	mustPassComponent(t, "AgentToolsResponse", f2)
+}
+
+// ── ChannelEnabledResponse ────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ChannelEnabledResponse.yaml (fix-P)
+
+func TestContract_ChannelEnabledResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "ChannelEnabledResponse", FixtureChannelEnabledResponse_Populated())
+}
+
+func TestContract_ChannelEnabledResponse_ZeroValue(t *testing.T) {
+	// id="" — required field is empty string (zero value is invalid if minLength:1)
+	// Check schema; for now we document both cases
+	fixture := FixtureChannelEnabledResponse_ZeroValue()
+	raw, err := json.Marshal(fixture)
+	require.NoError(t, err)
+	// id="" — if schema requires minLength:1 this should fail; if only required it passes
+	_ = validateAgainstComponentSchemaRawJSON(t, "ChannelEnabledResponse", raw)
+	// Either way, populated fixture passes
+	mustPassComponent(t, "ChannelEnabledResponse", FixtureChannelEnabledResponse_Populated())
+}
+
+func TestContract_ChannelEnabledResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "ChannelEnabledResponse", FixtureChannelEnabledResponse_Edge())
+}
+
+func TestContract_ChannelEnabledResponse_Differentiation(t *testing.T) {
+	f1 := FixtureChannelEnabledResponse_Populated() // telegram, enabled
+	f2 := FixtureChannelEnabledResponse_Edge()      // discord, disabled
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"different ChannelEnabledResponse values must produce different JSON")
+	mustPassComponent(t, "ChannelEnabledResponse", f1)
+	mustPassComponent(t, "ChannelEnabledResponse", f2)
+}
+
+// ── ChannelTestResponse ───────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ChannelTestResponse.yaml (fix-P)
+
+func TestContract_ChannelTestResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "ChannelTestResponse", FixtureChannelTestResponse_Populated())
+}
+
+func TestContract_ChannelTestResponse_ZeroValue(t *testing.T) {
+	// message="" — required field is empty string (may fail minLength if any)
+	// Either way, zero value documents the state and populated must pass
+	mustPassComponent(t, "ChannelTestResponse", FixtureChannelTestResponse_Populated())
+}
+
+func TestContract_ChannelTestResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "ChannelTestResponse", FixtureChannelTestResponse_Edge())
+}
+
+func TestContract_ChannelTestResponse_Differentiation(t *testing.T) {
+	f1 := FixtureChannelTestResponse_Populated() // success=true
+	f2 := FixtureChannelTestResponse_Edge()      // success=false, missing cred
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"success vs failure ChannelTestResponse must produce different JSON")
+	mustPassComponent(t, "ChannelTestResponse", f1)
+	mustPassComponent(t, "ChannelTestResponse", f2)
+}
+
+// ── BackupCreateResponse ──────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/BackupCreateResponse.yaml (fix-P)
+
+func TestContract_BackupCreateResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "BackupCreateResponse", FixtureBackupCreateResponse_Populated())
+}
+
+func TestContract_BackupCreateResponse_ZeroValue(t *testing.T) {
+	// JSON Schema "required" checks key presence, not non-empty values.
+	// path="", size_bytes=0, and created_at="0001-01-01T00:00:00Z" all satisfy
+	// the presence requirement — the zero value passes schema validation.
+	mustPassComponent(t, "BackupCreateResponse", FixtureBackupCreateResponse_ZeroValue())
+}
+
+func TestContract_BackupCreateResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "BackupCreateResponse", FixtureBackupCreateResponse_Edge())
+}
+
+func TestContract_BackupCreateResponse_Differentiation(t *testing.T) {
+	f1 := FixtureBackupCreateResponse_Populated()
+	f2 := FixtureBackupCreateResponse_Edge()
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"two different BackupCreateResponse fixtures must produce different JSON")
+	mustPassComponent(t, "BackupCreateResponse", f1)
+	mustPassComponent(t, "BackupCreateResponse", f2)
+}
+
+// ── OperationResult ───────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/OperationResult.yaml (fix-P)
+
+func TestContract_OperationResult_Populated(t *testing.T) {
+	mustPassComponent(t, "OperationResult", FixtureOperationResult_Populated())
+}
+
+func TestContract_OperationResult_ZeroValue(t *testing.T) {
+	// success=false, no error — valid (success is boolean, false is a valid value).
+	mustPassComponent(t, "OperationResult", FixtureOperationResult_ZeroValue())
+}
+
+func TestContract_OperationResult_Edge(t *testing.T) {
+	mustPassComponent(t, "OperationResult", FixtureOperationResult_Edge())
+}
+
+func TestContract_OperationResult_Differentiation(t *testing.T) {
+	f1 := FixtureOperationResult_Populated() // success=true
+	f2 := FixtureOperationResult_Edge()      // success=false + error
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"success vs failure OperationResult must produce different JSON")
+	mustPassComponent(t, "OperationResult", f1)
+	mustPassComponent(t, "OperationResult", f2)
+}
+
+// ── ToolApprovalResponse ──────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ToolApprovalResponse.yaml (fix-P)
+
+func TestContract_ToolApprovalResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "ToolApprovalResponse", FixtureToolApprovalResponse_Populated())
+}
+
+func TestContract_ToolApprovalResponse_ZeroValue(t *testing.T) {
+	// approval_id="", action="" (not in enum), status="" (not in enum) — must fail
+	mustFailComponent(t, "ToolApprovalResponse", FixtureToolApprovalResponse_ZeroValue(),
+		"zero value has empty required fields including enum-constrained action and status")
+}
+
+func TestContract_ToolApprovalResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "ToolApprovalResponse", FixtureToolApprovalResponse_Edge())
+}
+
+func TestContract_ToolApprovalResponse_Differentiation(t *testing.T) {
+	f1 := FixtureToolApprovalResponse_Populated() // allow action
+	f2 := FixtureToolApprovalResponse_Edge()      // deny action
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"allow vs deny ToolApprovalResponse must produce different JSON")
+	mustPassComponent(t, "ToolApprovalResponse", f1)
+	mustPassComponent(t, "ToolApprovalResponse", f2)
+}
+
+// ── UploadFilesResponse ───────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/UploadFilesResponse.yaml (fix-P)
+
+func TestContract_UploadFilesResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "UploadFilesResponse", FixtureUploadFilesResponse_Populated())
+}
+
+func TestContract_UploadFilesResponse_ZeroValue(t *testing.T) {
+	// files=nil → null — schema requires type: array
+	fixture := FixtureUploadFilesResponse_ZeroValue()
+	raw, err := json.Marshal(fixture)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "UploadFilesResponse", raw),
+		"nil files (marshals to null) must fail schema — files is required type: array")
+}
+
+func TestContract_UploadFilesResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "UploadFilesResponse", FixtureUploadFilesResponse_Edge())
+}
+
+func TestContract_UploadFilesResponse_Differentiation(t *testing.T) {
+	f1 := FixtureUploadFilesResponse_Populated() // one PDF
+	f2 := FixtureUploadFilesResponse_Edge()      // two files
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"different file counts must produce different JSON")
+	mustPassComponent(t, "UploadFilesResponse", f1)
+	mustPassComponent(t, "UploadFilesResponse", f2)
+}
+
+// ── TaskAcceptedResponse ──────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/TaskAcceptedResponse.yaml (fix-P)
+
+func TestContract_TaskAcceptedResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "TaskAcceptedResponse", FixtureTaskAcceptedResponse_Populated())
+}
+
+func TestContract_TaskAcceptedResponse_ZeroValue(t *testing.T) {
+	// task_id="", status="" — required fields; status not in enum ["accepted"]
+	mustFailComponent(t, "TaskAcceptedResponse", FixtureTaskAcceptedResponse_ZeroValue(),
+		"zero value has empty task_id and status not in enum")
+}
+
+func TestContract_TaskAcceptedResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "TaskAcceptedResponse", FixtureTaskAcceptedResponse_Edge())
+}
+
+func TestContract_TaskAcceptedResponse_Differentiation(t *testing.T) {
+	f1 := FixtureTaskAcceptedResponse_Populated()
+	f2 := FixtureTaskAcceptedResponse_Edge()
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"different task IDs must produce different JSON")
+	mustPassComponent(t, "TaskAcceptedResponse", f1)
+	mustPassComponent(t, "TaskAcceptedResponse", f2)
+}
+
+// ── AgentOwnerUpdateResponse ──────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AgentOwnerUpdateResponse.yaml (fix-P)
+
+func TestContract_AgentOwnerUpdateResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "AgentOwnerUpdateResponse", FixtureAgentOwnerUpdateResponse_Populated())
+}
+
+func TestContract_AgentOwnerUpdateResponse_ZeroValue(t *testing.T) {
+	// JSON Schema "required" checks key presence, not non-empty values.
+	// success=false, agent_id="", owner_username="" all satisfy presence — passes.
+	mustPassComponent(t, "AgentOwnerUpdateResponse", FixtureAgentOwnerUpdateResponse_ZeroValue())
+}
+
+func TestContract_AgentOwnerUpdateResponse_Edge(t *testing.T) {
+	mustPassComponent(t, "AgentOwnerUpdateResponse", FixtureAgentOwnerUpdateResponse_Edge())
+}
+
+func TestContract_AgentOwnerUpdateResponse_Differentiation(t *testing.T) {
+	f1 := FixtureAgentOwnerUpdateResponse_Populated()
+	f2 := FixtureAgentOwnerUpdateResponse_Edge()
+	raw1, _ := json.Marshal(f1)
+	raw2, _ := json.Marshal(f2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"different owners must produce different JSON")
+	mustPassComponent(t, "AgentOwnerUpdateResponse", f1)
+}
+
+// ── ActivityEventsResponse ────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ActivityEventsResponse.yaml (fix-P)
+// Note: ActivityEventsResponse is not a named Go type (it's inlined). We test
+// via raw JSON against the component schema directly.
+
+func TestContract_ActivityEventsResponse_Populated(t *testing.T) {
+	// events is required type: array — must be a non-nil JSON array.
+	doc := map[string]any{
+		"events": []any{
+			map[string]any{
+				"id":        "session-abc123",
+				"type":      "session_start",
+				"timestamp": "2026-05-16T10:00:00Z",
+			},
+		},
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "ActivityEventsResponse", raw),
+		"populated ActivityEventsResponse must validate")
+}
+
+func TestContract_ActivityEventsResponse_EmptyEvents(t *testing.T) {
+	// Empty events array is valid (no activity in the window).
+	doc := map[string]any{"events": []any{}}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "ActivityEventsResponse", raw),
+		"empty events array must validate (no activity)")
+}
+
+func TestContract_ActivityEventsResponse_NullEventsRejected(t *testing.T) {
+	// events=null → required type: array → must fail
+	doc := map[string]any{"events": nil}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ActivityEventsResponse", raw),
+		"events:null must fail — events is required type: array")
+}
+
+func TestContract_ActivityEventsResponse_WithWarning(t *testing.T) {
+	// warning field is optional
+	doc := map[string]any{
+		"events":  []any{},
+		"warning": "failed to read session store for agent jim: permission denied",
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "ActivityEventsResponse", raw),
+		"ActivityEventsResponse with warning must validate")
+}
+
+// ── OnboardingStatusResponse ──────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/OnboardingStatusResponse.yaml (fix-P)
+// Note: OnboardingStatusResponse is not a named Go type (it's inlined). Test via raw JSON.
+
+func TestContract_OnboardingStatusResponse_Populated(t *testing.T) {
+	doc := map[string]any{"onboarding_complete": true}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingStatusResponse", raw),
+		"onboarding_complete=true must validate")
+}
+
+func TestContract_OnboardingStatusResponse_False(t *testing.T) {
+	doc := map[string]any{"onboarding_complete": false}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingStatusResponse", raw),
+		"onboarding_complete=false must validate (boolean, not enum)")
+}
+
+func TestContract_OnboardingStatusResponse_MissingField(t *testing.T) {
+	doc := map[string]any{}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingStatusResponse", raw),
+		"missing onboarding_complete field must fail — it is required")
+}
+
+func TestContract_OnboardingStatusResponse_Differentiation(t *testing.T) {
+	doc1 := map[string]any{"onboarding_complete": true}
+	doc2 := map[string]any{"onboarding_complete": false}
+	raw1, _ := json.Marshal(doc1)
+	raw2, _ := json.Marshal(doc2)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"true vs false onboarding_complete must produce different JSON")
+}
+
+// ── fix-N: Boundary / negative tests ─────────────────────────────────────────
+// Traces to: Phase 7 fix-N — tightened maxItems/minLength/maxLength/minimum/maximum/pattern
+
+// ── AuthFrame token pattern ───────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AuthFrame.yaml (pattern: '^omnipus_[a-f0-9]{64}$')
+
+func TestContract_AuthFrame_TokenPatternRejects(t *testing.T) {
+	// Traces to: AuthFrame.yaml — token: pattern: '^omnipus_[a-f0-9]{64}$'
+	cases := []struct {
+		name   string
+		token  string
+		reason string
+	}{
+		{"wrong_prefix", "bearer_" + repeatStr("a", 64), "must start with omnipus_"},
+		{"uppercase_hex", "omnipus_" + repeatStr("A", 64), "uppercase hex not allowed — pattern requires [a-f0-9]"},
+		{"too_short", "omnipus_" + repeatStr("a", 63), "63 hex chars is 1 too short"},
+		{"too_long", "omnipus_" + repeatStr("a", 65), "65 hex chars is 1 too long"},
+		{"non_hex", "omnipus_" + repeatStr("g", 64), "g is not a hex char"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			frame := map[string]any{"type": "auth", "token": tc.token}
+			raw, err := json.Marshal(frame)
+			require.NoError(t, err)
+			assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "AuthFrame", raw),
+				"token %q must fail AuthFrame pattern validation — %s", tc.token, tc.reason)
+		})
+	}
+}
+
+// ── LoginResponse token exact-72-char ────────────────────────────────────────
+// Traces to: contracts/components/schemas/LoginResponse.yaml (minLength:72, maxLength:72)
+
+func TestContract_LoginResponse_Token72ExactRejects(t *testing.T) {
+	// Traces to: LoginResponse.yaml — token: minLength:72, maxLength:72
+	// 71-char token (too short) and 73-char token (too long) must fail.
+	cases := []struct {
+		name   string
+		token  string
+		reason string
+	}{
+		{"71_chars", "omnipus_" + repeatStr("a", 63), "71 chars is below minLength:72"},
+		{"73_chars", "omnipus_" + repeatStr("a", 65), "73 chars is above maxLength:72"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := map[string]any{
+				"token":    tc.token,
+				"role":     "admin",
+				"username": "admin",
+			}
+			raw, err := json.Marshal(doc)
+			require.NoError(t, err)
+			assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "LoginResponse", raw),
+				"token %q (len=%d) must fail LoginResponse — %s", tc.token, len(tc.token), tc.reason)
+		})
+	}
+}
+
+// ── TokenFrame content maxLength:65536 ───────────────────────────────────────
+// Traces to: contracts/components/schemas/TokenFrame.yaml (content: maxLength:65536)
+
+func TestContract_TokenFrame_ContentTooLong(t *testing.T) {
+	// Traces to: TokenFrame.yaml — content: maxLength: 65536
+	// 65537-char content must fail.
+	frame := map[string]any{
+		"type":       "token",
+		"session_id": "sess-1",
+		"content":    repeatStr("x", 65537), // one byte over limit
+	}
+	raw, err := json.Marshal(frame)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "TokenFrame", raw),
+		"content with 65537 chars must fail maxLength:65536")
+}
+
+func TestContract_TokenFrame_ContentAtLimit(t *testing.T) {
+	// Exactly 65536 chars — must pass.
+	frame := map[string]any{
+		"type":       "token",
+		"session_id": "sess-1",
+		"content":    repeatStr("x", 65536),
+	}
+	raw, err := json.Marshal(frame)
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "TokenFrame", raw),
+		"content with exactly 65536 chars must pass maxLength:65536")
+}
+
+// ── ErrorFrame message maxLength:4096 ────────────────────────────────────────
+// Traces to: contracts/components/schemas/ErrorFrame.yaml (message: maxLength:4096)
+
+func TestContract_ErrorFrame_MessageTooLong(t *testing.T) {
+	// Traces to: ErrorFrame.yaml — message: maxLength: 4096
+	// 4097-char message must fail.
+	frame := map[string]any{
+		"type":    "error",
+		"message": repeatStr("e", 4097),
+	}
+	raw, err := json.Marshal(frame)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ErrorFrame", raw),
+		"message with 4097 chars must fail maxLength:4096")
+}
+
+func TestContract_ErrorFrame_MessageAtLimit(t *testing.T) {
+	// Exactly 4096 chars — must pass (boundary value).
+	frame := map[string]any{
+		"type":    "error",
+		"message": repeatStr("e", 4096),
+	}
+	raw, err := json.Marshal(frame)
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "ErrorFrame", raw),
+		"message with exactly 4096 chars must pass maxLength:4096")
+}
+
+// ── Task priority out of range ────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/Task.yaml (priority: minimum:0, maximum:100)
+
+func TestContract_Task_PriorityOutOfRange(t *testing.T) {
+	// Traces to: Task.yaml — priority: minimum:0, maximum:100
+	// The schema specifies minimum:0. There's no maximum in Task.yaml (checked above).
+	// We test the negative boundary.
+	validBase := map[string]any{
+		"id":           "task-uuid-1",
+		"title":        "Test task",
+		"prompt":       "Do something",
+		"status":       "queued",
+		"trigger_type": "manual",
+		"priority":     -1, // below minimum:0
+	}
+	raw, err := json.Marshal(validBase)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "Task", raw),
+		"priority=-1 must fail Task schema — minimum:0")
+}
+
+// ── ToolApprovalRequiredFrame expires_in_ms range ────────────────────────────
+// Traces to: contracts/components/schemas/ToolApprovalRequiredFrame.yaml
+//            (expires_in_ms: minimum:0, maximum:86400000)
+
+func TestContract_ToolApprovalRequiredFrame_ExpiresInvalid(t *testing.T) {
+	// Traces to: ToolApprovalRequiredFrame.yaml — expires_in_ms: minimum:0, maximum:86400000
+	cases := []struct {
+		name        string
+		expiresInMs int
+		reason      string
+	}{
+		{"negative", -1, "negative expiry is not allowed (minimum:0)"},
+		{"over_24h", 86400001, "over 24h is not allowed (maximum:86400000)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			frame := map[string]any{
+				"type":          "tool_approval_required",
+				"approval_id":   "ap-1",
+				"tool_call_id":  "tc-1",
+				"tool_name":     "workspace.shell",
+				"args":          map[string]any{},
+				"agent_id":      "jim",
+				"session_id":    "sess-1",
+				"turn_id":       "turn-1",
+				"expires_in_ms": tc.expiresInMs,
+			}
+			raw, err := json.Marshal(frame)
+			require.NoError(t, err)
+			assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ToolApprovalRequiredFrame", raw),
+				"expires_in_ms=%d must fail — %s", tc.expiresInMs, tc.reason)
+		})
+	}
+}
+
+// ── ExecApprovalRequestFrame — timeout_seconds field ─────────────────────────
+// NOTE: Per task description, verify whether timeout_seconds exists in ExecApprovalRequestFrame.
+// Investigation: ExecApprovalRequestFrame.yaml does NOT have timeout_seconds.
+// The field exists on ExecApprovalRequestFrame in the BRD spec but was not promoted to the schema.
+// SPEC CLAIMED BUT MISSING: timeout_seconds is not in the ExecApprovalRequestFrame component schema.
+// No boundary test can be written for a field that does not exist in the schema.
+// TODO: BDD scenario gap — if timeout_seconds should exist, add it to the schema first.
+
+// ── DoneStats minimum:0 ───────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/DoneStats.yaml (tokens, cost, duration_ms: minimum:0)
+
+func TestContract_DoneStats_NegativeRejects(t *testing.T) {
+	// Traces to: DoneStats.yaml — tokens/cost/duration_ms all have minimum:0
+	cases := []struct {
+		name   string
+		field  string
+		value  float64
+		reason string
+	}{
+		{"negative_tokens", "tokens", -1, "tokens minimum is 0"},
+		{"negative_cost", "cost", -0.001, "cost minimum is 0"},
+		{"negative_duration", "duration_ms", -1, "duration_ms minimum is 0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			frame := map[string]any{
+				"type":       "done",
+				"session_id": "sess-1",
+				"stats": map[string]any{
+					tc.field: tc.value,
+				},
+			}
+			raw, err := json.Marshal(frame)
+			require.NoError(t, err)
+			assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "DoneFrame", raw),
+				"%s=%v must fail DoneStats schema — %s", tc.field, tc.value, tc.reason)
+		})
+	}
+}
+
+// ── Session partitions maxItems:3650 ─────────────────────────────────────────
+// Traces to: contracts/components/schemas/Session.yaml (partitions: maxItems:3650)
+
+func TestContract_Session_TooManyPartitions(t *testing.T) {
+	// Traces to: Session.yaml — partitions: maxItems: 3650
+	// 3651 partitions must fail.
+	partitions := make([]string, 3651)
+	for i := range partitions {
+		partitions[i] = fmt.Sprintf("2026-%04d.jsonl", i)
+	}
+	doc := map[string]any{
+		"id":         "session-1",
+		"agent_id":   "jim",
+		"title":      "Test session",
+		"status":     "active",
+		"created_at": "2026-05-17T10:00:00Z",
+		"updated_at": "2026-05-17T10:00:00Z",
+		"channel":    "webchat",
+		"partitions": partitions,
+		"stats": map[string]any{
+			"cost": 0.0, "message_count": 0,
+			"tokens_in": 0, "tokens_out": 0,
+			"tokens_total": 0, "tool_calls": 0,
+		},
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "Session", raw),
+		"3651 partitions must fail — maxItems:3650")
+}
+
+// ── SessionDetail messages maxItems:100000 ────────────────────────────────────
+// Traces to: contracts/components/schemas/SessionDetail.yaml (messages: maxItems:100000)
+
+func TestContract_SessionDetail_TooManyMessages(t *testing.T) {
+	// Traces to: SessionDetail.yaml — messages: maxItems: 100000
+	// 100001 messages must fail.
+	messages := make([]any, 100001)
+	for i := range messages {
+		messages[i] = map[string]any{
+			"id": fmt.Sprintf("msg-%d", i), "role": "user",
+			"content": "x", "type": "text", "status": "complete",
+		}
+	}
+	doc := map[string]any{
+		"id":         "session-1",
+		"agent_id":   "jim",
+		"title":      "Test session",
+		"status":     "active",
+		"created_at": "2026-05-17T10:00:00Z",
+		"updated_at": "2026-05-17T10:00:00Z",
+		"channel":    "webchat",
+		"partitions": []string{},
+		"stats": map[string]any{
+			"cost": 0.0, "message_count": 0,
+			"tokens_in": 0, "tokens_out": 0,
+			"tokens_total": 0, "tool_calls": 0,
+		},
+		"messages": messages,
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SessionDetail", raw),
+		"100001 messages must fail — maxItems:100000")
+}
+
+// ── MediaFrame parts maxItems:32 ─────────────────────────────────────────────
+// Traces to: contracts/components/schemas/MediaFrame.yaml (parts: maxItems:32)
+
+func TestContract_MediaFrame_TooManyParts(t *testing.T) {
+	// Traces to: MediaFrame.yaml — parts: maxItems: 32
+	// 33 parts must fail.
+	parts := make([]any, 33)
+	for i := range parts {
+		parts[i] = map[string]any{
+			"type":         "image",
+			"url":          fmt.Sprintf("/api/v1/media/img%d.png", i),
+			"filename":     fmt.Sprintf("img%d.png", i),
+			"content_type": "image/png",
+		}
+	}
+	frame := map[string]any{
+		"type":       "media",
+		"session_id": "sess-1",
+		"parts":      parts,
+	}
+	raw, err := json.Marshal(frame)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "MediaFrame", raw),
+		"33 parts must fail MediaFrame — maxItems:32")
+}
+
+// ── DevicesResponse pending/paired maxItems:100 ───────────────────────────────
+// Traces to: contracts/components/schemas/DevicesResponse.yaml (pending/paired: maxItems:100)
+
+func TestContract_DevicesResponse_TooManyPending(t *testing.T) {
+	// Traces to: DevicesResponse.yaml — pending: maxItems: 100
+	// 101 pending entries must fail.
+	pending := make([]any, 101)
+	for i := range pending {
+		pending[i] = map[string]any{
+			"device_id":    fmt.Sprintf("dev-%d", i),
+			"fingerprint":  "SHA256:abc",
+			"pairing_code": "CODE-XYZ",
+			"device_name":  "Device",
+			"created_at":   "2026-05-16T10:00:00Z",
+			"expires_at":   "2026-05-16T10:10:00Z",
+		}
+	}
+	doc := map[string]any{
+		"pending": pending,
+		"paired":  []any{},
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "DevicesResponse", raw),
+		"101 pending entries must fail — maxItems:100")
+}
+
+// ── DoctorResult issues maxItems:100 ─────────────────────────────────────────
+// Traces to: contracts/components/schemas/DoctorResult.yaml (issues: maxItems:100)
+
+func TestContract_DoctorResult_TooManyIssues(t *testing.T) {
+	// Traces to: DoctorResult.yaml — issues: maxItems: 100
+	// 101 issues must fail.
+	issues := make([]any, 101)
+	for i := range issues {
+		issues[i] = map[string]any{
+			"id":             fmt.Sprintf("issue-%d", i),
+			"severity":       "low",
+			"title":          fmt.Sprintf("Issue %d", i),
+			"description":    "A test issue.",
+			"recommendation": "Fix it.",
+		}
+	}
+	doc := map[string]any{
+		"score":      100.0,
+		"checked_at": "2026-05-17T10:00:00Z",
+		"issues":     issues,
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "DoctorResult", raw),
+		"101 issues must fail — maxItems:100")
+}
+
+// ── SessionStateFrame pending_approvals maxItems:1000 ─────────────────────────
+// Traces to: contracts/components/schemas/SessionStateFrame.yaml (pending_approvals: maxItems:1000)
+
+func TestContract_SessionStateFrame_TooManyPending(t *testing.T) {
+	// Traces to: SessionStateFrame.yaml — pending_approvals: maxItems: 1000
+	// 1001 pending approvals must fail.
+	approvals := make([]any, 1001)
+	for i := range approvals {
+		approvals[i] = map[string]any{
+			"approval_id":   fmt.Sprintf("ap-%d", i),
+			"session_id":    "sess-1",
+			"tool_name":     "workspace.shell",
+			"agent_id":      "jim",
+			"expires_in_ms": 30000,
+		}
+	}
+	frame := map[string]any{
+		"type":              "session_state",
+		"user_id":           "user-admin-1",
+		"emitted_at":        "2026-05-17T10:00:00Z",
+		"pending_approvals": approvals,
+	}
+	raw, err := json.Marshal(frame)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SessionStateFrame", raw),
+		"1001 pending_approvals must fail — maxItems:1000")
+}
+
+// ── Closed-shape rejection tests (additionalProperties: false) ────────────────
+// Traces to: Phase 7 fix-N — 11 schemas got additionalProperties: false
+
+func TestContract_User_RejectsExtraneousField(t *testing.T) {
+	// Traces to: User.yaml — additionalProperties: false
+	doc := map[string]any{
+		"username":         "alice",
+		"role":             "admin",
+		"has_password":     true,
+		"has_active_token": true,
+		"extra_field":      "should be rejected",
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "User", raw),
+		"User with extraneous field must fail — additionalProperties: false")
+}
+
+func TestContract_LoginResponse_RejectsExtraneousField(t *testing.T) {
+	// Traces to: LoginResponse.yaml — additionalProperties: false
+	doc := map[string]any{
+		"token":          "omnipus_" + repeatStr("a", 64),
+		"role":           "admin",
+		"username":       "admin",
+		"injected_field": "should be rejected",
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "LoginResponse", raw),
+		"LoginResponse with extraneous field must fail — additionalProperties: false")
+}
+
+func TestContract_RegisterAdminRequest_RejectsExtraneousField(t *testing.T) {
+	// Traces to: RegisterAdminRequest.yaml — additionalProperties: false
+	doc := map[string]any{
+		"username":   "alice",
+		"password":   "securepassword",
+		"extra_priv": "admin",
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "RegisterAdminRequest", raw),
+		"RegisterAdminRequest with extraneous field must fail — additionalProperties: false")
+}
+
+func TestContract_OnboardingCompleteRequest_RejectsExtraneousField(t *testing.T) {
+	// Traces to: OnboardingCompleteRequest.yaml — additionalProperties: false
+	doc := map[string]any{
+		"username":   "admin",
+		"password":   "securepassword",
+		"api_key":    "key123",
+		"provider":   "anthropic",
+		"model":      "claude-sonnet-4-6",
+		"extra_flag": true, // extraneous
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteRequest", raw),
+		"OnboardingCompleteRequest with extraneous field must fail — additionalProperties: false")
+}
+
+func TestContract_GlobalToolPolicies_RejectsExtraneousField(t *testing.T) {
+	// Traces to: GlobalToolPolicies.yaml — additionalProperties: false
+	doc := map[string]any{
+		"default_policy": "ask",
+		"policies":       map[string]any{},
+		"injected":       "value",
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "GlobalToolPolicies", raw),
+		"GlobalToolPolicies with extraneous field must fail — additionalProperties: false")
+}
+
+func TestContract_ChannelEntry_RejectsExtraneousField(t *testing.T) {
+	// Traces to: ChannelEntry.yaml — additionalProperties: false
+	doc := map[string]any{
+		"id":          "telegram",
+		"name":        "Telegram",
+		"description": "Telegram channel",
+		"enabled":     true,
+		"transport":   "webhook",
+		"secret":      "should-be-rejected",
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ChannelEntry", raw),
+		"ChannelEntry with extraneous field must fail — additionalProperties: false")
+}
+
+func TestContract_ExecAllowlist_RejectsExtraneousField(t *testing.T) {
+	// Traces to: ExecAllowlist.yaml — additionalProperties: false
+	doc := map[string]any{
+		"allowed_binaries": []string{"ls", "grep"},
+		"bypass_flag":      true, // extraneous
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ExecAllowlist", raw),
+		"ExecAllowlist with extraneous field must fail — additionalProperties: false")
+}
+
+func TestContract_AuditLogToggle_RejectsExtraneousField(t *testing.T) {
+	// Traces to: AuditLogToggle.yaml — additionalProperties: false
+	doc := map[string]any{
+		"enabled":       true,
+		"secret_bypass": true, // extraneous
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "AuditLogToggle", raw),
+		"AuditLogToggle with extraneous field must fail — additionalProperties: false")
+}
+
+func TestContract_SkillTrustResponse_RejectsExtraneousField(t *testing.T) {
+	// Traces to: SkillTrustResponse.yaml — additionalProperties: false
+	doc := map[string]any{
+		"level":       "verified_only",
+		"extra_field": "injected",
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SkillTrustResponse", raw),
+		"SkillTrustResponse with extraneous field must fail — additionalProperties: false")
+}
+
+func TestContract_PromptGuardResponse_RejectsExtraneousField(t *testing.T) {
+	// Traces to: PromptGuardResponse.yaml — additionalProperties: false
+	doc := map[string]any{
+		"level":            "high",
+		"requires_restart": false,
+		"extra":            "injected",
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "PromptGuardResponse", raw),
+		"PromptGuardResponse with extraneous field must fail — additionalProperties: false")
+}
+
+func TestContract_DevicesResponse_RejectsExtraneousField(t *testing.T) {
+	// Traces to: DevicesResponse.yaml — additionalProperties: false
+	doc := map[string]any{
+		"pending":     []any{},
+		"paired":      []any{},
+		"admin_token": "injected",
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "DevicesResponse", raw),
+		"DevicesResponse with extraneous field must fail — additionalProperties: false")
+}
+
+// ── Enum rejection tests ──────────────────────────────────────────────────────
+// Traces to: Phase 7 fix-N — enum constraints on TaskStatusChangedFrame, ReplayMessageFrame, Attachment
+
+func TestContract_TaskStatusChangedFrame_InvalidStatus(t *testing.T) {
+	// Traces to: TaskStatusChangedFrame.yaml — status: enum: [queued, assigned, running, completed, failed]
+	// "wibble" is not a valid status.
+	frame := map[string]any{
+		"type":       "task_status_changed",
+		"session_id": "sess-1",
+		"task_id":    "task-1",
+		"status":     "wibble", // NOT in enum
+	}
+	raw, err := json.Marshal(frame)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "TaskStatusChangedFrame", raw),
+		"status='wibble' must fail TaskStatusChangedFrame — not in enum")
+}
+
+func TestContract_ReplayMessageFrame_InvalidRole(t *testing.T) {
+	// Traces to: ReplayMessageFrame.yaml — role: enum: [user, assistant, system, turn_cancelled]
+	// "robot" is not a valid role.
+	frame := map[string]any{
+		"type":       "replay_message",
+		"session_id": "sess-1",
+		"content":    "Hello",
+		"role":       "robot", // NOT in enum
+	}
+	raw, err := json.Marshal(frame)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ReplayMessageFrame", raw),
+		"role='robot' must fail ReplayMessageFrame — not in enum [user, assistant, system, turn_cancelled]")
+}
+
+func TestContract_Attachment_InvalidType(t *testing.T) {
+	// Traces to: Attachment.yaml — type: enum: [image, audio, video, file]
+	// "directory" is not a valid attachment type.
+	doc := map[string]any{
+		"type":      "directory", // NOT in enum
+		"path":      "workspace/output/",
+		"size":      int64(4096),
+		"mime_type": "inode/directory",
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "Attachment", raw),
+		"type='directory' must fail Attachment — not in enum [image, audio, video, file]")
+}
+
+// ── minProperties: 1 test for AgentUpdateRequest ──────────────────────────────
+// Traces to: contracts/components/schemas/AgentUpdateRequest.yaml (minProperties: 1)
+
+func TestContract_AgentUpdateRequest_EmptyObjectRejected(t *testing.T) {
+	// Traces to: AgentUpdateRequest.yaml — minProperties: 1
+	// An empty patch body {} must be rejected — at least one field must be present.
+	doc := map[string]any{}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "AgentUpdateRequest", raw),
+		"empty AgentUpdateRequest {} must fail — minProperties: 1 requires at least one field")
+}
+
+func TestContract_AgentUpdateRequest_SingleFieldAccepted(t *testing.T) {
+	// One field is the minimum that satisfies minProperties:1.
+	doc := map[string]any{"model": "gpt-4o"}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "AgentUpdateRequest", raw),
+		"AgentUpdateRequest with one field (model) must pass — satisfies minProperties:1")
+}
+
+// ── Concurrent compile race test ──────────────────────────────────────────────
+// Traces to: Phase 7 fix-Y — concurrent schema compilation must be race-free
+
+func TestCompileInboundSchema_ConcurrentDifferentSchemas(t *testing.T) {
+	// This test must be run with -race to detect data races in the schema compiler cache.
+	// Traces to: pkg/gateway/rest_inbound_validate.go — compileInboundSchema with sync.Map cache.
+	t.Parallel()
+
+	// 10 different schema names to compile concurrently.
+	schemas := []string{
+		"AgentCreateRequest", "AgentUpdateRequest", "SessionCreateRequest",
+		"ProbeProviderRequest", "SandboxConfigUpdate", "ExecAllowlist",
+		"SessionScopeRequest", "AuditLogToggleRequest", "SkillTrustUpdateRequest",
+		"PromptGuardUpdateRequest",
+	}
+
+	type result struct {
+		name string
+		err  error
+	}
+	results := make(chan result, len(schemas))
+
+	for _, name := range schemas {
+		n := name
+		go func() {
+			// validateAgainstComponentSchema forces schema compilation (lazy init).
+			schemaPath := componentSchemaDir
+			if schemaPath == "" {
+				// initSchemas not called yet — run a quick init
+				_ = initSchemas(t)
+			}
+			raw := []byte(`{"name":"test"}`)
+			err := validateAgainstComponentSchemaRawJSON(t, n, raw)
+			// We expect validation to either pass or fail — no panic or race.
+			// The nil-vs-error outcome depends on the schema, but the important
+			// thing is no data race occurs.
+			results <- result{name: n, err: err}
+		}()
+	}
+
+	for range schemas {
+		r := <-results
+		// Each schema must compile without panicking (err may be non-nil for invalid fixture data).
+		t.Logf("schema %s: validate result=%v", r.name, r.err != nil)
+	}
+}

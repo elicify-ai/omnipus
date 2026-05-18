@@ -635,6 +635,23 @@ describe('ClientFrameTypes — contract test (NF-5)', () => {
     expect(ClientFrameTypes).toContain('cancel')
   })
 
+  it('ClientFrameTypes contains exactly the 8 specified client frame types', () => {
+    // Traces to: fix-Y — pr-test-analyzer gap: full-set assertion for ClientFrameTypes.
+    // These are the 8 client→server frame types defined in contracts/asyncapi.yaml.
+    // Changing this set requires a corresponding spec change — catch regressions here.
+    const expectedTypes = new Set([
+      'auth',
+      'message',
+      'cancel',
+      'exec_approval_response',
+      'ping',
+      'attach_session',
+      'device_pairing_response',
+      'session_close',
+    ])
+    expect(new Set(ClientFrameTypes)).toEqual(expectedTypes)
+  })
+
   it('session_close frame sent from server is rejected by _parseServerFrame (direction filter)', () => {
     // A session_close frame originates from the client. If the server somehow
     // echoes it back, the direction filter in _parseServerFrame must drop it.
@@ -662,4 +679,73 @@ describe('ClientFrameTypes — contract test (NF-5)', () => {
 
     conn.disconnect()
   })
+})
+
+// ── Parametrized direction-filter: all 8 client frame types ───────────────────
+//
+// Traces to: fix-Y — pr-test-analyzer gap: parametrized direction-filter coverage
+// for all client→server frame types.
+//
+// Every ClientFrameType, when spoofed as a server→client frame, must be
+// rejected by _parseServerFrame's direction filter and increment the dropped
+// frame counter. This prevents spoofing attacks where a server sends a frame
+// whose type belongs to the client-only set.
+
+describe('WsConnection direction-filter — all client frame types rejected when spoofed', () => {
+  beforeEach(() => {
+    resetDroppedFrameCount()
+    resetUnknownFrameTypeCount()
+  })
+
+  // The 8 client frame types with minimal valid payloads that would otherwise
+  // satisfy their Zod schemas (ensuring rejection is from direction filter, not
+  // schema validation).
+  const clientFramePayloads: Array<{ type: string; payload: Record<string, unknown> }> = [
+    { type: 'auth', payload: { type: 'auth', token: 'spoofed_token_value_here_x' } },
+    { type: 'message', payload: { type: 'message', content: 'hello', session_id: 's1' } },
+    { type: 'cancel', payload: { type: 'cancel', session_id: 's1' } },
+    {
+      type: 'exec_approval_response',
+      payload: { type: 'exec_approval_response', id: 'appr_1', decision: 'allow' },
+    },
+    { type: 'ping', payload: { type: 'ping' } },
+    { type: 'attach_session', payload: { type: 'attach_session', session_id: 's1' } },
+    {
+      type: 'device_pairing_response',
+      payload: {
+        type: 'device_pairing_response',
+        pairing_token: 'tok',
+        device_name: 'My Device',
+        accept: true,
+      },
+    },
+    { type: 'session_close', payload: { type: 'session_close', session_id: 's1' } },
+  ]
+
+  it.each(clientFramePayloads)(
+    '$type — spoofed server→client direction is rejected, dropped counter increments',
+    ({ type: frameType, payload }) => {
+      // Traces to: fix-Y — direction filter must reject all 8 client frame types
+      // when spoofed as server-originated frames.
+      const cbs = makeCallbacks()
+      const conn = new WsConnection(cbs)
+      conn.connect()
+      lastWsInstance.onopen?.()
+
+      // Simulate receiving a client→server frame from the server (spoofed direction).
+      lastWsInstance.onmessage?.({ data: JSON.stringify(payload) })
+
+      // onFrame must NOT be called — direction filter blocks delivery.
+      expect(cbs.onFrame).not.toHaveBeenCalled()
+      // The frame must be counted as dropped.
+      expect(getDroppedFrameCount()).toBeGreaterThan(0)
+      // Unknown-type counter must NOT increment — the type is known but wrong direction.
+      expect(getUnknownFrameTypeCount()).toBe(0)
+
+      // Ensure the type we are testing is in ClientFrameTypes (the filter's source of truth).
+      expect(ClientFrameTypes).toContain(frameType)
+
+      conn.disconnect()
+    }
+  )
 })

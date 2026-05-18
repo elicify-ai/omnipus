@@ -1561,3 +1561,529 @@ func repeatStr(s string, n int) string {
 	}
 	return string(result)
 }
+
+// ── fix-O: 11 promoted schemas ────────────────────────────────────────────────
+
+// ── AuditLogToggleRequest ─────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AuditLogToggleRequest.yaml (fix-O)
+
+func FixtureAuditLogToggleRequest_Populated() AuditLogToggleRequest {
+	return AuditLogToggleRequest{Enabled: true}
+}
+
+func FixtureAuditLogToggleRequest_ZeroValue() AuditLogToggleRequest {
+	return AuditLogToggleRequest{}
+}
+
+func FixtureAuditLogToggleRequest_Edge() AuditLogToggleRequest {
+	return AuditLogToggleRequest{Enabled: false}
+}
+
+// ── AuditLogUpdateResponse ────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AuditLogUpdateResponse.yaml (fix-O)
+
+func FixtureAuditLogUpdateResponse_Populated() AuditLogUpdateResponse {
+	return AuditLogUpdateResponse{
+		Saved:           true,
+		RequiresRestart: true,
+		AppliedEnabled:  false, // old value before restart
+	}
+}
+
+func FixtureAuditLogUpdateResponse_ZeroValue() AuditLogUpdateResponse {
+	return AuditLogUpdateResponse{}
+}
+
+func FixtureAuditLogUpdateResponse_Edge() AuditLogUpdateResponse {
+	return AuditLogUpdateResponse{
+		Saved:           false,
+		RequiresRestart: true,
+		AppliedEnabled:  true,
+	}
+}
+
+// ── SkillTrustUpdateRequest ───────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/SkillTrustUpdateRequest.yaml (fix-O)
+
+func FixtureSkillTrustUpdateRequest_Populated() SkillTrustUpdateRequest {
+	return SkillTrustUpdateRequest{Level: SkillTrustUpdateRequestLevel("block_unverified")}
+}
+
+func FixtureSkillTrustUpdateRequest_ZeroValue() SkillTrustUpdateRequest {
+	return SkillTrustUpdateRequest{}
+}
+
+func FixtureSkillTrustUpdateRequest_Edge() SkillTrustUpdateRequest {
+	return SkillTrustUpdateRequest{Level: SkillTrustUpdateRequestLevel("allow_all")}
+}
+
+// ── SkillTrustUpdateResponse ──────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/SkillTrustUpdateResponse.yaml (fix-O)
+
+func FixtureSkillTrustUpdateResponse_Populated() SkillTrustUpdateResponse {
+	warning := strPtr("allow_all disables hash verification — community skills run without integrity checks")
+	return SkillTrustUpdateResponse{
+		Saved:           true,
+		RequiresRestart: false,
+		AppliedLevel:    SkillTrustUpdateResponseAppliedLevel("allow_all"),
+		Warning:         warning,
+	}
+}
+
+func FixtureSkillTrustUpdateResponse_ZeroValue() SkillTrustUpdateResponse {
+	return SkillTrustUpdateResponse{}
+}
+
+func FixtureSkillTrustUpdateResponse_Edge() SkillTrustUpdateResponse {
+	return SkillTrustUpdateResponse{
+		Saved:           true,
+		RequiresRestart: false,
+		AppliedLevel:    SkillTrustUpdateResponseAppliedLevel("block_unverified"),
+	}
+}
+
+// ── PromptGuardUpdateRequest ──────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/PromptGuardUpdateRequest.yaml (fix-O)
+
+func FixturePromptGuardUpdateRequest_Populated() PromptGuardUpdateRequest {
+	return PromptGuardUpdateRequest{Level: PromptGuardUpdateRequestLevel("high")}
+}
+
+func FixturePromptGuardUpdateRequest_ZeroValue() PromptGuardUpdateRequest {
+	return PromptGuardUpdateRequest{}
+}
+
+func FixturePromptGuardUpdateRequest_Edge() PromptGuardUpdateRequest {
+	return PromptGuardUpdateRequest{Level: PromptGuardUpdateRequestLevel("low")}
+}
+
+// ── PromptGuardUpdateResponse ─────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/PromptGuardUpdateResponse.yaml (fix-O)
+
+func FixturePromptGuardUpdateResponse_Populated() PromptGuardUpdateResponse {
+	return PromptGuardUpdateResponse{
+		Saved:           true,
+		RequiresRestart: false,
+		AppliedLevel:    PromptGuardUpdateResponseAppliedLevel("high"),
+	}
+}
+
+func FixturePromptGuardUpdateResponse_ZeroValue() PromptGuardUpdateResponse {
+	return PromptGuardUpdateResponse{}
+}
+
+func FixturePromptGuardUpdateResponse_Edge() PromptGuardUpdateResponse {
+	warning := strPtr("hot-reload failed — restart required")
+	return PromptGuardUpdateResponse{
+		Saved:           true,
+		RequiresRestart: true,
+		AppliedLevel:    PromptGuardUpdateResponseAppliedLevel("medium"),
+		Warning:         warning,
+	}
+}
+
+// ── RateLimitsResponse ────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/RateLimitsResponse.yaml (fix-O)
+
+func FixtureRateLimitsResponse_Populated() RateLimitsResponse {
+	return RateLimitsResponse{
+		Enabled:                    true,
+		DailyCostCap:               5.0,
+		DailyCostUsd:               1.23,
+		MaxAgentLlmCallsPerHour:    100,
+		MaxAgentToolCallsPerMinute: 60,
+	}
+}
+
+func FixtureRateLimitsResponse_ZeroValue() RateLimitsResponse {
+	return RateLimitsResponse{}
+}
+
+func FixtureRateLimitsResponse_Edge() RateLimitsResponse {
+	return RateLimitsResponse{
+		Enabled:                    false,
+		DailyCostCap:               0, // unlimited
+		DailyCostUsd:               0,
+		MaxAgentLlmCallsPerHour:    0, // unlimited
+		MaxAgentToolCallsPerMinute: 0, // unlimited
+	}
+}
+
+// ── RateLimitsUpdateRequest ───────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/RateLimitsUpdateRequest.yaml (fix-O)
+
+func FixtureRateLimitsUpdateRequest_Populated() RateLimitsUpdateRequest {
+	cap := float64(10.0)
+	llm := int64(200)
+	tool := int64(120)
+	return RateLimitsUpdateRequest{
+		DailyCostCapUsd:            &cap,
+		MaxAgentLlmCallsPerHour:    &llm,
+		MaxAgentToolCallsPerMinute: &tool,
+	}
+}
+
+func FixtureRateLimitsUpdateRequest_ZeroValue() RateLimitsUpdateRequest {
+	return RateLimitsUpdateRequest{}
+}
+
+func FixtureRateLimitsUpdateRequest_Edge() RateLimitsUpdateRequest {
+	cap := float64(0)
+	return RateLimitsUpdateRequest{DailyCostCapUsd: &cap}
+}
+
+// ── RateLimitsUpdateResponse ──────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/RateLimitsUpdateResponse.yaml (fix-O)
+
+func FixtureRateLimitsUpdateResponse_Populated() RateLimitsUpdateResponse {
+	cap := float64(10.0)
+	llm := int64(200)
+	tool := int64(120)
+	return RateLimitsUpdateResponse{
+		Saved:           true,
+		RequiresRestart: false,
+		Applied: &struct {
+			DailyCostCapUsd            *float64 `json:"daily_cost_cap_usd,omitempty"`
+			MaxAgentLlmCallsPerHour    *int64   `json:"max_agent_llm_calls_per_hour,omitempty"`
+			MaxAgentToolCallsPerMinute *int64   `json:"max_agent_tool_calls_per_minute,omitempty"`
+		}{
+			DailyCostCapUsd:            &cap,
+			MaxAgentLlmCallsPerHour:    &llm,
+			MaxAgentToolCallsPerMinute: &tool,
+		},
+	}
+}
+
+func FixtureRateLimitsUpdateResponse_ZeroValue() RateLimitsUpdateResponse {
+	return RateLimitsUpdateResponse{}
+}
+
+func FixtureRateLimitsUpdateResponse_Edge() RateLimitsUpdateResponse {
+	warning := strPtr("hot-reload failed — restart required")
+	return RateLimitsUpdateResponse{
+		Saved:           true,
+		RequiresRestart: true,
+		Warning:         warning,
+	}
+}
+
+// ── SessionScopeUpdateResponse ────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/SessionScopeUpdateResponse.yaml (fix-O)
+
+func FixtureSessionScopeUpdateResponse_Populated() SessionScopeUpdateResponse {
+	return SessionScopeUpdateResponse{
+		Saved:           true,
+		RequiresRestart: true,
+		AppliedDmScope:  "agent",
+	}
+}
+
+func FixtureSessionScopeUpdateResponse_ZeroValue() SessionScopeUpdateResponse {
+	return SessionScopeUpdateResponse{}
+}
+
+func FixtureSessionScopeUpdateResponse_Edge() SessionScopeUpdateResponse {
+	warning := strPtr("session routing restart required")
+	return SessionScopeUpdateResponse{
+		Saved:           true,
+		RequiresRestart: true,
+		AppliedDmScope:  "shared",
+		Warning:         warning,
+	}
+}
+
+// ── RetentionUpdateResponse ───────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/RetentionUpdateResponse.yaml (fix-O)
+
+func FixtureRetentionUpdateResponse_Populated() RetentionUpdateResponse {
+	return RetentionUpdateResponse{
+		Saved:           true,
+		RequiresRestart: false,
+		Disabled:        false,
+		SessionDays:     90,
+	}
+}
+
+func FixtureRetentionUpdateResponse_ZeroValue() RetentionUpdateResponse {
+	return RetentionUpdateResponse{}
+}
+
+func FixtureRetentionUpdateResponse_Edge() RetentionUpdateResponse {
+	return RetentionUpdateResponse{
+		Saved:           true,
+		RequiresRestart: false,
+		Disabled:        true, // retention disabled — keep forever
+		SessionDays:     0,
+	}
+}
+
+// ── fix-P: 12 new schemas (excluding RateLimitsStatusResponse — deleted in integration) ────────
+
+// ── AgentToolsResponse ────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AgentToolsResponse.yaml (fix-P)
+
+func FixtureAgentToolsResponse_Populated() AgentToolsResponse {
+	agentType := AgentToolsResponseAgentTypeCore
+	allow := AgentToolsResponseConfigBuiltinDefaultPolicyAllow
+	toolCfgAllow := AgentToolsResponseToolsConfiguredPolicyAllow
+	toolEffAllow := AgentToolsResponseToolsEffectivePolicyAllow
+	return AgentToolsResponse{
+		AgentType: &agentType,
+		Config: struct {
+			Builtin *struct {
+				DefaultPolicy *AgentToolsResponseConfigBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
+			} `json:"builtin,omitempty"`
+			Mcp *struct {
+				Servers *[]struct {
+					Id    string    `json:"id"`
+					Tools *[]string `json:"tools,omitempty"`
+				} `json:"servers,omitempty"`
+			} `json:"mcp,omitempty"`
+		}{
+			Builtin: &struct {
+				DefaultPolicy *AgentToolsResponseConfigBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
+			}{DefaultPolicy: &allow},
+		},
+		Tools: []struct {
+			ConfiguredPolicy AgentToolsResponseToolsConfiguredPolicy `json:"configured_policy"`
+			EffectivePolicy  AgentToolsResponseToolsEffectivePolicy  `json:"effective_policy"`
+			FenceApplied     bool                                    `json:"fence_applied"`
+			Name             string                                  `json:"name"`
+			RequiresAdminAsk bool                                    `json:"requires_admin_ask"`
+		}{
+			{
+				Name:             "workspace.shell",
+				ConfiguredPolicy: toolCfgAllow,
+				EffectivePolicy:  toolEffAllow,
+				FenceApplied:     false,
+				RequiresAdminAsk: false,
+			},
+		},
+	}
+}
+
+func FixtureAgentToolsResponse_ZeroValue() AgentToolsResponse {
+	return AgentToolsResponse{}
+}
+
+func FixtureAgentToolsResponse_Edge() AgentToolsResponse {
+	agentType := AgentToolsResponseAgentTypeCustom
+	deny := AgentToolsResponseConfigBuiltinDefaultPolicyDeny
+	toolCfgDeny := AgentToolsResponseToolsConfiguredPolicyDeny
+	toolEffAsk := AgentToolsResponseToolsEffectivePolicyAsk
+	return AgentToolsResponse{
+		AgentType: &agentType,
+		Config: struct {
+			Builtin *struct {
+				DefaultPolicy *AgentToolsResponseConfigBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
+			} `json:"builtin,omitempty"`
+			Mcp *struct {
+				Servers *[]struct {
+					Id    string    `json:"id"`
+					Tools *[]string `json:"tools,omitempty"`
+				} `json:"servers,omitempty"`
+			} `json:"mcp,omitempty"`
+		}{
+			Builtin: &struct {
+				DefaultPolicy *AgentToolsResponseConfigBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
+			}{DefaultPolicy: &deny},
+		},
+		Tools: []struct {
+			ConfiguredPolicy AgentToolsResponseToolsConfiguredPolicy `json:"configured_policy"`
+			EffectivePolicy  AgentToolsResponseToolsEffectivePolicy  `json:"effective_policy"`
+			FenceApplied     bool                                    `json:"fence_applied"`
+			Name             string                                  `json:"name"`
+			RequiresAdminAsk bool                                    `json:"requires_admin_ask"`
+		}{
+			{
+				Name:             "system.spawn_subagent",
+				ConfiguredPolicy: toolCfgDeny,
+				EffectivePolicy:  toolEffAsk,
+				FenceApplied:     true,
+				RequiresAdminAsk: true,
+			},
+		},
+	}
+}
+
+// ── ChannelEnabledResponse ────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ChannelEnabledResponse.yaml (fix-P)
+
+func FixtureChannelEnabledResponse_Populated() ChannelEnabledResponse {
+	return ChannelEnabledResponse{Id: "telegram", Enabled: true}
+}
+
+func FixtureChannelEnabledResponse_ZeroValue() ChannelEnabledResponse {
+	return ChannelEnabledResponse{}
+}
+
+func FixtureChannelEnabledResponse_Edge() ChannelEnabledResponse {
+	return ChannelEnabledResponse{Id: "discord", Enabled: false}
+}
+
+// ── ChannelTestResponse ───────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ChannelTestResponse.yaml (fix-P)
+
+func FixtureChannelTestResponse_Populated() ChannelTestResponse {
+	return ChannelTestResponse{Success: true, Message: "all required credentials are configured"}
+}
+
+func FixtureChannelTestResponse_ZeroValue() ChannelTestResponse {
+	return ChannelTestResponse{}
+}
+
+func FixtureChannelTestResponse_Edge() ChannelTestResponse {
+	return ChannelTestResponse{
+		Success: false,
+		Message: "missing required credential: telegram_bot_token",
+	}
+}
+
+// ── BackupCreateResponse ──────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/BackupCreateResponse.yaml (fix-P)
+
+func FixtureBackupCreateResponse_Populated() BackupCreateResponse {
+	return BackupCreateResponse{
+		Path:      "/home/user/.omnipus/backups/backup-20260516T103000Z.tar.gz",
+		SizeBytes: 1048576,
+		CreatedAt: time.Date(2026, 5, 16, 10, 30, 0, 0, time.UTC),
+	}
+}
+
+func FixtureBackupCreateResponse_ZeroValue() BackupCreateResponse {
+	return BackupCreateResponse{}
+}
+
+func FixtureBackupCreateResponse_Edge() BackupCreateResponse {
+	return BackupCreateResponse{
+		Path:      "/home/user/.omnipus/backups/backup-" + repeatStr("x", 30) + ".tar.gz",
+		SizeBytes: 0, // minimum: 0 — empty archive valid
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+}
+
+// ── OperationResult ───────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/OperationResult.yaml (fix-P)
+
+func FixtureOperationResult_Populated() OperationResult {
+	return OperationResult{Success: true}
+}
+
+func FixtureOperationResult_ZeroValue() OperationResult {
+	return OperationResult{}
+}
+
+func FixtureOperationResult_Edge() OperationResult {
+	errMsg := strPtr("operation failed: permission denied")
+	return OperationResult{Success: false, Error: errMsg}
+}
+
+// ── ToolApprovalResponse ──────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ToolApprovalResponse.yaml (fix-P)
+
+func FixtureToolApprovalResponse_Populated() ToolApprovalResponse {
+	return ToolApprovalResponse{
+		ApprovalId: "ap-550e8400-e29b-41d4-a716-446655440001",
+		Action:     ToolApprovalResponseAction("approve"),
+		Status:     ToolApprovalResponseStatus("ok"),
+	}
+}
+
+func FixtureToolApprovalResponse_ZeroValue() ToolApprovalResponse {
+	return ToolApprovalResponse{}
+}
+
+func FixtureToolApprovalResponse_Edge() ToolApprovalResponse {
+	return ToolApprovalResponse{
+		ApprovalId: "ap-" + repeatStr("e", 36),
+		Action:     ToolApprovalResponseAction("deny"),
+		Status:     ToolApprovalResponseStatus("ok"),
+	}
+}
+
+// ── UploadFilesResponse ───────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/UploadFilesResponse.yaml (fix-P)
+
+func FixtureUploadFilesResponse_Populated() UploadFilesResponse {
+	return UploadFilesResponse{
+		Files: []struct {
+			ContentType string `json:"content_type"`
+			Name        string `json:"name"`
+			Path        string `json:"path"`
+			Size        int64  `json:"size"`
+		}{
+			{
+				Name:        "report.pdf",
+				Path:        "uploads/sess-1/report.pdf",
+				ContentType: "application/pdf",
+				Size:        204800,
+			},
+		},
+	}
+}
+
+func FixtureUploadFilesResponse_ZeroValue() UploadFilesResponse {
+	return UploadFilesResponse{}
+}
+
+func FixtureUploadFilesResponse_Edge() UploadFilesResponse {
+	return UploadFilesResponse{
+		Files: []struct {
+			ContentType string `json:"content_type"`
+			Name        string `json:"name"`
+			Path        string `json:"path"`
+			Size        int64  `json:"size"`
+		}{
+			{Name: "a.png", Path: "uploads/s/a.png", ContentType: "image/png", Size: 0},
+			{Name: "b.txt", Path: "uploads/s/b.txt", ContentType: "text/plain", Size: 1},
+		},
+	}
+}
+
+// ── TaskAcceptedResponse ──────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/TaskAcceptedResponse.yaml (fix-P)
+
+func FixtureTaskAcceptedResponse_Populated() TaskAcceptedResponse {
+	return TaskAcceptedResponse{
+		TaskId: "550e8400-e29b-41d4-a716-446655440000",
+		Status: TaskAcceptedResponseStatus("accepted"),
+	}
+}
+
+func FixtureTaskAcceptedResponse_ZeroValue() TaskAcceptedResponse {
+	return TaskAcceptedResponse{}
+}
+
+func FixtureTaskAcceptedResponse_Edge() TaskAcceptedResponse {
+	return TaskAcceptedResponse{
+		TaskId: "00000000-0000-0000-0000-000000000001",
+		Status: TaskAcceptedResponseStatus("accepted"),
+	}
+}
+
+// ── AgentOwnerUpdateResponse ──────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AgentOwnerUpdateResponse.yaml (fix-P)
+
+func FixtureAgentOwnerUpdateResponse_Populated() AgentOwnerUpdateResponse {
+	return AgentOwnerUpdateResponse{
+		AgentId:       "custom-agent-abc123",
+		OwnerUsername: "alice",
+		Success:       true,
+	}
+}
+
+func FixtureAgentOwnerUpdateResponse_ZeroValue() AgentOwnerUpdateResponse {
+	return AgentOwnerUpdateResponse{}
+}
+
+func FixtureAgentOwnerUpdateResponse_Edge() AgentOwnerUpdateResponse {
+	return AgentOwnerUpdateResponse{
+		AgentId:       "custom-agent-" + repeatStr("x", 36),
+		OwnerUsername: "unicode-owner-🔑",
+		Success:       false,
+	}
+}
