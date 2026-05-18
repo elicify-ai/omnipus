@@ -544,6 +544,14 @@ export const SessionScopeRequest = z
     ]),
   })
   .passthrough();
+export const SessionScopeUpdateResponse = z
+  .object({
+    saved: z.boolean(),
+    requires_restart: z.boolean(),
+    applied_dm_scope: z.string(),
+    warning: z.string().optional(),
+  })
+  .passthrough();
 export const HealthResponse = z
   .object({ status: z.literal("ok") })
   .passthrough();
@@ -603,9 +611,17 @@ export const SkillTrustResponse = z
     level: z.enum(["block_unverified", "warn_unverified", "allow_all"]),
   })
   .passthrough();
-export const updateSkillTrust_Body = z
+export const SkillTrustUpdateRequest = z
   .object({
     level: z.enum(["block_unverified", "warn_unverified", "allow_all"]),
+  })
+  .passthrough();
+export const SkillTrustUpdateResponse = z
+  .object({
+    saved: z.boolean(),
+    requires_restart: z.boolean(),
+    applied_level: z.enum(["block_unverified", "warn_unverified", "allow_all"]),
+    warning: z.string().optional(),
   })
   .passthrough();
 export const PromptGuardResponse = z
@@ -614,16 +630,49 @@ export const PromptGuardResponse = z
     requires_restart: z.boolean(),
   })
   .passthrough();
-export const updatePromptGuard_Body = z
+export const PromptGuardUpdateRequest = z
   .object({ level: z.enum(["low", "medium", "high"]) })
   .passthrough();
-export const updateRateLimits_Body = z
+export const PromptGuardUpdateResponse = z
+  .object({
+    saved: z.boolean(),
+    requires_restart: z.boolean(),
+    applied_level: z.enum(["low", "medium", "high"]),
+    warning: z.string().optional(),
+  })
+  .passthrough();
+export const RateLimitsResponse = z
+  .object({
+    enabled: z.boolean(),
+    daily_cost_usd: z.number().gte(0),
+    daily_cost_cap: z.number().gte(0),
+    max_agent_llm_calls_per_hour: z.number().int().gte(0),
+    max_agent_tool_calls_per_minute: z.number().int().gte(0),
+  })
+  .passthrough();
+export const RateLimitsUpdateRequest = z
   .object({
     daily_cost_cap_usd: z.number().gte(0),
     max_agent_llm_calls_per_hour: z.number().int().gte(0),
     max_agent_tool_calls_per_minute: z.number().int().gte(0),
   })
   .partial()
+  .passthrough();
+export const RateLimitsUpdateResponse = z
+  .object({
+    saved: z.boolean(),
+    requires_restart: z.boolean(),
+    applied: z
+      .object({
+        daily_cost_cap_usd: z.number(),
+        max_agent_llm_calls_per_hour: z.number().int(),
+        max_agent_tool_calls_per_minute: z.number().int(),
+      })
+      .partial()
+      .passthrough()
+      .optional(),
+    warning: z.string().optional(),
+  })
   .passthrough();
 export const SandboxConfig = z
   .object({
@@ -709,9 +758,27 @@ export const AuditEntry = z
   })
   .passthrough();
 export const AuditLogToggle = z.object({ enabled: z.boolean() }).passthrough();
+export const AuditLogToggleRequest = z
+  .object({ enabled: z.boolean() })
+  .passthrough();
+export const AuditLogUpdateResponse = z
+  .object({
+    saved: z.boolean(),
+    requires_restart: z.boolean(),
+    applied_enabled: z.boolean(),
+  })
+  .passthrough();
 export const RetentionConfig = z
   .object({ session_days: z.number().int().gte(0), disabled: z.boolean() })
   .partial()
+  .passthrough();
+export const RetentionUpdateResponse = z
+  .object({
+    saved: z.boolean(),
+    requires_restart: z.boolean(),
+    session_days: z.number().int().gte(0),
+    disabled: z.boolean(),
+  })
   .passthrough();
 export const RetentionSweepResult = z
   .object({
@@ -2132,13 +2199,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         schema: z.object({ enabled: z.boolean() }).passthrough(),
       },
     ],
-    response: z
-      .object({
-        saved: z.boolean(),
-        requires_restart: z.boolean(),
-        applied_enabled: z.boolean(),
-      })
-      .passthrough(),
+    response: AuditLogUpdateResponse,
     errors: [
       {
         status: 400,
@@ -2234,17 +2295,10 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         name: "body",
         type: "Body",
-        schema: updatePromptGuard_Body,
+        schema: PromptGuardUpdateRequest,
       },
     ],
-    response: z
-      .object({
-        saved: z.boolean(),
-        requires_restart: z.boolean(),
-        applied_level: z.enum(["low", "medium", "high"]),
-        warning: z.string().optional(),
-      })
-      .passthrough(),
+    response: PromptGuardUpdateResponse,
     errors: [
       {
         status: 400,
@@ -2265,15 +2319,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     description: `Returns the current rate-limit config and the live daily LLM cost. Hot-reloaded — requires_restart is always false on PUT.
 `,
     requestFormat: "json",
-    response: z
-      .object({
-        enabled: z.boolean(),
-        daily_cost_usd: z.number().gte(0),
-        daily_cost_cap: z.number().gte(0),
-        max_agent_llm_calls_per_hour: z.number().int().gte(0),
-        max_agent_tool_calls_per_minute: z.number().int().gte(0),
-      })
-      .passthrough(),
+    response: RateLimitsResponse,
     errors: [
       {
         status: 401,
@@ -2293,25 +2339,10 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         name: "body",
         type: "Body",
-        schema: updateRateLimits_Body,
+        schema: RateLimitsUpdateRequest,
       },
     ],
-    response: z
-      .object({
-        saved: z.boolean(),
-        requires_restart: z.boolean(),
-        applied: z
-          .object({
-            daily_cost_cap_usd: z.number(),
-            max_agent_llm_calls_per_hour: z.number().int(),
-            max_agent_tool_calls_per_minute: z.number().int(),
-          })
-          .partial()
-          .passthrough()
-          .optional(),
-        warning: z.string().optional(),
-      })
-      .passthrough(),
+    response: RateLimitsUpdateResponse,
     errors: [
       {
         status: 400,
@@ -2355,14 +2386,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         schema: RetentionConfig,
       },
     ],
-    response: z
-      .object({
-        saved: z.boolean(),
-        requires_restart: z.boolean(),
-        session_days: z.number().int().gte(0),
-        disabled: z.boolean(),
-      })
-      .passthrough(),
+    response: RetentionUpdateResponse,
     errors: [
       {
         status: 400,
@@ -2507,14 +2531,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         schema: SessionScopeRequest,
       },
     ],
-    response: z
-      .object({
-        saved: z.boolean(),
-        requires_restart: z.boolean(),
-        applied_dm_scope: z.string(),
-        warning: z.string().optional(),
-      })
-      .passthrough(),
+    response: SessionScopeUpdateResponse,
     errors: [
       {
         status: 400,
@@ -2565,21 +2582,10 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         name: "body",
         type: "Body",
-        schema: updateSkillTrust_Body,
+        schema: SkillTrustUpdateRequest,
       },
     ],
-    response: z
-      .object({
-        saved: z.boolean(),
-        requires_restart: z.boolean(),
-        applied_level: z.enum([
-          "block_unverified",
-          "warn_unverified",
-          "allow_all",
-        ]),
-        warning: z.string().optional(),
-      })
-      .passthrough(),
+    response: SkillTrustUpdateResponse,
     errors: [
       {
         status: 400,

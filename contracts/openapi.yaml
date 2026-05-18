@@ -198,6 +198,28 @@ components:
       $ref: ./components/schemas/StorageStats.yaml
     MeInfo:
       $ref: ./components/schemas/MeInfo.yaml
+    AuditLogToggleRequest:
+      $ref: ./components/schemas/AuditLogToggleRequest.yaml
+    AuditLogUpdateResponse:
+      $ref: ./components/schemas/AuditLogUpdateResponse.yaml
+    SkillTrustUpdateRequest:
+      $ref: ./components/schemas/SkillTrustUpdateRequest.yaml
+    SkillTrustUpdateResponse:
+      $ref: ./components/schemas/SkillTrustUpdateResponse.yaml
+    PromptGuardUpdateRequest:
+      $ref: ./components/schemas/PromptGuardUpdateRequest.yaml
+    PromptGuardUpdateResponse:
+      $ref: ./components/schemas/PromptGuardUpdateResponse.yaml
+    RateLimitsResponse:
+      $ref: ./components/schemas/RateLimitsResponse.yaml
+    RateLimitsUpdateRequest:
+      $ref: ./components/schemas/RateLimitsUpdateRequest.yaml
+    RateLimitsUpdateResponse:
+      $ref: ./components/schemas/RateLimitsUpdateResponse.yaml
+    SessionScopeUpdateResponse:
+      $ref: ./components/schemas/SessionScopeUpdateResponse.yaml
+    RetentionUpdateResponse:
+      $ref: ./components/schemas/RetentionUpdateResponse.yaml
   responses:
     400BadRequest:
       description: "Bad request \u2014 missing or invalid field."
@@ -1234,26 +1256,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - saved
-                - requires_restart
-                - applied_dm_scope
-                properties:
-                  saved:
-                    type: boolean
-                    example: true
-                  requires_restart:
-                    type: boolean
-                    description: "Always true \u2014 session routing requires a gateway restart."
-                    example: true
-                  applied_dm_scope:
-                    type: string
-                    description: The dm_scope currently active (before restart).
-                    example: per-channel-peer
-                  warning:
-                    type: string
-                    description: Present when hot-reload failed (config saved, restart required).
+                $ref: '#/components/schemas/SessionScopeUpdateResponse'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -1612,44 +1615,14 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required:
-              - level
-              properties:
-                level:
-                  type: string
-                  enum:
-                  - block_unverified
-                  - warn_unverified
-                  - allow_all
+              $ref: '#/components/schemas/SkillTrustUpdateRequest'
       responses:
         '200':
           description: Updated skill trust level.
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - saved
-                - requires_restart
-                - applied_level
-                properties:
-                  saved:
-                    type: boolean
-                    example: true
-                  requires_restart:
-                    type: boolean
-                    example: false
-                  applied_level:
-                    type: string
-                    enum:
-                    - block_unverified
-                    - warn_unverified
-                    - allow_all
-                    example: block_unverified
-                  warning:
-                    type: string
-                    description: "Present when allow_all is selected \u2014 warns that hash verification is disabled.\n"
+                $ref: '#/components/schemas/SkillTrustUpdateResponse'
         '400':
           description: Invalid trust level value.
           content:
@@ -1695,46 +1668,14 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required:
-              - level
-              properties:
-                level:
-                  type: string
-                  enum:
-                  - low
-                  - medium
-                  - high
+              $ref: '#/components/schemas/PromptGuardUpdateRequest'
       responses:
         '200':
           description: Updated prompt guard level.
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - saved
-                - requires_restart
-                - applied_level
-                properties:
-                  saved:
-                    type: boolean
-                    example: true
-                  requires_restart:
-                    type: boolean
-                    example: false
-                  applied_level:
-                    type: string
-                    enum:
-                    - low
-                    - medium
-                    - high
-                    example: medium
-                  warning:
-                    type: string
-                    description: 'Present when hot-reload failed. Restart required to apply.
-
-                      '
+                $ref: '#/components/schemas/PromptGuardUpdateResponse'
         '400':
           description: Invalid level value.
           content:
@@ -1760,37 +1701,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - enabled
-                - daily_cost_usd
-                - daily_cost_cap
-                - max_agent_llm_calls_per_hour
-                - max_agent_tool_calls_per_minute
-                properties:
-                  enabled:
-                    type: boolean
-                    example: true
-                  daily_cost_usd:
-                    type: number
-                    format: double
-                    minimum: 0
-                    example: 0.42
-                  daily_cost_cap:
-                    type: number
-                    format: double
-                    minimum: 0
-                    example: 5.0
-                  max_agent_llm_calls_per_hour:
-                    type: integer
-                    format: int64
-                    minimum: 0
-                    example: 100
-                  max_agent_tool_calls_per_minute:
-                    type: integer
-                    format: int64
-                    minimum: 0
-                    example: 60
+                $ref: '#/components/schemas/RateLimitsResponse'
         '401':
           description: Missing or invalid bearer token.
           content:
@@ -1808,55 +1719,14 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                daily_cost_cap_usd:
-                  type: number
-                  format: double
-                  minimum: 0
-                  description: 0 = unlimited.
-                max_agent_llm_calls_per_hour:
-                  type: integer
-                  format: int64
-                  minimum: 0
-                  description: 0 = unlimited.
-                max_agent_tool_calls_per_minute:
-                  type: integer
-                  format: int64
-                  minimum: 0
-                  description: 0 = unlimited.
+              $ref: '#/components/schemas/RateLimitsUpdateRequest'
       responses:
         '200':
           description: Updated rate limit configuration.
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - saved
-                - requires_restart
-                properties:
-                  saved:
-                    type: boolean
-                    example: true
-                  requires_restart:
-                    type: boolean
-                    example: false
-                  applied:
-                    type: object
-                    properties:
-                      daily_cost_cap_usd:
-                        type: number
-                        format: double
-                      max_agent_llm_calls_per_hour:
-                        type: integer
-                        format: int64
-                      max_agent_tool_calls_per_minute:
-                        type: integer
-                        format: int64
-                  warning:
-                    type: string
-                    description: Present when hot-reload failed.
+                $ref: '#/components/schemas/RateLimitsUpdateResponse'
         '400':
           description: Invalid field types or values.
           content:
@@ -2017,34 +1887,14 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required:
-              - enabled
-              properties:
-                enabled:
-                  type: boolean
+              $ref: '#/components/schemas/AuditLogToggleRequest'
       responses:
         '200':
           description: Audit log state saved (restart required).
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - saved
-                - requires_restart
-                - applied_enabled
-                properties:
-                  saved:
-                    type: boolean
-                    example: true
-                  requires_restart:
-                    type: boolean
-                    example: true
-                  applied_enabled:
-                    type: boolean
-                    description: Value currently in effect (before this save).
-                    example: true
+                $ref: '#/components/schemas/AuditLogUpdateResponse'
         '400':
           description: Missing or invalid enabled field.
           content:
@@ -2097,26 +1947,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - saved
-                - requires_restart
-                - session_days
-                - disabled
-                properties:
-                  saved:
-                    type: boolean
-                    example: true
-                  requires_restart:
-                    type: boolean
-                    example: false
-                  session_days:
-                    type: integer
-                    minimum: 0
-                    example: 30
-                  disabled:
-                    type: boolean
-                    example: false
+                $ref: '#/components/schemas/RetentionUpdateResponse'
         '400':
           description: Type mismatch (float for session_days, string for disabled).
           content:

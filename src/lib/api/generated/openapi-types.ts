@@ -3690,6 +3690,204 @@ export interface components {
              */
             role: "admin" | "user";
         };
+        /**
+         * AuditLogToggleRequest
+         * @description Request body for PUT /api/v1/security/audit-log. Enables or disables audit logging.
+         */
+        AuditLogToggleRequest: {
+            /**
+             * @description Whether audit logging should be enabled.
+             * @example true
+             */
+            enabled: boolean;
+        };
+        /**
+         * AuditLogUpdateResponse
+         * @description Response from PUT /api/v1/security/audit-log. Audit log state saved; restart required.
+         */
+        AuditLogUpdateResponse: {
+            /** @example true */
+            saved: boolean;
+            /** @example true */
+            requires_restart: boolean;
+            /**
+             * @description Value currently in effect (before this save).
+             * @example true
+             */
+            applied_enabled: boolean;
+        };
+        /**
+         * SkillTrustUpdateRequest
+         * @description Request body for PUT /api/v1/security/skill-trust. Updates the skill trust level; controls how unverified community skills are handled.
+         */
+        SkillTrustUpdateRequest: {
+            /**
+             * @description New skill trust level.
+             * @example block_unverified
+             * @enum {string}
+             */
+            level: "block_unverified" | "warn_unverified" | "allow_all";
+        };
+        /**
+         * SkillTrustUpdateResponse
+         * @description Response from PUT /api/v1/security/skill-trust. Updated skill trust level.
+         */
+        SkillTrustUpdateResponse: {
+            /** @example true */
+            saved: boolean;
+            /** @example false */
+            requires_restart: boolean;
+            /**
+             * @example block_unverified
+             * @enum {string}
+             */
+            applied_level: "block_unverified" | "warn_unverified" | "allow_all";
+            /** @description Present when allow_all is selected — warns that hash verification is disabled. */
+            warning?: string;
+        };
+        /**
+         * PromptGuardUpdateRequest
+         * @description Request body for PUT /api/v1/security/prompt-guard. Updates the prompt injection detection strictness level.
+         */
+        PromptGuardUpdateRequest: {
+            /**
+             * @description New prompt injection detection strictness level.
+             * @example medium
+             * @enum {string}
+             */
+            level: "low" | "medium" | "high";
+        };
+        /**
+         * PromptGuardUpdateResponse
+         * @description Response from PUT /api/v1/security/prompt-guard. Updated prompt injection guard level.
+         */
+        PromptGuardUpdateResponse: {
+            /** @example true */
+            saved: boolean;
+            /** @example false */
+            requires_restart: boolean;
+            /**
+             * @example medium
+             * @enum {string}
+             */
+            applied_level: "low" | "medium" | "high";
+            /** @description Present when hot-reload failed. Restart required to apply. */
+            warning?: string;
+        };
+        /**
+         * RateLimitsResponse
+         * @description Response from GET /api/v1/security/rate-limits. Returns the current rate-limit configuration and the live daily LLM cost.
+         */
+        RateLimitsResponse: {
+            /** @example true */
+            enabled: boolean;
+            /**
+             * Format: double
+             * @description Live daily LLM cost accumulated so far today.
+             * @example 0.42
+             */
+            daily_cost_usd: number;
+            /**
+             * Format: double
+             * @description Configured daily cost cap in USD. 0 means unlimited.
+             * @example 5
+             */
+            daily_cost_cap: number;
+            /**
+             * Format: int64
+             * @description Maximum LLM calls per hour across all agents. 0 means unlimited.
+             * @example 100
+             */
+            max_agent_llm_calls_per_hour: number;
+            /**
+             * Format: int64
+             * @description Maximum tool calls per minute across all agents. 0 means unlimited.
+             * @example 60
+             */
+            max_agent_tool_calls_per_minute: number;
+        };
+        /**
+         * RateLimitsUpdateRequest
+         * @description Request body for PUT /api/v1/security/rate-limits. Partial update — any subset of the three cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded.
+         */
+        RateLimitsUpdateRequest: {
+            /**
+             * Format: double
+             * @description Daily cost cap in USD. 0 = unlimited.
+             */
+            daily_cost_cap_usd?: number;
+            /**
+             * Format: int64
+             * @description Maximum LLM calls per hour. 0 = unlimited.
+             */
+            max_agent_llm_calls_per_hour?: number;
+            /**
+             * Format: int64
+             * @description Maximum tool calls per minute. 0 = unlimited.
+             */
+            max_agent_tool_calls_per_minute?: number;
+        };
+        /**
+         * RateLimitsUpdateResponse
+         * @description Response from PUT /api/v1/security/rate-limits. Updated rate limit configuration.
+         */
+        RateLimitsUpdateResponse: {
+            /** @example true */
+            saved: boolean;
+            /** @example false */
+            requires_restart: boolean;
+            /** @description Applied rate limit values after the update. */
+            applied?: {
+                /** Format: double */
+                daily_cost_cap_usd?: number;
+                /** Format: int64 */
+                max_agent_llm_calls_per_hour?: number;
+                /** Format: int64 */
+                max_agent_tool_calls_per_minute?: number;
+            };
+            /** @description Present when hot-reload failed. */
+            warning?: string;
+        };
+        /**
+         * SessionScopeUpdateResponse
+         * @description Response from PUT /api/v1/security/session-scope. Session scope saved; restart required to apply.
+         */
+        SessionScopeUpdateResponse: {
+            /** @example true */
+            saved: boolean;
+            /**
+             * @description Always true — session routing requires a gateway restart.
+             * @example true
+             */
+            requires_restart: boolean;
+            /**
+             * @description The dm_scope currently active (before restart).
+             * @example per-channel-peer
+             */
+            applied_dm_scope: string;
+            /** @description Present when hot-reload failed (config saved, restart required). */
+            warning?: string;
+        };
+        /**
+         * RetentionUpdateResponse
+         * @description Response from PUT /api/v1/security/retention. Updated retention configuration.
+         */
+        RetentionUpdateResponse: {
+            /** @example true */
+            saved: boolean;
+            /** @example false */
+            requires_restart: boolean;
+            /**
+             * @description Applied session retention in days. 0 means use the system default (90 days).
+             * @example 30
+             */
+            session_days: number;
+            /**
+             * @description When true, retention sweeps are disabled and session logs are kept forever.
+             * @example false
+             */
+            disabled: boolean;
+        };
     };
     responses: {
         /** @description Bad request — missing or invalid field. */
@@ -4592,22 +4790,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example true */
-                        saved: boolean;
-                        /**
-                         * @description Always true — session routing requires a gateway restart.
-                         * @example true
-                         */
-                        requires_restart: boolean;
-                        /**
-                         * @description The dm_scope currently active (before restart).
-                         * @example per-channel-peer
-                         */
-                        applied_dm_scope: string;
-                        /** @description Present when hot-reload failed (config saved, restart required). */
-                        warning?: string;
-                    };
+                    "application/json": components["schemas"]["SessionScopeUpdateResponse"];
                 };
             };
             400: components["responses"]["400BadRequest"];
@@ -5030,10 +5213,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    /** @enum {string} */
-                    level: "block_unverified" | "warn_unverified" | "allow_all";
-                };
+                "application/json": components["schemas"]["SkillTrustUpdateRequest"];
             };
         };
         responses: {
@@ -5043,19 +5223,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example true */
-                        saved: boolean;
-                        /** @example false */
-                        requires_restart: boolean;
-                        /**
-                         * @example block_unverified
-                         * @enum {string}
-                         */
-                        applied_level: "block_unverified" | "warn_unverified" | "allow_all";
-                        /** @description Present when allow_all is selected — warns that hash verification is disabled. */
-                        warning?: string;
-                    };
+                    "application/json": components["schemas"]["SkillTrustUpdateResponse"];
                 };
             };
             /** @description Invalid trust level value. */
@@ -5116,10 +5284,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    /** @enum {string} */
-                    level: "low" | "medium" | "high";
-                };
+                "application/json": components["schemas"]["PromptGuardUpdateRequest"];
             };
         };
         responses: {
@@ -5129,19 +5294,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example true */
-                        saved: boolean;
-                        /** @example false */
-                        requires_restart: boolean;
-                        /**
-                         * @example medium
-                         * @enum {string}
-                         */
-                        applied_level: "low" | "medium" | "high";
-                        /** @description Present when hot-reload failed. Restart required to apply. */
-                        warning?: string;
-                    };
+                    "application/json": components["schemas"]["PromptGuardUpdateResponse"];
                 };
             };
             /** @description Invalid level value. */
@@ -5179,30 +5332,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example true */
-                        enabled: boolean;
-                        /**
-                         * Format: double
-                         * @example 0.42
-                         */
-                        daily_cost_usd: number;
-                        /**
-                         * Format: double
-                         * @example 5
-                         */
-                        daily_cost_cap: number;
-                        /**
-                         * Format: int64
-                         * @example 100
-                         */
-                        max_agent_llm_calls_per_hour: number;
-                        /**
-                         * Format: int64
-                         * @example 60
-                         */
-                        max_agent_tool_calls_per_minute: number;
-                    };
+                    "application/json": components["schemas"]["RateLimitsResponse"];
                 };
             };
             /** @description Missing or invalid bearer token. */
@@ -5225,23 +5355,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    /**
-                     * Format: double
-                     * @description 0 = unlimited.
-                     */
-                    daily_cost_cap_usd?: number;
-                    /**
-                     * Format: int64
-                     * @description 0 = unlimited.
-                     */
-                    max_agent_llm_calls_per_hour?: number;
-                    /**
-                     * Format: int64
-                     * @description 0 = unlimited.
-                     */
-                    max_agent_tool_calls_per_minute?: number;
-                };
+                "application/json": components["schemas"]["RateLimitsUpdateRequest"];
             };
         };
         responses: {
@@ -5251,22 +5365,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example true */
-                        saved: boolean;
-                        /** @example false */
-                        requires_restart: boolean;
-                        applied?: {
-                            /** Format: double */
-                            daily_cost_cap_usd?: number;
-                            /** Format: int64 */
-                            max_agent_llm_calls_per_hour?: number;
-                            /** Format: int64 */
-                            max_agent_tool_calls_per_minute?: number;
-                        };
-                        /** @description Present when hot-reload failed. */
-                        warning?: string;
-                    };
+                    "application/json": components["schemas"]["RateLimitsUpdateResponse"];
                 };
             };
             /** @description Invalid field types or values. */
@@ -5483,9 +5582,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    enabled: boolean;
-                };
+                "application/json": components["schemas"]["AuditLogToggleRequest"];
             };
         };
         responses: {
@@ -5495,17 +5592,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example true */
-                        saved: boolean;
-                        /** @example true */
-                        requires_restart: boolean;
-                        /**
-                         * @description Value currently in effect (before this save).
-                         * @example true
-                         */
-                        applied_enabled: boolean;
-                    };
+                    "application/json": components["schemas"]["AuditLogUpdateResponse"];
                 };
             };
             /** @description Missing or invalid enabled field. */
@@ -5576,16 +5663,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        /** @example true */
-                        saved: boolean;
-                        /** @example false */
-                        requires_restart: boolean;
-                        /** @example 30 */
-                        session_days: number;
-                        /** @example false */
-                        disabled: boolean;
-                    };
+                    "application/json": components["schemas"]["RetentionUpdateResponse"];
                 };
             };
             /** @description Type mismatch (float for session_days, string for disabled). */
@@ -7089,3 +7167,14 @@ export type DevicesResponse = components["schemas"]["DevicesResponse"];
 export type BackupEntry = components["schemas"]["BackupEntry"];
 export type StorageStats = components["schemas"]["StorageStats"];
 export type MeInfo = components["schemas"]["MeInfo"];
+export type AuditLogToggleRequest = components["schemas"]["AuditLogToggleRequest"];
+export type AuditLogUpdateResponse = components["schemas"]["AuditLogUpdateResponse"];
+export type SkillTrustUpdateRequest = components["schemas"]["SkillTrustUpdateRequest"];
+export type SkillTrustUpdateResponse = components["schemas"]["SkillTrustUpdateResponse"];
+export type PromptGuardUpdateRequest = components["schemas"]["PromptGuardUpdateRequest"];
+export type PromptGuardUpdateResponse = components["schemas"]["PromptGuardUpdateResponse"];
+export type RateLimitsResponse = components["schemas"]["RateLimitsResponse"];
+export type RateLimitsUpdateRequest = components["schemas"]["RateLimitsUpdateRequest"];
+export type RateLimitsUpdateResponse = components["schemas"]["RateLimitsUpdateResponse"];
+export type SessionScopeUpdateResponse = components["schemas"]["SessionScopeUpdateResponse"];
+export type RetentionUpdateResponse = components["schemas"]["RetentionUpdateResponse"];

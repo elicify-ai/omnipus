@@ -344,21 +344,29 @@ describe('Security API helpers', () => {
 
   describe('fetchRateLimits', () => {
     it('GET /api/v1/security/rate-limits — returns current limits', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ daily_cost_cap_usd: 5, max_agent_llm_calls_per_hour: 100 }))
+      // GET returns daily_cost_cap (not _usd) per contracts/components/schemas/RateLimitsResponse.yaml
+      fetchSpy.mockResolvedValueOnce(makeOkResponse({
+        enabled: true,
+        daily_cost_usd: 0.42,
+        daily_cost_cap: 5,
+        max_agent_llm_calls_per_hour: 100,
+        max_agent_tool_calls_per_minute: 60,
+      }))
 
       const { fetchRateLimits } = await import('./api')
       const result = await fetchRateLimits()
 
       const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
       expect(url).toContain('/api/v1/security/rate-limits')
-      expect(result.daily_cost_cap_usd).toBe(5)
+      expect(result.daily_cost_cap).toBe(5)
     })
   })
 
   describe('updateRateLimits', () => {
     it('PUT /api/v1/security/rate-limits — sends CSRF and body', async () => {
       const body = { daily_cost_cap_usd: 10, max_agent_llm_calls_per_hour: 50 }
-      fetchSpy.mockResolvedValueOnce(makeOkResponse(body))
+      // PUT returns RateLimitsUpdateResponse per contracts/components/schemas/RateLimitsUpdateResponse.yaml
+      fetchSpy.mockResolvedValueOnce(makeOkResponse({ saved: true, requires_restart: false }))
 
       const { updateRateLimits } = await import('./api')
       await updateRateLimits(body)

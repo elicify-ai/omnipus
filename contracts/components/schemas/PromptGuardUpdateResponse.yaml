@@ -1,0 +1,25 @@
+title: PromptGuardUpdateResponse
+description: >
+  Response from PUT /api/v1/security/prompt-guard. Updated prompt injection guard level.
+type: object
+required:
+  - saved
+  - requires_restart
+  - applied_level
+properties:
+  saved:
+    type: boolean
+    example: true
+  requires_restart:
+    type: boolean
+    example: false
+  applied_level:
+    type: string
+    enum:
+      - low
+      - medium
+      - high
+    example: medium
+  warning:
+    type: string
+    description: Present when hot-reload failed. Restart required to apply.

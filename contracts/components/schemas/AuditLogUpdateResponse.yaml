@@ -1,0 +1,19 @@
+title: AuditLogUpdateResponse
+description: >
+  Response from PUT /api/v1/security/audit-log. Audit log state saved; restart required.
+type: object
+required:
+  - saved
+  - requires_restart
+  - applied_enabled
+properties:
+  saved:
+    type: boolean
+    example: true
+  requires_restart:
+    type: boolean
+    example: true
+  applied_enabled:
+    type: boolean
+    description: Value currently in effect (before this save).
+    example: true

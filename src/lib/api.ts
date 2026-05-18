@@ -83,6 +83,17 @@ import {
   Message as WireMessageSchema,
   Session as WireSessionSchema,
   SessionDetail as WireSessionDetailSchema,
+  // Phase 7 fix-O — newly promoted from inline openapi.yaml schemas:
+  AuditLogUpdateResponse as AuditLogUpdateResponseSchema,
+  SkillTrustUpdateRequest as SkillTrustUpdateRequestSchema,
+  SkillTrustUpdateResponse as SkillTrustUpdateResponseSchema,
+  PromptGuardUpdateRequest as PromptGuardUpdateRequestSchema,
+  PromptGuardUpdateResponse as PromptGuardUpdateResponseSchema,
+  RateLimitsResponse as RateLimitsResponseSchema,
+  RateLimitsUpdateRequest as RateLimitsUpdateRequestSchema,
+  RateLimitsUpdateResponse as RateLimitsUpdateResponseSchema,
+  SessionScopeUpdateResponse as SessionScopeUpdateResponseSchema,
+  RetentionUpdateResponse as RetentionUpdateResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -199,6 +210,17 @@ import type {
   BackupEntry,
   StorageStats,
   MeInfo,
+  // Phase 7 fix-O — newly promoted from inline openapi.yaml schemas:
+  AuditLogUpdateResponse,
+  SkillTrustUpdateRequest,
+  SkillTrustUpdateResponse,
+  PromptGuardUpdateRequest,
+  PromptGuardUpdateResponse,
+  RateLimitsResponse,
+  RateLimitsUpdateRequest,
+  RateLimitsUpdateResponse,
+  SessionScopeUpdateResponse,
+  RetentionUpdateResponse,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -258,6 +280,17 @@ export type {
   BackupEntry,
   StorageStats,
   MeInfo,
+  // Phase 7 fix-O — newly promoted from inline openapi.yaml schemas:
+  AuditLogUpdateResponse,
+  SkillTrustUpdateRequest,
+  SkillTrustUpdateResponse,
+  PromptGuardUpdateRequest,
+  PromptGuardUpdateResponse,
+  RateLimitsResponse,
+  RateLimitsUpdateRequest,
+  RateLimitsUpdateResponse,
+  SessionScopeUpdateResponse,
+  RetentionUpdateResponse,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -1454,14 +1487,8 @@ export function fetchPendingRestart(): Promise<PendingRestartEntry[]> {
 // This endpoint controls whether audit logging is enabled at all.
 // AuditLogToggle is re-exported from generated openapi-types above.
 
-// SPA-internal update response — not a wire type, no generated counterpart.
-export type AuditLogUpdateResponse = { // not-wire-format: SPA-internal shape matching the inline response schema in contracts/openapi.yaml PUT /security/audit-log. Not a named schema component.
-  saved: boolean
-  requires_restart: boolean
-  applied_enabled: boolean
-}
-
-const _auditLogUpdateSchema = z.object({ saved: z.boolean(), requires_restart: z.boolean(), applied_enabled: z.boolean() }).passthrough()
+// AuditLogUpdateResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/AuditLogUpdateResponse.yaml.
 
 export function fetchAuditLogToggle(): Promise<AuditLogToggle> {
   return request<AuditLogToggle>('/security/audit-log', undefined, AuditLogToggleSchema)
@@ -1471,28 +1498,15 @@ export function updateAuditLog(enabled: boolean): Promise<AuditLogUpdateResponse
   return request<AuditLogUpdateResponse>('/security/audit-log', {
     method: 'PUT',
     body: JSON.stringify({ enabled }),
-  }, _auditLogUpdateSchema)
+  }, AuditLogUpdateResponseSchema)
 }
 
 // Skill trust — controls how unverified community skills are handled.
 // SkillTrustResponse is re-exported from generated openapi-types above.
-
-// SPA-internal update response — not a wire type, no generated counterpart.
-export type SkillTrustUpdateResponse = { // not-wire-format: SPA-internal shape matching the inline response schema in contracts/openapi.yaml PUT /security/skill-trust. Not a named schema component.
-  saved: boolean
-  requires_restart: boolean
-  applied_level: SkillTrustLevel
-}
-
-export interface SkillTrustUpdateBody { // not-wire-format: SPA-internal request body helper used with 'satisfies' to type-check the PUT /security/skill-trust request body. The wire schema is defined inline in contracts/openapi.yaml.
-  level: SkillTrustLevel
-}
-
-const _skillTrustUpdateSchema = z.object({
-  saved: z.boolean(),
-  requires_restart: z.boolean(),
-  applied_level: z.enum(['block_unverified', 'warn_unverified', 'allow_all']),
-}).passthrough()
+// SkillTrustUpdateRequest — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/SkillTrustUpdateRequest.yaml.
+// SkillTrustUpdateResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/SkillTrustUpdateResponse.yaml.
 
 export function fetchSkillTrust(): Promise<SkillTrustResponse> {
   return request<SkillTrustResponse>('/security/skill-trust', undefined, SkillTrustResponseSchema)
@@ -1501,29 +1515,16 @@ export function fetchSkillTrust(): Promise<SkillTrustResponse> {
 export function updateSkillTrust(level: SkillTrustLevel): Promise<SkillTrustUpdateResponse> {
   return request<SkillTrustUpdateResponse>('/security/skill-trust', {
     method: 'PUT',
-    body: JSON.stringify({ level } satisfies SkillTrustUpdateBody),
-  }, _skillTrustUpdateSchema)
+    body: JSON.stringify({ level } satisfies SkillTrustUpdateRequest),
+  }, SkillTrustUpdateResponseSchema)
 }
 
 // Prompt guard — uses `level` field, aligns with PromptInjectionLevel.
 // PromptGuardResponse is re-exported from generated openapi-types above.
-
-// SPA-internal update response — not a wire type, no generated counterpart.
-export type PromptGuardUpdateResponse = { // not-wire-format: SPA-internal shape matching the inline response schema in contracts/openapi.yaml PUT /security/prompt-guard. Not a named schema component.
-  saved: boolean
-  requires_restart: boolean
-  applied_level: PromptInjectionLevel
-}
-
-export interface PromptGuardUpdateBody { // not-wire-format: SPA-internal request body helper used with 'satisfies' to type-check the PUT /security/prompt-guard request body. The wire schema is defined inline in contracts/openapi.yaml.
-  level: PromptInjectionLevel
-}
-
-const _promptGuardUpdateSchema = z.object({
-  saved: z.boolean(),
-  requires_restart: z.boolean(),
-  applied_level: z.enum(['low', 'medium', 'high']),
-}).passthrough()
+// PromptGuardUpdateRequest — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/PromptGuardUpdateRequest.yaml.
+// PromptGuardUpdateResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/PromptGuardUpdateResponse.yaml.
 
 export function fetchPromptGuardLevel(): Promise<PromptGuardResponse> {
   return request<PromptGuardResponse>('/security/prompt-guard', undefined, PromptGuardResponseSchema)
@@ -1532,83 +1533,43 @@ export function fetchPromptGuardLevel(): Promise<PromptGuardResponse> {
 export function updatePromptGuardLevel(level: PromptInjectionLevel): Promise<PromptGuardUpdateResponse> {
   return request<PromptGuardUpdateResponse>('/security/prompt-guard', {
     method: 'PUT',
-    body: JSON.stringify({ level } satisfies PromptGuardUpdateBody),
-  }, _promptGuardUpdateSchema)
+    body: JSON.stringify({ level } satisfies PromptGuardUpdateRequest),
+  }, PromptGuardUpdateResponseSchema)
 }
 
 // Rate limits — adds write support and configures spending/throughput caps.
-// SPA-internal read response — not a generated wire type. The generated
-// RateLimitConfig schema is used for the full config shape.
-export type RateLimitsResponse = { // not-wire-format: SPA-internal shape matching the inline response schema in contracts/openapi.yaml GET/PUT /security/rate-limits. Not a named schema component.
-  daily_cost_cap_usd?: number
-  max_agent_llm_calls_per_hour?: number
-  max_agent_tool_calls_per_minute?: number
-}
-
-export interface RateLimitsUpdateBody { // not-wire-format: SPA-internal request body helper for PUT /security/rate-limits. The wire schema is defined inline in contracts/openapi.yaml.
-  daily_cost_cap_usd?: number
-  max_agent_llm_calls_per_hour?: number
-  max_agent_tool_calls_per_minute?: number
-}
-
-const _rateLimitsSchema = z.object({
-  daily_cost_cap_usd: z.number().optional(),
-  max_agent_llm_calls_per_hour: z.number().optional(),
-  max_agent_tool_calls_per_minute: z.number().optional(),
-}).passthrough()
+// RateLimitsResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/RateLimitsResponse.yaml.
+// RateLimitsUpdateRequest — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/RateLimitsUpdateRequest.yaml.
+// RateLimitsUpdateResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/RateLimitsUpdateResponse.yaml.
 
 export function fetchRateLimits(): Promise<RateLimitsResponse> {
-  return request<RateLimitsResponse>('/security/rate-limits', undefined, _rateLimitsSchema)
+  return request<RateLimitsResponse>('/security/rate-limits', undefined, RateLimitsResponseSchema)
 }
 
-export function updateRateLimits(body: RateLimitsUpdateBody): Promise<RateLimitsResponse> {
-  return request<RateLimitsResponse>('/security/rate-limits', {
+export function updateRateLimits(body: RateLimitsUpdateRequest): Promise<RateLimitsUpdateResponse> {
+  return request<RateLimitsUpdateResponse>('/security/rate-limits', {
     method: 'PUT',
     body: JSON.stringify(body),
-  }, _rateLimitsSchema)
+  }, RateLimitsUpdateResponseSchema)
 }
 
 // Sandbox config — mode, allowed paths, SSRF controls, and the global
 // agent defaults (default_profile, shell_deny_patterns).
-// allow_internal is []string matching OmnipusSSRFConfig.AllowInternal in pkg/config/sandbox.go.
-// Entries may be hostname, exact IP, or CIDR range. Empty slice means "block all".
-// SandboxConfigResponse is a richer SPA-internal read shape. The generated SandboxConfig
-// type is the wire schema; this adds SPA-specific fields.
-export type SandboxConfigResponse = { // not-wire-format: SPA-internal richer shape that adds requires_restart and SPA-specific fields (applied_mode) on top of the wire SandboxConfig schema. The generated SandboxConfig is the base wire type.
-  mode?: string
-  // applied_mode is the value the gateway is currently enforcing. It differs
-  // from `mode` when the operator saved a change but hasn't restarted.
-  applied_mode?: string
-  allow_network_outbound?: boolean
-  allowed_paths?: string[]
-  ssrf_enabled?: boolean
-  ssrf_allow_internal?: string[]
-  ssrf?: {
-    enabled?: boolean
-    allow_internal?: string[]
-  }
-  // default_profile is the global fallback applied to NEW custom agents
-  // that do not pick their own SandboxProfile. Empty = inherit hardcoded.
-  default_profile?: SandboxProfile | ''
-  // shell_deny_patterns is the global fallback shell-deny regex list
-  // applied on top of any per-agent custom patterns.
-  shell_deny_patterns?: string[]
-  requires_restart?: boolean
-}
+// SandboxConfig — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/SandboxConfig.yaml.
+// SandboxConfigUpdate — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/SandboxConfigUpdate.yaml.
 
-export interface SandboxConfigUpdateBody { // not-wire-format: SPA-internal request body for PUT /security/sandbox-config. The wire shape is defined by the SandboxConfigUpdate generated schema; this interface adds SPA convenience types (SandboxProfile enum).
-  mode?: string
-  allow_network_outbound?: boolean
-  allowed_paths?: string[]
-  ssrf_enabled?: boolean
-  ssrf_allow_internal?: string[]
-  ssrf?: {
-    enabled?: boolean
-    allow_internal?: string[]
-  }
-  default_profile?: SandboxProfile | ''
-  shell_deny_patterns?: string[]
-}
+// SandboxConfigResponse is a backward-compat alias for the generated SandboxConfig.
+// SandboxConfig already contains requires_restart, applied_mode, saved, and all
+// sandbox fields — no extra SPA-specific shape is needed.
+export type SandboxConfigResponse = SandboxConfig
+
+// SandboxConfigUpdateBody is a backward-compat alias for the generated SandboxConfigUpdate.
+export type SandboxConfigUpdateBody = SandboxConfigUpdate
 
 export function fetchSandboxConfig(): Promise<SandboxConfigResponse> {
   return request<SandboxConfigResponse>('/security/sandbox-config', undefined, SandboxConfigSchema)
@@ -1623,27 +1584,10 @@ export function updateSandboxConfig(body: SandboxConfigUpdateBody): Promise<Sand
 
 // Session scope — controls DM conversation isolation granularity.
 // SessionScopeResponse is re-exported from generated openapi-types above.
-
-export interface SessionScopeUpdateBody { // not-wire-format: SPA-internal request body helper used with 'satisfies' for PUT /security/session-scope. The wire schema is defined inline in contracts/openapi.yaml.
-  dm_scope: DMScope
-}
-
-// SPA-internal update response — not a wire type, no generated counterpart.
-export type SessionScopeUpdateResponse = { // not-wire-format: SPA-internal shape matching the inline response schema in contracts/openapi.yaml PUT /security/session-scope. Not a named schema component.
-  saved: boolean
-  requires_restart: boolean
-  // applied_dm_scope reflects the value currently in effect. Since DM scope is
-  // restart-gated, this is the previous value until the gateway is restarted.
-  applied_dm_scope: DMScope
-}
-
-const _sessionScopeUpdateSchema = z.object({
-  saved: z.boolean(),
-  requires_restart: z.boolean(),
-  // applied_dm_scope is typed as string here to match the generated spec;
-  // the SPA casts it to DMScope after validation.
-  applied_dm_scope: z.string(),
-}).passthrough()
+// SessionScopeRequest (request body) — re-exported from generated openapi-types.
+// See contracts/components/schemas/SessionScopeRequest.yaml.
+// SessionScopeUpdateResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/SessionScopeUpdateResponse.yaml.
 
 export function fetchSessionScope(): Promise<SessionScopeResponse> {
   return request<SessionScopeResponse>('/security/session-scope', undefined, SessionScopeResponseSchema as ZodType<SessionScopeResponse>)
@@ -1652,8 +1596,8 @@ export function fetchSessionScope(): Promise<SessionScopeResponse> {
 export function updateSessionScope(dm_scope: DMScope): Promise<SessionScopeUpdateResponse> {
   return request<SessionScopeUpdateResponse>('/security/session-scope', {
     method: 'PUT',
-    body: JSON.stringify({ dm_scope } satisfies SessionScopeUpdateBody),
-  }, _sessionScopeUpdateSchema as ZodType<SessionScopeUpdateResponse>)
+    body: JSON.stringify({ dm_scope } satisfies SessionScopeRequest),
+  }, SessionScopeUpdateResponseSchema)
 }
 
 // Retention — session log retention policy.
@@ -1672,34 +1616,17 @@ export function retentionMode(resp: {
   return 'default'
 }
 
-// SPA-internal retention read response — not a generated wire type.
-export type RetentionResponse = { // not-wire-format: SPA-internal shape matching the inline response schema in contracts/openapi.yaml GET /security/retention. Aliases the RetentionConfig generated type (partial fields). Not a named schema component.
-  session_days?: number
-  disabled?: boolean
-}
+// GET /security/retention returns RetentionConfig (session_days?, disabled?).
+// RetentionConfig — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/RetentionConfig.yaml.
+// RetentionResponse is a backward-compat alias for the GET response shape.
+export type RetentionResponse = RetentionConfig
 
-export interface RetentionUpdateBody { // not-wire-format: SPA-internal request body for PUT /security/retention. The wire schema is defined inline in contracts/openapi.yaml.
-  session_days?: number
-  disabled?: boolean
-}
+// RetentionUpdateBody is a backward-compat alias for the PUT request body.
+export type RetentionUpdateBody = RetentionConfig
 
-// Matches the handler at pkg/gateway/rest_retention.go's putRetention response:
-// flat {saved, requires_restart, session_days, disabled}. An earlier nested
-// `applied: {...}` shape never shipped — the handler always wrote flat.
-// SPA-internal update response — not a generated wire type.
-export type RetentionUpdateResponse = { // not-wire-format: SPA-internal shape matching the inline response schema in contracts/openapi.yaml PUT /security/retention. Not a named schema component.
-  saved: boolean
-  requires_restart: boolean
-  session_days: number
-  disabled: boolean
-}
-
-const _retentionUpdateSchema = z.object({
-  saved: z.boolean(),
-  requires_restart: z.boolean(),
-  session_days: z.number().int().gte(0),
-  disabled: z.boolean(),
-}).passthrough()
+// RetentionUpdateResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/RetentionUpdateResponse.yaml.
 
 export function fetchRetention(): Promise<RetentionResponse> {
   return request<RetentionResponse>('/security/retention', undefined, RetentionConfigSchema)
@@ -1709,7 +1636,7 @@ export function updateRetention(body: RetentionUpdateBody): Promise<RetentionUpd
   return request<RetentionUpdateResponse>('/security/retention', {
     method: 'PUT',
     body: JSON.stringify(body),
-  }, _retentionUpdateSchema)
+  }, RetentionUpdateResponseSchema)
 }
 
 // Retention sweep — immediately purge sessions beyond the retention window.
@@ -1736,15 +1663,15 @@ export type CreateUserBody = UserCreateRequest
 export type CreateUserResponse = UserCreateResponse
 export type DeleteUserResponse = UserDeleteResponse
 
-export interface ResetUserPasswordBody { // not-wire-format: SPA-internal request body helper used with 'satisfies' for PUT /users/{username}/password. The wire schema is UserResetPasswordRequest (generated).
-  password: string
-}
+// ResetUserPasswordBody is a backward-compat alias for the generated UserResetPasswordRequest.
+// See contracts/components/schemas/UserResetPasswordRequest.yaml.
+export type ResetUserPasswordBody = UserResetPasswordRequest
 
 export type ResetUserPasswordResponse = UserResetPasswordResponse
 
-export interface UpdateUserRoleBody { // not-wire-format: SPA-internal request body helper used with 'satisfies' for PATCH /users/{username}/role. The wire schema is UserRoleChangeRequest (generated).
-  role: UserRole
-}
+// UpdateUserRoleBody is a backward-compat alias for the generated UserRoleChangeRequest.
+// See contracts/components/schemas/UserRoleChangeRequest.yaml.
+export type UpdateUserRoleBody = UserRoleChangeRequest
 
 export type UpdateUserRoleResponse = UserRoleChangeResponse
 

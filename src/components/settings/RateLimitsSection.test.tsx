@@ -42,6 +42,24 @@ function renderSection() {
 
 const mockAddToast = vi.fn()
 
+// Build a complete RateLimitsResponse mock. All required fields must be present.
+function mockRateLimits(overrides: Partial<{
+  enabled: boolean
+  daily_cost_usd: number
+  daily_cost_cap: number
+  max_agent_llm_calls_per_hour: number
+  max_agent_tool_calls_per_minute: number
+}> = {}) {
+  return {
+    enabled: false,
+    daily_cost_usd: 0,
+    daily_cost_cap: 0,
+    max_agent_llm_calls_per_hour: 0,
+    max_agent_tool_calls_per_minute: 0,
+    ...overrides,
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(useUiStore).mockReturnValue({ addToast: mockAddToast } as never)
@@ -57,7 +75,7 @@ beforeEach(() => {
 
 describe('RateLimitsSection — negative validation', () => {
   it('typing -5 in cost cap shows error on blur', async () => {
-    vi.mocked(fetchRateLimits).mockResolvedValue({ daily_cost_cap_usd: 0 })
+    vi.mocked(fetchRateLimits).mockResolvedValue(mockRateLimits({ daily_cost_cap: 0 }))
 
     renderSection()
 
@@ -73,7 +91,7 @@ describe('RateLimitsSection — negative validation', () => {
   })
 
   it('typing -5 in llm calls per hour shows error on blur', async () => {
-    vi.mocked(fetchRateLimits).mockResolvedValue({ max_agent_llm_calls_per_hour: 0 })
+    vi.mocked(fetchRateLimits).mockResolvedValue(mockRateLimits({ max_agent_llm_calls_per_hour: 0 }))
 
     renderSection()
 
@@ -89,7 +107,7 @@ describe('RateLimitsSection — negative validation', () => {
   })
 
   it('typing 10.5 in llm calls (integer field) shows error on blur', async () => {
-    vi.mocked(fetchRateLimits).mockResolvedValue({})
+    vi.mocked(fetchRateLimits).mockResolvedValue(mockRateLimits())
 
     renderSection()
 
@@ -103,7 +121,7 @@ describe('RateLimitsSection — negative validation', () => {
   })
 
   it('typing 10.5 in tool calls (integer field) shows error on blur', async () => {
-    vi.mocked(fetchRateLimits).mockResolvedValue({})
+    vi.mocked(fetchRateLimits).mockResolvedValue(mockRateLimits())
 
     renderSection()
 
@@ -117,7 +135,7 @@ describe('RateLimitsSection — negative validation', () => {
   })
 
   it('invalid value → updateRateLimits is NOT called on blur', async () => {
-    vi.mocked(fetchRateLimits).mockResolvedValue({ daily_cost_cap_usd: 0 })
+    vi.mocked(fetchRateLimits).mockResolvedValue(mockRateLimits({ daily_cost_cap: 0 }))
 
     renderSection()
 
@@ -139,12 +157,8 @@ describe('RateLimitsSection — negative validation', () => {
 
 describe('RateLimitsSection — autosave on blur', () => {
   it('changing cost-cap to 25.5 and blurring fires updateRateLimits', async () => {
-    vi.mocked(fetchRateLimits).mockResolvedValue({})
-    vi.mocked(updateRateLimits).mockResolvedValue({
-      daily_cost_cap_usd: 25.5,
-      max_agent_llm_calls_per_hour: undefined,
-      max_agent_tool_calls_per_minute: undefined,
-    })
+    vi.mocked(fetchRateLimits).mockResolvedValue(mockRateLimits())
+    vi.mocked(updateRateLimits).mockResolvedValue({ saved: true, requires_restart: false })
 
     renderSection()
 
@@ -160,7 +174,7 @@ describe('RateLimitsSection — autosave on blur', () => {
   })
 
   it('no Save button is rendered', async () => {
-    vi.mocked(fetchRateLimits).mockResolvedValue({})
+    vi.mocked(fetchRateLimits).mockResolvedValue(mockRateLimits())
 
     renderSection()
 
@@ -169,9 +183,9 @@ describe('RateLimitsSection — autosave on blur', () => {
   })
 
   it('shows SaveStatus "Saving…" on blur while mutation is in flight', async () => {
-    vi.mocked(fetchRateLimits).mockResolvedValue({})
+    vi.mocked(fetchRateLimits).mockResolvedValue(mockRateLimits())
     vi.mocked(updateRateLimits).mockImplementation(
-      () => new Promise((resolve) => setTimeout(() => resolve({ daily_cost_cap_usd: 25.5 }), 50))
+      () => new Promise((resolve) => setTimeout(() => resolve({ saved: true, requires_restart: false }), 50))
     )
 
     renderSection()
@@ -186,11 +200,11 @@ describe('RateLimitsSection — autosave on blur', () => {
   })
 
   it('no mutation if value did not change from server value (blur on unchanged field)', async () => {
-    vi.mocked(fetchRateLimits).mockResolvedValue({
-      daily_cost_cap_usd: 10,
+    vi.mocked(fetchRateLimits).mockResolvedValue(mockRateLimits({
+      daily_cost_cap: 10,
       max_agent_llm_calls_per_hour: 50,
       max_agent_tool_calls_per_minute: 5,
-    })
+    }))
 
     renderSection()
 
@@ -203,16 +217,12 @@ describe('RateLimitsSection — autosave on blur', () => {
   })
 
   it('only changed field is included in the mutation body (partial update)', async () => {
-    vi.mocked(fetchRateLimits).mockResolvedValue({
-      daily_cost_cap_usd: 10,
+    vi.mocked(fetchRateLimits).mockResolvedValue(mockRateLimits({
+      daily_cost_cap: 10,
       max_agent_llm_calls_per_hour: 50,
       max_agent_tool_calls_per_minute: 5,
-    })
-    vi.mocked(updateRateLimits).mockResolvedValue({
-      daily_cost_cap_usd: 20,
-      max_agent_llm_calls_per_hour: 50,
-      max_agent_tool_calls_per_minute: 5,
-    })
+    }))
+    vi.mocked(updateRateLimits).mockResolvedValue({ saved: true, requires_restart: false })
 
     renderSection()
 
@@ -226,7 +236,7 @@ describe('RateLimitsSection — autosave on blur', () => {
   })
 
   it('shows error toast when mutation fails', async () => {
-    vi.mocked(fetchRateLimits).mockResolvedValue({})
+    vi.mocked(fetchRateLimits).mockResolvedValue(mockRateLimits())
     vi.mocked(updateRateLimits).mockRejectedValue(new Error('server error'))
 
     renderSection()
@@ -253,7 +263,7 @@ describe('RateLimitsSection — non-admin', () => {
       ((selector: (s: { role?: string; user?: { username: string } }) => unknown) =>
         selector({ role: 'user', user: { username: 'testuser' } })) as never,
     )
-    vi.mocked(fetchRateLimits).mockResolvedValue({ daily_cost_cap_usd: 0 })
+    vi.mocked(fetchRateLimits).mockResolvedValue(mockRateLimits({ daily_cost_cap: 0 }))
 
     renderSection()
 

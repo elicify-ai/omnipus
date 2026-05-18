@@ -657,6 +657,48 @@ func (e PromptGuardResponseLevel) Valid() bool {
 	}
 }
 
+// Defines values for PromptGuardUpdateRequestLevel.
+const (
+	PromptGuardUpdateRequestLevelHigh   PromptGuardUpdateRequestLevel = "high"
+	PromptGuardUpdateRequestLevelLow    PromptGuardUpdateRequestLevel = "low"
+	PromptGuardUpdateRequestLevelMedium PromptGuardUpdateRequestLevel = "medium"
+)
+
+// Valid indicates whether the value is a known member of the PromptGuardUpdateRequestLevel enum.
+func (e PromptGuardUpdateRequestLevel) Valid() bool {
+	switch e {
+	case PromptGuardUpdateRequestLevelHigh:
+		return true
+	case PromptGuardUpdateRequestLevelLow:
+		return true
+	case PromptGuardUpdateRequestLevelMedium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PromptGuardUpdateResponseAppliedLevel.
+const (
+	PromptGuardUpdateResponseAppliedLevelHigh   PromptGuardUpdateResponseAppliedLevel = "high"
+	PromptGuardUpdateResponseAppliedLevelLow    PromptGuardUpdateResponseAppliedLevel = "low"
+	PromptGuardUpdateResponseAppliedLevelMedium PromptGuardUpdateResponseAppliedLevel = "medium"
+)
+
+// Valid indicates whether the value is a known member of the PromptGuardUpdateResponseAppliedLevel enum.
+func (e PromptGuardUpdateResponseAppliedLevel) Valid() bool {
+	switch e {
+	case PromptGuardUpdateResponseAppliedLevelHigh:
+		return true
+	case PromptGuardUpdateResponseAppliedLevelLow:
+		return true
+	case PromptGuardUpdateResponseAppliedLevelMedium:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ProviderStatus.
 const (
 	ProviderStatusConnected    ProviderStatus = "connected"
@@ -1095,6 +1137,48 @@ func (e SkillTrustResponseLevel) Valid() bool {
 	}
 }
 
+// Defines values for SkillTrustUpdateRequestLevel.
+const (
+	SkillTrustUpdateRequestLevelAllowAll        SkillTrustUpdateRequestLevel = "allow_all"
+	SkillTrustUpdateRequestLevelBlockUnverified SkillTrustUpdateRequestLevel = "block_unverified"
+	SkillTrustUpdateRequestLevelWarnUnverified  SkillTrustUpdateRequestLevel = "warn_unverified"
+)
+
+// Valid indicates whether the value is a known member of the SkillTrustUpdateRequestLevel enum.
+func (e SkillTrustUpdateRequestLevel) Valid() bool {
+	switch e {
+	case SkillTrustUpdateRequestLevelAllowAll:
+		return true
+	case SkillTrustUpdateRequestLevelBlockUnverified:
+		return true
+	case SkillTrustUpdateRequestLevelWarnUnverified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillTrustUpdateResponseAppliedLevel.
+const (
+	AllowAll        SkillTrustUpdateResponseAppliedLevel = "allow_all"
+	BlockUnverified SkillTrustUpdateResponseAppliedLevel = "block_unverified"
+	WarnUnverified  SkillTrustUpdateResponseAppliedLevel = "warn_unverified"
+)
+
+// Valid indicates whether the value is a known member of the SkillTrustUpdateResponseAppliedLevel enum.
+func (e SkillTrustUpdateResponseAppliedLevel) Valid() bool {
+	switch e {
+	case AllowAll:
+		return true
+	case BlockUnverified:
+		return true
+	case WarnUnverified:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskStatus.
 const (
 	TaskStatusAssigned  TaskStatus = "assigned"
@@ -1398,90 +1482,6 @@ const (
 func (e RestoreBackup200JSONResponseBodyStatus) Valid() bool {
 	switch e {
 	case Restored:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UpdatePromptGuardJSONBodyLevel.
-const (
-	UpdatePromptGuardJSONBodyLevelHigh   UpdatePromptGuardJSONBodyLevel = "high"
-	UpdatePromptGuardJSONBodyLevelLow    UpdatePromptGuardJSONBodyLevel = "low"
-	UpdatePromptGuardJSONBodyLevelMedium UpdatePromptGuardJSONBodyLevel = "medium"
-)
-
-// Valid indicates whether the value is a known member of the UpdatePromptGuardJSONBodyLevel enum.
-func (e UpdatePromptGuardJSONBodyLevel) Valid() bool {
-	switch e {
-	case UpdatePromptGuardJSONBodyLevelHigh:
-		return true
-	case UpdatePromptGuardJSONBodyLevelLow:
-		return true
-	case UpdatePromptGuardJSONBodyLevelMedium:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UpdatePromptGuard200JSONResponseBodyAppliedLevel.
-const (
-	UpdatePromptGuard200JSONResponseBodyAppliedLevelHigh   UpdatePromptGuard200JSONResponseBodyAppliedLevel = "high"
-	UpdatePromptGuard200JSONResponseBodyAppliedLevelLow    UpdatePromptGuard200JSONResponseBodyAppliedLevel = "low"
-	UpdatePromptGuard200JSONResponseBodyAppliedLevelMedium UpdatePromptGuard200JSONResponseBodyAppliedLevel = "medium"
-)
-
-// Valid indicates whether the value is a known member of the UpdatePromptGuard200JSONResponseBodyAppliedLevel enum.
-func (e UpdatePromptGuard200JSONResponseBodyAppliedLevel) Valid() bool {
-	switch e {
-	case UpdatePromptGuard200JSONResponseBodyAppliedLevelHigh:
-		return true
-	case UpdatePromptGuard200JSONResponseBodyAppliedLevelLow:
-		return true
-	case UpdatePromptGuard200JSONResponseBodyAppliedLevelMedium:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UpdateSkillTrustJSONBodyLevel.
-const (
-	UpdateSkillTrustJSONBodyLevelAllowAll        UpdateSkillTrustJSONBodyLevel = "allow_all"
-	UpdateSkillTrustJSONBodyLevelBlockUnverified UpdateSkillTrustJSONBodyLevel = "block_unverified"
-	UpdateSkillTrustJSONBodyLevelWarnUnverified  UpdateSkillTrustJSONBodyLevel = "warn_unverified"
-)
-
-// Valid indicates whether the value is a known member of the UpdateSkillTrustJSONBodyLevel enum.
-func (e UpdateSkillTrustJSONBodyLevel) Valid() bool {
-	switch e {
-	case UpdateSkillTrustJSONBodyLevelAllowAll:
-		return true
-	case UpdateSkillTrustJSONBodyLevelBlockUnverified:
-		return true
-	case UpdateSkillTrustJSONBodyLevelWarnUnverified:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for UpdateSkillTrust200JSONResponseBodyAppliedLevel.
-const (
-	AllowAll        UpdateSkillTrust200JSONResponseBodyAppliedLevel = "allow_all"
-	BlockUnverified UpdateSkillTrust200JSONResponseBodyAppliedLevel = "block_unverified"
-	WarnUnverified  UpdateSkillTrust200JSONResponseBodyAppliedLevel = "warn_unverified"
-)
-
-// Valid indicates whether the value is a known member of the UpdateSkillTrust200JSONResponseBodyAppliedLevel enum.
-func (e UpdateSkillTrust200JSONResponseBodyAppliedLevel) Valid() bool {
-	switch e {
-	case AllowAll:
-		return true
-	case BlockUnverified:
-		return true
-	case WarnUnverified:
 		return true
 	default:
 		return false
@@ -2011,6 +2011,20 @@ type AuditLogToggle struct {
 	Enabled bool `json:"enabled"`
 }
 
+// AuditLogToggleRequest Request body for PUT /api/v1/security/audit-log. Enables or disables audit logging.
+type AuditLogToggleRequest struct {
+	// Enabled Whether audit logging should be enabled.
+	Enabled bool `json:"enabled"`
+}
+
+// AuditLogUpdateResponse Response from PUT /api/v1/security/audit-log. Audit log state saved; restart required.
+type AuditLogUpdateResponse struct {
+	// AppliedEnabled Value currently in effect (before this save).
+	AppliedEnabled  bool `json:"applied_enabled"`
+	RequiresRestart bool `json:"requires_restart"`
+	Saved           bool `json:"saved"`
+}
+
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
 type ChangePasswordRequest struct {
 	// CurrentPassword The user's current password for verification.
@@ -2467,6 +2481,28 @@ type PromptGuardResponse struct {
 // PromptGuardResponseLevel Current prompt injection detection strictness level.
 type PromptGuardResponseLevel string
 
+// PromptGuardUpdateRequest Request body for PUT /api/v1/security/prompt-guard. Updates the prompt injection detection strictness level.
+type PromptGuardUpdateRequest struct {
+	// Level New prompt injection detection strictness level.
+	Level PromptGuardUpdateRequestLevel `json:"level"`
+}
+
+// PromptGuardUpdateRequestLevel New prompt injection detection strictness level.
+type PromptGuardUpdateRequestLevel string
+
+// PromptGuardUpdateResponse Response from PUT /api/v1/security/prompt-guard. Updated prompt injection guard level.
+type PromptGuardUpdateResponse struct {
+	AppliedLevel    PromptGuardUpdateResponseAppliedLevel `json:"applied_level"`
+	RequiresRestart bool                                  `json:"requires_restart"`
+	Saved           bool                                  `json:"saved"`
+
+	// Warning Present when hot-reload failed. Restart required to apply.
+	Warning *string `json:"warning,omitempty"`
+}
+
+// PromptGuardUpdateResponseAppliedLevel defines model for PromptGuardUpdateResponse.AppliedLevel.
+type PromptGuardUpdateResponseAppliedLevel string
+
 // Provider A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue.
 type Provider struct {
 	// DisplayName Branded display name for UI presentation (e.g. "OpenRouter", "Anthropic"). Falls back to name when absent.
@@ -2494,6 +2530,49 @@ type Provider struct {
 // ProviderStatus "connected" when at least one API key is configured for this provider. "disconnected" when no key is available or on the fallback default entry. "error" when the provider is configured but the upstream returned a non-retryable error.
 type ProviderStatus string
 
+// RateLimitsResponse Response from GET /api/v1/security/rate-limits. Returns the current rate-limit configuration and the live daily LLM cost.
+type RateLimitsResponse struct {
+	// DailyCostCap Configured daily cost cap in USD. 0 means unlimited.
+	DailyCostCap float64 `json:"daily_cost_cap"`
+
+	// DailyCostUsd Live daily LLM cost accumulated so far today.
+	DailyCostUsd float64 `json:"daily_cost_usd"`
+	Enabled      bool    `json:"enabled"`
+
+	// MaxAgentLlmCallsPerHour Maximum LLM calls per hour across all agents. 0 means unlimited.
+	MaxAgentLlmCallsPerHour int64 `json:"max_agent_llm_calls_per_hour"`
+
+	// MaxAgentToolCallsPerMinute Maximum tool calls per minute across all agents. 0 means unlimited.
+	MaxAgentToolCallsPerMinute int64 `json:"max_agent_tool_calls_per_minute"`
+}
+
+// RateLimitsUpdateRequest Request body for PUT /api/v1/security/rate-limits. Partial update — any subset of the three cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded.
+type RateLimitsUpdateRequest struct {
+	// DailyCostCapUsd Daily cost cap in USD. 0 = unlimited.
+	DailyCostCapUsd *float64 `json:"daily_cost_cap_usd,omitempty"`
+
+	// MaxAgentLlmCallsPerHour Maximum LLM calls per hour. 0 = unlimited.
+	MaxAgentLlmCallsPerHour *int64 `json:"max_agent_llm_calls_per_hour,omitempty"`
+
+	// MaxAgentToolCallsPerMinute Maximum tool calls per minute. 0 = unlimited.
+	MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
+}
+
+// RateLimitsUpdateResponse Response from PUT /api/v1/security/rate-limits. Updated rate limit configuration.
+type RateLimitsUpdateResponse struct {
+	// Applied Applied rate limit values after the update.
+	Applied *struct {
+		DailyCostCapUsd            *float64 `json:"daily_cost_cap_usd,omitempty"`
+		MaxAgentLlmCallsPerHour    *int64   `json:"max_agent_llm_calls_per_hour,omitempty"`
+		MaxAgentToolCallsPerMinute *int64   `json:"max_agent_tool_calls_per_minute,omitempty"`
+	} `json:"applied,omitempty"`
+	RequiresRestart bool `json:"requires_restart"`
+	Saved           bool `json:"saved"`
+
+	// Warning Present when hot-reload failed.
+	Warning *string `json:"warning,omitempty"`
+}
+
 // RegisterAdminRequest Body for POST /auth/register-admin. Creates the first admin user (fails 409 if one already exists).
 type RegisterAdminRequest struct {
 	// Password Password for the new admin account. Minimum 8 characters.
@@ -2519,6 +2598,17 @@ type RetentionSweepResult struct {
 
 	// SkippedReason Present when the sweep was skipped without removing anything. Currently only "disabled" (retention is configured as disabled).
 	SkippedReason *string `json:"skipped_reason,omitempty"`
+}
+
+// RetentionUpdateResponse Response from PUT /api/v1/security/retention. Updated retention configuration.
+type RetentionUpdateResponse struct {
+	// Disabled When true, retention sweeps are disabled and session logs are kept forever.
+	Disabled        bool `json:"disabled"`
+	RequiresRestart bool `json:"requires_restart"`
+	Saved           bool `json:"saved"`
+
+	// SessionDays Applied session retention in days. 0 means use the system default (90 days).
+	SessionDays int `json:"session_days"`
 }
 
 // SandboxConfig Sandbox configuration returned by GET /api/v1/security/sandbox-config and as part of PUT /api/v1/security/sandbox-config responses.
@@ -2947,6 +3037,19 @@ type SessionScopeResponse struct {
 // SessionScopeResponseDmScope Current DM session scoping strategy. Controls how incoming direct messages are routed to session threads. Changes require a gateway restart to take effect.
 type SessionScopeResponseDmScope string
 
+// SessionScopeUpdateResponse Response from PUT /api/v1/security/session-scope. Session scope saved; restart required to apply.
+type SessionScopeUpdateResponse struct {
+	// AppliedDmScope The dm_scope currently active (before restart).
+	AppliedDmScope string `json:"applied_dm_scope"`
+
+	// RequiresRestart Always true — session routing requires a gateway restart.
+	RequiresRestart bool `json:"requires_restart"`
+	Saved           bool `json:"saved"`
+
+	// Warning Present when hot-reload failed (config saved, restart required).
+	Warning *string `json:"warning,omitempty"`
+}
+
 // Skill A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata.
 type Skill struct {
 	// AgentAssignment ID of the agent this skill is assigned to, when the skill is bound to a specific agent rather than globally available. Absent for globally assigned skills.
@@ -2985,6 +3088,28 @@ type SkillTrustResponse struct {
 
 // SkillTrustResponseLevel Current skill trust level. Controls how unverified community skills are handled.
 type SkillTrustResponseLevel string
+
+// SkillTrustUpdateRequest Request body for PUT /api/v1/security/skill-trust. Updates the skill trust level; controls how unverified community skills are handled.
+type SkillTrustUpdateRequest struct {
+	// Level New skill trust level.
+	Level SkillTrustUpdateRequestLevel `json:"level"`
+}
+
+// SkillTrustUpdateRequestLevel New skill trust level.
+type SkillTrustUpdateRequestLevel string
+
+// SkillTrustUpdateResponse Response from PUT /api/v1/security/skill-trust. Updated skill trust level.
+type SkillTrustUpdateResponse struct {
+	AppliedLevel    SkillTrustUpdateResponseAppliedLevel `json:"applied_level"`
+	RequiresRestart bool                                 `json:"requires_restart"`
+	Saved           bool                                 `json:"saved"`
+
+	// Warning Present when allow_all is selected — warns that hash verification is disabled.
+	Warning *string `json:"warning,omitempty"`
+}
+
+// SkillTrustUpdateResponseAppliedLevel defines model for SkillTrustUpdateResponse.AppliedLevel.
+type SkillTrustUpdateResponseAppliedLevel string
 
 // StorageStats Storage statistics returned by GET /api/v1/storage/stats. Reports session count, workspace disk usage, memory entry count, and any non-fatal warnings encountered while collecting the stats.
 type StorageStats struct {
@@ -3292,50 +3417,11 @@ type RestoreBackupJSONBody struct {
 // RestoreBackup200JSONResponseBodyStatus defines parameters for RestoreBackup.
 type RestoreBackup200JSONResponseBodyStatus string
 
-// UpdateAuditLogToggleJSONBody defines parameters for UpdateAuditLogToggle.
-type UpdateAuditLogToggleJSONBody struct {
-	Enabled bool `json:"enabled"`
-}
-
 // UpdateExecAllowlistJSONBody defines parameters for UpdateExecAllowlist.
 type UpdateExecAllowlistJSONBody struct {
 	// AllowedBinaries List of allowed binary name patterns.
 	AllowedBinaries []string `json:"allowed_binaries"`
 }
-
-// UpdatePromptGuardJSONBody defines parameters for UpdatePromptGuard.
-type UpdatePromptGuardJSONBody struct {
-	Level UpdatePromptGuardJSONBodyLevel `json:"level"`
-}
-
-// UpdatePromptGuardJSONBodyLevel defines parameters for UpdatePromptGuard.
-type UpdatePromptGuardJSONBodyLevel string
-
-// UpdatePromptGuard200JSONResponseBodyAppliedLevel defines parameters for UpdatePromptGuard.
-type UpdatePromptGuard200JSONResponseBodyAppliedLevel string
-
-// UpdateRateLimitsJSONBody defines parameters for UpdateRateLimits.
-type UpdateRateLimitsJSONBody struct {
-	// DailyCostCapUsd 0 = unlimited.
-	DailyCostCapUsd *float64 `json:"daily_cost_cap_usd,omitempty"`
-
-	// MaxAgentLlmCallsPerHour 0 = unlimited.
-	MaxAgentLlmCallsPerHour *int64 `json:"max_agent_llm_calls_per_hour,omitempty"`
-
-	// MaxAgentToolCallsPerMinute 0 = unlimited.
-	MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
-}
-
-// UpdateSkillTrustJSONBody defines parameters for UpdateSkillTrust.
-type UpdateSkillTrustJSONBody struct {
-	Level UpdateSkillTrustJSONBodyLevel `json:"level"`
-}
-
-// UpdateSkillTrustJSONBodyLevel defines parameters for UpdateSkillTrust.
-type UpdateSkillTrustJSONBodyLevel string
-
-// UpdateSkillTrust200JSONResponseBodyAppliedLevel defines parameters for UpdateSkillTrust.
-type UpdateSkillTrust200JSONResponseBodyAppliedLevel string
 
 // ListSessionsParams defines parameters for ListSessions.
 type ListSessionsParams struct {
@@ -3467,16 +3553,16 @@ type ProbeProviderJSONRequestBody = ProbeProviderRequest
 type RestoreBackupJSONRequestBody RestoreBackupJSONBody
 
 // UpdateAuditLogToggleJSONRequestBody defines body for UpdateAuditLogToggle for application/json ContentType.
-type UpdateAuditLogToggleJSONRequestBody UpdateAuditLogToggleJSONBody
+type UpdateAuditLogToggleJSONRequestBody = AuditLogToggleRequest
 
 // UpdateExecAllowlistJSONRequestBody defines body for UpdateExecAllowlist for application/json ContentType.
 type UpdateExecAllowlistJSONRequestBody UpdateExecAllowlistJSONBody
 
 // UpdatePromptGuardJSONRequestBody defines body for UpdatePromptGuard for application/json ContentType.
-type UpdatePromptGuardJSONRequestBody UpdatePromptGuardJSONBody
+type UpdatePromptGuardJSONRequestBody = PromptGuardUpdateRequest
 
 // UpdateRateLimitsJSONRequestBody defines body for UpdateRateLimits for application/json ContentType.
-type UpdateRateLimitsJSONRequestBody UpdateRateLimitsJSONBody
+type UpdateRateLimitsJSONRequestBody = RateLimitsUpdateRequest
 
 // UpdateRetentionJSONRequestBody defines body for UpdateRetention for application/json ContentType.
 type UpdateRetentionJSONRequestBody = RetentionConfig
@@ -3488,7 +3574,7 @@ type UpdateSandboxConfigJSONRequestBody = SandboxConfigUpdate
 type UpdateSessionScopeJSONRequestBody = SessionScopeRequest
 
 // UpdateSkillTrustJSONRequestBody defines body for UpdateSkillTrust for application/json ContentType.
-type UpdateSkillTrustJSONRequestBody UpdateSkillTrustJSONBody
+type UpdateSkillTrustJSONRequestBody = SkillTrustUpdateRequest
 
 // UpdateGlobalToolPoliciesJSONRequestBody defines body for UpdateGlobalToolPolicies for application/json ContentType.
 type UpdateGlobalToolPoliciesJSONRequestBody = GlobalToolPolicies

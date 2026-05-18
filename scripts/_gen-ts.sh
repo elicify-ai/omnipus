@@ -39,10 +39,14 @@ else
   NODE_MODULES="$REPO_ROOT/node_modules"
 fi
 # contracts/ lives in the main repo root, not the worktree root.
-if [ -d "$MAIN_REPO_ROOT/contracts" ]; then
-  CONTRACTS="$MAIN_REPO_ROOT/contracts"
-else
-  CONTRACTS="$REPO_ROOT/contracts"
+# Allow CONTRACTS env var override so worktrees with modified contracts can
+# generate from their own copy (e.g. worktrees/fix-inline-schemas).
+if [ -z "${CONTRACTS:-}" ]; then
+  if [ -d "$MAIN_REPO_ROOT/contracts" ]; then
+    CONTRACTS="$MAIN_REPO_ROOT/contracts"
+  else
+    CONTRACTS="$REPO_ROOT/contracts"
+  fi
 fi
 GEN="$REPO_ROOT/src/lib/api/generated"
 TEMPLATE="$REPO_ROOT/scripts/_gen-ts-template.hbs"

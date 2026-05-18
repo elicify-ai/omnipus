@@ -44,7 +44,8 @@ export function RateLimitStatusCard() {
       )
     }
 
-    const hasCap = data?.daily_cost_cap_usd && data.daily_cost_cap_usd > 0
+    // GET returns daily_cost_cap (no _usd suffix) per RateLimitsResponse schema.
+    const hasCap = data?.daily_cost_cap && data.daily_cost_cap > 0
     const hasLlmLimit = data?.max_agent_llm_calls_per_hour && data.max_agent_llm_calls_per_hour > 0
     const hasToolLimit = data?.max_agent_tool_calls_per_minute && data.max_agent_tool_calls_per_minute > 0
 
@@ -62,7 +63,7 @@ export function RateLimitStatusCard() {
           <div className="flex items-center justify-between text-[10px] text-[var(--color-muted)]">
             <span>Daily cost cap</span>
             <span className="text-[var(--color-secondary)]">
-              ${data!.daily_cost_cap_usd!.toFixed(2)}
+              ${data!.daily_cost_cap!.toFixed(2)}
             </span>
           </div>
         )}

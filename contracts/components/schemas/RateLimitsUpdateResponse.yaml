@@ -1,0 +1,30 @@
+title: RateLimitsUpdateResponse
+description: >
+  Response from PUT /api/v1/security/rate-limits. Updated rate limit configuration.
+type: object
+required:
+  - saved
+  - requires_restart
+properties:
+  saved:
+    type: boolean
+    example: true
+  requires_restart:
+    type: boolean
+    example: false
+  applied:
+    type: object
+    description: Applied rate limit values after the update.
+    properties:
+      daily_cost_cap_usd:
+        type: number
+        format: double
+      max_agent_llm_calls_per_hour:
+        type: integer
+        format: int64
+      max_agent_tool_calls_per_minute:
+        type: integer
+        format: int64
+  warning:
+    type: string
+    description: Present when hot-reload failed.
