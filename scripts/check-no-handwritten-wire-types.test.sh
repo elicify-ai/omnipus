@@ -130,7 +130,7 @@ setup_go_fixture "pkg/gateway/fixture_wire.go" '
 package gateway
 
 // BarResponse has the opt-out marker — should NOT be flagged.
-type BarResponse struct { // not-wire-format
+type BarResponse struct { // not-wire-format: decode-only test assertion target, never emitted over any boundary
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	OK   bool   `json:"ok"`
