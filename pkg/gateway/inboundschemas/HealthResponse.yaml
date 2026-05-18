@@ -1,0 +1,14 @@
+title: HealthResponse
+description: >
+  Response from GET /health. Returns HTTP 200 when the gateway is up.
+  No authentication required.
+type: object
+required:
+  - status
+properties:
+  status:
+    type: string
+    description: Always "ok" when the gateway is healthy.
+    enum:
+      - ok
+    example: ok

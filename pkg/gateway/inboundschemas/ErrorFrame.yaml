@@ -1,0 +1,23 @@
+title: ErrorFrame
+description: >
+  Server → client. Error notification. May be global (no session_id, e.g.,
+  auth failure) or session-scoped. The SPA displays the message as a toast or
+  inline error. Does NOT terminate the WebSocket connection.
+type: object
+required:
+  - type
+  - message
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: error
+  session_id:
+    type: string
+    description: >
+      Session this error relates to. Optional: global errors (auth, connection)
+      are not tied to a specific session.
+  message:
+    type: string
+    minLength: 1
+    description: Human-readable error description.

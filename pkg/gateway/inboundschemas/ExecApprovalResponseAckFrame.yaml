@@ -1,0 +1,18 @@
+title: ExecApprovalResponseAckFrame
+description: >
+  Server → client. Acknowledgement that the server successfully resolved an
+  exec_approval_response frame.
+type: object
+required:
+  - type
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: exec_approval_response_ack
+  id:
+    type: string
+    description: The approval request ID that was resolved.
+  session_id:
+    type: string
+    description: Session associated with the resolved approval.

@@ -1,0 +1,45 @@
+title: ToolCallStartFrame
+description: >
+  Server → client. Emitted at the start of a tool execution. The SPA uses this
+  to render a "running" tool call badge attached to the current assistant message.
+  IMPORTANT: params MUST be an object (never null). The Go backend sets it from
+  tc.Parameters which is map[string]any — always initialized.
+type: object
+required:
+  - type
+  - session_id
+  - tool
+  - call_id
+  - params
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: tool_call_start
+  session_id:
+    type: string
+    minLength: 1
+    description: Session in which this tool call is executing.
+  tool:
+    type: string
+    minLength: 1
+    description: Name of the tool being called (e.g., "workspace.shell", "spawn").
+  call_id:
+    type: string
+    minLength: 1
+    description: Unique identifier for this tool call invocation.
+  params:
+    type: object
+    additionalProperties: true
+    description: >
+      Tool invocation arguments. Always an object (never null). May be empty {}
+      for tools that take no parameters. The SPA iterates Object.keys(params)
+      to render argument badges — null would crash at render time.
+  parent_call_id:
+    type: string
+    description: >
+      For tool calls that fire inside a sub-turn: the spawn ToolCall.ID of the
+      parent subagent. Empty string or absent for top-level tool calls.
+  agent_id:
+    type: string
+    description: Agent that invoked this tool call.

@@ -1206,6 +1206,18 @@ type GatewayConfig struct {
 	// results in a single turn that triggers a turn abort (FR-084). Default: 8.
 	// Set to 0 to disable. Negative values are treated as the default (8).
 	TurnSyntheticErrorFloor int `json:"turn_synthetic_error_floor,omitempty" env:"OMNIPUS_TURN_SYNTHETIC_ERROR_FLOOR"`
+
+	// ValidateInbound enables server-side JSON Schema validation of REST request
+	// bodies against the OpenAPI component schemas before the body is decoded into
+	// a Go struct. Defaults to false (opt-in). When true, handlers that accept a
+	// JSON body validate it against the corresponding schema from
+	// contracts/components/schemas/ and reject schema-invalid payloads with HTTP
+	// 400 + a descriptive error message, preventing Go zero-value silently
+	// accepted from a malformed or empty {}.
+	//
+	// Set via: {"gateway": {"validate_inbound": true}} in config.json
+	// or OMNIPUS_GATEWAY_VALIDATE_INBOUND=true env var.
+	ValidateInbound bool `json:"validate_inbound,omitempty" env:"OMNIPUS_GATEWAY_VALIDATE_INBOUND"`
 }
 
 type ToolDiscoveryConfig struct {

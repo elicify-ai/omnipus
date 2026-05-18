@@ -1,0 +1,18 @@
+title: AuthFrame
+description: >
+  Client → server. First frame sent by the SPA after the WebSocket connection
+  opens. The server validates the token and, if accepted, begins dispatching
+  the session_state frame followed by normal frame routing.
+type: object
+required:
+  - type
+  - token
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: auth
+  token:
+    type: string
+    minLength: 1
+    description: Bearer token obtained from /api/v1/auth/login.

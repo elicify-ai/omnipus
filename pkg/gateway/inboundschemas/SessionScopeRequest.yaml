@@ -1,0 +1,17 @@
+type: object
+description: Body for PUT /security/session-scope. Updates the DM session scoping strategy.
+required:
+  - dm_scope
+properties:
+  dm_scope:
+    type: string
+    enum:
+      - main
+      - per-peer
+      - per-channel-peer
+      - per-account-channel-peer
+    description: >
+      New DM session scoping strategy. Must be exactly one of the four canonical values.
+      Changes are saved to disk immediately but require a gateway restart to apply
+      (requires_restart will be true in the response).
+    example: "per-channel-peer"

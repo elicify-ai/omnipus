@@ -1,0 +1,39 @@
+title: DevicePending
+description: >
+  A device pairing request that has not yet been approved. Returned as part of
+  the DevicesResponse from GET /api/v1/devices.
+type: object
+required:
+  - device_id
+  - fingerprint
+  - pairing_code
+  - device_name
+  - created_at
+  - expires_at
+properties:
+  device_id:
+    type: string
+    description: Unique device identifier.
+    example: "dev_01HXYZ"
+  fingerprint:
+    type: string
+    description: Cryptographic fingerprint of the device's public key.
+    example: "SHA256:abc123..."
+  pairing_code:
+    type: string
+    description: Short human-readable pairing code displayed to the user.
+    example: "BLUE-TIGER-42"
+  device_name:
+    type: string
+    description: Human-readable device name provided during pairing.
+    example: "Alice's MacBook"
+  created_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp when the pairing request was created.
+    example: "2026-05-16T10:00:00Z"
+  expires_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp when the pairing request expires.
+    example: "2026-05-16T10:10:00Z"

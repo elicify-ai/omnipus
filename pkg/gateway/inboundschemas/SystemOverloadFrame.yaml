@@ -1,0 +1,24 @@
+title: SystemOverloadFrame
+description: >
+  Server → client (FR-016, MAJ-009). Emitted when the system is at capacity
+  and an agent action was blocked. The SPA displays a warning toast. This frame
+  does not affect streaming state — the associated turn will still complete with
+  a done frame.
+type: object
+required:
+  - type
+  - session_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: system_overload
+  session_id:
+    type: string
+    minLength: 1
+    description: Session in which the overload was detected.
+  message:
+    type: string
+    description: >
+      Human-readable explanation. If absent the SPA substitutes a default:
+      "System at capacity — agent action blocked. Retry shortly."

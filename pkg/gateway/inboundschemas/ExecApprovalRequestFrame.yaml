@@ -1,0 +1,53 @@
+title: ExecApprovalRequestFrame
+description: >
+  Server → client. Sent when a tool call requires explicit admin approval before
+  execution (exec-level sandbox policy). The SPA displays an approval modal and
+  waits for an exec_approval_response from the user.
+  The `command` field carries the tool name (e.g. "workspace.shell") and is the
+  primary display string for the approval modal. The optional `tool` and `params`
+  fields carry the structured tool call information for richer display.
+type: object
+required:
+  - type
+  - session_id
+  - id
+  - command
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: exec_approval_request
+  session_id:
+    type: string
+    minLength: 1
+    description: Session in which approval is needed.
+  id:
+    type: string
+    minLength: 1
+    description: Unique UUID for this approval request. Used in exec_approval_response.
+  command:
+    type: string
+    minLength: 1
+    description: >
+      The tool name or shell command requiring approval (e.g. "workspace.shell").
+      Used as the primary display string in the approval modal.
+  tool:
+    type: string
+    description: >
+      Structured tool name, same value as command. Present for programmatic
+      consumers that prefer the field name `tool` over `command`.
+  params:
+    type: object
+    additionalProperties: true
+    description: >
+      Tool invocation arguments. Present when the tool was called with parameters.
+      May be absent or empty for parameter-less tool calls.
+  message:
+    type: string
+    description: Human-readable message shown to the admin describing the approval request.
+  working_dir:
+    type: string
+    description: Working directory in which the command will be executed.
+  matched_policy:
+    type: string
+    description: The policy rule that triggered this approval requirement.

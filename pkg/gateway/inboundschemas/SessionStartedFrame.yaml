@@ -1,0 +1,22 @@
+title: SessionStartedFrame
+description: >
+  Server → client. Emitted by the server immediately after it mints a new
+  session_id in response to a message frame sent without a session_id. The SPA
+  stores this id as the activeSessionId for all subsequent frames in this turn.
+  session_id here is the NEWLY MINTED session id, not routing context.
+type: object
+required:
+  - type
+  - session_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: session_started
+  session_id:
+    type: string
+    minLength: 1
+    description: The newly minted session ID.
+  agent_id:
+    type: string
+    description: The agent that will handle this session.

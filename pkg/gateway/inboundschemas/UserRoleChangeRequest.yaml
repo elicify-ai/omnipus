@@ -1,0 +1,12 @@
+type: object
+description: Body for PATCH /users/{username}/role. Changes a user's RBAC role. Admin-only.
+required:
+  - role
+properties:
+  role:
+    type: string
+    enum:
+      - admin
+      - user
+    description: New role. Case-sensitive; exactly "admin" or "user".
+    example: "user"

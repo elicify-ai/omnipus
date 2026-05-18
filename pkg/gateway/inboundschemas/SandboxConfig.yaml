@@ -1,0 +1,88 @@
+title: SandboxConfig
+description: >
+  Sandbox configuration returned by GET /api/v1/security/sandbox-config and
+  as part of PUT /api/v1/security/sandbox-config responses.
+type: object
+properties:
+  mode:
+    type: string
+    description: Configured sandbox enforcement mode.
+    enum:
+      - off
+      - permissive
+      - enforce
+    example: enforce
+  applied_mode:
+    type: string
+    description: >
+      The mode the gateway is currently enforcing. Differs from `mode` when
+      the operator saved a change but has not restarted yet.
+    example: permissive
+  allow_network_outbound:
+    type: boolean
+    description: Whether outbound network access is permitted from the sandbox.
+    example: false
+  allowed_paths:
+    type: array
+    items:
+      type: string
+    description: >
+      File system paths the sandboxed process may access.
+      Empty array means use only default allowed paths.
+    example:
+      - /tmp/workspace
+  ssrf_enabled:
+    type: boolean
+    description: Whether SSRF (server-side request forgery) protection is active.
+    example: true
+  ssrf_allow_internal:
+    type: array
+    items:
+      type: string
+    description: >
+      IP addresses, hostnames, or CIDR ranges that are allowed to receive
+      outbound requests even when SSRF protection is enabled.
+      Empty array means block all internal addresses.
+    example:
+      - 192.168.1.100
+  ssrf:
+    type: object
+    description: Nested SSRF config block for backward-compatible clients.
+    properties:
+      enabled:
+        type: boolean
+      allow_internal:
+        type: array
+        items:
+          type: string
+  default_profile:
+    type: string
+    description: >
+      Global fallback sandbox profile applied to new custom agents that do not
+      pick their own profile. Empty string means use hardcoded default.
+    enum:
+      - ""
+      - none
+      - workspace
+      - workspace+net
+      - host
+      - "off"
+    example: workspace
+  shell_deny_patterns:
+    type: array
+    items:
+      type: string
+    description: >
+      Global fallback shell command deny-list (regex entries).
+      Per-agent custom patterns extend this list.
+    example:
+      - "^curl\\s"
+      - "^wget\\s"
+  requires_restart:
+    type: boolean
+    description: >
+      Present in PUT responses. True when the change requires a gateway
+      restart to take effect (mode, allowed_paths, default_profile).
+  saved:
+    type: boolean
+    description: Present in PUT responses. Always true on success.

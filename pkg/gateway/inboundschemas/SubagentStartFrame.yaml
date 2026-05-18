@@ -1,0 +1,39 @@
+title: SubagentStartFrame
+description: >
+  Server → client (FR-H-004). Opening bracket of a subagent span. Emitted when
+  the agent loop spawns a sub-turn. The SPA uses span_id to group subsequent
+  nested tool_call_start / tool_call_result frames under a collapsible span UI.
+type: object
+required:
+  - type
+  - session_id
+  - span_id
+  - parent_call_id
+  - task_label
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: subagent_start
+  session_id:
+    type: string
+    minLength: 1
+    description: Session in which this sub-turn is running.
+  span_id:
+    type: string
+    minLength: 1
+    description: >
+      Unique identifier for this span. Constructed by the server as
+      "span_" + parent spawn ToolCall.ID.
+  parent_call_id:
+    type: string
+    minLength: 1
+    description: The spawn ToolCall.ID that triggered this sub-turn.
+  task_label:
+    type: string
+    description: >
+      Human-readable label for the subagent task, extracted from the spawn
+      call's "label" or "task" parameter (truncated to 60 chars).
+  agent_id:
+    type: string
+    description: Agent running the sub-turn.

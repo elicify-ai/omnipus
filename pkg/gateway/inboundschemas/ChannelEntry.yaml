@@ -1,0 +1,54 @@
+title: ChannelEntry
+description: >
+  A communication channel entry returned by GET /api/v1/channels.
+type: object
+required:
+  - id
+  - name
+  - transport
+  - enabled
+  - description
+properties:
+  id:
+    type: string
+    description: Canonical channel identifier.
+    enum:
+      - webchat
+      - telegram
+      - discord
+      - slack
+      - whatsapp
+      - feishu
+      - dingtalk
+      - wecom
+      - weixin
+      - line
+      - qq
+      - onebot
+      - irc
+      - matrix
+      - maixcam
+    example: telegram
+  name:
+    type: string
+    description: Human-readable channel name.
+    example: Telegram
+  transport:
+    type: string
+    description: Transport mechanism used by this channel.
+    enum:
+      - websocket
+      - webhook
+      - bridge
+      - tcp
+      - http
+      - serial
+    example: webhook
+  enabled:
+    type: boolean
+    description: Whether this channel is currently enabled.
+    example: false
+  description:
+    type: string
+    description: Short description of the channel.
+    example: Telegram Bot API

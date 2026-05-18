@@ -1,0 +1,68 @@
+title: ToolApprovalRequiredFrame
+description: >
+  Server → client (FR-011, FR-082). Emitted when a tool call is paused for
+  ask-policy approval via the Central Tool Registry. The SPA enqueues this in
+  the tool approval store and shows an approval modal to the admin.
+
+  CRITICAL — nil-safety contract (Ava-chat bug post-mortem):
+  The `args` field MUST be an object (never null). The Go server enforces this
+  at the broadcast site: when entry.Args is nil, it is coerced to map[string]any{}
+  before marshaling so the SPA never receives "args": null.
+  The SPA's ToolApprovalModal calls Object.keys(args) directly — a null value
+  crashes at render time. This contract MUST be maintained in the Go backend and
+  verified by the Phase 4 contract test.
+type: object
+required:
+  - type
+  - approval_id
+  - tool_call_id
+  - tool_name
+  - args
+  - agent_id
+  - session_id
+  - turn_id
+  - expires_in_ms
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: tool_approval_required
+  approval_id:
+    type: string
+    minLength: 1
+    description: Unique UUID for this approval request.
+  tool_call_id:
+    type: string
+    minLength: 1
+    description: The ToolCall.ID that is paused awaiting approval.
+  tool_name:
+    type: string
+    minLength: 1
+    description: Name of the tool requiring approval.
+  args:
+    type: object
+    additionalProperties: true
+    description: >
+      Tool invocation arguments. MUST be an object (never null). The Go backend
+      coerces nil → {} at the broadcast site. The SPA calls Object.keys(args)
+      to render the approval modal — null would throw a TypeError at render time.
+      This is the field that caused the Ava-chat crash. Required + object + non-null
+      so the Phase 4 contract test catches any future nil regression.
+  agent_id:
+    type: string
+    minLength: 1
+    description: Agent that invoked the tool.
+  session_id:
+    type: string
+    minLength: 1
+    description: Session in which approval is needed.
+  turn_id:
+    type: string
+    minLength: 1
+    description: The turn ID that contains the paused tool call.
+  expires_in_ms:
+    type: integer
+    description: >
+      Relative expiry in milliseconds from receipt. The SPA computes
+      expiresAt = Date.now() + expires_in_ms. Using a relative delta avoids
+      clock-skew between server and browser (OBS-004).

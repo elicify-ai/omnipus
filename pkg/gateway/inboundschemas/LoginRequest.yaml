@@ -1,0 +1,16 @@
+type: object
+description: Credentials for authenticating an existing user.
+required:
+  - username
+  - password
+properties:
+  username:
+    type: string
+    minLength: 1
+    description: The user's login name.
+    example: "admin"
+  password:
+    type: string
+    minLength: 1
+    description: The user's password.
+    example: "s3cr3tpassword"

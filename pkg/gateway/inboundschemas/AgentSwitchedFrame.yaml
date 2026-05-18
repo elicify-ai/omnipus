@@ -1,0 +1,29 @@
+title: AgentSwitchedFrame
+description: >
+  Server → client. Emitted when the active agent for a session changes due to
+  a successful handoff or return_to_default tool call. The SPA updates the
+  activeAgentId in the session store.
+type: object
+required:
+  - type
+  - session_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: agent_switched
+  session_id:
+    type: string
+    minLength: 1
+    description: Session whose active agent changed.
+  agent_id:
+    type: string
+    description: >
+      New active agent ID. Empty string means "returned to default agent"
+      (e.g., after return_to_default tool call).
+  message:
+    type: string
+    description: >
+      Display name of the new agent. Included by the backend so the SPA can
+      show the agent name without an extra API round-trip. Mirrors the
+      agent_name field from the TS interface for display-only purposes.

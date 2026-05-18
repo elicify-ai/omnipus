@@ -1,0 +1,80 @@
+type: object
+description: >
+  A single transcript entry (session.TranscriptEntry on the Go side).
+  Maps to the Message interface in src/lib/api.ts. The SPA reads this
+  from GET /sessions/{id}/messages.
+required:
+  - id
+  - timestamp
+  - agent_id
+properties:
+  id:
+    type: string
+    description: Unique message identifier.
+    example: "msg_01HXYZ"
+  type:
+    type: string
+    enum:
+      - message
+      - compaction
+      - system
+    description: >
+      Entry classification. Absent or empty means "message" (backwards compatible).
+      "compaction" entries summarize pruned context; "system" entries are internal markers.
+    example: "message"
+  role:
+    type: string
+    enum:
+      - user
+      - assistant
+      - system
+    description: Author role. Absent on compaction entries.
+    example: "assistant"
+  content:
+    type: string
+    description: Raw markdown/text content of the message.
+    example: "I can help you with that!"
+  summary:
+    type: string
+    description: Compaction summary text (present only on type=compaction entries).
+    example: "Compacted 120 messages."
+  timestamp:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp when this entry was recorded.
+    example: "2026-05-16T10:01:00Z"
+  tokens:
+    type: integer
+    description: Token count for this entry (input + output). Absent when zero.
+    example: 150
+  cost:
+    type: number
+    format: double
+    description: USD cost for this entry. Absent when zero.
+    example: 0.00045
+  status:
+    type: string
+    enum:
+      - ok
+      - error
+      - interrupted
+    description: Completion status of this message turn.
+    example: "ok"
+  attachments:
+    type: array
+    items:
+      $ref: './Attachment.yaml'
+    description: File attachments associated with this message.
+  tool_calls:
+    type: array
+    items:
+      $ref: './ToolCall.yaml'
+    description: Tool invocations made during this message turn.
+  agent_id:
+    type: string
+    description: ID of the agent that produced this entry (FR-002). Always present.
+    example: "jim"
+  messages_compacted:
+    type: integer
+    description: Number of messages compacted (present only on compaction entries).
+    example: 120

@@ -1,0 +1,113 @@
+type: object
+description: >
+  Session metadata object (maps to session.UnifiedMeta + session.SessionMeta).
+  Returned in list and detail endpoints. The SPA maps this through rawToSession()
+  which reads stats.message_count, stats.tokens_total, and stats.cost.
+required:
+  - id
+  - agent_id
+  - title
+  - status
+  - created_at
+  - updated_at
+  - channel
+  - partitions
+  - stats
+properties:
+  id:
+    type: string
+    description: Unique session identifier (UUID).
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  type:
+    type: string
+    enum:
+      - chat
+      - task
+      - channel
+    description: >
+      Session classification. Legacy sessions without a type field are treated as "chat"
+      by the SPA via rawToSession(). Defaults to "chat" on creation.
+    example: "chat"
+  agent_id:
+    type: string
+    description: ID of the primary agent that owns this session.
+    example: "jim"
+  title:
+    type: string
+    description: Human-readable session title. May be auto-generated or user-renamed.
+    example: "My chat session"
+  status:
+    type: string
+    enum:
+      - active
+      - archived
+      - interrupted
+    description: Current lifecycle status of the session.
+    example: "active"
+  created_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp when the session was created.
+    example: "2026-05-16T10:00:00Z"
+  updated_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp of the last modification to session metadata or transcript.
+    example: "2026-05-16T10:05:30Z"
+  model:
+    type: string
+    description: LLM model name used in this session (may be empty for legacy sessions).
+    example: "claude-sonnet-4-6"
+  provider:
+    type: string
+    description: Provider identifier (e.g. "anthropic", "openai") for this session.
+    example: "anthropic"
+  stats:
+    $ref: './SessionStats.yaml'
+  project_id:
+    type: string
+    description: Associated project ID (optional, future v0.3 feature).
+    example: "proj-123"
+  task_id:
+    type: string
+    description: Associated task ID when this session was created to service a task.
+    example: "task-456"
+  channel:
+    type: string
+    description: >
+      Channel identifier that initiated this session (e.g. "webchat", "telegram").
+      Always present (may be empty string for legacy sessions).
+    example: "webchat"
+  partitions:
+    type: array
+    items:
+      type: string
+    description: >
+      List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]).
+      Always present as an array (may be empty for new sessions with no messages).
+    example:
+      - "2026-05-16.jsonl"
+  last_compaction_summary:
+    type: string
+    description: Summary of the last context compaction pass (present only when compaction has occurred).
+    example: "Compacted 120 messages to summary."
+  agent_ids:
+    type: array
+    items:
+      type: string
+    description: >
+      All agent IDs that have participated in this session (multi-agent sessions).
+      For legacy single-agent sessions this field is absent; callers should fall
+      back to [agent_id] when agent_ids is undefined.
+    example:
+      - "jim"
+      - "ava"
+  active_agent_id:
+    type: string
+    description: The agent ID currently handling this session (multi-agent sessions only).
+    example: "jim"
+  compaction_summaries:
+    type: object
+    description: Per-agent compaction summaries (multi-agent sessions only).
+    additionalProperties:
+      type: string

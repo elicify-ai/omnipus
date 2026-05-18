@@ -1,0 +1,42 @@
+title: ReplayMessageFrame
+description: >
+  Server → client. One replayed turn entry emitted during a session replay
+  (attach_session). Each entry corresponds to a user, assistant, or system
+  transcript entry. The SPA reconstructs the conversation from these frames.
+type: object
+required:
+  - type
+  - session_id
+  - content
+  - role
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: replay_message
+  session_id:
+    type: string
+    minLength: 1
+    description: Session being replayed.
+  content:
+    type: string
+    description: Message text.
+  role:
+    type: string
+    description: >
+      Turn role. Typical values: "user", "assistant", "system".
+      The SPA also receives "turn_cancelled" — a metadata-only role that is
+      skipped (no bubble rendered). Role is normalised to "assistant" if empty.
+  id:
+    type: string
+    description: >
+      Server-assigned message ID for deduplication on WS reconnect. The SPA
+      uses id-match dedup when present, falling back to content+role+timestamp
+      tuple when absent.
+  timestamp:
+    type: string
+    format: date-time
+    description: ISO-8601 timestamp of the original message.
+  agent_id:
+    type: string
+    description: Agent that produced this message (assistant messages only).

@@ -1,0 +1,86 @@
+type: object
+description: >
+  Body for PUT /agents/{id}. All fields are optional — only provided fields are updated.
+  Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions.
+  model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback,
+  heartbeat_enabled, and heartbeat_interval may be updated on locked agents.
+properties:
+  name:
+    type: string
+    minLength: 1
+    description: New display name. Rejected on locked agents.
+    example: "My Renamed Agent"
+  description:
+    type: string
+    description: New description. Rejected on locked agents. Empty string removes it.
+    example: "Updated description"
+  model:
+    type: string
+    description: New model name. Allowed on all agents.
+    example: "gpt-4o"
+  soul:
+    type: string
+    description: >
+      New SOUL.md content (agent system prompt). Rejected on locked agents.
+      Writing this triggers a config reload.
+    example: "You are a helpful assistant..."
+  heartbeat:
+    type: string
+    description: >
+      New HEARTBEAT.md content. Rejected on locked agents.
+      Writing this triggers a config reload.
+    example: "Check queue every hour."
+  instructions:
+    type: string
+    description: >
+      New AGENT.md body (after frontmatter). Rejected on locked agents.
+      Writing this triggers a config reload.
+    example: "Focus on Python only."
+  timeout_seconds:
+    type: integer
+    description: New timeout in seconds per turn. Allowed on all agents.
+    example: 600
+  max_tool_iterations:
+    type: integer
+    description: New maximum tool calls per turn. Allowed on all agents.
+    example: 100
+  steering_mode:
+    type: string
+    description: New steering mode. Allowed on all agents.
+    example: "one-at-a-time"
+  tool_feedback:
+    type: boolean
+    description: Enable/disable tool feedback loop. Allowed on all agents.
+    example: true
+  heartbeat_enabled:
+    type: boolean
+    description: Enable/disable heartbeat loop. Allowed on all agents.
+    example: false
+  heartbeat_interval:
+    type: integer
+    description: New heartbeat interval in seconds. Allowed on all agents.
+    example: 1800
+  sandbox_profile:
+    type: string
+    enum:
+      - workspace
+      - workspace+net
+      - host
+      - off
+    description: >
+      New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
+    example: "workspace"
+  shell_policy:
+    type: object
+    description: Per-agent shell command deny-pattern configuration.
+    properties:
+      enable_deny_patterns:
+        type: boolean
+        example: true
+      custom_deny_patterns:
+        type: array
+        items:
+          type: string
+        description: Must each be valid Go regexp patterns (400 on invalid regexp).
+        example:
+          - "rm -rf /"

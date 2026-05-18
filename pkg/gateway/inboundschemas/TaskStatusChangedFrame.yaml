@@ -1,0 +1,31 @@
+title: TaskStatusChangedFrame
+description: >
+  Server → client. Notifies the SPA that a task's status has changed. The SPA
+  invalidates the tasks TanStack Query cache on receipt; no direct state
+  mutation is performed.
+type: object
+required:
+  - type
+  - session_id
+  - task_id
+  - status
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: task_status_changed
+  session_id:
+    type: string
+    minLength: 1
+    description: Session in which the task lives.
+  task_id:
+    type: string
+    minLength: 1
+    description: ID of the task whose status changed.
+  status:
+    type: string
+    minLength: 1
+    description: New status string for the task.
+  agent_id:
+    type: string
+    description: Agent managing this task.

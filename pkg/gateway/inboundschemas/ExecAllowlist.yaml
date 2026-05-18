@@ -1,0 +1,35 @@
+title: ExecAllowlist
+description: >
+  Exec binary allowlist configuration for GET/PUT
+  /api/v1/security/exec-allowlist (SEC-05).
+type: object
+required:
+  - allowed_binaries
+properties:
+  allowed_binaries:
+    type: array
+    items:
+      type: string
+      minLength: 1
+      maxLength: 256
+    maxItems: 256
+    description: >
+      Ordered list of allowed binary name patterns evaluated on every exec
+      call. Patterns are trimmed, deduplicated, and validated server-side.
+      Empty array = block all exec calls.
+    example:
+      - git
+      - python3
+      - node
+  approval:
+    type: string
+    description: >
+      Approval mode for exec calls. Reflects config.tools.exec.approval.
+      Only present in GET responses.
+    example: ask
+  restart_required:
+    type: boolean
+    description: >
+      True in PUT responses — the in-memory agent loop uses the previous
+      allowlist until the gateway restarts (SEC-12).
+    example: true

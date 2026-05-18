@@ -1,0 +1,25 @@
+type: object
+description: File attachment associated with a transcript entry.
+required:
+  - type
+  - path
+  - size
+  - mime_type
+properties:
+  type:
+    type: string
+    description: Attachment category (e.g. "file", "image").
+    example: "file"
+  path:
+    type: string
+    description: Relative path within the session workspace.
+    example: "output/result.txt"
+  size:
+    type: integer
+    format: int64
+    description: File size in bytes.
+    example: 1024
+  mime_type:
+    type: string
+    description: MIME type of the attachment.
+    example: "text/plain"

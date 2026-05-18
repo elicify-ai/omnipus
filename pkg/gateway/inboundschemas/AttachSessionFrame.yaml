@@ -1,0 +1,20 @@
+title: AttachSessionFrame
+description: >
+  Client → server. Requests the server to replay the transcript for the given
+  session. The server responds with a stream of replay_message, tool_call_start,
+  tool_call_result, subagent_start, subagent_end, and media frames, followed by
+  exactly one done frame. During replay, live frames from an in-progress agent
+  turn are buffered and flushed after the done frame.
+type: object
+required:
+  - type
+  - session_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: attach_session
+  session_id:
+    type: string
+    minLength: 1
+    description: Session ID to attach to and replay.

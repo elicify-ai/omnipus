@@ -1,0 +1,48 @@
+title: RateLimitConfig
+description: >
+  Rate limit configuration returned by GET /api/v1/security/rate-limits and
+  accepted by PUT /api/v1/security/rate-limits.
+type: object
+properties:
+  enabled:
+    type: boolean
+    description: >
+      True when any rate limit cap is configured. Derived from whether any
+      limit field is non-zero. Only present in GET responses.
+    example: true
+  daily_cost_usd:
+    type: number
+    format: double
+    minimum: 0
+    description: >
+      Current cumulative LLM spending for today (UTC). Only present in
+      GET responses.
+    example: 0.42
+  daily_cost_cap:
+    type: number
+    format: double
+    minimum: 0
+    description: >
+      Maximum allowed daily LLM cost in USD. 0 = unlimited.
+      Only present in GET responses (mapped from daily_cost_cap_usd).
+    example: 5.0
+  daily_cost_cap_usd:
+    type: number
+    format: double
+    minimum: 0
+    description: >
+      Maximum allowed daily LLM cost in USD. 0 = unlimited.
+      Used in PUT request body.
+    example: 5.0
+  max_agent_llm_calls_per_hour:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Maximum LLM API calls per agent per hour. 0 = unlimited.
+    example: 100
+  max_agent_tool_calls_per_minute:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Maximum tool calls per agent per minute. 0 = unlimited.
+    example: 60

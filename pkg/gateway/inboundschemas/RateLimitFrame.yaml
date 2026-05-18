@@ -1,0 +1,46 @@
+title: RateLimitFrame
+description: >
+  Server → client (SEC-26). Notifies the SPA of a rate-limit denial so the
+  chat UI can display an inline indicator. Global-scope events (e.g., daily cost
+  cap) are broadcast to every connected client; agent/channel-scoped events are
+  filtered by chatID on the server.
+type: object
+required:
+  - type
+  - session_id
+  - scope
+  - resource
+  - policy_rule
+  - retry_after_seconds
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: rate_limit
+  session_id:
+    type: string
+    description: Session that hit the rate limit (may be empty for global scope).
+  scope:
+    type: string
+    enum:
+      - agent
+      - channel
+      - global
+    description: Scope at which the rate limit was applied.
+  resource:
+    type: string
+    minLength: 1
+    description: The resource that was rate-limited (e.g., a tool name or model ID).
+  policy_rule:
+    type: string
+    minLength: 1
+    description: The policy rule that triggered the rate limit.
+  retry_after_seconds:
+    type: number
+    description: Suggested back-off duration in seconds before retrying.
+  agent_id:
+    type: string
+    description: Agent that triggered the rate limit.
+  tool:
+    type: string
+    description: Tool involved in the rate-limited call.

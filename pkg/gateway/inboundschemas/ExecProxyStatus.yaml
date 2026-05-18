@@ -1,0 +1,22 @@
+title: ExecProxyStatus
+description: >
+  Runtime state of the exec SSRF proxy returned by
+  GET /api/v1/security/exec-proxy-status (SEC-28).
+type: object
+required:
+  - enabled
+  - running
+properties:
+  enabled:
+    type: boolean
+    description: Whether the exec proxy is configured to run (cfg.Tools.Exec.EnableProxy).
+    example: true
+  running:
+    type: boolean
+    description: Whether the proxy listener is currently bound and running.
+    example: true
+  address:
+    type: string
+    description: >
+      Bound address in "host:port" format. Present only when running is true.
+    example: "127.0.0.1:19000"

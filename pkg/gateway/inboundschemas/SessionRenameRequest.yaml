@@ -1,0 +1,11 @@
+type: object
+description: Body for PUT /sessions/{id}. Renames a session.
+required:
+  - title
+properties:
+  title:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: New title for the session.
+    example: "Refactoring project setup"

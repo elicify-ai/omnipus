@@ -381,8 +381,11 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		APIKey   string `json:"api_key"`
 		Endpoint string `json:"endpoint"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var validateEnabled bool
+	if a.agentLoop != nil {
+		validateEnabled = a.agentLoop.GetConfig().Gateway.ValidateInbound
+	}
+	if !decodeAndValidate(w, r, "ProbeProviderRequest", &body, validateEnabled) {
 		return
 	}
 	if body.ID == "" {

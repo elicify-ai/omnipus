@@ -1,0 +1,90 @@
+title: SandboxStatus
+description: >
+  Runtime sandbox backend status returned by
+  GET /api/v1/security/sandbox-status.
+type: object
+required:
+  - backend
+  - available
+  - kernel_level
+  - policy_applied
+  - seccomp_enabled
+  - bind_ports_count
+properties:
+  backend:
+    type: string
+    description: Name of the active sandbox backend.
+    example: landlock
+  available:
+    type: boolean
+    description: Whether the backend is available on this platform.
+    example: true
+  kernel_level:
+    type: boolean
+    description: >
+      Whether the backend can enforce at the kernel level. True for Landlock
+      on Linux 5.13+. False for the fallback (app-level) backend.
+    example: true
+  policy_applied:
+    type: boolean
+    description: >
+      Whether kernel-level enforcement is actually live on this process.
+      A kernel-capable backend may not have policy applied if Apply() was
+      not called yet (e.g. sandbox mode is off).
+    example: true
+  abi_version:
+    type: integer
+    description: Landlock ABI version. Present on Linux with Landlock support.
+    example: 4
+  issue_ref:
+    type: string
+    description: >
+      Set when a known kernel incompatibility is flagged. Do NOT hard-code
+      the literal issue number in the SPA.
+    example: "https://github.com/dapicom-ai/omnipus/issues/123"
+  blocked_syscalls:
+    type: array
+    items:
+      type: string
+    description: >
+      List of syscall names blocked by seccomp (when active).
+  seccomp_enabled:
+    type: boolean
+    description: Whether seccomp BPF filtering is currently active.
+    example: true
+  landlock_features:
+    type: array
+    items:
+      type: string
+    description: Landlock feature flags active on this kernel.
+  notes:
+    type: array
+    items:
+      type: string
+    description: Human-readable notes about the sandbox state or limitations.
+  mode:
+    type: string
+    description: Current sandbox enforcement mode (from ApplyState).
+    example: enforce
+  disabled_by:
+    type: string
+    description: >
+      Reason the sandbox is disabled, if applicable. E.g. "config" or "kernel".
+  landlock_enforced:
+    type: boolean
+    description: Whether Landlock file-system access rules are enforced.
+  seccomp_enforced:
+    type: boolean
+    description: Whether seccomp syscall filtering is enforced.
+  audit_only:
+    type: boolean
+    description: >
+      True when the sandbox is in permissive (audit-only) mode —
+      policy violations are logged but not blocked.
+  bind_ports_count:
+    type: integer
+    minimum: 0
+    description: >
+      Number of bind-port allow-list rules installed by the kernel.
+      Zero on FallbackBackend, Mode=Off, or Landlock ABI < 4.
+    example: 2

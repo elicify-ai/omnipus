@@ -1,0 +1,17 @@
+title: RetentionConfig
+description: >
+  Session log retention configuration returned by GET /api/v1/security/retention.
+type: object
+properties:
+  session_days:
+    type: integer
+    minimum: 0
+    description: >
+      Number of days to retain session logs. 0 means use the system default
+      (90 days). Only present when a custom retention period is set.
+    example: 30
+  disabled:
+    type: boolean
+    description: >
+      When true, retention sweeps are disabled and session logs are kept forever.
+    example: false

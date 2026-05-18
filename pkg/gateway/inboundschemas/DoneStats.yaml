@@ -1,0 +1,41 @@
+title: DoneStats
+description: >
+  Statistics payload included in a done frame. All numeric fields default to 0
+  when not applicable (e.g., a turn with no LLM calls). Additional diagnostic
+  keys may be present from replay (frames_emitted, orphan_count,
+  duplicate_tool_call_id_count, truncated_result_count, replay_error).
+type: object
+additionalProperties: true
+properties:
+  tokens:
+    type: number
+    description: Total tokens consumed in this turn (input + output).
+  cost:
+    type: number
+    description: Total cost in USD for this turn.
+  duration_ms:
+    type: number
+    description: Wall-clock duration of the turn in milliseconds.
+  tokens_dropped:
+    type: number
+    description: >
+      Number of token frames dropped due to backpressure on the send channel.
+      Only present when > 0.
+  # Replay-only diagnostics (present on done frames emitted by streamReplay)
+  frames_emitted:
+    type: number
+    description: Number of content frames emitted during replay. Replay-only.
+  orphan_count:
+    type: number
+    description: Tool calls whose parent span was not found. Replay-only.
+  duplicate_tool_call_id_count:
+    type: number
+    description: Tool call IDs that appeared more than once. Replay-only.
+  truncated_result_count:
+    type: number
+    description: Tool call results truncated to 1 MiB. Replay-only.
+  replay_error:
+    type: boolean
+    description: >
+      True when the done frame was synthesized after a replay error (W1-5).
+      Replay-only.

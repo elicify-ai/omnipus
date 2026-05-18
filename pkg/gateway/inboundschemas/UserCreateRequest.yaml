@@ -1,0 +1,28 @@
+type: object
+description: Body for POST /users. Creates a new user account. Admin-only.
+required:
+  - username
+  - role
+  - password
+properties:
+  username:
+    type: string
+    minLength: 2
+    maxLength: 63
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$'
+    description: >
+      Must start with an alphanumeric and contain only letters, digits, dots,
+      dashes, and underscores. Length 2-63 characters.
+    example: "alice"
+  role:
+    type: string
+    enum:
+      - admin
+      - user
+    description: RBAC role. Case-sensitive; exactly "admin" or "user".
+    example: "user"
+  password:
+    type: string
+    minLength: 8
+    description: Initial password. Minimum 8 characters.
+    example: "s3cr3tpassword"

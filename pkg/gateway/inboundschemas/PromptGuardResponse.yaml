@@ -1,0 +1,20 @@
+title: PromptGuardResponse
+description: >
+  Prompt injection guard level returned by GET /api/v1/security/prompt-guard.
+type: object
+required:
+  - level
+  - requires_restart
+properties:
+  level:
+    type: string
+    description: Current prompt injection detection strictness level.
+    enum:
+      - low
+      - medium
+      - high
+    example: medium
+  requires_restart:
+    type: boolean
+    description: Always false — prompt guard is hot-reloaded.
+    example: false

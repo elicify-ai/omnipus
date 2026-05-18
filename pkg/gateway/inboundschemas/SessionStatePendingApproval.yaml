@@ -1,0 +1,32 @@
+title: SessionStatePendingApproval
+description: >
+  One entry in the pending_approvals list of a SessionStateFrame.
+  Describes a tool approval that is currently awaiting admin decision.
+type: object
+required:
+  - approval_id
+  - session_id
+  - tool_name
+  - agent_id
+  - expires_in_ms
+additionalProperties: false
+properties:
+  approval_id:
+    type: string
+    minLength: 1
+    description: Unique UUID for this approval request.
+  session_id:
+    type: string
+    minLength: 1
+    description: Session in which the approval is pending.
+  tool_name:
+    type: string
+    minLength: 1
+    description: Name of the tool awaiting approval.
+  agent_id:
+    type: string
+    minLength: 1
+    description: Agent that invoked the tool.
+  expires_in_ms:
+    type: integer
+    description: Relative expiry in milliseconds from receipt.

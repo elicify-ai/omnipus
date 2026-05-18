@@ -1,0 +1,24 @@
+type: object
+description: >
+  Response from POST /onboarding/probe-provider. Always HTTP 200.
+  success=true means the API key was accepted; success=false means the upstream
+  rejected it (the error field explains why).
+required:
+  - success
+properties:
+  success:
+    type: boolean
+    description: Whether the provider accepted the API key.
+    example: true
+  models:
+    type: array
+    items:
+      type: string
+    description: List of model IDs returned by the provider. Present only when success=true.
+    example:
+      - "anthropic/claude-3.5-haiku"
+      - "openai/gpt-4o"
+  error:
+    type: string
+    description: Human-readable error from the upstream provider. Present only when success=false.
+    example: "401 unauthorized"

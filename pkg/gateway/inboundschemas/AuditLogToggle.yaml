@@ -1,0 +1,13 @@
+title: AuditLogToggle
+description: >
+  Audit log enable/disable state returned by GET /api/v1/security/audit-log.
+  Note: this endpoint controls whether audit logging is enabled at all.
+  GET /api/v1/audit-log (distinct path) returns the actual audit entries.
+type: object
+required:
+  - enabled
+properties:
+  enabled:
+    type: boolean
+    description: Whether audit logging is currently enabled.
+    example: true

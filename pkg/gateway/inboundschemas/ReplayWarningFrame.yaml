@@ -1,0 +1,29 @@
+title: ReplayWarningFrame
+description: >
+  Server → client (V1.B). Emitted by replay.go just before the terminal done
+  frame when the transcript contained duplicate tool_call_ids. Older duplicate
+  copies are silently overwritten on disk; only the latest one is replayed.
+  Surfacing the count as a one-shot toast gives the operator visible feedback
+  that something irregular was detected — a server-only slog.Warn was invisible
+  before this frame was introduced.
+type: object
+required:
+  - type
+  - session_id
+  - message
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: replay_warning
+  session_id:
+    type: string
+    minLength: 1
+    description: Session whose transcript triggered this warning.
+  message:
+    type: string
+    minLength: 1
+    description: Human-readable description of the warning condition.
+  stats:
+    $ref: ReplayWarningStats.yaml
+    description: Optional diagnostic counters for operator debugging.

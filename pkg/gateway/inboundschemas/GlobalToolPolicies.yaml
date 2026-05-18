@@ -1,0 +1,32 @@
+title: GlobalToolPolicies
+description: >
+  Global tool policy configuration returned by GET /api/v1/security/tool-policies
+  and accepted by PUT /api/v1/security/tool-policies.
+type: object
+required:
+  - default_policy
+  - policies
+properties:
+  default_policy:
+    type: string
+    description: Default policy for any tool not listed in policies.
+    enum:
+      - allow
+      - ask
+      - deny
+    example: allow
+  policies:
+    type: object
+    description: >
+      Per-tool policy overrides. Keys are canonical tool names;
+      values are the policy to apply. Never null — empty object
+      when no overrides are configured.
+    additionalProperties:
+      type: string
+      enum:
+        - allow
+        - ask
+        - deny
+    example:
+      exec: ask
+      browser.evaluate: deny

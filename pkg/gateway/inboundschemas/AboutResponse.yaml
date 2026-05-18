@@ -1,0 +1,77 @@
+title: AboutResponse
+description: >
+  Gateway metadata returned by GET /api/v1/about.
+type: object
+required:
+  - version
+  - go_version
+  - os
+  - arch
+  - uptime
+  - uptime_seconds
+  - pid
+  - preview_port
+  - preview_listener_enabled
+  - warmup_timeout_seconds
+  - frame_ancestors_fallback
+properties:
+  version:
+    type: string
+    description: Omnipus gateway version string.
+    example: "0.1.0"
+  go_version:
+    type: string
+    description: Go runtime version string.
+    example: "go1.22.3"
+  os:
+    type: string
+    description: Operating system (GOOS).
+    example: linux
+  arch:
+    type: string
+    description: CPU architecture (GOARCH).
+    example: amd64
+  uptime:
+    type: string
+    description: Human-readable uptime string.
+    example: "2h30m15s"
+  uptime_seconds:
+    type: integer
+    minimum: 0
+    description: Process uptime in seconds.
+    example: 9015
+  pid:
+    type: integer
+    description: Gateway process ID.
+    example: 12345
+  preview_port:
+    type: integer
+    description: >
+      Port the preview listener is bound on (FR-009).
+      Default is gateway.port + 1.
+    example: 5001
+  preview_listener_enabled:
+    type: boolean
+    description: >
+      Whether the iframe preview listener is currently bound and serving
+      requests. Absent on old gateway versions (treat as true when absent).
+    example: true
+  preview_origin:
+    type: string
+    description: >
+      Fully-qualified HTTPS origin operators set via gateway.preview_origin
+      (e.g. "https://preview.acme.com"). Absent when not configured;
+      the SPA constructs the origin from preview_port in that case.
+    example: "https://preview.acme.com"
+  warmup_timeout_seconds:
+    type: integer
+    minimum: 0
+    description: Dev-server warmup timeout from config.
+    example: 30
+  frame_ancestors_fallback:
+    type: boolean
+    description: >
+      True when frame-ancestors is in fallback ('*') mode — the host is bound
+      to 0.0.0.0/[::] and public_url is not set, degrading T-04 defence.
+      The SPA can show a warning banner when this is true.
+    example: false

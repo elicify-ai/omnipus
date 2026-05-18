@@ -1,0 +1,61 @@
+type: object
+description: >
+  Per-agent tool configuration governing which builtin tools are accessible
+  and which MCP servers are bound (config.AgentToolsCfg on the Go side,
+  AgentToolsCfg interface in src/lib/api.ts).
+properties:
+  builtin:
+    type: object
+    description: Controls builtin tool visibility for this agent.
+    properties:
+      default_policy:
+        type: string
+        enum:
+          - allow
+          - ask
+          - deny
+        description: >
+          Fallback policy applied to any builtin tool not listed in policies.
+          Custom agents are seeded with default_policy=allow and a system.*=deny
+          entry to enforce the privilege rail.
+        example: "allow"
+      policies:
+        type: object
+        description: >
+          Per-tool policy overrides. Keys are tool names or glob patterns
+          (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
+        additionalProperties:
+          type: string
+          enum:
+            - allow
+            - ask
+            - deny
+        example:
+          "system.*": "deny"
+          "workspace.shell": "ask"
+  mcp:
+    type: object
+    description: MCP server bindings for this agent.
+    properties:
+      servers:
+        type: array
+        description: List of MCP server bindings.
+        items:
+          type: object
+          required:
+            - id
+          properties:
+            id:
+              type: string
+              description: MCP server identifier as registered in config.json.
+              example: "my-mcp-server"
+            tools:
+              type: array
+              items:
+                type: string
+              description: >
+                Specific tool names to expose from this server. When absent,
+                all tools from the server are available.
+              example:
+                - "search"
+                - "fetch"

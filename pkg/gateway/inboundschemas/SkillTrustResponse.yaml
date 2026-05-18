@@ -1,0 +1,17 @@
+title: SkillTrustResponse
+description: >
+  Skill trust level returned by GET /api/v1/security/skill-trust.
+type: object
+required:
+  - level
+properties:
+  level:
+    type: string
+    description: >
+      Current skill trust level. Controls how unverified community skills
+      are handled.
+    enum:
+      - block_unverified
+      - warn_unverified
+      - allow_all
+    example: warn_unverified

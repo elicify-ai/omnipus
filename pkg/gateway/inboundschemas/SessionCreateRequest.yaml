@@ -1,0 +1,17 @@
+type: object
+description: Body for POST /sessions. Creates a new session for an agent.
+properties:
+  agent_id:
+    type: string
+    description: >
+      Agent ID that will own this session. Defaults to "main" when omitted.
+      Must reference an existing agent (400 if not found).
+    example: "jim"
+  type:
+    type: string
+    enum:
+      - chat
+      - task
+      - channel
+    description: Session type. Defaults to "chat" when omitted.
+    example: "chat"

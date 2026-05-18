@@ -1,0 +1,34 @@
+type: object
+description: >
+  Returned on successful login, register-admin, or onboarding/complete.
+  Contains the bearer token to use in subsequent Authorization headers,
+  the role of the authenticated user, and the username.
+required:
+  - token
+  - role
+  - username
+properties:
+  token:
+    type: string
+    description: >
+      Bearer token for subsequent API calls. Prefix with "omnipus_" followed
+      by 64 hex characters. Store in sessionStorage (preferred) or localStorage
+      under the key "omnipus_auth_token".
+    example: "omnipus_a3f...4b2"
+  role:
+    type: string
+    enum:
+      - admin
+      - user
+    description: RBAC role of the authenticated user.
+    example: "admin"
+  username:
+    type: string
+    description: The authenticated user's login name.
+    example: "admin"
+  warning:
+    type: string
+    description: >
+      Non-fatal advisory message. Present on onboarding/complete when
+      the credential store is locked and the API key was stored in plaintext.
+    example: "API key stored in plaintext — set OMNIPUS_MASTER_KEY for encrypted storage"

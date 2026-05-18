@@ -1,0 +1,51 @@
+type: object
+description: >
+  Body for POST /onboarding/complete. Atomically sets up the first LLM provider
+  and creates the initial admin account. CSRF-exempt (no cookie exists at this point).
+required:
+  - provider
+  - admin
+properties:
+  provider:
+    type: object
+    description: LLM provider configuration to persist.
+    required:
+      - id
+      - api_key
+    properties:
+      id:
+        type: string
+        description: >
+          Provider protocol identifier (e.g. "anthropic", "openai", "openrouter", "gemini").
+          Must be a known protocol; unknown values are rejected with 400.
+        example: "anthropic"
+      api_key:
+        type: string
+        minLength: 1
+        description: API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json.
+        example: "sk-ant-..."
+      model:
+        type: string
+        description: >
+          Default model to use for this provider. When omitted, a sensible default is chosen
+          per provider (e.g. "claude-sonnet-4-6" for anthropic, "gpt-4o" for openai).
+        example: "claude-sonnet-4-6"
+  admin:
+    type: object
+    description: Initial admin account credentials.
+    required:
+      - username
+      - password
+    properties:
+      username:
+        type: string
+        minLength: 2
+        maxLength: 63
+        pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$'
+        description: Admin login name.
+        example: "admin"
+      password:
+        type: string
+        minLength: 8
+        description: Admin password. Minimum 8 characters.
+        example: "s3cr3tpassword"

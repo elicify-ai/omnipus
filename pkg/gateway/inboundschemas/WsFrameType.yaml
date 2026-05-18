@@ -1,0 +1,40 @@
+title: WsFrameType
+description: >
+  Discriminator enum of every WebSocket frame type string. The value in the
+  `type` field of every frame must be one of these strings.
+type: string
+enum:
+  # ── Client → server ─────────────────────────────────────────────────────────
+  - auth
+  - message
+  - cancel
+  - exec_approval_response
+  - ping
+  - attach_session
+  - device_pairing_response
+  - session_close
+  # ── Server → client ─────────────────────────────────────────────────────────
+  - session_started
+  - token
+  - done
+  - error
+  - tool_call_start
+  - tool_call_result
+  - subagent_start
+  - subagent_end
+  - exec_approval_request
+  - task_status_changed
+  - replay_message
+  - rate_limit
+  - media
+  - agent_switched
+  - tool_approval_required
+  - session_state
+  - system_overload
+  - replay_warning
+  - cancel_stage
+  - exec_approval_expired
+  # ── Server → client (internal / ack) ────────────────────────────────────────
+  - session_close_ack
+  - exec_approval_response_ack
+  - device_pairing_request

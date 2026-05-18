@@ -1,0 +1,31 @@
+type: object
+description: >
+  Body for POST /agents. Creates a new custom agent. A UUID is assigned by the server.
+  The agent starts in "draft" status (no SOUL.md written yet).
+required:
+  - name
+properties:
+  name:
+    type: string
+    minLength: 1
+    description: Display name for the new agent.
+    example: "My Custom Agent"
+  description:
+    type: string
+    description: Short description of the agent's purpose.
+    example: "Specialized data analysis assistant"
+  model:
+    type: string
+    description: >
+      Model name for LLM calls. When omitted, the global agents.defaults.model_name is used.
+    example: "claude-sonnet-4-6"
+  color:
+    type: string
+    description: Hex color code for the agent avatar.
+    example: "#D4AF37"
+  icon:
+    type: string
+    description: Phosphor icon name for the agent avatar.
+    example: "ChartBar"
+  tools_cfg:
+    $ref: './AgentToolsCfg.yaml'

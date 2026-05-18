@@ -1,0 +1,25 @@
+title: PendingRestartEntry
+description: >
+  A single config key that has been written to disk but not yet applied —
+  the running value diverges from the persisted value. Returned in the
+  array from GET /api/v1/config/pending-restart.
+type: object
+required:
+  - key
+  - persisted_value
+  - applied_value
+properties:
+  key:
+    type: string
+    description: >
+      Dotted config key path (e.g. "sandbox.mode", "gateway.port").
+      Only RestartGatedKeys appear here — hot-reload keys never appear.
+    example: sandbox.mode
+  persisted_value:
+    description: >
+      Value currently on disk (what will be applied after restart).
+    example: enforce
+  applied_value:
+    description: >
+      Value currently applied to the running process (boot-time snapshot).
+    example: permissive

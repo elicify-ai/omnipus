@@ -1,0 +1,40 @@
+type: object
+description: >
+  A single activity event as returned by GET /activity.
+  Events represent notable runtime occurrences (session starts, task lifecycle changes)
+  from the last 24 hours, returned in reverse-chronological order (max 50 entries).
+required:
+  - id
+  - type
+  - timestamp
+properties:
+  id:
+    type: string
+    description: >
+      Opaque event identifier derived from the source entity.
+      E.g. "session-<uuid>", "task-c-<id>", "task-u-<id>".
+    example: "session-550e8400-e29b-41d4-a716-446655440000"
+  type:
+    type: string
+    description: >
+      Event category. "session_start" = new session began.
+      "task_created" = a task was created.
+      "task_updated" = a task completed or changed status.
+    example: "session_start"
+  agent_id:
+    type: string
+    description: ID of the agent involved in the event (absent for system events).
+    example: "jim"
+  agent_name:
+    type: string
+    description: Display name of the agent involved (absent for system events).
+    example: "Jim"
+  timestamp:
+    type: string
+    format: date-time
+    description: RFC3339 UTC timestamp when the event occurred.
+    example: "2026-05-17T14:23:00Z"
+  summary:
+    type: string
+    description: Human-readable one-line summary of the event (e.g. session title, task title).
+    example: "New session"

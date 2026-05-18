@@ -1,0 +1,39 @@
+title: SessionStateFrame
+description: >
+  Server → client (FR-052, FR-073, FR-081). One-shot frame emitted to each
+  WebSocket connection immediately after authentication. Contains all pending
+  tool approvals scoped to the authenticated user. The SPA reconciles its
+  approval store against this frame on every WS reconnect.
+
+  CRITICAL — nil-safety contract:
+  pending_approvals MUST be an array (never null). The server coerces nil →
+  []sessionStatePendingApproval{} before marshaling. The SPA calls
+  frame.pending_approvals.map() directly — a null value would crash.
+type: object
+required:
+  - type
+  - user_id
+  - pending_approvals
+  - emitted_at
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: session_state
+  user_id:
+    type: string
+    description: >
+      ID of the authenticated user. Empty string when the WS connection was
+      established without a user context (e.g., dev-mode bypass).
+  pending_approvals:
+    type: array
+    items:
+      $ref: SessionStatePendingApproval.yaml
+    description: >
+      Snapshot of all pending tool approvals visible to this user. Always an
+      array — never null. The server emits [] when no approvals are pending or
+      the user has no visibility (non-admin with no session ownership).
+  emitted_at:
+    type: string
+    format: date-time
+    description: RFC 3339 timestamp of when the server computed this snapshot.

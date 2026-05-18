@@ -1,0 +1,36 @@
+title: CancelStageFrame
+description: >
+  Server → client (B3). Cancel progress notification sent by the gateway after
+  the SPA sends a cancel frame. Three stages drive the progressive Stop-button
+  label transition.
+  NOTE: The field is "stage" (not "status") — see parallel gateway fix. The SPA
+  validates stage values and drops frames with any value not in:
+  {graceful, hard, detached}.
+type: object
+required:
+  - type
+  - session_id
+  - stage
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: cancel_stage
+  session_id:
+    type: string
+    minLength: 1
+    description: Session whose cancel state is being updated.
+  stage:
+    type: string
+    enum:
+      - graceful
+      - hard
+      - detached
+    description: >
+      graceful — cancel request acknowledged; agent is completing the current
+                 tool call and will stop at the next safe checkpoint.
+      hard     — graceful deadline expired; the agent turn is being force-killed.
+      detached — the session has been detached from the running turn; the SPA
+                 can now treat the session as idle.
+      The SPA validates this field via isValidFrame() and drops frames with any
+      other value (B3 fix for unknown-stage render crashes).

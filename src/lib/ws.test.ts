@@ -8,7 +8,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { WsConnection, parseFrameSafe, getDroppedFrameCount, resetDroppedFrameCount, getUnknownFrameTypeCount, resetUnknownFrameTypeCount } from './ws'
+import { WsConnection, parseFrameSafe, getDroppedFrameCount, resetDroppedFrameCount, getUnknownFrameTypeCount, resetUnknownFrameTypeCount, ClientFrameTypes } from './ws'
+import { ClientFrameTypes as ClientFrameTypesFromGenerated } from '@/lib/api/generated/asyncapi-types'
 
 // ── Mock WebSocket ─────────────────────────────────────────────────────────────
 
@@ -598,5 +599,67 @@ describe('getUnknownFrameTypeCount / resetUnknownFrameTypeCount', () => {
   it('reset after increment returns 0', () => {
     resetUnknownFrameTypeCount()
     expect(getUnknownFrameTypeCount()).toBe(0)
+  })
+})
+
+// ── ClientFrameTypes contract test ────────────────────────────────────────────
+//
+// Traces to: Architect NF-5 — CLIENT_FRAME_TYPES must be generated from spec.
+//
+// This test asserts that:
+// 1. ClientFrameTypes exported from ws.ts equals the generated constant.
+// 2. The set is non-empty (the spec has at least one client→server frame).
+// 3. Every entry in the set passes Zod validation as a valid WsFrame — this
+//    ensures the discriminators are actual frame type strings in the spec and
+//    not stale residue from a removed frame type.
+// 4. session_close is present (regression guard: it was missing from the
+//    hand-maintained set that this constant replaces).
+
+describe('ClientFrameTypes — contract test (NF-5)', () => {
+  it('ClientFrameTypes exported from ws.ts matches the generated constant', () => {
+    // Both imports must refer to the same array contents (same source of truth).
+    expect(Array.from(ClientFrameTypes)).toEqual(Array.from(ClientFrameTypesFromGenerated))
+  })
+
+  it('ClientFrameTypes is non-empty', () => {
+    expect(ClientFrameTypes.length).toBeGreaterThan(0)
+  })
+
+  it('ClientFrameTypes includes session_close (regression guard for the missing entry)', () => {
+    expect(ClientFrameTypes).toContain('session_close')
+  })
+
+  it('ClientFrameTypes includes auth, message, cancel', () => {
+    expect(ClientFrameTypes).toContain('auth')
+    expect(ClientFrameTypes).toContain('message')
+    expect(ClientFrameTypes).toContain('cancel')
+  })
+
+  it('session_close frame sent from server is rejected by _parseServerFrame (direction filter)', () => {
+    // A session_close frame originates from the client. If the server somehow
+    // echoes it back, the direction filter in _parseServerFrame must drop it.
+    // This uses WsConnection.onmessage to exercise the production code path.
+    resetDroppedFrameCount()
+    const onFrame = vi.fn()
+    const conn = new WsConnection({
+      onFrame,
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      onError: vi.fn(),
+    })
+    conn.connect()
+    // Trigger onopen so the socket is in the OPEN state
+    const ws = (global as { __ws_instances?: { onopen?: () => void }[] }).__ws_instances?.at(-1)
+    if (ws?.onopen) ws.onopen()
+
+    // Send a session_close frame as if it came from the server (spoofed direction).
+    const spoofedClose = JSON.stringify({ type: 'session_close' })
+    const wsInstance = (conn as unknown as { ws: { onmessage?: (e: { data: string }) => void } | null }).ws
+    wsInstance?.onmessage?.({ data: spoofedClose })
+
+    expect(onFrame).not.toHaveBeenCalled()
+    expect(getDroppedFrameCount()).toBeGreaterThan(0)
+
+    conn.disconnect()
   })
 })

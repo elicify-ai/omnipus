@@ -1,0 +1,35 @@
+type: object
+description: Aggregated statistics for a session transcript.
+required:
+  - tokens_in
+  - tokens_out
+  - tokens_total
+  - cost
+  - tool_calls
+  - message_count
+properties:
+  tokens_in:
+    type: integer
+    description: Total input tokens consumed across all messages in this session.
+    example: 1200
+  tokens_out:
+    type: integer
+    description: Total output tokens generated across all messages in this session.
+    example: 450
+  tokens_total:
+    type: integer
+    description: Sum of tokens_in and tokens_out.
+    example: 1650
+  cost:
+    type: number
+    format: double
+    description: Total USD cost for this session (based on provider pricing).
+    example: 0.0023
+  tool_calls:
+    type: integer
+    description: Total number of tool calls made in this session.
+    example: 3
+  message_count:
+    type: integer
+    description: Number of transcript entries in this session.
+    example: 8

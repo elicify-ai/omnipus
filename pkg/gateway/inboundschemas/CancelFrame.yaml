@@ -1,0 +1,18 @@
+title: CancelFrame
+description: >
+  Client → server. Request the server to cancel the in-progress turn for the
+  given session. The server acknowledges with one or more cancel_stage frames
+  (graceful → hard → detached) and eventually a done frame.
+type: object
+required:
+  - type
+  - session_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: cancel
+  session_id:
+    type: string
+    minLength: 1
+    description: Session whose in-progress turn should be cancelled.

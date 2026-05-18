@@ -1,0 +1,33 @@
+type: object
+description: >
+  Represents a gateway user account as returned by GET /users and POST /users.
+  Password hashes and token hashes are NEVER included in responses — only the
+  boolean presence flags are exposed.
+required:
+  - username
+  - role
+  - has_password
+  - has_active_token
+properties:
+  username:
+    type: string
+    minLength: 2
+    maxLength: 63
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$'
+    description: Login name. Immutable after creation.
+    example: "alice"
+  role:
+    type: string
+    enum:
+      - admin
+      - user
+    description: RBAC role. Case-sensitive.
+    example: "admin"
+  has_password:
+    type: boolean
+    description: True when the user's password_hash is non-empty (i.e. a password has been set).
+    example: true
+  has_active_token:
+    type: boolean
+    description: True when the user's token_hash is non-empty (i.e. a bearer token is currently issued).
+    example: true

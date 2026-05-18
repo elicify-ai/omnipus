@@ -7,7 +7,6 @@
 package gateway
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -55,8 +54,8 @@ func (a *restAPI) HandleExecAllowlist(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			AllowedBinaries []string `json:"allowed_binaries"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+		if !decodeAndValidate(w, r, "ExecAllowlist", &body, validateEnabled) {
 			return
 		}
 		// Normalise a nil slice to an empty slice so the config always contains

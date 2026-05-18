@@ -1,0 +1,60 @@
+title: ToolCallResultFrame
+description: >
+  Server → client. Emitted at the end of a tool execution with the result and
+  final status. The SPA updates the corresponding tool call badge from "running"
+  to "success" or "error".
+type: object
+required:
+  - type
+  - session_id
+  - tool
+  - call_id
+  - result
+  - status
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: tool_call_result
+  session_id:
+    type: string
+    minLength: 1
+    description: Session in which this tool call executed.
+  tool:
+    type: string
+    minLength: 1
+    description: Name of the tool that was called.
+  call_id:
+    type: string
+    minLength: 1
+    description: Matches the call_id from the preceding tool_call_start frame.
+  result:
+    description: >
+      The tool's return value. May be any JSON value (object, array, string,
+      number, boolean). When the result exceeded 1 MiB the value is a
+      TruncatedResult sentinel. When marshaling the result failed the value is
+      a MarshalErrorResult sentinel.
+    oneOf:
+      - {}
+      - $ref: TruncatedResult.yaml
+      - $ref: MarshalErrorResult.yaml
+  status:
+    type: string
+    enum:
+      - success
+      - error
+    description: Final execution status. Normalised from empty to "success" by the server.
+  duration_ms:
+    type: integer
+    description: Tool execution wall-clock time in milliseconds.
+  error:
+    type: string
+    description: Error message when status is "error".
+  parent_call_id:
+    type: string
+    description: >
+      For tool calls that fire inside a sub-turn: the spawn ToolCall.ID of the
+      parent subagent. Empty string or absent for top-level tool calls.
+  agent_id:
+    type: string
+    description: Agent that invoked this tool call.

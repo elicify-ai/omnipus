@@ -1,0 +1,14 @@
+title: PingFrame
+description: >
+  Client → server. Heartbeat frame sent by the SPA every 30 seconds to keep
+  the connection alive through proxies and firewalls. The server does not send
+  a pong application-layer frame in response; the WebSocket protocol-level
+  pong is handled transparently by gorilla/websocket.
+type: object
+required:
+  - type
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: ping

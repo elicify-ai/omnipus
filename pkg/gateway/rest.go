@@ -526,8 +526,8 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		AgentID string `json:"agent_id"`
 		Type    string `json:"type"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "SessionCreateRequest", &req, validateEnabled) {
 		return
 	}
 
@@ -1078,8 +1078,8 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			} `json:"mcp"`
 		} `json:"tools_cfg"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "AgentCreateRequest", &req, validateEnabled) {
 		return
 	}
 	if req.Name == "" {
@@ -1311,8 +1311,8 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		SandboxProfile    *config.SandboxProfile   `json:"sandbox_profile"`
 		ShellPolicy       *config.AgentShellPolicy `json:"shell_policy"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	validateEnabled := cfg.Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "AgentUpdateRequest", &req, validateEnabled) {
 		return
 	}
 	// Enforce god-mode latches (1) and (2) at the REST write gate.

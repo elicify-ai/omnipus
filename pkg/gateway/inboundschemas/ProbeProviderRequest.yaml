@@ -1,0 +1,24 @@
+type: object
+description: >
+  Body for POST /onboarding/probe-provider. Tests an API key against a provider
+  and returns available models. Non-persistent — nothing is written to disk.
+  CSRF-exempt. Returns 409 once onboarding is complete.
+required:
+  - id
+  - api_key
+properties:
+  id:
+    type: string
+    description: Provider protocol identifier (e.g. "anthropic", "openai", "openrouter").
+    example: "openrouter"
+  api_key:
+    type: string
+    minLength: 1
+    description: API key to test against the provider.
+    example: "sk-or-..."
+  endpoint:
+    type: string
+    description: >
+      Optional override for the provider's API base URL. When omitted, the server
+      uses the provider's well-known default endpoint.
+    example: "https://openrouter.ai/api/v1"

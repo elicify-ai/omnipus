@@ -332,6 +332,7 @@ const clientFrames = [
   "PingFrame",
   "AttachSessionFrame",
   "DevicePairingResponseFrame",
+  "SessionCloseFrame",
 ];
 
 lines.push("// ── Client → server frames ──────────────────────────────────────────────────");
@@ -341,6 +342,26 @@ clientFrames.forEach((name, i) => {
   const sep = i === clientFrames.length - 1 ? ";" : "";
   lines.push(`  | ${name}${sep}`);
 });
+lines.push("");
+
+// ── ClientFrameTypes constant — derived from clientFrames, not hand-written ───
+// This constant is the single source of truth for the set of type-discriminator
+// strings that identify client→server frames. ws.ts must import this constant
+// and construct CLIENT_FRAME_TYPES from it rather than maintaining a hand-written
+// literal set. Emitted as `as const` so TypeScript narrows to a tuple of literals.
+const clientFrameTypeValues = clientFrames.map((name) => {
+  const schema = schemas[name];
+  const typeConst = schema?.properties?.type?.const;
+  if (typeConst === undefined) {
+    throw new Error(`clientFrames entry "${name}" has no properties.type.const in asyncapi.yaml`);
+  }
+  return typeConst;
+});
+
+lines.push("// ── ClientFrameTypes constant — generated from spec, not hand-written ─────────");
+lines.push("// Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.");
+lines.push("");
+lines.push(`export const ClientFrameTypes = [${clientFrameTypeValues.map((v) => JSON.stringify(v)).join(", ")}] as const`);
 lines.push("");
 
 // ── Server→client frame union ─────────────────────────────────────────────────

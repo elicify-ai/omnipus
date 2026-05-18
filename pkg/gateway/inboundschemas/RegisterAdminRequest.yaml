@@ -1,0 +1,20 @@
+type: object
+description: Body for POST /auth/register-admin. Creates the first admin user (fails 409 if one already exists).
+required:
+  - username
+  - password
+properties:
+  username:
+    type: string
+    minLength: 2
+    maxLength: 63
+    pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$'
+    description: >
+      Must start with an alphanumeric character and contain only letters, digits,
+      dots, dashes, and underscores. Length 2-63 characters.
+    example: "admin"
+  password:
+    type: string
+    minLength: 8
+    description: Password for the new admin account. Minimum 8 characters.
+    example: "s3cr3tpassword"

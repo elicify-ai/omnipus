@@ -1,0 +1,64 @@
+title: SubagentEndFrame
+description: >
+  Server → client (FR-H-004). Closing bracket of a subagent span. Emitted when
+  the sub-turn finishes. The SPA transitions the span from "running" to a
+  terminal status and records duration and optional result.
+  NOTE: status MUST be validated — the SPA's isValidFrame() rejects any
+  status string not in the SUBAGENT_END_STATUSES set; such frames are dropped.
+type: object
+required:
+  - type
+  - session_id
+  - span_id
+  - status
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: subagent_end
+  session_id:
+    type: string
+    minLength: 1
+    description: Session in which this sub-turn ran.
+  span_id:
+    type: string
+    minLength: 1
+    description: Matches the span_id from the preceding subagent_start frame.
+  status:
+    type: string
+    enum:
+      - success
+      - error
+      - cancelled
+      - interrupted
+      - timeout
+    description: >
+      Terminal status of the sub-turn.  The SPA validates this field and drops
+      frames with any other value to prevent unknown-status render crashes (W4-6).
+  duration_ms:
+    type: integer
+    description: Wall-clock duration of the sub-turn in milliseconds.
+  final_result:
+    type: string
+    description: Optional textual summary of the sub-turn's output.
+  reason:
+    type: string
+    enum:
+      - parent_timeout
+      - parent_cancelled
+      - parent_done_early
+      - unknown
+    description: >
+      When status is "interrupted": why the sub-turn was interrupted by the
+      parent. Populated by W1-9 coordination in the agent loop.
+  agent_id:
+    type: string
+    description: Agent that ran the sub-turn.
+  parent_call_id:
+    type: string
+    description: The spawn ToolCall.ID that triggered this sub-turn.
+  message:
+    type: string
+    description: >
+      Internal reason string emitted by the orphan-watchdog synthetic end
+      frame. Not rendered directly in the UI.

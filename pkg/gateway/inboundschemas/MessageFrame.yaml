@@ -1,0 +1,31 @@
+title: MessageFrame
+description: >
+  Client → server. User chat message. Two variants:
+    - Without session_id: server mints a new session and acks with session_started.
+    - With session_id: message is appended to the existing session.
+  The discriminant is the PRESENCE of session_id, not a different type value.
+  Both variants share type: "message".
+type: object
+required:
+  - type
+  - content
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: message
+  content:
+    type: string
+    minLength: 1
+    maxLength: 5242880
+    description: User message text. Maximum 5 MiB enforced by the server.
+  session_id:
+    type: string
+    description: >
+      If present, continue this existing session. If omitted, the server mints
+      a new session and responds with a session_started frame.
+  agent_id:
+    type: string
+    description: >
+      Route this message to a specific agent by ID. If omitted the default
+      agent (typically "main") handles the message.

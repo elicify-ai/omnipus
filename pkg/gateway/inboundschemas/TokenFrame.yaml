@@ -1,0 +1,22 @@
+title: TokenFrame
+description: >
+  Server → client. A streaming token (partial LLM response text) for the given
+  session. Multiple token frames are emitted during an agent turn; the SPA
+  appends each token's content to the last assistant message bubble.
+type: object
+required:
+  - type
+  - session_id
+  - content
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: token
+  session_id:
+    type: string
+    minLength: 1
+    description: Session this token belongs to.
+  content:
+    type: string
+    description: Partial LLM response text to append.

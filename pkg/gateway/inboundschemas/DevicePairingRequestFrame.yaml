@@ -1,0 +1,34 @@
+title: DevicePairingRequestFrame
+description: >
+  Server → client. Emitted when a remote device initiates a pairing request and
+  needs admin approval. The SPA displays a pairing modal to the admin.
+  The admin responds with a device_pairing_response frame.
+  Fields map directly to pkg/gateway/websocket.go wsServerFrame DeviceID,
+  Fingerprint, PairingCode, DeviceName fields.
+type: object
+required:
+  - type
+  - device_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: device_pairing_request
+  device_id:
+    type: string
+    minLength: 1
+    description: Unique identifier for the device requesting pairing.
+  fingerprint:
+    type: string
+    description: Device fingerprint for identity verification.
+  pairing_code:
+    type: string
+    description: Human-readable pairing code to show in the admin UI for verbal confirmation.
+  device_name:
+    type: string
+    description: Display name of the device (e.g., hostname or user-provided label).
+  session_id:
+    type: string
+    description: >
+      Optional session context. Absent for global pairing requests not tied to
+      a specific session.

@@ -10,6 +10,8 @@ import { maybeDevToast } from '@/lib/dev-toast'
 // see CLAUDE.md hard-constraint #8. This file re-exports and aliases only.
 
 import { WsFrame as WsFrameSchema, WsFrameType as WsFrameTypeSchema } from '@/lib/api/generated/schemas'
+import { ClientFrameTypes } from '@/lib/api/generated/asyncapi-types'
+
 import type {
   WsFrameType,
   WsFrame,
@@ -52,9 +54,12 @@ import type {
   PingFrame,
   AttachSessionFrame,
   DevicePairingResponseFrame,
+  SessionCloseFrame,
 } from '@/lib/api/generated/asyncapi-types'
 
 // Re-export canonical names from generated file
+export { ClientFrameTypes }
+
 export type {
   WsFrameType,
   WsFrame,
@@ -95,6 +100,7 @@ export type {
   PingFrame,
   AttachSessionFrame,
   DevicePairingResponseFrame,
+  SessionCloseFrame,
 }
 
 // ── WsXxx legacy aliases ──────────────────────────────────────────────────────
@@ -133,6 +139,7 @@ export type WsSystemOverloadFrame = SystemOverloadFrame
 export type WsReplayWarningFrame = ReplayWarningFrame
 export type WsCancelStageFrame = CancelStageFrame
 export type WsSessionCloseAckFrame = SessionCloseAckFrame
+export type WsSessionCloseFrame = SessionCloseFrame
 export type WsExecApprovalResponseAckFrame = ExecApprovalResponseAckFrame
 export type WsDevicePairingRequestFrame = DevicePairingRequestFrame
 
@@ -220,19 +227,13 @@ function safeJsonParse(data: unknown): { ok: true; raw: unknown } | { ok: false 
 // frames. An incoming server message that carries a client-direction `type`
 // (e.g. a spoofed `{type:"auth"}`) would pass Zod validation (the schema covers
 // all directions) but must NOT be forwarded to the SPA frame reducer.
-// CLIENT_FRAME_TYPES is the set of `type` values exclusively used by
-// client→server frames. These are derived from the ClientFrame union in
-// asyncapi-types.ts — kept in sync with the spec by construction.
+//
+// CLIENT_FRAME_TYPES is built from the generated ClientFrameTypes constant
+// (contracts/asyncapi.yaml source of truth). The hand-written literal set that
+// lived here previously has been deleted — if the spec changes, re-run
+// scripts/_gen-asyncapi-types.mjs and ClientFrameTypes auto-updates.
 
-const CLIENT_FRAME_TYPES = new Set<string>([
-  'auth',
-  'message',
-  'cancel',
-  'exec_approval_response',
-  'ping',
-  'attach_session',
-  'device_pairing_response',
-])
+const CLIENT_FRAME_TYPES = new Set<string>(ClientFrameTypes)
 
 // ── parseFrameSafe ────────────────────────────────────────────────────────────
 //

@@ -1,0 +1,47 @@
+type: object
+description: >
+  A single tool invocation recorded in a transcript entry.
+  Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts.
+required:
+  - id
+  - tool
+  - status
+properties:
+  id:
+    type: string
+    description: Unique tool call identifier (ToolCallID type on the Go side).
+    example: "tc_01HXYZ"
+  tool:
+    type: string
+    description: Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
+    example: "workspace.shell"
+  status:
+    type: string
+    enum:
+      - success
+      - error
+      - pending
+      - denied
+      - running
+      - cancelled
+    description: Outcome of the tool call.
+    example: "success"
+  duration_ms:
+    type: integer
+    format: int64
+    description: Elapsed time in milliseconds. Absent when still running.
+    example: 234
+  parameters:
+    type: object
+    description: Input parameters passed to the tool.
+    additionalProperties: true
+    example:
+      command: "ls -la"
+  result:
+    type: object
+    description: Return value from the tool. Shape is tool-specific.
+    additionalProperties: true
+  parent_tool_call_id:
+    type: string
+    description: Parent tool call ID for nested subagent tool invocations.
+    example: "tc_01HABC"

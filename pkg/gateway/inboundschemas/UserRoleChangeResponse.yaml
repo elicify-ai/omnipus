@@ -1,0 +1,24 @@
+type: object
+description: Returned on successful PATCH /users/{username}/role.
+required:
+  - username
+  - role
+properties:
+  username:
+    type: string
+    description: The affected user's login name.
+    example: "alice"
+  role:
+    type: string
+    enum:
+      - admin
+      - user
+    description: The new role.
+    example: "user"
+  requires_restart:
+    type: boolean
+    description: Present and true when hot-reload failed after the role change.
+    example: false
+  warning:
+    type: string
+    description: Human-readable explanation when requires_restart is true.

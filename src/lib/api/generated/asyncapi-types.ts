@@ -367,7 +367,13 @@ export type ClientFrame =
   | ExecApprovalResponseFrame
   | PingFrame
   | AttachSessionFrame
-  | DevicePairingResponseFrame;
+  | DevicePairingResponseFrame
+  | SessionCloseFrame;
+
+// ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
+// Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
+
+export const ClientFrameTypes = ["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -394,5 +400,4 @@ export type ServerFrame =
   | SessionCloseAckFrame
   | ExecApprovalResponseAckFrame
   | DevicePairingRequestFrame
-  | SessionCloseFrame
   | ExecApprovalExpiredFrame;

@@ -1,0 +1,61 @@
+title: AuditEntry
+description: >
+  A single audit log record from the JSONL audit log file
+  (~/.omnipus/system/audit.jsonl). Matches the Go pkg/audit.Entry struct.
+type: object
+required:
+  - timestamp
+  - event
+properties:
+  timestamp:
+    type: string
+    format: date-time
+    description: ISO 8601 UTC timestamp of when the event was recorded.
+    example: "2026-05-16T10:30:00Z"
+  event:
+    type: string
+    description: >
+      Event type identifier. Well-known values:
+      tool_call, exec, file_op, llm_call, policy_eval, rate_limit,
+      ssrf, startup, shutdown. Custom values are permitted for
+      extensibility (open-ended union).
+    example: tool_call
+  decision:
+    type: string
+    description: >
+      Outcome of the event evaluation. One of: allow, deny, error.
+      May be absent for informational events.
+    enum:
+      - allow
+      - deny
+      - error
+    example: allow
+  agent_id:
+    type: string
+    description: ID of the agent that triggered the event. May be absent.
+    example: jim
+  session_id:
+    type: string
+    description: Session ID associated with the event. May be absent.
+    example: sess_abc123
+  tool:
+    type: string
+    description: Tool name when the event is a tool call. May be absent.
+    example: workspace.shell
+  command:
+    type: string
+    description: >
+      Command string when the event is an exec event. May be absent.
+    example: ls -la
+  parameters:
+    type: object
+    description: Tool call parameters or other event-specific key-value pairs.
+    additionalProperties: true
+  policy_rule:
+    type: string
+    description: Policy rule that produced this decision. May be absent.
+    example: "exec: ask"
+  details:
+    type: object
+    description: Event-specific metadata. Structure varies by event type.
+    additionalProperties: true
