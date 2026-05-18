@@ -119,6 +119,15 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
     until: '2026-09-30',
     note: 'InlineMedia <a download> path requires a mock non-image media frame; no scenario provider yet.',
   },
+  // contract-counters.spec.ts — production binary does not expose window.__omnipus_test_hooks
+  {
+    test: 'no schema-validation errors during authenticated page load + navigation',
+    issue: 'https://github.com/dapicom-ai/omnipus/issues/155',
+    until: '2026-12-31',
+    note: 'window.__omnipus_test_hooks counters are only present in dev builds (import.meta.env.DEV). ' +
+      'CI runs against the embedded production binary where MODE=production. ' +
+      'Run against a Vite dev server to exercise the full assertion.',
+  },
 ];
 
 // ── Validation ──────────────────────────────────────────────────────────────────

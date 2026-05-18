@@ -103,45 +103,21 @@ export type {
   SessionCloseFrame,
 }
 
-// ── WsXxx legacy aliases ──────────────────────────────────────────────────────
+// ── WsXxx legacy aliases (active callers only) ───────────────────────────────
 //
-// Existing consumers (stores, components, tests) use Ws-prefixed type names.
-// These aliases let them keep their current imports. New code should use the
-// canonical names above.
+// Only the 8 names actively imported by src/store/chat.ts,
+// src/store/toolApproval.ts, src/components/chat/SubagentBlock.tsx,
+// src/components/agents/ToolApprovalModal.test.tsx, and src/lib/wsParser.test.ts
+// are kept. The remaining 23 dead aliases have been removed.
+// New code should import canonical names from @/lib/api/generated/asyncapi-types.
 
-export type WsAuthFrame = AuthFrame
-export type WsMessageFrame = MessageFrame
-export type WsCancelFrame = CancelFrame
-export type WsExecApprovalResponseFrame = ExecApprovalResponseFrame
-export type WsPingFrame = PingFrame
-export type WsAttachSessionFrame = AttachSessionFrame
-export type WsDevicePairingResponseFrame = DevicePairingResponseFrame
-
-export type WsSessionStartedFrame = SessionStartedFrame
-export type WsTokenFrame = TokenFrame
-export type WsDoneFrame = DoneFrame
-export type WsErrorFrame = ErrorFrame
-export type WsToolCallStartFrame = ToolCallStartFrame
-export type WsToolCallResultFrame = ToolCallResultFrame
 export type WsSubagentStartFrame = SubagentStartFrame
 export type WsSubagentEndFrame = SubagentEndFrame
 export type WsExecApprovalRequestFrame = ExecApprovalRequestFrame
-export type WsTaskStatusChangedFrame = TaskStatusChangedFrame
 export type WsReplayMessageFrame = ReplayMessageFrame
 export type WsRateLimitFrame = RateLimitFrame
-export type WsMediaFrame = MediaFrame
-export type WsMediaPart = MediaPart
-export type WsAgentSwitchedFrame = AgentSwitchedFrame
 export type WsToolApprovalRequiredFrame = ToolApprovalRequiredFrame
-export type WsSessionStatePendingApproval = SessionStatePendingApproval
 export type WsSessionStateFrame = SessionStateFrame
-export type WsSystemOverloadFrame = SystemOverloadFrame
-export type WsReplayWarningFrame = ReplayWarningFrame
-export type WsCancelStageFrame = CancelStageFrame
-export type WsSessionCloseAckFrame = SessionCloseAckFrame
-export type WsSessionCloseFrame = SessionCloseFrame
-export type WsExecApprovalResponseAckFrame = ExecApprovalResponseAckFrame
-export type WsDevicePairingRequestFrame = DevicePairingRequestFrame
 
 // WsSendFrame: union of all client→server frames.
 export type WsSendFrame = ClientFrame

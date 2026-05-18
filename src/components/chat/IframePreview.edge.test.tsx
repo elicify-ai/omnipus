@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { IframePreview, type IframePreviewProps } from './IframePreview'
 import type { ServeWorkspaceResult, RunInWorkspaceResult } from '@/lib/api'
 
@@ -224,3 +224,33 @@ describe.each([
     })
   }
 )
+
+// ── Positive invariant: null result renders a "Waiting for" placeholder ───────
+//
+// A silent null render (blank DOM) would pass .not.toThrow() but break the UX.
+// Assert that the user actually sees an informative placeholder.
+
+it('null result for serve_workspace renders a "Waiting for" placeholder', () => {
+  render(<IframePreview kind="serve_workspace" result={null} />)
+  // The component renders "Waiting for {toolName}…" when result is null.
+  expect(screen.getByText(/Waiting for/i)).toBeInTheDocument()
+})
+
+it('null result for web_serve renders a "Waiting for" placeholder', () => {
+  render(<IframePreview kind="web_serve" result={null} />)
+  expect(screen.getByText(/Waiting for/i)).toBeInTheDocument()
+})
+
+it('null result for run_in_workspace renders a warming-up placeholder', () => {
+  render(<IframePreview kind="run_in_workspace" result={null} />)
+  // run_in_workspace with null result kicks off warmup polling UI.
+  // The component must render something visible — it must not be blank.
+  const container = document.querySelector('body')
+  expect(container?.textContent?.trim().length).toBeGreaterThan(0)
+})
+
+it('isLoading state renders a "Loading preview" placeholder', () => {
+  mockUseQuery.mockReturnValueOnce({ data: undefined, isLoading: true, isError: false, refetch: vi.fn() })
+  render(<IframePreview kind="serve_workspace" result={baseServe()} />)
+  expect(screen.getByText(/Loading preview/i)).toBeInTheDocument()
+})

@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { BrowserToolBlock } from './BrowserTool'
 import { Globe } from '@phosphor-icons/react'
 import type { ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
@@ -255,3 +255,37 @@ describe.each([
     })
   }
 )
+
+// ── Positive invariants ───────────────────────────────────────────────────────
+//
+// Verify that the tool name and summary are always visible in the rendered DOM.
+
+it('renders toolName as visible text', () => {
+  render(
+    <BrowserToolBlock
+      toolName="browser.navigate"
+      icon={Globe}
+      args={{ url: 'https://example.com' }}
+      result={null}
+      status={{ type: 'running' }}
+      summary="https://example.com"
+    />
+  )
+  expect(screen.getByText('browser.navigate')).toBeInTheDocument()
+  expect(screen.getByText('https://example.com')).toBeInTheDocument()
+})
+
+it('null result with complete status renders without showing a <script> tag (XSS regression)', () => {
+  render(
+    <BrowserToolBlock
+      toolName="browser.evaluate"
+      icon={Globe}
+      args={{ script: '<script>alert(1)</script>' }}
+      result={'<script>window.__xss=true</script>'}
+      status={{ type: 'complete' }}
+      summary="evaluate"
+    />
+  )
+  // No injected <script> elements in the DOM
+  expect(document.querySelectorAll('script')).toHaveLength(0)
+})

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { WebServeBlock } from './WebServeUI'
 import type { ToolCallStartFrame } from '@/lib/api/generated/asyncapi-types'
 
@@ -263,3 +263,34 @@ describe.each([
     })
   }
 )
+
+// ── Positive invariants ───────────────────────────────────────────────────────
+//
+// A silent null render (blank DOM) would pass .not.toThrow() but break the UX.
+// These assertions verify the user sees real content.
+
+it('renders a visible tool header for a static result', () => {
+  render(
+    <WebServeBlock
+      args={{}}
+      result={validStaticResult}
+      isRunning={false}
+      toolName="web_serve"
+    />
+  )
+  // The webserve-tool-header data-testid is always present when the component renders.
+  expect(screen.getByTestId('webserve-tool-header')).toBeInTheDocument()
+})
+
+it('renders a non-empty DOM for null result (tool in-progress)', () => {
+  render(
+    <WebServeBlock
+      args={{}}
+      result={null}
+      isRunning={true}
+      toolName="web_serve"
+    />
+  )
+  // A non-empty DOM means the user sees something (not a blank card).
+  expect(document.querySelector('body')?.textContent?.trim().length).toBeGreaterThan(0)
+})

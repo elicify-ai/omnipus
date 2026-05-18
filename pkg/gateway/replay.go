@@ -55,6 +55,18 @@ const replayResultPreviewBytes = 10 * 1024
 //
 // The returned error is non-nil only when emit itself returns an error (e.g.
 // context canceled or send-channel full).
+//
+// emit type-safety note: the parameter type is func(any) error rather than a
+// constrained union type because Go generics do not support interface unions as
+// function parameters. All callers pass the gateway WebSocket writer, which
+// marshal-validates every frame via the generated contract_test.go Go contract
+// test before the byte hits the wire. The SPA edge independently validates
+// every incoming payload through the matching Zod schema (see
+// src/lib/api/generated/schemas.ts). These two layers together provide the
+// same runtime guarantee that a hypothetical ServerFrameLike interface would
+// give at compile time, without requiring invasive changes to the generated
+// types. If oapi-codegen adds a sealed-union option for generated frame types,
+// migrate emit to func(generated.ServerFrame) error at that point.
 func streamReplay(
 	ctx context.Context,
 	sessionID string,

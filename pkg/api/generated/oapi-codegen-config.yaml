@@ -2,5 +2,5 @@ package: generated
 generate:
   models: true
   embedded-spec: false
-  std-http-server: true
+  std-http-server: false
 output: pkg/api/generated/openapi_types.gen.go

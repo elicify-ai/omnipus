@@ -1117,6 +1117,7 @@ export function fetchSkills(): Promise<Skill[]> {
 }
 
 export function deleteSkill(name: string): Promise<void> {
+  // no-schema: void response; DELETE has no body.
   return request<void>(`/skills/${encodeURIComponent(name)}`, { method: 'DELETE' })
 }
 
@@ -1129,6 +1130,7 @@ export function addMcpServer(data: McpServerCreate): Promise<McpServer> {
 }
 
 export function deleteMcpServer(id: string): Promise<void> {
+  // no-schema: void response; DELETE has no body.
   return request<void>(`/mcp-servers/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
@@ -1256,14 +1258,18 @@ export interface CredentialKey { // not-wire-format: SPA-internal credential dis
 }
 
 export function fetchCredentials(): Promise<CredentialKey[]> {
+  // no-schema: wire returns string[] (key names only); SPA maps them to CredentialKey[]
+  // (see not-wire-format comment on CredentialKey above). No generated schema component matches.
   return request<CredentialKey[]>('/credentials')
 }
 
 export function addCredential(key: string, value: string): Promise<void> {
+  // no-schema: void response; POST body is a write-only operation.
   return request<void>('/credentials', { method: 'POST', body: JSON.stringify({ key, value }) })
 }
 
 export function deleteCredential(key: string): Promise<void> {
+  // no-schema: void response; DELETE has no body.
   return request<void>(`/credentials/${encodeURIComponent(key)}`, { method: 'DELETE' })
 }
 
@@ -1294,10 +1300,12 @@ export function fetchBackups(): Promise<BackupEntry[]> {
 }
 
 export function restoreBackup(filename: string): Promise<void> {
+  // no-schema: void response; 204 No Content on success.
   return request<void>('/restore', { method: 'POST', body: JSON.stringify({ filename }) })
 }
 
 export function clearAllSessions(): Promise<void> {
+  // no-schema: void response; DELETE returns 204 No Content.
   return request<void>('/sessions/all', { method: 'DELETE' })
 }
 
@@ -1343,6 +1351,9 @@ export interface AboutInfo { // not-wire-format: SPA-internal backward-compatibl
 }
 
 export function fetchAboutInfo(): Promise<AboutInfo> {
+  // no-schema: AboutInfo is a looser SPA-compatibility subset of the wire AboutResponse
+  // (different field names: uptime_seconds vs uptime). Validating against a strict schema
+  // would produce false negatives on older gateway versions.
   return request<AboutInfo>('/about')
 }
 
@@ -1372,11 +1383,14 @@ export function fetchAuditLog(): Promise<AuditEntry[]> {
 
 // ── User Context (USER.md) ────────────────────────────────────────────────────
 
+const _userContextSchema = z.object({ content: z.string() })
+
 export function fetchUserContext(): Promise<{ content: string }> {
-  return request<{ content: string }>('/user-context')
+  return request<{ content: string }>('/user-context', undefined, _userContextSchema)
 }
 
 export function updateUserContext(content: string): Promise<void> {
+  // no-schema: void response; PUT returns 204 No Content.
   return request<void>('/user-context', {
     method: 'PUT',
     body: JSON.stringify({ content }),
@@ -1774,6 +1788,7 @@ export function updateAgentTools(agentId: string, cfg: AgentToolsCfg): Promise<A
  * FR-011, FR-082. Throws with status code prefix on non-2xx (e.g. "403: ...").
  */
 export function postToolApproval(approvalId: string, action: 'approve' | 'deny' | 'cancel'): Promise<void> {
+  // no-schema: void response; POST returns 204 No Content.
   return request<void>(`/tool-approvals/${encodeURIComponent(approvalId)}`, {
     method: 'POST',
     body: JSON.stringify({ action }),

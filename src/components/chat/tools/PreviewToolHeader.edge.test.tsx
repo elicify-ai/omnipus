@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { PreviewToolHeader } from './PreviewToolHeader'
 import { Globe, Terminal } from '@phosphor-icons/react'
 
@@ -167,3 +167,34 @@ describe.each([
     })
   }
 )
+
+// ── Positive invariants ───────────────────────────────────────────────────────
+//
+// .not.toThrow() does not prove the user sees anything. These assertions verify
+// that the tool name is visible in the rendered output.
+
+it('renders the toolName as visible text', () => {
+  render(
+    <PreviewToolHeader
+      icon={<Globe size={13} />}
+      toolName="web_serve"
+      isRunning={false}
+      hasResult={true}
+    />
+  )
+  expect(screen.getByText('web_serve')).toBeInTheDocument()
+})
+
+it('renders a label when provided', () => {
+  render(
+    <PreviewToolHeader
+      icon={<Terminal size={13} />}
+      toolName="run_in_workspace"
+      label="npm run dev"
+      isRunning={true}
+      hasResult={false}
+    />
+  )
+  expect(screen.getByText('run_in_workspace')).toBeInTheDocument()
+  expect(screen.getByText('npm run dev')).toBeInTheDocument()
+})

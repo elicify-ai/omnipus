@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { GenericToolCall } from './GenericToolCall'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import type {
@@ -277,3 +277,34 @@ describe.each([
     })
   }
 )
+
+// ── Positive invariants ───────────────────────────────────────────────────────
+//
+// data-testid="tool-call-badge" is always rendered by GenericToolCall.
+// Asserting its presence proves the user sees a real rendered card, not a blank div.
+
+it('always renders the tool-call-badge container', () => {
+  render(
+    <GenericToolCall
+      toolName="exec"
+      args={{ command: 'ls' }}
+      result={undefined}
+      status={RUNNING_STATUS}
+    />
+  )
+  expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
+})
+
+it('renders tool-call-badge with the correct data-tool attribute', () => {
+  render(
+    <GenericToolCall
+      toolName="fs.read"
+      args={{ path: '/workspace/file.ts' }}
+      result={undefined}
+      status={COMPLETE_STATUS}
+    />
+  )
+  const badge = screen.getByTestId('tool-call-badge')
+  expect(badge).toBeInTheDocument()
+  expect(badge.getAttribute('data-tool')).toBe('fs.read')
+})
