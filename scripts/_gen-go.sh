@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # _gen-go.sh — Regenerate Go types from contracts/
 #
-# This script is consumed by scripts/gen-contracts.sh (Agent C) to regenerate
+# This script is consumed by scripts/gen-contracts.sh to regenerate
 # the two Go generated files under pkg/api/generated/.
 #
 # Usage (from repo root):
@@ -9,52 +9,45 @@
 #
 # Prerequisites:
 #   - oapi-codegen v2 installed:
-#       GOBIN=/home/Daniel/go/bin go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
-#   - Go 1.21+ in PATH (needed by oapi-codegen for formatting)
+#       go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
+#   - Go 1.22+ in PATH (needed by oapi-codegen for formatting)
 #   - gopkg.in/yaml.v3 available in go.mod (already present)
-#
-# Exact commands (for Agent C to fold into gen-contracts.sh):
-#
-#   Step 1: oapi-codegen → openapi_types.gen.go
-#     PATH="/usr/local/go/bin:$PATH" \
-#     /home/Daniel/go/bin/oapi-codegen \
-#       -config pkg/api/generated/oapi-codegen-config.yaml \
-#       contracts/openapi.yaml
-#
-#   Step 2: custom converter → asyncapi_types.gen.go
-#     PATH="/usr/local/go/bin:$PATH" CGO_ENABLED=0 \
-#     go run ./scripts/gen-asyncapi-go/ \
-#       contracts/asyncapi.yaml \
-#       pkg/api/generated/asyncapi_types.gen.go
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-OAPI_CODEGEN="${GOBIN:-/home/Daniel/go/bin}/oapi-codegen"
-GO="${GO:-/usr/local/go/bin/go}"
-
-# Ensure oapi-codegen is available.
-if [[ ! -x "$OAPI_CODEGEN" ]]; then
-  echo "oapi-codegen not found at $OAPI_CODEGEN" >&2
-  echo "Install with: GOBIN=/home/Daniel/go/bin go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest" >&2
+# Resolve oapi-codegen: honour explicit OAPI_CODEGEN env, then GOBIN, then PATH.
+if [ -n "${OAPI_CODEGEN:-}" ] && [ -x "$OAPI_CODEGEN" ]; then
+  : # already set and executable — use it
+elif [ -n "${GOBIN:-}" ] && [ -x "${GOBIN}/oapi-codegen" ]; then
+  OAPI_CODEGEN="${GOBIN}/oapi-codegen"
+elif command -v oapi-codegen >/dev/null 2>&1; then
+  OAPI_CODEGEN="$(command -v oapi-codegen)"
+else
+  echo "oapi-codegen not found. Install with:" >&2
+  echo "  go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest" >&2
   exit 1
 fi
 
-# Ensure Go is available.
-if [[ ! -x "$GO" ]]; then
-  echo "go not found at $GO" >&2
-  exit 1
+# Resolve go binary: honour explicit GO env, then PATH.
+if [ -z "${GO:-}" ]; then
+  if command -v go >/dev/null 2>&1; then
+    GO="$(command -v go)"
+  else
+    echo "go not found in PATH" >&2
+    exit 1
+  fi
 fi
 
 echo "==> Generating openapi_types.gen.go via oapi-codegen..."
-PATH="/usr/local/go/bin:$PATH" "$OAPI_CODEGEN" \
+"$OAPI_CODEGEN" \
   -config pkg/api/generated/oapi-codegen-config.yaml \
   contracts/openapi.yaml
 
 echo "==> Generating asyncapi_types.gen.go via custom converter..."
-PATH="/usr/local/go/bin:$PATH" CGO_ENABLED=0 "$GO" run ./scripts/gen-asyncapi-go/ \
+CGO_ENABLED=0 "$GO" run ./scripts/gen-asyncapi-go/ \
   contracts/asyncapi.yaml \
   pkg/api/generated/asyncapi_types.gen.go
 

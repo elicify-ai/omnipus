@@ -1,4 +1,7 @@
-//go:build cgo
+// goolm is the pure-Go OLM implementation (replaces libolm which requires CGo).
+// Build with: -tags goolm
+// Without this tag the matrix channel is excluded so CGO_ENABLED=0 builds pass.
+//go:build goolm
 
 package matrix
 

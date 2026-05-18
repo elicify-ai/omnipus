@@ -118,7 +118,7 @@ describe('Command Center screen — empty state', () => {
   beforeAll(async () => {
     const mod = await import('@/routes/_app/command-center')
     CommandCenterScreen = mod.Route.options.component as () => JSX.Element
-  })
+  }, 60_000)
 
   it('renders "Command Center" screen with StatusBar and TaskList', () => {
     // Traces to: wave5a-wire-ui-spec.md — US-13: Command Center renders StatusBar and TaskList

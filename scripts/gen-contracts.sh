@@ -11,22 +11,24 @@
 #
 # Required tools (verified by the child scripts, fail fast if missing):
 #   - npx + node_modules (openapi-typescript, openapi-zod-client, js-yaml, @asyncapi/parser, @redocly/cli)
-#   - /usr/local/go/bin/go (or `go` in PATH)
-#   - /home/Daniel/go/bin/oapi-codegen (or `oapi-codegen` in PATH — install via
-#       `GOBIN=/home/Daniel/go/bin go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.7.0`)
-#   - /usr/local/go/bin/gofmt (or `gofmt` in PATH)
+#   - go 1.22+ in PATH (or /usr/local/go/bin/go)
+#   - oapi-codegen v2 (install: go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest)
+#   - gofmt in PATH (ships with Go)
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-# Make sure Go toolchain is on PATH for child processes (oapi-codegen, gofmt)
+# Make sure Go toolchain is on PATH for child processes (oapi-codegen, gofmt).
+# Priority: /usr/local/go/bin (system Go), then GOBIN or ~/go/bin (user installs).
 if [ -d /usr/local/go/bin ] && ! echo "$PATH" | grep -q "/usr/local/go/bin"; then
   export PATH="/usr/local/go/bin:$PATH"
 fi
-if [ -d /home/Daniel/go/bin ] && ! echo "$PATH" | grep -q "/home/Daniel/go/bin"; then
-  export PATH="/home/Daniel/go/bin:$PATH"
+if [ -n "${GOBIN:-}" ] && ! echo "$PATH" | grep -q "${GOBIN}"; then
+  export PATH="${GOBIN}:${PATH}"
+elif [ -d "${HOME}/go/bin" ] && ! echo "$PATH" | grep -q "${HOME}/go/bin"; then
+  export PATH="${HOME}/go/bin:${PATH}"
 fi
 
 echo "[gen-contracts] Working directory: ${REPO_ROOT}"

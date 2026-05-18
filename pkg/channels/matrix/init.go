@@ -1,4 +1,6 @@
-//go:build cgo
+// goolm is the pure-Go OLM implementation (replaces libolm which requires CGo).
+// Build with: -tags goolm
+//go:build goolm
 
 package matrix
 

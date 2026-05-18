@@ -14,6 +14,7 @@
 
 import { ApiError } from './api-error'
 export { ApiError, isApiError } from './api-error'
+import { maybeDevToast } from './dev-toast'
 
 import type { ZodType } from 'zod'
 import { z } from 'zod'
@@ -114,6 +115,16 @@ export function getApiSchemaErrorCount(): number {
 
 export function resetApiSchemaErrorCount(): void {
   _apiSchemaErrorCount = 0
+}
+
+// Expose schema error counters on window.__omnipus_test_hooks in DEV/test builds
+// so Playwright tests can assert on validation health without reaching into module
+// internals (F-NEW-4).
+if ((import.meta.env.DEV || import.meta.env.MODE === 'test') && typeof window !== 'undefined') {
+  const w = window as unknown as { __omnipus_test_hooks?: Record<string, unknown> }
+  w.__omnipus_test_hooks ??= {}
+  w.__omnipus_test_hooks.getApiSchemaErrorCount = getApiSchemaErrorCount
+  w.__omnipus_test_hooks.resetApiSchemaErrorCount = resetApiSchemaErrorCount
 }
 
 // ── Re-exports from generated types ───────────────────────────────────────────
@@ -390,20 +401,7 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
         [{ path: [], message: 'Response is not valid JSON' }],
         rawText,
       )
-      if (import.meta.env.DEV) {
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-require-imports
-          const { useUiStore } = require('@/store/ui') as {
-            useUiStore: { getState: () => { addToast: (t: { message: string; variant: 'warning' }) => void } }
-          }
-          useUiStore.getState().addToast({
-            message: `[api] Non-JSON response: ${path}`,
-            variant: 'warning',
-          })
-        } catch {
-          console.warn('[api] Non-JSON response:', path)
-        }
-      }
+      maybeDevToast(`[api] Non-JSON response: ${path}`, `${method}:${path}:non-json`)
       throw schemaErr
     }
     // No schema — throw a generic ApiError for non-JSON bodies on non-2xx
@@ -429,21 +427,8 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
         result.error.issues.map((i) => ({ path: i.path as (string | number)[], message: i.message })),
         body,
       )
-      if (import.meta.env.DEV) {
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-require-imports
-          const { useUiStore } = require('@/store/ui') as {
-            useUiStore: { getState: () => { addToast: (t: { message: string; variant: 'warning' }) => void } }
-          }
-          const first = schemaErr.zodIssues[0]
-          useUiStore.getState().addToast({
-            message: `[api] Schema mismatch: ${path} — ${first?.message ?? 'unknown'}`,
-            variant: 'warning',
-          })
-        } catch {
-          console.warn('[api] Schema mismatch:', schemaErr.message)
-        }
-      }
+      const first = schemaErr.zodIssues[0]
+      maybeDevToast(`[api] Schema mismatch: ${path} — ${first?.message ?? 'unknown'}`, `${method}:${path}:schema`)
       throw schemaErr
     }
     return result.data

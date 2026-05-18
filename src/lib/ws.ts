@@ -1,6 +1,8 @@
 // WebSocket connection manager for /api/v1/chat/ws
 // Handles: connect, authenticate, streaming frames, reconnect with exponential backoff
 
+import { maybeDevToast } from '@/lib/dev-toast'
+
 // ── Generated type imports ────────────────────────────────────────────────────
 //
 // All wire-format frame types are sourced from the generated AsyncAPI types.
@@ -190,28 +192,11 @@ if ((import.meta.env.DEV || import.meta.env.MODE === 'test') && typeof window !=
 
 // ── Dev-mode toast helper ─────────────────────────────────────────────────────
 //
-// Throttled: at most one toast per frame type per second to avoid flooding the
-// UI when a burst of malformed frames arrives.
-
-const _toastThrottleMap: Record<string, number> = {}
-const TOAST_THROTTLE_MS = 1000
+// Thin wrapper over the shared maybeDevToast helper (src/lib/dev-toast.ts).
+// Throttling and store interaction are handled there.
 
 function _maybeDevToast(frameType: string, message: string): void {
-  if (!import.meta.env.DEV) return
-  const now = Date.now()
-  if (now - (_toastThrottleMap[frameType] ?? 0) < TOAST_THROTTLE_MS) return
-  _toastThrottleMap[frameType] = now
-  try {
-    // Zustand stores expose getState() for non-React callers.
-    // Dynamic require avoids circular-dep issues at module init time.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { useUiStore } = require('@/store/ui') as {
-      useUiStore: { getState: () => { addToast: (t: { message: string; variant: 'warning' }) => void } }
-    }
-    useUiStore.getState().addToast({ message, variant: 'warning' })
-  } catch {
-    console.warn('[ws]', message)
-  }
+  maybeDevToast(message, frameType)
 }
 
 // ── safeJsonParse ────────────────────────────────────────────────────────────
