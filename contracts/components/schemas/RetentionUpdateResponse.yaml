@@ -1,6 +1,7 @@
 title: RetentionUpdateResponse
 description: >
-  Response from PUT /api/v1/security/retention. Updated retention configuration.
+  Response from PUT /api/v1/security/retention.
+  Returns save status and the currently active retention settings.
 type: object
 required:
   - saved
@@ -10,15 +11,16 @@ required:
 properties:
   saved:
     type: boolean
+    description: True when the configuration was successfully persisted to disk.
     example: true
   requires_restart:
     type: boolean
+    description: Always false — retention config is hot-reloaded.
     example: false
   session_days:
     type: integer
     minimum: 0
-    description: >
-      Applied session retention in days. 0 means use the system default (90 days).
+    description: Number of days to retain session logs. 0 = system default (90 days).
     example: 30
   disabled:
     type: boolean

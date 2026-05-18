@@ -124,16 +124,17 @@ func (a *restAPI) putSkillTrust(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("rest: skill trust updated", "level", body.Level)
 
-	resp := map[string]any{
-		"saved":            true,
-		"requires_restart": false,
-		"applied_level":    body.Level,
+	resp := gen.SkillTrustUpdateResponse{
+		Saved:           true,
+		RequiresRestart: false,
+		AppliedLevel:    gen.SkillTrustUpdateResponseAppliedLevel(body.Level),
 	}
 	if body.Level == string(config.SkillTrustAllowAll) {
-		resp["warning"] = fmt.Sprintf(
+		warnMsg := fmt.Sprintf(
 			"skill_trust=%s disables hash verification — configure a trusted skills registry instead",
 			body.Level,
 		)
+		resp.Warning = &warnMsg
 	}
 	jsonOK(w, resp)
 }

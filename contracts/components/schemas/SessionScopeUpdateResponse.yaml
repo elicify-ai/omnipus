@@ -1,7 +1,7 @@
 title: SessionScopeUpdateResponse
 description: >
   Response from PUT /api/v1/security/session-scope.
-  Session scope saved; restart required to apply.
+  Returns save status and the currently active scope (before restart).
 type: object
 required:
   - saved
@@ -10,15 +10,17 @@ required:
 properties:
   saved:
     type: boolean
+    description: True when the configuration was successfully persisted to disk.
     example: true
   requires_restart:
     type: boolean
-    description: Always true — session routing requires a gateway restart.
+    description: Always true — session routing requires a gateway restart to take effect.
     example: true
   applied_dm_scope:
     type: string
-    description: The dm_scope currently active (before restart).
+    description: The dm_scope currently active (the value before restart takes effect).
     example: per-channel-peer
   warning:
     type: string
-    description: Present when hot-reload failed (config saved, restart required).
+    description: Present when hot-reload failed — config is saved but restart is required.
+    example: config saved to disk but hot-reload failed; restart the gateway to apply

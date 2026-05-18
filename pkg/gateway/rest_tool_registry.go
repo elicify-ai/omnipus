@@ -204,18 +204,29 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		policyCfg.GlobalDefaultPolicy = sandboxDefault
 	}
 
-	// agentToolEntry carries the per-tool effective policy view for GET /api/v1/agents/{id}/tools.
-	// It is a local type because the spec (GetAgentTools200JSONResponseBodyTools*) only defines
-	// the policy enum values; the compound response object has no canonical generated struct.
-	type agentToolEntry struct {
-		Name             string `json:"name"`
+	// agentToolsResp is a concrete struct that matches the AgentToolsResponse wire shape.
+	// We define a local concrete struct to avoid the verbosity of constructing the
+	// anonymous struct type embedded in gen.AgentToolsResponse.
+	type toolEntry struct {
 		ConfiguredPolicy string `json:"configured_policy"`
 		EffectivePolicy  string `json:"effective_policy"`
 		FenceApplied     bool   `json:"fence_applied"`
+		Name             string `json:"name"`
 		RequiresAdminAsk bool   `json:"requires_admin_ask"`
 	}
+	type configBuiltin struct {
+		DefaultPolicy string            `json:"default_policy,omitempty"`
+		Policies      map[string]string `json:"policies,omitempty"`
+	}
+	type agentToolsResp struct {
+		AgentType string `json:"agent_type,omitempty"`
+		Config    struct {
+			Builtin *configBuiltin `json:"builtin,omitempty"`
+		} `json:"config"`
+		Tools []toolEntry `json:"tools"`
+	}
 
-	var toolEntries []agentToolEntry
+	var toolEntries []toolEntry
 
 	if agentInstance != nil {
 		allTools := agentInstance.Tools.GetAll()
@@ -241,7 +252,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 			//   - effective_policy after fence is "ask"
 			fenceApplied := rak && agentType == "custom" && configuredPolicy == "allow" && effectivePolicy == "ask"
 
-			toolEntries = append(toolEntries, agentToolEntry{
+			toolEntries = append(toolEntries, toolEntry{
 				Name:             name,
 				ConfiguredPolicy: configuredPolicy,
 				EffectivePolicy:  effectivePolicy,
@@ -252,7 +263,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	}
 
 	if toolEntries == nil {
-		toolEntries = []agentToolEntry{}
+		toolEntries = []toolEntry{}
 	}
 
 	// Build config section to match existing SPA contract.
@@ -268,15 +279,17 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		respPolicies = map[string]string{}
 	}
 
-	jsonOK(w, map[string]any{
-		"agent_type": agentType,
-		"config": map[string]any{
-			"builtin": map[string]any{
-				"default_policy": respDefaultPolicy,
-				"policies":       respPolicies,
+	jsonOK(w, agentToolsResp{
+		AgentType: agentType,
+		Config: struct {
+			Builtin *configBuiltin `json:"builtin,omitempty"`
+		}{
+			Builtin: &configBuiltin{
+				DefaultPolicy: respDefaultPolicy,
+				Policies:      respPolicies,
 			},
 		},
-		"effective_tools": toolEntries,
+		Tools: toolEntries,
 	})
 }
 
@@ -384,5 +397,9 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonOK(w, map[string]any{"approval_id": approvalID, "action": body.Action, "status": "ok"})
+	jsonOK(w, gen.ToolApprovalResponse{
+		ApprovalId: approvalID,
+		Action:     gen.ToolApprovalResponseAction(body.Action),
+		Status:     gen.Ok,
+	})
 }

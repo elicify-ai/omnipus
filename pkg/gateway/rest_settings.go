@@ -220,10 +220,10 @@ func (a *restAPI) HandleCreateBackup(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not stat backup: %v", err))
 		return
 	}
-	jsonOK(w, map[string]any{
-		"path":       destPath,
-		"size_bytes": info.Size(),
-		"created_at": info.ModTime().UTC().Format(time.RFC3339),
+	jsonOK(w, gen.BackupCreateResponse{
+		Path:      destPath,
+		SizeBytes: info.Size(),
+		CreatedAt: info.ModTime().UTC(),
 	})
 }
 

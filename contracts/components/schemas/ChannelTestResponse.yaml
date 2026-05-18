@@ -1,0 +1,17 @@
+title: ChannelTestResponse
+description: >
+  Response from POST /api/v1/channels/{id}/test.
+  Returns whether required credentials are configured.
+type: object
+required:
+  - success
+  - message
+properties:
+  success:
+    type: boolean
+    description: True when all required credential fields are present.
+    example: true
+  message:
+    type: string
+    description: Human-readable description of the test result.
+    example: 'channel "telegram" is configured'

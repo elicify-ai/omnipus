@@ -423,9 +423,9 @@ func (a *restAPI) HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnauthorized, "invalid token")
 		return
 	}
-	jsonOK(w, map[string]any{
-		"username": user.Username,
-		"role":     user.Role,
+	jsonOK(w, gen.ValidateTokenResponse{
+		Username: user.Username,
+		Role:     gen.ValidateTokenResponseRole(user.Role),
 	})
 }
 
@@ -690,7 +690,7 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 	if err := a.awaitReload(); err != nil {
 		slog.Warn("auth: hot-reload after change-password failed", "error", err)
 	}
-	jsonOK(w, map[string]any{"success": true})
+	jsonOK(w, gen.OperationResult{Success: true})
 }
 
 // generateUserToken creates a random bearer token for authentication.

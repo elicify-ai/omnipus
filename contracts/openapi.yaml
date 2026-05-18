@@ -220,6 +220,28 @@ components:
       $ref: ./components/schemas/SessionScopeUpdateResponse.yaml
     RetentionUpdateResponse:
       $ref: ./components/schemas/RetentionUpdateResponse.yaml
+    AgentToolsResponse:
+      $ref: ./components/schemas/AgentToolsResponse.yaml
+    ChannelEnabledResponse:
+      $ref: ./components/schemas/ChannelEnabledResponse.yaml
+    ChannelTestResponse:
+      $ref: ./components/schemas/ChannelTestResponse.yaml
+    BackupCreateResponse:
+      $ref: ./components/schemas/BackupCreateResponse.yaml
+    OnboardingStatusResponse:
+      $ref: ./components/schemas/OnboardingStatusResponse.yaml
+    OperationResult:
+      $ref: ./components/schemas/OperationResult.yaml
+    ToolApprovalResponse:
+      $ref: ./components/schemas/ToolApprovalResponse.yaml
+    UploadFilesResponse:
+      $ref: ./components/schemas/UploadFilesResponse.yaml
+    TaskAcceptedResponse:
+      $ref: ./components/schemas/TaskAcceptedResponse.yaml
+    AgentOwnerUpdateResponse:
+      $ref: ./components/schemas/AgentOwnerUpdateResponse.yaml
+    ActivityEventsResponse:
+      $ref: ./components/schemas/ActivityEventsResponse.yaml
   responses:
     400BadRequest:
       description: "Bad request \u2014 missing or invalid field."
@@ -403,13 +425,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - success
-                properties:
-                  success:
-                    type: boolean
-                    example: true
+                $ref: '#/components/schemas/OperationResult'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -1028,6 +1044,54 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+    patch:
+      operationId: patchAgentOwnership
+      summary: Update agent ownership (admin only)
+      description: >
+        Updates the owner_username field on a custom agent.
+        Only admins may call this endpoint.
+        System and core agents cannot have an owner assigned (400).
+        Clearing the owner (empty string) requires the X-Confirm-Demote: 1 header.
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Agent ID.
+        example: 550e8400-e29b-41d4-a716-446655440000
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                owner_username:
+                  type: string
+                  description: Username of the new owner. Empty string clears ownership (requires X-Confirm-Demote header).
+                  example: alice
+      responses:
+        '200':
+          description: Ownership updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentOwnerUpdateResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
   /agents/{id}/sessions:
     get:
       operationId: listAgentSessions
@@ -1087,49 +1151,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - config
-                - tools
-                properties:
-                  config:
-                    $ref: '#/components/schemas/AgentToolsCfg'
-                  tools:
-                    type: array
-                    description: Per-tool effective policy entries.
-                    items:
-                      type: object
-                      required:
-                      - name
-                      - configured_policy
-                      - effective_policy
-                      - fence_applied
-                      - requires_admin_ask
-                      properties:
-                        name:
-                          type: string
-                          description: Tool name.
-                          example: workspace.shell
-                        configured_policy:
-                          type: string
-                          enum:
-                          - allow
-                          - ask
-                          - deny
-                          description: Policy as stored in the agent's tools_cfg.
-                        effective_policy:
-                          type: string
-                          enum:
-                          - allow
-                          - ask
-                          - deny
-                          description: Actual policy after fence rules are applied.
-                        fence_applied:
-                          type: boolean
-                          description: True when a privilege fence downgraded the configured policy.
-                        requires_admin_ask:
-                          type: boolean
-                          description: True when the tool requires admin approval regardless of policy.
+                $ref: '#/components/schemas/AgentToolsResponse'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -1168,42 +1190,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - config
-                - tools
-                properties:
-                  config:
-                    $ref: '#/components/schemas/AgentToolsCfg'
-                  tools:
-                    type: array
-                    items:
-                      type: object
-                      required:
-                      - name
-                      - configured_policy
-                      - effective_policy
-                      - fence_applied
-                      - requires_admin_ask
-                      properties:
-                        name:
-                          type: string
-                        configured_policy:
-                          type: string
-                          enum:
-                          - allow
-                          - ask
-                          - deny
-                        effective_policy:
-                          type: string
-                          enum:
-                          - allow
-                          - ask
-                          - deny
-                        fence_applied:
-                          type: boolean
-                        requires_admin_ask:
-                          type: boolean
+                $ref: '#/components/schemas/AgentToolsResponse'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -1395,27 +1382,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - approval_id
-                - action
-                - status
-                properties:
-                  approval_id:
-                    type: string
-                    example: appr_abc123
-                  action:
-                    type: string
-                    enum:
-                    - approve
-                    - deny
-                    - cancel
-                    example: approve
-                  status:
-                    type: string
-                    enum:
-                    - ok
-                    example: ok
+                $ref: '#/components/schemas/ToolApprovalResponse'
         '400':
           description: Malformed body or unknown action.
           content:
@@ -2073,17 +2040,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - id
-                - enabled
-                properties:
-                  id:
-                    type: string
-                    example: telegram
-                  enabled:
-                    type: boolean
-                    example: true
+                $ref: '#/components/schemas/ChannelEnabledResponse'
         '404':
           description: Channel ID not found.
           content:
@@ -2111,17 +2068,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - id
-                - enabled
-                properties:
-                  id:
-                    type: string
-                    example: telegram
-                  enabled:
-                    type: boolean
-                    example: false
+                $ref: '#/components/schemas/ChannelEnabledResponse'
         '404':
           description: Channel ID not found.
           content:
@@ -2200,17 +2147,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - success
-                - message
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  message:
-                    type: string
-                    example: channel "telegram" is configured
+                $ref: '#/components/schemas/ChannelTestResponse'
         '404':
           description: Channel ID not found.
           content:
@@ -2514,26 +2451,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - path
-                - size_bytes
-                - created_at
-                properties:
-                  path:
-                    type: string
-                    description: Absolute path to the backup file.
-                    example: /home/user/.omnipus/backups/backup-20260516T103000Z.tar.gz
-                  size_bytes:
-                    type: integer
-                    format: int64
-                    minimum: 0
-                    description: Size of the backup file in bytes.
-                    example: 1048576
-                  created_at:
-                    type: string
-                    format: date-time
-                    example: '2026-05-16T10:30:00Z'
+                $ref: '#/components/schemas/BackupCreateResponse'
         '405':
           description: Method not allowed.
           content:
@@ -2752,6 +2670,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /providers/{id}/test:
+    get:
+      operationId: testProvider
+      summary: Test provider API key configuration
+      description: >
+        Verifies that an API key is configured for the given provider without making an
+        upstream call. Returns success=false with an error message if no key is configured.
+        Available before and after onboarding.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Provider identifier (e.g. "anthropic", "openai").
+        example: anthropic
+      responses:
+        '200':
+          description: Provider test result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResult'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
   /skills:
     get:
       operationId: listSkills
@@ -2843,14 +2790,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                - files
-                properties:
-                  files:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/UploadedFile'
+                $ref: '#/components/schemas/UploadFilesResponse'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -3175,8 +3115,12 @@ paths:
           type: string
         description: Task ID.
       responses:
-        '200':
-          description: Task started.
+        '202':
+          description: Task accepted and queued for execution.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskAcceptedResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':

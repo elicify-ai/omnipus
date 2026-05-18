@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
@@ -127,11 +128,9 @@ func (a *restAPI) patchAgentOwnership(w http.ResponseWriter, r *http.Request, ag
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"success":        true,
-		"agent_id":       agentID,
-		"owner_username": newOwner,
+	jsonOK(w, gen.AgentOwnerUpdateResponse{
+		Success:       true,
+		AgentId:       agentID,
+		OwnerUsername: newOwner,
 	})
 }

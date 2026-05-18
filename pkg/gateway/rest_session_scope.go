@@ -118,11 +118,12 @@ func (a *restAPI) putSessionScope(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		slog.Info("rest: session dm_scope updated (restart required)", "dm_scope", body.DMScope)
-		jsonOK(w, map[string]any{
-			"saved":            true,
-			"requires_restart": true,
-			"applied_dm_scope": oldScope,
-			"warning":          "config saved to disk but hot-reload failed; restart the gateway to apply",
+		warnMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
+		jsonOK(w, gen.SessionScopeUpdateResponse{
+			Saved:           true,
+			RequiresRestart: true,
+			AppliedDmScope:  oldScope,
+			Warning:         &warnMsg,
 		})
 		return
 	}
@@ -143,9 +144,9 @@ func (a *restAPI) putSessionScope(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("rest: session dm_scope updated", "dm_scope", body.DMScope)
 
-	jsonOK(w, map[string]any{
-		"saved":            true,
-		"requires_restart": true,
-		"applied_dm_scope": oldScope,
+	jsonOK(w, gen.SessionScopeUpdateResponse{
+		Saved:           true,
+		RequiresRestart: true,
+		AppliedDmScope:  oldScope,
 	})
 }

@@ -94,11 +94,11 @@ func (a *restAPI) putRetention(w http.ResponseWriter, r *http.Request) {
 	if newSessionDays == nil && newDisabled == nil {
 		cfg := a.agentLoop.GetConfig()
 		ret := cfg.Storage.Retention
-		jsonOK(w, map[string]any{
-			"saved":            true,
-			"requires_restart": false,
-			"session_days":     ret.SessionDays,
-			"disabled":         ret.Disabled,
+		jsonOK(w, gen.RetentionUpdateResponse{
+			Saved:           true,
+			RequiresRestart: false,
+			SessionDays:     ret.SessionDays,
+			Disabled:        ret.Disabled,
 		})
 		return
 	}
@@ -149,11 +149,11 @@ func (a *restAPI) putRetention(w http.ResponseWriter, r *http.Request) {
 		"disabled", newRet.Disabled,
 	)
 
-	jsonOK(w, map[string]any{
-		"saved":            true,
-		"requires_restart": false,
-		"session_days":     newRet.SessionDays,
-		"disabled":         newRet.Disabled,
+	jsonOK(w, gen.RetentionUpdateResponse{
+		Saved:           true,
+		RequiresRestart: false,
+		SessionDays:     newRet.SessionDays,
+		Disabled:        newRet.Disabled,
 	})
 }
 

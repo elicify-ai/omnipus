@@ -264,7 +264,10 @@ func jsonOK(w http.ResponseWriter, body any) {
 		slog.Error("rest: json encode failed", "error", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": "internal server error"})
+		errMsg := "internal server error"
+		if encErr := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: errMsg}); encErr != nil {
+			slog.Debug("rest: write fallback error response failed", "error", encErr)
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -272,13 +275,15 @@ func jsonOK(w http.ResponseWriter, body any) {
 		slog.Debug("rest: write response body failed", "error", err)
 		return
 	}
-	w.Write([]byte("\n"))
+	if _, err := w.Write([]byte("\n")); err != nil {
+		slog.Debug("rest: write newline failed", "error", err)
+	}
 }
 
 func jsonErr(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
+	if err := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: msg}); err != nil {
 		slog.Debug("rest: write error response failed", "error", err)
 	}
 }
@@ -376,6 +381,73 @@ func sanitizePartialError(pe error) string {
 	return "session_list_failed"
 }
 
+// unifiedMetaToGenSession converts a session.UnifiedMeta to the generated gen.Session wire type.
+// The two types have matching JSON field names; this explicit conversion satisfies the Go type checker.
+func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
+	s := gen.Session{
+		Id:        m.ID,
+		AgentId:   m.AgentID,
+		Channel:   m.Channel,
+		CreatedAt: m.CreatedAt,
+		Title:     m.Title,
+		Status:    gen.SessionStatus(m.Status),
+		Partitions: func() []string {
+			if m.Partitions == nil {
+				return []string{}
+			}
+			return m.Partitions
+		}(),
+		Stats: struct {
+			Cost         float64 `json:"cost"`
+			MessageCount int     `json:"message_count"`
+			TokensIn     int     `json:"tokens_in"`
+			TokensOut    int     `json:"tokens_out"`
+			TokensTotal  int     `json:"tokens_total"`
+			ToolCalls    int     `json:"tool_calls"`
+		}{
+			Cost:         m.Stats.Cost,
+			MessageCount: m.Stats.MessageCount,
+			TokensIn:     m.Stats.TokensIn,
+			TokensOut:    m.Stats.TokensOut,
+			TokensTotal:  m.Stats.TokensTotal,
+			ToolCalls:    m.Stats.ToolCalls,
+		},
+	}
+	if m.Model != "" {
+		s.Model = &m.Model
+	}
+	if m.Provider != "" {
+		s.Provider = &m.Provider
+	}
+	if m.ProjectID != "" {
+		s.ProjectId = &m.ProjectID
+	}
+	if m.TaskID != "" {
+		s.TaskId = &m.TaskID
+	}
+	if m.LastCompactionSummary != "" {
+		s.LastCompactionSummary = &m.LastCompactionSummary
+	}
+	if m.ActiveAgentID != "" {
+		s.ActiveAgentId = &m.ActiveAgentID
+	}
+	if len(m.AgentIDs) > 0 {
+		ids := make([]string, len(m.AgentIDs))
+		copy(ids, m.AgentIDs)
+		s.AgentIds = &ids
+	}
+	if len(m.CompactionSummaries) > 0 {
+		cs := make(map[string]string, len(m.CompactionSummaries))
+		for k, v := range m.CompactionSummaries {
+			cs[k] = v
+		}
+		s.CompactionSummaries = &cs
+	}
+	sessionType := gen.SessionType(m.Type)
+	s.Type = &sessionType
+	return s
+}
+
 func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	agentFilter := r.URL.Query().Get("agent_id")
 	typeFilter := r.URL.Query().Get("type")
@@ -405,11 +477,14 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	for i, pe := range partialErrs {
 		sanitized[i] = sanitizePartialError(pe)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]any{
-		"sessions":       filtered,
-		"partial_errors": sanitized,
+	genSessions := make([]gen.Session, 0, len(filtered))
+	for _, m := range filtered {
+		s := unifiedMetaToGenSession(m)
+		genSessions = append(genSessions, s)
+	}
+	jsonOK(w, gen.ListSessions200JSONResponseBody1{
+		Sessions:      genSessions,
+		PartialErrors: sanitized,
 	})
 }
 
@@ -2445,8 +2520,8 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		jsonOK(w, map[string]any{
-			"onboarding_complete": true,
+		jsonOK(w, gen.AppState{
+			OnboardingComplete: true,
 		})
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -2808,7 +2883,12 @@ func (a *restAPI) startTask(w http.ResponseWriter, r *http.Request, id string) {
 	}()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{"status": "accepted", "task_id": id})
+	if err := json.NewEncoder(w).Encode(gen.TaskAcceptedResponse{
+		TaskId: id,
+		Status: gen.Accepted,
+	}); err != nil {
+		slog.Warn("rest: start task: encode response failed", "error", err)
+	}
 }
 
 func (a *restAPI) deleteTask(w http.ResponseWriter, id string) {
@@ -2945,8 +3025,7 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 		events = []gen.ActivityEvent{}
 	}
 	if sessionWarning != "" {
-		jsonOK(w, map[string]any{"events": events, "warning": sessionWarning})
-		return
+		slog.Warn("rest: activity: partial results due to session listing errors", "warning", sessionWarning)
 	}
 	jsonOK(w, events)
 }
@@ -3157,12 +3236,14 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		providerID := strings.TrimSuffix(sub, "/test")
 		cfgData, err := os.ReadFile(a.configPath())
 		if err != nil {
-			jsonOK(w, map[string]any{"success": false, "error": "could not read config"})
+			errMsg := "could not read config"
+			jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
 			return
 		}
 		var cfgRaw map[string]any
 		if err := json.Unmarshal(cfgData, &cfgRaw); err != nil {
-			jsonOK(w, map[string]any{"success": false, "error": "could not parse config"})
+			errMsg := "could not parse config"
+			jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
 			return
 		}
 		providerList, _ := cfgRaw["providers"].([]any)
@@ -3189,17 +3270,19 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				if !hasPlaintextKey && !hasCredRef {
-					jsonOK(w, map[string]any{"success": false, "error": "no API key configured for this provider"})
+					errMsg := "no API key configured for this provider"
+					jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
 					return
 				}
 				break
 			}
 		}
 		if !found {
-			jsonOK(w, map[string]any{"success": false, "error": fmt.Sprintf("provider %q not configured", providerID)})
+			errMsg := fmt.Sprintf("provider %q not configured", providerID)
+			jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
 			return
 		}
-		jsonOK(w, map[string]any{"success": true})
+		jsonOK(w, gen.OperationResult{Success: true})
 
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -3881,7 +3964,7 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
-	jsonOK(w, map[string]any{"id": channelID, "enabled": enabled})
+	jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: enabled})
 }
 
 // channelSensitiveFields maps channel IDs to their secret/credential field names.
@@ -4010,15 +4093,15 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 		}
 	}
 	if len(missing) > 0 {
-		jsonOK(w, map[string]any{
-			"success": false,
-			"message": fmt.Sprintf("missing required fields: %s", strings.Join(missing, ", ")),
+		jsonOK(w, gen.ChannelTestResponse{
+			Success: false,
+			Message: fmt.Sprintf("missing required fields: %s", strings.Join(missing, ", ")),
 		})
 		return
 	}
-	jsonOK(w, map[string]any{
-		"success": true,
-		"message": fmt.Sprintf("channel %q is configured", channelID),
+	jsonOK(w, gen.ChannelTestResponse{
+		Success: true,
+		Message: fmt.Sprintf("channel %q is configured", channelID),
 	})
 }
 
@@ -4137,7 +4220,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var uploaded []gen.UploadedFile
+	var resp gen.UploadFilesResponse
 
 	for {
 		part, err := reader.NextPart()
@@ -4227,7 +4310,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 		// cleanupUploaded removes all previously uploaded files on error.
 		cleanupUploaded := func() {
-			for _, prev := range uploaded {
+			for _, prev := range resp.Files {
 				os.Remove(filepath.Join(a.homePath, prev.Path))
 			}
 		}
@@ -4279,22 +4362,27 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			"content_type", contentType,
 		)
 
-		uploaded = append(uploaded, gen.UploadedFile{
+		resp.Files = append(resp.Files, struct {
+			ContentType string `json:"content_type"`
+			Name        string `json:"name"`
+			Path        string `json:"path"`
+			Size        int64  `json:"size"`
+		}{
+			ContentType: contentType,
 			Name:        sanitized,
 			Path:        relativePath,
 			Size:        written,
-			ContentType: contentType,
 		})
 	}
 
-	if len(uploaded) == 0 {
+	if len(resp.Files) == 0 {
 		jsonErr(w, http.StatusBadRequest, "no files found in upload")
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(map[string]any{"files": uploaded}); err != nil {
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		slog.Warn("rest: upload: encode response failed", "error", err)
 	}
 }

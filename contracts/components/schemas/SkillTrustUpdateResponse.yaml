@@ -1,6 +1,7 @@
 title: SkillTrustUpdateResponse
 description: >
-  Response from PUT /api/v1/security/skill-trust. Updated skill trust level.
+  Response from PUT /api/v1/security/skill-trust.
+  Returns save status and the now-active skill trust level.
 type: object
 required:
   - saved
@@ -9,17 +10,22 @@ required:
 properties:
   saved:
     type: boolean
+    description: True when the configuration was successfully persisted to disk.
     example: true
   requires_restart:
     type: boolean
+    description: Always false — skill trust is hot-reloaded.
     example: false
   applied_level:
     type: string
+    description: The skill trust level now active.
     enum:
       - block_unverified
       - warn_unverified
       - allow_all
-    example: block_unverified
+    example: warn_unverified
   warning:
     type: string
-    description: Present when allow_all is selected — warns that hash verification is disabled.
+    description: >
+      Present when allow_all is selected — warns that hash verification is disabled.
+    example: "skill_trust=allow_all disables hash verification — configure a trusted skills registry instead"

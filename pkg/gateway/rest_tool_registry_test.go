@@ -153,14 +153,14 @@ func TestREST_GetAgentTools_FilteredView(t *testing.T) {
 	// Top-level shape (FR-028).
 	assert.Contains(t, resp, "agent_type", "response must include agent_type")
 	assert.Contains(t, resp, "config", "response must include config")
-	assert.Contains(t, resp, "effective_tools", "response must include effective_tools")
+	assert.Contains(t, resp, "tools", "response must include tools")
 
-	tools, ok := resp["effective_tools"].([]any)
-	require.True(t, ok, "effective_tools must be an array")
+	tools, ok := resp["tools"].([]any)
+	require.True(t, ok, "tools must be an array")
 
 	for i, raw := range tools {
 		entry, ok := raw.(map[string]any)
-		require.True(t, ok, "effective_tools[%d] must be an object", i)
+		require.True(t, ok, "tools[%d] must be an object", i)
 		assert.Contains(t, entry, "name", "entry %d missing 'name'", i)
 		assert.Contains(t, entry, "configured_policy", "entry %d missing 'configured_policy'", i)
 		assert.Contains(t, entry, "effective_policy", "entry %d missing 'effective_policy'", i)

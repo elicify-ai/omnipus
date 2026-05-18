@@ -86,20 +86,21 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 
 	if reloadErr := a.awaitReload(); reloadErr != nil {
 		slog.Info("rest: prompt guard level updated (restart required)", "level", body.Level)
-		jsonOK(w, map[string]any{
-			"saved":            true,
-			"requires_restart": true,
-			"applied_level":    body.Level,
-			"warning":          "config saved to disk but hot-reload failed; restart the gateway to apply",
+		warnMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
+		jsonOK(w, gen.PromptGuardUpdateResponse{
+			Saved:           true,
+			RequiresRestart: true,
+			AppliedLevel:    gen.PromptGuardUpdateResponseAppliedLevel(body.Level),
+			Warning:         &warnMsg,
 		})
 		return
 	}
 
 	slog.Info("rest: prompt guard level updated", "level", body.Level)
 
-	jsonOK(w, map[string]any{
-		"saved":            true,
-		"requires_restart": false,
-		"applied_level":    body.Level,
+	jsonOK(w, gen.PromptGuardUpdateResponse{
+		Saved:           true,
+		RequiresRestart: false,
+		AppliedLevel:    gen.PromptGuardUpdateResponseAppliedLevel(body.Level),
 	})
 }

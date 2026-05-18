@@ -78,10 +78,10 @@ func (a *restAPI) HandleSandboxAuditLog(w http.ResponseWriter, r *http.Request) 
 		// audit_log is in RestartGatedKeys — changing it requires a restart to
 		// swap file handles. Do not call awaitReload here; the requires_restart
 		// response field informs the admin.
-		jsonOK(w, map[string]any{
-			"saved":            true,
-			"requires_restart": true,
-			"applied_enabled":  oldEnabled,
+		jsonOK(w, gen.AuditLogUpdateResponse{
+			Saved:           true,
+			RequiresRestart: true,
+			AppliedEnabled:  oldEnabled,
 		})
 
 	default:
