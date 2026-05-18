@@ -2,7 +2,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChatScreen } from '@/components/chat/ChatScreen'
-import { fetchSessionDetail } from '@/lib/api'
+import { fetchSessionDetail, isApiError } from '@/lib/api'
 import { useSessionStore } from '@/store/session'
 
 function SessionRoute() {
@@ -51,10 +51,16 @@ export const Route = createFileRoute('/_app/sessions/$sessionId')({
         useSessionStore.getState().setActiveSession(detail.session.id, detail.session.agent_id, null)
       }
       return detail ?? null
-    } catch {
-      // Session not found or API error — return null and let ChatScreen
+    } catch (err) {
+      // Only swallow 404 — session genuinely does not exist, let ChatScreen
       // render with an empty/default state.
-      return null
+      // Re-throw everything else (ApiSchemaError, 5xx ApiError, network errors)
+      // so the route error boundary surfaces the real problem instead of
+      // silently hiding contract violations.
+      if (isApiError(err) && err.status === 404) {
+        return null
+      }
+      throw err
     }
   },
 })

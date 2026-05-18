@@ -977,18 +977,24 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	// Then: HTTP 200
 	require.Equal(t, http.StatusOK, w.Code)
 
-	// Then: response body has agent_type="custom" and policy format
-	var resp struct {
-		AgentType string         `json:"agent_type"`
-		Config    map[string]any `json:"config"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "custom", resp.AgentType,
+	// Then: response body must parse into gen.AgentToolsResponse — verifying the
+	// PUT response uses `tools` (not `effective_tools`) matching the OpenAPI spec
+	// and the SPA Zod schema (_agentToolsSchema). Regression test for fix-T BUG 1.
+	var genResp gen.AgentToolsResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &genResp),
+		"PUT response must unmarshal into gen.AgentToolsResponse (tools key required)")
+	// gen.AgentToolsResponse.Tools is a non-nullable slice — it must be present
+	// (nil means the `tools` key was absent from the JSON, which is the old bug).
+	assert.NotNil(t, genResp.Tools, "PUT response must include `tools` field (not `effective_tools`)")
+	// Config.Builtin must be present.
+	require.NotNil(t, genResp.Config.Builtin, "PUT response must include config.builtin")
+	// AgentType must be "custom".
+	require.NotNil(t, genResp.AgentType, "PUT response must include agent_type")
+	assert.Equal(t, gen.AgentToolsResponseAgentTypeCustom, *genResp.AgentType,
 		"updateAgentTools must return agent_type=custom for a custom agent")
-	builtin, ok := resp.Config["builtin"].(map[string]any)
-	require.True(t, ok, "response config must contain a builtin object")
-	// Legacy mode:"explicit" + visible is converted to policy format
-	assert.Equal(t, "deny", builtin["default_policy"],
+	// Legacy mode:"explicit" + visible is converted to policy format (default_policy=deny).
+	require.NotNil(t, genResp.Config.Builtin.DefaultPolicy, "config.builtin.default_policy must be present")
+	assert.Equal(t, gen.AgentToolsResponseConfigBuiltinDefaultPolicyDeny, *genResp.Config.Builtin.DefaultPolicy,
 		"explicit mode converts to default_policy=deny")
 
 	// Then: config.json on disk was updated with the tools config

@@ -1232,3 +1232,163 @@ describe('updateConfig: sends wire shape to backend', () => {
     expect(gw.dev_mode_bypass).toBeUndefined()
   })
 })
+
+// ── BUG 2 regression — fetchCredentials string[]→{key}[] transform ─────────────
+//
+// The backend returns string[] (key names only). fetchCredentials must transform
+// each string into a CredentialKey object so SecuritySection.tsx can render cred.key.
+// Before fix-T, no transform existed and cred.key was undefined at runtime.
+
+describe('fetchCredentials: string[] → CredentialKey[] transform (fix-T BUG 2)', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    stubCookie('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookie()
+    vi.resetModules()
+  })
+
+  it('transforms string[] wire response to CredentialKey[] with .key property', async () => {
+    const wireResponse = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GITHUB_TOKEN']
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireResponse), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchCredentials } = await import('./api')
+    const result = await fetchCredentials()
+
+    expect(result).toEqual([
+      { key: 'ANTHROPIC_API_KEY' },
+      { key: 'OPENAI_API_KEY' },
+      { key: 'GITHUB_TOKEN' },
+    ])
+    // Each entry must have a .key so SecuritySection.tsx renders correctly.
+    for (const entry of result) {
+      expect(typeof entry.key).toBe('string')
+      expect(entry.key.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('returns an empty array when wire response is []', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchCredentials } = await import('./api')
+    const result = await fetchCredentials()
+
+    expect(result).toEqual([])
+  })
+
+  it('throws ApiSchemaError when wire response is not an array', async () => {
+    // The Zod schema validates string[]; any non-array response must fail.
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ keys: ['foo'] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchCredentials, getApiSchemaErrorCount, resetApiSchemaErrorCount } = await import('./api')
+    resetApiSchemaErrorCount()
+    await expect(fetchCredentials()).rejects.toThrow()
+    expect(getApiSchemaErrorCount()).toBe(1)
+  })
+})
+
+// ── BUG 3 regression — enableChannel/disableChannel ChannelEnabledResponse ────
+//
+// The backend returns {id, enabled} (ChannelEnabledResponse), not a full ChannelEntry.
+// Before fix-T, the SPA Zod schema expected ChannelEntry (name, transport, description)
+// and threw ApiSchemaError on every channel toggle.
+
+describe('enableChannel / disableChannel: ChannelEnabledResponse validation (fix-T BUG 3)', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    stubCookie('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookie()
+    vi.resetModules()
+  })
+
+  it('enableChannel accepts {id, enabled} response and returns ChannelEnabledResponse', async () => {
+    const wire = { id: 'telegram', enabled: true }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wire), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { enableChannel } = await import('./api')
+    const result = await enableChannel('telegram')
+
+    expect(result.id).toBe('telegram')
+    expect(result.enabled).toBe(true)
+    // Ensure the request was PUT
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/channels/telegram/enable')
+    expect((init.method ?? '').toUpperCase()).toBe('PUT')
+  })
+
+  it('disableChannel accepts {id, enabled:false} response and returns ChannelEnabledResponse', async () => {
+    const wire = { id: 'discord', enabled: false }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wire), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { disableChannel } = await import('./api')
+    const result = await disableChannel('discord')
+
+    expect(result.id).toBe('discord')
+    expect(result.enabled).toBe(false)
+    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/channels/discord/disable')
+  })
+
+  it('enableChannel throws ApiSchemaError when backend returns a full ChannelEntry (old bug)', async () => {
+    // Simulate the old incorrect backend response — a full ChannelEntry without
+    // the required `enabled` field as a top-level field matching ChannelEnabledResponse.
+    // ChannelEnabledResponse requires {id: string, enabled: boolean}; a ChannelEntry
+    // response that happens to have those fields should still pass, but a response
+    // missing `id` must fail.
+    const badWire = { name: 'Telegram', transport: 'telegram', description: 'Telegram channel', enabled: true }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(badWire), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { enableChannel, getApiSchemaErrorCount, resetApiSchemaErrorCount } = await import('./api')
+    resetApiSchemaErrorCount()
+    // ChannelEnabledResponse requires `id` (string) — a response without it fails Zod.
+    await expect(enableChannel('telegram')).rejects.toThrow()
+    expect(getApiSchemaErrorCount()).toBe(1)
+  })
+})

@@ -76,6 +76,7 @@ import {
   GatewayStatus as GatewayStatusSchema,
   ToolRegistryEntry as ToolRegistryEntrySchema,
   ChannelEntry as ChannelEntrySchema,
+  ChannelEnabledResponse as ChannelEnabledResponseSchema,
   Skill as SkillSchema,
   McpServer as McpServerSchema,
   ActivityEvent as ActivityEventSchema,
@@ -219,6 +220,7 @@ import type {
   RateLimitsUpdateResponse,
   SessionScopeUpdateResponse,
   RetentionUpdateResponse,
+  ChannelEnabledResponse,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -289,6 +291,7 @@ export type {
   RateLimitsUpdateResponse,
   SessionScopeUpdateResponse,
   RetentionUpdateResponse,
+  ChannelEnabledResponse,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -1071,12 +1074,22 @@ export function fetchChannels(): Promise<ChannelEntry[]> {
   return request<ChannelEntry[]>('/channels', undefined, z.array(ChannelEntrySchema) as ZodType<ChannelEntry[]>)
 }
 
-export function enableChannel(id: string): Promise<ChannelEntry> {
-  return request<ChannelEntry>(`/channels/${encodeURIComponent(id)}/enable`, { method: 'PUT' }, ChannelEntrySchema as ZodType<ChannelEntry>)
+export function enableChannel(id: string): Promise<ChannelEnabledResponse> {
+  // Backend returns ChannelEnabledResponse {id, enabled} — not a full ChannelEntry.
+  return request<ChannelEnabledResponse>(
+    `/channels/${encodeURIComponent(id)}/enable`,
+    { method: 'PUT' },
+    ChannelEnabledResponseSchema as ZodType<ChannelEnabledResponse>,
+  )
 }
 
-export function disableChannel(id: string): Promise<ChannelEntry> {
-  return request<ChannelEntry>(`/channels/${encodeURIComponent(id)}/disable`, { method: 'PUT' }, ChannelEntrySchema as ZodType<ChannelEntry>)
+export function disableChannel(id: string): Promise<ChannelEnabledResponse> {
+  // Backend returns ChannelEnabledResponse {id, enabled} — not a full ChannelEntry.
+  return request<ChannelEnabledResponse>(
+    `/channels/${encodeURIComponent(id)}/disable`,
+    { method: 'PUT' },
+    ChannelEnabledResponseSchema as ZodType<ChannelEnabledResponse>,
+  )
 }
 
 export function fetchChannelConfig(id: string): Promise<Record<string, unknown>> {
@@ -1255,10 +1268,13 @@ export interface CredentialKey { // not-wire-format: SPA-internal credential dis
   updated_at?: string
 }
 
-export function fetchCredentials(): Promise<CredentialKey[]> {
-  // no-schema: wire returns string[] (key names only); SPA maps them to CredentialKey[]
-  // (see not-wire-format comment on CredentialKey above). No generated schema component matches.
-  return request<CredentialKey[]>('/credentials')
+export async function fetchCredentials(): Promise<CredentialKey[]> {
+  // Wire format: GET /credentials returns string[] (key names only).
+  // The SPA uses CredentialKey[] (objects with .key) so SecuritySection.tsx can
+  // render cred.key and use it as a React key. We validate the wire shape, then
+  // transform string[] → {key:string}[].
+  const wire = await request<string[]>('/credentials', undefined, z.array(z.string()) as ZodType<string[]>)
+  return wire.map((key) => ({ key }))
 }
 
 export function addCredential(key: string, value: string): Promise<void> {

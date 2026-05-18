@@ -3775,7 +3775,10 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		// Still return the saved config so the caller sees what landed; the
 		// reload error is logged for the operator.
 	}
-	a.getAgentTools(w, agentID)
+	// Use HandleAgentToolsRegistry so the PUT response emits `tools` (not
+	// `effective_tools`) — both paths must share the same wire shape to match
+	// the AgentToolsResponse spec and the SPA Zod schema (_agentToolsSchema).
+	a.HandleAgentToolsRegistry(w, r, agentID)
 }
 
 // toolsCfgToPolicy converts a config.AgentToolsCfg to ToolPolicyCfg.
