@@ -1,0 +1,18 @@
+title: McpToolCallResponse
+description: >
+  Response from POST /api/v1/tools/mcp.
+  Contains the result returned by the MCP server tool.
+type: object
+required:
+  - result
+additionalProperties: false
+properties:
+  result:
+    description: >
+      The tool's return value. Shape is tool-specific; may be any JSON type.
+  error:
+    type: string
+    description: >
+      Error message if the tool call failed on the MCP server side.
+      Only present when the call returned an error result.
+    example: "file not found: /home/user/missing.txt"

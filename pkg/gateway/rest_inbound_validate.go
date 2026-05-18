@@ -236,6 +236,28 @@ func decodeAndValidate(w http.ResponseWriter, r *http.Request, schemaName string
 	return true
 }
 
+// ValidateInboundFrameJSON validates a raw WS frame body against the named schema.
+// Returns the same (msg, serverErr) shape as validateBodyAgainstSchema.
+//
+// When msg == "" and serverErr == false, validation passed.
+// When msg != "" and serverErr == false, it is a client-side schema violation.
+// When msg != "" and serverErr == true, it is a server-side compile failure.
+//
+// Callers decide whether to emit an error frame back to the client.
+func ValidateInboundFrameJSON(schemaName string, rawJSON []byte) (msg string, serverErr bool) {
+	return validateBodyAgainstSchema(schemaName, rawJSON)
+}
+
+// _wsInboundFrameDropped counts inbound WS frames dropped by schema validation
+// across all connections on this process. Exposed for health checks / metrics.
+var _wsInboundFrameDropped atomic.Uint64
+
+// WsInboundFrameDropped returns the cumulative count of inbound WS frames
+// dropped due to schema validation failures since process start.
+func WsInboundFrameDropped() uint64 {
+	return _wsInboundFrameDropped.Load()
+}
+
 // PreCompileAllInboundSchemas compiles every *.yaml file in the embedded
 // inboundschemas.FS and caches the result. It is called during gateway boot,
 // before the HTTP listener starts, so any schema-compile error aborts startup

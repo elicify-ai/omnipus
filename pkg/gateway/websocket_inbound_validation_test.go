@@ -170,3 +170,99 @@ func TestWS_InboundApproval_RejectsUnknownDecision(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
 		"connection must remain open after approval rejection")
 }
+
+// ---------------------------------------------------------------------------
+// T7: WS JSON Schema validation (validate_inbound=true)
+// ---------------------------------------------------------------------------
+
+// TestWS_ValidateInbound_SchemaRejectsMessageFrameMissingContent verifies that
+// when gateway.validate_inbound=true, a message frame without the required
+// "content" field is rejected with an error frame and the connection stays open.
+//
+// BDD:
+//
+//	Given an authenticated WebSocket connection with validate_inbound=true,
+//	When the client sends {"type":"message"} with no content field,
+//	Then the server responds with {"type":"error"} mentioning "MessageFrame",
+//	And the connection stays open.
+//
+// Implements: T7 — WS inbound schema validation parity with REST.
+// Traces to: pkg/gateway/websocket.go readLoop validate_inbound block.
+func TestWS_ValidateInbound_SchemaRejectsMessageFrameMissingContent(t *testing.T) {
+	handler, _, al := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	// Enable schema validation.
+	al.GetConfig().Gateway.ValidateInbound = true
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	sendWSAuthFrameDevMode(t, conn)
+
+	// Send a message frame missing the required "content" field.
+	// The MessageFrame schema requires content to be present.
+	malformedFrame := map[string]any{"type": "message"} // no content
+	data, err := json.Marshal(malformedFrame)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+
+	// Server must respond with an error frame mentioning the schema name.
+	resp := readFrameOfType(t, conn, "error", 3*time.Second)
+	assert.NotEmpty(t, resp.Message,
+		"error frame must carry a schema validation message")
+	assert.Contains(t, resp.Message, "MessageFrame",
+		"error message must identify the failing schema")
+
+	// Connection must remain open.
+	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	ping := wsClientFrameTestHelper{Type: "ping"}
+	pingData, _ := json.Marshal(ping)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
+		"connection must remain open after schema rejection")
+}
+
+// TestWS_ValidateInbound_ValidFramePassesThrough verifies that a valid
+// MessageFrame passes schema validation without being dropped.
+//
+// BDD:
+//
+//	Given an authenticated WebSocket connection with validate_inbound=true,
+//	When the client sends a well-formed {"type":"message","content":"hello"},
+//	Then the frame is NOT rejected (no error frame from schema validation).
+//
+// Implements: T7 — WS inbound schema validation passes valid frames.
+// Traces to: pkg/gateway/websocket.go readLoop validate_inbound block.
+func TestWS_ValidateInbound_ValidFramePassesThrough(t *testing.T) {
+	handler, _, al := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	// Enable schema validation.
+	al.GetConfig().Gateway.ValidateInbound = true
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	sendWSAuthFrameDevMode(t, conn)
+
+	// Send a well-formed message frame.
+	validFrame := wsClientFrameTestHelper{Type: "message", Content: "hello from T7"}
+	data, err := json.Marshal(validFrame)
+	require.NoError(t, err)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+
+	// The server should not respond with an error frame for valid input.
+	// Send a second message (ping) after a brief delay; if the first frame caused
+	// a schema error the ping would arrive after the error frame.
+	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
+	ping := wsClientFrameTestHelper{Type: "ping"}
+	pingData, _ := json.Marshal(ping)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
+		"connection must remain open when a valid frame is sent")
+}

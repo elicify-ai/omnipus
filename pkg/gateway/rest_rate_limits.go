@@ -74,13 +74,14 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	// Decode to map[string]json.RawMessage so we can inspect each field's
-	// JSON token type independently and reject type mismatches strictly.
+	// decodeAndValidate validates the body against the RateLimitsUpdateRequest
+	// JSON Schema (when validate_inbound=true) before decoding. When the schema
+	// reports type:integer for LLM/tool count fields, fractional floats are
+	// rejected at the schema level; the bespoke parseInt64Field check below
+	// provides defense-in-depth regardless.
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var raw map[string]json.RawMessage
-	dec := json.NewDecoder(r.Body)
-	dec.UseNumber()
-	if err := dec.Decode(&raw); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeAndValidate(w, r, "RateLimitsUpdateRequest", &raw, validateEnabled) {
 		return
 	}
 

@@ -550,6 +550,33 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 			continue
 		}
 
+		// Per-frame JSON Schema validation (mirrors REST decodeAndValidate).
+		// Gated by gateway.validate_inbound; when false the check is a no-op.
+		validateEnabled := h.agentLoop.GetConfig().Gateway.ValidateInbound
+		if validateEnabled {
+			schemaName := wsFrameSchemaName(peek.Type)
+			if schemaName != "" {
+				if errMsg, serverErr := ValidateInboundFrameJSON(schemaName, data); errMsg != "" {
+					_wsInboundFrameDropped.Add(1)
+					wc.inboundDropped.Add(1)
+					if serverErr {
+						// Server-side compile failure — log and drop; do not reveal details.
+						slog.Error("ws: inbound schema unavailable, dropping frame",
+							"schema", schemaName, "frame_type", peek.Type, "chat_id", chatID)
+					} else {
+						// Client-side schema violation — send descriptive error frame.
+						slog.Warn("ws: inbound frame schema validation failed — dropping",
+							"schema", schemaName, "frame_type", peek.Type, "error", errMsg, "chat_id", chatID)
+						sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+							Type:    string(generated.WsFrameTypeError),
+							Message: "frame schema validation failed (" + schemaName + "): " + errMsg,
+						})
+					}
+					continue
+				}
+			}
+		}
+
 		switch peek.Type {
 		case string(generated.WsFrameTypeMessage):
 			var f generated.MessageFrame
@@ -674,6 +701,30 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 		default:
 			slog.Debug("ws: unknown frame type ignored", "type", peek.Type, "chat_id", chatID)
 		}
+	}
+}
+
+// wsFrameSchemaName maps a WS frame type string to the corresponding inbound
+// JSON Schema name (the key used in ValidateInboundFrameJSON). Returns ""
+// for frame types that have no inbound schema (e.g. ping — no body to validate).
+func wsFrameSchemaName(frameType string) string {
+	switch frameType {
+	case string(generated.WsFrameTypeMessage):
+		return "MessageFrame"
+	case string(generated.WsFrameTypeCancel):
+		return "CancelFrame"
+	case string(generated.WsFrameTypeExecApprovalResponse):
+		return "ExecApprovalResponseFrame"
+	case string(generated.WsFrameTypeAttachSession):
+		return "AttachSessionFrame"
+	case string(generated.WsFrameTypeDevicePairingResponse):
+		return "DevicePairingResponseFrame"
+	case string(generated.WsFrameTypeSessionClose):
+		return "SessionCloseFrame"
+	case string(generated.WsFrameTypePing):
+		return "PingFrame"
+	default:
+		return ""
 	}
 }
 

@@ -10,6 +10,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1015,6 +1016,77 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	require.True(t, ok, "config.json must persist policies map")
 	assert.Equal(t, "allow", policiesRaw["read_file"])
 	assert.Equal(t, "allow", policiesRaw["web_search"])
+}
+
+// TestUpdateAgentTools_ReloadFailure_Returns503 verifies that if TriggerReload fails
+// with a non-ErrReloadNotConfigured error, PUT /api/v1/agents/{id}/tools returns 503.
+//
+// BDD:
+//
+//	Given a custom agent exists in config, a config.json is on disk, AND
+//	  the agent loop's reload function is wired to always fail,
+//	When PUT /api/v1/agents/{id}/tools is called with valid tool config,
+//	Then the response is 503 Service Unavailable with a descriptive message,
+//	And the config was still written to disk (disk write succeeded before reload).
+//
+// Closes: R4 silent-failure H1 (TriggerReload failure was silently ignored — now 503).
+// Traces to: pkg/gateway/rest.go updateAgentTools — TriggerReload 503 path.
+func TestUpdateAgentTools_ReloadFailure_Returns503(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"reload-test-agent","name":"Reload Test Agent"}]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{
+				{ID: "reload-test-agent", Name: "Reload Test Agent"},
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	// Wire a reload function that always returns an error (simulates gateway
+	// restart in progress or reload pipeline failure).
+	al.SetReloadFunc(func() error {
+		return fmt.Errorf("simulated reload failure: config file locked")
+	})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	body := `{"builtin":{"mode":"inherit"}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/reload-test-agent/tools", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	// Then: HTTP 503 (reload failed).
+	require.Equal(t, http.StatusServiceUnavailable, w.Code,
+		"updateAgentTools must return 503 when TriggerReload fails with a non-ErrReloadNotConfigured error")
+
+	// Then: response must contain the human-readable reload failure message.
+	var errResp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+	assert.Contains(t, errResp["error"], "in-memory reload failed",
+		"503 response must mention in-memory reload failure")
+
+	// Then: config.json was still updated (disk write happened before reload).
+	savedCfg, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	var savedMap map[string]any
+	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
+	agentsMap, _ := savedMap["agents"].(map[string]any)
+	list, _ := agentsMap["list"].([]any)
+	require.Len(t, list, 1, "config.json must contain exactly one agent after 503")
+	agentMap, _ := list[0].(map[string]any)
+	_, hasTools := agentMap["tools"]
+	assert.True(t, hasTools, "tools config must be persisted to config.json even on 503")
 }
 
 // TestHandleMCPTools_MethodNotAllowed verifies that POST to HandleMCPTools returns 405.

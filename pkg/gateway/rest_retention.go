@@ -58,14 +58,14 @@ func (a *restAPI) getRetention(w http.ResponseWriter, r *http.Request) {
 func (a *restAPI) putRetention(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	// Decode to map[string]json.RawMessage so we can inspect each field's JSON
-	// token type independently — this lets us reject floats for session_days and
-	// strings for disabled before the value ever reaches the config layer.
+	// decodeAndValidate validates the body against the RetentionUpdateRequest
+	// JSON Schema (when validate_inbound=true) before decoding. The schema
+	// enforces type:integer for session_days and type:boolean for disabled;
+	// the bespoke parseRetentionSessionDays / parseRetentionDisabled checks
+	// below provide defense-in-depth regardless of the validate_inbound flag.
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var raw map[string]json.RawMessage
-	dec := json.NewDecoder(r.Body)
-	dec.UseNumber()
-	if err := dec.Decode(&raw); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeAndValidate(w, r, "RetentionUpdateRequest", &raw, validateEnabled) {
 		return
 	}
 

@@ -1,0 +1,11 @@
+title: BearerToken
+description: >
+  Canonical opaque bearer token format used by Omnipus.
+  The prefix "omnipus_" (8 characters) followed by 64 lowercase hex
+  characters (32 random bytes), giving a total length of 72 characters.
+  Used in Authorization headers, WS AuthFrame, and rotate-token responses.
+type: string
+minLength: 72
+maxLength: 72
+pattern: '^omnipus_[a-f0-9]{64}$'
+example: 'omnipus_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'

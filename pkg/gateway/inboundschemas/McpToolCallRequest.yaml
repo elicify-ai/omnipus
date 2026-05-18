@@ -1,0 +1,25 @@
+title: McpToolCallRequest
+description: >
+  Request body for POST /api/v1/tools/mcp.
+  Invokes a tool on a specific MCP server by name, passing optional arguments.
+type: object
+required:
+  - server_id
+  - tool_name
+additionalProperties: false
+properties:
+  server_id:
+    type: string
+    description: The MCP server ID to invoke the tool on.
+    example: "filesystem"
+  tool_name:
+    type: string
+    description: The name of the tool to call on the MCP server.
+    example: "read_file"
+  arguments:
+    type: object
+    additionalProperties: true
+    description: >
+      Key-value arguments to pass to the tool. Shape is tool-specific.
+    example:
+      path: "/home/user/document.txt"

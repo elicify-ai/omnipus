@@ -274,6 +274,18 @@ components:
       $ref: ./components/schemas/RestoreBackupRequest.yaml
     AgentOwnershipUpdateRequest:
       $ref: ./components/schemas/AgentOwnershipUpdateRequest.yaml
+    BearerToken:
+      $ref: ./components/schemas/BearerToken.yaml
+    ChannelConfigureRequest:
+      $ref: ./components/schemas/ChannelConfigureRequest.yaml
+    RetentionUpdateRequest:
+      $ref: ./components/schemas/RetentionUpdateRequest.yaml
+    McpToolsListResponse:
+      $ref: ./components/schemas/McpToolsListResponse.yaml
+    McpToolCallRequest:
+      $ref: ./components/schemas/McpToolCallRequest.yaml
+    McpToolCallResponse:
+      $ref: ./components/schemas/McpToolCallResponse.yaml
   responses:
     400BadRequest:
       description: "Bad request \u2014 missing or invalid field."
@@ -3422,5 +3434,158 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+  /tools/mcp:
+    get:
+      operationId: listMcpTools
+      summary: List all configured MCP servers
+      description: >
+        Returns all configured MCP servers with their status and tool metadata
+        for the agent tool picker UI. Requires authentication.
+      tags:
+      - Tools
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Array of MCP server entries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpToolsListResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      operationId: callMcpTool
+      summary: Invoke a tool on an MCP server
+      description: >
+        Calls a named tool on a specific MCP server and returns the result.
+        Requires authentication. The tool and server must already be configured
+        and enabled. Arguments are tool-specific.
+      tags:
+      - Tools
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpToolCallRequest'
+      responses:
+        '200':
+          description: Tool call result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpToolCallResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /uploads/{session_id}/{filename}:
+    get:
+      operationId: serveUpload
+      summary: Serve an uploaded file
+      description: >
+        Serves a previously uploaded file by session ID and filename.
+        Authentication is optional — browsers must be able to load image
+        URLs directly from chat messages. Returns the file content with
+        the appropriate Content-Type header.
+      tags:
+      - Upload
+      security: []
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Session ID the file was uploaded under.
+        example: "550e8400-e29b-41d4-a716-446655440000"
+      - name: filename
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Sanitized filename as returned by the upload endpoint.
+        example: "screenshot.png"
+      responses:
+        '200':
+          description: File content streamed with appropriate Content-Type.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /media/{ref_id}:
+    get:
+      operationId: serveMedia
+      summary: Serve a media file by ref ID
+      description: >
+        Resolves a media:// URI (e.g. media://abc123) and streams the
+        underlying file with the correct Content-Type. Used by the chat UI
+        to display screenshots and other agent-generated media. Returns 403
+        if path traversal is detected in ref_id, 404 if the ref is unknown.
+      tags:
+      - Upload
+      security: []
+      parameters:
+      - name: ref_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The opaque media reference ID (not a path — no slashes or dots).
+        example: "a1b2c3d4e5f6"
+      responses:
+        '200':
+          description: Media file content streamed with appropriate Content-Type.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '403':
+          description: Forbidden — invalid or path-traversal ref_id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Media store not available.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 security:
 - BearerAuth: []

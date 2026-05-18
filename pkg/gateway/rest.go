@@ -33,6 +33,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
@@ -2499,7 +2500,9 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "could not generate token")
 		return
 	}
-	newToken := hex.EncodeToString(tokenBytes)
+	// Token format: "omnipus_" + 64-char lowercase hex (32 random bytes).
+	// This matches the BearerToken schema pattern '^omnipus_[a-f0-9]{64}$'.
+	newToken := "omnipus_" + hex.EncodeToString(tokenBytes)
 	// Persist to config.json BEFORE updating the live config.
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		gw, _ := m["gateway"].(map[string]any)
@@ -3791,9 +3794,24 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// "no reload needed" claim was wrong — config-on-disk and the in-memory
 	// pointer are decoupled. Reload is cheap and idempotent.
 	if err := a.agentLoop.TriggerReload(); err != nil {
-		slog.Error("agent tools update: reload failed", "agent_id", agentID, "error", err)
-		// Still return the saved config so the caller sees what landed; the
-		// reload error is logged for the operator.
+		// ErrReloadNotConfigured is normal in unit tests where the full gateway
+		// reload pipeline is not wired — treat it as a no-op and continue.
+		if !errors.Is(err, agent.ErrReloadNotConfigured) {
+			slog.Error("agent tools update: reload failed — in-memory policy not updated",
+				"agent_id", agentID, "error", err)
+			if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
+				if auditErr := audit.EmitSecuritySettingChange(
+					r.Context(), auditLogger, "agent.tools_policy",
+					map[string]any{"agent_id": agentID, "saved": true},
+					map[string]any{"agent_id": agentID, "reload_error": err.Error()},
+				); auditErr != nil {
+					slog.Error("rest: audit emit agent tools reload failure", "error", auditErr)
+				}
+			}
+			jsonErr(w, http.StatusServiceUnavailable,
+				"config saved but in-memory reload failed; restart the gateway or retry")
+			return
+		}
 	}
 	// Use HandleAgentToolsRegistry so the PUT response emits `tools` (not
 	// `effective_tools`) — both paths must share the same wire shape to match
@@ -4045,9 +4063,9 @@ func (a *restAPI) getChannelConfig(w http.ResponseWriter, channelID string) {
 // Merges the request body fields into the channel's config section (does not overwrite absent fields).
 // Returns the updated channel config with credential fields redacted.
 func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, channelID string) {
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var updates map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeAndValidate(w, r, "ChannelConfigureRequest", &updates, validateEnabled) {
 		return
 	}
 	// Remove reserved fields that must not be set here.

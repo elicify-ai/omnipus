@@ -5,6 +5,7 @@ package generated
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/oapi-codegen/runtime"
@@ -372,48 +373,6 @@ func (e AgentUpdateRequestSandboxProfile) Valid() bool {
 	case AgentUpdateRequestSandboxProfileWorkspace:
 		return true
 	case AgentUpdateRequestSandboxProfileWorkspaceNet:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentUpdateRequestToolsCfgBuiltinDefaultPolicy.
-const (
-	AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAllow AgentUpdateRequestToolsCfgBuiltinDefaultPolicy = "allow"
-	AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAsk   AgentUpdateRequestToolsCfgBuiltinDefaultPolicy = "ask"
-	AgentUpdateRequestToolsCfgBuiltinDefaultPolicyDeny  AgentUpdateRequestToolsCfgBuiltinDefaultPolicy = "deny"
-)
-
-// Valid indicates whether the value is a known member of the AgentUpdateRequestToolsCfgBuiltinDefaultPolicy enum.
-func (e AgentUpdateRequestToolsCfgBuiltinDefaultPolicy) Valid() bool {
-	switch e {
-	case AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAllow:
-		return true
-	case AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAsk:
-		return true
-	case AgentUpdateRequestToolsCfgBuiltinDefaultPolicyDeny:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentUpdateRequestToolsCfgBuiltinPolicies.
-const (
-	AgentUpdateRequestToolsCfgBuiltinPoliciesAllow AgentUpdateRequestToolsCfgBuiltinPolicies = "allow"
-	AgentUpdateRequestToolsCfgBuiltinPoliciesAsk   AgentUpdateRequestToolsCfgBuiltinPolicies = "ask"
-	AgentUpdateRequestToolsCfgBuiltinPoliciesDeny  AgentUpdateRequestToolsCfgBuiltinPolicies = "deny"
-)
-
-// Valid indicates whether the value is a known member of the AgentUpdateRequestToolsCfgBuiltinPolicies enum.
-func (e AgentUpdateRequestToolsCfgBuiltinPolicies) Valid() bool {
-	switch e {
-	case AgentUpdateRequestToolsCfgBuiltinPoliciesAllow:
-		return true
-	case AgentUpdateRequestToolsCfgBuiltinPoliciesAsk:
-		return true
-	case AgentUpdateRequestToolsCfgBuiltinPoliciesDeny:
 		return true
 	default:
 		return false
@@ -1988,44 +1947,14 @@ type AgentCreateRequest struct {
 	// Description Short description of the agent's purpose.
 	Description *string `json:"description,omitempty"`
 
-	// FallbackModels Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
-	FallbackModels *[]string `json:"fallback_models,omitempty"`
-
 	// Icon Phosphor icon name for the agent avatar.
 	Icon *string `json:"icon,omitempty"`
 
 	// Model Model name for LLM calls. When omitted, the global agents.defaults.model_name is used.
 	Model *string `json:"model,omitempty"`
 
-	// ModelParams LLM sampling parameters applied to this agent's requests.
-	ModelParams *struct {
-		// MaxTokens Maximum tokens to generate per turn.
-		MaxTokens *int `json:"max_tokens,omitempty"`
-
-		// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
-		Temperature *float64 `json:"temperature,omitempty"`
-
-		// TopP Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-		TopP *float64 `json:"top_p,omitempty"`
-	} `json:"model_params,omitempty"`
-
 	// Name Display name for the new agent.
 	Name string `json:"name"`
-
-	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
-	RateLimits *struct {
-		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
-		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
-
-		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
-
-		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
-
-		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
-		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
-	} `json:"rate_limits,omitempty"`
 
 	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	ToolsCfg *struct {
@@ -2180,14 +2109,8 @@ type AgentToolsUpdateRequestBuiltinPolicies string
 
 // AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400.
 type AgentUpdateRequest struct {
-	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
-	Color *string `json:"color,omitempty"`
-
 	// Description New description. Rejected on locked agents. Empty string removes it.
 	Description *string `json:"description,omitempty"`
-
-	// FallbackModels Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
-	FallbackModels *[]string `json:"fallback_models,omitempty"`
 
 	// Heartbeat New HEARTBEAT.md content. Rejected on locked agents. Writing this triggers a config reload.
 	Heartbeat *string `json:"heartbeat,omitempty"`
@@ -2198,9 +2121,6 @@ type AgentUpdateRequest struct {
 	// HeartbeatInterval New heartbeat interval in seconds. Allowed on all agents.
 	HeartbeatInterval *int `json:"heartbeat_interval,omitempty"`
 
-	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
-	Icon *string `json:"icon,omitempty"`
-
 	// Instructions New AGENT.md body (after frontmatter). Rejected on locked agents. Writing this triggers a config reload.
 	Instructions *string `json:"instructions,omitempty"`
 
@@ -2210,35 +2130,8 @@ type AgentUpdateRequest struct {
 	// Model New model name. Allowed on all agents.
 	Model *string `json:"model,omitempty"`
 
-	// ModelParams LLM sampling parameters applied to this agent's requests.
-	ModelParams *struct {
-		// MaxTokens Maximum tokens to generate per turn.
-		MaxTokens *int `json:"max_tokens,omitempty"`
-
-		// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
-		Temperature *float64 `json:"temperature,omitempty"`
-
-		// TopP Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-		TopP *float64 `json:"top_p,omitempty"`
-	} `json:"model_params,omitempty"`
-
 	// Name New display name. Rejected on locked agents.
 	Name *string `json:"name,omitempty"`
-
-	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
-	RateLimits *struct {
-		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
-		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
-
-		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
-
-		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
-
-		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
-		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
-	} `json:"rate_limits,omitempty"`
 
 	// SandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
 	SandboxProfile *AgentUpdateRequestSandboxProfile `json:"sandbox_profile,omitempty"`
@@ -2261,40 +2154,10 @@ type AgentUpdateRequest struct {
 
 	// ToolFeedback Enable/disable tool feedback loop. Allowed on all agents.
 	ToolFeedback *bool `json:"tool_feedback,omitempty"`
-
-	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
-	ToolsCfg *struct {
-		// Builtin Controls builtin tool visibility for this agent.
-		Builtin *struct {
-			// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-			DefaultPolicy *AgentUpdateRequestToolsCfgBuiltinDefaultPolicy `json:"default_policy,omitempty"`
-
-			// Policies Per-tool policy overrides. Keys are tool names or glob patterns (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
-			Policies *map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies,omitempty"`
-		} `json:"builtin,omitempty"`
-
-		// Mcp MCP server bindings for this agent.
-		Mcp *struct {
-			// Servers List of MCP server bindings.
-			Servers *[]struct {
-				// Id MCP server identifier as registered in config.json.
-				Id string `json:"id"`
-
-				// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
-				Tools *[]string `json:"tools,omitempty"`
-			} `json:"servers,omitempty"`
-		} `json:"mcp,omitempty"`
-	} `json:"tools_cfg,omitempty"`
 }
 
 // AgentUpdateRequestSandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
 type AgentUpdateRequestSandboxProfile string
-
-// AgentUpdateRequestToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-type AgentUpdateRequestToolsCfgBuiltinDefaultPolicy string
-
-// AgentUpdateRequestToolsCfgBuiltinPolicies defines model for AgentUpdateRequest.ToolsCfg.Builtin.Policies.
-type AgentUpdateRequestToolsCfgBuiltinPolicies string
 
 // AppState Application state returned by GET /api/v1/state. Reflects whether onboarding has been completed and optional diagnostic metadata.
 type AppState struct {
@@ -2631,7 +2494,7 @@ type LoginResponse struct {
 	// Role RBAC role of the authenticated user.
 	Role LoginResponseRole `json:"role"`
 
-	// Token Bearer token for subsequent API calls. Prefix "omnipus_" followed by 64 lowercase hex characters (total 72 chars). Store in sessionStorage (preferred) or localStorage under the key "omnipus_auth_token".
+	// Token Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
 
 	// Username The authenticated user's login name.
@@ -2692,10 +2555,47 @@ type McpServerCreate struct {
 // McpServerCreateTransport Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).
 type McpServerCreateTransport string
 
-// McpServerToolsResponse Response from GET /mcp-servers/{id}/tools. Returns the list of tool names exposed by a specific MCP server.
-type McpServerToolsResponse struct {
-	// Tools List of tool names exposed by the MCP server.
-	Tools []string `json:"tools"`
+// McpToolCallRequest Request body for POST /api/v1/tools/mcp. Invokes a tool on a specific MCP server by name, passing optional arguments.
+type McpToolCallRequest struct {
+	// Arguments Key-value arguments to pass to the tool. Shape is tool-specific.
+	Arguments *map[string]interface{} `json:"arguments,omitempty"`
+
+	// ServerId The MCP server ID to invoke the tool on.
+	ServerId string `json:"server_id"`
+
+	// ToolName The name of the tool to call on the MCP server.
+	ToolName string `json:"tool_name"`
+}
+
+// McpToolCallResponse Response from POST /api/v1/tools/mcp. Contains the result returned by the MCP server tool.
+type McpToolCallResponse struct {
+	// Error Error message if the tool call failed on the MCP server side. Only present when the call returned an error result.
+	Error *string `json:"error,omitempty"`
+
+	// Result The tool's return value. Shape is tool-specific; may be any JSON type.
+	Result interface{} `json:"result"`
+}
+
+// McpToolsListResponse Response from GET /api/v1/tools/mcp. Returns all configured MCP servers with their status for the agent tool picker UI.
+type McpToolsListResponse = []McpToolsListResponse_Item
+
+// McpToolsListResponse_Item defines model for McpToolsListResponse.Item.
+type McpToolsListResponse_Item struct {
+	// Args Arguments passed to the MCP server command.
+	Args *[]string `json:"args,omitempty"`
+
+	// Command The command used to start the MCP server.
+	Command *string `json:"command,omitempty"`
+
+	// Enabled Whether the MCP server is currently enabled.
+	Enabled bool `json:"enabled"`
+
+	// Id Unique MCP server identifier (same as the config key name).
+	Id string `json:"id"`
+
+	// Name Display name for the MCP server.
+	Name                 string                 `json:"name"`
+	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
 // MeInfo Response from GET /api/v1/me. Returns the authenticated user's role, used for RBAC gating in the SPA.
@@ -2826,7 +2726,7 @@ type OnboardingCompleteResponse struct {
 	// Role RBAC role of the authenticated user.
 	Role OnboardingCompleteResponseRole `json:"role"`
 
-	// Token Bearer token for subsequent API calls. Prefix "omnipus_" followed by 64 lowercase hex characters (total 72 chars). Store in sessionStorage (preferred) or localStorage under the key "omnipus_auth_token".
+	// Token Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
 
 	// Username The authenticated user's login name.
@@ -3061,7 +2961,7 @@ type RetentionUpdateResponse struct {
 
 // RotateTokenResponse Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
 type RotateTokenResponse struct {
-	// Token The new gateway bearer token (64 hex characters, 32 random bytes). Store securely; this is the only time it is returned.
+	// Token Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
 }
 
@@ -4139,6 +4039,9 @@ type UpdateTaskJSONRequestBody = TaskUpdateRequest
 // PostToolApprovalJSONRequestBody defines body for PostToolApproval for application/json ContentType.
 type PostToolApprovalJSONRequestBody = ToolApprovalActionRequest
 
+// CallMcpToolJSONRequestBody defines body for CallMcpTool for application/json ContentType.
+type CallMcpToolJSONRequestBody = McpToolCallRequest
+
 // UploadFilesMultipartRequestBody defines body for UploadFiles for multipart/form-data ContentType.
 type UploadFilesMultipartRequestBody UploadFilesMultipartBody
 
@@ -4153,6 +4056,128 @@ type ResetUserPasswordJSONRequestBody = UserResetPasswordRequest
 
 // ChangeUserRoleJSONRequestBody defines body for ChangeUserRole for application/json ContentType.
 type ChangeUserRoleJSONRequestBody = UserRoleChangeRequest
+
+// Getter for additional properties for McpToolsListResponse_Item. Returns the specified
+// element and whether it was found
+func (a McpToolsListResponse_Item) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for McpToolsListResponse_Item
+func (a *McpToolsListResponse_Item) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for McpToolsListResponse_Item to handle AdditionalProperties
+func (a *McpToolsListResponse_Item) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["args"]; found {
+		err = json.Unmarshal(raw, &a.Args)
+		if err != nil {
+			return fmt.Errorf("error reading 'args': %w", err)
+		}
+		delete(object, "args")
+	}
+
+	if raw, found := object["command"]; found {
+		err = json.Unmarshal(raw, &a.Command)
+		if err != nil {
+			return fmt.Errorf("error reading 'command': %w", err)
+		}
+		delete(object, "command")
+	}
+
+	if raw, found := object["enabled"]; found {
+		err = json.Unmarshal(raw, &a.Enabled)
+		if err != nil {
+			return fmt.Errorf("error reading 'enabled': %w", err)
+		}
+		delete(object, "enabled")
+	}
+
+	if raw, found := object["id"]; found {
+		err = json.Unmarshal(raw, &a.Id)
+		if err != nil {
+			return fmt.Errorf("error reading 'id': %w", err)
+		}
+		delete(object, "id")
+	}
+
+	if raw, found := object["name"]; found {
+		err = json.Unmarshal(raw, &a.Name)
+		if err != nil {
+			return fmt.Errorf("error reading 'name': %w", err)
+		}
+		delete(object, "name")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for McpToolsListResponse_Item to handle AdditionalProperties
+func (a McpToolsListResponse_Item) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Args != nil {
+		object["args"], err = json.Marshal(a.Args)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'args': %w", err)
+		}
+	}
+
+	if a.Command != nil {
+		object["command"], err = json.Marshal(a.Command)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'command': %w", err)
+		}
+	}
+
+	object["enabled"], err = json.Marshal(a.Enabled)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'enabled': %w", err)
+	}
+
+	object["id"], err = json.Marshal(a.Id)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'id': %w", err)
+	}
+
+	object["name"], err = json.Marshal(a.Name)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'name': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
 
 // AsListSessions200JSONResponseBody0 returns the union data inside the ListSessions200JSONResponseBody as a ListSessions200JSONResponseBody0
 func (t ListSessions200JSONResponseBody) AsListSessions200JSONResponseBody0() (ListSessions200JSONResponseBody0, error) {

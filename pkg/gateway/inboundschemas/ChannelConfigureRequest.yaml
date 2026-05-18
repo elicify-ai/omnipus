@@ -1,0 +1,25 @@
+title: ChannelConfigureRequest
+description: >
+  Request body for PUT /api/v1/channels/{id}/configure.
+  Merges the supplied fields into the channel's config section. The "enabled"
+  field is reserved and silently removed — use the separate enable/disable
+  endpoints instead. Field names and value types are channel-specific; unknown
+  fields are stored as-is and passed through to the channel implementation.
+type: object
+additionalProperties: true
+properties:
+  token:
+    type: string
+    description: Channel authentication token (e.g. Telegram bot token, Discord bot token).
+  bot_token:
+    type: string
+    description: Alias for token used by some channels.
+  app_id:
+    type: string
+    description: Application ID (used by Slack, Discord).
+  app_secret:
+    type: string
+    description: Application secret / signing secret.
+  webhook_secret:
+    type: string
+    description: HMAC secret for verifying incoming webhook payloads.
