@@ -11,7 +11,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -285,8 +284,8 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 
 	var body gen.LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "LoginRequest", &body, validateEnabled) {
 		return
 	}
 	if body.Username == "" || body.Password == "" {
@@ -437,8 +436,8 @@ func (a *restAPI) HandleRegisterAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body gen.RegisterAdminRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "RegisterAdminRequest", &body, validateEnabled) {
 		return
 	}
 	if body.Username == "" || body.Password == "" {
@@ -617,8 +616,8 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body gen.ChangePasswordRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "ChangePasswordRequest", &body, validateEnabled) {
 		return
 	}
 	if body.CurrentPassword == "" || body.NewPassword == "" {

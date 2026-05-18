@@ -15,27 +15,6 @@ const (
 	BearerAuthScopes bearerAuthContextKey = "BearerAuth.Scopes"
 )
 
-// Defines values for ActivityEventType.
-const (
-	SessionStart ActivityEventType = "session_start"
-	TaskCreated  ActivityEventType = "task_created"
-	TaskUpdated  ActivityEventType = "task_updated"
-)
-
-// Valid indicates whether the value is a known member of the ActivityEventType enum.
-func (e ActivityEventType) Valid() bool {
-	switch e {
-	case SessionStart:
-		return true
-	case TaskCreated:
-		return true
-	case TaskUpdated:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentSandboxProfile.
 const (
 	AgentSandboxProfileHost         AgentSandboxProfile = "host"
@@ -288,6 +267,66 @@ func (e AgentToolsResponseToolsEffectivePolicy) Valid() bool {
 	case AgentToolsResponseToolsEffectivePolicyAsk:
 		return true
 	case AgentToolsResponseToolsEffectivePolicyDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsUpdateRequestBuiltinDefaultPolicy.
+const (
+	AgentToolsUpdateRequestBuiltinDefaultPolicyAllow AgentToolsUpdateRequestBuiltinDefaultPolicy = "allow"
+	AgentToolsUpdateRequestBuiltinDefaultPolicyAsk   AgentToolsUpdateRequestBuiltinDefaultPolicy = "ask"
+	AgentToolsUpdateRequestBuiltinDefaultPolicyDeny  AgentToolsUpdateRequestBuiltinDefaultPolicy = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestBuiltinDefaultPolicy enum.
+func (e AgentToolsUpdateRequestBuiltinDefaultPolicy) Valid() bool {
+	switch e {
+	case AgentToolsUpdateRequestBuiltinDefaultPolicyAllow:
+		return true
+	case AgentToolsUpdateRequestBuiltinDefaultPolicyAsk:
+		return true
+	case AgentToolsUpdateRequestBuiltinDefaultPolicyDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsUpdateRequestBuiltinMode.
+const (
+	Explicit AgentToolsUpdateRequestBuiltinMode = "explicit"
+	Inherit  AgentToolsUpdateRequestBuiltinMode = "inherit"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestBuiltinMode enum.
+func (e AgentToolsUpdateRequestBuiltinMode) Valid() bool {
+	switch e {
+	case Explicit:
+		return true
+	case Inherit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsUpdateRequestBuiltinPolicies.
+const (
+	AgentToolsUpdateRequestBuiltinPoliciesAllow AgentToolsUpdateRequestBuiltinPolicies = "allow"
+	AgentToolsUpdateRequestBuiltinPoliciesAsk   AgentToolsUpdateRequestBuiltinPolicies = "ask"
+	AgentToolsUpdateRequestBuiltinPoliciesDeny  AgentToolsUpdateRequestBuiltinPolicies = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestBuiltinPolicies enum.
+func (e AgentToolsUpdateRequestBuiltinPolicies) Valid() bool {
+	switch e {
+	case AgentToolsUpdateRequestBuiltinPoliciesAllow:
+		return true
+	case AgentToolsUpdateRequestBuiltinPoliciesAsk:
+		return true
+	case AgentToolsUpdateRequestBuiltinPoliciesDeny:
 		return true
 	default:
 		return false
@@ -1362,6 +1401,27 @@ func (e TaskAcceptedResponseStatus) Valid() bool {
 	}
 }
 
+// Defines values for ToolApprovalActionRequestAction.
+const (
+	ToolApprovalActionRequestActionApprove ToolApprovalActionRequestAction = "approve"
+	ToolApprovalActionRequestActionCancel  ToolApprovalActionRequestAction = "cancel"
+	ToolApprovalActionRequestActionDeny    ToolApprovalActionRequestAction = "deny"
+)
+
+// Valid indicates whether the value is a known member of the ToolApprovalActionRequestAction enum.
+func (e ToolApprovalActionRequestAction) Valid() bool {
+	switch e {
+	case ToolApprovalActionRequestActionApprove:
+		return true
+	case ToolApprovalActionRequestActionCancel:
+		return true
+	case ToolApprovalActionRequestActionDeny:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ToolApprovalResponseAction.
 const (
 	ToolApprovalResponseActionApprove ToolApprovalResponseAction = "approve"
@@ -1638,27 +1698,6 @@ func (e ListTasksParamsStatus) Valid() bool {
 	}
 }
 
-// Defines values for PostToolApprovalJSONBodyAction.
-const (
-	PostToolApprovalJSONBodyActionApprove PostToolApprovalJSONBodyAction = "approve"
-	PostToolApprovalJSONBodyActionCancel  PostToolApprovalJSONBodyAction = "cancel"
-	PostToolApprovalJSONBodyActionDeny    PostToolApprovalJSONBodyAction = "deny"
-)
-
-// Valid indicates whether the value is a known member of the PostToolApprovalJSONBodyAction enum.
-func (e PostToolApprovalJSONBodyAction) Valid() bool {
-	switch e {
-	case PostToolApprovalJSONBodyActionApprove:
-		return true
-	case PostToolApprovalJSONBodyActionCancel:
-		return true
-	case PostToolApprovalJSONBodyActionDeny:
-		return true
-	default:
-		return false
-	}
-}
-
 // AboutResponse Gateway metadata returned by GET /api/v1/about.
 type AboutResponse struct {
 	// Arch CPU architecture (GOARCH).
@@ -1716,11 +1755,8 @@ type ActivityEvent struct {
 	Timestamp time.Time `json:"timestamp"`
 
 	// Type Event category. "session_start" = new session began. "task_created" = a task was created. "task_updated" = a task completed or changed status.
-	Type ActivityEventType `json:"type"`
+	Type string `json:"type"`
 }
-
-// ActivityEventType Event category. "session_start" = new session began. "task_created" = a task was created. "task_updated" = a task completed or changed status.
-type ActivityEventType string
 
 // Agent An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the Go agentResponse struct and the TypeScript Agent interface in src/lib/api.ts. Core (locked) agents suppress soul/instructions in list responses and forbid identity mutations via PUT.
 type Agent struct {
@@ -1938,28 +1974,10 @@ type AgentOwnerUpdateResponse struct {
 	Success bool `json:"success"`
 }
 
-// AgentToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
-type AgentToolsCfg struct {
-	// Builtin Controls builtin tool visibility for this agent.
-	Builtin *struct {
-		// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
-		DefaultPolicy *AgentToolsCfgBuiltinDefaultPolicy `json:"default_policy,omitempty"`
-
-		// Policies Per-tool policy overrides. Keys are tool names or glob patterns (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
-		Policies *map[string]AgentToolsCfgBuiltinPolicies `json:"policies,omitempty"`
-	} `json:"builtin,omitempty"`
-
-	// Mcp MCP server bindings for this agent.
-	Mcp *struct {
-		// Servers List of MCP server bindings.
-		Servers *[]struct {
-			// Id MCP server identifier as registered in config.json.
-			Id string `json:"id"`
-
-			// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
-			Tools *[]string `json:"tools,omitempty"`
-		} `json:"servers,omitempty"`
-	} `json:"mcp,omitempty"`
+// AgentOwnershipUpdateRequest Request body for PATCH /api/v1/agents/{id}/ownership. Updates the owner_username field on a custom agent. Admin-only. System and core agents cannot have an owner assigned. Clearing the owner (empty string) requires the X-Confirm-Demote: 1 header.
+type AgentOwnershipUpdateRequest struct {
+	// OwnerUsername Username of the new owner. Empty string clears ownership (requires X-Confirm-Demote: 1 header to prevent accidents).
+	OwnerUsername *string `json:"owner_username,omitempty"`
 }
 
 // AgentToolsResponse Response from GET /api/v1/agents/{id}/tools and PUT /api/v1/agents/{id}/tools. Returns the agent's tool policy configuration plus the effective per-tool policy list.
@@ -2024,6 +2042,45 @@ type AgentToolsResponseToolsConfiguredPolicy string
 
 // AgentToolsResponseToolsEffectivePolicy The policy actually enforced at LLM-call time after fence and global policy overrides are applied.
 type AgentToolsResponseToolsEffectivePolicy string
+
+// AgentToolsUpdateRequest Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.default_policy + builtin.policies) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
+type AgentToolsUpdateRequest struct {
+	// Builtin Builtin tool policy configuration for this agent.
+	Builtin *struct {
+		// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Defaults to "allow" when omitted.
+		DefaultPolicy *AgentToolsUpdateRequestBuiltinDefaultPolicy `json:"default_policy,omitempty"`
+
+		// Mode Legacy format: "explicit" builds a deny-all policy with allow entries for each name in visible[]. "inherit" sets default_policy=allow. Ignored when default_policy is present.
+		Mode *AgentToolsUpdateRequestBuiltinMode `json:"mode,omitempty"`
+
+		// Policies Per-tool policy overrides. Keys are canonical tool names or glob patterns (e.g. "system.*"). Values are "allow", "ask", or "deny".
+		Policies *map[string]AgentToolsUpdateRequestBuiltinPolicies `json:"policies,omitempty"`
+
+		// Visible Legacy format: tool names to allow when mode="explicit". Ignored when default_policy is present.
+		Visible *[]string `json:"visible,omitempty"`
+	} `json:"builtin,omitempty"`
+
+	// Mcp MCP server bindings for this agent.
+	Mcp *struct {
+		// Servers List of MCP server bindings.
+		Servers *[]struct {
+			// Id MCP server identifier as registered in config.json.
+			Id string `json:"id"`
+
+			// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
+			Tools *[]string `json:"tools,omitempty"`
+		} `json:"servers,omitempty"`
+	} `json:"mcp,omitempty"`
+}
+
+// AgentToolsUpdateRequestBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Defaults to "allow" when omitted.
+type AgentToolsUpdateRequestBuiltinDefaultPolicy string
+
+// AgentToolsUpdateRequestBuiltinMode Legacy format: "explicit" builds a deny-all policy with allow entries for each name in visible[]. "inherit" sets default_policy=allow. Ignored when default_policy is present.
+type AgentToolsUpdateRequestBuiltinMode string
+
+// AgentToolsUpdateRequestBuiltinPolicies defines model for AgentToolsUpdateRequest.Builtin.Policies.
+type AgentToolsUpdateRequestBuiltinPolicies string
 
 // AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400.
 type AgentUpdateRequest struct {
@@ -2096,6 +2153,12 @@ type AppState struct {
 
 	// OnboardingComplete Whether the first-run onboarding wizard has been completed.
 	OnboardingComplete bool `json:"onboarding_complete"`
+}
+
+// AppStatePatchRequest Request body for PATCH /api/v1/state. Partial update to application state. Currently only supports marking onboarding as complete (onboarding_complete must be true — setting it to false is rejected 400).
+type AppStatePatchRequest struct {
+	// OnboardingComplete Mark onboarding as complete. Must be true — false is rejected with 400.
+	OnboardingComplete *bool `json:"onboarding_complete,omitempty"`
 }
 
 // AuditEntry A single audit log record from the JSONL audit log file (~/.omnipus/system/audit.jsonl). Matches the Go pkg/audit.Entry struct.
@@ -2219,6 +2282,15 @@ type ChannelTestResponse struct {
 
 	// Success True when all required credential fields are present.
 	Success bool `json:"success"`
+}
+
+// CredentialSetRequest Request body for POST /api/v1/credentials. Stores an encrypted credential. The key must be non-empty; the value is stored AES-256-GCM encrypted.
+type CredentialSetRequest struct {
+	// Key Credential key name.
+	Key string `json:"key"`
+
+	// Value Credential value (stored encrypted).
+	Value string `json:"value"`
 }
 
 // DevicesResponse Response from GET /api/v1/devices. Lists both pending pairing requests and already-paired devices.
@@ -2444,6 +2516,9 @@ type McpServerCreate struct {
 
 	// Command Command to start the MCP server process (stdio transport).
 	Command string `json:"command"`
+
+	// Env Environment variable overrides passed to the MCP server process. Only applicable for stdio transport. Each key-value pair is injected into the server process environment at startup.
+	Env *map[string]string `json:"env,omitempty"`
 
 	// Name Human-readable server name.
 	Name string `json:"name"`
@@ -2707,6 +2782,15 @@ type Provider struct {
 // ProviderStatus "connected" when at least one API key is configured for this provider. "disconnected" when no key is available or on the fallback default entry. "error" when the provider is configured but the upstream returned a non-retryable error.
 type ProviderStatus string
 
+// ProviderUpdateRequest Request body for PUT /api/v1/providers/{id}. Adds or updates an LLM provider configuration. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key.
+type ProviderUpdateRequest struct {
+	// ApiKey API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json. Required when adding a new provider; optional when updating an existing one (omit to leave the current key unchanged).
+	ApiKey *string `json:"api_key,omitempty"`
+
+	// Model Default model to use for this provider. Defaults to "default" when not specified on new providers.
+	Model *string `json:"model,omitempty"`
+}
+
 // RateLimitsResponse Response from GET /api/v1/security/rate-limits. Returns the current rate-limit configuration and the live daily LLM cost.
 type RateLimitsResponse struct {
 	// DailyCostCap Configured daily cost cap in USD. 0 means unlimited.
@@ -2768,6 +2852,12 @@ type RegisterAdminRequest struct {
 	Username string `json:"username"`
 }
 
+// RestoreBackupRequest Request body for POST /api/v1/restore. Extracts a backup tar.gz archive over ~/.omnipus/, skipping config.json to preserve current settings.
+type RestoreBackupRequest struct {
+	// Filename Name of the backup file (without path). Must not contain path separators or traversal sequences. Must end with .tar.gz.
+	Filename string `json:"filename"`
+}
+
 // RetentionConfig Session log retention configuration returned by GET /api/v1/security/retention.
 type RetentionConfig struct {
 	// Disabled When true, retention sweeps are disabled and session logs are kept forever.
@@ -2799,12 +2889,6 @@ type RetentionUpdateResponse struct {
 
 	// SessionDays Number of days to retain session logs. 0 = system default (90 days).
 	SessionDays int `json:"session_days"`
-}
-
-// RotateTokenResponse Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
-type RotateTokenResponse struct {
-	// Token The new gateway bearer token (64 hex characters, 32 random bytes). Store securely; this is the only time it is returned.
-	Token string `json:"token"`
 }
 
 // SandboxConfig Sandbox configuration returned by GET /api/v1/security/sandbox-config and as part of PUT /api/v1/security/sandbox-config responses.
@@ -3278,6 +3362,12 @@ type Skill struct {
 // SkillStatus "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
 type SkillStatus string
 
+// SkillInstallRequest Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by name.
+type SkillInstallRequest struct {
+	// Name Skill name to install from the ClawHub registry.
+	Name string `json:"name"`
+}
+
 // SkillTrustResponse Skill trust level returned by GET /api/v1/security/skill-trust.
 type SkillTrustResponse struct {
 	// Level Current skill trust level. Controls how unverified community skills are handled.
@@ -3313,6 +3403,12 @@ type SkillTrustUpdateResponse struct {
 
 // SkillTrustUpdateResponseAppliedLevel The skill trust level now active.
 type SkillTrustUpdateResponseAppliedLevel string
+
+// SseChatRequest Request body for POST /api/v1/chat (SSE streaming endpoint). Sends a user message to the agent and streams the response via Server-Sent Events.
+type SseChatRequest struct {
+	// Message The user message to send to the agent. Must not be empty.
+	Message string `json:"message"`
+}
 
 // StorageStats Storage statistics returned by GET /api/v1/storage/stats. Reports session count, workspace disk usage, memory entry count, and any non-fatal warnings encountered while collecting the stats.
 type StorageStats struct {
@@ -3401,6 +3497,75 @@ type TaskAcceptedResponse struct {
 // TaskAcceptedResponseStatus Acceptance status. Always "accepted".
 type TaskAcceptedResponseStatus string
 
+// TaskCreateRequest Request body for POST /api/v1/tasks. Creates a new task. The fields name/description are backward-compat aliases for title/prompt.
+type TaskCreateRequest struct {
+	// AgentId Agent to assign the task to.
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// Description Backward-compat alias for prompt.
+	Description *string `json:"description,omitempty"`
+
+	// Name Backward-compat alias for title.
+	Name *string `json:"name,omitempty"`
+
+	// ParentTaskId Parent task ID (for creating subtasks).
+	ParentTaskId *string `json:"parent_task_id,omitempty"`
+
+	// Priority Task priority (higher = more urgent). Defaults to 3.
+	Priority *int `json:"priority,omitempty"`
+
+	// Prompt Task description / prompt for the agent.
+	Prompt *string `json:"prompt,omitempty"`
+
+	// Title Task title.
+	Title string `json:"title"`
+
+	// TriggerType How the task was triggered. Defaults to "manual".
+	TriggerType *string `json:"trigger_type,omitempty"`
+}
+
+// TaskUpdateRequest Request body for PUT /api/v1/tasks/{id}. Updates fields on an existing task. All fields are optional — only provided fields are updated. The fields name/description are backward-compat aliases for title/result.
+type TaskUpdateRequest struct {
+	// AgentId Agent to re-assign the task to.
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// Artifacts List of artifact paths produced by the task.
+	Artifacts *[]string `json:"artifacts,omitempty"`
+
+	// CompletedAt When the task completed execution.
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+
+	// Description Backward-compat alias for result.
+	Description *string `json:"description,omitempty"`
+
+	// Name Backward-compat alias for title.
+	Name *string `json:"name,omitempty"`
+
+	// Priority New task priority.
+	Priority *int `json:"priority,omitempty"`
+
+	// Result Task result or output summary.
+	Result *string `json:"result,omitempty"`
+
+	// StartedAt When the task started execution.
+	StartedAt *time.Time `json:"started_at,omitempty"`
+
+	// Status New task status.
+	Status *string `json:"status,omitempty"`
+
+	// Title New task title.
+	Title *string `json:"title,omitempty"`
+}
+
+// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, or cancelling it. For tools with RequiresAdminAsk=true the caller must hold the admin role (FR-015).
+type ToolApprovalActionRequest struct {
+	// Action Action to take on this approval.
+	Action ToolApprovalActionRequestAction `json:"action"`
+}
+
+// ToolApprovalActionRequestAction Action to take on this approval.
+type ToolApprovalActionRequestAction string
+
 // ToolApprovalResponse Response from POST /api/v1/tool-approvals/{approval_id}. Confirms that the approval action was processed.
 type ToolApprovalResponse struct {
 	// Action The action that was applied.
@@ -3479,15 +3644,9 @@ type User struct {
 // UserRole RBAC role. Case-sensitive.
 type UserRole string
 
-// UserContextRequest Request body for PUT /api/v1/user-context. Replaces the entire content of USER.md in the default workspace. Passing an empty string clears the file.
-type UserContextRequest struct {
-	// Content Full replacement content for USER.md. May be empty to clear the file. No maximum length is enforced at the schema level — the underlying filesystem write via fileutil.WriteFileAtomic provides the practical limit.
-	Content string `json:"content"`
-}
-
-// UserContextResponse Response from GET /api/v1/user-context and PUT /api/v1/user-context. Returns the current content of USER.md in the default workspace. An empty string means the file does not exist or has not been written yet.
-type UserContextResponse struct {
-	// Content Current content of USER.md. Empty string when the file does not exist or has not been set yet.
+// UserContextUpdateRequest Request body for PUT /api/v1/user-context. Replaces the full content of USER.md — the persistent user context injected into every agent prompt.
+type UserContextUpdateRequest struct {
+	// Content New content for USER.md. May be an empty string to clear the user context. No size limit enforced here (1 MB body limit applied by the HTTP layer).
 	Content string `json:"content"`
 }
 
@@ -3599,15 +3758,6 @@ type ValidateTokenResponse struct {
 // ValidateTokenResponseRole The RBAC role of the authenticated user.
 type ValidateTokenResponseRole string
 
-// VersionResponse Response from GET /api/v1/version. Returns build identity information. Used by the frontend to detect version drift and show "New version available" prompts (issue #110). No authentication required.
-type VersionResponse struct {
-	// BuildSha VCS revision SHA embedded at build time via debug.ReadBuildInfo(). Value is "dev" when built outside a version-controlled tree or when vcs.revision is not set (e.g. go run).
-	BuildSha string `json:"build_sha"`
-
-	// Version Omnipus gateway version string (e.g. "0.1.0" or "dev").
-	Version string `json:"version"`
-}
-
 // N400BadRequest Standard error envelope returned by all non-2xx responses.
 type N400BadRequest = ErrorResponse
 
@@ -3638,32 +3788,11 @@ type N503ServiceUnavailable = ErrorResponse
 // bearerAuthContextKey is the context key for BearerAuth security scheme
 type bearerAuthContextKey string
 
-// PatchAgentOwnershipJSONBody defines parameters for PatchAgentOwnership.
-type PatchAgentOwnershipJSONBody struct {
-	// OwnerUsername Username of the new owner. Empty string clears ownership (requires X-Confirm-Demote header).
-	OwnerUsername *string `json:"owner_username,omitempty"`
-}
-
 // ConfigureChannelJSONBody defines parameters for ConfigureChannel.
 type ConfigureChannelJSONBody map[string]interface{}
 
-// SetCredentialJSONBody defines parameters for SetCredential.
-type SetCredentialJSONBody struct {
-	// Key Credential key name.
-	Key string `json:"key"`
-
-	// Value Credential value (stored encrypted).
-	Value string `json:"value"`
-}
-
 // DeleteCredential200JSONResponseBodyStatus defines parameters for DeleteCredential.
 type DeleteCredential200JSONResponseBodyStatus string
-
-// RestoreBackupJSONBody defines parameters for RestoreBackup.
-type RestoreBackupJSONBody struct {
-	// Filename Name of the backup file (without path).
-	Filename string `json:"filename"`
-}
 
 // RestoreBackup200JSONResponseBodyStatus defines parameters for RestoreBackup.
 type RestoreBackup200JSONResponseBodyStatus string
@@ -3704,12 +3833,6 @@ type ListSessions200JSONResponseBody struct {
 // ClearAllSessions200JSONResponseBodyStatus defines parameters for ClearAllSessions.
 type ClearAllSessions200JSONResponseBodyStatus string
 
-// PatchAppStateJSONBody defines parameters for PatchAppState.
-type PatchAppStateJSONBody struct {
-	// OnboardingComplete Mark onboarding as complete.
-	OnboardingComplete *bool `json:"onboarding_complete,omitempty"`
-}
-
 // ListTasksParams defines parameters for ListTasks.
 type ListTasksParams struct {
 	// Status Filter tasks by status.
@@ -3718,33 +3841,6 @@ type ListTasksParams struct {
 
 // ListTasksParamsStatus defines parameters for ListTasks.
 type ListTasksParamsStatus string
-
-// CreateTaskJSONBody defines parameters for CreateTask.
-type CreateTaskJSONBody struct {
-	// AgentId Agent to assign the task to.
-	AgentId *string `json:"agent_id,omitempty"`
-
-	// ParentTaskId Parent task ID (for creating subtasks).
-	ParentTaskId *string `json:"parent_task_id,omitempty"`
-
-	// Priority Task priority (higher = more urgent).
-	Priority *int `json:"priority,omitempty"`
-
-	// Prompt Task description / prompt for the agent.
-	Prompt string `json:"prompt"`
-
-	// Title Task title.
-	Title string `json:"title"`
-}
-
-// PostToolApprovalJSONBody defines parameters for PostToolApproval.
-type PostToolApprovalJSONBody struct {
-	// Action Action to take on this approval.
-	Action PostToolApprovalJSONBodyAction `json:"action"`
-}
-
-// PostToolApprovalJSONBodyAction defines parameters for PostToolApproval.
-type PostToolApprovalJSONBodyAction string
 
 // UploadFilesMultipartBody defines parameters for UploadFiles.
 type UploadFilesMultipartBody struct {
@@ -3765,13 +3861,13 @@ type UploadFilesParams struct {
 type CreateAgentJSONRequestBody = AgentCreateRequest
 
 // PatchAgentOwnershipJSONRequestBody defines body for PatchAgentOwnership for application/json ContentType.
-type PatchAgentOwnershipJSONRequestBody PatchAgentOwnershipJSONBody
+type PatchAgentOwnershipJSONRequestBody = AgentOwnershipUpdateRequest
 
 // UpdateAgentJSONRequestBody defines body for UpdateAgent for application/json ContentType.
 type UpdateAgentJSONRequestBody = AgentUpdateRequest
 
 // UpdateAgentToolsJSONRequestBody defines body for UpdateAgentTools for application/json ContentType.
-type UpdateAgentToolsJSONRequestBody = AgentToolsCfg
+type UpdateAgentToolsJSONRequestBody = AgentToolsUpdateRequest
 
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = ChangePasswordRequest
@@ -3785,8 +3881,11 @@ type RegisterAdminJSONRequestBody = RegisterAdminRequest
 // ConfigureChannelJSONRequestBody defines body for ConfigureChannel for application/json ContentType.
 type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
 
+// PostChatJSONRequestBody defines body for PostChat for application/json ContentType.
+type PostChatJSONRequestBody = SseChatRequest
+
 // SetCredentialJSONRequestBody defines body for SetCredential for application/json ContentType.
-type SetCredentialJSONRequestBody SetCredentialJSONBody
+type SetCredentialJSONRequestBody = CredentialSetRequest
 
 // AddMcpServerJSONRequestBody defines body for AddMcpServer for application/json ContentType.
 type AddMcpServerJSONRequestBody = McpServerCreate
@@ -3797,8 +3896,11 @@ type CompleteOnboardingJSONRequestBody = OnboardingCompleteRequest
 // ProbeProviderJSONRequestBody defines body for ProbeProvider for application/json ContentType.
 type ProbeProviderJSONRequestBody = ProbeProviderRequest
 
+// UpdateProviderJSONRequestBody defines body for UpdateProvider for application/json ContentType.
+type UpdateProviderJSONRequestBody = ProviderUpdateRequest
+
 // RestoreBackupJSONRequestBody defines body for RestoreBackup for application/json ContentType.
-type RestoreBackupJSONRequestBody RestoreBackupJSONBody
+type RestoreBackupJSONRequestBody = RestoreBackupRequest
 
 // UpdateAuditLogToggleJSONRequestBody defines body for UpdateAuditLogToggle for application/json ContentType.
 type UpdateAuditLogToggleJSONRequestBody = AuditLogToggleRequest
@@ -3833,23 +3935,26 @@ type CreateSessionJSONRequestBody = SessionCreateRequest
 // RenameSessionJSONRequestBody defines body for RenameSession for application/json ContentType.
 type RenameSessionJSONRequestBody = SessionRenameRequest
 
+// InstallSkillJSONRequestBody defines body for InstallSkill for application/json ContentType.
+type InstallSkillJSONRequestBody = SkillInstallRequest
+
 // PatchAppStateJSONRequestBody defines body for PatchAppState for application/json ContentType.
-type PatchAppStateJSONRequestBody PatchAppStateJSONBody
+type PatchAppStateJSONRequestBody = AppStatePatchRequest
 
 // CreateTaskJSONRequestBody defines body for CreateTask for application/json ContentType.
-type CreateTaskJSONRequestBody CreateTaskJSONBody
+type CreateTaskJSONRequestBody = TaskCreateRequest
 
 // UpdateTaskJSONRequestBody defines body for UpdateTask for application/json ContentType.
-type UpdateTaskJSONRequestBody = Task
+type UpdateTaskJSONRequestBody = TaskUpdateRequest
 
 // PostToolApprovalJSONRequestBody defines body for PostToolApproval for application/json ContentType.
-type PostToolApprovalJSONRequestBody PostToolApprovalJSONBody
+type PostToolApprovalJSONRequestBody = ToolApprovalActionRequest
 
 // UploadFilesMultipartRequestBody defines body for UploadFiles for multipart/form-data ContentType.
 type UploadFilesMultipartRequestBody UploadFilesMultipartBody
 
 // PutUserContextJSONRequestBody defines body for PutUserContext for application/json ContentType.
-type PutUserContextJSONRequestBody = UserContextRequest
+type PutUserContextJSONRequestBody = UserContextUpdateRequest
 
 // CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
 type CreateUserJSONRequestBody = UserCreateRequest

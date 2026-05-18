@@ -7,7 +7,6 @@
 package gateway
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -61,8 +60,8 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	}
 
 	var body gen.OnboardingCompleteRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "OnboardingCompleteRequest", &body, validateEnabled) {
 		return
 	}
 
@@ -112,7 +111,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 
 	// Build the provider entry as a JSON object to inject into providers array.
 	// model defaults per provider when not specified in the onboarding request.
-	var providerModel string
+	providerModel := ""
 	if body.Provider.Model != nil {
 		providerModel = *body.Provider.Model
 	}
@@ -386,7 +385,7 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	var baseURL string
+	baseURL := ""
 	if body.Endpoint != nil {
 		baseURL = *body.Endpoint
 	}

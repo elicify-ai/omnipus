@@ -1,0 +1,71 @@
+title: AgentToolsUpdateRequest
+description: >
+  Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool
+  policy configuration. Supports both the current policy format
+  (builtin.default_policy + builtin.policies) and the legacy explicit/inherit
+  mode format (builtin.mode + builtin.visible) for backward compatibility.
+  Legacy fields are converted to policy format server-side before persisting.
+type: object
+properties:
+  builtin:
+    type: object
+    description: Builtin tool policy configuration for this agent.
+    properties:
+      default_policy:
+        type: string
+        enum:
+          - allow
+          - ask
+          - deny
+        description: >
+          Fallback policy applied to any builtin tool not listed in policies.
+          Defaults to "allow" when omitted.
+      policies:
+        type: object
+        additionalProperties:
+          type: string
+          enum:
+            - allow
+            - ask
+            - deny
+        description: >
+          Per-tool policy overrides. Keys are canonical tool names or glob
+          patterns (e.g. "system.*"). Values are "allow", "ask", or "deny".
+      mode:
+        type: string
+        description: >
+          Legacy format: "explicit" builds a deny-all policy with allow entries
+          for each name in visible[]. "inherit" sets default_policy=allow.
+          Ignored when default_policy is present.
+        enum:
+          - explicit
+          - inherit
+      visible:
+        type: array
+        items:
+          type: string
+        description: >
+          Legacy format: tool names to allow when mode="explicit".
+          Ignored when default_policy is present.
+  mcp:
+    type: object
+    description: MCP server bindings for this agent.
+    properties:
+      servers:
+        type: array
+        description: List of MCP server bindings.
+        items:
+          type: object
+          required:
+            - id
+          properties:
+            id:
+              type: string
+              description: MCP server identifier as registered in config.json.
+            tools:
+              type: array
+              items:
+                type: string
+              description: >
+                Specific tool names to expose from this server. When absent,
+                all tools from the server are available.

@@ -101,8 +101,8 @@ func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var body gen.UserCreateRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "UserCreateRequest", &body, validateEnabled) {
 		return
 	}
 	if !usernameRE.MatchString(body.Username) {
@@ -156,7 +156,7 @@ func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 			"username":      body.Username,
 			"password_hash": string(passwordHash),
 			"token_hash":    "", // no token at creation time — user must log in explicitly.
-			"role":          body.Role,
+			"role":          string(body.Role),
 		})
 		gw["users"] = users
 		return nil
@@ -173,10 +173,10 @@ func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 	if err := a.awaitReload(); err != nil {
 		emitUserAudit(r, a, "gateway.users."+body.Username, nil, map[string]any{
 			"username": body.Username,
-			"role":     body.Role,
+			"role":     string(body.Role),
 			"password": body.Password,
 		})
-		slog.Info("rest: user created (restart required)", "username", body.Username, "role", body.Role)
+		slog.Info("rest: user created (restart required)", "username", body.Username, "role", string(body.Role))
 		reqRestart := true
 		warningMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
 		w.WriteHeader(http.StatusCreated)
@@ -190,11 +190,11 @@ func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	emitUserAudit(r, a, "gateway.users."+body.Username, nil, map[string]any{
 		"username": body.Username,
-		"role":     body.Role,
+		"role":     string(body.Role),
 		"password": body.Password, // redactSensitive masks this as "***redacted***".
 	})
 
-	slog.Info("rest: user created", "username", body.Username, "role", body.Role)
+	slog.Info("rest: user created", "username", body.Username, "role", string(body.Role))
 	w.WriteHeader(http.StatusCreated)
 	jsonBodyOnlyCreated(w, gen.UserCreateResponse{
 		Username: body.Username,
@@ -338,8 +338,8 @@ func (a *restAPI) HandleUserChangeRole(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var body gen.UserRoleChangeRequest
-	if decErr := json.NewDecoder(r.Body).Decode(&body); decErr != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "UserRoleChangeRequest", &body, validateEnabled) {
 		return
 	}
 	if string(body.Role) != string(config.UserRoleAdmin) && string(body.Role) != string(config.UserRoleUser) {
@@ -351,7 +351,7 @@ func (a *restAPI) HandleUserChangeRole(w http.ResponseWriter, r *http.Request) {
 	if updErr := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		if err := a.findAndMutateUser(m, username, func(u map[string]any) error {
 			oldRole, _ = u["role"].(string)
-			u["role"] = body.Role
+			u["role"] = string(body.Role)
 			return nil
 		}); err != nil {
 			return err
@@ -381,8 +381,8 @@ func (a *restAPI) HandleUserChangeRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if reloadErr := a.awaitReload(); reloadErr != nil {
-		emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, body.Role)
-		slog.Info("rest: user role changed (restart required)", "username", username, "old", oldRole, "new", body.Role)
+		emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, string(body.Role))
+		slog.Info("rest: user role changed (restart required)", "username", username, "old", oldRole, "new", string(body.Role))
 		reqRestart := true
 		warningMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
 		jsonOK(w, gen.UserRoleChangeResponse{
@@ -393,9 +393,9 @@ func (a *restAPI) HandleUserChangeRole(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, body.Role)
+	emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, string(body.Role))
 
-	slog.Info("rest: user role changed", "username", username, "old", oldRole, "new", body.Role)
+	slog.Info("rest: user role changed", "username", username, "old", oldRole, "new", string(body.Role))
 	jsonOK(w, gen.UserRoleChangeResponse{
 		Username: username,
 		Role:     gen.UserRoleChangeResponseRole(body.Role),
@@ -434,8 +434,8 @@ func (a *restAPI) HandleUserResetPassword(w http.ResponseWriter, r *http.Request
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var body gen.UserResetPasswordRequest
-	if decErr := json.NewDecoder(r.Body).Decode(&body); decErr != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "UserResetPasswordRequest", &body, validateEnabled) {
 		return
 	}
 	if len(body.Password) < 8 {

@@ -22,7 +22,6 @@
 package gateway
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -204,29 +203,16 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		policyCfg.GlobalDefaultPolicy = sandboxDefault
 	}
 
-	// agentToolsResp is a concrete struct that matches the AgentToolsResponse wire shape.
-	// We define a local concrete struct to avoid the verbosity of constructing the
-	// anonymous struct type embedded in gen.AgentToolsResponse.
-	type toolEntry struct { // not-wire-format: local accumulator for gen.AgentToolsResponse.Tools anonymous struct; never emitted standalone
-		ConfiguredPolicy string `json:"configured_policy"`
-		EffectivePolicy  string `json:"effective_policy"`
-		FenceApplied     bool   `json:"fence_applied"`
-		Name             string `json:"name"`
-		RequiresAdminAsk bool   `json:"requires_admin_ask"`
-	}
-	type configBuiltin struct { // not-wire-format: local helper for gen.AgentToolsResponse.Config.Builtin anonymous struct; never emitted standalone
-		DefaultPolicy string            `json:"default_policy,omitempty"`
-		Policies      map[string]string `json:"policies,omitempty"`
-	}
-	type agentToolsResp struct { // not-wire-format: local concrete alias for gen.AgentToolsResponse to avoid anonymous-struct verbosity; serialises to the same JSON shape
-		AgentType string `json:"agent_type,omitempty"`
-		Config    struct {
-			Builtin *configBuiltin `json:"builtin,omitempty"`
-		} `json:"config"`
-		Tools []toolEntry `json:"tools"`
+	// Build tool entries as gen.AgentToolsResponse.Tools anonymous struct slice.
+	type toolsEntry = struct {
+		ConfiguredPolicy gen.AgentToolsResponseToolsConfiguredPolicy `json:"configured_policy"`
+		EffectivePolicy  gen.AgentToolsResponseToolsEffectivePolicy  `json:"effective_policy"`
+		FenceApplied     bool                                        `json:"fence_applied"`
+		Name             string                                      `json:"name"`
+		RequiresAdminAsk bool                                        `json:"requires_admin_ask"`
 	}
 
-	var toolEntries []toolEntry
+	var toolEntries []toolsEntry
 
 	if agentInstance != nil {
 		allTools := agentInstance.Tools.GetAll()
@@ -252,10 +238,10 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 			//   - effective_policy after fence is "ask"
 			fenceApplied := rak && agentType == "custom" && configuredPolicy == "allow" && effectivePolicy == "ask"
 
-			toolEntries = append(toolEntries, toolEntry{
+			toolEntries = append(toolEntries, toolsEntry{
 				Name:             name,
-				ConfiguredPolicy: configuredPolicy,
-				EffectivePolicy:  effectivePolicy,
+				ConfiguredPolicy: gen.AgentToolsResponseToolsConfiguredPolicy(configuredPolicy),
+				EffectivePolicy:  gen.AgentToolsResponseToolsEffectivePolicy(effectivePolicy),
 				FenceApplied:     fenceApplied,
 				RequiresAdminAsk: rak,
 			})
@@ -263,7 +249,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	}
 
 	if toolEntries == nil {
-		toolEntries = []toolEntry{}
+		toolEntries = []toolsEntry{}
 	}
 
 	// Build config section to match existing SPA contract.
@@ -279,18 +265,41 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		respPolicies = map[string]string{}
 	}
 
-	jsonOK(w, agentToolsResp{
-		AgentType: agentType,
+	// Convert map[string]string to map[string]AgentToolsResponseConfigBuiltinPolicies.
+	builtinPolicies := make(map[string]gen.AgentToolsResponseConfigBuiltinPolicies, len(respPolicies))
+	for k, v := range respPolicies {
+		builtinPolicies[k] = gen.AgentToolsResponseConfigBuiltinPolicies(v)
+	}
+	respBuiltinDefaultPolicy := gen.AgentToolsResponseConfigBuiltinDefaultPolicy(respDefaultPolicy)
+	agentTypeVal := gen.AgentToolsResponseAgentType(agentType)
+
+	// Build the AgentToolsResponse. The Tools field uses the same anonymous struct
+	// as gen.AgentToolsResponse.Tools, aliased as toolsEntry above.
+	resp := gen.AgentToolsResponse{
+		AgentType: &agentTypeVal,
 		Config: struct {
-			Builtin *configBuiltin `json:"builtin,omitempty"`
+			Builtin *struct {
+				DefaultPolicy *gen.AgentToolsResponseConfigBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]gen.AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
+			} `json:"builtin,omitempty"`
+			Mcp *struct {
+				Servers *[]struct {
+					Id    string    `json:"id"`
+					Tools *[]string `json:"tools,omitempty"`
+				} `json:"servers,omitempty"`
+			} `json:"mcp,omitempty"`
 		}{
-			Builtin: &configBuiltin{
-				DefaultPolicy: respDefaultPolicy,
-				Policies:      respPolicies,
+			Builtin: &struct {
+				DefaultPolicy *gen.AgentToolsResponseConfigBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]gen.AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
+			}{
+				DefaultPolicy: &respBuiltinDefaultPolicy,
+				Policies:      &builtinPolicies,
 			},
 		},
 		Tools: toolEntries,
-	})
+	}
+	jsonOK(w, resp)
 }
 
 // resolveConfiguredPolicy returns the agent-configured policy for toolName
@@ -339,26 +348,24 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse body.
-	var body struct { // not-wire-format: single-field approval action payload; no standalone schema in contracts; action enum is validated immediately below
-		Action string `json:"action"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var body gen.ToolApprovalActionRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "ToolApprovalActionRequest", &body, validateEnabled) {
 		return
 	}
 	var action ApprovalAction
 	switch body.Action {
-	case "approve":
+	case gen.ToolApprovalActionRequestActionApprove:
 		action = ApprovalActionApprove
-	case "deny":
+	case gen.ToolApprovalActionRequestActionDeny:
 		action = ApprovalActionDeny
-	case "cancel":
+	case gen.ToolApprovalActionRequestActionCancel:
 		action = ApprovalActionCancel
 	default:
 		jsonErr(
 			w,
 			http.StatusBadRequest,
-			fmt.Sprintf("unknown action %q: must be approve, deny, or cancel", body.Action),
+			fmt.Sprintf("unknown action %q: must be approve, deny, or cancel", string(body.Action)),
 		)
 		return
 	}
@@ -388,7 +395,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	if gone {
 		// Entry already in terminal state — FR-018.
 		slog.Warn("tool-approval: late action on resolved approval",
-			"approval_id", approvalID, "action", body.Action)
+			"approval_id", approvalID, "action", string(body.Action))
 		jsonErr(w, http.StatusGone, "approval already resolved")
 		return
 	}

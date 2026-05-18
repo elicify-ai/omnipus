@@ -7,7 +7,6 @@
 package gateway
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 
@@ -41,20 +40,14 @@ func (a *restAPI) HandleSandboxAuditLog(w http.ResponseWriter, r *http.Request) 
 		})
 
 	case http.MethodPut:
-		var body struct { // not-wire-format: uses *bool to detect missing field; gen.AuditLogToggleRequest uses bool which cannot distinguish absent from false
-			Enabled *bool `json:"enabled"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
-			return
-		}
-		if body.Enabled == nil {
-			jsonErr(w, http.StatusBadRequest, "enabled field is required")
+		var body gen.AuditLogToggleRequest
+		validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+		if !decodeAndValidate(w, r, "AuditLogToggleRequest", &body, validateEnabled) {
 			return
 		}
 
 		oldEnabled := a.agentLoop.GetConfig().Sandbox.AuditLog
-		newEnabled := *body.Enabled
+		newEnabled := body.Enabled
 
 		if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 			ensureMap(m, "sandbox")["audit_log"] = newEnabled

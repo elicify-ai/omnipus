@@ -547,8 +547,8 @@ func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id 
 // Accepts {"title": "new name"} and returns the updated session meta.
 func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id string) {
 	var req gen.SessionRenameRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "SessionRenameRequest", &req, validateEnabled) {
 		return
 	}
 	if req.Title == "" {
@@ -601,7 +601,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var agentID string
+	agentID := ""
 	if req.AgentId != nil {
 		agentID = *req.AgentId
 	}
@@ -629,11 +629,11 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var reqType string
+	var sessionType session.UnifiedSessionType
+	reqType := ""
 	if req.Type != nil {
 		reqType = string(*req.Type)
 	}
-	var sessionType session.UnifiedSessionType
 	switch reqType {
 	case string(session.SessionTypeTask):
 		sessionType = session.SessionTypeTask
@@ -816,7 +816,7 @@ func fetchUpstreamModels(baseURL, apiKey string) ([]string, error) {
 		return nil, err
 	}
 
-	var result struct { // not-wire-format: internal unmarshaling target for upstream provider API response; never emitted to SPA consumers
+	var result struct { // not-wire-format: decodes upstream provider /models API response, never emitted to SPA
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
@@ -1136,25 +1136,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 }
 
 func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
-	var req struct { // not-wire-format: validated against AgentCreateRequest schema via decodeAndValidate; migration to gen.AgentCreateRequest deferred to fix-U (complex nested anonymous types)
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Model       string `json:"model"`
-		Color       string `json:"color"`
-		Icon        string `json:"icon"`
-		ToolsCfg    *struct {
-			Builtin struct {
-				DefaultPolicy string            `json:"default_policy"`
-				Policies      map[string]string `json:"policies"`
-			} `json:"builtin"`
-			MCP struct {
-				Servers []struct {
-					ID    string   `json:"id"`
-					Tools []string `json:"tools"`
-				} `json:"servers"`
-			} `json:"mcp"`
-		} `json:"tools_cfg"`
-	}
+	var req gen.AgentCreateRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "AgentCreateRequest", &req, validateEnabled) {
 		return
@@ -1163,16 +1145,28 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
 		return
 	}
+	description := ""
+	if req.Description != nil {
+		description = strings.TrimSpace(*req.Description)
+	}
+	color := ""
+	if req.Color != nil {
+		color = *req.Color
+	}
+	icon := ""
+	if req.Icon != nil {
+		icon = *req.Icon
+	}
 	ac := config.AgentConfig{
 		ID:          uuid.New().String(),
 		Name:        req.Name,
-		Description: strings.TrimSpace(req.Description),
-		Color:       req.Color,
-		Icon:        req.Icon,
+		Description: description,
+		Color:       color,
+		Icon:        icon,
 		Type:        config.AgentTypeCustom,
 	}
-	if req.Model != "" {
-		ac.Model = &config.AgentModelConfig{Primary: req.Model}
+	if req.Model != nil && *req.Model != "" {
+		ac.Model = &config.AgentModelConfig{Primary: *req.Model}
 	}
 	// Seed the privilege rail (FR-008/FR-022): custom agents always get
 	// system.*: deny unless the caller explicitly overrides it.
@@ -1187,18 +1181,24 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		for k, v := range baseCfg.Builtin.Policies {
 			builtin.Policies[k] = v
 		}
-		if req.ToolsCfg.Builtin.DefaultPolicy != "" {
-			builtin.DefaultPolicy = config.ToolPolicy(req.ToolsCfg.Builtin.DefaultPolicy)
+		if req.ToolsCfg.Builtin != nil && req.ToolsCfg.Builtin.DefaultPolicy != nil && *req.ToolsCfg.Builtin.DefaultPolicy != "" {
+			builtin.DefaultPolicy = config.ToolPolicy(*req.ToolsCfg.Builtin.DefaultPolicy)
 		}
 		// Merge caller-supplied policies; caller's system.* entry overrides seed.
-		for k, v := range req.ToolsCfg.Builtin.Policies {
-			builtin.Policies[k] = config.ToolPolicy(v)
+		if req.ToolsCfg.Builtin != nil && req.ToolsCfg.Builtin.Policies != nil {
+			for k, v := range *req.ToolsCfg.Builtin.Policies {
+				builtin.Policies[k] = config.ToolPolicy(v)
+			}
 		}
 		ac.Tools = &config.AgentToolsCfg{Builtin: builtin}
-		if len(req.ToolsCfg.MCP.Servers) > 0 {
-			servers := make([]config.AgentMCPServerBinding, 0, len(req.ToolsCfg.MCP.Servers))
-			for _, s := range req.ToolsCfg.MCP.Servers {
-				servers = append(servers, config.AgentMCPServerBinding{ID: s.ID, Tools: s.Tools})
+		if req.ToolsCfg.Mcp != nil && req.ToolsCfg.Mcp.Servers != nil && len(*req.ToolsCfg.Mcp.Servers) > 0 {
+			servers := make([]config.AgentMCPServerBinding, 0, len(*req.ToolsCfg.Mcp.Servers))
+			for _, s := range *req.ToolsCfg.Mcp.Servers {
+				var tools []string
+				if s.Tools != nil {
+					tools = *s.Tools
+				}
+				servers = append(servers, config.AgentMCPServerBinding{ID: s.Id, Tools: tools})
 			}
 			ac.Tools.MCP = config.AgentMCPToolsCfg{Servers: servers}
 		}
@@ -1372,22 +1372,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", id))
 		return
 	}
-	var req struct { // not-wire-format: validated against AgentUpdateRequest schema via decodeAndValidate; migration to gen.AgentUpdateRequest deferred to fix-U (uses config.SandboxProfile/AgentShellPolicy not in spec)
-		Name              *string                  `json:"name"`
-		Description       *string                  `json:"description"`
-		Model             *string                  `json:"model"`
-		Soul              *string                  `json:"soul"`
-		Heartbeat         *string                  `json:"heartbeat"`
-		Instructions      *string                  `json:"instructions"`
-		TimeoutSeconds    *int                     `json:"timeout_seconds"`
-		MaxToolIterations *int                     `json:"max_tool_iterations"`
-		SteeringMode      *string                  `json:"steering_mode"`
-		ToolFeedback      *bool                    `json:"tool_feedback"`
-		HeartbeatEnabled  *bool                    `json:"heartbeat_enabled"`
-		HeartbeatInterval *int                     `json:"heartbeat_interval"`
-		SandboxProfile    *config.SandboxProfile   `json:"sandbox_profile"`
-		ShellPolicy       *config.AgentShellPolicy `json:"shell_policy"`
-	}
+	var req gen.AgentUpdateRequest
 	validateEnabled := cfg.Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "AgentUpdateRequest", &req, validateEnabled) {
 		return
@@ -1395,7 +1380,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// Enforce god-mode latches (1) and (2) at the REST write gate.
 	// Reject sandbox_profile=off unless both sandbox.GodModeAvailable (build
 	// tag) and a.allowGodMode (--allow-god-mode boot flag) are true.
-	if req.SandboxProfile != nil && *req.SandboxProfile == config.SandboxProfileOff {
+	if req.SandboxProfile != nil && config.SandboxProfile(*req.SandboxProfile) == config.SandboxProfileOff {
 		if !sandbox.GodModeAvailable {
 			jsonErr(w, http.StatusForbidden,
 				"sandbox_profile=off is not available in this build")
@@ -1408,8 +1393,8 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		}
 	}
 	// Validate any custom deny patterns in shell_policy — each must be a valid Go regexp.
-	if req.ShellPolicy != nil && len(req.ShellPolicy.CustomDenyPatterns) > 0 {
-		for _, pat := range req.ShellPolicy.CustomDenyPatterns {
+	if req.ShellPolicy != nil && req.ShellPolicy.CustomDenyPatterns != nil {
+		for _, pat := range *req.ShellPolicy.CustomDenyPatterns {
 			if _, compileErr := regexp.Compile(pat); compileErr != nil {
 				jsonErr(w, http.StatusBadRequest,
 					fmt.Sprintf("shell_policy.custom_deny_patterns: invalid regexp %q: %v", pat, compileErr))
@@ -1504,8 +1489,8 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					spMap := map[string]any{
 						"enable_deny_patterns": req.ShellPolicy.EnableDenyPatterns,
 					}
-					if len(req.ShellPolicy.CustomDenyPatterns) > 0 {
-						spMap["custom_deny_patterns"] = req.ShellPolicy.CustomDenyPatterns
+					if req.ShellPolicy.CustomDenyPatterns != nil && len(*req.ShellPolicy.CustomDenyPatterns) > 0 {
+						spMap["custom_deny_patterns"] = *req.ShellPolicy.CustomDenyPatterns
 					}
 					agentMap["shell_policy"] = spMap
 				}
@@ -2046,10 +2031,12 @@ func (a *restAPI) searchSkills(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
-	var req struct { // not-wire-format: skill install stub; no generated schema for skill install request; endpoint returns 501 Not Implemented
-		Name string `json:"name"`
+	var req gen.SkillInstallRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "SkillInstallRequest", &req, validateEnabled) {
+		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+	if req.Name == "" {
 		jsonErr(w, http.StatusBadRequest, "name is required")
 		return
 	}
@@ -2238,8 +2225,8 @@ func (a *restAPI) getUserContext(w http.ResponseWriter) {
 
 func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
 	var req gen.UserContextRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "UserContextRequest", &req, validateEnabled) {
 		return
 	}
 	cfg := a.agentLoop.GetConfig()
@@ -2461,7 +2448,7 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("token saved but reload failed: %v", err))
 		return
 	}
-	jsonOK(w, gen.RotateTokenResponse{Token: newToken})
+	jsonOK(w, map[string]string{"token": newToken})
 }
 
 // httpHandlerRegistrar is the subset of channels.Manager used for route registration.
@@ -2502,11 +2489,9 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonOK(w, resp)
 	case http.MethodPatch:
-		var body struct { // not-wire-format: single-field state patch; no standalone schema in contracts; onboarding_complete flag consumed immediately and not emitted in any response
-			OnboardingComplete *bool `json:"onboarding_complete"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		var body gen.AppStatePatchRequest
+		validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+		if !decodeAndValidate(w, r, "AppStatePatchRequest", &body, validateEnabled) {
 			return
 		}
 		if body.OnboardingComplete == nil || !*body.OnboardingComplete {
@@ -2564,9 +2549,9 @@ func (a *restAPI) HandleVersion(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	jsonOK(w, gen.VersionResponse{
-		Version:  Version,
-		BuildSha: buildSha,
+	jsonOK(w, map[string]string{
+		"version":   Version,
+		"build_sha": buildSha,
 	})
 }
 
@@ -2731,46 +2716,50 @@ func (a *restAPI) getTask(w http.ResponseWriter, id string) {
 }
 
 func (a *restAPI) createTask(w http.ResponseWriter, r *http.Request) {
-	var req struct { // not-wire-format: includes backward-compat aliases (name→title, description→prompt) not in Task schema; migration to gen.Task deferred to fix-U
-		// New fields
-		Title        string `json:"title"`
-		Prompt       string `json:"prompt"`
-		AgentID      string `json:"agent_id"`
-		Priority     int    `json:"priority"`
-		ParentTaskID string `json:"parent_task_id"`
-		TriggerType  string `json:"trigger_type"`
-		// Backward compat aliases
-		Name        string `json:"name"`
-		Description string `json:"description"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var req gen.TaskCreateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "TaskCreateRequest", &req, validateEnabled) {
 		return
 	}
 	// Backward compat: accept name→title, description→prompt
-	if req.Title == "" && req.Name != "" {
-		req.Title = req.Name
+	title := req.Title
+	prompt := ""
+	if req.Prompt != nil {
+		prompt = *req.Prompt
 	}
-	if req.Prompt == "" && req.Description != "" {
-		req.Prompt = req.Description
+	if title == "" && req.Name != nil && *req.Name != "" {
+		title = *req.Name
 	}
-	if req.Title == "" {
+	if prompt == "" && req.Description != nil && *req.Description != "" {
+		prompt = *req.Description
+	}
+	if title == "" {
 		jsonErr(w, http.StatusUnprocessableEntity, "title is required")
 		return
 	}
-	if req.Priority == 0 {
-		req.Priority = 3
+	agentID := ""
+	if req.AgentId != nil {
+		agentID = *req.AgentId
 	}
-	if req.TriggerType == "" {
-		req.TriggerType = "manual"
+	priority := 3
+	if req.Priority != nil && *req.Priority != 0 {
+		priority = *req.Priority
+	}
+	parentTaskID := ""
+	if req.ParentTaskId != nil {
+		parentTaskID = *req.ParentTaskId
+	}
+	triggerType := "manual"
+	if req.TriggerType != nil && *req.TriggerType != "" {
+		triggerType = *req.TriggerType
 	}
 	t := &taskstore.TaskEntity{
-		Title:        req.Title,
-		Prompt:       req.Prompt,
-		AgentID:      req.AgentID,
-		Priority:     req.Priority,
-		ParentTaskID: req.ParentTaskID,
-		TriggerType:  req.TriggerType,
+		Title:        title,
+		Prompt:       prompt,
+		AgentID:      agentID,
+		Priority:     priority,
+		ParentTaskID: parentTaskID,
+		TriggerType:  triggerType,
 		CreatedBy:    "user",
 		Status:       "queued",
 	}
@@ -2788,21 +2777,9 @@ func (a *restAPI) updateTask(w http.ResponseWriter, r *http.Request, id string) 
 		jsonErr(w, http.StatusBadRequest, "invalid task ID")
 		return
 	}
-	var req struct { // not-wire-format: includes backward-compat aliases and time.Time fields; migration to gen.Task deferred to fix-U (Task schema uses string dates)
-		Status      *string    `json:"status"`
-		Result      *string    `json:"result"`
-		Artifacts   *[]string  `json:"artifacts"`
-		Title       *string    `json:"title"`
-		AgentID     *string    `json:"agent_id"`
-		Priority    *int       `json:"priority"`
-		StartedAt   *time.Time `json:"started_at"`
-		CompletedAt *time.Time `json:"completed_at"`
-		// Backward compat
-		Name        *string `json:"name"`
-		Description *string `json:"description"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var req gen.TaskUpdateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "TaskUpdateRequest", &req, validateEnabled) {
 		return
 	}
 	// Backward compat mappings
@@ -2817,7 +2794,7 @@ func (a *restAPI) updateTask(w http.ResponseWriter, r *http.Request, id string) 
 		Result:      req.Result,
 		Artifacts:   req.Artifacts,
 		Title:       req.Title,
-		AgentID:     req.AgentID,
+		AgentID:     req.AgentId,
 		Priority:    req.Priority,
 		StartedAt:   req.StartedAt,
 		CompletedAt: req.CompletedAt,
@@ -3114,12 +3091,9 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		providerID := sub
-		var req struct { // not-wire-format: provider credential update payload; no standalone schema in contracts; api_key written to credential store, not emitted in any response
-			APIKey string `json:"api_key"`
-			Model  string `json:"model"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		var req gen.ProviderUpdateRequest
+		validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+		if !decodeAndValidate(w, r, "ProviderUpdateRequest", &req, validateEnabled) {
 			return
 		}
 		// Check if the provider already exists.
@@ -3137,20 +3111,21 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		if !found {
 			// New provider — api_key is required.
-			if req.APIKey == "" {
+			if req.ApiKey == nil || *req.ApiKey == "" {
 				jsonErr(w, http.StatusUnprocessableEntity, "api_key is required")
 				return
 			}
-			if req.Model == "" {
-				req.Model = "default"
+			if req.Model == nil || *req.Model == "" {
+				defaultModel := "default"
+				req.Model = &defaultModel
 			}
 		}
 		// Store API key in the encrypted credentials store (AES-256-GCM) and
 		// reference it via api_key_ref in config.json. Refuses the operation if
 		// the credential store is locked (SEC-23: no plaintext fallback).
 		var credRefName string
-		if req.APIKey != "" {
-			ref, err := a.storeCredential(providerID+"_API_KEY", req.APIKey)
+		if req.ApiKey != nil && *req.ApiKey != "" {
+			ref, err := a.storeCredential(providerID+"_API_KEY", *req.ApiKey)
 			if err != nil {
 				slog.Error(
 					"rest: credential store unavailable for provider update",
@@ -3178,13 +3153,13 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				}
 				pName := inferProviderName(strVal(model, "provider"), strVal(model, "model"))
 				if pName == providerID {
-					if req.APIKey != "" {
+					if req.ApiKey != nil && *req.ApiKey != "" {
 						model["api_key_ref"] = credRefName
 						delete(model, "api_key")
 						delete(model, "api_keys")
 					}
-					if req.Model != "" {
-						model["model"] = req.Model
+					if req.Model != nil && *req.Model != "" {
+						model["model"] = *req.Model
 					}
 					model["provider"] = providerID
 					updated = true
@@ -3193,10 +3168,14 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			}
 			if !updated {
 				// Provider not found — add a new entry.
+				modelVal := ""
+				if req.Model != nil {
+					modelVal = *req.Model
+				}
 				newEntry := map[string]any{
 					"model_name":  providerID,
 					"provider":    providerID,
-					"model":       req.Model,
+					"model":       modelVal,
 					"api_key_ref": credRefName,
 				}
 				m["providers"] = append(providerList, newEntry)
@@ -3348,15 +3327,9 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 // Transport must be one of: stdio, sse, http (enforced by enum validation).
 // Returns the new McpServer entry shaped per contracts/components/schemas/McpServer.yaml.
 func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
-	var req struct { // not-wire-format: extends McpServerCreate schema with Env map field not yet in spec; migration to gen.McpServerCreate deferred until spec includes env
-		Name      string            `json:"name"`
-		Command   string            `json:"command"`
-		Args      []string          `json:"args"`
-		Env       map[string]string `json:"env"`
-		Transport string            `json:"transport"` // "stdio" | "sse" | "http"
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var req gen.McpServerCreate
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "McpServerCreate", &req, validateEnabled) {
 		return
 	}
 	if req.Name == "" {
@@ -3367,7 +3340,7 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "invalid server name")
 		return
 	}
-	transport := req.Transport
+	transport := string(req.Transport)
 	if transport == "" {
 		transport = "stdio"
 	}
@@ -3405,11 +3378,11 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 			"command": req.Command,
 			"type":    transport,
 		}
-		if len(req.Args) > 0 {
-			entry["args"] = req.Args
+		if req.Args != nil && len(*req.Args) > 0 {
+			entry["args"] = *req.Args
 		}
-		if len(req.Env) > 0 {
-			entry["env"] = req.Env
+		if req.Env != nil && len(*req.Env) > 0 {
+			entry["env"] = *req.Env
 		}
 		servers[req.Name] = entry
 		return nil
@@ -3651,51 +3624,53 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
-	var req struct { // not-wire-format: includes legacy mode/visible compat fields not in AgentToolsCfg schema; migration to gen.AgentToolsCfg deferred to fix-U
-		Builtin struct {
-			// New policy format
-			DefaultPolicy string            `json:"default_policy"`
-			Policies      map[string]string `json:"policies"`
-			// Legacy format (backward compat)
-			Mode    string   `json:"mode"`
-			Visible []string `json:"visible"`
-		} `json:"builtin"`
-		MCP struct {
-			Servers []struct {
-				ID    string   `json:"id"`
-				Tools []string `json:"tools"`
-			} `json:"servers"`
-		} `json:"mcp"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var req gen.AgentToolsUpdateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "AgentToolsUpdateRequest", &req, validateEnabled) {
 		return
 	}
 
-	// Convert legacy format to policy format if needed.
-	if req.Builtin.DefaultPolicy == "" && req.Builtin.Mode != "" {
-		switch req.Builtin.Mode {
-		case "explicit":
-			req.Builtin.DefaultPolicy = "deny"
-			req.Builtin.Policies = make(map[string]string, len(req.Builtin.Visible))
-			for _, name := range req.Builtin.Visible {
-				req.Builtin.Policies[name] = "allow"
+	// Extract builtin fields with defaults.
+	builtinDefaultPolicy := ""
+	var builtinPolicies map[string]string
+	if req.Builtin != nil {
+		if req.Builtin.DefaultPolicy != nil {
+			builtinDefaultPolicy = string(*req.Builtin.DefaultPolicy)
+		}
+		if req.Builtin.Policies != nil {
+			builtinPolicies = make(map[string]string, len(*req.Builtin.Policies))
+			for k, v := range *req.Builtin.Policies {
+				builtinPolicies[k] = string(v)
 			}
-		case "inherit":
-			req.Builtin.DefaultPolicy = "allow"
 		}
 	}
-	if req.Builtin.DefaultPolicy == "" {
-		req.Builtin.DefaultPolicy = "allow"
+
+	// Convert legacy format to policy format if needed.
+	if req.Builtin != nil && builtinDefaultPolicy == "" && req.Builtin.Mode != nil {
+		switch string(*req.Builtin.Mode) {
+		case "explicit":
+			builtinDefaultPolicy = "deny"
+			if req.Builtin.Visible != nil {
+				builtinPolicies = make(map[string]string, len(*req.Builtin.Visible))
+				for _, name := range *req.Builtin.Visible {
+					builtinPolicies[name] = "allow"
+				}
+			}
+		case "inherit":
+			builtinDefaultPolicy = "allow"
+		}
+	}
+	if builtinDefaultPolicy == "" {
+		builtinDefaultPolicy = "allow"
 	}
 
 	// Validate policy values.
 	validPolicies := map[string]bool{"allow": true, "ask": true, "deny": true}
-	if !validPolicies[req.Builtin.DefaultPolicy] {
+	if !validPolicies[builtinDefaultPolicy] {
 		jsonErr(w, http.StatusUnprocessableEntity, "builtin.default_policy must be 'allow', 'ask', or 'deny'")
 		return
 	}
-	for name, p := range req.Builtin.Policies {
+	for name, p := range builtinPolicies {
 		if !validPolicies[p] {
 			jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid policy %q for tool %q", p, name))
 			return
@@ -3703,17 +3678,29 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	}
 
 	// Validate MCP server IDs reference configured servers.
-	if len(req.MCP.Servers) > 0 {
+	var mcpServers []struct {
+		ID    string
+		Tools []string
+	}
+	if req.Mcp != nil && req.Mcp.Servers != nil {
 		configuredServers := cfg.Tools.MCP.Servers
-		for _, s := range req.MCP.Servers {
-			if s.ID == "" {
+		for _, s := range *req.Mcp.Servers {
+			if s.Id == "" {
 				jsonErr(w, http.StatusUnprocessableEntity, "mcp.servers[].id must not be empty")
 				return
 			}
-			if _, exists := configuredServers[s.ID]; !exists {
-				jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("MCP server %q is not configured", s.ID))
+			if _, exists := configuredServers[s.Id]; !exists {
+				jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("MCP server %q is not configured", s.Id))
 				return
 			}
+			toolList := []string{}
+			if s.Tools != nil {
+				toolList = *s.Tools
+			}
+			mcpServers = append(mcpServers, struct {
+				ID    string
+				Tools []string
+			}{ID: s.Id, Tools: toolList})
 		}
 	}
 
@@ -3731,17 +3718,17 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 			}
 			if agentMap["id"] == agentID {
 				builtinCfg := map[string]any{
-					"default_policy": req.Builtin.DefaultPolicy,
+					"default_policy": builtinDefaultPolicy,
 				}
-				if len(req.Builtin.Policies) > 0 {
-					builtinCfg["policies"] = req.Builtin.Policies
+				if len(builtinPolicies) > 0 {
+					builtinCfg["policies"] = builtinPolicies
 				}
 				toolsCfg := map[string]any{
 					"builtin": builtinCfg,
 				}
-				if len(req.MCP.Servers) > 0 {
-					servers := make([]map[string]any, 0, len(req.MCP.Servers))
-					for _, s := range req.MCP.Servers {
+				if len(mcpServers) > 0 {
+					servers := make([]map[string]any, 0, len(mcpServers))
+					for _, s := range mcpServers {
 						srv := map[string]any{"id": s.ID}
 						if len(s.Tools) > 0 {
 							srv["tools"] = s.Tools

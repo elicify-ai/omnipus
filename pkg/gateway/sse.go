@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/session"
@@ -126,11 +127,10 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Restrict CORS to the configured origin (localhost only by default).
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 
-	var body struct { // not-wire-format: SSE sink decode-only struct; single-field, no generated schema exists for this internal endpoint
-		Message string `json:"message"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	var body gen.SseChatRequest
+	cfg := h.cfg()
+	validateEnabled := cfg != nil && cfg.Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "SseChatRequest", &body, validateEnabled) {
 		return
 	}
 	if body.Message == "" {

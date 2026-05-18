@@ -15,7 +15,6 @@
 package gateway
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -45,11 +44,9 @@ func (a *restAPI) patchAgentOwnership(w http.ResponseWriter, r *http.Request, ag
 	}
 
 	// Decode body.
-	var body struct { // not-wire-format: single-field PATCH payload; no standalone schema in spec; AgentOwnerUpdateResponse covers the response shape only
-		OwnerUsername string `json:"owner_username"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+	var body gen.AgentOwnershipUpdateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "AgentOwnershipUpdateRequest", &body, validateEnabled) {
 		return
 	}
 
@@ -75,7 +72,10 @@ func (a *restAPI) patchAgentOwnership(w http.ResponseWriter, r *http.Request, ag
 		return
 	}
 
-	newOwner := body.OwnerUsername
+	newOwner := ""
+	if body.OwnerUsername != nil {
+		newOwner = *body.OwnerUsername
+	}
 
 	// Clearing the owner requires explicit confirmation header to prevent accidents.
 	if newOwner == "" {

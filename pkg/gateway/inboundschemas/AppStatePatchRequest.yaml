@@ -1,0 +1,12 @@
+title: AppStatePatchRequest
+description: >
+  Request body for PATCH /api/v1/state. Partial update to application state.
+  Currently only supports marking onboarding as complete
+  (onboarding_complete must be true — setting it to false is rejected 400).
+type: object
+properties:
+  onboarding_complete:
+    type: boolean
+    description: >
+      Mark onboarding as complete. Must be true — false is rejected with 400.
+    example: true

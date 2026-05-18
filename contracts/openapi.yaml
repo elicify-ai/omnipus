@@ -112,6 +112,8 @@ components:
       $ref: ./components/schemas/Agent.yaml
     AgentToolsCfg:
       $ref: ./components/schemas/AgentToolsCfg.yaml
+    AgentToolsUpdateRequest:
+      $ref: ./components/schemas/AgentToolsUpdateRequest.yaml
     AgentCreateRequest:
       $ref: ./components/schemas/AgentCreateRequest.yaml
     AgentUpdateRequest:
@@ -250,6 +252,26 @@ components:
       $ref: ./components/schemas/UserContextRequest.yaml
     UserContextResponse:
       $ref: ./components/schemas/UserContextResponse.yaml
+    TaskCreateRequest:
+      $ref: ./components/schemas/TaskCreateRequest.yaml
+    TaskUpdateRequest:
+      $ref: ./components/schemas/TaskUpdateRequest.yaml
+    ProviderUpdateRequest:
+      $ref: ./components/schemas/ProviderUpdateRequest.yaml
+    AppStatePatchRequest:
+      $ref: ./components/schemas/AppStatePatchRequest.yaml
+    SkillInstallRequest:
+      $ref: ./components/schemas/SkillInstallRequest.yaml
+    SseChatRequest:
+      $ref: ./components/schemas/SseChatRequest.yaml
+    ToolApprovalActionRequest:
+      $ref: ./components/schemas/ToolApprovalActionRequest.yaml
+    CredentialSetRequest:
+      $ref: ./components/schemas/CredentialSetRequest.yaml
+    RestoreBackupRequest:
+      $ref: ./components/schemas/RestoreBackupRequest.yaml
+    AgentOwnershipUpdateRequest:
+      $ref: ./components/schemas/AgentOwnershipUpdateRequest.yaml
   responses:
     400BadRequest:
       description: "Bad request \u2014 missing or invalid field."
@@ -1077,12 +1099,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                owner_username:
-                  type: string
-                  description: Username of the new owner. Empty string clears ownership (requires X-Confirm-Demote header).
-                  example: alice
+              $ref: '#/components/schemas/AgentOwnershipUpdateRequest'
       responses:
         '200':
           description: Ownership updated.
@@ -1191,7 +1208,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AgentToolsCfg'
+              $ref: '#/components/schemas/AgentToolsUpdateRequest'
       responses:
         '200':
           description: Tools configuration updated. Returns the effective tool list.
@@ -1396,18 +1413,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required:
-              - action
-              properties:
-                action:
-                  type: string
-                  description: Action to take on this approval.
-                  enum:
-                  - approve
-                  - deny
-                  - cancel
-                  example: approve
+              $ref: '#/components/schemas/ToolApprovalActionRequest'
       responses:
         '200':
           description: Action processed successfully.
@@ -2411,19 +2417,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required:
-              - key
-              - value
-              properties:
-                key:
-                  type: string
-                  description: Credential key name.
-                  example: OPENAI_API_KEY
-                value:
-                  type: string
-                  description: Credential value (stored encrypted).
-                  example: sk-...
+              $ref: '#/components/schemas/CredentialSetRequest'
       responses:
         '201':
           description: Credential stored.
@@ -2578,14 +2572,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required:
-              - filename
-              properties:
-                filename:
-                  type: string
-                  description: Name of the backup file (without path).
-                  example: backup-20260516T103000Z.tar.gz
+              $ref: '#/components/schemas/RestoreBackupRequest'
       responses:
         '200':
           description: Backup restored.
@@ -2735,6 +2722,54 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /providers/{id}:
+    put:
+      operationId: updateProvider
+      summary: Add or update an LLM provider configuration
+      description: >
+        Adds or updates an LLM provider entry. On new providers, api_key is
+        required. On existing providers, api_key may be omitted to keep the
+        current key. The API key is stored encrypted (AES-256-GCM) in
+        credentials.json. Available before and after onboarding.
+      tags:
+      - Providers
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Provider identifier (e.g. "anthropic", "openai", "openrouter").
+        example: anthropic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderUpdateRequest'
+      responses:
+        '200':
+          description: Provider updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Provider'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '422':
+          description: api_key required for new providers.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Credential store locked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /providers/{id}/test:
     get:
       operationId: testProvider
@@ -2790,6 +2825,69 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /skills/install:
+    post:
+      operationId: installSkill
+      summary: Install a skill from the ClawHub registry
+      description: >
+        Installs a skill by name from the ClawHub registry. Currently returns
+        501 Not Implemented while the registry integration is in progress.
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillInstallRequest'
+      responses:
+        '200':
+          description: Skill installed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '501':
+          description: Not yet implemented.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /chat:
+    post:
+      operationId: postChat
+      summary: Send a chat message via SSE
+      description: >
+        Sends a user message to the agent and streams the response via
+        Server-Sent Events. The connection stays open until the agent
+        finishes responding or the client disconnects.
+      tags:
+      - Chat
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SseChatRequest'
+      responses:
+        '200':
+          description: SSE stream of agent response frames.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
   /activity:
     get:
       operationId: getActivity
@@ -2901,12 +2999,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                onboarding_complete:
-                  type: boolean
-                  description: Mark onboarding as complete.
-                  example: true
+              $ref: '#/components/schemas/AppStatePatchRequest'
       responses:
         '200':
           description: State updated.
@@ -3107,31 +3200,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required:
-                - title
-                - prompt
-              properties:
-                title:
-                  type: string
-                  description: Task title.
-                  example: "Analyze logs"
-                prompt:
-                  type: string
-                  description: Task description / prompt for the agent.
-                  example: "Summarize the last 7 days of gateway logs."
-                agent_id:
-                  type: string
-                  description: Agent to assign the task to.
-                  example: "jim"
-                priority:
-                  type: integer
-                  minimum: 0
-                  description: Task priority (higher = more urgent).
-                  example: 5
-                parent_task_id:
-                  type: string
-                  description: Parent task ID (for creating subtasks).
+              $ref: '#/components/schemas/TaskCreateRequest'
       responses:
         '200':
           description: Created task.
@@ -3164,7 +3233,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Task'
+              $ref: '#/components/schemas/TaskUpdateRequest'
       responses:
         '200':
           description: Updated task.

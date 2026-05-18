@@ -35,3 +35,13 @@ properties:
       process-based servers, "sse" or "http" for remote HTTP-based servers
       (both are handled identically by the gateway).
     example: "stdio"
+  env:
+    type: object
+    additionalProperties:
+      type: string
+    description: >
+      Environment variable overrides passed to the MCP server process.
+      Only applicable for stdio transport. Each key-value pair is injected
+      into the server process environment at startup.
+    example:
+      PATH: "/usr/local/bin:/usr/bin"
