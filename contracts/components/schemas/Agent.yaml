@@ -26,6 +26,8 @@ properties:
     example: "550e8400-e29b-41d4-a716-446655440000"
   name:
     type: string
+    minLength: 1
+    maxLength: 100
     description: Human-readable display name.
     example: "Jim"
   type:
@@ -48,6 +50,7 @@ properties:
     example: false
   color:
     type: string
+    pattern: '^#[0-9A-Fa-f]{6}$'
     description: Hex color code for agent avatar display (e.g. "#D4AF37").
     example: "#D4AF37"
   icon:
@@ -56,6 +59,7 @@ properties:
     example: "Robot"
   model:
     type: string
+    maxLength: 256
     description: >
       Model name string used for LLM calls (resolved from defaults when not
       explicitly set on the agent). May be "provider/model" format for OpenRouter.
@@ -102,12 +106,14 @@ properties:
     example: "config reload failed: ..."
   timeout_seconds:
     type: integer
+    minimum: 0
     description: >
       Maximum seconds a single agent turn may run before being interrupted.
       Inherited from agents.defaults.timeout_seconds when not overridden per-agent.
     example: 300
   max_tool_iterations:
     type: integer
+    minimum: 0
     description: >
       Maximum number of tool calls allowed per turn.
       Inherited from agents.defaults.max_tool_iterations when not overridden.
@@ -130,6 +136,7 @@ properties:
     example: false
   heartbeat_interval:
     type: integer
+    minimum: 0
     description: Interval in seconds between heartbeat passes.
     example: 3600
   tools_cfg:
@@ -166,6 +173,7 @@ properties:
           - "curl.*169\\.254"
   fallback_models:
     type: array
+    maxItems: 10
     items:
       type: string
     description: >

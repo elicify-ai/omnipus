@@ -43,6 +43,7 @@ properties:
     type: integer
     description: Task priority (higher = more urgent). Default is 0.
     minimum: 0
+    maximum: 100
     example: 5
   status:
     type: string

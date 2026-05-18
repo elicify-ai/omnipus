@@ -10,6 +10,7 @@ required:
   - paired_at
   - last_seen_at
   - status
+additionalProperties: false
 properties:
   device_id:
     type: string

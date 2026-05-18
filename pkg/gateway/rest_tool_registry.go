@@ -207,18 +207,18 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	// agentToolsResp is a concrete struct that matches the AgentToolsResponse wire shape.
 	// We define a local concrete struct to avoid the verbosity of constructing the
 	// anonymous struct type embedded in gen.AgentToolsResponse.
-	type toolEntry struct {
+	type toolEntry struct { // not-wire-format: local accumulator for gen.AgentToolsResponse.Tools anonymous struct; never emitted standalone
 		ConfiguredPolicy string `json:"configured_policy"`
 		EffectivePolicy  string `json:"effective_policy"`
 		FenceApplied     bool   `json:"fence_applied"`
 		Name             string `json:"name"`
 		RequiresAdminAsk bool   `json:"requires_admin_ask"`
 	}
-	type configBuiltin struct {
+	type configBuiltin struct { // not-wire-format: local helper for gen.AgentToolsResponse.Config.Builtin anonymous struct; never emitted standalone
 		DefaultPolicy string            `json:"default_policy,omitempty"`
 		Policies      map[string]string `json:"policies,omitempty"`
 	}
-	type agentToolsResp struct {
+	type agentToolsResp struct { // not-wire-format: local concrete alias for gen.AgentToolsResponse to avoid anonymous-struct verbosity; serialises to the same JSON shape
 		AgentType string `json:"agent_type,omitempty"`
 		Config    struct {
 			Builtin *configBuiltin `json:"builtin,omitempty"`
@@ -339,7 +339,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse body.
-	var body struct {
+	var body struct { // not-wire-format: single-field approval action payload; no standalone schema in contracts; action enum is validated immediately below
 		Action string `json:"action"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

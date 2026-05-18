@@ -66,22 +66,20 @@ func (a *restAPI) HandleSessionScope(w http.ResponseWriter, r *http.Request) {
 func (a *restAPI) putSessionScope(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	var body struct {
-		DMScope string `json:"dm_scope"`
-	}
+	var body gen.SessionScopeRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 
-	if body.DMScope == "" {
+	if body.DmScope == "" {
 		jsonErr(w, http.StatusBadRequest, dmScopeInvalidMsg)
 		return
 	}
 
 	valid := false
 	for _, v := range canonicalDMScopes {
-		if body.DMScope == string(v) {
+		if string(body.DmScope) == string(v) {
 			valid = true
 			break
 		}
@@ -98,7 +96,7 @@ func (a *restAPI) putSessionScope(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		ensureMap(m, "session")["dm_scope"] = body.DMScope
+		ensureMap(m, "session")["dm_scope"] = body.DmScope
 		return nil
 	}); err != nil {
 		slog.Error("rest: update session dm_scope", "error", err)
@@ -111,13 +109,13 @@ func (a *restAPI) putSessionScope(w http.ResponseWriter, r *http.Request) {
 			if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
 				if err := audit.EmitSecuritySettingChange(
 					r.Context(), auditLogger,
-					"session.dm_scope", oldScope, body.DMScope,
+					"session.dm_scope", oldScope, body.DmScope,
 				); err != nil {
 					slog.Error("rest: audit emit session dm_scope change", "error", err)
 				}
 			}
 		}
-		slog.Info("rest: session dm_scope updated (restart required)", "dm_scope", body.DMScope)
+		slog.Info("rest: session dm_scope updated (restart required)", "dm_scope", body.DmScope)
 		warnMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
 		jsonOK(w, gen.SessionScopeUpdateResponse{
 			Saved:           true,
@@ -135,14 +133,14 @@ func (a *restAPI) putSessionScope(w http.ResponseWriter, r *http.Request) {
 				auditLogger,
 				"session.dm_scope",
 				oldScope,
-				body.DMScope,
+				body.DmScope,
 			); err != nil {
 				slog.Error("rest: audit emit session dm_scope change", "error", err)
 			}
 		}
 	}
 
-	slog.Info("rest: session dm_scope updated", "dm_scope", body.DMScope)
+	slog.Info("rest: session dm_scope updated", "dm_scope", body.DmScope)
 
 	jsonOK(w, gen.SessionScopeUpdateResponse{
 		Saved:           true,

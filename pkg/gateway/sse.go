@@ -126,7 +126,7 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Restrict CORS to the configured origin (localhost only by default).
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 
-	var body struct {
+	var body struct { // not-wire-format: SSE sink decode-only struct; single-field, no generated schema exists for this internal endpoint
 		Message string `json:"message"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

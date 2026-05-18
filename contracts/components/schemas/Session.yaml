@@ -3,6 +3,7 @@ description: >
   Session metadata object (maps to session.UnifiedMeta + session.SessionMeta).
   Returned in list and detail endpoints. The SPA maps this through rawToSession()
   which reads stats.message_count, stats.tokens_total, and stats.cost.
+additionalProperties: false
 required:
   - id
   - agent_id

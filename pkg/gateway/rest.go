@@ -546,9 +546,7 @@ func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id 
 // renameSession handles PUT /api/v1/sessions/{id}.
 // Accepts {"title": "new name"} and returns the updated session meta.
 func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id string) {
-	var req struct {
-		Title string `json:"title"`
-	}
+	var req gen.SessionRenameRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
@@ -597,16 +595,16 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id strin
 }
 
 func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		AgentID string `json:"agent_id"`
-		Type    string `json:"type"`
-	}
+	var req gen.SessionCreateRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "SessionCreateRequest", &req, validateEnabled) {
 		return
 	}
 
-	agentID := req.AgentID
+	var agentID string
+	if req.AgentId != nil {
+		agentID = *req.AgentId
+	}
 	if agentID == "" {
 		agentID = "main"
 	}
@@ -631,8 +629,12 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var reqType string
+	if req.Type != nil {
+		reqType = string(*req.Type)
+	}
 	var sessionType session.UnifiedSessionType
-	switch req.Type {
+	switch reqType {
 	case string(session.SessionTypeTask):
 		sessionType = session.SessionTypeTask
 	case string(session.SessionTypeChannel):
@@ -814,7 +816,7 @@ func fetchUpstreamModels(baseURL, apiKey string) ([]string, error) {
 		return nil, err
 	}
 
-	var result struct {
+	var result struct { // not-wire-format: internal unmarshaling target for upstream provider API response; never emitted to SPA consumers
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
@@ -1134,7 +1136,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 }
 
 func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
-	var req struct {
+	var req struct { // not-wire-format: validated against AgentCreateRequest schema via decodeAndValidate; migration to gen.AgentCreateRequest deferred to fix-U (complex nested anonymous types)
 		Name        string `json:"name"`
 		Description string `json:"description"`
 		Model       string `json:"model"`
@@ -1370,7 +1372,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", id))
 		return
 	}
-	var req struct {
+	var req struct { // not-wire-format: validated against AgentUpdateRequest schema via decodeAndValidate; migration to gen.AgentUpdateRequest deferred to fix-U (uses config.SandboxProfile/AgentShellPolicy not in spec)
 		Name              *string                  `json:"name"`
 		Description       *string                  `json:"description"`
 		Model             *string                  `json:"model"`
@@ -2044,7 +2046,7 @@ func (a *restAPI) searchSkills(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
-	var req struct {
+	var req struct { // not-wire-format: skill install stub; no generated schema for skill install request; endpoint returns 501 Not Implemented
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
@@ -2231,13 +2233,11 @@ func (a *restAPI) getUserContext(w http.ResponseWriter) {
 	} else {
 		content = string(data)
 	}
-	jsonOK(w, map[string]string{"content": content})
+	jsonOK(w, gen.UserContextResponse{Content: content})
 }
 
 func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Content string `json:"content"`
-	}
+	var req gen.UserContextRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
@@ -2249,7 +2249,7 @@ func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write USER.md: %v", err))
 		return
 	}
-	jsonOK(w, map[string]string{"content": req.Content})
+	jsonOK(w, gen.UserContextResponse{Content: req.Content})
 }
 
 // registerAdditionalEndpoints registers handlers for endpoints the frontend calls.
@@ -2461,7 +2461,7 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("token saved but reload failed: %v", err))
 		return
 	}
-	jsonOK(w, map[string]string{"token": newToken})
+	jsonOK(w, gen.RotateTokenResponse{Token: newToken})
 }
 
 // httpHandlerRegistrar is the subset of channels.Manager used for route registration.
@@ -2502,7 +2502,7 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonOK(w, resp)
 	case http.MethodPatch:
-		var body struct {
+		var body struct { // not-wire-format: single-field state patch; no standalone schema in contracts; onboarding_complete flag consumed immediately and not emitted in any response
 			OnboardingComplete *bool `json:"onboarding_complete"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -2564,9 +2564,9 @@ func (a *restAPI) HandleVersion(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	jsonOK(w, map[string]string{
-		"version":   Version,
-		"build_sha": buildSha,
+	jsonOK(w, gen.VersionResponse{
+		Version:  Version,
+		BuildSha: buildSha,
 	})
 }
 
@@ -2731,7 +2731,7 @@ func (a *restAPI) getTask(w http.ResponseWriter, id string) {
 }
 
 func (a *restAPI) createTask(w http.ResponseWriter, r *http.Request) {
-	var req struct {
+	var req struct { // not-wire-format: includes backward-compat aliases (name→title, description→prompt) not in Task schema; migration to gen.Task deferred to fix-U
 		// New fields
 		Title        string `json:"title"`
 		Prompt       string `json:"prompt"`
@@ -2788,7 +2788,7 @@ func (a *restAPI) updateTask(w http.ResponseWriter, r *http.Request, id string) 
 		jsonErr(w, http.StatusBadRequest, "invalid task ID")
 		return
 	}
-	var req struct {
+	var req struct { // not-wire-format: includes backward-compat aliases and time.Time fields; migration to gen.Task deferred to fix-U (Task schema uses string dates)
 		Status      *string    `json:"status"`
 		Result      *string    `json:"result"`
 		Artifacts   *[]string  `json:"artifacts"`
@@ -3114,7 +3114,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		providerID := sub
-		var req struct {
+		var req struct { // not-wire-format: provider credential update payload; no standalone schema in contracts; api_key written to credential store, not emitted in any response
 			APIKey string `json:"api_key"`
 			Model  string `json:"model"`
 		}
@@ -3348,7 +3348,7 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 // Transport must be one of: stdio, sse, http (enforced by enum validation).
 // Returns the new McpServer entry shaped per contracts/components/schemas/McpServer.yaml.
 func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
-	var req struct {
+	var req struct { // not-wire-format: extends McpServerCreate schema with Env map field not yet in spec; migration to gen.McpServerCreate deferred until spec includes env
 		Name      string            `json:"name"`
 		Command   string            `json:"command"`
 		Args      []string          `json:"args"`
@@ -3651,7 +3651,7 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
-	var req struct {
+	var req struct { // not-wire-format: includes legacy mode/visible compat fields not in AgentToolsCfg schema; migration to gen.AgentToolsCfg deferred to fix-U
 		Builtin struct {
 			// New policy format
 			DefaultPolicy string            `json:"default_policy"`

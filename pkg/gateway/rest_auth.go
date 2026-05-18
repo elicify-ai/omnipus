@@ -284,10 +284,7 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	ip := clientIP(r)
 
-	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
+	var body gen.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
@@ -439,10 +436,7 @@ func (a *restAPI) HandleRegisterAdmin(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
+	var body gen.RegisterAdminRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
@@ -622,10 +616,7 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
-	var body struct {
-		CurrentPassword string `json:"current_password"`
-		NewPassword     string `json:"new_password"`
-	}
+	var body gen.ChangePasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return

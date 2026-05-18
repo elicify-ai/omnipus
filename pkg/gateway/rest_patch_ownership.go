@@ -45,7 +45,7 @@ func (a *restAPI) patchAgentOwnership(w http.ResponseWriter, r *http.Request, ag
 	}
 
 	// Decode body.
-	var body struct {
+	var body struct { // not-wire-format: single-field PATCH payload; no standalone schema in spec; AgentOwnerUpdateResponse covers the response shape only
 		OwnerUsername string `json:"owner_username"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

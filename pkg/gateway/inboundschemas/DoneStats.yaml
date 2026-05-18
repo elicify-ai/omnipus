@@ -9,7 +9,7 @@ type: object
 additionalProperties: true
 properties:
   tokens:
-    type: number
+    type: integer
     minimum: 0
     description: Total tokens consumed in this turn (input + output).
   cost:
@@ -17,30 +17,30 @@ properties:
     minimum: 0
     description: Total cost in USD for this turn.
   duration_ms:
-    type: number
+    type: integer
     minimum: 0
     description: Wall-clock duration of the turn in milliseconds.
   tokens_dropped:
-    type: number
+    type: integer
     minimum: 0
     description: >
       Number of token frames dropped due to backpressure on the send channel.
       Only present when > 0.
   # Replay-only diagnostics (present on done frames emitted by streamReplay)
   frames_emitted:
-    type: number
+    type: integer
     minimum: 0
     description: Number of content frames emitted during replay. Replay-only.
   orphan_count:
-    type: number
+    type: integer
     minimum: 0
     description: Tool calls whose parent span was not found. Replay-only.
   duplicate_tool_call_id_count:
-    type: number
+    type: integer
     minimum: 0
     description: Tool call IDs that appeared more than once. Replay-only.
   truncated_result_count:
-    type: number
+    type: integer
     minimum: 0
     description: Tool call results truncated to 1 MiB. Replay-only.
   replay_error:

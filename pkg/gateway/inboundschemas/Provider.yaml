@@ -8,6 +8,7 @@ required:
   - name
   - status
   - models
+additionalProperties: false
 properties:
   id:
     type: string

@@ -51,14 +51,12 @@ func (a *restAPI) HandlePromptGuard(w http.ResponseWriter, r *http.Request) {
 // Admin enforcement is handled by adminWrap at route registration in rest.go.
 func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var body struct {
-		Level string `json:"level"`
-	}
+	var body gen.PromptGuardUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	switch body.Level {
+	switch string(body.Level) {
 	case "low", "medium", "high":
 	default:
 		jsonErr(w, http.StatusBadRequest, `level must be one of: "low", "medium", "high"`)

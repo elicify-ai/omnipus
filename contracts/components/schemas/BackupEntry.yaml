@@ -6,6 +6,7 @@ required:
   - filename
   - size_bytes
   - created_at
+additionalProperties: false
 properties:
   filename:
     type: string

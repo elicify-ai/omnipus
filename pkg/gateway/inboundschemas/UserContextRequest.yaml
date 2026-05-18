@@ -1,0 +1,16 @@
+title: UserContextRequest
+description: >
+  Request body for PUT /api/v1/user-context. Replaces the entire content of
+  USER.md in the default workspace. Passing an empty string clears the file.
+type: object
+required:
+  - content
+additionalProperties: false
+properties:
+  content:
+    type: string
+    description: >
+      Full replacement content for USER.md. May be empty to clear the file.
+      No maximum length is enforced at the schema level — the underlying
+      filesystem write via fileutil.WriteFileAtomic provides the practical limit.
+    example: "I am a senior Go developer focused on distributed systems."

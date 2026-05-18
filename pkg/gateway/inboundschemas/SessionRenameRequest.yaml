@@ -2,6 +2,7 @@ type: object
 description: Body for PUT /sessions/{id}. Renames a session.
 required:
   - title
+additionalProperties: false
 properties:
   title:
     type: string

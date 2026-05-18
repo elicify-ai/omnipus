@@ -70,17 +70,14 @@ func (a *restAPI) HandleToolPolicies(w http.ResponseWriter, r *http.Request) {
 // It is called only after RequireAdmin has confirmed the caller holds admin role.
 func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
-	var body struct {
-		DefaultPolicy string            `json:"default_policy"`
-		Policies      map[string]string `json:"policies"`
-	}
+	var body gen.GlobalToolPolicies
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 
 	// Validate default_policy.
-	switch body.DefaultPolicy {
+	switch string(body.DefaultPolicy) {
 	case "", "allow", "ask", "deny":
 		// valid; empty string is treated as "allow"
 	default:
@@ -88,12 +85,12 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.DefaultPolicy == "" {
-		body.DefaultPolicy = "allow"
+		body.DefaultPolicy = gen.GlobalToolPoliciesDefaultPolicyAllow
 	}
 
 	// Validate per-tool policies.
 	for toolName, p := range body.Policies {
-		switch p {
+		switch string(p) {
 		case "allow", "ask", "deny":
 			// valid
 		default:
@@ -110,9 +107,14 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 			sandbox = map[string]any{}
 			m["sandbox"] = sandbox
 		}
-		sandbox["default_tool_policy"] = body.DefaultPolicy
+		sandbox["default_tool_policy"] = string(body.DefaultPolicy)
 		if body.Policies != nil {
-			sandbox["tool_policies"] = body.Policies
+			// Convert typed map to plain map[string]string for JSON serialization.
+			plain := make(map[string]string, len(body.Policies))
+			for k, v := range body.Policies {
+				plain[k] = string(v)
+			}
+			sandbox["tool_policies"] = plain
 		} else {
 			// Explicit null from the client clears the map.
 			sandbox["tool_policies"] = map[string]any{}
@@ -132,7 +134,7 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 				Decision: audit.DecisionAllow,
 				Details: map[string]any{
 					"action":         "tool_policies_update",
-					"default_policy": body.DefaultPolicy,
+					"default_policy": string(body.DefaultPolicy),
 					"policy_count":   len(body.Policies),
 				},
 			}); err != nil {
@@ -142,19 +144,14 @@ func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("rest: global tool policies updated",
-		"default_policy", body.DefaultPolicy,
+		"default_policy", string(body.DefaultPolicy),
 		"policy_count", len(body.Policies),
 	)
 
-	// Return the persisted state. Changes take effect immediately because
-	// safeUpdateConfigJSON hot-reloads the in-memory config after the write.
-	// Coerce body.Policies to the generated map type — never null (Ava-chat bug class).
-	respPolicies := make(map[string]gen.GlobalToolPoliciesPolicies)
-	for k, v := range body.Policies {
-		respPolicies[k] = gen.GlobalToolPoliciesPolicies(v)
+	// Return the persisted state — use the already-typed body directly.
+	// Coerce nil Policies to empty map — never null (Ava-chat bug class).
+	if body.Policies == nil {
+		body.Policies = map[string]gen.GlobalToolPoliciesPolicies{}
 	}
-	jsonOK(w, gen.GlobalToolPolicies{
-		DefaultPolicy: gen.GlobalToolPoliciesDefaultPolicy(body.DefaultPolicy),
-		Policies:      respPolicies,
-	})
+	jsonOK(w, body)
 }

@@ -41,7 +41,7 @@ func (a *restAPI) HandleSandboxAuditLog(w http.ResponseWriter, r *http.Request) 
 		})
 
 	case http.MethodPut:
-		var body struct {
+		var body struct { // not-wire-format: uses *bool to detect missing field; gen.AuditLogToggleRequest uses bool which cannot distinguish absent from false
 			Enabled *bool `json:"enabled"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {

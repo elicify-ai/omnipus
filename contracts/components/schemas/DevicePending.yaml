@@ -10,6 +10,7 @@ required:
   - device_name
   - created_at
   - expires_at
+additionalProperties: false
 properties:
   device_id:
     type: string

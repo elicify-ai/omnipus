@@ -5,6 +5,7 @@ description: >
 required:
   - session
   - messages
+additionalProperties: false
 properties:
   session:
     $ref: './Session.yaml'

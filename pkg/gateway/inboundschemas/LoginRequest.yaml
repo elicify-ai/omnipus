@@ -3,6 +3,7 @@ description: Credentials for authenticating an existing user.
 required:
   - username
   - password
+additionalProperties: false
 properties:
   username:
     type: string

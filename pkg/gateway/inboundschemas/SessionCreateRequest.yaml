@@ -1,5 +1,6 @@
 type: object
 description: Body for POST /sessions. Creates a new session for an agent.
+additionalProperties: false
 properties:
   agent_id:
     type: string

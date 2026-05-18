@@ -38,7 +38,8 @@ properties:
   retry_after_seconds:
     type: number
     minimum: 0
-    description: Suggested back-off duration in seconds before retrying. Minimum 0 (no negative back-off).
+    maximum: 86400
+    description: Suggested back-off duration in seconds before retrying. Minimum 0 (no negative back-off); maximum 86400 (24 hours).
   agent_id:
     type: string
     description: Agent that triggered the rate limit.

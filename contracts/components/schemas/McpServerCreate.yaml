@@ -6,6 +6,7 @@ required:
   - name
   - command
   - transport
+additionalProperties: false
 properties:
   name:
     type: string

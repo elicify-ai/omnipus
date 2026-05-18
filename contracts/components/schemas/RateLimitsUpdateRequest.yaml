@@ -5,6 +5,7 @@ description: >
   Strict type validation rejects JSON strings in numeric fields, floats in integer fields,
   negative values, NaN/Inf, and overflow. Changes are hot-reloaded.
 type: object
+additionalProperties: false
 properties:
   daily_cost_cap_usd:
     type: number

@@ -6,6 +6,7 @@ required:
   - id
   - tool
   - status
+additionalProperties: false
 properties:
   id:
     type: string
@@ -29,6 +30,7 @@ properties:
   duration_ms:
     type: integer
     format: int64
+    minimum: 0
     description: Elapsed time in milliseconds. Absent when still running.
     example: 234
   parameters:

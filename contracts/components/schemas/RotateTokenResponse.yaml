@@ -1,0 +1,19 @@
+title: RotateTokenResponse
+description: >
+  Response from POST /api/v1/config/gateway/rotate-token.
+  Returns the newly generated bearer token. The caller must immediately
+  update any stored token references — the previous token is no longer valid
+  once the gateway processes the next request with the new token active.
+type: object
+required:
+  - token
+additionalProperties: false
+properties:
+  token:
+    type: string
+    minLength: 64
+    maxLength: 64
+    description: >
+      The new gateway bearer token (64 hex characters, 32 random bytes).
+      Store securely; this is the only time it is returned.
+    example: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"

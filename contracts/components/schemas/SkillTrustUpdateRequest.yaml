@@ -5,6 +5,7 @@ description: >
 type: object
 required:
   - level
+additionalProperties: false
 properties:
   level:
     type: string

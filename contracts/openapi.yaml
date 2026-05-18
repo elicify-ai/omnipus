@@ -242,6 +242,14 @@ components:
       $ref: ./components/schemas/AgentOwnerUpdateResponse.yaml
     ActivityEventsResponse:
       $ref: ./components/schemas/ActivityEventsResponse.yaml
+    RotateTokenResponse:
+      $ref: ./components/schemas/RotateTokenResponse.yaml
+    VersionResponse:
+      $ref: ./components/schemas/VersionResponse.yaml
+    UserContextRequest:
+      $ref: ./components/schemas/UserContextRequest.yaml
+    UserContextResponse:
+      $ref: ./components/schemas/UserContextResponse.yaml
   responses:
     400BadRequest:
       description: "Bad request \u2014 missing or invalid field."
@@ -1298,6 +1306,30 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
       security: []
+  /version:
+    get:
+      operationId: getVersion
+      summary: Build version and VCS revision
+      description: >
+        Returns the gateway's version string and embedded VCS revision SHA.
+        Used by the frontend to detect version drift and prompt "New version
+        available" (#110). No authentication required.
+      tags:
+      - About
+      security: []
+      responses:
+        '200':
+          description: Version information.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionResponse'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /tools:
     get:
       operationId: getToolRegistry
@@ -2154,6 +2186,39 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /config/gateway/rotate-token:
+    post:
+      operationId: rotateGatewayToken
+      summary: Rotate the gateway bearer token (admin only)
+      description: >
+        Generates a new cryptographically random 64-hex-character gateway bearer
+        token, persists it to config.json, triggers a hot reload, and returns the
+        new token. The previous token is immediately invalidated. Admin-only;
+        secured by RequireAdmin + RequireNotBypass chain. Use after security
+        incidents or on a regular rotation schedule.
+      tags:
+      - Config
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: New gateway token (valid immediately).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RotateTokenResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
   /config/pending-restart:
     get:
       operationId: getPendingRestart
@@ -2853,6 +2918,72 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+  /user-context:
+    get:
+      operationId: getUserContext
+      summary: Get user context (USER.md content)
+      description: >
+        Returns the current content of USER.md from the default workspace. This
+        file holds workspace-level context about the user (background, preferences,
+        etc.) that is prepended to agent prompts. Returns empty string when the
+        file does not exist. Requires authentication.
+      tags:
+      - Workspace
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Current USER.md content (may be empty string).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserContextResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    put:
+      operationId: putUserContext
+      summary: Set user context (replace USER.md content)
+      description: >
+        Replaces the entire content of USER.md in the default workspace with the
+        provided string. Passing an empty string clears the file. The new content
+        is returned in the response. Requires authentication.
+      tags:
+      - Workspace
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserContextRequest'
+      responses:
+        '200':
+          description: Updated USER.md content (echoed back).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserContextResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
   /me:
     get:
       operationId: getMe

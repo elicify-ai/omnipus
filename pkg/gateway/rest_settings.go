@@ -125,7 +125,7 @@ func (a *restAPI) listCredentials(w http.ResponseWriter) {
 
 // setCredential adds or updates an encrypted credential.
 func (a *restAPI) setCredential(w http.ResponseWriter, r *http.Request) {
-	var req struct {
+	var req struct { // not-wire-format: credential key-value pair; no standalone schema in contracts; never emitted in a response
 		Key   string `json:"key"`
 		Value string `json:"value"`
 	}
@@ -321,7 +321,7 @@ func (a *restAPI) HandleListBackups(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list backups: %v", err))
 		return
 	}
-	type backupEntry struct {
+	type backupEntry struct { // not-wire-format: oapi-codegen inlines BackupEntry into listBackups response; no standalone gen.BackupEntry type exists
 		Filename  string `json:"filename"`
 		SizeBytes int64  `json:"size_bytes"`
 		CreatedAt string `json:"created_at"`
@@ -352,7 +352,7 @@ func (a *restAPI) HandleRestore(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	var req struct {
+	var req struct { // not-wire-format: single-field restore request body; no standalone schema in contracts; restore filename is not a public wire type
 		Filename string `json:"filename"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

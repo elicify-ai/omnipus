@@ -6,6 +6,7 @@ description: >
 required:
   - id
   - api_key
+additionalProperties: false
 properties:
   id:
     type: string

@@ -5,6 +5,7 @@ required:
   - path
   - size
   - mime_type
+additionalProperties: false
 properties:
   type:
     type: string

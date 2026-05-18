@@ -37,6 +37,7 @@ properties:
       frames with any other value to prevent unknown-status render crashes (W4-6).
   duration_ms:
     type: integer
+    minimum: 0
     description: Wall-clock duration of the sub-turn in milliseconds.
   final_result:
     type: string

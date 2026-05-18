@@ -51,9 +51,7 @@ func (a *restAPI) HandleExecAllowlist(w http.ResponseWriter, r *http.Request) {
 			RestartRequired: &restartRequired,
 		})
 	case http.MethodPut:
-		var body struct {
-			AllowedBinaries []string `json:"allowed_binaries"`
-		}
+		var body gen.ExecAllowlist
 		validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 		if !decodeAndValidate(w, r, "ExecAllowlist", &body, validateEnabled) {
 			return

@@ -5,6 +5,7 @@ description: >
 type: object
 required:
   - onboarding_complete
+additionalProperties: false
 properties:
   onboarding_complete:
     type: boolean

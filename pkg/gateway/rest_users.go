@@ -100,11 +100,7 @@ func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var body struct {
-		Username string `json:"username"`
-		Role     string `json:"role"`
-		Password string `json:"password"`
-	}
+	var body gen.UserCreateRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
@@ -113,7 +109,7 @@ func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, usernameInvalidMsg)
 		return
 	}
-	if body.Role != string(config.UserRoleAdmin) && body.Role != string(config.UserRoleUser) {
+	if string(body.Role) != string(config.UserRoleAdmin) && string(body.Role) != string(config.UserRoleUser) {
 		jsonErr(w, http.StatusBadRequest, roleInvalidMsg)
 		return
 	}
@@ -341,14 +337,12 @@ func (a *restAPI) HandleUserChangeRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var body struct {
-		Role string `json:"role"`
-	}
+	var body gen.UserRoleChangeRequest
 	if decErr := json.NewDecoder(r.Body).Decode(&body); decErr != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if body.Role != string(config.UserRoleAdmin) && body.Role != string(config.UserRoleUser) {
+	if string(body.Role) != string(config.UserRoleAdmin) && string(body.Role) != string(config.UserRoleUser) {
 		jsonErr(w, http.StatusBadRequest, roleInvalidMsg)
 		return
 	}
@@ -439,9 +433,7 @@ func (a *restAPI) HandleUserResetPassword(w http.ResponseWriter, r *http.Request
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var body struct {
-		Password string `json:"password"`
-	}
+	var body gen.UserResetPasswordRequest
 	if decErr := json.NewDecoder(r.Body).Decode(&body); decErr != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return

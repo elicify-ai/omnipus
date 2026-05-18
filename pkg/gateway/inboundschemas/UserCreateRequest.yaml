@@ -4,6 +4,7 @@ required:
   - username
   - role
   - password
+additionalProperties: false
 properties:
   username:
     type: string

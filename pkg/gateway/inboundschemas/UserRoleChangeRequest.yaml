@@ -2,6 +2,7 @@ type: object
 description: Body for PATCH /users/{username}/role. Changes a user's RBAC role. Admin-only.
 required:
   - role
+additionalProperties: false
 properties:
   role:
     type: string

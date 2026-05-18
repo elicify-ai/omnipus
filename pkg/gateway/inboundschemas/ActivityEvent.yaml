@@ -16,6 +16,10 @@ properties:
     example: "session-550e8400-e29b-41d4-a716-446655440000"
   type:
     type: string
+    enum:
+      - session_start
+      - task_created
+      - task_updated
     description: >
       Event category. "session_start" = new session began.
       "task_created" = a task was created.

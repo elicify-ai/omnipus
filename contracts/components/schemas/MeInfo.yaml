@@ -5,6 +5,7 @@ description: >
 type: object
 required:
   - role
+additionalProperties: false
 properties:
   role:
     type: string

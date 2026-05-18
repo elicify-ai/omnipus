@@ -4,6 +4,7 @@ description: >
   The agent starts in "draft" status (no SOUL.md written yet).
 required:
   - name
+additionalProperties: false
 properties:
   name:
     type: string

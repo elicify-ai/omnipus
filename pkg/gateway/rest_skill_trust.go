@@ -68,9 +68,7 @@ func (a *restAPI) HandleSkillTrust(w http.ResponseWriter, r *http.Request) {
 func (a *restAPI) putSkillTrust(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	var body struct {
-		Level string `json:"level"`
-	}
+	var body gen.SkillTrustUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return
@@ -83,7 +81,7 @@ func (a *restAPI) putSkillTrust(w http.ResponseWriter, r *http.Request) {
 
 	valid := false
 	for _, v := range validSkillTrustLevels {
-		if body.Level == v {
+		if string(body.Level) == v {
 			valid = true
 			break
 		}
@@ -129,10 +127,10 @@ func (a *restAPI) putSkillTrust(w http.ResponseWriter, r *http.Request) {
 		RequiresRestart: false,
 		AppliedLevel:    gen.SkillTrustUpdateResponseAppliedLevel(body.Level),
 	}
-	if body.Level == string(config.SkillTrustAllowAll) {
+	if string(body.Level) == string(config.SkillTrustAllowAll) {
 		warnMsg := fmt.Sprintf(
 			"skill_trust=%s disables hash verification — configure a trusted skills registry instead",
-			body.Level,
+			string(body.Level),
 		)
 		resp.Warning = &warnMsg
 	}

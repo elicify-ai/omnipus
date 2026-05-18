@@ -14,6 +14,7 @@ required:
   - preview_listener_enabled
   - warmup_timeout_seconds
   - frame_ancestors_fallback
+additionalProperties: false
 properties:
   version:
     type: string

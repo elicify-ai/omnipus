@@ -9,6 +9,7 @@ required:
   - version
   - verified
   - status
+additionalProperties: false
 properties:
   id:
     type: string

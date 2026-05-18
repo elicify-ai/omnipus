@@ -525,7 +525,7 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   active_agent_id?: string  // the agent currently handling this session
 }
 
-interface RawSession {
+interface RawSession { // not-wire-format: internal API deserialization shape before rawToSession() transform; never emitted to SPA consumers directly
   id: string
   agent_id: string
   title: string
@@ -998,7 +998,7 @@ export function configureProvider(id: string, apiKey?: string, endpoint?: string
   }, ProviderSchema as ZodType<Provider>)
 }
 
-const _testProviderSchema = z.object({ success: z.boolean(), error: z.string().optional() }).passthrough()
+const _testProviderSchema = z.object({ success: z.boolean(), error: z.string().optional() }).passthrough() // not-wire-format: internal Zod validator for request(); migrate to generated schema in fix-X SPA migration
 
 export function testProvider(id: string): Promise<{ success: boolean; error?: string }> {
   return request(`/providers/${id}/test`, { method: 'POST' }, _testProviderSchema)
@@ -1104,7 +1104,7 @@ export function configureChannel(id: string, config: Record<string, unknown>): P
   })
 }
 
-const _testChannelSchema = z.object({ success: z.boolean(), message: z.string() }).passthrough()
+const _testChannelSchema = z.object({ success: z.boolean(), message: z.string() }).passthrough() // not-wire-format: internal Zod validator for request(); migrate to generated schema in fix-X SPA migration
 
 export function testChannel(id: string): Promise<{ success: boolean; message: string }> {
   return request<{ success: boolean; message: string }>(`/channels/${encodeURIComponent(id)}/test`, {
@@ -1331,7 +1331,7 @@ export async function renameSession(id: string, title: string): Promise<Session>
   return rawToSession(raw)
 }
 
-const _deleteSessionSchema = z.object({ success: z.boolean() }).passthrough()
+const _deleteSessionSchema = z.object({ success: z.boolean() }).passthrough() // not-wire-format: internal Zod validator for request(); migrate to generated schema in fix-X SPA migration
 
 export function deleteSession(id: string): Promise<{ success: boolean }> {
   return request<{ success: boolean }>(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }, _deleteSessionSchema)
@@ -1396,7 +1396,7 @@ export function fetchAuditLog(): Promise<AuditEntry[]> {
 
 // ── User Context (USER.md) ────────────────────────────────────────────────────
 
-const _userContextSchema = z.object({ content: z.string() })
+const _userContextSchema = z.object({ content: z.string() }) // not-wire-format: internal Zod validator for request(); migrate to generated schema in fix-X SPA migration
 
 export function fetchUserContext(): Promise<{ content: string }> {
   return request<{ content: string }>('/user-context', undefined, _userContextSchema)
@@ -1470,7 +1470,7 @@ export async function uploadFiles(sessionId: string, files: File[]): Promise<{ f
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
-const _changePasswordSchema = z.object({ success: z.boolean() }).passthrough()
+const _changePasswordSchema = z.object({ success: z.boolean() }).passthrough() // not-wire-format: internal Zod validator for request(); migrate to generated schema in fix-X SPA migration
 
 export function changePassword(currentPassword: string, newPassword: string): Promise<{ success: boolean }> {
   return request<{ success: boolean }>('/auth/change-password', {
@@ -1779,8 +1779,8 @@ export function fetchMcpServersForAgent(): Promise<McpServer[]> {
   return request<McpServer[]>('/mcp-servers', undefined, z.array(McpServerSchema) as ZodType<McpServer[]>)
 }
 
-type AgentToolsResponse = { config: AgentToolsCfg; tools: AgentToolEntry[] }
-const _agentToolsSchema = z.object({
+type AgentToolsResponse = { config: AgentToolsCfg; tools: AgentToolEntry[] } // not-wire-format: local alias for gen.AgentToolsResponse already in spec; migrate to generated type in fix-X SPA migration
+const _agentToolsSchema = z.object({ // not-wire-format: internal Zod validator for request(); migrate to generated schema in fix-X SPA migration
   config: AgentToolsCfgSchema,
   tools: z.array(AgentToolEntrySchema),
 }).passthrough() as ZodType<AgentToolsResponse>

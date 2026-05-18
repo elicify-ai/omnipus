@@ -8,6 +8,7 @@ required:
   - path
   - size
   - content_type
+additionalProperties: false
 properties:
   name:
     type: string

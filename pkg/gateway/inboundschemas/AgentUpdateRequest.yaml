@@ -6,6 +6,7 @@ description: >
   heartbeat_enabled, and heartbeat_interval may be updated on locked agents.
   At least one field must be present (minProperties: 1) — empty patches are rejected 400.
 minProperties: 1
+additionalProperties: false
 properties:
   name:
     type: string

@@ -38,7 +38,20 @@ properties:
       TruncatedResult sentinel. When marshaling the result failed the value is a
       MarshalErrorResult sentinel.
     oneOf:
-      - type: ["object", "array", "string", "number", "boolean", "null"]
+      - type: object
+      - type: array
+        items: {}
+      - type: string
+      - type: number
+      - type: boolean
+      - nullable: true
+        not:
+          anyOf:
+            - type: object
+            - type: array
+            - type: string
+            - type: number
+            - type: boolean
       - $ref: TruncatedResult.yaml
       - $ref: MarshalErrorResult.yaml
   status:
@@ -49,6 +62,7 @@ properties:
     description: Final execution status. Normalised from empty to "success" by the server.
   duration_ms:
     type: integer
+    minimum: 0
     description: Tool execution wall-clock time in milliseconds.
   error:
     type: string
