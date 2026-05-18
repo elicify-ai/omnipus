@@ -965,6 +965,589 @@ func FixturePingFrame_Edge() PingFrame {
 	}
 }
 
+// ── REST response type fixtures — Phase 7 round-2 additions ─────────────────
+//
+// 13 types from fix-H  +  2 types from fix-D (ExecApprovalExpiredFrame, SessionCloseFrame)
+// Traces to: docs/plan/quizzical-marinating-frog.md — Phase 4 contract test spec
+
+// ── Task ─────────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/Task.yaml
+
+func FixtureTask_Populated() Task {
+	agentId := "jim"
+	agentName := "Jim"
+	createdBy := "admin"
+	parentTaskId := "parent-task-00000000-0000-0000-0000-000000000001"
+	result := "Found 3 anomalies in the log."
+	sessionId := "sess-00000000-0000-0000-0000-000000000002"
+	artifacts := []string{"/workspace/report.pdf", "/workspace/chart.png"}
+	createdAt := time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC)
+	startedAt := time.Date(2026, 5, 16, 10, 1, 0, 0, time.UTC)
+	completedAt := time.Date(2026, 5, 16, 10, 5, 30, 0, time.UTC)
+	return Task{
+		Id:           "550e8400-e29b-41d4-a716-446655440000",
+		Title:        "Analyze logs",
+		Prompt:       "Summarize the last 7 days of gateway logs.",
+		AgentId:      &agentId,
+		AgentName:    &agentName,
+		CreatedBy:    &createdBy,
+		ParentTaskId: &parentTaskId,
+		Priority:     5,
+		Status:       TaskStatus("completed"),
+		Result:       &result,
+		SessionId:    &sessionId,
+		Artifacts:    &artifacts,
+		TriggerType:  TaskTriggerType("manual"),
+		CreatedAt:    &createdAt,
+		StartedAt:    &startedAt,
+		CompletedAt:  &completedAt,
+	}
+}
+
+// FixtureTask_ZeroValue — Go zero values.
+// Expected: FAIL because id="", title="", prompt="", status="" (not in enum),
+// trigger_type="" (not in enum), priority=0 (valid — minimum: 0).
+func FixtureTask_ZeroValue() Task {
+	return Task{}
+}
+
+// FixtureTask_Edge — queued task, no agent, unicode title, max priority.
+func FixtureTask_Edge() Task {
+	createdAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	return Task{
+		Id:          "00000000-0000-0000-0000-000000000001",
+		Title:       "unicode-task-title-タスク-rocket",
+		Prompt:      repeatStr("task prompt content ", 20),
+		Priority:    100,
+		Status:      TaskStatus("queued"),
+		TriggerType: TaskTriggerType("event"),
+		CreatedAt:   &createdAt,
+	}
+}
+
+// ── McpServer ─────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/McpServer.yaml
+
+func FixtureMcpServer_Populated() McpServer {
+	tools := []string{"search", "fetch", "index"}
+	return McpServer{
+		Id:        "my-mcp-server",
+		Name:      "My MCP Server",
+		Transport: McpServerTransport("stdio"),
+		Status:    McpServerStatus("connected"),
+		ToolCount: 3,
+		Tools:     &tools,
+	}
+}
+
+// FixtureMcpServer_ZeroValue — Go zero values.
+// Expected: FAIL because id="", name="", transport="" (not in enum),
+// status="" (not in enum), tool_count=0 (valid — minimum: 0).
+func FixtureMcpServer_ZeroValue() McpServer {
+	return McpServer{}
+}
+
+// FixtureMcpServer_Edge — disconnected server, empty tools list, SSE transport.
+func FixtureMcpServer_Edge() McpServer {
+	return McpServer{
+		Id:        "sse-server-" + repeatStr("x", 20),
+		Name:      "SSE Server 🔌",
+		Transport: McpServerTransport("sse"),
+		Status:    McpServerStatus("disconnected"),
+		ToolCount: 0,
+		// Tools omitted (nil) — allowed per schema (optional)
+	}
+}
+
+// FixtureMcpServer_NilToolsAllowed — tools is optional; omitting it is valid.
+// This is NOT the bug pattern (nil tools is optional per schema, not required).
+func FixtureMcpServer_NilToolsAllowed() McpServer {
+	return McpServer{
+		Id:        "mcp-no-tools",
+		Name:      "Pending Enumeration",
+		Transport: McpServerTransport("websocket"),
+		Status:    McpServerStatus("connected"),
+		ToolCount: 0,
+		Tools:     nil, // valid: tools is optional
+	}
+}
+
+// ── McpServerCreate ───────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/McpServerCreate.yaml
+
+func FixtureMcpServerCreate_Populated() McpServerCreate {
+	args := []string{"--port", "3000"}
+	return McpServerCreate{
+		Name:      "My MCP Server",
+		Command:   "npx @modelcontextprotocol/server-everything",
+		Args:      &args,
+		Transport: McpServerCreateTransport("stdio"),
+	}
+}
+
+// FixtureMcpServerCreate_ZeroValue — Go zero values.
+// Expected: FAIL because name="", command="", transport="" (not in enum).
+func FixtureMcpServerCreate_ZeroValue() McpServerCreate {
+	return McpServerCreate{}
+}
+
+// FixtureMcpServerCreate_Edge — no args (optional), SSE transport, unicode name.
+func FixtureMcpServerCreate_Edge() McpServerCreate {
+	return McpServerCreate{
+		Name:      "remote-server-sse-world",
+		Command:   "python -m mcp_server",
+		Args:      nil, // args is optional per schema
+		Transport: McpServerCreateTransport("sse"),
+	}
+}
+
+// ── AppState ─────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AppState.yaml
+
+func FixtureAppState_Populated() AppState {
+	lastRun := time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC)
+	score := float64(85.0)
+	godModeAvail := false
+	godModeOptedIn := false
+	devModeBypass := false
+	return AppState{
+		OnboardingComplete: true,
+		LastDoctorRun:      &lastRun,
+		LastDoctorScore:    &score,
+		GodModeAvailable:   &godModeAvail,
+		GodModeOptedIn:     &godModeOptedIn,
+		DevModeBypass:      &devModeBypass,
+	}
+}
+
+// FixtureAppState_ZeroValue — Go zero value.
+// Expected: PASS — onboarding_complete is the only required field,
+// and bool zero value (false) is a valid boolean (not an absent value).
+// This is one of the few types where ZeroValue passes.
+func FixtureAppState_ZeroValue() AppState {
+	return AppState{}
+}
+
+// FixtureAppState_Edge — onboarding not complete, god mode available and opted in.
+func FixtureAppState_Edge() AppState {
+	godModeAvail := true
+	godModeOptedIn := true
+	devModeBypass := true
+	return AppState{
+		OnboardingComplete: false,
+		GodModeAvailable:   &godModeAvail,
+		GodModeOptedIn:     &godModeOptedIn,
+		DevModeBypass:      &devModeBypass,
+	}
+}
+
+// ── ValidateTokenResponse ─────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ValidateTokenResponse.yaml
+
+func FixtureValidateTokenResponse_Populated() ValidateTokenResponse {
+	return ValidateTokenResponse{
+		Username: "admin",
+		Role:     ValidateTokenResponseRole("admin"),
+	}
+}
+
+// FixtureValidateTokenResponse_ZeroValue — Go zero values.
+// Expected: FAIL because username="", role="" (not in enum [admin, user]).
+func FixtureValidateTokenResponse_ZeroValue() ValidateTokenResponse {
+	return ValidateTokenResponse{}
+}
+
+// FixtureValidateTokenResponse_Edge — user role, unicode username.
+func FixtureValidateTokenResponse_Edge() ValidateTokenResponse {
+	return ValidateTokenResponse{
+		Username: "unicode-user-🔑-" + repeatStr("a", 20),
+		Role:     ValidateTokenResponseRole("user"),
+	}
+}
+
+// ── DoctorIssue (via DoctorResult.Issues inline struct) ───────────────────────
+// Note: oapi-codegen inlined DoctorIssue as an anonymous struct inside DoctorResult.
+// Tests are written against DoctorResult (which includes issues) and the
+// component schema DoctorIssue.yaml directly via raw JSON.
+// Traces to: contracts/components/schemas/DoctorIssue.yaml
+
+// FixtureDoctorIssueJSON_Populated — returns a raw JSON map matching DoctorIssue schema.
+// Used in raw-JSON contract tests since there is no named Go type for DoctorIssue.
+func FixtureDoctorIssueJSON_Populated() map[string]any {
+	return map[string]any{
+		"id":             "no-provider-configured",
+		"severity":       "high",
+		"title":          "No LLM provider configured",
+		"description":    "No API provider has been configured. The agent cannot generate responses.",
+		"recommendation": "Go to Settings > Providers and add an API key.",
+		"action_link":    "/settings/providers",
+		"action_label":   "Configure Provider",
+	}
+}
+
+// FixtureDoctorIssueJSON_ZeroValue — empty map → missing all required fields.
+func FixtureDoctorIssueJSON_ZeroValue() map[string]any {
+	return map[string]any{}
+}
+
+// FixtureDoctorIssueJSON_Edge — low severity, no optional fields.
+func FixtureDoctorIssueJSON_Edge() map[string]any {
+	return map[string]any{
+		"id":             "master-key-permissions",
+		"severity":       "low",
+		"title":          "Master key file has lax permissions",
+		"description":    "The master.key file should be mode 0600 to prevent unauthorized reads.",
+		"recommendation": "Run: chmod 600 ~/.omnipus/master.key",
+	}
+}
+
+// ── DoctorResult ─────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/DoctorResult.yaml
+
+func FixtureDoctorResult_Populated() DoctorResult {
+	actionLink := "/settings/providers"
+	actionLabel := "Configure Provider"
+	return DoctorResult{
+		Score:     85.0,
+		CheckedAt: time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC),
+		Issues: []struct {
+			ActionLabel    *string                    `json:"action_label,omitempty"`
+			ActionLink     *string                    `json:"action_link,omitempty"`
+			Description    string                     `json:"description"`
+			Id             string                     `json:"id"`
+			Recommendation string                     `json:"recommendation"`
+			Severity       DoctorResultIssuesSeverity `json:"severity"`
+			Title          string                     `json:"title"`
+		}{
+			{
+				Id:             "no-provider-configured",
+				Severity:       DoctorResultIssuesSeverity("high"),
+				Title:          "No LLM provider configured",
+				Description:    "No API provider has been configured.",
+				Recommendation: "Go to Settings > Providers and add an API key.",
+				ActionLink:     &actionLink,
+				ActionLabel:    &actionLabel,
+			},
+		},
+	}
+}
+
+// FixtureDoctorResult_ZeroValue — Go zero values.
+// Expected: FAIL because score=0 (valid; minimum:0), but checked_at=time.Time{} marshals
+// to "0001-01-01T00:00:00Z" (valid RFC3339). The issues slice nil → JSON null → FAIL
+// because issues is required type:array.
+func FixtureDoctorResult_ZeroValue() DoctorResult {
+	return DoctorResult{}
+}
+
+// FixtureDoctorResult_Edge — perfect score, empty issues (valid), unicode checked_at.
+func FixtureDoctorResult_Edge() DoctorResult {
+	return DoctorResult{
+		Score:     100.0,
+		CheckedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Issues: []struct {
+			ActionLabel    *string                    `json:"action_label,omitempty"`
+			ActionLink     *string                    `json:"action_link,omitempty"`
+			Description    string                     `json:"description"`
+			Id             string                     `json:"id"`
+			Recommendation string                     `json:"recommendation"`
+			Severity       DoctorResultIssuesSeverity `json:"severity"`
+			Title          string                     `json:"title"`
+		}{}, // empty array is valid — score 100 means no issues
+	}
+}
+
+// FixtureDoctorResult_NilIssues — issues nil → JSON null → schema violation.
+func FixtureDoctorResult_NilIssues() DoctorResult {
+	return DoctorResult{
+		Score:     75.0,
+		CheckedAt: time.Date(2026, 5, 17, 10, 0, 0, 0, time.UTC),
+		Issues:    nil, // THE BUG: nil slice → JSON null → schema requires type: array
+	}
+}
+
+// ── DevicePending (via DevicesResponse.Pending inline struct) ─────────────────
+// Note: oapi-codegen inlined DevicePending as an anonymous struct inside DevicesResponse.
+// Tests use raw JSON maps for DoctorIssue-style direct schema validation.
+// Traces to: contracts/components/schemas/DevicePending.yaml
+
+func FixtureDevicePendingJSON_Populated() map[string]any {
+	return map[string]any{
+		"device_id":    "dev_01HXYZ",
+		"fingerprint":  "SHA256:abc123...",
+		"pairing_code": "BLUE-TIGER-42",
+		"device_name":  "Alice's MacBook",
+		"created_at":   "2026-05-16T10:00:00Z",
+		"expires_at":   "2026-05-16T10:10:00Z",
+	}
+}
+
+func FixtureDevicePendingJSON_ZeroValue() map[string]any {
+	return map[string]any{}
+}
+
+func FixtureDevicePendingJSON_Edge() map[string]any {
+	return map[string]any{
+		"device_id":    "dev-" + repeatStr("f", 36),
+		"fingerprint":  "SHA256:" + repeatStr("a", 43) + "=",
+		"pairing_code": "ORANGE-FALCON-99",
+		"device_name":  "device-name-unicode-key",
+		"created_at":   "2026-01-01T00:00:00Z",
+		"expires_at":   "2026-01-01T00:10:00Z",
+	}
+}
+
+// ── DevicePaired (via DevicesResponse.Paired inline struct) ───────────────────
+// Traces to: contracts/components/schemas/DevicePaired.yaml
+
+func FixtureDevicePairedJSON_Populated() map[string]any {
+	return map[string]any{
+		"device_id":    "dev_01HXYZ",
+		"fingerprint":  "SHA256:abc123...",
+		"device_name":  "Alice's MacBook",
+		"paired_at":    "2026-05-16T10:00:00Z",
+		"last_seen_at": "2026-05-16T11:30:00Z",
+		"status":       "active",
+	}
+}
+
+func FixtureDevicePairedJSON_ZeroValue() map[string]any {
+	return map[string]any{}
+}
+
+func FixtureDevicePairedJSON_Edge() map[string]any {
+	return map[string]any{
+		"device_id":    "dev-" + repeatStr("b", 36),
+		"fingerprint":  "SHA256:" + repeatStr("b", 43) + "=",
+		"device_name":  "Revoked Laptop 💻",
+		"paired_at":    "2026-01-01T00:00:00Z",
+		"last_seen_at": "2026-01-01T12:00:00Z",
+		"status":       "revoked",
+	}
+}
+
+// ── DevicesResponse ───────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/DevicesResponse.yaml
+
+func FixtureDevicesResponse_Populated() DevicesResponse {
+	return DevicesResponse{
+		Pending: []struct {
+			CreatedAt   time.Time `json:"created_at"`
+			DeviceId    string    `json:"device_id"`
+			DeviceName  string    `json:"device_name"`
+			ExpiresAt   time.Time `json:"expires_at"`
+			Fingerprint string    `json:"fingerprint"`
+			PairingCode string    `json:"pairing_code"`
+		}{
+			{
+				DeviceId:    "dev_pending_01",
+				Fingerprint: "SHA256:pending123...",
+				PairingCode: "BLUE-TIGER-42",
+				DeviceName:  "Alice's MacBook",
+				CreatedAt:   time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC),
+				ExpiresAt:   time.Date(2026, 5, 16, 10, 10, 0, 0, time.UTC),
+			},
+		},
+		Paired: []struct {
+			DeviceId    string                      `json:"device_id"`
+			DeviceName  string                      `json:"device_name"`
+			Fingerprint string                      `json:"fingerprint"`
+			LastSeenAt  time.Time                   `json:"last_seen_at"`
+			PairedAt    time.Time                   `json:"paired_at"`
+			Status      DevicesResponsePairedStatus `json:"status"`
+		}{
+			{
+				DeviceId:    "dev_paired_01",
+				Fingerprint: "SHA256:paired456...",
+				DeviceName:  "Bob's iPhone",
+				PairedAt:    time.Date(2026, 5, 15, 9, 0, 0, 0, time.UTC),
+				LastSeenAt:  time.Date(2026, 5, 16, 11, 30, 0, 0, time.UTC),
+				Status:      DevicesResponsePairedStatusActive,
+			},
+		},
+	}
+}
+
+// FixtureDevicesResponse_ZeroValue — Go zero values.
+// Expected: FAIL because pending=nil and paired=nil (both marshal to null,
+// schema requires type: array for both fields).
+func FixtureDevicesResponse_ZeroValue() DevicesResponse {
+	return DevicesResponse{}
+}
+
+// FixtureDevicesResponse_Edge — empty arrays (no devices) — valid, common state.
+func FixtureDevicesResponse_Edge() DevicesResponse {
+	return DevicesResponse{
+		Pending: []struct {
+			CreatedAt   time.Time `json:"created_at"`
+			DeviceId    string    `json:"device_id"`
+			DeviceName  string    `json:"device_name"`
+			ExpiresAt   time.Time `json:"expires_at"`
+			Fingerprint string    `json:"fingerprint"`
+			PairingCode string    `json:"pairing_code"`
+		}{},
+		Paired: []struct {
+			DeviceId    string                      `json:"device_id"`
+			DeviceName  string                      `json:"device_name"`
+			Fingerprint string                      `json:"fingerprint"`
+			LastSeenAt  time.Time                   `json:"last_seen_at"`
+			PairedAt    time.Time                   `json:"paired_at"`
+			Status      DevicesResponsePairedStatus `json:"status"`
+		}{},
+	}
+}
+
+// ── BackupEntry (inlined in listBackups response, tested via raw JSON) ─────────
+// Note: oapi-codegen inlined BackupEntry as an anonymous object in the listBackups
+// response. Tests validate against the component schema BackupEntry.yaml directly.
+// Traces to: contracts/components/schemas/BackupEntry.yaml
+
+func FixtureBackupEntryJSON_Populated() map[string]any {
+	return map[string]any{
+		"filename":   "omnipus-backup-2026-05-16T10-00-00Z.tar.gz",
+		"size_bytes": int64(1048576),
+		"created_at": "2026-05-16T10:00:00Z",
+	}
+}
+
+func FixtureBackupEntryJSON_ZeroValue() map[string]any {
+	return map[string]any{}
+}
+
+func FixtureBackupEntryJSON_Edge() map[string]any {
+	return map[string]any{
+		"filename":   "omnipus-backup-" + repeatStr("x", 30) + ".tar.gz",
+		"size_bytes": int64(0), // minimum: 0 — empty archive is valid
+		"created_at": "2026-01-01T00:00:00Z",
+	}
+}
+
+// ── StorageStats ──────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/StorageStats.yaml
+
+func FixtureStorageStats_Populated() StorageStats {
+	oldest := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	warnings := []string{"workspace size unavailable: permission denied"}
+	return StorageStats{
+		WorkspaceSizeBytes: 52428800,
+		SessionCount:       42,
+		MemoryEntryCount:   7,
+		OldestSessionDate:  &oldest,
+		Warnings:           &warnings,
+	}
+}
+
+// FixtureStorageStats_ZeroValue — Go zero values.
+// Expected: PASS — all required fields (workspace_size_bytes, session_count,
+// memory_entry_count) are integers with zero as a valid value (minimum: 0).
+// Zero value is a legitimate "empty system" state.
+func FixtureStorageStats_ZeroValue() StorageStats {
+	return StorageStats{}
+}
+
+// FixtureStorageStats_Edge — no sessions, no memory, multiple warnings.
+func FixtureStorageStats_Edge() StorageStats {
+	warnings := []string{
+		"agent store 'custom-agent-1' unreadable: permission denied",
+		"agent store 'custom-agent-2' unreadable: file not found",
+	}
+	return StorageStats{
+		WorkspaceSizeBytes: 0,
+		SessionCount:       0,
+		MemoryEntryCount:   0,
+		Warnings:           &warnings,
+	}
+}
+
+// FixtureStorageStats_NilWarningsAllowed — warnings is optional; nil is valid.
+func FixtureStorageStats_NilWarningsAllowed() StorageStats {
+	oldest := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	return StorageStats{
+		WorkspaceSizeBytes: 1024,
+		SessionCount:       3,
+		MemoryEntryCount:   0,
+		OldestSessionDate:  &oldest,
+		Warnings:           nil, // optional — nil is valid
+	}
+}
+
+// ── MeInfo ────────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/MeInfo.yaml
+
+func FixtureMeInfo_Populated() MeInfo {
+	return MeInfo{
+		Role: MeInfoRole("admin"),
+	}
+}
+
+// FixtureMeInfo_ZeroValue — Go zero value.
+// Expected: FAIL because role="" (not in enum [admin, user]).
+func FixtureMeInfo_ZeroValue() MeInfo {
+	return MeInfo{}
+}
+
+// FixtureMeInfo_Edge — user role (the other enum value).
+func FixtureMeInfo_Edge() MeInfo {
+	return MeInfo{
+		Role: MeInfoRole("user"),
+	}
+}
+
+// ── ExecApprovalExpiredFrame ──────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ExecApprovalExpiredFrame.yaml
+// This is the fix-D type — schema existed but fixtures/tests were missing.
+
+func FixtureExecApprovalExpiredFrame_Populated() ExecApprovalExpiredFrame {
+	msg := "Exec approval for 'rm -rf /tmp/build' expired after 30s — no admin response"
+	return ExecApprovalExpiredFrame{
+		Type:      "exec_approval_expired",
+		Id:        "exec-req-550e8400-e29b-41d4-a716-446655440001",
+		SessionId: "sess-550e8400-e29b-41d4-a716-446655440002",
+		Message:   &msg,
+	}
+}
+
+// FixtureExecApprovalExpiredFrame_ZeroValue — Go zero values.
+// Expected: FAIL because type="" (const: exec_approval_expired), id="", session_id="".
+func FixtureExecApprovalExpiredFrame_ZeroValue() ExecApprovalExpiredFrame {
+	return ExecApprovalExpiredFrame{}
+}
+
+// FixtureExecApprovalExpiredFrame_Edge — no message (optional), short IDs.
+func FixtureExecApprovalExpiredFrame_Edge() ExecApprovalExpiredFrame {
+	return ExecApprovalExpiredFrame{
+		Type:      "exec_approval_expired",
+		Id:        "exec-req-" + repeatStr("e", 36),
+		SessionId: "sess-" + repeatStr("s", 36),
+		// Message omitted — optional per schema
+	}
+}
+
+// ── SessionCloseFrame ─────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/SessionCloseFrame.yaml
+// This is the fix-D type — schema existed but fixtures/tests were missing.
+
+func FixtureSessionCloseFrame_Populated() SessionCloseFrame {
+	return SessionCloseFrame{
+		Type:      "session_close",
+		SessionId: "sess-550e8400-e29b-41d4-a716-446655440003",
+	}
+}
+
+// FixtureSessionCloseFrame_ZeroValue — Go zero values.
+// Expected: FAIL because type="" (const: session_close), session_id="" (minLength: 1).
+func FixtureSessionCloseFrame_ZeroValue() SessionCloseFrame {
+	return SessionCloseFrame{}
+}
+
+// FixtureSessionCloseFrame_Edge — long session_id (valid).
+func FixtureSessionCloseFrame_Edge() SessionCloseFrame {
+	return SessionCloseFrame{
+		Type:      "session_close",
+		SessionId: "sess-" + repeatStr("c", 60),
+	}
+}
+
 // ── helper functions ─────────────────────────────────────────────────────────
 
 func strPtr(s string) *string { return &s }

@@ -1058,3 +1058,645 @@ func TestContract_PingFrame_Edge(t *testing.T) {
 	// PingFrame has only the type field; edge = populated (both are minimal)
 	mustPassAsyncAPI(t, "PingFrame", FixturePingFrame_Edge())
 }
+
+// ── Phase 7 round-2 — 13 new types from fix-H + 2 from fix-D ────────────────
+// Each type gets: Populated (mustPass), ZeroValue (mustFail for most),
+// Edge (mustPass), plus NilXxxRejected tests for required array/map fields.
+// Traces to: docs/plan/quizzical-marinating-frog.md — Phase 4 contract test spec
+
+// ── Task ─────────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/Task.yaml
+
+func TestContract_Task_Populated(t *testing.T) {
+	// All required + optional fields set. Verifies a fully-hydrated task validates.
+	// Traces to: Task.yaml — required: [id, title, prompt, priority, status, trigger_type]
+	mustPassComponent(t, "Task", FixtureTask_Populated())
+}
+
+func TestContract_Task_ZeroValue(t *testing.T) {
+	// Zero value: id="", title="", prompt="", status="" (not in enum), trigger_type="" (not in enum).
+	// Traces to: Task.yaml — status and trigger_type are enum-constrained
+	mustFailComponent(t, "Task", FixtureTask_ZeroValue(),
+		"zero value has empty required fields; status and trigger_type are not valid enum values")
+}
+
+func TestContract_Task_Edge(t *testing.T) {
+	// queued task, no agent, unicode title, maximum priority
+	// Traces to: Task.yaml
+	mustPassComponent(t, "Task", FixtureTask_Edge())
+}
+
+func TestContract_Task_Differentiation(t *testing.T) {
+	// Two different Task fixtures must produce different JSON.
+	// Guards against hardcoded stubs.
+	f1 := FixtureTask_Populated()
+	f2 := FixtureTask_Edge()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"Populated and Edge Task fixtures must produce different JSON")
+	mustPassComponent(t, "Task", f1)
+	mustPassComponent(t, "Task", f2)
+}
+
+// ── McpServer ─────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/McpServer.yaml
+
+func TestContract_McpServer_Populated(t *testing.T) {
+	// Fully populated MCP server with tools list.
+	// Traces to: McpServer.yaml — required: [id, name, transport, status, tool_count]
+	mustPassComponent(t, "McpServer", FixtureMcpServer_Populated())
+}
+
+func TestContract_McpServer_ZeroValue(t *testing.T) {
+	// Zero value: id="", name="", transport="" (not in enum), status="" (not in enum).
+	// Traces to: McpServer.yaml — transport and status are enum-constrained
+	mustFailComponent(t, "McpServer", FixtureMcpServer_ZeroValue(),
+		"zero value has empty required fields; transport and status are not valid enum values")
+}
+
+func TestContract_McpServer_Edge(t *testing.T) {
+	// Disconnected server with SSE transport and no tools.
+	// Traces to: McpServer.yaml
+	mustPassComponent(t, "McpServer", FixtureMcpServer_Edge())
+}
+
+func TestContract_McpServer_NilToolsAllowed(t *testing.T) {
+	// tools is optional per schema — nil (omitempty) is valid.
+	// This is NOT the bug pattern; we document that nil tools is intentional and valid.
+	// Traces to: McpServer.yaml — tools is not in required list (optional)
+	mustPassComponent(t, "McpServer", FixtureMcpServer_NilToolsAllowed())
+}
+
+func TestContract_McpServer_Differentiation(t *testing.T) {
+	// Two McpServer fixtures with different transports/statuses must differ.
+	f1 := FixtureMcpServer_Populated()
+	f2 := FixtureMcpServer_Edge()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"Populated and Edge McpServer fixtures must produce different JSON")
+	mustPassComponent(t, "McpServer", f1)
+	mustPassComponent(t, "McpServer", f2)
+}
+
+// ── McpServerCreate ───────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/McpServerCreate.yaml
+
+func TestContract_McpServerCreate_Populated(t *testing.T) {
+	// Fully populated create request with args.
+	// Traces to: McpServerCreate.yaml — required: [name, command, transport]
+	mustPassComponent(t, "McpServerCreate", FixtureMcpServerCreate_Populated())
+}
+
+func TestContract_McpServerCreate_ZeroValue(t *testing.T) {
+	// Zero value: name="", command="", transport="" (not in enum).
+	// Traces to: McpServerCreate.yaml — transport is enum-constrained
+	mustFailComponent(t, "McpServerCreate", FixtureMcpServerCreate_ZeroValue(),
+		"zero value has empty required fields; transport is not a valid enum value")
+}
+
+func TestContract_McpServerCreate_Edge(t *testing.T) {
+	// No args (optional), SSE transport, unicode name.
+	// Traces to: McpServerCreate.yaml
+	mustPassComponent(t, "McpServerCreate", FixtureMcpServerCreate_Edge())
+}
+
+// ── AppState ─────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/AppState.yaml
+
+func TestContract_AppState_Populated(t *testing.T) {
+	// All optional fields set alongside the required onboarding_complete bool.
+	// Traces to: AppState.yaml — required: [onboarding_complete]
+	mustPassComponent(t, "AppState", FixtureAppState_Populated())
+}
+
+func TestContract_AppState_ZeroValue(t *testing.T) {
+	// ZeroValue passes: onboarding_complete=false is a valid boolean.
+	// AppState is one of the few types where Go zero value is schema-valid.
+	// Traces to: AppState.yaml — boolean fields have no enum constraint
+	mustPassComponent(t, "AppState", FixtureAppState_ZeroValue())
+}
+
+func TestContract_AppState_Edge(t *testing.T) {
+	// God mode available and opted in, dev mode bypass active.
+	// Traces to: AppState.yaml
+	mustPassComponent(t, "AppState", FixtureAppState_Edge())
+}
+
+func TestContract_AppState_Differentiation(t *testing.T) {
+	// Populated (onboarding complete, god mode off) vs Edge (onboarding incomplete, god mode on).
+	f1 := FixtureAppState_Populated()
+	f2 := FixtureAppState_Edge()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"Populated and Edge AppState fixtures must produce different JSON")
+	mustPassComponent(t, "AppState", f1)
+	mustPassComponent(t, "AppState", f2)
+}
+
+// ── ValidateTokenResponse ─────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ValidateTokenResponse.yaml
+
+func TestContract_ValidateTokenResponse_Populated(t *testing.T) {
+	// admin role.
+	// Traces to: ValidateTokenResponse.yaml — required: [username, role]
+	mustPassComponent(t, "ValidateTokenResponse", FixtureValidateTokenResponse_Populated())
+}
+
+func TestContract_ValidateTokenResponse_ZeroValue(t *testing.T) {
+	// username="", role="" — both required; role not in enum [admin, user].
+	// Traces to: ValidateTokenResponse.yaml — role is enum-constrained
+	mustFailComponent(t, "ValidateTokenResponse", FixtureValidateTokenResponse_ZeroValue(),
+		"zero value has empty required fields; role is not a valid enum value")
+}
+
+func TestContract_ValidateTokenResponse_Edge(t *testing.T) {
+	// user role (the other enum value), unicode username.
+	// Traces to: ValidateTokenResponse.yaml
+	mustPassComponent(t, "ValidateTokenResponse", FixtureValidateTokenResponse_Edge())
+}
+
+func TestContract_ValidateTokenResponse_Differentiation(t *testing.T) {
+	// admin vs user role — different role values produce different JSON.
+	f1 := FixtureValidateTokenResponse_Populated()
+	f2 := FixtureValidateTokenResponse_Edge()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"admin-role and user-role ValidateTokenResponse fixtures must produce different JSON")
+	mustPassComponent(t, "ValidateTokenResponse", f1)
+	mustPassComponent(t, "ValidateTokenResponse", f2)
+}
+
+// ── DoctorIssue ───────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/DoctorIssue.yaml
+// Note: oapi-codegen inlined DoctorIssue inside DoctorResult; we test the schema
+// directly via raw JSON marshaling and validateAgainstComponentSchemaRawJSON.
+
+func TestContract_DoctorIssue_Populated(t *testing.T) {
+	// All required + optional fields; verifies the DoctorIssue component schema.
+	// Traces to: DoctorIssue.yaml — required: [id, severity, title, description, recommendation]
+	raw, err := json.Marshal(FixtureDoctorIssueJSON_Populated())
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "DoctorIssue", raw),
+		"fully-populated DoctorIssue must validate against DoctorIssue.yaml")
+}
+
+func TestContract_DoctorIssue_ZeroValue(t *testing.T) {
+	// Empty map — missing all required fields.
+	// Traces to: DoctorIssue.yaml — required: [id, severity, title, description, recommendation]
+	raw, err := json.Marshal(FixtureDoctorIssueJSON_ZeroValue())
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "DoctorIssue", raw),
+		"empty object must fail DoctorIssue schema — all required fields missing")
+}
+
+func TestContract_DoctorIssue_Edge(t *testing.T) {
+	// Low severity, no optional action fields.
+	// Traces to: DoctorIssue.yaml
+	raw, err := json.Marshal(FixtureDoctorIssueJSON_Edge())
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "DoctorIssue", raw),
+		"low-severity DoctorIssue without optional fields must validate")
+}
+
+func TestContract_DoctorIssue_InvalidSeverity(t *testing.T) {
+	// severity must be enum [high, medium, low] — "critical" is not valid.
+	// Traces to: DoctorIssue.yaml — severity: enum: [high, medium, low]
+	issue := map[string]any{
+		"id":             "test-issue",
+		"severity":       "critical", // NOT in enum
+		"title":          "Test Issue",
+		"description":    "A test issue.",
+		"recommendation": "Fix it.",
+	}
+	raw, err := json.Marshal(issue)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "DoctorIssue", raw),
+		"severity='critical' must fail — not in enum [high, medium, low]")
+}
+
+// ── DoctorResult ─────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/DoctorResult.yaml
+
+func TestContract_DoctorResult_Populated(t *testing.T) {
+	// Populated result with one high-severity issue.
+	// Traces to: DoctorResult.yaml — required: [score, issues, checked_at]
+	mustPassComponent(t, "DoctorResult", FixtureDoctorResult_Populated())
+}
+
+func TestContract_DoctorResult_ZeroValue(t *testing.T) {
+	// Zero value: issues=nil marshals to null — schema requires type: array.
+	// Traces to: DoctorResult.yaml — issues is required type: array
+	mustFailComponent(t, "DoctorResult", FixtureDoctorResult_ZeroValue(),
+		"zero value has nil issues (marshals to null); schema requires type: array")
+}
+
+func TestContract_DoctorResult_Edge(t *testing.T) {
+	// Perfect score (100), empty issues array (valid).
+	// Traces to: DoctorResult.yaml
+	mustPassComponent(t, "DoctorResult", FixtureDoctorResult_Edge())
+}
+
+func TestContract_DoctorResult_NilIssuesRejected(t *testing.T) {
+	// nil issues → JSON null → schema violation (issues is required type: array).
+	// Locks the nil-slice bug pattern for DoctorResult.
+	// Traces to: DoctorResult.yaml (issues: required, type: array)
+
+	fixture := FixtureDoctorResult_NilIssues()
+
+	raw, err := json.Marshal(fixture)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"issues":null`,
+		"nil Issues must marshal to null to exercise the bug path")
+
+	validationErr := validateAgainstComponentSchemaRawJSON(t, "DoctorResult", raw)
+	assert.Error(t, validationErr,
+		"issues:null MUST fail validation — DoctorResult.issues is required type: array")
+}
+
+func TestContract_DoctorResult_Differentiation(t *testing.T) {
+	// Populated (score=85, issues present) vs Edge (score=100, empty issues).
+	f1 := FixtureDoctorResult_Populated()
+	f2 := FixtureDoctorResult_Edge()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"DoctorResult with issues vs without must produce different JSON")
+	mustPassComponent(t, "DoctorResult", f1)
+	mustPassComponent(t, "DoctorResult", f2)
+}
+
+// ── DevicePending ─────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/DevicePending.yaml
+// Note: oapi-codegen inlined DevicePending inside DevicesResponse;
+// we test the schema directly via raw JSON.
+
+func TestContract_DevicePending_Populated(t *testing.T) {
+	// All required fields set.
+	// Traces to: DevicePending.yaml — required: [device_id, fingerprint, pairing_code, device_name, created_at, expires_at]
+	raw, err := json.Marshal(FixtureDevicePendingJSON_Populated())
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "DevicePending", raw),
+		"fully-populated DevicePending must validate")
+}
+
+func TestContract_DevicePending_ZeroValue(t *testing.T) {
+	// Empty map — missing all required fields.
+	// Traces to: DevicePending.yaml
+	raw, err := json.Marshal(FixtureDevicePendingJSON_ZeroValue())
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "DevicePending", raw),
+		"empty object must fail DevicePending schema — all required fields missing")
+}
+
+func TestContract_DevicePending_Edge(t *testing.T) {
+	// Long IDs, unicode device name.
+	// Traces to: DevicePending.yaml
+	raw, err := json.Marshal(FixtureDevicePendingJSON_Edge())
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "DevicePending", raw),
+		"edge-case DevicePending with unicode name must validate")
+}
+
+func TestContract_DevicePending_Differentiation(t *testing.T) {
+	// Two different DevicePending objects must produce different JSON.
+	raw1, err := json.Marshal(FixtureDevicePendingJSON_Populated())
+	require.NoError(t, err)
+	raw2, err := json.Marshal(FixtureDevicePendingJSON_Edge())
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"two different DevicePending fixtures must produce different JSON")
+}
+
+// ── DevicePaired ──────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/DevicePaired.yaml
+// Note: oapi-codegen inlined DevicePaired inside DevicesResponse;
+// we test the schema directly via raw JSON.
+
+func TestContract_DevicePaired_Populated(t *testing.T) {
+	// active status device.
+	// Traces to: DevicePaired.yaml — required: [device_id, fingerprint, device_name, paired_at, last_seen_at, status]
+	raw, err := json.Marshal(FixtureDevicePairedJSON_Populated())
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "DevicePaired", raw),
+		"active DevicePaired must validate")
+}
+
+func TestContract_DevicePaired_ZeroValue(t *testing.T) {
+	// Empty map — missing all required fields.
+	// Traces to: DevicePaired.yaml
+	raw, err := json.Marshal(FixtureDevicePairedJSON_ZeroValue())
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "DevicePaired", raw),
+		"empty object must fail DevicePaired schema — all required fields missing")
+}
+
+func TestContract_DevicePaired_Edge(t *testing.T) {
+	// revoked status (the other enum value), unicode device name.
+	// Traces to: DevicePaired.yaml
+	raw, err := json.Marshal(FixtureDevicePairedJSON_Edge())
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "DevicePaired", raw),
+		"revoked DevicePaired with unicode name must validate")
+}
+
+func TestContract_DevicePaired_InvalidStatus(t *testing.T) {
+	// status must be enum [active, revoked] — "suspended" is not valid.
+	// Traces to: DevicePaired.yaml — status: enum: [active, revoked]
+	paired := map[string]any{
+		"device_id":    "dev_01",
+		"fingerprint":  "SHA256:abc",
+		"device_name":  "Test Device",
+		"paired_at":    "2026-05-16T10:00:00Z",
+		"last_seen_at": "2026-05-16T11:00:00Z",
+		"status":       "suspended", // NOT in enum
+	}
+	raw, err := json.Marshal(paired)
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "DevicePaired", raw),
+		"status='suspended' must fail — not in enum [active, revoked]")
+}
+
+// ── DevicesResponse ───────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/DevicesResponse.yaml
+
+func TestContract_DevicesResponse_Populated(t *testing.T) {
+	// Both pending and paired arrays have one entry each.
+	// Traces to: DevicesResponse.yaml — required: [pending, paired]
+	mustPassComponent(t, "DevicesResponse", FixtureDevicesResponse_Populated())
+}
+
+func TestContract_DevicesResponse_ZeroValue(t *testing.T) {
+	// Zero value: pending=nil and paired=nil — both marshal to null.
+	// Traces to: DevicesResponse.yaml — both required as type: array
+	mustFailComponent(t, "DevicesResponse", FixtureDevicesResponse_ZeroValue(),
+		"zero value has nil pending and paired slices (marshal to null); both required as type: array")
+}
+
+func TestContract_DevicesResponse_Edge(t *testing.T) {
+	// Empty arrays (no devices) — valid common state.
+	// Traces to: DevicesResponse.yaml
+	mustPassComponent(t, "DevicesResponse", FixtureDevicesResponse_Edge())
+}
+
+func TestContract_DevicesResponse_NilPendingRejected(t *testing.T) {
+	// pending nil → JSON null → schema violation.
+	// Locks the nil-slice bug pattern for DevicesResponse.pending.
+	// Traces to: DevicesResponse.yaml (pending: required, type: array)
+
+	fixture := DevicesResponse{
+		Pending: nil, // THE BUG: nil → JSON null
+		Paired: []struct {
+			DeviceId    string                      `json:"device_id"`
+			DeviceName  string                      `json:"device_name"`
+			Fingerprint string                      `json:"fingerprint"`
+			LastSeenAt  time.Time                   `json:"last_seen_at"`
+			PairedAt    time.Time                   `json:"paired_at"`
+			Status      DevicesResponsePairedStatus `json:"status"`
+		}{},
+	}
+
+	raw, err := json.Marshal(fixture)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"pending":null`,
+		"nil Pending must marshal to null")
+
+	validationErr := validateAgainstComponentSchemaRawJSON(t, "DevicesResponse", raw)
+	assert.Error(t, validationErr,
+		"pending:null MUST fail validation — DevicesResponse.pending is required type: array")
+}
+
+func TestContract_DevicesResponse_NilPairedRejected(t *testing.T) {
+	// paired nil → JSON null → schema violation.
+	// Locks the nil-slice bug pattern for DevicesResponse.paired.
+	// Traces to: DevicesResponse.yaml (paired: required, type: array)
+
+	fixture := DevicesResponse{
+		Pending: []struct {
+			CreatedAt   time.Time `json:"created_at"`
+			DeviceId    string    `json:"device_id"`
+			DeviceName  string    `json:"device_name"`
+			ExpiresAt   time.Time `json:"expires_at"`
+			Fingerprint string    `json:"fingerprint"`
+			PairingCode string    `json:"pairing_code"`
+		}{},
+		Paired: nil, // THE BUG: nil → JSON null
+	}
+
+	raw, err := json.Marshal(fixture)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"paired":null`,
+		"nil Paired must marshal to null")
+
+	validationErr := validateAgainstComponentSchemaRawJSON(t, "DevicesResponse", raw)
+	assert.Error(t, validationErr,
+		"paired:null MUST fail validation — DevicesResponse.paired is required type: array")
+}
+
+// ── BackupEntry ───────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/BackupEntry.yaml
+// Note: oapi-codegen inlined BackupEntry inside the listBackups response;
+// we test the schema directly via raw JSON.
+
+func TestContract_BackupEntry_Populated(t *testing.T) {
+	// All required fields set.
+	// Traces to: BackupEntry.yaml — required: [filename, size_bytes, created_at]
+	raw, err := json.Marshal(FixtureBackupEntryJSON_Populated())
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "BackupEntry", raw),
+		"fully-populated BackupEntry must validate")
+}
+
+func TestContract_BackupEntry_ZeroValue(t *testing.T) {
+	// Empty map — missing all required fields.
+	// Traces to: BackupEntry.yaml
+	raw, err := json.Marshal(FixtureBackupEntryJSON_ZeroValue())
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "BackupEntry", raw),
+		"empty object must fail BackupEntry schema — all required fields missing")
+}
+
+func TestContract_BackupEntry_Edge(t *testing.T) {
+	// Zero-byte size (valid), long filename.
+	// Traces to: BackupEntry.yaml — size_bytes: minimum: 0
+	raw, err := json.Marshal(FixtureBackupEntryJSON_Edge())
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "BackupEntry", raw),
+		"zero-byte backup entry must validate — minimum: 0 is valid")
+}
+
+func TestContract_BackupEntry_Differentiation(t *testing.T) {
+	// Two BackupEntry fixtures must produce different JSON.
+	raw1, err := json.Marshal(FixtureBackupEntryJSON_Populated())
+	require.NoError(t, err)
+	raw2, err := json.Marshal(FixtureBackupEntryJSON_Edge())
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"two different BackupEntry fixtures must produce different JSON")
+}
+
+// ── StorageStats ──────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/StorageStats.yaml
+
+func TestContract_StorageStats_Populated(t *testing.T) {
+	// Fully populated with all optional fields.
+	// Traces to: StorageStats.yaml — required: [workspace_size_bytes, session_count, memory_entry_count]
+	mustPassComponent(t, "StorageStats", FixtureStorageStats_Populated())
+}
+
+func TestContract_StorageStats_ZeroValue(t *testing.T) {
+	// ZeroValue passes: all required fields are integers; zero is a valid value.
+	// StorageStats is one of the few types where Go zero value is schema-valid
+	// (represents an empty system with zero workspace, sessions, and memory).
+	// Traces to: StorageStats.yaml — all required fields are integers with minimum: 0
+	mustPassComponent(t, "StorageStats", FixtureStorageStats_ZeroValue())
+}
+
+func TestContract_StorageStats_Edge(t *testing.T) {
+	// Zero counts, multiple warnings.
+	// Traces to: StorageStats.yaml
+	mustPassComponent(t, "StorageStats", FixtureStorageStats_Edge())
+}
+
+func TestContract_StorageStats_NilWarningsAllowed(t *testing.T) {
+	// warnings is optional; nil is valid (schema: warnings is not in required list).
+	// Traces to: StorageStats.yaml — warnings is optional
+	mustPassComponent(t, "StorageStats", FixtureStorageStats_NilWarningsAllowed())
+}
+
+func TestContract_StorageStats_Differentiation(t *testing.T) {
+	// Populated (52MB workspace, 42 sessions) vs Edge (zero counts, warnings).
+	f1 := FixtureStorageStats_Populated()
+	f2 := FixtureStorageStats_Edge()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"StorageStats with data vs empty must produce different JSON")
+	mustPassComponent(t, "StorageStats", f1)
+	mustPassComponent(t, "StorageStats", f2)
+}
+
+// ── MeInfo ────────────────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/MeInfo.yaml
+
+func TestContract_MeInfo_Populated(t *testing.T) {
+	// admin role.
+	// Traces to: MeInfo.yaml — required: [role]
+	mustPassComponent(t, "MeInfo", FixtureMeInfo_Populated())
+}
+
+func TestContract_MeInfo_ZeroValue(t *testing.T) {
+	// role="" — not in enum [admin, user].
+	// Traces to: MeInfo.yaml — role is enum-constrained
+	mustFailComponent(t, "MeInfo", FixtureMeInfo_ZeroValue(),
+		"zero value has empty role field; not a valid enum value")
+}
+
+func TestContract_MeInfo_Edge(t *testing.T) {
+	// user role (the other enum value).
+	// Traces to: MeInfo.yaml
+	mustPassComponent(t, "MeInfo", FixtureMeInfo_Edge())
+}
+
+func TestContract_MeInfo_Differentiation(t *testing.T) {
+	// admin vs user role must produce different JSON.
+	f1 := FixtureMeInfo_Populated()
+	f2 := FixtureMeInfo_Edge()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"admin-role and user-role MeInfo fixtures must produce different JSON")
+	mustPassComponent(t, "MeInfo", f1)
+	mustPassComponent(t, "MeInfo", f2)
+}
+
+// ── ExecApprovalExpiredFrame ──────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/ExecApprovalExpiredFrame.yaml
+// This is the fix-D type — schema existed since fix-D but no fixtures/tests were written.
+
+func TestContract_ExecApprovalExpiredFrame_Populated(t *testing.T) {
+	// All required fields + optional message.
+	// Traces to: ExecApprovalExpiredFrame.yaml — required: [type, id, session_id]
+	mustPassAsyncAPI(t, "ExecApprovalExpiredFrame", FixtureExecApprovalExpiredFrame_Populated())
+}
+
+func TestContract_ExecApprovalExpiredFrame_ZeroValue(t *testing.T) {
+	// type="" (const: exec_approval_expired), id="", session_id="" — all required.
+	// Traces to: ExecApprovalExpiredFrame.yaml — type has const constraint
+	mustFailAsyncAPI(t, "ExecApprovalExpiredFrame", FixtureExecApprovalExpiredFrame_ZeroValue(),
+		"zero value has empty type (const), id, and session_id fields")
+}
+
+func TestContract_ExecApprovalExpiredFrame_Edge(t *testing.T) {
+	// No message (optional), long IDs.
+	// Traces to: ExecApprovalExpiredFrame.yaml
+	mustPassAsyncAPI(t, "ExecApprovalExpiredFrame", FixtureExecApprovalExpiredFrame_Edge())
+}
+
+func TestContract_ExecApprovalExpiredFrame_Differentiation(t *testing.T) {
+	// Two ExecApprovalExpiredFrame fixtures must produce different JSON.
+	f1 := FixtureExecApprovalExpiredFrame_Populated()
+	f2 := FixtureExecApprovalExpiredFrame_Edge()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"Populated and Edge ExecApprovalExpiredFrame fixtures must produce different JSON")
+	mustPassAsyncAPI(t, "ExecApprovalExpiredFrame", f1)
+	mustPassAsyncAPI(t, "ExecApprovalExpiredFrame", f2)
+}
+
+// ── SessionCloseFrame ─────────────────────────────────────────────────────────
+// Traces to: contracts/components/schemas/SessionCloseFrame.yaml
+// This is the fix-D type — schema existed since fix-D but no fixtures/tests were written.
+
+func TestContract_SessionCloseFrame_Populated(t *testing.T) {
+	// Both required fields set.
+	// Traces to: SessionCloseFrame.yaml — required: [type, session_id]
+	mustPassAsyncAPI(t, "SessionCloseFrame", FixtureSessionCloseFrame_Populated())
+}
+
+func TestContract_SessionCloseFrame_ZeroValue(t *testing.T) {
+	// type="" (const: session_close), session_id="" (minLength: 1).
+	// Traces to: SessionCloseFrame.yaml — type has const constraint; session_id has minLength
+	mustFailAsyncAPI(t, "SessionCloseFrame", FixtureSessionCloseFrame_ZeroValue(),
+		"zero value has empty type (const) and session_id (minLength: 1)")
+}
+
+func TestContract_SessionCloseFrame_Edge(t *testing.T) {
+	// Long session_id (valid per minLength: 1).
+	// Traces to: SessionCloseFrame.yaml
+	mustPassAsyncAPI(t, "SessionCloseFrame", FixtureSessionCloseFrame_Edge())
+}
+
+func TestContract_SessionCloseFrame_Differentiation(t *testing.T) {
+	// Two SessionCloseFrame fixtures with different session IDs produce different JSON.
+	f1 := FixtureSessionCloseFrame_Populated()
+	f2 := FixtureSessionCloseFrame_Edge()
+	raw1, err := json.Marshal(f1)
+	require.NoError(t, err)
+	raw2, err := json.Marshal(f2)
+	require.NoError(t, err)
+	assert.NotEqual(t, string(raw1), string(raw2),
+		"two different SessionCloseFrame fixtures must produce different JSON")
+	mustPassAsyncAPI(t, "SessionCloseFrame", f1)
+	mustPassAsyncAPI(t, "SessionCloseFrame", f2)
+}
