@@ -3601,7 +3601,7 @@ export const WsFrameType = z.enum(["auth", "message", "cancel", "exec_approval_r
 export const AuthFrame = z
   .object({
     type: z.literal("auth"),
-    token: z.string().min(1),
+    token: z.string().min(8).max(72).regex(/^omnipus_[a-f0-9]{64}$/),
   })
   .strict();
 
@@ -3609,15 +3609,15 @@ export const MessageFrame = z
   .object({
     type: z.literal("message"),
     content: z.string().min(1).max(5242880),
-    session_id: z.string().optional(),
-    agent_id: z.string().optional(),
+    session_id: z.string().min(1).max(128).optional(),
+    agent_id: z.string().min(1).max(128).optional(),
   })
   .strict();
 
 export const CancelFrame = z
   .object({
     type: z.literal("cancel"),
-    session_id: z.string().min(1),
+    session_id: z.string().min(1).max(128),
   })
   .strict();
 
@@ -3638,7 +3638,7 @@ export const PingFrame = z
 export const AttachSessionFrame = z
   .object({
     type: z.literal("attach_session"),
-    session_id: z.string().min(1),
+    session_id: z.string().min(1).max(128),
   })
   .strict();
 
@@ -3661,21 +3661,21 @@ export const SessionStartedFrame = z
 export const TokenFrame = z
   .object({
     type: z.literal("token"),
-    session_id: z.string().min(1),
-    content: z.string(),
+    session_id: z.string().min(1).max(128),
+    content: z.string().max(65536),
   })
   .strict();
 
 export const DoneStats = z
   .object({
-    tokens: z.number().optional(),
-    cost: z.number().optional(),
-    duration_ms: z.number().optional(),
-    tokens_dropped: z.number().optional(),
-    frames_emitted: z.number().optional(),
-    orphan_count: z.number().optional(),
-    duplicate_tool_call_id_count: z.number().optional(),
-    truncated_result_count: z.number().optional(),
+    tokens: z.number().min(0).optional(),
+    cost: z.number().min(0).optional(),
+    duration_ms: z.number().min(0).optional(),
+    tokens_dropped: z.number().min(0).optional(),
+    frames_emitted: z.number().min(0).optional(),
+    orphan_count: z.number().min(0).optional(),
+    duplicate_tool_call_id_count: z.number().min(0).optional(),
+    truncated_result_count: z.number().min(0).optional(),
     replay_error: z.boolean().optional(),
   })
   .passthrough();
@@ -3691,16 +3691,16 @@ export const DoneFrame = z
 export const ErrorFrame = z
   .object({
     type: z.literal("error"),
-    session_id: z.string().optional(),
-    message: z.string().min(1),
+    session_id: z.string().max(128).optional(),
+    message: z.string().min(1).max(4096),
   })
   .strict();
 
 export const ToolCallStartFrame = z
   .object({
     type: z.literal("tool_call_start"),
-    session_id: z.string().min(1),
-    tool: z.string().min(1),
+    session_id: z.string().min(1).max(128),
+    tool: z.string().min(1).max(128),
     call_id: z.string().min(1),
     params: z.record(z.unknown()),
     parent_call_id: z.string().optional(),
@@ -3725,8 +3725,8 @@ export const MarshalErrorResult = z
 export const ToolCallResultFrame = z
   .object({
     type: z.literal("tool_call_result"),
-    session_id: z.string().min(1),
-    tool: z.string().min(1),
+    session_id: z.string().min(1).max(128),
+    tool: z.string().min(1).max(128),
     call_id: z.string().min(1),
     result: z.unknown(),
     status: z.enum(["success", "error"]),
@@ -3743,7 +3743,7 @@ export const SubagentStartFrame = z
     session_id: z.string().min(1),
     span_id: z.string().min(1),
     parent_call_id: z.string().min(1),
-    task_label: z.string(),
+    task_label: z.string().max(100),
     agent_id: z.string().optional(),
   })
   .strict();
@@ -3766,10 +3766,10 @@ export const SubagentEndFrame = z
 export const ExecApprovalRequestFrame = z
   .object({
     type: z.literal("exec_approval_request"),
-    session_id: z.string().min(1),
+    session_id: z.string().min(1).max(128),
     id: z.string().min(1),
-    command: z.string().min(1),
-    tool: z.string().optional(),
+    command: z.string().min(1).max(8192),
+    tool: z.string().max(128).optional(),
     params: z.record(z.unknown()).optional(),
     message: z.string().optional(),
     working_dir: z.string().optional(),
@@ -3782,7 +3782,7 @@ export const TaskStatusChangedFrame = z
     type: z.literal("task_status_changed"),
     session_id: z.string().min(1),
     task_id: z.string().min(1),
-    status: z.string().min(1),
+    status: z.enum(["queued", "assigned", "running", "completed", "failed"]),
     agent_id: z.string().optional(),
   })
   .strict();
@@ -3792,7 +3792,7 @@ export const ReplayMessageFrame = z
     type: z.literal("replay_message"),
     session_id: z.string().min(1),
     content: z.string(),
-    role: z.string(),
+    role: z.enum(["user", "assistant", "system", "turn_cancelled"]),
     id: z.string().optional(),
     timestamp: z.string().optional(),
     agent_id: z.string().optional(),
@@ -3806,9 +3806,9 @@ export const RateLimitFrame = z
     scope: z.enum(["agent", "channel", "global"]),
     resource: z.string().min(1),
     policy_rule: z.string().min(1),
-    retry_after_seconds: z.number(),
+    retry_after_seconds: z.number().min(0),
     agent_id: z.string().optional(),
-    tool: z.string().optional(),
+    tool: z.string().max(128).optional(),
   })
   .strict();
 
@@ -3826,7 +3826,7 @@ export const MediaFrame = z
   .object({
     type: z.literal("media"),
     session_id: z.string().min(1),
-    parts: z.array(MediaPart).min(1),
+    parts: z.array(MediaPart).min(1).max(32),
   })
   .strict();
 
@@ -3844,12 +3844,12 @@ export const ToolApprovalRequiredFrame = z
     type: z.literal("tool_approval_required"),
     approval_id: z.string().min(1),
     tool_call_id: z.string().min(1),
-    tool_name: z.string().min(1),
+    tool_name: z.string().min(1).max(128),
     args: z.record(z.unknown()),
     agent_id: z.string().min(1),
     session_id: z.string().min(1),
     turn_id: z.string().min(1),
-    expires_in_ms: z.number().int(),
+    expires_in_ms: z.number().int().min(0).max(86400000),
   })
   .strict();
 
@@ -3857,9 +3857,9 @@ export const SessionStatePendingApproval = z
   .object({
     approval_id: z.string().min(1),
     session_id: z.string().min(1),
-    tool_name: z.string().min(1),
+    tool_name: z.string().min(1).max(128),
     agent_id: z.string().min(1),
-    expires_in_ms: z.number().int(),
+    expires_in_ms: z.number().int().min(0).max(86400000),
   })
   .strict();
 
@@ -3867,7 +3867,7 @@ export const SessionStateFrame = z
   .object({
     type: z.literal("session_state"),
     user_id: z.string(),
-    pending_approvals: z.array(SessionStatePendingApproval),
+    pending_approvals: z.array(SessionStatePendingApproval).max(1000),
     emitted_at: z.string(),
   })
   .strict();

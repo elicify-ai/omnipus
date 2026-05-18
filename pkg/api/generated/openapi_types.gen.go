@@ -501,6 +501,30 @@ func (e MeInfoRole) Valid() bool {
 	}
 }
 
+// Defines values for MessageAttachmentsType.
+const (
+	MessageAttachmentsTypeAudio MessageAttachmentsType = "audio"
+	MessageAttachmentsTypeFile  MessageAttachmentsType = "file"
+	MessageAttachmentsTypeImage MessageAttachmentsType = "image"
+	MessageAttachmentsTypeVideo MessageAttachmentsType = "video"
+)
+
+// Valid indicates whether the value is a known member of the MessageAttachmentsType enum.
+func (e MessageAttachmentsType) Valid() bool {
+	switch e {
+	case MessageAttachmentsTypeAudio:
+		return true
+	case MessageAttachmentsTypeFile:
+		return true
+	case MessageAttachmentsTypeImage:
+		return true
+	case MessageAttachmentsTypeVideo:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageRole.
 const (
 	MessageRoleAssistant MessageRole = "assistant"
@@ -813,6 +837,30 @@ func (e SessionCreateRequestType) Valid() bool {
 	case SessionCreateRequestTypeChat:
 		return true
 	case SessionCreateRequestTypeTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesAttachmentsType.
+const (
+	SessionDetailMessagesAttachmentsTypeAudio SessionDetailMessagesAttachmentsType = "audio"
+	SessionDetailMessagesAttachmentsTypeFile  SessionDetailMessagesAttachmentsType = "file"
+	SessionDetailMessagesAttachmentsTypeImage SessionDetailMessagesAttachmentsType = "image"
+	SessionDetailMessagesAttachmentsTypeVideo SessionDetailMessagesAttachmentsType = "video"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesAttachmentsType enum.
+func (e SessionDetailMessagesAttachmentsType) Valid() bool {
+	switch e {
+	case SessionDetailMessagesAttachmentsTypeAudio:
+		return true
+	case SessionDetailMessagesAttachmentsTypeFile:
+		return true
+	case SessionDetailMessagesAttachmentsTypeImage:
+		return true
+	case SessionDetailMessagesAttachmentsTypeVideo:
 		return true
 	default:
 		return false
@@ -1848,7 +1896,7 @@ type AgentToolsCfg struct {
 	} `json:"mcp,omitempty"`
 }
 
-// AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents.
+// AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400.
 type AgentUpdateRequest struct {
 	// Description New description. Rejected on locked agents. Empty string removes it.
 	Description *string `json:"description,omitempty"`
@@ -1998,7 +2046,7 @@ type ChannelEntryTransport string
 
 // DevicesResponse Response from GET /api/v1/devices. Lists both pending pairing requests and already-paired devices.
 type DevicesResponse struct {
-	// Paired Devices that have been successfully paired.
+	// Paired Devices that have been successfully paired. Capped at 100.
 	Paired []struct {
 		// DeviceId Unique device identifier.
 		DeviceId string `json:"device_id"`
@@ -2019,7 +2067,7 @@ type DevicesResponse struct {
 		Status DevicesResponsePairedStatus `json:"status"`
 	} `json:"paired"`
 
-	// Pending Pairing requests awaiting approval.
+	// Pending Pairing requests awaiting approval. Capped at 100.
 	Pending []struct {
 		// CreatedAt RFC3339 timestamp when the pairing request was created.
 		CreatedAt time.Time `json:"created_at"`
@@ -2049,7 +2097,7 @@ type DoctorResult struct {
 	// CheckedAt RFC3339 timestamp when this health check was run.
 	CheckedAt time.Time `json:"checked_at"`
 
-	// Issues List of health-check findings. Empty when score is 100.
+	// Issues List of health-check findings. Empty when score is 100. Capped at 100 to bound response size.
 	Issues []struct {
 		// ActionLabel Display label for the action link.
 		ActionLabel *string `json:"action_label,omitempty"`
@@ -2172,7 +2220,7 @@ type LoginResponse struct {
 	// Role RBAC role of the authenticated user.
 	Role LoginResponseRole `json:"role"`
 
-	// Token Bearer token for subsequent API calls. Prefix with "omnipus_" followed by 64 hex characters. Store in sessionStorage (preferred) or localStorage under the key "omnipus_auth_token".
+	// Token Bearer token for subsequent API calls. Prefix "omnipus_" followed by 64 lowercase hex characters (total 72 chars). Store in sessionStorage (preferred) or localStorage under the key "omnipus_auth_token".
 	Token string `json:"token"`
 
 	// Username The authenticated user's login name.
@@ -2255,8 +2303,8 @@ type Message struct {
 		// Size File size in bytes.
 		Size int64 `json:"size"`
 
-		// Type Attachment category (e.g. "file", "image").
-		Type string `json:"type"`
+		// Type Attachment category. Aligned with MediaPart.type enum.
+		Type MessageAttachmentsType `json:"type"`
 	} `json:"attachments,omitempty"`
 
 	// Content Raw markdown/text content of the message.
@@ -2314,6 +2362,9 @@ type Message struct {
 	Type *MessageType `json:"type,omitempty"`
 }
 
+// MessageAttachmentsType Attachment category. Aligned with MediaPart.type enum.
+type MessageAttachmentsType string
+
 // MessageRole Author role. Absent on compaction entries.
 type MessageRole string
 
@@ -2355,7 +2406,7 @@ type OnboardingCompleteResponse struct {
 	// Role RBAC role of the authenticated user.
 	Role OnboardingCompleteResponseRole `json:"role"`
 
-	// Token Bearer token for subsequent API calls. Prefix with "omnipus_" followed by 64 hex characters. Store in sessionStorage (preferred) or localStorage under the key "omnipus_auth_token".
+	// Token Bearer token for subsequent API calls. Prefix "omnipus_" followed by 64 lowercase hex characters (total 72 chars). Store in sessionStorage (preferred) or localStorage under the key "omnipus_auth_token".
 	Token string `json:"token"`
 
 	// Username The authenticated user's login name.
@@ -2631,7 +2682,7 @@ type Session struct {
 	// Model LLM model name used in this session (may be empty for legacy sessions).
 	Model *string `json:"model,omitempty"`
 
-	// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages).
+	// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 	Partitions []string `json:"partitions"`
 
 	// ProjectId Associated project ID (optional, future v0.3 feature).
@@ -2700,7 +2751,7 @@ type SessionDetail struct {
 	// AgentRemoved True when the agent that owned this session has been deleted from the config. Used by the SPA to display a banner informing the user that the original agent no longer exists. Absent (or false) in the common case.
 	AgentRemoved *bool `json:"agent_removed,omitempty"`
 
-	// Messages Ordered list of transcript entries for this session.
+	// Messages Ordered list of transcript entries for this session. Capped at 100000 messages to bound response payload size.
 	Messages []struct {
 		// AgentId ID of the agent that produced this entry (FR-002). Always present.
 		AgentId string `json:"agent_id"`
@@ -2716,8 +2767,8 @@ type SessionDetail struct {
 			// Size File size in bytes.
 			Size int64 `json:"size"`
 
-			// Type Attachment category (e.g. "file", "image").
-			Type string `json:"type"`
+			// Type Attachment category. Aligned with MediaPart.type enum.
+			Type SessionDetailMessagesAttachmentsType `json:"type"`
 		} `json:"attachments,omitempty"`
 
 		// Content Raw markdown/text content of the message.
@@ -2804,7 +2855,7 @@ type SessionDetail struct {
 		// Model LLM model name used in this session (may be empty for legacy sessions).
 		Model *string `json:"model,omitempty"`
 
-		// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages).
+		// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 		Partitions []string `json:"partitions"`
 
 		// ProjectId Associated project ID (optional, future v0.3 feature).
@@ -2850,6 +2901,9 @@ type SessionDetail struct {
 		UpdatedAt time.Time `json:"updated_at"`
 	} `json:"session"`
 }
+
+// SessionDetailMessagesAttachmentsType Attachment category. Aligned with MediaPart.type enum.
+type SessionDetailMessagesAttachmentsType string
 
 // SessionDetailMessagesRole Author role. Absent on compaction entries.
 type SessionDetailMessagesRole string

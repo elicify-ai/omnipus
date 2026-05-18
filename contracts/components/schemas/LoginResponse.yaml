@@ -7,14 +7,18 @@ required:
   - token
   - role
   - username
+additionalProperties: false
 properties:
   token:
     type: string
+    minLength: 72
+    maxLength: 72
+    pattern: '^omnipus_[a-f0-9]{64}$'
     description: >
-      Bearer token for subsequent API calls. Prefix with "omnipus_" followed
-      by 64 hex characters. Store in sessionStorage (preferred) or localStorage
-      under the key "omnipus_auth_token".
-    example: "omnipus_a3f...4b2"
+      Bearer token for subsequent API calls. Prefix "omnipus_" followed by
+      64 lowercase hex characters (total 72 chars). Store in sessionStorage
+      (preferred) or localStorage under the key "omnipus_auth_token".
+    example: "omnipus_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   role:
     type: string
     enum:

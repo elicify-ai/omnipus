@@ -24,8 +24,13 @@ properties:
     description: ID of the task whose status changed.
   status:
     type: string
-    minLength: 1
-    description: New status string for the task.
+    enum:
+      - queued
+      - assigned
+      - running
+      - completed
+      - failed
+    description: New status of the task. Canonical values from pkg/taskstore/store.go validStatuses.
   agent_id:
     type: string
     description: Agent managing this task.

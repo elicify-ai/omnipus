@@ -21,11 +21,15 @@ properties:
     description: User message text. Maximum 5 MiB enforced by the server.
   session_id:
     type: string
+    minLength: 1
+    maxLength: 128
     description: >
       If present, continue this existing session. If omitted, the server mints
       a new session and responds with a session_started frame.
   agent_id:
     type: string
+    minLength: 1
+    maxLength: 128
     description: >
       Route this message to a specific agent by ID. If omitted the default
       agent (typically "main") handles the message.

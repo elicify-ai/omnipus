@@ -19,7 +19,8 @@ properties:
     type: array
     items:
       $ref: './DoctorIssue.yaml'
-    description: List of health-check findings. Empty when score is 100.
+    maxItems: 100
+    description: List of health-check findings. Empty when score is 100. Capped at 100 to bound response size.
   checked_at:
     type: string
     format: date-time

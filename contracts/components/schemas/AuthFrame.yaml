@@ -14,5 +14,7 @@ properties:
     const: auth
   token:
     type: string
-    minLength: 1
-    description: Bearer token obtained from /api/v1/auth/login.
+    minLength: 8
+    maxLength: 72
+    pattern: '^omnipus_[a-f0-9]{64}$'
+    description: Bearer token obtained from /api/v1/auth/login. Format is "omnipus_" + 64 hex chars.

@@ -29,10 +29,12 @@ properties:
     type: array
     items:
       $ref: SessionStatePendingApproval.yaml
+    maxItems: 1000
     description: >
       Snapshot of all pending tool approvals visible to this user. Always an
       array — never null. The server emits [] when no approvals are pending or
       the user has no visibility (non-admin with no session ownership).
+      Capped at 1000 entries to bound server emit volume and SPA render cost.
   emitted_at:
     type: string
     format: date-time

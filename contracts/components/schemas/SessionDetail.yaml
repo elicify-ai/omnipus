@@ -12,7 +12,10 @@ properties:
     type: array
     items:
       $ref: './Message.yaml'
-    description: Ordered list of transcript entries for this session.
+    maxItems: 100000
+    description: >
+      Ordered list of transcript entries for this session.
+      Capped at 100000 messages to bound response payload size.
   agent_removed:
     type: boolean
     description: >

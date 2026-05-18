@@ -19,10 +19,12 @@ properties:
   session_id:
     type: string
     minLength: 1
+    maxLength: 128
     description: Session in which this tool call is executing.
   tool:
     type: string
     minLength: 1
+    maxLength: 128
     description: Name of the tool being called (e.g., "workspace.shell", "spawn").
   call_id:
     type: string

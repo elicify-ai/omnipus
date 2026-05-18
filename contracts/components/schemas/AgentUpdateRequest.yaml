@@ -4,6 +4,8 @@ description: >
   Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions.
   model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback,
   heartbeat_enabled, and heartbeat_interval may be updated on locked agents.
+  At least one field must be present (minProperties: 1) — empty patches are rejected 400.
+minProperties: 1
 properties:
   name:
     type: string

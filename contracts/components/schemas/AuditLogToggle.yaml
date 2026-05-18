@@ -6,6 +6,7 @@ description: >
 type: object
 required:
   - enabled
+additionalProperties: false
 properties:
   enabled:
     type: boolean

@@ -30,7 +30,7 @@ type AttachSessionFrame struct {
 
 // AuthFrame — Client → server authentication frame.
 type AuthFrame struct {
-	// Bearer token from /api/v1/auth/login.
+	// Bearer token from /api/v1/auth/login. Format is "omnipus_" + 64 hex chars.
 	Token string `json:"token"`
 	Type  string `json:"type"`
 }
@@ -72,7 +72,7 @@ type DoneFrame struct {
 	Type      string     `json:"type"`
 }
 
-// DoneStats — Per-turn statistics in a done frame.
+// DoneStats — Per-turn statistics in a done frame. additionalProperties are allowed for replay extras (frames_emitted, orphan_count, etc.).
 type DoneStats struct {
 	Cost                     *float64 `json:"cost,omitempty"`
 	DuplicateToolCallIdCount *float64 `json:"duplicate_tool_call_id_count,omitempty"`
@@ -224,7 +224,7 @@ type SessionStartedFrame struct {
 // SessionStateFrame — Server → client reconnect approval snapshot (FR-052, FR-073, FR-081). pending_approvals MUST be an array (never null). Backend coerces nil → []. SPA calls pending_approvals.map() — null crashes at render time.
 type SessionStateFrame struct {
 	EmittedAt string `json:"emitted_at"`
-	// Always array, never null.
+	// Always array, never null. Capped at 1000.
 	PendingApprovals []SessionStatePendingApproval `json:"pending_approvals"`
 	Type             string                        `json:"type"`
 	UserId           string                        `json:"user_id"`
@@ -307,11 +307,12 @@ type ToolCallResultFrame struct {
 	DurationMs   *int    `json:"duration_ms,omitempty"`
 	Error        *string `json:"error,omitempty"`
 	ParentCallId *string `json:"parent_call_id,omitempty"`
-	Result       any     `json:"result"`
-	SessionId    string  `json:"session_id"`
-	Status       string  `json:"status"`
-	Tool         string  `json:"tool"`
-	Type         string  `json:"type"`
+	// Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult and MarshalErrorResult are alternative shapes.
+	Result    any    `json:"result"`
+	SessionId string `json:"session_id"`
+	Status    string `json:"status"`
+	Tool      string `json:"tool"`
+	Type      string `json:"type"`
 }
 
 // ToolCallStartFrame — Server → client tool execution started. params MUST be object (never null) — nil-safety contract to prevent Object.keys(params) crash.

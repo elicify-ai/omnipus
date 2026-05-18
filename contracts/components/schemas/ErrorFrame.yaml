@@ -14,10 +14,12 @@ properties:
     const: error
   session_id:
     type: string
+    maxLength: 128
     description: >
       Session this error relates to. Optional: global errors (auth, connection)
       are not tied to a specific session.
   message:
     type: string
     minLength: 1
+    maxLength: 4096
     description: Human-readable error description.

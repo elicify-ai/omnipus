@@ -5,6 +5,7 @@ description: >
 type: object
 required:
   - allowed_binaries
+additionalProperties: false
 properties:
   allowed_binaries:
     type: array

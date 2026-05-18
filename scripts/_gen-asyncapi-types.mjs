@@ -63,9 +63,16 @@ function resolveJsYaml() {
 
 const yaml = require(resolveJsYaml());
 
-// The contracts directory is always in the main git repo root.
-// In a worktree, --git-common-dir resolves to the main repo's .git dir.
+// Resolve the contracts directory. Always prefer the worktree's own contracts/
+// dir first (important when running from a git worktree with local changes).
+// Falls back to the main repo root via --git-common-dir for cases where the
+// contracts dir only lives in the main repo.
 function resolveContractsDir() {
+  // Primary: worktree-local contracts/ dir (handles local schema changes in worktrees)
+  const localContracts = join(ROOT, "contracts");
+  if (existsSync(localContracts)) return localContracts;
+
+  // Secondary: main repo root via git
   const { execSync } = require("child_process");
   try {
     const gitCommonDir = execSync("git rev-parse --git-common-dir", {
@@ -79,7 +86,7 @@ function resolveContractsDir() {
     // fall through
   }
   // Fallback: try known relative locations
-  for (const rel of ["contracts", "../contracts", "../../contracts", "../../../contracts"]) {
+  for (const rel of ["../contracts", "../../contracts", "../../../contracts"]) {
     const p = resolve(ROOT, rel);
     if (existsSync(p)) return p;
   }
@@ -220,6 +227,7 @@ function schemaToZod(schema, indent = 0) {
     let expr = "z.string()";
     if (schema.minLength !== undefined) expr += `.min(${schema.minLength})`;
     if (schema.maxLength !== undefined) expr += `.max(${schema.maxLength})`;
+    if (schema.pattern !== undefined) expr += `.regex(/${schema.pattern}/)`;
     return expr;
   }
 

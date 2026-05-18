@@ -819,21 +819,23 @@ func FixtureAttachSessionFrame_Edge() AttachSessionFrame {
 func FixtureAuthFrame_Populated() AuthFrame {
 	return AuthFrame{
 		Type:  "auth",
-		Token: "omnipus_" + repeatStr("t", 64),
+		Token: "omnipus_" + repeatStr("a", 64), // 'a' is valid hex; total 72 chars matches pattern
 	}
 }
 
 // FixtureAuthFrame_ZeroValue — Go zero values.
-// Expected: FAIL because type="" and token="" (both required; token has minLength:1).
+// Expected: FAIL because type="" and token="" (both required; fails minLength and pattern).
 func FixtureAuthFrame_ZeroValue() AuthFrame {
 	return AuthFrame{}
 }
 
-// FixtureAuthFrame_Edge — minimum valid token (single char).
+// FixtureAuthFrame_Edge — valid token using all-f hex digits.
+// Updated from "x" (single char, no longer valid) because pattern now requires
+// "^omnipus_[a-f0-9]{64}$" — token must be exactly the omnipus_ prefix + 64 hex chars.
 func FixtureAuthFrame_Edge() AuthFrame {
 	return AuthFrame{
 		Type:  "auth",
-		Token: "x", // minLength:1 — single character is valid
+		Token: "omnipus_" + repeatStr("f", 64), // 'f' is valid hex
 	}
 }
 

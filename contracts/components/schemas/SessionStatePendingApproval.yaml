@@ -22,6 +22,7 @@ properties:
   tool_name:
     type: string
     minLength: 1
+    maxLength: 128
     description: Name of the tool awaiting approval.
   agent_id:
     type: string
@@ -29,4 +30,6 @@ properties:
     description: Agent that invoked the tool.
   expires_in_ms:
     type: integer
-    description: Relative expiry in milliseconds from receipt.
+    minimum: 0
+    maximum: 86400000
+    description: Relative expiry in milliseconds from receipt. Minimum 0; maximum 86400000 (24 hours).

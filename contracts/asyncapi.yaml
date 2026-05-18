@@ -756,8 +756,10 @@ components:
           const: auth
         token:
           type: string
-          minLength: 1
-          description: Bearer token from /api/v1/auth/login.
+          minLength: 8
+          maxLength: 72
+          pattern: '^omnipus_[a-f0-9]{64}$'
+          description: Bearer token from /api/v1/auth/login. Format is "omnipus_" + 64 hex chars.
 
     MessageFrame:
       title: MessageFrame
@@ -779,8 +781,12 @@ components:
           maxLength: 5242880
         session_id:
           type: string
+          minLength: 1
+          maxLength: 128
         agent_id:
           type: string
+          minLength: 1
+          maxLength: 128
 
     CancelFrame:
       title: CancelFrame
@@ -797,6 +803,7 @@ components:
         session_id:
           type: string
           minLength: 1
+          maxLength: 128
 
     ExecApprovalResponseFrame:
       title: ExecApprovalResponseFrame
@@ -848,6 +855,7 @@ components:
         session_id:
           type: string
           minLength: 1
+          maxLength: 128
 
     DevicePairingResponseFrame:
       title: DevicePairingResponseFrame
@@ -905,31 +913,43 @@ components:
         session_id:
           type: string
           minLength: 1
+          maxLength: 128
         content:
           type: string
+          maxLength: 65536
 
     DoneStats:
       title: DoneStats
-      description: Per-turn statistics in a done frame.
+      description: >
+        Per-turn statistics in a done frame. additionalProperties are allowed
+        for replay extras (frames_emitted, orphan_count, etc.).
       type: object
       additionalProperties: true
       properties:
         tokens:
           type: number
+          minimum: 0
         cost:
           type: number
+          minimum: 0
         duration_ms:
           type: number
+          minimum: 0
         tokens_dropped:
           type: number
+          minimum: 0
         frames_emitted:
           type: number
+          minimum: 0
         orphan_count:
           type: number
+          minimum: 0
         duplicate_tool_call_id_count:
           type: number
+          minimum: 0
         truncated_result_count:
           type: number
+          minimum: 0
         replay_error:
           type: boolean
 
@@ -965,9 +985,11 @@ components:
           const: error
         session_id:
           type: string
+          maxLength: 128
         message:
           type: string
           minLength: 1
+          maxLength: 4096
 
     ToolCallStartFrame:
       title: ToolCallStartFrame
@@ -989,9 +1011,11 @@ components:
         session_id:
           type: string
           minLength: 1
+          maxLength: 128
         tool:
           type: string
           minLength: 1
+          maxLength: 128
         call_id:
           type: string
           minLength: 1
@@ -1053,13 +1077,22 @@ components:
         session_id:
           type: string
           minLength: 1
+          maxLength: 128
         tool:
           type: string
           minLength: 1
+          maxLength: 128
         call_id:
           type: string
           minLength: 1
-        result: {}
+        result:
+          description: >
+            Tool return value. Any JSON type or null (null is the contract for error frames).
+            Sentinels TruncatedResult and MarshalErrorResult are alternative shapes.
+          oneOf:
+            - type: ["object", "array", "string", "number", "boolean", "null"]
+            - $ref: '#/components/schemas/TruncatedResult'
+            - $ref: '#/components/schemas/MarshalErrorResult'
         status:
           type: string
           enum:
@@ -1100,6 +1133,7 @@ components:
           minLength: 1
         task_label:
           type: string
+          maxLength: 100
         agent_id:
           type: string
 
@@ -1171,15 +1205,18 @@ components:
         session_id:
           type: string
           minLength: 1
+          maxLength: 128
         id:
           type: string
           minLength: 1
         command:
           type: string
           minLength: 1
+          maxLength: 8192
           description: Tool name used as primary display string in the approval modal.
         tool:
           type: string
+          maxLength: 128
           description: Structured tool name (same value as command).
         params:
           type: object
@@ -1215,7 +1252,12 @@ components:
           minLength: 1
         status:
           type: string
-          minLength: 1
+          enum:
+            - queued
+            - assigned
+            - running
+            - completed
+            - failed
         agent_id:
           type: string
 
@@ -1240,6 +1282,11 @@ components:
           type: string
         role:
           type: string
+          enum:
+            - user
+            - assistant
+            - system
+            - turn_cancelled
         id:
           type: string
         timestamp:
@@ -1280,10 +1327,12 @@ components:
           minLength: 1
         retry_after_seconds:
           type: number
+          minimum: 0
         agent_id:
           type: string
         tool:
           type: string
+          maxLength: 128
 
     MediaPart:
       title: MediaPart
@@ -1336,6 +1385,7 @@ components:
         parts:
           type: array
           minItems: 1
+          maxItems: 32
           items:
             $ref: '#/components/schemas/MediaPart'
 
@@ -1390,6 +1440,7 @@ components:
         tool_name:
           type: string
           minLength: 1
+          maxLength: 128
         args:
           type: object
           additionalProperties: true
@@ -1407,6 +1458,8 @@ components:
           minLength: 1
         expires_in_ms:
           type: integer
+          minimum: 0
+          maximum: 86400000
 
     SessionStatePendingApproval:
       title: SessionStatePendingApproval
@@ -1429,11 +1482,14 @@ components:
         tool_name:
           type: string
           minLength: 1
+          maxLength: 128
         agent_id:
           type: string
           minLength: 1
         expires_in_ms:
           type: integer
+          minimum: 0
+          maximum: 86400000
 
     SessionStateFrame:
       title: SessionStateFrame
@@ -1458,7 +1514,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SessionStatePendingApproval'
-          description: Always array, never null.
+          maxItems: 1000
+          description: Always array, never null. Capped at 1000.
         emitted_at:
           type: string
           format: date-time

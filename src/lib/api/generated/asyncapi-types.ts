@@ -191,7 +191,7 @@ export interface TaskStatusChangedFrame {
   type: "task_status_changed";
   session_id: string;
   task_id: string;
-  status: string;
+  status: "queued" | "assigned" | "running" | "completed" | "failed";
   agent_id?: string;
 }
 
@@ -199,7 +199,7 @@ export interface ReplayMessageFrame {
   type: "replay_message";
   session_id: string;
   content: string;
-  role: string;
+  role: "user" | "assistant" | "system" | "turn_cancelled";
   id?: string;
   timestamp?: string;
   agent_id?: string;
