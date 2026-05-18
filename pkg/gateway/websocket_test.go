@@ -64,7 +64,7 @@ func dialTestWS(t *testing.T, srv *httptest.Server) *websocket.Conn {
 // and non-empty token value, but the token itself is not validated.
 func sendWSAuthFrameDevMode(t *testing.T, conn *websocket.Conn) {
 	t.Helper()
-	authFrame := wsClientFrame{Type: "auth", Token: "dev-token"}
+	authFrame := wsClientFrameTestHelper{Type: "auth", Token: "dev-token"}
 	data, err := json.Marshal(authFrame)
 	require.NoError(t, err, "marshal auth frame")
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data), "auth frame write")
@@ -88,7 +88,7 @@ func TestWSHandlerNoAuthRequired(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	// Send a message without auth — should succeed when token not configured.
-	frame := wsClientFrame{Type: "message", Content: "hello no-auth"}
+	frame := wsClientFrameTestHelper{Type: "message", Content: "hello no-auth"}
 	data, _ := json.Marshal(frame)
 	err := conn.WriteMessage(websocket.TextMessage, data)
 	assert.NoError(t, err, "write must succeed when auth is not configured")
@@ -119,12 +119,12 @@ func TestWSHandlerValidAuth(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
 
 	// Send valid auth frame.
-	authFrame := wsClientFrame{Type: "auth", Token: testToken}
+	authFrame := wsClientFrameTestHelper{Type: "auth", Token: testToken}
 	authData, _ := json.Marshal(authFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, authData))
 
 	// After valid auth, send a message — must succeed.
-	msgFrame := wsClientFrame{Type: "message", Content: "hello after auth"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "hello after auth"}
 	msgData, _ := json.Marshal(msgFrame)
 	err := conn.WriteMessage(websocket.TextMessage, msgData)
 	assert.NoError(t, err, "message send must succeed after valid auth")
@@ -150,14 +150,14 @@ func TestWSHandlerInvalidAuth(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
 
 	// Send wrong token.
-	authFrame := wsClientFrame{Type: "auth", Token: "wrong-token"}
+	authFrame := wsClientFrameTestHelper{Type: "auth", Token: "wrong-token"}
 	authData, _ := json.Marshal(authFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, authData))
 
 	// Read the error frame sent before the server closes.
 	_, resp, err := conn.ReadMessage()
 	require.NoError(t, err, "must receive error frame before connection closes")
-	var frame wsServerFrame
+	var frame wsServerFrameDecodeHelper
 	require.NoError(t, json.Unmarshal(resp, &frame))
 	assert.Equal(t, "error", frame.Type)
 	assert.Contains(t, strings.ToLower(frame.Message), "unauthorized")
@@ -187,7 +187,7 @@ func TestWSHandlerMalformedFrame(t *testing.T) {
 
 	// Connection must remain open: send another valid frame.
 	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
-	validFrame := wsClientFrame{Type: "message", Content: "still alive"}
+	validFrame := wsClientFrameTestHelper{Type: "message", Content: "still alive"}
 	validData, _ := json.Marshal(validFrame)
 	err := conn.WriteMessage(websocket.TextMessage, validData)
 	assert.NoError(t, err, "connection must remain open after malformed frame")
@@ -207,13 +207,13 @@ func TestWSHandlerCancelFrame(t *testing.T) {
 	conn := dialTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	cancelFrame := wsClientFrame{Type: "cancel"}
+	cancelFrame := wsClientFrameTestHelper{Type: "cancel"}
 	cancelData, _ := json.Marshal(cancelFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
 
 	// Connection must remain open after cancel.
 	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) //nolint:errcheck
-	pingFrame := wsClientFrame{Type: "message", Content: "after cancel"}
+	pingFrame := wsClientFrameTestHelper{Type: "message", Content: "after cancel"}
 	pingData, _ := json.Marshal(pingFrame)
 	err := conn.WriteMessage(websocket.TextMessage, pingData)
 	assert.NoError(t, err, "connection must remain open after cancel frame")
@@ -247,7 +247,7 @@ func TestWSHandlerMessagePublishedToBus(t *testing.T) {
 		}
 	}()
 
-	msgFrame := wsClientFrame{Type: "message", Content: "publish-to-bus-test"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "publish-to-bus-test"}
 	msgData, _ := json.Marshal(msgFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
 
@@ -291,7 +291,7 @@ func TestWSHandlerAuthNotRequired_NoFirstFrameNeeded(t *testing.T) {
 	}()
 
 	// Send message directly (no auth frame first) — must be accepted.
-	frame := wsClientFrame{Type: "message", Content: "no-auth-needed"}
+	frame := wsClientFrameTestHelper{Type: "message", Content: "no-auth-needed"}
 	data, _ := json.Marshal(frame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
@@ -320,14 +320,14 @@ func TestWSHandlerAuthRequired_InvalidTokenRejected(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(3 * time.Second)) //nolint:errcheck
 
 	// Send wrong token in auth frame.
-	bad := wsClientFrame{Type: "auth", Token: "bad-token"}
+	bad := wsClientFrameTestHelper{Type: "auth", Token: "bad-token"}
 	badData, _ := json.Marshal(bad)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, badData))
 
 	// Server must send an error frame.
 	_, resp, err := conn.ReadMessage()
 	require.NoError(t, err)
-	var frame wsServerFrame
+	var frame wsServerFrameDecodeHelper
 	require.NoError(t, json.Unmarshal(resp, &frame))
 	assert.Equal(t, "error", frame.Type, "must receive error frame for bad token")
 }
@@ -338,7 +338,7 @@ func TestWSHandlerAuthRequired_InvalidTokenRejected(t *testing.T) {
 // with a matching chatID is forwarded to the wsConn's sendCh as a "tool_call_start" frame.
 // BDD: Given an eventForwarder goroutine subscribed to an EventBus with chatID "chat-1",
 // When a ToolExecStartPayload event for chatID "chat-1" is emitted,
-// Then a wsServerFrame with type "tool_call_start" appears on sendCh.
+// Then a wsServerFrameDecodeHelper with type "tool_call_start" appears on sendCh.
 // Traces to: pkg/gateway/websocket.go — WSHandler.eventForwarder
 func TestEventForwarder_ForwardsToolExecStart(t *testing.T) {
 	handler, _, _ := newTestWSHandler(t)
@@ -367,7 +367,7 @@ func TestEventForwarder_ForwardsToolExecStart(t *testing.T) {
 
 	select {
 	case raw := <-wc.sendCh:
-		var f wsServerFrame
+		var f wsServerFrameDecodeHelper
 		require.NoError(t, json.Unmarshal(raw, &f), "sendCh frame must be valid JSON")
 		assert.Equal(t, "tool_call_start", f.Type, "frame type must be tool_call_start")
 		assert.Equal(t, "call-xyz", f.CallID, "CallID must match ToolCallID")

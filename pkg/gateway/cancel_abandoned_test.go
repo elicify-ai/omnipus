@@ -176,7 +176,7 @@ func TestCancel_AbandonedAfterHardTimeout(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Start a real blocking turn.
-	msgFrame := wsClientFrame{Type: "message", Content: "start stubborn turn"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start stubborn turn"}
 	data, _ := json.Marshal(msgFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
@@ -192,7 +192,7 @@ func TestCancel_AbandonedAfterHardTimeout(t *testing.T) {
 	}
 
 	// Fire cancel.
-	cancelFrame := wsClientFrame{Type: "cancel", SessionID: sessionID}
+	cancelFrame := wsClientFrameTestHelper{Type: "cancel", SessionID: sessionID}
 	cancelData, _ := json.Marshal(cancelFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
 

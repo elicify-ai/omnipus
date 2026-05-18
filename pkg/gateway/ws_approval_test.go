@@ -25,7 +25,7 @@ import (
 // --- test helpers ---
 
 // makeTestConn creates a minimal wsConn with a buffered sendCh and an open doneCh.
-// The sendCh must be buffered so sendConnFrame does not block in tests.
+// The sendCh must be buffered so sendConnGenFrame does not block in tests.
 func makeTestConn() *wsConn {
 	return &wsConn{
 		sendCh: make(chan []byte, 16),
@@ -43,13 +43,13 @@ func makeTestHook(conn *wsConn, timeout time.Duration) (*wsApprovalHook, *wsAppr
 	}, reg
 }
 
-// unmarshalWSServerFrame decodes raw websocket message bytes into a wsServerFrame.
-func unmarshalWSServerFrame(b []byte, f *wsServerFrame) error {
+// unmarshalWSServerFrame decodes raw websocket message bytes into a wsServerFrameDecodeHelper.
+func unmarshalWSServerFrame(b []byte, f *wsServerFrameDecodeHelper) error {
 	return json.Unmarshal(b, f)
 }
 
-// writeWSClientFrame marshals and sends a wsClientFrame over the WebSocket connection.
-func writeWSClientFrame(t *testing.T, conn *websocket.Conn, frame wsClientFrame) {
+// writeWSClientFrame marshals and sends a wsClientFrameTestHelper over the WebSocket connection.
+func writeWSClientFrame(t *testing.T, conn *websocket.Conn, frame wsClientFrameTestHelper) {
 	t.Helper()
 	data, err := json.Marshal(frame)
 	require.NoError(t, err, "marshal client frame")
@@ -57,7 +57,7 @@ func writeWSClientFrame(t *testing.T, conn *websocket.Conn, frame wsClientFrame)
 }
 
 // writeWSClientFrameNoFail is like writeWSClientFrame but returns the error instead of failing.
-func writeWSClientFrameNoFail(conn *websocket.Conn, frame wsClientFrame) error {
+func writeWSClientFrameNoFail(conn *websocket.Conn, frame wsClientFrameTestHelper) error {
 	data, err := json.Marshal(frame)
 	if err != nil {
 		return err
@@ -204,7 +204,7 @@ func TestApprovalHook_HappyPath(t *testing.T) {
 	go func() {
 		select {
 		case frameBytes := <-conn.sendCh:
-			var frame wsServerFrame
+			var frame wsServerFrameDecodeHelper
 			if err := unmarshalWSServerFrame(frameBytes, &frame); err != nil {
 				return
 			}
@@ -235,7 +235,7 @@ func TestApprovalHook_Denial(t *testing.T) {
 	go func() {
 		select {
 		case frameBytes := <-conn.sendCh:
-			var frame wsServerFrame
+			var frame wsServerFrameDecodeHelper
 			if err := unmarshalWSServerFrame(frameBytes, &frame); err != nil {
 				return
 			}
@@ -394,7 +394,7 @@ func runApprovalResponseRoundTrip(
 	ch := handler.approvalRegistry.register(pendingID, "")
 	defer handler.approvalRegistry.unregister(pendingID)
 
-	writeWSClientFrame(t, conn, wsClientFrame{
+	writeWSClientFrame(t, conn, wsClientFrameTestHelper{
 		Type:     "exec_approval_response",
 		ID:       pendingID,
 		Decision: decision,
@@ -512,7 +512,7 @@ func TestApprovalHook_HappyPath_ExecTool(t *testing.T) {
 	go func() {
 		select {
 		case frameBytes := <-conn.sendCh:
-			var frame wsServerFrame
+			var frame wsServerFrameDecodeHelper
 			if err := unmarshalWSServerFrame(frameBytes, &frame); err != nil {
 				return
 			}
@@ -543,7 +543,7 @@ func TestHandleApprovalResponse_EmptyID(t *testing.T) {
 	conn := dialTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	writeWSClientFrame(t, conn, wsClientFrame{
+	writeWSClientFrame(t, conn, wsClientFrameTestHelper{
 		Type:     "exec_approval_response",
 		ID:       "", // empty — server must not crash
 		Decision: "allow",
@@ -553,7 +553,7 @@ func TestHandleApprovalResponse_EmptyID(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Connection must remain open — a subsequent write must succeed.
-	err := writeWSClientFrameNoFail(conn, wsClientFrame{Type: "message", Content: "still alive"})
+	err := writeWSClientFrameNoFail(conn, wsClientFrameTestHelper{Type: "message", Content: "still alive"})
 	assert.NoError(t, err, "connection must remain open after empty-ID approval response")
 }
 
@@ -574,7 +574,7 @@ func TestWS_ApprovalResponse_RejectsMismatchedSessionID(t *testing.T) {
 	ch := registry.register(approvalID, sessionA)
 
 	// Build a minimal wsConn to capture outbound frames.
-	// The sendCh is buffered (16 slots) so sendConnFrame will not block.
+	// The sendCh is buffered (16 slots) so sendConnGenFrame will not block.
 	wc := makeTestConn()
 
 	// Build a WSHandler to call handleApprovalResponse with a mismatched session.
@@ -595,7 +595,7 @@ func TestWS_ApprovalResponse_RejectsMismatchedSessionID(t *testing.T) {
 	// An error frame must have been sent.
 	select {
 	case raw := <-wc.sendCh:
-		var frame wsServerFrame
+		var frame wsServerFrameDecodeHelper
 		if err := json.Unmarshal(raw, &frame); err != nil {
 			t.Fatalf("could not unmarshal frame: %v", err)
 		}

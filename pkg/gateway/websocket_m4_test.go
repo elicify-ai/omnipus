@@ -23,6 +23,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dapicom-ai/omnipus/pkg/api/generated"
 )
 
 // ---------------------------------------------------------------------------
@@ -123,7 +125,7 @@ func TestWSReadLimit_AcceptsSmallFrame(t *testing.T) {
 	// Normal-sized ping frame (< 5 MB) — must be accepted without closing.
 	// Use "ping" type (not "message") to avoid triggering session creation which
 	// writes to the temp dir and causes a cleanup race in the test.
-	pingFrame := wsClientFrame{Type: "ping"}
+	pingFrame := wsClientFrameTestHelper{Type: "ping"}
 	pingData, _ := json.Marshal(pingFrame)
 	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
@@ -131,40 +133,44 @@ func TestWSReadLimit_AcceptsSmallFrame(t *testing.T) {
 
 	// Connection must remain open: send a second frame successfully.
 	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
-	pingFrame2 := wsClientFrame{Type: "ping"}
+	pingFrame2 := wsClientFrameTestHelper{Type: "ping"}
 	pingData2, _ := json.Marshal(pingFrame2)
 	err := conn.WriteMessage(websocket.TextMessage, pingData2)
 	assert.NoError(t, err, "connection must remain open after a small frame")
 }
 
 // ---------------------------------------------------------------------------
-// M4-2: Exponential-backoff send / droppedFrames counter (sendConnFrame)
+// M4-2: Exponential-backoff send / droppedFrames counter (sendConnGenFrame)
 // ---------------------------------------------------------------------------
 
-// TestSendConnFrame_ResetOnSuccess verifies that droppedFrames is reset to 0
+// TestSendConnGenFrame_ResetOnSuccess verifies that droppedFrames is reset to 0
 // after a successful non-critical send.
 // BDD: Given a wsConn with a pre-set droppedFrames=5 and a drained sendCh,
-// When sendConnFrame delivers a non-critical "token" frame successfully,
+// When sendConnGenFrame delivers a non-critical "token" frame successfully,
 // Then wc.droppedFrames is 0.
-// Traces to: pkg/gateway/websocket.go — sendConnFrame default branch droppedFrames reset
-func TestSendConnFrame_ResetOnSuccess(t *testing.T) {
+// Traces to: pkg/gateway/websocket.go — sendRawFrameBytes default branch droppedFrames reset
+func TestSendConnGenFrame_ResetOnSuccess(t *testing.T) {
 	wc := makeTestConn()
 	// Pre-populate so we can confirm the reset.
 	wc.droppedFrames.Store(5)
 
-	sendConnFrame(wc, wsServerFrame{Type: "token", Content: "hello"})
+	sendConnGenFrame(wc, string(generated.WsFrameTypeToken), generated.TokenFrame{
+		Type:      string(generated.WsFrameTypeToken),
+		Content:   "hello",
+		SessionId: "sess-test",
+	})
 
 	assert.Equal(t, int32(0), wc.droppedFrames.Load(),
 		"droppedFrames must be reset to 0 after a successful non-critical send")
 }
 
-// TestSendConnFrame_IncrementsDroppedFramesOnFullChannel verifies that droppedFrames
+// TestSendConnGenFrame_IncrementsDroppedFramesOnFullChannel verifies that droppedFrames
 // increments when all three backoff attempts are exhausted.
 // BDD: Given a wsConn with a zero-capacity send channel (always full),
-// When sendConnFrame is called with a non-critical "token" frame,
+// When sendConnGenFrame is called with a non-critical "token" frame,
 // Then wc.droppedFrames increments by 1.
-// Traces to: pkg/gateway/websocket.go — sendConnFrame backoff exhaustion counter
-func TestSendConnFrame_IncrementsDroppedFramesOnFullChannel(t *testing.T) {
+// Traces to: pkg/gateway/websocket.go — sendRawFrameBytes backoff exhaustion counter
+func TestSendConnGenFrame_IncrementsDroppedFramesOnFullChannel(t *testing.T) {
 	// Zero-capacity channel: every send attempt fails immediately.
 	wc := &wsConn{
 		sendCh: make(chan []byte, 0),
@@ -172,32 +178,39 @@ func TestSendConnFrame_IncrementsDroppedFramesOnFullChannel(t *testing.T) {
 	}
 
 	before := wc.droppedFrames.Load()
-	// sendConnFrame spends up to ~60 ms on backoff attempts — acceptable in a unit test.
-	sendConnFrame(wc, wsServerFrame{Type: "token", Content: "overflow"})
+	// sendConnGenFrame spends up to ~60 ms on backoff attempts — acceptable in a unit test.
+	sendConnGenFrame(wc, string(generated.WsFrameTypeToken), generated.TokenFrame{
+		Type:      string(generated.WsFrameTypeToken),
+		Content:   "overflow",
+		SessionId: "sess-test",
+	})
 
 	assert.Equal(t, before+1, wc.droppedFrames.Load(),
 		"droppedFrames must increment by 1 after all three backoff attempts fail")
 }
 
-// TestSendConnFrame_CriticalFrameBypassesBackoff verifies that "error" frames use
+// TestSendConnGenFrame_CriticalFrameBypassesBackoff verifies that "error" frames use
 // the blocking critical path and do not increment droppedFrames.
 // This is the differentiation test: critical vs non-critical frame types must produce
 // different channel-send behavior.
 // BDD: Given a wsConn with a drained sendCh,
-// When sendConnFrame is called with a critical "error" frame,
+// When sendConnGenFrame is called with a critical "error" frame,
 // Then the frame is enqueued and droppedFrames remains 0.
 // BDD: Given a wsConn with a drained sendCh,
-// When sendConnFrame is called with a non-critical "token" frame with different content,
+// When sendConnGenFrame is called with a non-critical "token" frame with different content,
 // Then the frame is enqueued and its content differs from the "error" frame.
-// Traces to: pkg/gateway/websocket.go — sendConnFrame critical vs non-critical paths
-func TestSendConnFrame_CriticalFrameBypassesBackoff(t *testing.T) {
+// Traces to: pkg/gateway/websocket.go — sendRawFrameBytes critical vs non-critical paths
+func TestSendConnGenFrame_CriticalFrameBypassesBackoff(t *testing.T) {
 	// Critical "error" frame.
 	wcCrit := makeTestConn()
-	sendConnFrame(wcCrit, wsServerFrame{Type: "error", Message: "critical-message-A"})
+	sendConnGenFrame(wcCrit, string(generated.WsFrameTypeError), generated.ErrorFrame{
+		Type:    string(generated.WsFrameTypeError),
+		Message: "critical-message-A",
+	})
 
 	select {
 	case raw := <-wcCrit.sendCh:
-		var f wsServerFrame
+		var f wsServerFrameDecodeHelper
 		require.NoError(t, json.Unmarshal(raw, &f), "critical frame must be valid JSON")
 		assert.Equal(t, "error", f.Type)
 		assert.Equal(t, "critical-message-A", f.Message,
@@ -209,11 +222,15 @@ func TestSendConnFrame_CriticalFrameBypassesBackoff(t *testing.T) {
 
 	// Non-critical "token" frame — different type, different content.
 	wcNonCrit := makeTestConn()
-	sendConnFrame(wcNonCrit, wsServerFrame{Type: "token", Content: "stream-content-B"})
+	sendConnGenFrame(wcNonCrit, string(generated.WsFrameTypeToken), generated.TokenFrame{
+		Type:      string(generated.WsFrameTypeToken),
+		Content:   "stream-content-B",
+		SessionId: "sess-test",
+	})
 
 	select {
 	case raw := <-wcNonCrit.sendCh:
-		var f wsServerFrame
+		var f wsServerFrameDecodeHelper
 		require.NoError(t, json.Unmarshal(raw, &f), "non-critical frame must be valid JSON")
 		assert.Equal(t, "token", f.Type,
 			"non-critical frame type must be 'token' — different from critical path")
@@ -238,21 +255,15 @@ func TestDroppedFramesWarnThreshold_Is20(t *testing.T) {
 		"droppedFramesWarnThreshold must be 20 per M4 spec")
 }
 
-// TestSendConnFrame_DegradedWarningAfterThreshold verifies that when droppedFrames
+// TestSendConnGenFrame_DegradedWarningAfterThreshold verifies that when droppedFrames
 // reaches droppedFramesWarnThreshold (20), a "connection degraded" error frame is
 // injected into the send channel.
 //
-// The backoff sequence inside sendConnFrame takes ~60 ms total (immediate + 10ms + 50ms).
-// We need the channel to be full throughout that window so the non-critical frame is
-// dropped. We use a capacity-1, pre-filled channel. A drain goroutine starts 150 ms
-// after the test begins — after the backoff exhausts — so the degraded warning send
-// (which blocks up to 5 s) can land.
-//
 // BDD: Given a wsConn with droppedFrames=19 and a full send channel,
 // When the 20th non-critical frame is dropped,
-// Then a wsServerFrame{type:"error", message contains "degraded"} is sent.
-// Traces to: pkg/gateway/websocket.go — sendConnFrame degraded warning injection
-func TestSendConnFrame_DegradedWarningAfterThreshold(t *testing.T) {
+// Then an ErrorFrame{type:"error", message contains "degraded"} is sent.
+// Traces to: pkg/gateway/websocket.go — sendRawFrameBytes degraded warning injection
+func TestSendConnGenFrame_DegradedWarningAfterThreshold(t *testing.T) {
 	wc := &wsConn{
 		sendCh: make(chan []byte, 1),
 		doneCh: make(chan struct{}),
@@ -281,7 +292,11 @@ func TestSendConnFrame_DegradedWarningAfterThreshold(t *testing.T) {
 	}()
 
 	// Trigger the 20th drop — blocks for ~60ms backoff + warning send.
-	sendConnFrame(wc, wsServerFrame{Type: "token", Content: "trigger-degraded"})
+	sendConnGenFrame(wc, string(generated.WsFrameTypeToken), generated.TokenFrame{
+		Type:      string(generated.WsFrameTypeToken),
+		Content:   "trigger-degraded",
+		SessionId: "sess-test",
+	})
 
 	// Give the goroutine time to receive and forward the degraded frame.
 	deadline := time.After(3 * time.Second)
@@ -290,7 +305,7 @@ outer:
 	for {
 		select {
 		case raw := <-receivedFrames:
-			var f wsServerFrame
+			var f wsServerFrameDecodeHelper
 			if json.Unmarshal(raw, &f) != nil {
 				continue
 			}
@@ -308,13 +323,13 @@ outer:
 		droppedFramesWarnThreshold)
 }
 
-// TestSendConnFrame_DroppedFramesResetAfterDegradedWarning verifies that after the
+// TestSendConnGenFrame_DroppedFramesResetAfterDegradedWarning verifies that after the
 // degraded warning fires, droppedFrames is reset to 0.
 // BDD: Given a wsConn at threshold-1 drops,
 // When the 20th drop fires the degraded warning,
 // Then wc.droppedFrames is reset to 0.
-// Traces to: pkg/gateway/websocket.go — sendConnFrame wc.droppedFrames = 0 after warning
-func TestSendConnFrame_DroppedFramesResetAfterDegradedWarning(t *testing.T) {
+// Traces to: pkg/gateway/websocket.go — sendRawFrameBytes wc.droppedFrames = 0 after warning
+func TestSendConnGenFrame_DroppedFramesResetAfterDegradedWarning(t *testing.T) {
 	wc := &wsConn{
 		sendCh: make(chan []byte, 1),
 		doneCh: make(chan struct{}),
@@ -329,12 +344,16 @@ func TestSendConnFrame_DroppedFramesResetAfterDegradedWarning(t *testing.T) {
 		}
 	}()
 	t.Cleanup(func() {
-		// Brief wait so any in-flight sendConnFrame finishes before close.
+		// Brief wait so any in-flight sendConnGenFrame finishes before close.
 		time.Sleep(50 * time.Millisecond)
 		close(wc.sendCh)
 	})
 
-	sendConnFrame(wc, wsServerFrame{Type: "token", Content: "trigger-reset"})
+	sendConnGenFrame(wc, string(generated.WsFrameTypeToken), generated.TokenFrame{
+		Type:      string(generated.WsFrameTypeToken),
+		Content:   "trigger-reset",
+		SessionId: "sess-test",
+	})
 
 	// Give the degraded warning send time to complete.
 	time.Sleep(300 * time.Millisecond)

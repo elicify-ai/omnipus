@@ -8,11 +8,13 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 
+	"github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 )
 
@@ -85,9 +87,16 @@ func (c *webchatChannel) Send(_ context.Context, msg bus.OutboundMessage) error 
 
 	for _, conn := range conns {
 		if msg.Content != "" {
-			sendConnFrame(conn, wsServerFrame{Type: "token", Content: msg.Content, SessionID: sid})
+			sendConnGenFrame(conn, string(generated.WsFrameTypeToken), generated.TokenFrame{
+				Type:      string(generated.WsFrameTypeToken),
+				Content:   msg.Content,
+				SessionId: sid,
+			})
 		}
-		sendConnFrame(conn, wsServerFrame{Type: "done", Stats: map[string]any{}, SessionID: sid})
+		sendConnGenFrame(conn, string(generated.WsFrameTypeDone), generated.DoneFrame{
+			Type:      string(generated.WsFrameTypeDone),
+			SessionId: sid,
+		})
 	}
 	return nil
 }
@@ -140,20 +149,24 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 		return fmt.Errorf("webchat: no active connection for chat %s", msg.ChatID)
 	}
 
-	parts := make([]wsMediaPart, 0, len(msg.Parts))
+	parts := make([]generated.MediaPart, 0, len(msg.Parts))
 	for _, p := range msg.Parts {
 		if !strings.HasPrefix(p.Ref, "media://") {
 			slog.Warn("webchat: media part has unexpected ref scheme — skipping",
 				"chat_id", msg.ChatID, "ref", p.Ref)
 			continue
 		}
-		parts = append(parts, wsMediaPart{
+		part := generated.MediaPart{
 			Type:        p.Type,
-			URL:         "/api/v1/media/" + strings.TrimPrefix(p.Ref, "media://"),
+			Url:         "/api/v1/media/" + strings.TrimPrefix(p.Ref, "media://"),
 			Filename:    p.Filename,
 			ContentType: p.ContentType,
-			Caption:     p.Caption,
-		})
+		}
+		if p.Caption != "" {
+			caption := p.Caption
+			part.Caption = &caption
+		}
+		parts = append(parts, part)
 	}
 	if len(parts) == 0 {
 		return fmt.Errorf(
@@ -164,6 +177,16 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 	}
 
 	slog.Debug("webchat: sending media frame", "chat_id", msg.ChatID, "parts", len(parts))
-	sendConnFrame(conn, wsServerFrame{Type: "media", SessionID: msg.SessionID, Parts: parts})
+
+	// Marshal and route through sendRawFrameBytes to get replay-divert and backpressure logic.
+	raw, err := json.Marshal(generated.MediaFrame{
+		Type:      string(generated.WsFrameTypeMedia),
+		SessionId: msg.SessionID,
+		Parts:     parts,
+	})
+	if err != nil {
+		return fmt.Errorf("webchat: marshal media frame: %w", err)
+	}
+	sendRawFrameBytes(conn, string(generated.WsFrameTypeMedia), raw)
 	return nil
 }

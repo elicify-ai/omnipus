@@ -135,7 +135,7 @@ func drainUntilSessionDone(t *testing.T, conn *websocket.Conn, sid string, timeo
 		if err != nil {
 			return false
 		}
-		var f wsServerFrame
+		var f wsServerFrameDecodeHelper
 		if err := json.Unmarshal(raw, &f); err != nil {
 			continue
 		}
@@ -179,20 +179,17 @@ func TestWS_MessageWithEmptySessionID_MintsAndAcks(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// BDD: When — send message without session_id
-	firstMsg := wsClientFrame{Type: "message", Content: "first message no session id"}
+	firstMsg := wsClientFrameTestHelper{Type: "message", Content: "first message no session id"}
 	data, err := json.Marshal(firstMsg)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
-	// BDD: Then — next session-related frame must be session_started with a non-empty id
+	// BDD: Then — next session-related frame must be session_started with a non-empty session_id.
+	// The generated SessionStartedFrame carries session_id as the authoritative session identifier;
+	// the legacy `id` field is not part of the generated contract.
 	started := readFrameOfType(t, conn, "session_started", 5*time.Second)
 	assert.NotEmpty(t, started.SessionID, "session_started.session_id must be non-empty")
-	assert.NotEmpty(t, started.ID, "session_started.id must be non-empty")
 	mintedSessionID := started.SessionID
-
-	// Differentiation: both session_id and id fields must agree
-	assert.Equal(t, mintedSessionID, started.ID,
-		"session_started SessionID and ID fields must match")
 
 	// Drain the first message's done/error frame
 	firstDone := drainUntilSessionDone(t, conn, mintedSessionID, 5*time.Second)
@@ -200,7 +197,7 @@ func TestWS_MessageWithEmptySessionID_MintsAndAcks(t *testing.T) {
 		"first message must produce a done or error frame tagged with the minted session_id=%q", mintedSessionID)
 
 	// BDD: When — follow-up with the minted id
-	followup := wsClientFrame{
+	followup := wsClientFrameTestHelper{
 		Type:      "message",
 		Content:   "second message with minted session",
 		SessionID: mintedSessionID,
@@ -218,7 +215,7 @@ func TestWS_MessageWithEmptySessionID_MintsAndAcks(t *testing.T) {
 		if readErr != nil {
 			break
 		}
-		var f wsServerFrame
+		var f wsServerFrameDecodeHelper
 		if unmarshalErr := json.Unmarshal(raw, &f); unmarshalErr != nil {
 			continue
 		}
@@ -282,7 +279,7 @@ func TestWS_TwoParallelSessions_NoCrosstalk(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Mint session A
-	msgA := wsClientFrame{Type: "message", Content: "session-a-message"}
+	msgA := wsClientFrameTestHelper{Type: "message", Content: "session-a-message"}
 	dataA, _ := json.Marshal(msgA)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataA))
 
@@ -293,7 +290,7 @@ func TestWS_TwoParallelSessions_NoCrosstalk(t *testing.T) {
 	drainUntilSessionDone(t, conn, sessionA, 5*time.Second)
 
 	// Mint session B
-	msgB := wsClientFrame{Type: "message", Content: "session-b-message"}
+	msgB := wsClientFrameTestHelper{Type: "message", Content: "session-b-message"}
 	dataB, _ := json.Marshal(msgB)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataB))
 
@@ -308,7 +305,7 @@ func TestWS_TwoParallelSessions_NoCrosstalk(t *testing.T) {
 		"parallel sessions must have distinct session_ids — single-session implementation would give the same id")
 
 	// Send a follow-up to session A using its explicit id
-	followA := wsClientFrame{Type: "message", Content: "a-followup", SessionID: sessionA}
+	followA := wsClientFrameTestHelper{Type: "message", Content: "a-followup", SessionID: sessionA}
 	dataFA, _ := json.Marshal(followA)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataFA))
 
@@ -320,7 +317,7 @@ func TestWS_TwoParallelSessions_NoCrosstalk(t *testing.T) {
 		if err != nil {
 			break
 		}
-		var f wsServerFrame
+		var f wsServerFrameDecodeHelper
 		if err := json.Unmarshal(raw, &f); err != nil {
 			continue
 		}
@@ -405,7 +402,7 @@ func TestWS_MessageWithUnknownSessionID_ErrorsCleanly(t *testing.T) {
 	// Path traversal session_id — fails validation.EntityID (contains "..")
 	const invalidSID = "../traversal-attempt"
 
-	badMsg := wsClientFrame{
+	badMsg := wsClientFrameTestHelper{
 		Type:      "message",
 		Content:   "this session id has path traversal",
 		SessionID: invalidSID,
@@ -419,7 +416,7 @@ func TestWS_MessageWithUnknownSessionID_ErrorsCleanly(t *testing.T) {
 
 	// BDD: And — connection stays open (write a follow-up to confirm)
 	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
-	ping := wsClientFrame{Type: "message", Content: "still open after error?"}
+	ping := wsClientFrameTestHelper{Type: "message", Content: "still open after error?"}
 	pingData, _ := json.Marshal(ping)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
 		"connection must stay open after error frame — not a fatal disconnect")
@@ -456,7 +453,7 @@ func TestWS_HandoffOverrideKeyedBySessionID(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Mint session A
-	msgA := wsClientFrame{Type: "message", Content: "handoff-test-session-a"}
+	msgA := wsClientFrameTestHelper{Type: "message", Content: "handoff-test-session-a"}
 	dataA, _ := json.Marshal(msgA)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataA))
 
@@ -466,7 +463,7 @@ func TestWS_HandoffOverrideKeyedBySessionID(t *testing.T) {
 	drainUntilSessionDone(t, conn, sessionA, 5*time.Second)
 
 	// Mint session B
-	msgB := wsClientFrame{Type: "message", Content: "handoff-test-session-b"}
+	msgB := wsClientFrameTestHelper{Type: "message", Content: "handoff-test-session-b"}
 	dataB, _ := json.Marshal(msgB)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataB))
 
@@ -525,7 +522,7 @@ func TestWS_FrameTaggingCompleteness_AllSessionScopedFramesCarrySessionID(t *tes
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Mint session
-	initMsg := wsClientFrame{Type: "message", Content: "trigger session for frame tagging test"}
+	initMsg := wsClientFrameTestHelper{Type: "message", Content: "trigger session for frame tagging test"}
 	data, _ := json.Marshal(initMsg)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
@@ -533,11 +530,10 @@ func TestWS_FrameTaggingCompleteness_AllSessionScopedFramesCarrySessionID(t *tes
 	require.NotEmpty(t, started.SessionID)
 	mintedID := started.SessionID
 
-	// session_started itself must carry matching session_id
+	// session_started itself must carry matching session_id.
+	// The generated SessionStartedFrame carries session_id as the authoritative session identifier.
 	assert.Equal(t, mintedID, started.SessionID,
 		"session_started frame must carry the minted session_id in session_id field")
-	assert.Equal(t, mintedID, started.ID,
-		"session_started frame must echo the minted id in the id field")
 
 	// Session-scoped frame types observable with streaming provider.
 	sessionScopedTypes := map[string]bool{
@@ -554,7 +550,7 @@ func TestWS_FrameTaggingCompleteness_AllSessionScopedFramesCarrySessionID(t *tes
 		if err != nil {
 			break
 		}
-		var f wsServerFrame
+		var f wsServerFrameDecodeHelper
 		if err := json.Unmarshal(raw, &f); err != nil {
 			continue
 		}
@@ -618,7 +614,7 @@ func TestWS_PerAgentSessionKeyFormat(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Mint session A — send, wait for session_started, wait for done.
-	msgA := wsClientFrame{Type: "message", Content: "session-A-content"}
+	msgA := wsClientFrameTestHelper{Type: "message", Content: "session-A-content"}
 	dataA, _ := json.Marshal(msgA)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataA))
 
@@ -628,7 +624,7 @@ func TestWS_PerAgentSessionKeyFormat(t *testing.T) {
 	drainUntilSessionDone(t, conn, sessionA, 5*time.Second)
 
 	// Mint session B
-	msgB := wsClientFrame{Type: "message", Content: "session-B-content"}
+	msgB := wsClientFrameTestHelper{Type: "message", Content: "session-B-content"}
 	dataB, _ := json.Marshal(msgB)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataB))
 
@@ -689,7 +685,7 @@ func TestWS_HandleChatMessage_RejectsUnknownSessionID(t *testing.T) {
 
 	// Send a message referencing a well-formatted but non-existent session_id.
 	fakeSessionID := "00000000-0000-0000-0000-000000000001"
-	msg := wsClientFrame{
+	msg := wsClientFrameTestHelper{
 		Type:      "message",
 		Content:   "hello",
 		SessionID: fakeSessionID,
@@ -724,7 +720,7 @@ func TestWS_Cancel_OnlyInterruptsTargetSession(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Mint a real session first.
-	msg := wsClientFrame{Type: "message", Content: "hello"}
+	msg := wsClientFrameTestHelper{Type: "message", Content: "hello"}
 	data, _ := json.Marshal(msg)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 	started := readFrameOfType(t, conn, "session_started", 5*time.Second)
@@ -737,7 +733,7 @@ func TestWS_Cancel_OnlyInterruptsTargetSession(t *testing.T) {
 	// Cancel the finished session. InterruptSession should log a debug "no active
 	// turn" and return cleanly without crashing or panicking.
 	// There must be no error frame emitted to the client from this cancel.
-	cancelFrame := wsClientFrame{Type: "cancel", SessionID: sessionID}
+	cancelFrame := wsClientFrameTestHelper{Type: "cancel", SessionID: sessionID}
 	cancelData, _ := json.Marshal(cancelFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
 
@@ -775,7 +771,7 @@ func TestWS_TwoConnections_HandoffInOneDoesNotAffectOther(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn2)
 
 	// Mint session on connection 1.
-	data1, _ := json.Marshal(wsClientFrame{Type: "message", Content: "conn1"})
+	data1, _ := json.Marshal(wsClientFrameTestHelper{Type: "message", Content: "conn1"})
 	require.NoError(t, conn1.WriteMessage(websocket.TextMessage, data1))
 	started1 := readFrameOfType(t, conn1, "session_started", 5*time.Second)
 	sid1 := started1.SessionID
@@ -783,7 +779,7 @@ func TestWS_TwoConnections_HandoffInOneDoesNotAffectOther(t *testing.T) {
 	drainUntilSessionDone(t, conn1, sid1, 5*time.Second)
 
 	// Mint session on connection 2.
-	data2, _ := json.Marshal(wsClientFrame{Type: "message", Content: "conn2"})
+	data2, _ := json.Marshal(wsClientFrameTestHelper{Type: "message", Content: "conn2"})
 	require.NoError(t, conn2.WriteMessage(websocket.TextMessage, data2))
 	started2 := readFrameOfType(t, conn2, "session_started", 5*time.Second)
 	sid2 := started2.SessionID

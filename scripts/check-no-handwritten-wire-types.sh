@@ -19,6 +19,11 @@
 #         - Structs whose `type Foo struct {` line bears `// not-wire-format`
 #           (case-insensitive) — opt-out for internal helpers that carry
 #           json: tags for non-wire purposes (e.g. logging, config cache).
+#           The annotation MUST be followed by a justification of at least
+#           40 characters, e.g.:
+#             type MyHelper struct { // not-wire-format: decode-only test assertion target
+#           Annotations with fewer than 40 characters are flagged as
+#           under-documented opt-outs ([go-wire-type-justification]).
 #
 #   TS:  Any `export interface Foo { … }` or `export type Foo = { … }`
 #        (object-literal form) in src/lib/api.ts or src/lib/ws.ts is flagged
@@ -28,6 +33,7 @@
 #          - Re-export type aliases: `export type { X } from '…'`
 #          - Anything inside src/lib/api/generated/ (generated)
 #          - Any line that bears `// not-wire-format` (case-insensitive)
+#            with a justification of >= 40 characters after the annotation.
 #
 # Exit code: 0 if no offenders found, 1 if any found.
 #
@@ -82,7 +88,12 @@ generated_dir = os.path.join(repo_root, 'pkg', 'api', 'generated')
 
 STRUCT_DEF = re.compile(r'^type\s+(\w+)\s+struct\s*\{')
 NOT_WIRE_FORMAT = re.compile(r'//\s*not-wire-format', re.IGNORECASE)
+# Matches the annotation and captures everything after it (the justification text).
+NOT_WIRE_FORMAT_WITH_CAPTURE = re.compile(r'//\s*not-wire-format\s*:?\s*(.*)', re.IGNORECASE)
 JSON_TAG = re.compile(r'`[^`]*json:"[^"`]')
+
+# Minimum justification length (chars) required after '// not-wire-format'.
+MIN_JUSTIFICATION_LEN = 40
 
 findings = []
 
@@ -113,7 +124,22 @@ for dirpath, dirnames, filenames in os.walk(gateway_dir):
             m = STRUCT_DEF.search(line)
             if m:
                 # Check opt-out marker on same line
-                if NOT_WIRE_FORMAT.search(line):
+                nwf_m = NOT_WIRE_FORMAT.search(line)
+                if nwf_m:
+                    # Annotation present — validate justification length.
+                    cap_m = NOT_WIRE_FORMAT_WITH_CAPTURE.search(line)
+                    justification = cap_m.group(1).strip() if cap_m else ''
+                    if len(justification) < MIN_JUSTIFICATION_LEN:
+                        struct_start_line = i + 1  # 1-indexed
+                        type_name = m.group(1)
+                        relpath = os.path.relpath(fpath, repo_root)
+                        findings.append(
+                            f"{relpath}:{struct_start_line}: [go-wire-type-justification] "
+                            f"'// not-wire-format' on '{type_name}' has {len(justification)}-char "
+                            f"justification (minimum {MIN_JUSTIFICATION_LEN}) — "
+                            f"add a descriptive reason, e.g.: "
+                            f"// not-wire-format: decode-only test assertion target, never emitted"
+                        )
                     i += 1
                     continue
 
@@ -249,8 +275,11 @@ for line in "${FINDING_LINES[@]}"; do
   echo "  $line"
 done
 echo ""
-echo "To suppress a false positive, add '// not-wire-format' on the same line"
-echo "as the type/interface declaration."
+echo "To suppress a false positive, add '// not-wire-format: <justification>' on"
+echo "the same line as the type/interface declaration.  The justification text"
+echo "must be at least 40 characters (explains why the type is NOT a wire-format"
+echo "type despite carrying json tags).  Example:"
+echo "  type myHelper struct { // not-wire-format: decode-only test assertion target, never emitted over WS"
 echo ""
 echo "To fix a real finding:"
 echo "  1. Add the type to contracts/components/schemas/<TypeName>.yaml"

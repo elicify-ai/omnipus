@@ -562,7 +562,7 @@ func emitNestedToolCalls(
 
 // truncateResult JSON-encodes tc.Result and, if it exceeds replayMaxResultBytes,
 // replaces it with a truncation marker per FR-I-011.
-// Returns the value to place in wsServerFrame.Result.
+// Returns the value to place in the ToolCallResultFrame's result field.
 func truncateResult(sessionID string, tc session.ToolCall) any {
 	if tc.Result == nil {
 		return tc.Result

@@ -35,43 +35,29 @@ import (
 )
 
 // replayLiveBufferCap is the capacity of replayDivertCh (FR-I-009).
-// Frames are diverted here via sendConnFrame when isReplayingLive is set;
+// Frames are diverted here via sendConnGenFrame when isReplayingLive is set;
 // drained into sendCh after replay's done frame.  When the channel is full
-// sendConnFrame drops the frame and emits a degraded warning to sendCh directly
+// sendConnGenFrame drops the frame and emits a degraded warning to sendCh directly
 // (W1-6) so the client still receives the overflow notice.
 const replayLiveBufferCap = 1000
 
-// wsClientFrame is a message sent from the browser to the server over WebSocket.
-// not-wire-format: this is a server-side inbound decode struct; it is never marshaled
-// as a response. Inbound validation is enforced at the readLoop dispatch site.
-type wsClientFrame struct { // not-wire-format
-	Type      string `json:"type"`                 // "auth" | "message" | "cancel" | "exec_approval_response" | "attach_session" | "session_close" | "device_pairing_response"
-	Token     string `json:"token,omitempty"`      // for "auth"
-	Content   string `json:"content,omitempty"`    // for "message"
-	SessionID string `json:"session_id,omitempty"` // for "message" / "cancel" / "attach_session"
-	AgentID   string `json:"agent_id,omitempty"`   // for "message" — route to specific agent
-	ID        string `json:"id,omitempty"`         // for "exec_approval_response"
-	Decision  string `json:"decision,omitempty"`   // "allow" | "deny" | "always" for exec; "approve" | "reject" for device_pairing_response
-	DeviceID  string `json:"device_id,omitempty"`  // for "device_pairing_response"
+// wsTypeOnly is used in the readLoop to peek at the "type" discriminator
+// before decoding the full frame into its specific generated type.
+// It is never emitted as a wire value; it is an inbound decode helper only.
+type wsTypeOnly struct { //nolint:govet // internal decode helper, not a wire type
+	Type string `json:"type"`
 }
 
-// wsServerFrame is kept for two remaining uses:
+// wsServerFrameDecodeHelper is retained solely as a JSON-unmarshal target for
+// replay_test.go's sliceSink.all() — it decodes emitted JSON bytes for test
+// assertions. It is never constructed or marshaled as a wire value anywhere in
+// production code; all outbound emission sites use generated types.
 //
-//  1. sendConnFrame — the legacy send helper still used by error path callers (readLoop
-//     error responses, sendWSFrame pre-auth). These will migrate to sendConnGenFrame.
-//
-//  2. replay_test.go sliceSink.all() — decodes JSON bytes back to wsServerFrame for
-//     test assertions. The struct is never constructed as a wire value in replay.go
-//     after the Phase 7 contract-first migration; it exists only as a JSON decode target.
-//
-// not-wire-format: this struct is retained as a JSON decode helper and for legacy error
-// frame construction sites; it is not the authoritative wire-format definition.
-// Authoritative type is generated from contracts/asyncapi.yaml.
-//
-// Deprecated: new frame construction sites must use pkg/api/generated types and sendConnGenFrame.
-type wsServerFrame struct { // not-wire-format
+// Fields cover the superset of all server→client frames so that test assertions
+// can inspect any field without knowing the concrete frame type.
+type wsServerFrameDecodeHelper struct { //nolint:govet // not-wire-format: decode-only test assertion target, never emitted over the WebSocket connection
 	Type      string `json:"type"`
-	SessionID string `json:"session_id,omitempty"` // present on all session-scoped frames
+	SessionID string `json:"session_id,omitempty"`
 
 	Content    string         `json:"content,omitempty"`
 	Role       string         `json:"role,omitempty"`
@@ -98,24 +84,11 @@ type wsServerFrame struct { // not-wire-format
 	RetryAfterSeconds float64 `json:"retry_after_seconds,omitempty"`
 	AgentID           string  `json:"agent_id,omitempty"`
 	// media frame fields
-	Parts []wsMediaPart `json:"parts,omitempty"`
+	Parts []map[string]any `json:"parts,omitempty"`
 	// subagent span fields (FR-H-004, FR-H-005)
-	// SpanID is "span_" + parent spawn ToolCall.ID. Present on subagent_start and subagent_end.
-	SpanID string `json:"span_id,omitempty"`
-	// ParentCallID is the parent spawn ToolCall.ID. Present on subagent_start, subagent_end,
-	// and tool_call_start/result frames fired inside a sub-turn. Empty for top-level calls.
+	SpanID       string `json:"span_id,omitempty"`
 	ParentCallID string `json:"parent_call_id,omitempty"`
-	// TaskLabel is the human-readable label for the subagent task (subagent_start only).
-	TaskLabel string `json:"task_label,omitempty"`
-}
-
-// wsMediaPart represents a single media attachment in a "media" WebSocket frame.
-type wsMediaPart struct { // not-wire-format: embedded inside wsServerFrame which is // not-wire-format; never marshaled as a standalone response
-	Type        string `json:"type"`         // "image" | "audio" | "video" | "file"
-	URL         string `json:"url"`          // /api/v1/media/{ref}
-	Filename    string `json:"filename"`     // original filename
-	ContentType string `json:"content_type"` // MIME type
-	Caption     string `json:"caption,omitempty"`
+	TaskLabel    string `json:"task_label,omitempty"`
 }
 
 // WSHandler handles the /api/v1/chat/ws WebSocket endpoint for bi-directional
@@ -158,21 +131,22 @@ type WSHandler struct {
 }
 
 type wsConn struct {
-	conn          *websocket.Conn
-	sendCh        chan []byte
-	doneCh        chan struct{}
-	closeOnce     sync.Once
-	droppedTokens atomic.Int32
-	droppedFrames atomic.Int32    // non-critical frames dropped due to backpressure
-	role          config.UserRole // RBAC role resolved at auth time
-	userID        string          // username resolved at auth time; used for session_state scoping (FR-073)
+	conn           *websocket.Conn
+	sendCh         chan []byte
+	doneCh         chan struct{}
+	closeOnce      sync.Once
+	droppedTokens  atomic.Int32
+	droppedFrames  atomic.Int32    // non-critical outbound frames dropped due to backpressure
+	inboundDropped atomic.Int32    // inbound frames dropped due to schema validation failure (Part B)
+	role           config.UserRole // RBAC role resolved at auth time
+	userID         string          // username resolved at auth time; used for session_state scoping (FR-073)
 
 	// Replay-mode divert (W1-1): during replay, live events arriving via
-	// sendConnFrame are redirected into replayDivertCh instead of sendCh so
+	// sendConnGenFrame are redirected into replayDivertCh instead of sendCh so
 	// they don't interleave with replay frames. After replay finishes they are
 	// drained into sendCh in arrival order.
 	// isReplayingLive is set atomically before replay starts and cleared after
-	// the done frame is sent, so concurrent callers of sendConnFrame see a
+	// the done frame is sent, so concurrent callers of sendConnGenFrame see a
 	// consistent view without holding any mutex.
 	isReplayingLive atomic.Bool
 	replayDivertCh  chan []byte // capacity replayLiveBufferCap; allocated lazily by handleAttachSession
@@ -397,10 +371,10 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.agentLoop.MountHook(agent.NamedHook(hookName, approvalHook)); err != nil {
 		slog.Error("ws: could not mount approval hook — closing connection", "chat_id", chatID, "error", err)
-		sendConnFrame(
-			wc,
-			wsServerFrame{Type: "error", Message: "failed to initialize tool approval — please reconnect"},
-		)
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "failed to initialize tool approval — please reconnect",
+		})
 		return
 	}
 
@@ -448,17 +422,20 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 		return false
 	}
 
-	var frame wsClientFrame
-	if err := json.Unmarshal(data, &frame); err != nil || frame.Type != "auth" {
-		sendWSFrame(
+	var authFrame generated.AuthFrame
+	if err := json.Unmarshal(data, &authFrame); err != nil || authFrame.Type != string(generated.WsFrameTypeAuth) {
+		sendGenWSFrame(
 			conn,
-			wsServerFrame{Type: "error", Message: "first message must be {\"type\":\"auth\",\"token\":\"...\"}"},
+			generated.ErrorFrame{
+				Type:    string(generated.WsFrameTypeError),
+				Message: "first message must be {\"type\":\"auth\",\"token\":\"...\"}",
+			},
 		)
 		return false
 	}
 
 	cfg := h.agentLoop.GetConfig()
-	rawToken := frame.Token
+	rawToken := authFrame.Token
 
 	// 1. Check per-user list (RBAC — bcrypt token hash lookup).
 	if len(cfg.Gateway.Users) > 0 {
@@ -471,7 +448,10 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 			}
 		}
 		// Token not in user list — reject.
-		sendWSFrame(conn, wsServerFrame{Type: "error", Message: "unauthorized: invalid token"})
+		sendGenWSFrame(conn, generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "unauthorized: invalid token",
+		})
 		conn.WriteMessage(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "authentication failed"),
@@ -489,7 +469,10 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 			return true
 		}
 		// No auth configured — deny by default (fail closed), matching HTTP auth path.
-		sendWSFrame(conn, wsServerFrame{Type: "error", Message: "no users configured, complete onboarding first"})
+		sendGenWSFrame(conn, generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "no users configured, complete onboarding first",
+		})
 		conn.WriteMessage(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "authentication failed"),
@@ -497,7 +480,10 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 		return false
 	}
 	if subtle.ConstantTimeCompare([]byte(rawToken), []byte(required)) != 1 {
-		sendWSFrame(conn, wsServerFrame{Type: "error", Message: "unauthorized: invalid token"})
+		sendGenWSFrame(conn, generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "unauthorized: invalid token",
+		})
 		conn.WriteMessage(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "authentication failed"),
@@ -536,7 +522,10 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 					"limit_bytes",
 					wsMaxMessageBytes,
 				)
-				sendWSFrame(conn, wsServerFrame{Type: "error", Message: "message too large (max 5MB)"})
+				sendGenWSFrame(conn, generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "message too large (max 5MB)",
+				})
 				return
 			}
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
@@ -550,73 +539,140 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 			return
 		}
 
-		var frame wsClientFrame
-		if err := json.Unmarshal(data, &frame); err != nil {
+		// Peek at the type discriminator before full decode.
+		var peek wsTypeOnly
+		if err := json.Unmarshal(data, &peek); err != nil {
 			slog.Warn("ws: malformed frame", "error", err)
-			sendConnFrame(wc, wsServerFrame{Type: "error", Message: "malformed message frame"})
+			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:    string(generated.WsFrameTypeError),
+				Message: "malformed message frame",
+			})
 			continue
 		}
 
-		switch frame.Type {
-		case "message":
-			if frame.Content == "" {
+		switch peek.Type {
+		case string(generated.WsFrameTypeMessage):
+			var f generated.MessageFrame
+			if err := json.Unmarshal(data, &f); err != nil {
+				slog.Warn("ws: malformed message frame", "error", err)
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "malformed message frame",
+				})
 				continue
 			}
-			h.handleChatMessage(ctx, chatID, frame.SessionID, frame.Content, frame.AgentID, wc)
-		case "cancel":
-			h.handleCancel(wc, frame.SessionID)
-		case "exec_approval_response":
-			h.handleApprovalResponse(frame.ID, frame.Decision, frame.SessionID, wc)
-		case "attach_session":
+			if f.Content == "" {
+				continue
+			}
+			var agentID string
+			if f.AgentId != nil {
+				agentID = *f.AgentId
+			}
+			var sessionID string
+			if f.SessionId != nil {
+				sessionID = *f.SessionId
+			}
+			h.handleChatMessage(ctx, chatID, sessionID, f.Content, agentID, wc)
+		case string(generated.WsFrameTypeCancel):
+			var f generated.CancelFrame
+			if err := json.Unmarshal(data, &f); err != nil {
+				slog.Warn("ws: malformed cancel frame", "error", err)
+				continue
+			}
+			if f.SessionId == "" {
+				wc.inboundDropped.Add(1)
+				slog.Warn("ws: cancel frame missing required session_id — dropping",
+					"chat_id", chatID)
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "cancel requires session_id",
+				})
+				continue
+			}
+			h.handleCancel(wc, f.SessionId)
+		case string(generated.WsFrameTypeExecApprovalResponse):
+			var f generated.ExecApprovalResponseFrame
+			if err := json.Unmarshal(data, &f); err != nil {
+				slog.Warn("ws: malformed exec_approval_response frame", "error", err)
+				wc.inboundDropped.Add(1)
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "malformed exec_approval_response frame",
+				})
+				continue
+			}
+			// Schema validation: decision must be one of the allowed values.
+			switch f.Decision {
+			case "allow", "deny", "always":
+				// valid
+			default:
+				wc.inboundDropped.Add(1)
+				slog.Warn("ws: exec_approval_response unknown decision — dropping",
+					"decision", f.Decision, "id", f.Id, "chat_id", chatID)
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "exec_approval_response: unknown decision value",
+				})
+				continue
+			}
+			h.handleApprovalResponse(f.Id, f.Decision, "", wc)
+		case string(generated.WsFrameTypeAttachSession):
+			var f generated.AttachSessionFrame
+			if err := json.Unmarshal(data, &f); err != nil {
+				slog.Warn("ws: malformed attach_session frame", "error", err)
+				continue
+			}
 			slog.Info("ws: attach_session frame received",
 				"chat_id", chatID,
-				"requested_session_id", frame.SessionID,
+				"requested_session_id", f.SessionId,
 			)
-			if frame.SessionID != "" {
-				// FR-024 lazy CAS: if this agent already has an active session that
-				// differs from the one being attached, close the prior session.
-				if frame.AgentID != "" {
-					if prior, ok := h.agentLoop.GetCurrentSession(
-						frame.AgentID,
-					); ok && prior != "" &&
-						prior != frame.SessionID {
-						priorSID := prior
-						go func() {
-							defer func() {
-								if r := recover(); r != nil {
-									slog.Error("ws: lazy CloseSession panic recovered",
-										"session_id", priorSID,
-										"panic", r,
-									)
-								}
-							}()
-							h.agentLoop.CloseSession(priorSID, "lazy")
-						}()
-					}
-					h.agentLoop.SetCurrentSession(frame.AgentID, frame.SessionID)
-				}
-				h.handleAttachSession(ctx, chatID, frame.SessionID, wc)
+			if f.SessionId != "" {
+				h.handleAttachSession(ctx, chatID, f.SessionId, wc)
 			} else {
 				slog.Warn("ws: attach_session with empty session_id", "chat_id", chatID)
 			}
-		case "session_close":
+		case string(generated.WsFrameTypeSessionClose):
+			var f generated.SessionCloseFrame
+			if err := json.Unmarshal(data, &f); err != nil {
+				slog.Warn("ws: malformed session_close frame", "error", err)
+				continue
+			}
 			// FR-023: explicit session close request from the client.
-			if frame.SessionID == "" {
-				sendConnFrame(wc, wsServerFrame{Type: "error", Message: "session_close requires session_id"})
+			if f.SessionId == "" {
+				wc.inboundDropped.Add(1)
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "session_close requires session_id",
+				})
 				continue
 			}
-			if err := validation.EntityID(frame.SessionID); err != nil {
-				sendConnFrame(wc, wsServerFrame{Type: "error", Message: "invalid session_id"})
+			if err := validation.EntityID(f.SessionId); err != nil {
+				wc.inboundDropped.Add(1)
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "invalid session_id",
+				})
 				continue
 			}
-			h.agentLoop.CloseSession(frame.SessionID, "explicit")
-			sendConnFrame(wc, wsServerFrame{Type: "session_close_ack", ID: frame.SessionID, SessionID: frame.SessionID})
-		case "ping":
+			h.agentLoop.CloseSession(f.SessionId, "explicit")
+			sid := f.SessionId
+			sendConnGenFrame(wc, string(generated.WsFrameTypeSessionCloseAck), generated.SessionCloseAckFrame{
+				Type:      string(generated.WsFrameTypeSessionCloseAck),
+				SessionId: f.SessionId,
+				Id:        &sid,
+			})
+		case string(generated.WsFrameTypePing):
 			// Client heartbeat — no action needed, the WebSocket pong handler keeps the connection alive
-		case "device_pairing_response":
-			h.handleDevicePairingResponse(frame.DeviceID, frame.Decision)
+		case string(generated.WsFrameTypeDevicePairingResponse):
+			var f generated.DevicePairingResponseFrame
+			if err := json.Unmarshal(data, &f); err != nil {
+				slog.Warn("ws: malformed device_pairing_response frame", "error", err)
+				wc.inboundDropped.Add(1)
+				continue
+			}
+			h.handleDevicePairingResponse(f.DeviceId, f.Decision)
 		default:
-			slog.Debug("ws: unknown frame type ignored", "type", frame.Type, "chat_id", chatID)
+			slog.Debug("ws: unknown frame type ignored", "type", peek.Type, "chat_id", chatID)
 		}
 	}
 }
@@ -648,9 +704,8 @@ func (h *WSHandler) handleChatMessage(
 			meta, err := store.NewSession(session.SessionTypeChat, "webchat", targetAgentID)
 			if err != nil {
 				slog.Error("ws: could not create session", "error", err)
-				sendConnFrame(wc, wsServerFrame{
-					Type:    "error",
-					Command: "session_create_failed",
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
 					Message: fmt.Sprintf("could not create session: %v", err),
 				})
 				return
@@ -670,26 +725,36 @@ func (h *WSHandler) handleChatMessage(
 				slog.Warn("ws: could not set session title", "session_id", meta.ID, "error", err)
 			}
 			// Ack the new session_id so the SPA can associate all subsequent frames.
-			sendConnFrame(wc, wsServerFrame{
-				Type:      "session_started",
-				ID:        meta.ID,
-				SessionID: meta.ID,
-				AgentID:   targetAgentID,
-			})
+			startedFrame := generated.SessionStartedFrame{
+				Type:      string(generated.WsFrameTypeSessionStarted),
+				SessionId: meta.ID,
+			}
+			if targetAgentID != "" {
+				aid := targetAgentID
+				startedFrame.AgentId = &aid
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeSessionStarted), startedFrame)
 		} else {
 			// Validate client-supplied session_id format.
 			if err := validation.EntityID(sessionID); err != nil {
 				slog.Warn("ws: invalid session_id in message frame", "session_id", sessionID, "error", err)
-				sendConnFrame(
-					wc,
-					wsServerFrame{Type: "error", Message: "invalid session_id format", SessionID: sessionID},
-				)
+				sidCopy := sessionID
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:      string(generated.WsFrameTypeError),
+					Message:   "invalid session_id format",
+					SessionId: &sidCopy,
+				})
 				return
 			}
 			// Validate that the session actually exists in the store.
 			if _, err := store.GetMeta(sessionID); err != nil {
 				slog.Warn("ws: session not found", "session_id", sessionID, "error", err)
-				sendConnFrame(wc, wsServerFrame{Type: "error", Message: "session not found", SessionID: sessionID})
+				sidCopy := sessionID
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:      string(generated.WsFrameTypeError),
+					Message:   "session not found",
+					SessionId: &sidCopy,
+				})
 				return
 			}
 			// Track for streamer.
@@ -724,7 +789,12 @@ func (h *WSHandler) handleChatMessage(
 	if agentID != "" {
 		if err := validateEntityID(agentID); err != nil {
 			slog.Warn("ws: invalid agent_id in message frame; rejecting", "agent_id", agentID, "error", err)
-			sendConnFrame(wc, wsServerFrame{Type: "error", Message: "invalid agent_id", SessionID: sessionID})
+			sidCopy := sessionID
+			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:      string(generated.WsFrameTypeError),
+				Message:   "invalid agent_id",
+				SessionId: &sidCopy,
+			})
 			return
 		}
 		msg.Metadata = map[string]string{"agent_id": agentID}
@@ -733,19 +803,17 @@ func (h *WSHandler) handleChatMessage(
 	defer cancel()
 	if err := h.msgBus.PublishInbound(pubCtx, msg); err != nil {
 		slog.Warn("ws: failed to publish message", "error", err)
-		sendConnFrame(
-			wc,
-			wsServerFrame{
-				Type:      "error",
-				Message:   fmt.Sprintf("failed to deliver message: %v", err),
-				SessionID: sessionID,
-			},
-		)
+		sidCopy := sessionID
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:      string(generated.WsFrameTypeError),
+			Message:   fmt.Sprintf("failed to deliver message: %v", err),
+			SessionId: &sidCopy,
+		})
 	}
 }
 
 // sendCancelStageFrame marshals a generated.CancelStageFrame and delivers it via wc.sendCh.
-// Mirrors sendConnFrame's non-critical send path (immediate try, then 10ms/50ms
+// Mirrors sendConnGenFrame's non-critical send path (immediate try, then 10ms/50ms
 // backoffs) but is non-critical so it does not use sendConnGenFrame's critical-frame
 // timeout path. Best-effort: marshal/send errors are logged at debug level and do not
 // block the cancel state machine.
@@ -797,7 +865,10 @@ func sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
 // delegates. All state-machine logic lives in pkg/agent.RequestCancel.
 func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 	if sessionID == "" {
-		sendConnFrame(wc, wsServerFrame{Type: "error", Message: "cancel requires session_id"})
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "cancel requires session_id",
+		})
 		return
 	}
 
@@ -831,7 +902,10 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 	if err != nil {
 		slog.Warn("ws: handleCancel: RequestCancel error",
 			"session_id", sessionID, "error", err)
-		sendConnFrame(wc, wsServerFrame{Type: "error", Message: "cancel failed: " + err.Error()})
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "cancel failed: " + err.Error(),
+		})
 		return
 	}
 	if !outcome.Fired {
@@ -854,20 +928,29 @@ func (h *WSHandler) handleAttachSession(
 	wc *wsConn,
 ) {
 	if err := validateEntityID(attachID); err != nil {
-		sendConnFrame(wc, wsServerFrame{Type: "error", Message: "invalid session_id"})
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "invalid session_id",
+		})
 		return
 	}
 
 	store := h.resolveSessionStore(attachID)
 	if store == nil {
-		sendConnFrame(wc, wsServerFrame{Type: "error", Message: "session not found"})
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "session not found",
+		})
 		return
 	}
 
 	entries, err := store.ReadTranscript(attachID)
 	if err != nil {
 		slog.Warn("ws: attach_session: could not read transcript", "session_id", attachID, "error", err)
-		sendConnFrame(wc, wsServerFrame{Type: "error", Message: "could not read session transcript"})
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "could not read session transcript",
+		})
 		return
 	}
 
@@ -891,7 +974,7 @@ func (h *WSHandler) handleAttachSession(
 	// FR-I-009 / W1-1: register for live-event forwarding BEFORE starting replay
 	// so no live events are lost during the replay window.
 	//
-	// Live events arriving via sendConnFrame during replay are diverted into
+	// Live events arriving via sendConnGenFrame during replay are diverted into
 	// wc.replayDivertCh (allocated below) by the atomic flag wc.isReplayingLive.
 	// writePump drains wc.sendCh as normal — replay frames go there directly.
 	// After the done frame, the flag is cleared and the divert buffer is drained
@@ -915,7 +998,7 @@ func (h *WSHandler) handleAttachSession(
 	h.sessionIDs[attachID] = attachID
 	h.mu.Unlock()
 
-	// Arm the divert: any sendConnFrame calls after this point will route live
+	// Arm the divert: any sendConnGenFrame calls after this point will route live
 	// frames into replayDivertCh instead of sendCh.
 	wc.isReplayingLive.Store(true)
 
@@ -948,7 +1031,7 @@ func (h *WSHandler) handleAttachSession(
 	}
 	framesEmitted, replayErr := streamReplay(ctx, attachID, entries, rs, emitFn, mediaStore)
 
-	// Disarm the divert FIRST so that subsequent sendConnFrame calls go directly
+	// Disarm the divert FIRST so that subsequent sendConnGenFrame calls go directly
 	// to sendCh once we drain the buffer below.
 	wc.isReplayingLive.Store(false)
 
@@ -1020,9 +1103,10 @@ drainDone:
 	if err := h.agentLoop.HydrateAgentHistoryFromTranscript(attachID); err != nil {
 		slog.Warn("ws: attach_session: hydrate agent history failed",
 			"session_id", attachID, "error", err)
-		sendConnFrame(wc, wsServerFrame{
-			Type:      "error",
-			SessionID: attachID,
+		sidCopy := attachID
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:      string(generated.WsFrameTypeError),
+			SessionId: &sidCopy,
 			Message:   "could not restore conversation context — agent may not remember earlier turns",
 		})
 	}
@@ -1045,8 +1129,8 @@ func (h *WSHandler) handleApprovalResponse(id, decision, sessionID string, wc *w
 		if sessionID != registeredSID {
 			slog.Warn("ws: exec_approval_response session_id mismatch — rejecting",
 				"id", id, "frame_session", sessionID, "registered_session", registeredSID)
-			sendConnFrame(wc, wsServerFrame{
-				Type:    "error",
+			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:    string(generated.WsFrameTypeError),
 				Message: "approval session_id mismatch",
 			})
 			return
@@ -1070,10 +1154,15 @@ func (h *WSHandler) handleApprovalResponse(id, decision, sessionID string, wc *w
 		slog.Debug("ws: exec_approval_response for unknown or expired request", "id", id, "decision", decision)
 	} else {
 		slog.Info("ws: exec_approval resolved", "id", id, "decision", decision, "verdict", verdict)
-		sendConnFrame(wc, wsServerFrame{
-			Type:      "exec_approval_response_ack",
-			ID:        id,
-			SessionID: sessionID,
+		var sidPtr *string
+		if sessionID != "" {
+			sidCopy := sessionID
+			sidPtr = &sidCopy
+		}
+		sendConnGenFrame(wc, string(generated.WsFrameTypeExecApprovalResponseAck), generated.ExecApprovalResponseAckFrame{
+			Type:      string(generated.WsFrameTypeExecApprovalResponseAck),
+			Id:        &id,
+			SessionId: sidPtr,
 		})
 	}
 }
@@ -1136,7 +1225,7 @@ func (h *WSHandler) pingPump(wc *wsConn) {
 	}
 }
 
-// sendConnFrame marshals a frame and enqueues it on wc's send channel.
+// sendConnGenFrame marshals a frame and enqueues it on wc's send channel.
 // For "done", "error", and approval frames, blocks up to 5 s rather than dropping,
 // because losing these frames would leave the client in a permanently stuck state.
 // For non-critical frames, retries with short delays (immediate, 10ms, 50ms) before dropping.
@@ -1153,24 +1242,9 @@ func (h *WSHandler) pingPump(wc *wsConn) {
 // frames after which a "connection degraded" error is sent to the browser.
 const droppedFramesWarnThreshold = 20
 
-// sendConnFrame marshals a wsServerFrame and routes it to the connection.
-// Deprecated: construction sites should use sendConnGenFrame with the appropriate
-// generated type from pkg/api/generated. This function is kept for internal use
-// by replay.go (streamReplay signature is locked by test code) and pre-migration
-// call sites in the readLoop error path.
-// Remove once all callers migrate to sendConnGenFrame (contract-first migration).
-func sendConnFrame(wc *wsConn, frame wsServerFrame) {
-	data, err := json.Marshal(frame)
-	if err != nil {
-		slog.Error("ws: marshal frame failed", "error", err)
-		return
-	}
-	sendRawFrameBytes(wc, frame.Type, data)
-}
-
 // sendConnGenFrame marshals any generated frame type (from pkg/api/generated) and
 // routes it to the connection with the same backpressure and replay-divert logic as
-// sendConnFrame.  frameType is the string value of the frame's "type" field, used
+// sendConnGenFrame.  frameType is the string value of the frame's "type" field, used
 // to determine whether the frame is critical (never dropped, blocks briefly).
 func sendConnGenFrame(wc *wsConn, frameType string, frame any) {
 	data, err := json.Marshal(frame)
@@ -1183,7 +1257,7 @@ func sendConnGenFrame(wc *wsConn, frameType string, frame any) {
 
 // sendRawFrameBytes routes pre-marshaled frame bytes to the connection's send channel.
 // It implements the replay-divert logic (W1-1), critical-frame blocking, and
-// backpressure drop logic shared by sendConnFrame and sendConnGenFrame.
+// backpressure drop logic shared by sendConnGenFrame and sendConnGenFrame.
 // frameType is used to determine criticality (done, error, exec_approval_*).
 func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 	// W1-1: if replay mode is active, divert live frames into the replay buffer
@@ -1244,8 +1318,8 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 		// immediately without waiting for replay to drain (W1-6).
 		if wc.droppedFrames.Load() >= int32(droppedFramesWarnThreshold) {
 			wc.droppedFrames.Store(0)
-			degraded, merr := json.Marshal(wsServerFrame{
-				Type:    "error",
+			degraded, merr := json.Marshal(generated.ErrorFrame{
+				Type:    string(generated.WsFrameTypeError),
 				Message: "connection degraded: frames being dropped due to backpressure",
 			})
 			if merr != nil {
@@ -1262,15 +1336,16 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 	}
 }
 
-// sendWSFrame writes a frame directly to a connection (used before the send goroutine starts).
-func sendWSFrame(conn *websocket.Conn, frame wsServerFrame) {
+// sendGenWSFrame writes a generated frame directly to a connection (used before the send goroutine starts).
+// frameType is the frame's type discriminator value (e.g. "error"), used for logging only.
+func sendGenWSFrame(conn *websocket.Conn, frame any) {
 	data, err := json.Marshal(frame)
 	if err != nil {
 		slog.Error("ws: marshal frame failed", "error", err)
 		return
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		slog.Debug("ws: write frame failed", "type", frame.Type, "error", err)
+		slog.Debug("ws: write frame failed", "error", err)
 	}
 }
 
@@ -1691,7 +1766,11 @@ func (s *wsStreamer) SetTurnStats(tokens int64, costUSD float64, duration time.D
 }
 
 func (s *wsStreamer) Update(_ context.Context, content string) error {
-	data, err := json.Marshal(wsServerFrame{Type: "token", Content: content, SessionID: s.sessionID})
+	data, err := json.Marshal(generated.TokenFrame{
+		Type:      string(generated.WsFrameTypeToken),
+		Content:   content,
+		SessionId: s.sessionID,
+	})
 	if err != nil {
 		return fmt.Errorf("ws: marshal token frame: %w", err)
 	}

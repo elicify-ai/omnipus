@@ -51,15 +51,15 @@ func (s *sliceSink) emit(f any) error {
 	return nil
 }
 
-// all decodes all accumulated JSON frames into wsServerFrame for test assertions.
-// wsServerFrame is kept as a decode-only test helper — it is never constructed
+// all decodes all accumulated JSON frames into wsServerFrameDecodeHelper for test assertions.
+// wsServerFrameDecodeHelper is kept as a decode-only test helper — it is never constructed
 // as a wire value; only json.Unmarshal populates it.
-func (s *sliceSink) all() []wsServerFrame {
+func (s *sliceSink) all() []wsServerFrameDecodeHelper {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]wsServerFrame, 0, len(s.frames))
+	out := make([]wsServerFrameDecodeHelper, 0, len(s.frames))
 	for _, raw := range s.frames {
-		var f wsServerFrame
+		var f wsServerFrameDecodeHelper
 		if err := json.Unmarshal(raw, &f); err == nil {
 			out = append(out, f)
 		}
@@ -68,7 +68,7 @@ func (s *sliceSink) all() []wsServerFrame {
 }
 
 // runReplay is a convenience wrapper for streamReplay with a sliceSink.
-func runReplay(t *testing.T, entries []session.TranscriptEntry) ([]wsServerFrame, int) {
+func runReplay(t *testing.T, entries []session.TranscriptEntry) ([]wsServerFrameDecodeHelper, int) {
 	t.Helper()
 	sink := &sliceSink{}
 	rs := computeReplayStats(entries)
@@ -710,9 +710,9 @@ func TestAttach_RegistersLiveEventsBeforeReplay(t *testing.T) {
 
 	// Must have received at least: replay_message{user,"hello"} + done.
 	close(wc.sendCh)
-	var got []wsServerFrame
+	var got []wsServerFrameDecodeHelper
 	for raw := range wc.sendCh {
-		var f wsServerFrame
+		var f wsServerFrameDecodeHelper
 		if json.Unmarshal(raw, &f) == nil {
 			got = append(got, f)
 		}
@@ -942,7 +942,7 @@ func TestReplay_LiveEventBuffer_OrderPreserved(t *testing.T) {
 // Test helpers for frame inspection
 // ─────────────────────────────────────────────────────────────────────────────
 
-func frameTypes(frames []wsServerFrame) []string {
+func frameTypes(frames []wsServerFrameDecodeHelper) []string {
 	out := make([]string, len(frames))
 	for i, f := range frames {
 		out[i] = f.Type
@@ -950,7 +950,7 @@ func frameTypes(frames []wsServerFrame) []string {
 	return out
 }
 
-func findFrame(frames []wsServerFrame, typ string) *wsServerFrame {
+func findFrame(frames []wsServerFrameDecodeHelper, typ string) *wsServerFrameDecodeHelper {
 	for i := range frames {
 		if frames[i].Type == typ {
 			return &frames[i]
@@ -959,8 +959,8 @@ func findFrame(frames []wsServerFrame, typ string) *wsServerFrame {
 	return nil
 }
 
-func filterByType(frames []wsServerFrame, typ string) []wsServerFrame {
-	var out []wsServerFrame
+func filterByType(frames []wsServerFrameDecodeHelper, typ string) []wsServerFrameDecodeHelper {
+	var out []wsServerFrameDecodeHelper
 	for _, f := range frames {
 		if f.Type == typ {
 			out = append(out, f)
@@ -1011,7 +1011,7 @@ func TestLiveEventForwarder_ToolCallStart_CarriesAgentID(t *testing.T) {
 
 	select {
 	case raw := <-wc.sendCh:
-		var f wsServerFrame
+		var f wsServerFrameDecodeHelper
 		require.NoError(t, json.Unmarshal(raw, &f))
 		assert.Equal(t, "tool_call_start", f.Type)
 		// agent_id on live tool_call_start: the event payload doesn't carry AgentID

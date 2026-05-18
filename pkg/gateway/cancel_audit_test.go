@@ -187,7 +187,7 @@ func TestCancel_AuditEventEmitted(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Start a real turn.
-	msgFrame := wsClientFrame{Type: "message", Content: "start blocking turn for audit test"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start blocking turn for audit test"}
 	data, _ := json.Marshal(msgFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 
@@ -203,7 +203,7 @@ func TestCancel_AuditEventEmitted(t *testing.T) {
 	}
 
 	// Send the WebSocket cancel frame — drives the real handleCancel path.
-	cancelFrame := wsClientFrame{Type: "cancel", SessionID: sessionID}
+	cancelFrame := wsClientFrameTestHelper{Type: "cancel", SessionID: sessionID}
 	cancelData, _ := json.Marshal(cancelFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
 
@@ -238,7 +238,7 @@ func TestCancel_AuditEventEmitted(t *testing.T) {
 	// another turn_cancel_attempt (with was_fired=false). This proves the audit
 	// comes from real state — a hardcoded emitter would either emit nothing or
 	// always emit the same payload.
-	cancelFrame2 := wsClientFrame{Type: "cancel", SessionID: sessionID}
+	cancelFrame2 := wsClientFrameTestHelper{Type: "cancel", SessionID: sessionID}
 	cancelData2, _ := json.Marshal(cancelFrame2)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData2))
 
