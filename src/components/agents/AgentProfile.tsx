@@ -219,7 +219,10 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
     tool_feedback: toolFeedback,
     heartbeat_enabled: heartbeatEnabled,
     heartbeat_interval: heartbeatInterval,
-    sandbox_profile: sandboxProfile,
+    // 'none' is a UI-only marker meaning "inherit global default". Strip it before
+    // submitting so the backend receives undefined (omitted) rather than a value
+    // that fails the sandbox_profile enum validation (contract does not include 'none').
+    sandbox_profile: sandboxProfile === 'none' ? undefined : sandboxProfile,
     shell_policy: {
       custom_deny_patterns: shellDenyPatterns.filter((p) => p.trim() !== ''),
     },

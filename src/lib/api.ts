@@ -504,7 +504,10 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
 
 // ── Agents ────────────────────────────────────────────────────────────────────
 
-export type SandboxProfile = 'none' | 'workspace' | 'workspace+net' | 'host' | 'off'
+// 'none' is a UI-only sentinel meaning "inherit global default" — it is NOT a
+// valid contract value and must be stripped before submission (see AgentProfile.tsx).
+// The wire format only accepts: workspace | workspace+net | host | off.
+export type SandboxProfile = 'none' | 'workspace' | 'workspace+net' | 'host' | 'off' // not-wire-format: 'none' is UI-only; strip to undefined before send
 
 export interface AgentShellPolicy { // not-wire-format: SPA-internal helper type — the shell_policy field on the generated Agent type is an inline anonymous object; this interface is never sent to or received from the gateway as a standalone value
   enable_deny_patterns?: boolean

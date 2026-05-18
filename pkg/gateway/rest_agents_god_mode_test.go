@@ -212,3 +212,52 @@ func TestUpdateAgent_ShellPolicy_ValidRegexes_Returns200(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code,
 		"valid regexps in custom_deny_patterns must return 200; body: %s", w.Body.String())
 }
+
+// TestUpdateAgent_ShellPolicy_PartialPatch_EnableDenyPatternsPreserved is a
+// regression test for the enable_deny_patterns null-poisoning bug.
+//
+// When a caller PATCHes only custom_deny_patterns (omitting enable_deny_patterns),
+// the prior value of enable_deny_patterns must be preserved in config.json.
+// The bug: req.ShellPolicy.EnableDenyPatterns was *bool; writing it unconditionally
+// persisted null, which decoded as false on the next read.
+func TestUpdateAgent_ShellPolicy_PartialPatch_EnableDenyPatternsPreserved(t *testing.T) {
+	api := buildGodModeTestAPI(t, false /* allowGodMode */)
+
+	// First PATCH: set enable_deny_patterns=true.
+	body1 := `{"shell_policy":{"enable_deny_patterns":true,"custom_deny_patterns":["rm\\s+-rf"]}}`
+	w1 := httptest.NewRecorder()
+	r1 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body1))
+	r1.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w1, r1)
+	require.Equal(t, http.StatusOK, w1.Code, "first PATCH must succeed; body: %s", w1.Body.String())
+
+	// Second PATCH: send only custom_deny_patterns (no enable_deny_patterns key).
+	body2 := `{"shell_policy":{"custom_deny_patterns":["curl\\s+evil"]}}`
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body2))
+	r2.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w2, r2)
+	require.Equal(t, http.StatusOK, w2.Code, "second PATCH must succeed; body: %s", w2.Body.String())
+
+	// Read config.json and confirm enable_deny_patterns is still true (not null or false).
+	raw, err := os.ReadFile(api.homePath + "/config.json")
+	require.NoError(t, err)
+	var persisted map[string]any
+	require.NoError(t, json.Unmarshal(raw, &persisted))
+	agents, _ := persisted["agents"].(map[string]any)
+	list, _ := agents["list"].([]any)
+	var found bool
+	for _, item := range list {
+		m, ok := item.(map[string]any)
+		if !ok || m["id"] != "test-agent" {
+			continue
+		}
+		sp, _ := m["shell_policy"].(map[string]any)
+		require.NotNil(t, sp, "shell_policy must exist in persisted config")
+		assert.Equal(t, true, sp["enable_deny_patterns"],
+			"enable_deny_patterns must remain true after partial PATCH (null-poisoning regression)")
+		found = true
+		break
+	}
+	assert.True(t, found, "test-agent must appear in the persisted agent list")
+}

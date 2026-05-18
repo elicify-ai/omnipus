@@ -509,29 +509,10 @@ func TestUpdateAgent_ValidateInbound_ValidBody(t *testing.T) {
 }
 
 // TestUpdateAgent_ValidateInbound_EmptyPatchRejected asserts the minProperties:1
-// invariant in the AgentUpdateRequest schema.
-//
-// NOTE: The inbound schema at pkg/gateway/inboundschemas/AgentUpdateRequest.yaml
-// currently does NOT include minProperties:1 — only the component schema at
-// contracts/components/schemas/AgentUpdateRequest.yaml does. Until the inbound
-// schema is synced, the empty {} body passes decodeAndValidate and the handler
-// proceeds to apply the no-op patch (returning 200).
-//
-// This test documents the CURRENT (permissive) behaviour and acts as a
-// regression gate: if minProperties:1 is ever added to the inbound schema the
-// assertion must change to 400 and the comment below must be updated.
-//
-// PRODUCTION BUG: pkg/gateway/inboundschemas/AgentUpdateRequest.yaml is missing
-// minProperties:1. An empty {} body silently passes schema validation and
-// reaches the handler, which treats it as a no-op update. The spec and the
-// contract schema both require at least one field. This should be fixed by
-// backend-lead by adding "minProperties: 1" to the inbound schema.
-//
-// Traces to: fix-Q / fix-Y — minProperties:1 enforcement for AgentUpdateRequest.
+// invariant in the AgentUpdateRequest inbound schema (fix-V).
 func TestUpdateAgent_ValidateInbound_EmptyPatchRejected(t *testing.T) {
 	api := newTestRestAPIWithValidationAndAgent(t)
 
-	// Empty object — should violate minProperties:1 once the inbound schema is fixed.
 	body := `{}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/test-agent-001", strings.NewReader(body))
@@ -540,22 +521,14 @@ func TestUpdateAgent_ValidateInbound_EmptyPatchRejected(t *testing.T) {
 
 	api.updateAgent(w, r, "test-agent-001")
 
-	// CURRENT BEHAVIOUR: inbound schema missing minProperties:1 → empty patch passes → 200.
-	// DESIRED BEHAVIOUR: 400 with error containing "AgentUpdateRequest".
-	// TODO(backend-lead): add "minProperties: 1" to pkg/gateway/inboundschemas/AgentUpdateRequest.yaml
-	// and flip this assertion to:
-	//   assert.Equal(t, http.StatusBadRequest, w.Code, "empty patch body {} must return 400")
-	//   assert.Contains(t, resp["error"], "AgentUpdateRequest", ...)
-	assert.NotEqual(t, http.StatusNotFound, w.Code,
-		"agent must be found (test fixture correctly seeds test-agent-001)")
-	// If the status is 400, it must NOT be a JSON decode error (empty {} is valid JSON):
-	if w.Code == http.StatusBadRequest {
-		var resp map[string]string
-		if err := json.Unmarshal(w.Body.Bytes(), &resp); err == nil {
-			// When the inbound schema is fixed this branch will carry "AgentUpdateRequest".
-			t.Logf("empty patch returned 400 with error: %s", resp["error"])
-		}
-	}
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"empty patch body {} must be rejected 400 by minProperties:1 in AgentUpdateRequest inbound schema; body: %s", w.Body.String())
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "AgentUpdateRequest",
+		"error message must reference the schema name")
+	assert.Contains(t, resp["error"], "minProperties",
+		"error message must reference the minProperties constraint")
 }
 
 // ── Handler integration tests — HandleOnboardingProbeProvider ─────────────────

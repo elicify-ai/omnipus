@@ -1712,11 +1712,11 @@ func FixtureRateLimitsResponse_Edge() RateLimitsResponse {
 // Traces to: contracts/components/schemas/RateLimitsUpdateRequest.yaml (fix-O)
 
 func FixtureRateLimitsUpdateRequest_Populated() RateLimitsUpdateRequest {
-	cap := float64(10.0)
+	costCap := float64(10.0)
 	llm := int64(200)
 	tool := int64(120)
 	return RateLimitsUpdateRequest{
-		DailyCostCapUsd:            &cap,
+		DailyCostCapUsd:            &costCap,
 		MaxAgentLlmCallsPerHour:    &llm,
 		MaxAgentToolCallsPerMinute: &tool,
 	}
@@ -1727,15 +1727,15 @@ func FixtureRateLimitsUpdateRequest_ZeroValue() RateLimitsUpdateRequest {
 }
 
 func FixtureRateLimitsUpdateRequest_Edge() RateLimitsUpdateRequest {
-	cap := float64(0)
-	return RateLimitsUpdateRequest{DailyCostCapUsd: &cap}
+	costCap := float64(0)
+	return RateLimitsUpdateRequest{DailyCostCapUsd: &costCap}
 }
 
 // ── RateLimitsUpdateResponse ──────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/RateLimitsUpdateResponse.yaml (fix-O)
 
 func FixtureRateLimitsUpdateResponse_Populated() RateLimitsUpdateResponse {
-	cap := float64(10.0)
+	costCap := float64(10.0)
 	llm := int64(200)
 	tool := int64(120)
 	return RateLimitsUpdateResponse{
@@ -1746,7 +1746,7 @@ func FixtureRateLimitsUpdateResponse_Populated() RateLimitsUpdateResponse {
 			MaxAgentLlmCallsPerHour    *int64   `json:"max_agent_llm_calls_per_hour,omitempty"`
 			MaxAgentToolCallsPerMinute *int64   `json:"max_agent_tool_calls_per_minute,omitempty"`
 		}{
-			DailyCostCapUsd:            &cap,
+			DailyCostCapUsd:            &costCap,
 			MaxAgentLlmCallsPerHour:    &llm,
 			MaxAgentToolCallsPerMinute: &tool,
 		},

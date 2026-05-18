@@ -135,10 +135,7 @@ func TestCancel_TwoStageTimer_GracefulThenHard(t *testing.T) {
 	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
 
 	// ironProvider blocks for 20 seconds, well past the 3+5=8s hard+detach window.
-	// Register Shutdown cleanup BEFORE the agent loop so it fires first and
-	// allows the al.Run goroutine to exit cleanly within the 5s timeout.
 	ip := newIronProvider(20 * time.Second)
-	t.Cleanup(ip.Shutdown)
 
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 18802, DevModeBypass: true},
@@ -166,6 +163,10 @@ func TestCancel_TwoStageTimer_GracefulThenHard(t *testing.T) {
 			t.Logf("agent loop Run: %v", err)
 		}
 	}()
+	// t.Cleanup runs LIFO: the LAST-registered cleanup fires FIRST.
+	// ip.Shutdown must fire FIRST (unblocks the iron provider so al.Run can exit),
+	// then the cancel/wait cleanup runs second to drain the loop goroutine.
+	// Register cancel/wait BEFORE ip.Shutdown so ip.Shutdown fires first.
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -174,6 +175,7 @@ func TestCancel_TwoStageTimer_GracefulThenHard(t *testing.T) {
 			t.Logf("agent loop Run did not exit within 5s")
 		}
 	})
+	t.Cleanup(ip.Shutdown)
 	time.Sleep(20 * time.Millisecond)
 
 	handler := newWSHandler(msgBus, al, "")

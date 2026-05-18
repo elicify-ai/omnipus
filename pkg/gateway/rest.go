@@ -1486,13 +1486,23 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					}
 				}
 				if req.ShellPolicy != nil {
-					spMap := map[string]any{
-						"enable_deny_patterns": req.ShellPolicy.EnableDenyPatterns,
+					// Load existing shell_policy from the persisted map (if any) so
+					// that a partial PATCH (e.g. only custom_deny_patterns) does not
+					// clobber fields the caller did not send.
+					existing, _ := agentMap["shell_policy"].(map[string]any)
+					if existing == nil {
+						existing = map[string]any{}
+					}
+					// Only overwrite enable_deny_patterns when the caller explicitly
+					// sent it (non-nil pointer). Writing nil would persist JSON null
+					// and reset the flag to false on next decode.
+					if req.ShellPolicy.EnableDenyPatterns != nil {
+						existing["enable_deny_patterns"] = *req.ShellPolicy.EnableDenyPatterns
 					}
 					if req.ShellPolicy.CustomDenyPatterns != nil && len(*req.ShellPolicy.CustomDenyPatterns) > 0 {
-						spMap["custom_deny_patterns"] = *req.ShellPolicy.CustomDenyPatterns
+						existing["custom_deny_patterns"] = *req.ShellPolicy.CustomDenyPatterns
 					}
-					agentMap["shell_policy"] = spMap
+					agentMap["shell_policy"] = existing
 				}
 				break
 			}

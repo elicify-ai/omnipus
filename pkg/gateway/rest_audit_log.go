@@ -7,6 +7,8 @@
 package gateway
 
 import (
+	"bytes"
+	"io"
 	"log/slog"
 	"net/http"
 
@@ -40,6 +42,23 @@ func (a *restAPI) HandleSandboxAuditLog(w http.ResponseWriter, r *http.Request) 
 		})
 
 	case http.MethodPut:
+		// Pre-check: gen.AuditLogToggleRequest.Enabled is bool (not *bool), so
+		// an empty {} body decodes as Enabled:false and would silently disable
+		// audit logging. Guard against this by requiring the "enabled" key to be
+		// present in the raw body before decode. This is safe because the body is
+		// always small (< 100 bytes) and we reset it via bytes.NewReader below.
+		rawBody, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			jsonErr(w, http.StatusBadRequest, "could not read request body")
+			return
+		}
+		if !bytes.Contains(rawBody, []byte(`"enabled"`)) {
+			jsonErr(w, http.StatusBadRequest, `request body must contain "enabled" field`)
+			return
+		}
+		// Replace the consumed body so decodeAndValidate can re-read it.
+		r.Body = io.NopCloser(bytes.NewReader(rawBody))
+
 		var body gen.AuditLogToggleRequest
 		validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 		if !decodeAndValidate(w, r, "AuditLogToggleRequest", &body, validateEnabled) {

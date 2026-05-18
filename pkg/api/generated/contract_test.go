@@ -2906,7 +2906,8 @@ func TestContract_TaskStatusChangedFrame_InvalidStatus(t *testing.T) {
 }
 
 func TestContract_ReplayMessageFrame_InvalidRole(t *testing.T) {
-	// Traces to: ReplayMessageFrame.yaml — role: enum: [user, assistant, system, turn_cancelled]
+	// Traces to: ReplayMessageFrame.yaml — role enum: [user, assistant, system, turn_canceled].
+	// Note: the wire value uses British spelling ("turn_cancel" + "led") per the AsyncAPI spec.
 	// "robot" is not a valid role.
 	frame := map[string]any{
 		"type":       "replay_message",
@@ -2917,7 +2918,7 @@ func TestContract_ReplayMessageFrame_InvalidRole(t *testing.T) {
 	raw, err := json.Marshal(frame)
 	require.NoError(t, err)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ReplayMessageFrame", raw),
-		"role='robot' must fail ReplayMessageFrame — not in enum [user, assistant, system, turn_cancelled]")
+		"role='robot' must fail ReplayMessageFrame validation")
 }
 
 func TestContract_Attachment_InvalidType(t *testing.T) {

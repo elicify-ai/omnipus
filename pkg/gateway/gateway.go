@@ -569,10 +569,6 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// deps use the true runtime enforcement level (not the config file value).
 	agentLoop.SetAppliedSandboxMode(sandboxResult.Mode)
 
-	// Arm the permissive / production-off nag banner BEFORE the listener
-	// binds so operators see the warning even during a fast crash-loop.
-	stopNag := StartNagBanner(sandboxResult.NagReason, nil)
-
 	fmt.Println("\n📦 Agent Status:")
 	startupInfo := agentLoop.GetStartupInfo()
 	toolsInfo, _ := startupInfo["tools"].(map[string]any)
@@ -599,6 +595,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	if err := PreCompileAllInboundSchemas(); err != nil {
 		return fmt.Errorf("gateway: inbound schema pre-compile failed: %w", err)
 	}
+
+	// Arm the permissive / production-off nag banner AFTER pre-compile so that a
+	// pre-compile failure does not leak the nag goroutine (StartNagBanner allocates
+	// a goroutine that must be stopped via stopNag()).
+	stopNag := StartNagBanner(sandboxResult.NagReason, nil)
 	slog.Info("gateway: inbound schemas pre-compiled successfully")
 
 	// M16 (FR-001/FR-002): pre-instantiate central registries.
