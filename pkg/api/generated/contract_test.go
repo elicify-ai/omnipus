@@ -1698,11 +1698,8 @@ func TestContract_SessionCloseFrame_Differentiation(t *testing.T) {
 	mustPassAsyncAPI(t, "SessionCloseFrame", f2)
 }
 
-// ── fix-O: 11 promoted schemas ─────────────────────────────────────────────────
-// Traces to: Phase 7 fix-O — contract tests for promoted security-settings schemas
-
 // ── AuditLogToggleRequest ─────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/AuditLogToggleRequest.yaml (fix-O)
+// Traces to: contracts/components/schemas/AuditLogToggleRequest.yaml
 
 func TestContract_AuditLogToggleRequest_Populated(t *testing.T) {
 	mustPassComponent(t, "AuditLogToggleRequest", FixtureAuditLogToggleRequest_Populated())
@@ -1730,7 +1727,7 @@ func TestContract_AuditLogToggleRequest_Differentiation(t *testing.T) {
 }
 
 // ── AuditLogUpdateResponse ────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/AuditLogUpdateResponse.yaml (fix-O)
+// Traces to: contracts/components/schemas/AuditLogUpdateResponse.yaml
 
 func TestContract_AuditLogUpdateResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "AuditLogUpdateResponse", FixtureAuditLogUpdateResponse_Populated())
@@ -1755,7 +1752,7 @@ func TestContract_AuditLogUpdateResponse_Differentiation(t *testing.T) {
 }
 
 // ── SkillTrustUpdateRequest ───────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/SkillTrustUpdateRequest.yaml (fix-O)
+// Traces to: contracts/components/schemas/SkillTrustUpdateRequest.yaml
 
 func TestContract_SkillTrustUpdateRequest_Populated(t *testing.T) {
 	mustPassComponent(t, "SkillTrustUpdateRequest", FixtureSkillTrustUpdateRequest_Populated())
@@ -1783,7 +1780,7 @@ func TestContract_SkillTrustUpdateRequest_Differentiation(t *testing.T) {
 }
 
 // ── SkillTrustUpdateResponse ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/SkillTrustUpdateResponse.yaml (fix-O)
+// Traces to: contracts/components/schemas/SkillTrustUpdateResponse.yaml
 
 func TestContract_SkillTrustUpdateResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "SkillTrustUpdateResponse", FixtureSkillTrustUpdateResponse_Populated())
@@ -1811,7 +1808,7 @@ func TestContract_SkillTrustUpdateResponse_Differentiation(t *testing.T) {
 }
 
 // ── PromptGuardUpdateRequest ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/PromptGuardUpdateRequest.yaml (fix-O)
+// Traces to: contracts/components/schemas/PromptGuardUpdateRequest.yaml
 
 func TestContract_PromptGuardUpdateRequest_Populated(t *testing.T) {
 	mustPassComponent(t, "PromptGuardUpdateRequest", FixturePromptGuardUpdateRequest_Populated())
@@ -1839,7 +1836,7 @@ func TestContract_PromptGuardUpdateRequest_Differentiation(t *testing.T) {
 }
 
 // ── PromptGuardUpdateResponse ─────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/PromptGuardUpdateResponse.yaml (fix-O)
+// Traces to: contracts/components/schemas/PromptGuardUpdateResponse.yaml
 
 func TestContract_PromptGuardUpdateResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "PromptGuardUpdateResponse", FixturePromptGuardUpdateResponse_Populated())
@@ -1867,7 +1864,7 @@ func TestContract_PromptGuardUpdateResponse_Differentiation(t *testing.T) {
 }
 
 // ── RateLimitsResponse ────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/RateLimitsResponse.yaml (fix-O)
+// Traces to: contracts/components/schemas/RateLimitsResponse.yaml
 
 func TestContract_RateLimitsResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "RateLimitsResponse", FixtureRateLimitsResponse_Populated())
@@ -1892,7 +1889,7 @@ func TestContract_RateLimitsResponse_Differentiation(t *testing.T) {
 }
 
 // ── RateLimitsUpdateRequest ───────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/RateLimitsUpdateRequest.yaml (fix-O)
+// Traces to: contracts/components/schemas/RateLimitsUpdateRequest.yaml
 
 func TestContract_RateLimitsUpdateRequest_Populated(t *testing.T) {
 	mustPassComponent(t, "RateLimitsUpdateRequest", FixtureRateLimitsUpdateRequest_Populated())
@@ -1917,7 +1914,7 @@ func TestContract_RateLimitsUpdateRequest_Differentiation(t *testing.T) {
 }
 
 // ── RateLimitsUpdateResponse ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/RateLimitsUpdateResponse.yaml (fix-O)
+// Traces to: contracts/components/schemas/RateLimitsUpdateResponse.yaml
 
 func TestContract_RateLimitsUpdateResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "RateLimitsUpdateResponse", FixtureRateLimitsUpdateResponse_Populated())
@@ -1942,7 +1939,7 @@ func TestContract_RateLimitsUpdateResponse_Differentiation(t *testing.T) {
 }
 
 // ── SessionScopeUpdateResponse ────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/SessionScopeUpdateResponse.yaml (fix-O)
+// Traces to: contracts/components/schemas/SessionScopeUpdateResponse.yaml
 
 func TestContract_SessionScopeUpdateResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "SessionScopeUpdateResponse", FixtureSessionScopeUpdateResponse_Populated())
@@ -1967,7 +1964,7 @@ func TestContract_SessionScopeUpdateResponse_Differentiation(t *testing.T) {
 }
 
 // ── RetentionUpdateResponse ───────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/RetentionUpdateResponse.yaml (fix-O)
+// Traces to: contracts/components/schemas/RetentionUpdateResponse.yaml
 
 func TestContract_RetentionUpdateResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "RetentionUpdateResponse", FixtureRetentionUpdateResponse_Populated())
@@ -1991,11 +1988,8 @@ func TestContract_RetentionUpdateResponse_Differentiation(t *testing.T) {
 		"enabled vs disabled retention must produce different JSON")
 }
 
-// ── fix-P: 12 new schemas ─────────────────────────────────────────────────────
-// Traces to: Phase 7 fix-P — contract tests for new REST response schemas
-
 // ── AgentToolsResponse ────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/AgentToolsResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/AgentToolsResponse.yaml
 
 func TestContract_AgentToolsResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "AgentToolsResponse", FixtureAgentToolsResponse_Populated())
@@ -2028,7 +2022,7 @@ func TestContract_AgentToolsResponse_Differentiation(t *testing.T) {
 }
 
 // ── ChannelEnabledResponse ────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/ChannelEnabledResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/ChannelEnabledResponse.yaml
 
 func TestContract_ChannelEnabledResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "ChannelEnabledResponse", FixtureChannelEnabledResponse_Populated())
@@ -2062,7 +2056,7 @@ func TestContract_ChannelEnabledResponse_Differentiation(t *testing.T) {
 }
 
 // ── ChannelTestResponse ───────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/ChannelTestResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/ChannelTestResponse.yaml
 
 func TestContract_ChannelTestResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "ChannelTestResponse", FixtureChannelTestResponse_Populated())
@@ -2090,7 +2084,7 @@ func TestContract_ChannelTestResponse_Differentiation(t *testing.T) {
 }
 
 // ── BackupCreateResponse ──────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/BackupCreateResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/BackupCreateResponse.yaml
 
 func TestContract_BackupCreateResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "BackupCreateResponse", FixtureBackupCreateResponse_Populated())
@@ -2119,7 +2113,7 @@ func TestContract_BackupCreateResponse_Differentiation(t *testing.T) {
 }
 
 // ── OperationResult ───────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/OperationResult.yaml (fix-P)
+// Traces to: contracts/components/schemas/OperationResult.yaml
 
 func TestContract_OperationResult_Populated(t *testing.T) {
 	mustPassComponent(t, "OperationResult", FixtureOperationResult_Populated())
@@ -2146,7 +2140,7 @@ func TestContract_OperationResult_Differentiation(t *testing.T) {
 }
 
 // ── ToolApprovalResponse ──────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/ToolApprovalResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/ToolApprovalResponse.yaml
 
 func TestContract_ToolApprovalResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "ToolApprovalResponse", FixtureToolApprovalResponse_Populated())
@@ -2174,7 +2168,7 @@ func TestContract_ToolApprovalResponse_Differentiation(t *testing.T) {
 }
 
 // ── UploadFilesResponse ───────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/UploadFilesResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/UploadFilesResponse.yaml
 
 func TestContract_UploadFilesResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "UploadFilesResponse", FixtureUploadFilesResponse_Populated())
@@ -2205,7 +2199,7 @@ func TestContract_UploadFilesResponse_Differentiation(t *testing.T) {
 }
 
 // ── TaskAcceptedResponse ──────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/TaskAcceptedResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/TaskAcceptedResponse.yaml
 
 func TestContract_TaskAcceptedResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "TaskAcceptedResponse", FixtureTaskAcceptedResponse_Populated())
@@ -2233,7 +2227,7 @@ func TestContract_TaskAcceptedResponse_Differentiation(t *testing.T) {
 }
 
 // ── AgentOwnerUpdateResponse ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/AgentOwnerUpdateResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/AgentOwnerUpdateResponse.yaml
 
 func TestContract_AgentOwnerUpdateResponse_Populated(t *testing.T) {
 	mustPassComponent(t, "AgentOwnerUpdateResponse", FixtureAgentOwnerUpdateResponse_Populated())
@@ -2260,7 +2254,7 @@ func TestContract_AgentOwnerUpdateResponse_Differentiation(t *testing.T) {
 }
 
 // ── ActivityEventsResponse ────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/ActivityEventsResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/ActivityEventsResponse.yaml
 // Note: ActivityEventsResponse is not a named Go type (it's inlined). We test
 // via raw JSON against the component schema directly.
 
@@ -2312,7 +2306,7 @@ func TestContract_ActivityEventsResponse_WithWarning(t *testing.T) {
 }
 
 // ── OnboardingStatusResponse ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/OnboardingStatusResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/OnboardingStatusResponse.yaml
 // Note: OnboardingStatusResponse is not a named Go type (it's inlined). Test via raw JSON.
 
 func TestContract_OnboardingStatusResponse_Populated(t *testing.T) {
@@ -2347,9 +2341,6 @@ func TestContract_OnboardingStatusResponse_Differentiation(t *testing.T) {
 	assert.NotEqual(t, string(raw1), string(raw2),
 		"true vs false onboarding_complete must produce different JSON")
 }
-
-// ── fix-N: Boundary / negative tests ─────────────────────────────────────────
-// Traces to: Phase 7 fix-N — tightened maxItems/minLength/maxLength/minimum/maximum/pattern
 
 // ── AuthFrame token pattern ───────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/AuthFrame.yaml (pattern: '^omnipus_[a-f0-9]{64}$')
@@ -2736,7 +2727,6 @@ func TestContract_SessionStateFrame_TooManyPending(t *testing.T) {
 }
 
 // ── Closed-shape rejection tests (additionalProperties: false) ────────────────
-// Traces to: Phase 7 fix-N — 11 schemas got additionalProperties: false
 
 func TestContract_User_RejectsExtraneousField(t *testing.T) {
 	// Traces to: User.yaml — additionalProperties: false
@@ -2888,7 +2878,6 @@ func TestContract_DevicesResponse_RejectsExtraneousField(t *testing.T) {
 }
 
 // ── Enum rejection tests ──────────────────────────────────────────────────────
-// Traces to: Phase 7 fix-N — enum constraints on TaskStatusChangedFrame, ReplayMessageFrame, Attachment
 
 func TestContract_TaskStatusChangedFrame_InvalidStatus(t *testing.T) {
 	// Traces to: TaskStatusChangedFrame.yaml — status: enum: [queued, assigned, running, completed, failed]

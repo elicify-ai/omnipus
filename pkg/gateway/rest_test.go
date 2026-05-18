@@ -1107,3 +1107,190 @@ func TestHandleMCPTools_MethodNotAllowed(t *testing.T) {
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
+
+// ── fix-V endpoint handler response-shape tests ────────────────────────────────
+
+// TestRotateGatewayToken_ResponseShape verifies that POST /config/gateway/rotate-token
+// returns a body that unmarshal-cleanly maps to gen.RotateTokenResponse, and that
+// the token field is non-empty.
+//
+// BDD:
+//
+//	Given a gateway with a writable config.json and a wired reload func,
+//	When POST /api/v1/config/gateway/rotate-token is called,
+//	Then the response is 200 and the body has a non-empty "token" field matching gen.RotateTokenResponse.
+//
+// Traces to: rest.go rotateGatewayToken handler — wire shape must match RotateTokenResponse.
+func TestRotateGatewayToken_ResponseShape(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	// Wire a no-op reload func so TriggerReload does not fail with
+	// "reload not configured" — the handler calls TriggerReload after saving the
+	// new token to disk; in unit tests AgentLoop.Run() is never called so the
+	// real reload trigger is absent. A no-op reload is acceptable here because
+	// the test is focused on the HTTP response shape (wire format), not reload
+	// semantics.
+	api.agentLoop.SetReloadFunc(func() error { return nil })
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/config/gateway/rotate-token", nil)
+	r = withAdminRole(r)
+
+	api.rotateGatewayToken(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"rotate-token must return 200: %s", w.Body.String())
+
+	// The response body must unmarshal into gen.RotateTokenResponse.
+	var resp gen.RotateTokenResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp),
+		"response must unmarshal into gen.RotateTokenResponse — wire shape must match contract")
+
+	// The token must be non-empty (a real 64-char hex string, 32 random bytes).
+	assert.NotEmpty(t, resp.Token, "RotateTokenResponse.Token must be non-empty")
+	assert.Len(t, resp.Token, 64,
+		"RotateTokenResponse.Token must be 64 hex chars (32 bytes hex-encoded)")
+
+	// Differentiation: call twice — tokens must differ (not hardcoded).
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodPost, "/api/v1/config/gateway/rotate-token", nil)
+	r2 = withAdminRole(r2)
+	api.rotateGatewayToken(w2, r2)
+	require.Equal(t, http.StatusOK, w2.Code)
+	var resp2 gen.RotateTokenResponse
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
+	assert.NotEqual(t, resp.Token, resp2.Token,
+		"rotate-token must produce a different token on each call (not hardcoded)")
+}
+
+// TestHandleVersion_ResponseShape verifies that GET /version returns a body that
+// unmarshal-cleanly maps to gen.VersionResponse.
+//
+// BDD:
+//
+//	Given a running gateway,
+//	When GET /api/v1/version is called,
+//	Then the response is 200 and the body has "version" and "build_sha" fields.
+//
+// Traces to: rest.go HandleVersion handler — wire shape must match VersionResponse.
+func TestHandleVersion_ResponseShape(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/version", nil)
+
+	api.HandleVersion(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// The response body must unmarshal into gen.VersionResponse.
+	var resp gen.VersionResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp),
+		"response must unmarshal into gen.VersionResponse — wire shape must match contract")
+
+	// version field must be non-empty (either "dev" or a semver string).
+	assert.NotEmpty(t, resp.Version, "VersionResponse.Version must be non-empty")
+	// build_sha field must be non-empty (either "dev" or a git SHA).
+	assert.NotEmpty(t, resp.BuildSha, "VersionResponse.BuildSha must be non-empty")
+}
+
+// TestGetUserContext_HappyPath verifies that GET /user-context returns
+// gen.UserContextResponse with empty content when USER.md does not exist.
+//
+// BDD:
+//
+//	Given a workspace with no USER.md file,
+//	When GET /api/v1/user-context is called,
+//	Then 200 with {"content": ""}.
+//
+// Traces to: rest.go getUserContext — returns empty string when USER.md is absent.
+func TestGetUserContext_HappyPath(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/user-context", nil)
+	r = withAdminRole(r)
+
+	api.HandleUserContext(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp gen.UserContextResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp),
+		"response must unmarshal into gen.UserContextResponse")
+	assert.Equal(t, "", resp.Content,
+		"content must be empty string when USER.md does not exist")
+}
+
+// TestPutUserContext_HappyPath verifies that PUT /user-context writes content
+// and GET /user-context returns the same content.
+//
+// BDD:
+//
+//	Given a workspace with no USER.md,
+//	When PUT /api/v1/user-context with {"content": "Hello, world!"},
+//	Then 200 with {"content": "Hello, world!"}.
+//	And GET /api/v1/user-context returns {"content": "Hello, world!"}.
+//
+// Traces to: rest.go putUserContext — persists content to USER.md.
+func TestPutUserContext_HappyPath(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	const testContent = "Hello, world! — user context test."
+
+	// PUT with content.
+	putBody := `{"content":"` + testContent + `"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/user-context", strings.NewReader(putBody))
+	r.Header.Set("Content-Type", "application/json")
+	r = withAdminRole(r)
+
+	api.HandleUserContext(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "PUT must return 200: %s", w.Body.String())
+	var putResp gen.UserContextResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &putResp))
+	assert.Equal(t, testContent, putResp.Content,
+		"PUT response content must echo the written content")
+
+	// GET must return the same content (persistence test).
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodGet, "/api/v1/user-context", nil)
+	r2 = withAdminRole(r2)
+	api.HandleUserContext(w2, r2)
+
+	require.Equal(t, http.StatusOK, w2.Code)
+	var getResp gen.UserContextResponse
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &getResp))
+	assert.Equal(t, testContent, getResp.Content,
+		"GET must return the content written by PUT (persistence test)")
+}
+
+// TestPutUserContext_ValidateInbound_400OnMissingContent verifies that with
+// validate_inbound=true, PUT /user-context without the "content" field returns 400.
+//
+// BDD:
+//
+//	Given validate_inbound=true,
+//	When PUT /api/v1/user-context with body {},
+//	Then 400 with schema error referencing UserContextRequest.
+//
+// Traces to: rest.go putUserContext — decodeAndValidate with "UserContextRequest" schema.
+func TestPutUserContext_ValidateInbound_400OnMissingContent(t *testing.T) {
+	api := newTestRestAPIWithValidation(t)
+
+	// {} is missing the required "content" field.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/user-context", strings.NewReader("{}"))
+	r.Header.Set("Content-Type", "application/json")
+	r = withAdminRole(r)
+
+	api.HandleUserContext(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"missing required 'content' field must return 400 when validate_inbound=true")
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "UserContextRequest",
+		"error message must reference the schema name")
+}

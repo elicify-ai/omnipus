@@ -89,7 +89,6 @@ import {
   RateLimitsUpdateResponse as RateLimitsUpdateResponseSchema,
   SessionScopeUpdateResponse as SessionScopeUpdateResponseSchema,
   RetentionUpdateResponse as RetentionUpdateResponseSchema,
-  // fix-X: replacing hand-written Zod schemas with generated equivalents:
   AgentToolsResponse as AgentToolsResponseSchema,
   ChannelTestResponse as ChannelTestResponseSchema,
   OperationResult as OperationResultSchema,
@@ -170,7 +169,6 @@ if ((import.meta.env.DEV || import.meta.env.MODE === 'test') && typeof window !=
 // Types without local bodies are imported and immediately re-exported.
 // See CLAUDE.md hard-constraint #8.
 
-// Types where local hand-written body diverges from generated — imported aliased
 // Types whose generated shape is canonical (no local body) — import into scope
 // so function return-type annotations compile, then re-export for consumers.
 import type {
@@ -243,7 +241,6 @@ import type {
   SessionScopeUpdateResponse,
   RetentionUpdateResponse,
   ChannelEnabledResponse,
-  // fix-X: types for hand-written schema replacement:
   AgentToolsResponse,
   UploadFilesResponse,
   BackupCreateResponse,
@@ -325,7 +322,6 @@ export type {
   SessionScopeUpdateResponse,
   RetentionUpdateResponse,
   ChannelEnabledResponse,
-  // fix-X: generated types replacing hand-written schemas:
   AgentToolsResponse,
   UploadFilesResponse,
   BackupCreateResponse,
@@ -1114,7 +1110,7 @@ export function fetchGatewayStatus(): Promise<GatewayStatus> {
 // See contracts/components/schemas/ToolRegistryEntry.yaml.
 export type Tool = ToolRegistryEntry
 
-// fetchTools is a backward-compat alias for fetchRegistryTools (fix-X dedup).
+// fetchTools is a backward-compat alias for fetchRegistryTools.
 // New callers should use fetchRegistryTools (or fetchBuiltinTools) directly.
 export function fetchTools(): Promise<ToolRegistryEntry[]> { return fetchRegistryTools() }
 
@@ -1183,7 +1179,7 @@ export function deleteSkill(name: string): Promise<void> {
   return request<void>(`/skills/${encodeURIComponent(name)}`, { method: 'DELETE' })
 }
 
-// fetchMcpServers is a backward-compat alias for fetchMcpServersForAgent (fix-X dedup).
+// fetchMcpServers is a backward-compat alias for fetchMcpServersForAgent.
 // New callers should use fetchMcpServersForAgent directly.
 export function fetchMcpServers(): Promise<McpServer[]> { return fetchMcpServersForAgent() }
 
@@ -1723,7 +1719,6 @@ export function triggerRetentionSweep(): Promise<RetentionSweepResult> {
 export type UserEntry = User
 
 // UserEntry is the SPA-internal type; the generated User schema is compatible (passthrough).
-// fix-X: replaced hand-written _userListSchema with z.array(UserSchema) from generated.
 export function fetchUsers(): Promise<UserEntry[]> {
   return request<UserEntry[]>('/users', undefined, z.array(UserSchema) as ZodType<UserEntry[]>)
 }
@@ -1795,8 +1790,6 @@ export function fetchMcpServersForAgent(): Promise<McpServer[]> {
 
 // AgentToolsResponse — imported from generated openapi-types (contract-first #8).
 // AgentToolsResponseSchema — imported from generated schemas (contract-first #8).
-// fix-X: replaced hand-written type + _agentToolsSchema with generated equivalents.
-
 export function fetchAgentTools(agentId: string): Promise<AgentToolsResponse> {
   return request<AgentToolsResponse>(`/agents/${encodeURIComponent(agentId)}/tools`, undefined, AgentToolsResponseSchema as ZodType<AgentToolsResponse>)
 }

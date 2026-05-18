@@ -1392,3 +1392,95 @@ describe('enableChannel / disableChannel: ChannelEnabledResponse validation (fix
     expect(getApiSchemaErrorCount()).toBe(1)
   })
 })
+
+// ── validEnum / _configCoercionCount integration tests ────────────────────────
+//
+// Verifies that rawToFrontendConfig calls validEnum which increments _configCoercionCount
+// when the backend returns an invalid enum value for security.policy_mode.
+// Also verifies that valid enum values do NOT increment the counter.
+
+describe('validEnum / _configCoercionCount', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+  })
+
+  it('increments counter when backend returns invalid enum value for security.policy_mode', async () => {
+    // Simulate backend returning "garbage" for security.policy_mode —
+    // not one of the valid values: allow | deny.
+    const wireConfig = {
+      gateway: { host: '127.0.0.1', port: 8080 },
+      security: { policy_mode: 'garbage' },
+    }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireConfig), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchConfig, getConfigCoercionCount, resetConfigCoercionCount } = await import('./api')
+    resetConfigCoercionCount()
+
+    const config = await fetchConfig()
+
+    // The coercion counter must have been incremented by at least 1 (for policy_mode).
+    expect(getConfigCoercionCount()).toBeGreaterThan(0)
+    // The invalid value must be replaced by the fallback ("deny").
+    expect(config.security.policy_mode).toBe('deny')
+  })
+
+  it('does NOT increment counter when backend returns a valid enum value for security.policy_mode', async () => {
+    // "allow" is a valid value — no coercion should occur.
+    const wireConfig = {
+      gateway: { host: '127.0.0.1', port: 8080 },
+      security: { policy_mode: 'allow' },
+    }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireConfig), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchConfig, getConfigCoercionCount, resetConfigCoercionCount } = await import('./api')
+    resetConfigCoercionCount()
+
+    const config = await fetchConfig()
+
+    // No coercion should have occurred.
+    expect(getConfigCoercionCount()).toBe(0)
+    // The valid value must be preserved.
+    expect(config.security.policy_mode).toBe('allow')
+  })
+
+  it('increments counter once per invalid enum field — differentiation test', async () => {
+    // Two different invalid enum values — counter should increment twice (once per field).
+    const wireConfig = {
+      gateway: { host: '127.0.0.1', port: 8080, auth_mode: 'invalid_mode' },
+      security: { policy_mode: 'invalid_policy', exec_approval: 'invalid_exec' },
+    }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireConfig), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchConfig, getConfigCoercionCount, resetConfigCoercionCount } = await import('./api')
+    resetConfigCoercionCount()
+
+    await fetchConfig()
+
+    // Three invalid enum values should produce count ≥ 3.
+    expect(getConfigCoercionCount()).toBeGreaterThanOrEqual(3)
+  })
+})

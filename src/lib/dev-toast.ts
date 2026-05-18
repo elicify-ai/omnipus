@@ -6,8 +6,8 @@
 // callers typically pass the frame type (ws.ts) or `${method}:${path}` (api.ts).
 //
 // Not a hook — safe to call from module-scope (outside React components).
-// Uses dynamic import() so the Zustand store is resolved lazily, avoiding
-// circular-dependency issues at module initialisation time.
+// Uses dynamic import() so the Zustand store is resolved lazily, keeping the
+// toast store out of the api-module init path for dead-code elimination.
 
 const _lastToastAt: Record<string, number> = {}
 const THROTTLE_MS = 1000

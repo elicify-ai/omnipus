@@ -3,8 +3,7 @@ description: >
   Server → client. Emitted when a remote device initiates a pairing request and
   needs admin approval. The SPA displays a pairing modal to the admin.
   The admin responds with a device_pairing_response frame.
-  Fields map directly to pkg/gateway/websocket.go wsServerFrame DeviceID,
-  Fingerprint, PairingCode, DeviceName fields.
+  Fields map to the generated DevicePairingRequestFrame type in pkg/api/generated/.
 type: object
 required:
   - type

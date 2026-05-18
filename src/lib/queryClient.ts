@@ -24,12 +24,13 @@ export const queryClient = new QueryClient({
 
 // Centralized ApiSchemaError handler — surfaces backend schema mismatches in
 // production (not just DEV) so operators know when the server version drifts
-// from the SPA's contract expectations. Toasts are lazy-imported to avoid
-// circular dependencies at module initialisation time.
+// from the SPA's contract expectations. Toasts are lazy-imported to keep the
+// ui store out of the api-module init path and allow dead-code elimination.
 // Dedup map: keyed by endpoint, value is the timestamp of the last toast.
 // Prevents a retry storm (retry:3 = 4 toasts) from the same endpoint within 5s.
 const _schemaErrorLastToast = new Map<string, number>()
 const _SCHEMA_ERROR_DEDUP_MS = 5_000
+
 
 function _handleApiSchemaError(err: unknown): void {
   if (!(err instanceof ApiSchemaError)) return

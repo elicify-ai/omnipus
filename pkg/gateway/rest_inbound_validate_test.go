@@ -594,3 +594,82 @@ func TestProbeProvider_ValidateInbound_ValidBody(t *testing.T) {
 		}
 	}
 }
+
+// ── PreCompileAllInboundSchemas tests ─────────────────────────────────────────
+
+// TestPreCompileAllInboundSchemas_AllSchemasCompile verifies that every embedded
+// YAML schema in inboundschemas.FS compiles without error. This exercises the
+// gateway boot path where PreCompileAllInboundSchemas is called before the HTTP
+// listener starts.
+//
+// BDD:
+//
+//	Given the inboundschemas.FS embed contains all component schemas,
+//	When PreCompileAllInboundSchemas is called,
+//	Then it returns nil (no compile errors) and InboundSchemaCompileFailures is 0.
+//
+// Traces to: rest_inbound_validate.go PreCompileAllInboundSchemas — gateway boot pre-compile.
+func TestPreCompileAllInboundSchemas_AllSchemasCompile(t *testing.T) {
+	// Reset failure counter so this test is not affected by previous test runs.
+	_inboundSchemaCompileFailures.Store(0)
+
+	err := PreCompileAllInboundSchemas()
+	assert.NoError(t, err, "all embedded schemas must compile without error")
+
+	// After a successful pre-compile, the failure counter must still be 0
+	// (no compile error incremented it during the call).
+	assert.Equal(t, uint64(0), InboundSchemaCompileFailures(),
+		"InboundSchemaCompileFailures must be 0 after successful pre-compile")
+}
+
+// TestPreCompileAllInboundSchemas_IsDeterministic verifies that calling
+// PreCompileAllInboundSchemas twice returns nil both times (idempotent due to
+// the per-schema compile cache).
+//
+// Traces to: rest_inbound_validate.go — compileInboundSchema caches results; second call is a cache hit.
+func TestPreCompileAllInboundSchemas_IsDeterministic(t *testing.T) {
+	err1 := PreCompileAllInboundSchemas()
+	err2 := PreCompileAllInboundSchemas()
+	assert.NoError(t, err1, "first call must succeed")
+	assert.NoError(t, err2, "second call (cached) must also succeed")
+}
+
+// ── Fail-closed 500 path tests ─────────────────────────────────────────────────
+
+// TestDecodeAndValidate_SchemaCompileFailure_Returns500 asserts the fail-closed
+// behaviour when a handler calls decodeAndValidate with a schema name that does
+// not exist in the embedded FS (simulating a server misconfiguration).
+//
+// BDD:
+//
+//	Given validateEnabled=true,
+//	When decodeAndValidate is called with a schemaName that has no matching .yaml file,
+//	Then it returns false, writes HTTP 500, and the body contains "inbound schema unavailable".
+//	And InboundSchemaCompileFailures() is incremented.
+//
+// Traces to: rest_inbound_validate.go validateBodyAgainstSchema — server-side 500 fail-closed path.
+func TestDecodeAndValidate_SchemaCompileFailure_Returns500(t *testing.T) {
+	// Record the current failure count so we can assert it increments.
+	before := InboundSchemaCompileFailures()
+
+	var dst map[string]any
+	body := `{"some":"data"}`
+	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	w := httptest.NewRecorder()
+
+	// Use a schema name that is guaranteed to not exist in the embedded FS.
+	ok := decodeAndValidate(w, r, "NonExistentSchemaXYZ_AF_9999", &dst, true)
+
+	assert.False(t, ok, "decodeAndValidate must return false on schema compile failure")
+	assert.Equal(t, http.StatusInternalServerError, w.Code,
+		"schema compile failure must produce HTTP 500 (fail-closed)")
+
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "inbound schema unavailable", resp["error"],
+		"error body must say 'inbound schema unavailable'")
+
+	after := InboundSchemaCompileFailures()
+	assert.Greater(t, after, before,
+		"InboundSchemaCompileFailures must be incremented when schema compile fails")
+}

@@ -1496,7 +1496,6 @@ func FixtureMeInfo_Edge() MeInfo {
 
 // ── ExecApprovalExpiredFrame ──────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/ExecApprovalExpiredFrame.yaml
-// This is the fix-D type — schema existed but fixtures/tests were missing.
 
 func FixtureExecApprovalExpiredFrame_Populated() ExecApprovalExpiredFrame {
 	msg := "Exec approval for 'rm -rf /tmp/build' expired after 30s — no admin response"
@@ -1526,7 +1525,6 @@ func FixtureExecApprovalExpiredFrame_Edge() ExecApprovalExpiredFrame {
 
 // ── SessionCloseFrame ─────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/SessionCloseFrame.yaml
-// This is the fix-D type — schema existed but fixtures/tests were missing.
 
 func FixtureSessionCloseFrame_Populated() SessionCloseFrame {
 	return SessionCloseFrame{
@@ -1561,10 +1559,8 @@ func repeatStr(s string, n int) string {
 	return string(result)
 }
 
-// ── fix-O: 11 promoted schemas ────────────────────────────────────────────────
-
 // ── AuditLogToggleRequest ─────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/AuditLogToggleRequest.yaml (fix-O)
+// Traces to: contracts/components/schemas/AuditLogToggleRequest.yaml
 
 func FixtureAuditLogToggleRequest_Populated() AuditLogToggleRequest {
 	return AuditLogToggleRequest{Enabled: true}
@@ -1579,7 +1575,7 @@ func FixtureAuditLogToggleRequest_Edge() AuditLogToggleRequest {
 }
 
 // ── AuditLogUpdateResponse ────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/AuditLogUpdateResponse.yaml (fix-O)
+// Traces to: contracts/components/schemas/AuditLogUpdateResponse.yaml
 
 func FixtureAuditLogUpdateResponse_Populated() AuditLogUpdateResponse {
 	return AuditLogUpdateResponse{
@@ -1602,7 +1598,7 @@ func FixtureAuditLogUpdateResponse_Edge() AuditLogUpdateResponse {
 }
 
 // ── SkillTrustUpdateRequest ───────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/SkillTrustUpdateRequest.yaml (fix-O)
+// Traces to: contracts/components/schemas/SkillTrustUpdateRequest.yaml
 
 func FixtureSkillTrustUpdateRequest_Populated() SkillTrustUpdateRequest {
 	return SkillTrustUpdateRequest{Level: SkillTrustUpdateRequestLevel("block_unverified")}
@@ -1617,7 +1613,7 @@ func FixtureSkillTrustUpdateRequest_Edge() SkillTrustUpdateRequest {
 }
 
 // ── SkillTrustUpdateResponse ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/SkillTrustUpdateResponse.yaml (fix-O)
+// Traces to: contracts/components/schemas/SkillTrustUpdateResponse.yaml
 
 func FixtureSkillTrustUpdateResponse_Populated() SkillTrustUpdateResponse {
 	warning := strPtr("allow_all disables hash verification — community skills run without integrity checks")
@@ -1642,7 +1638,7 @@ func FixtureSkillTrustUpdateResponse_Edge() SkillTrustUpdateResponse {
 }
 
 // ── PromptGuardUpdateRequest ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/PromptGuardUpdateRequest.yaml (fix-O)
+// Traces to: contracts/components/schemas/PromptGuardUpdateRequest.yaml
 
 func FixturePromptGuardUpdateRequest_Populated() PromptGuardUpdateRequest {
 	return PromptGuardUpdateRequest{Level: PromptGuardUpdateRequestLevel("high")}
@@ -1657,7 +1653,7 @@ func FixturePromptGuardUpdateRequest_Edge() PromptGuardUpdateRequest {
 }
 
 // ── PromptGuardUpdateResponse ─────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/PromptGuardUpdateResponse.yaml (fix-O)
+// Traces to: contracts/components/schemas/PromptGuardUpdateResponse.yaml
 
 func FixturePromptGuardUpdateResponse_Populated() PromptGuardUpdateResponse {
 	return PromptGuardUpdateResponse{
@@ -1682,7 +1678,7 @@ func FixturePromptGuardUpdateResponse_Edge() PromptGuardUpdateResponse {
 }
 
 // ── RateLimitsResponse ────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/RateLimitsResponse.yaml (fix-O)
+// Traces to: contracts/components/schemas/RateLimitsResponse.yaml
 
 func FixtureRateLimitsResponse_Populated() RateLimitsResponse {
 	return RateLimitsResponse{
@@ -1709,7 +1705,7 @@ func FixtureRateLimitsResponse_Edge() RateLimitsResponse {
 }
 
 // ── RateLimitsUpdateRequest ───────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/RateLimitsUpdateRequest.yaml (fix-O)
+// Traces to: contracts/components/schemas/RateLimitsUpdateRequest.yaml
 
 func FixtureRateLimitsUpdateRequest_Populated() RateLimitsUpdateRequest {
 	costCap := float64(10.0)
@@ -1732,7 +1728,7 @@ func FixtureRateLimitsUpdateRequest_Edge() RateLimitsUpdateRequest {
 }
 
 // ── RateLimitsUpdateResponse ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/RateLimitsUpdateResponse.yaml (fix-O)
+// Traces to: contracts/components/schemas/RateLimitsUpdateResponse.yaml
 
 func FixtureRateLimitsUpdateResponse_Populated() RateLimitsUpdateResponse {
 	costCap := float64(10.0)
@@ -1767,7 +1763,7 @@ func FixtureRateLimitsUpdateResponse_Edge() RateLimitsUpdateResponse {
 }
 
 // ── SessionScopeUpdateResponse ────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/SessionScopeUpdateResponse.yaml (fix-O)
+// Traces to: contracts/components/schemas/SessionScopeUpdateResponse.yaml
 
 func FixtureSessionScopeUpdateResponse_Populated() SessionScopeUpdateResponse {
 	return SessionScopeUpdateResponse{
@@ -1792,7 +1788,7 @@ func FixtureSessionScopeUpdateResponse_Edge() SessionScopeUpdateResponse {
 }
 
 // ── RetentionUpdateResponse ───────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/RetentionUpdateResponse.yaml (fix-O)
+// Traces to: contracts/components/schemas/RetentionUpdateResponse.yaml
 
 func FixtureRetentionUpdateResponse_Populated() RetentionUpdateResponse {
 	return RetentionUpdateResponse{
@@ -1816,10 +1812,8 @@ func FixtureRetentionUpdateResponse_Edge() RetentionUpdateResponse {
 	}
 }
 
-// ── fix-P: 12 new schemas (excluding RateLimitsStatusResponse — deleted in integration) ────────
-
 // ── AgentToolsResponse ────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/AgentToolsResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/AgentToolsResponse.yaml
 
 func FixtureAgentToolsResponse_Populated() AgentToolsResponse {
 	agentType := AgentToolsResponseAgentTypeCore
@@ -1910,7 +1904,7 @@ func FixtureAgentToolsResponse_Edge() AgentToolsResponse {
 }
 
 // ── ChannelEnabledResponse ────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/ChannelEnabledResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/ChannelEnabledResponse.yaml
 
 func FixtureChannelEnabledResponse_Populated() ChannelEnabledResponse {
 	return ChannelEnabledResponse{Id: "telegram", Enabled: true}
@@ -1925,7 +1919,7 @@ func FixtureChannelEnabledResponse_Edge() ChannelEnabledResponse {
 }
 
 // ── ChannelTestResponse ───────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/ChannelTestResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/ChannelTestResponse.yaml
 
 func FixtureChannelTestResponse_Populated() ChannelTestResponse {
 	return ChannelTestResponse{Success: true, Message: "all required credentials are configured"}
@@ -1943,7 +1937,7 @@ func FixtureChannelTestResponse_Edge() ChannelTestResponse {
 }
 
 // ── BackupCreateResponse ──────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/BackupCreateResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/BackupCreateResponse.yaml
 
 func FixtureBackupCreateResponse_Populated() BackupCreateResponse {
 	return BackupCreateResponse{
@@ -1966,7 +1960,7 @@ func FixtureBackupCreateResponse_Edge() BackupCreateResponse {
 }
 
 // ── OperationResult ───────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/OperationResult.yaml (fix-P)
+// Traces to: contracts/components/schemas/OperationResult.yaml
 
 func FixtureOperationResult_Populated() OperationResult {
 	return OperationResult{Success: true}
@@ -1982,7 +1976,7 @@ func FixtureOperationResult_Edge() OperationResult {
 }
 
 // ── ToolApprovalResponse ──────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/ToolApprovalResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/ToolApprovalResponse.yaml
 
 func FixtureToolApprovalResponse_Populated() ToolApprovalResponse {
 	return ToolApprovalResponse{
@@ -2005,7 +1999,7 @@ func FixtureToolApprovalResponse_Edge() ToolApprovalResponse {
 }
 
 // ── UploadFilesResponse ───────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/UploadFilesResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/UploadFilesResponse.yaml
 
 func FixtureUploadFilesResponse_Populated() UploadFilesResponse {
 	return UploadFilesResponse{
@@ -2044,7 +2038,7 @@ func FixtureUploadFilesResponse_Edge() UploadFilesResponse {
 }
 
 // ── TaskAcceptedResponse ──────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/TaskAcceptedResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/TaskAcceptedResponse.yaml
 
 func FixtureTaskAcceptedResponse_Populated() TaskAcceptedResponse {
 	return TaskAcceptedResponse{
@@ -2065,7 +2059,7 @@ func FixtureTaskAcceptedResponse_Edge() TaskAcceptedResponse {
 }
 
 // ── AgentOwnerUpdateResponse ──────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/AgentOwnerUpdateResponse.yaml (fix-P)
+// Traces to: contracts/components/schemas/AgentOwnerUpdateResponse.yaml
 
 func FixtureAgentOwnerUpdateResponse_Populated() AgentOwnerUpdateResponse {
 	return AgentOwnerUpdateResponse{

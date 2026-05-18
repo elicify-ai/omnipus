@@ -66,7 +66,7 @@ for arg in "${@}"; do
 done
 
 # ─── Self-test mode ───────────────────────────────────────────────────────────
-# Runs synthetic fixture tests against every new pattern introduced in fix-W.
+# Runs synthetic fixture tests against lint patterns.
 # Exits 0 if all pass, 1 if any fail.
 
 if [[ "$SELF_TEST_MODE" -eq 1 ]]; then
