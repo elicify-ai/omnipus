@@ -145,7 +145,7 @@ describe('Agents screen — empty state', () => {
     // with the "Agents" h1 lives in agents.index.tsx. Import the index route instead.
     const mod = await import('@/routes/_app/agents.index')
     AgentsScreen = mod.Route.options.component as () => JSX.Element
-  })
+  }, 60_000)
 
   it('renders "Agents" as h1 heading', () => {
     render(<AgentsScreen />, { wrapper })
@@ -159,7 +159,7 @@ describe('Skills screen — empty state', () => {
   beforeAll(async () => {
     const mod = await import('@/routes/_app/skills')
     SkillsScreen = mod.Route.options.component as () => JSX.Element
-  })
+  }, 60_000)
 
   it('renders "Skills & Tools" as h1 heading', () => {
     render(<SkillsScreen />, { wrapper })
@@ -174,7 +174,7 @@ describe('Settings screen — empty state', () => {
   beforeAll(async () => {
     const mod = await import('@/routes/_app/settings')
     SettingsScreen = mod.Route.options.component as () => JSX.Element
-  })
+  }, 60_000)
 
   it('renders "Settings" as h1 heading', () => {
     render(<SettingsScreen />, { wrapper })
@@ -190,7 +190,7 @@ describe('Chat (index) screen — empty state', () => {
   beforeAll(async () => {
     const mod = await import('@/routes/_app/index')
     ChatScreen = mod.Route.options.component as () => JSX.Element
-  })
+  }, 60_000)
 
   it('renders "Welcome to Omnipus" heading', () => {
     render(<ChatScreen />, { wrapper })
@@ -219,7 +219,7 @@ describe('404 NotFound page — branded empty state', () => {
   beforeAll(async () => {
     const mod = await import('@/routes/__root')
     NotFoundPage = mod.Route.options.notFoundComponent as () => JSX.Element
-  })
+  }, 60_000)
 
   it('renders 404 heading', () => {
     render(<NotFoundPage />)

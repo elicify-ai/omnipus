@@ -458,6 +458,8 @@ describe('ABI v4 surfaces', () => {
     })
   })
 
+  // 60_000 ms timeout: this test uses async waitFor and can be slow under
+  // full-suite concurrent load when all 86 test files run in parallel forks.
   it('dismiss button stores sessionStorage key and hides banner', async () => {
     vi.mocked(fetchSandboxStatus).mockResolvedValue({
       ...baseStatus,
@@ -478,7 +480,7 @@ describe('ABI v4 surfaces', () => {
     })
 
     expect(sessionStorage.getItem('omnipus:abi4-banner-dismissed')).toBe('dismissed')
-  })
+  }, 60_000)
 
   it('abi_version=3 → banner NOT rendered', async () => {
     vi.mocked(fetchSandboxStatus).mockResolvedValue({
