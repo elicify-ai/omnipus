@@ -1,13 +1,14 @@
 import { makeApi, Zodios, type ZodiosOptions } from "@zodios/core";
 import { z } from "zod";
 
-type OnboardingCompleteResponse = LoginResponse;
 type LoginResponse = {
-  token: string;
+  token: BearerToken;
   role: "admin" | "user";
   username: string;
   warning?: string | undefined;
 };
+type BearerToken = string;
+type OnboardingCompleteResponse = LoginResponse;
 type Session = {
   id: string;
   type?: ("chat" | "task" | "channel") | undefined;
@@ -95,36 +96,11 @@ type Agent = {
   sandbox_profile?:
     | ("workspace" | "workspace+net" | "host" | "off")
     | undefined;
-  shell_policy?:
-    | Partial<{
-        enable_deny_patterns: boolean;
-        custom_deny_patterns: Array<string>;
-      }>
-    | undefined;
+  shell_policy?: AgentShellPolicy | undefined;
   fallback_models?: Array<string> | undefined;
-  model_params?:
-    | Partial<{
-        temperature: number;
-        max_tokens: number;
-        top_p: number;
-      }>
-    | undefined;
-  rate_limits?:
-    | Partial<{
-        use_global_defaults: boolean;
-        max_llm_calls_per_hour: number;
-        max_tool_calls_per_minute: number;
-        max_cost_per_day: number;
-      }>
-    | undefined;
-  stats?:
-    | {
-        total_sessions: number;
-        total_tokens: number;
-        total_cost: number;
-        last_active?: string | undefined;
-      }
-    | undefined;
+  model_params?: AgentModelParams | undefined;
+  rate_limits?: AgentRateLimits | undefined;
+  stats?: AgentStats | undefined;
 };
 type AgentToolsCfg = Partial<{
   builtin: Partial<{
@@ -138,6 +114,27 @@ type AgentToolsCfg = Partial<{
     }>;
   }>;
 }>;
+type AgentShellPolicy = Partial<{
+  enable_deny_patterns: boolean;
+  custom_deny_patterns: Array<string>;
+}>;
+type AgentModelParams = Partial<{
+  temperature: number;
+  max_tokens: number;
+  top_p: number;
+}>;
+type AgentRateLimits = Partial<{
+  use_global_defaults: boolean;
+  max_llm_calls_per_hour: number;
+  max_tool_calls_per_minute: number;
+  max_cost_per_day: number;
+}>;
+type AgentStats = {
+  total_sessions: number;
+  total_tokens: number;
+  total_cost: number;
+  last_active?: string | undefined;
+};
 type AgentCreateRequest = {
   name: string;
   description?: string | undefined;
@@ -196,6 +193,29 @@ type AgentUpdateRequest = Partial<{
   }>;
   tools_cfg: AgentToolsCfg;
 }>;
+type ChannelEntry = {
+  id: ChannelId;
+  name: string;
+  transport: "websocket" | "webhook" | "bridge" | "tcp" | "http" | "serial";
+  enabled: boolean;
+  description: string;
+};
+type ChannelId =
+  | "webchat"
+  | "telegram"
+  | "discord"
+  | "slack"
+  | "whatsapp"
+  | "feishu"
+  | "dingtalk"
+  | "wecom"
+  | "weixin"
+  | "line"
+  | "qq"
+  | "onebot"
+  | "irc"
+  | "matrix"
+  | "maixcam";
 type DoctorResult = {
   score: number;
   issues: Array<DoctorIssue>;
@@ -242,6 +262,10 @@ type AgentToolEntry = {
   fence_applied: boolean;
   requires_admin_ask: boolean;
 };
+type ChannelEnabledResponse = {
+  id: ChannelId;
+  enabled: boolean;
+};
 type UploadFilesResponse = {
   files: Array<UploadedFile>;
 };
@@ -263,15 +287,17 @@ type ActivityEvent = {
   timestamp: string;
   summary?: string | undefined;
 };
+type RotateTokenResponse = {
+  token: BearerToken;
+};
 
 export const LoginRequest = z.object({
   username: z.string().min(1),
-  password: z.string().min(1),
+  password: z.string().min(1).max(72),
 });
+export const BearerToken = z.string();
 export const LoginResponse: z.ZodType<LoginResponse> = z.object({
-  token: z
-    .string()
-    .min(72)
+  token: BearerToken.min(72)
     .max(72)
     .regex(/^omnipus_[a-f0-9]{64}$/),
   role: z.enum(["admin", "user"]),
@@ -294,11 +320,11 @@ export const RegisterAdminRequest = z.object({
     .min(2)
     .max(63)
     .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
-  password: z.string().min(8),
+  password: z.string().min(8).max(72),
 });
 export const ChangePasswordRequest = z.object({
-  current_password: z.string().min(1),
-  new_password: z.string().min(8),
+  current_password: z.string().min(1).max(72),
+  new_password: z.string().min(8).max(72),
 });
 export const OperationResult = z.object({
   success: z.boolean(),
@@ -324,7 +350,54 @@ export const OnboardingCompleteRequest = z.object({
     .passthrough(),
 });
 export const ProbeProviderRequest = z.object({
-  id: z.string(),
+  id: z.enum([
+    "anthropic",
+    "anthropic-messages",
+    "openai",
+    "openrouter",
+    "gemini",
+    "google",
+    "ollama",
+    "azure",
+    "azure-openai",
+    "bedrock",
+    "litellm",
+    "groq",
+    "zhipu",
+    "nvidia",
+    "moonshot",
+    "shengsuanyun",
+    "deepseek",
+    "cerebras",
+    "vivgrid",
+    "volcengine",
+    "vllm",
+    "qwen",
+    "qwen-intl",
+    "qwen-international",
+    "dashscope-intl",
+    "qwen-us",
+    "dashscope-us",
+    "mistral",
+    "avian",
+    "longcat",
+    "modelscope",
+    "novita",
+    "coding-plan",
+    "alibaba-coding",
+    "qwen-coding",
+    "mimo",
+    "minimax",
+    "coding-plan-anthropic",
+    "alibaba-coding-anthropic",
+    "antigravity",
+    "claude-cli",
+    "claudecli",
+    "codex-cli",
+    "codexcli",
+    "github-copilot",
+    "copilot",
+  ]),
   api_key: z.string().min(1),
   endpoint: z.string().optional(),
 });
@@ -397,8 +470,8 @@ export const Message: z.ZodType<Message> = z.object({
   content: z.string().optional(),
   summary: z.string().optional(),
   timestamp: z.string().datetime({ offset: true }),
-  tokens: z.number().int().optional(),
-  cost: z.number().optional(),
+  tokens: z.number().int().gte(0).optional(),
+  cost: z.number().gte(0).optional(),
   status: z.enum(["ok", "error", "interrupted"]).optional(),
   attachments: z.array(Attachment).optional(),
   tool_calls: z.array(ToolCall).optional(),
@@ -430,7 +503,7 @@ export const UserCreateRequest = z.object({
     .max(63)
     .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
   role: z.enum(["admin", "user"]),
-  password: z.string().min(8),
+  password: z.string().min(8).max(72),
 });
 export const UserCreateResponse = z
   .object({
@@ -451,16 +524,14 @@ export const UserDeleteResponse = z
 export const UserRoleChangeRequest = z.object({
   role: z.enum(["admin", "user"]),
 });
-export const UserRoleChangeResponse = z
-  .object({
-    username: z.string(),
-    role: z.enum(["admin", "user"]),
-    requires_restart: z.boolean().optional(),
-    warning: z.string().optional(),
-  })
-  .passthrough();
+export const UserRoleChangeResponse = z.object({
+  username: z.string(),
+  role: z.enum(["admin", "user"]),
+  requires_restart: z.boolean().optional(),
+  warning: z.string().optional(),
+});
 export const UserResetPasswordRequest = z.object({
-  password: z.string().min(8),
+  password: z.string().min(8).max(72),
 });
 export const UserResetPasswordResponse = z
   .object({
@@ -492,6 +563,38 @@ export const AgentToolsCfg: z.ZodType<AgentToolsCfg> = z
   })
   .partial()
   .passthrough();
+export const AgentShellPolicy: z.ZodType<AgentShellPolicy> = z
+  .object({
+    enable_deny_patterns: z.boolean(),
+    custom_deny_patterns: z.array(z.string()),
+  })
+  .partial()
+  .passthrough();
+export const AgentModelParams: z.ZodType<AgentModelParams> = z
+  .object({
+    temperature: z.number().gte(0).lte(2),
+    max_tokens: z.number().int().gte(1),
+    top_p: z.number().gte(0).lte(1),
+  })
+  .partial()
+  .passthrough();
+export const AgentRateLimits: z.ZodType<AgentRateLimits> = z
+  .object({
+    use_global_defaults: z.boolean(),
+    max_llm_calls_per_hour: z.number().int().gte(0),
+    max_tool_calls_per_minute: z.number().int().gte(0),
+    max_cost_per_day: z.number().gte(0),
+  })
+  .partial()
+  .passthrough();
+export const AgentStats: z.ZodType<AgentStats> = z
+  .object({
+    total_sessions: z.number().int().gte(0),
+    total_tokens: z.number().int().gte(0),
+    total_cost: z.number().gte(0),
+    last_active: z.string().datetime({ offset: true }).optional(),
+  })
+  .passthrough();
 export const Agent: z.ZodType<Agent> = z
   .object({
     id: z.string(),
@@ -520,43 +623,11 @@ export const Agent: z.ZodType<Agent> = z
     sandbox_profile: z
       .enum(["workspace", "workspace+net", "host", "off"])
       .optional(),
-    shell_policy: z
-      .object({
-        enable_deny_patterns: z.boolean(),
-        custom_deny_patterns: z.array(z.string()),
-      })
-      .partial()
-      .passthrough()
-      .optional(),
+    shell_policy: AgentShellPolicy.optional(),
     fallback_models: z.array(z.string()).max(10).optional(),
-    model_params: z
-      .object({
-        temperature: z.number(),
-        max_tokens: z.number().int(),
-        top_p: z.number(),
-      })
-      .partial()
-      .passthrough()
-      .optional(),
-    rate_limits: z
-      .object({
-        use_global_defaults: z.boolean(),
-        max_llm_calls_per_hour: z.number().int(),
-        max_tool_calls_per_minute: z.number().int(),
-        max_cost_per_day: z.number(),
-      })
-      .partial()
-      .passthrough()
-      .optional(),
-    stats: z
-      .object({
-        total_sessions: z.number().int(),
-        total_tokens: z.number().int(),
-        total_cost: z.number(),
-        last_active: z.string().datetime({ offset: true }).optional(),
-      })
-      .passthrough()
-      .optional(),
+    model_params: AgentModelParams.optional(),
+    rate_limits: AgentRateLimits.optional(),
+    stats: AgentStats.optional(),
   })
   .passthrough();
 export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
@@ -635,13 +706,11 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
 export const AgentOwnershipUpdateRequest = z
   .object({ owner_username: z.string() })
   .partial();
-export const AgentOwnerUpdateResponse = z
-  .object({
-    success: z.boolean(),
-    agent_id: z.string(),
-    owner_username: z.string(),
-  })
-  .passthrough();
+export const AgentOwnerUpdateResponse = z.object({
+  success: z.boolean(),
+  agent_id: z.string(),
+  owner_username: z.string(),
+});
 export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
   .object({
     name: z.string(),
@@ -651,13 +720,11 @@ export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
     requires_admin_ask: z.boolean(),
   })
   .passthrough();
-export const AgentToolsResponse: z.ZodType<AgentToolsResponse> = z
-  .object({
-    config: AgentToolsCfg,
-    tools: z.array(AgentToolEntry),
-    agent_type: z.enum(["core", "system", "custom"]).optional(),
-  })
-  .passthrough();
+export const AgentToolsResponse: z.ZodType<AgentToolsResponse> = z.object({
+  config: AgentToolsCfg,
+  tools: z.array(AgentToolEntry),
+  agent_type: z.enum(["core", "system", "custom"]).optional(),
+});
 export const AgentToolsUpdateRequest = z
   .object({
     builtin: z
@@ -723,8 +790,8 @@ export const AboutResponse = z.object({
   frame_ancestors_fallback: z.boolean(),
 });
 export const VersionResponse = z.object({
-  version: z.string(),
-  build_sha: z.string(),
+  version: z.string().regex(/^\d+\.\d+\.\d+(?:[-+].*)?$/),
+  build_sha: z.string().regex(/^([0-9a-f]{7,40}|dev)$/),
 });
 export const ToolRegistryEntry = z
   .object({
@@ -770,14 +837,12 @@ export const SkillTrustResponse = z.object({
 export const SkillTrustUpdateRequest = z.object({
   level: z.enum(["block_unverified", "warn_unverified", "allow_all"]),
 });
-export const SkillTrustUpdateResponse = z
-  .object({
-    saved: z.boolean(),
-    requires_restart: z.boolean(),
-    applied_level: z.enum(["block_unverified", "warn_unverified", "allow_all"]),
-    warning: z.string().optional(),
-  })
-  .passthrough();
+export const SkillTrustUpdateResponse = z.object({
+  saved: z.boolean(),
+  requires_restart: z.boolean(),
+  applied_level: z.enum(["block_unverified", "warn_unverified", "allow_all"]),
+  warning: z.string().optional(),
+});
 export const PromptGuardResponse = z.object({
   level: z.enum(["low", "medium", "high"]),
   requires_restart: z.boolean(),
@@ -785,14 +850,12 @@ export const PromptGuardResponse = z.object({
 export const PromptGuardUpdateRequest = z.object({
   level: z.enum(["low", "medium", "high"]),
 });
-export const PromptGuardUpdateResponse = z
-  .object({
-    saved: z.boolean(),
-    requires_restart: z.boolean(),
-    applied_level: z.enum(["low", "medium", "high"]),
-    warning: z.string().optional(),
-  })
-  .passthrough();
+export const PromptGuardUpdateResponse = z.object({
+  saved: z.boolean(),
+  requires_restart: z.boolean(),
+  applied_level: z.enum(["low", "medium", "high"]),
+  warning: z.string().optional(),
+});
 export const RateLimitsResponse = z
   .object({
     enabled: z.boolean(),
@@ -897,7 +960,7 @@ export const SandboxStatus = z
 export const AuditEntry = z
   .object({
     timestamp: z.string().datetime({ offset: true }),
-    event: z.string(),
+    event: z.string().regex(/^[a-z_]+$/),
     decision: z.enum(["allow", "deny", "error"]).optional(),
     agent_id: z.string().optional(),
     session_id: z.string().optional(),
@@ -910,13 +973,11 @@ export const AuditEntry = z
   .passthrough();
 export const AuditLogToggle = z.object({ enabled: z.boolean() });
 export const AuditLogToggleRequest = z.object({ enabled: z.boolean() });
-export const AuditLogUpdateResponse = z
-  .object({
-    saved: z.boolean(),
-    requires_restart: z.boolean(),
-    applied_enabled: z.boolean(),
-  })
-  .passthrough();
+export const AuditLogUpdateResponse = z.object({
+  saved: z.boolean(),
+  requires_restart: z.boolean(),
+  applied_enabled: z.boolean(),
+});
 export const RetentionConfig = z
   .object({ session_days: z.number().int().gte(0), disabled: z.boolean() })
   .partial()
@@ -935,24 +996,25 @@ export const RetentionSweepResult = z
     skipped_reason: z.string().optional(),
   })
   .passthrough();
-export const ChannelEntry = z.object({
-  id: z.enum([
-    "webchat",
-    "telegram",
-    "discord",
-    "slack",
-    "whatsapp",
-    "feishu",
-    "dingtalk",
-    "wecom",
-    "weixin",
-    "line",
-    "qq",
-    "onebot",
-    "irc",
-    "matrix",
-    "maixcam",
-  ]),
+export const ChannelId = z.enum([
+  "webchat",
+  "telegram",
+  "discord",
+  "slack",
+  "whatsapp",
+  "feishu",
+  "dingtalk",
+  "wecom",
+  "weixin",
+  "line",
+  "qq",
+  "onebot",
+  "irc",
+  "matrix",
+  "maixcam",
+]);
+export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
+  id: ChannelId,
   name: z.string(),
   transport: z.enum([
     "websocket",
@@ -965,14 +1027,15 @@ export const ChannelEntry = z.object({
   enabled: z.boolean(),
   description: z.string(),
 });
-export const ChannelEnabledResponse = z
-  .object({ id: z.string(), enabled: z.boolean() })
-  .passthrough();
+export const ChannelEnabledResponse: z.ZodType<ChannelEnabledResponse> =
+  z.object({ id: ChannelId, enabled: z.boolean() });
 export const ChannelTestResponse = z
   .object({ success: z.boolean(), message: z.string() })
   .passthrough();
-export const RotateTokenResponse = z.object({
-  token: z.string().min(64).max(64),
+export const RotateTokenResponse: z.ZodType<RotateTokenResponse> = z.object({
+  token: BearerToken.min(72)
+    .max(72)
+    .regex(/^omnipus_[a-f0-9]{64}$/),
 });
 export const PendingRestartEntry = z
   .object({
@@ -985,13 +1048,11 @@ export const CredentialSetRequest = z.object({
   key: z.string(),
   value: z.string(),
 });
-export const BackupCreateResponse = z
-  .object({
-    path: z.string(),
-    size_bytes: z.number().int().gte(0),
-    created_at: z.string().datetime({ offset: true }),
-  })
-  .passthrough();
+export const BackupCreateResponse = z.object({
+  path: z.string(),
+  size_bytes: z.number().int().gte(0),
+  created_at: z.string().datetime({ offset: true }),
+});
 export const RestoreBackupRequest = z.object({ filename: z.string() });
 export const StorageStats = z
   .object({
@@ -1015,6 +1076,7 @@ export const Provider = z.object({
   display_name: z.string().optional(),
   status: z.enum(["connected", "disconnected", "error"]),
   models: z.array(z.string()),
+  has_api_key: z.boolean().optional(),
   warning: z.string().optional(),
   error: z.string().optional(),
 });
@@ -1024,14 +1086,20 @@ export const ProviderUpdateRequest = z
 export const Skill = z.object({
   id: z.string(),
   name: z.string(),
-  version: z.string(),
+  version: z.string().regex(/^\d+\.\d+\.\d+(?:[-+].*)?$/),
   description: z.string().optional(),
   author: z.string().optional(),
   verified: z.boolean(),
   status: z.enum(["active", "disabled", "inactive", "error"]),
   agent_assignment: z.string().optional(),
 });
-export const SkillInstallRequest = z.object({ name: z.string() });
+export const SkillInstallRequest = z.object({
+  name: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[a-z0-9][a-z0-9._-]*$/),
+});
 export const SseChatRequest = z.object({ message: z.string() });
 export const ActivityEvent: z.ZodType<ActivityEvent> = z
   .object({
@@ -1068,7 +1136,7 @@ export const AppStatePatchRequest = z
   .object({ onboarding_complete: z.boolean() })
   .partial();
 export const UserContextResponse = z.object({ content: z.string() });
-export const UserContextRequest = z.object({ content: z.string() });
+export const UserContextRequest = z.object({ content: z.string().max(262144) });
 export const MeInfo = z.object({ role: z.enum(["admin", "user"]) });
 export const DoctorIssue: z.ZodType<DoctorIssue> = z.object({
   id: z.string(),
@@ -1080,7 +1148,7 @@ export const DoctorIssue: z.ZodType<DoctorIssue> = z.object({
   action_label: z.string().optional(),
 });
 export const DoctorResult: z.ZodType<DoctorResult> = z.object({
-  score: z.number().gte(0).lte(100),
+  score: z.number().int().gte(0).lte(100),
   issues: z.array(DoctorIssue).max(100),
   checked_at: z.string().datetime({ offset: true }),
 });
@@ -1128,15 +1196,15 @@ export const TaskCreateRequest = z.object({
   title: z.string(),
   prompt: z.string().optional(),
   agent_id: z.string().optional(),
-  priority: z.number().int().gte(0).optional(),
+  priority: z.number().int().gte(0).lte(100).optional(),
   parent_task_id: z.string().optional(),
-  trigger_type: z.string().optional(),
+  trigger_type: z.enum(["manual", "time", "event"]).optional(),
   name: z.string().optional(),
   description: z.string().optional(),
 });
 export const TaskUpdateRequest = z
   .object({
-    status: z.string(),
+    status: z.enum(["queued", "assigned", "running", "completed", "failed"]),
     result: z.string(),
     artifacts: z.array(z.string()),
     title: z.string(),
@@ -1169,6 +1237,26 @@ export const McpServerCreate = z.object({
   env: z.record(z.string()).optional(),
 });
 export const McpServerToolsResponse = z.object({ tools: z.array(z.string()) });
+export const McpToolsListResponse = z.array(
+  z
+    .object({
+      id: z.string(),
+      name: z.string(),
+      enabled: z.boolean(),
+      command: z.string().optional(),
+      args: z.array(z.string()).optional(),
+    })
+    .passthrough()
+);
+export const McpToolCallRequest = z.object({
+  server_id: z.string(),
+  tool_name: z.string(),
+  arguments: z.object({}).partial().passthrough().optional(),
+});
+export const McpToolCallResponse = z.object({
+  result: z.unknown(),
+  error: z.string().optional(),
+});
 export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
   LoginResponse;
 export const AgentSession = z
@@ -1199,9 +1287,21 @@ export const BackupEntry = z.object({
 export const OnboardingStatusResponse = z
   .object({ onboarding_complete: z.boolean() })
   .passthrough();
-export const ActivityEventsResponse: z.ZodType<ActivityEventsResponse> = z
-  .object({ events: z.array(ActivityEvent), warning: z.string().optional() })
+export const ActivityEventsResponse: z.ZodType<ActivityEventsResponse> =
+  z.object({ events: z.array(ActivityEvent), warning: z.string().optional() });
+export const ChannelConfigureRequest = z
+  .object({
+    token: z.string(),
+    bot_token: z.string(),
+    app_id: z.string(),
+    app_secret: z.string(),
+    webhook_secret: z.string(),
+  })
+  .partial()
   .passthrough();
+export const RetentionUpdateRequest = z
+  .object({ session_days: z.number().int().gte(0), disabled: z.boolean() })
+  .partial();
 
 const endpoints = makeApi([
   {
@@ -1937,7 +2037,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     description: `Generates a new cryptographically random 64-hex-character gateway bearer token, persists it to config.json, triggers a hot reload, and returns the new token. The previous token is immediately invalidated. Admin-only; secured by RequireAdmin + RequireNotBypass chain. Use after security incidents or on a regular rotation schedule.
 `,
     requestFormat: "json",
-    response: z.object({ token: z.string().min(64).max(64) }),
+    response: RotateTokenResponse,
     errors: [
       {
         status: 401,
@@ -2235,6 +2335,49 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/media/:ref_id",
+    alias: "serveMedia",
+    description: `Resolves a media:// URI (e.g. media://abc123) and streams the underlying file with the correct Content-Type. Used by the chat UI to display screenshots and other agent-generated media. Returns 403 if path traversal is detected in ref_id, 404 if the ref is unknown.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "ref_id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Forbidden — invalid or path-traversal ref_id.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Media store not available.`,
         schema: ErrorResponse,
       },
     ],
@@ -3234,7 +3377,13 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         name: "body",
         type: "Body",
-        schema: z.object({ name: z.string() }),
+        schema: z.object({
+          name: z
+            .string()
+            .min(1)
+            .max(128)
+            .regex(/^[a-z0-9][a-z0-9._-]*$/),
+        }),
       },
     ],
     response: Skill,
@@ -3589,6 +3738,75 @@ Polled by the SPA StatusBar every 15 seconds.
     ],
   },
   {
+    method: "get",
+    path: "/tools/mcp",
+    alias: "listMcpTools",
+    description: `Returns all configured MCP servers with their status and tool metadata for the agent tool picker UI. Requires authentication.
+`,
+    requestFormat: "json",
+    response: z.array(
+      z
+        .object({
+          id: z.string(),
+          name: z.string(),
+          enabled: z.boolean(),
+          command: z.string().optional(),
+          args: z.array(z.string()).optional(),
+        })
+        .passthrough()
+    ),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/tools/mcp",
+    alias: "callMcpTool",
+    description: `Calls a named tool on a specific MCP server and returns the result. Requires authentication. The tool and server must already be configured and enabled. Arguments are tool-specific.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: McpToolCallRequest,
+      },
+    ],
+    response: z.object({ result: z.unknown(), error: z.string().optional() }),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "post",
     path: "/upload",
     alias: "uploadFiles",
@@ -3620,6 +3838,44 @@ Returns HTTP 201 on success.
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/uploads/:session_id/:filename",
+    alias: "serveUpload",
+    description: `Serves a previously uploaded file by session ID and filename. Authentication is optional — browsers must be able to load image URLs directly from chat messages. Returns the file content with the appropriate Content-Type header.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "session_id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "filename",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
         schema: ErrorResponse,
       },
       {
@@ -3666,7 +3922,7 @@ Returns HTTP 201 on success.
       {
         name: "body",
         type: "Body",
-        schema: z.object({ content: z.string() }),
+        schema: z.object({ content: z.string().max(262144) }),
       },
     ],
     response: z.object({ content: z.string() }),
@@ -3836,7 +4092,7 @@ Returns HTTP 201 on success.
       {
         name: "body",
         type: "Body",
-        schema: z.object({ password: z.string().min(8) }),
+        schema: z.object({ password: z.string().min(8).max(72) }),
       },
       {
         name: "username",

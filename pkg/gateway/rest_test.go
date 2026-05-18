@@ -1145,10 +1145,12 @@ func TestRotateGatewayToken_ResponseShape(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp),
 		"response must unmarshal into gen.RotateTokenResponse — wire shape must match contract")
 
-	// The token must be non-empty (a real 64-char hex string, 32 random bytes).
+	// Per the BearerToken schema, the token must be exactly 72 chars: "omnipus_" + 64-hex.
 	assert.NotEmpty(t, resp.Token, "RotateTokenResponse.Token must be non-empty")
-	assert.Len(t, resp.Token, 64,
-		"RotateTokenResponse.Token must be 64 hex chars (32 bytes hex-encoded)")
+	assert.Len(t, resp.Token, 72,
+		"RotateTokenResponse.Token must be 72 chars: omnipus_ + 64 hex chars (BearerToken schema)")
+	assert.Regexp(t, `^omnipus_[a-f0-9]{64}$`, resp.Token,
+		"RotateTokenResponse.Token must match BearerToken pattern")
 
 	// Differentiation: call twice — tokens must differ (not hardcoded).
 	w2 := httptest.NewRecorder()

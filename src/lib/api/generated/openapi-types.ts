@@ -1606,6 +1606,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tools/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List all configured MCP servers
+         * @description Returns all configured MCP servers with their status and tool metadata for the agent tool picker UI. Requires authentication.
+         */
+        get: operations["listMcpTools"];
+        put?: never;
+        /**
+         * Invoke a tool on an MCP server
+         * @description Calls a named tool on a specific MCP server and returns the result. Requires authentication. The tool and server must already be configured and enabled. Arguments are tool-specific.
+         */
+        post: operations["callMcpTool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/uploads/{session_id}/{filename}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Serve an uploaded file
+         * @description Serves a previously uploaded file by session ID and filename. Authentication is optional — browsers must be able to load image URLs directly from chat messages. Returns the file content with the appropriate Content-Type header.
+         */
+        get: operations["serveUpload"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/media/{ref_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Serve a media file by ref ID
+         * @description Resolves a media:// URI (e.g. media://abc123) and streams the underlying file with the correct Content-Type. Used by the chat UI to display screenshots and other agent-generated media. Returns 403 if path traversal is detected in ref_id, 404 if the ref is unknown.
+         */
+        get: operations["serveMedia"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1635,18 +1699,14 @@ export interface components {
              */
             username: string;
             /**
-             * @description The user's password.
+             * @description The user's password. Maximum 72 characters (bcrypt limit).
              * @example s3cr3tpassword
              */
             password: string;
         };
         /** @description Returned on successful login, register-admin, or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers, the role of the authenticated user, and the username. */
         LoginResponse: {
-            /**
-             * @description Bearer token for subsequent API calls. Prefix "omnipus_" followed by 64 lowercase hex characters (total 72 chars). Store in sessionStorage (preferred) or localStorage under the key "omnipus_auth_token".
-             * @example omnipus_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-             */
-            token: string;
+            token: components["schemas"]["BearerToken"];
             /**
              * @description RBAC role of the authenticated user.
              * @example admin
@@ -1672,7 +1732,7 @@ export interface components {
              */
             username: string;
             /**
-             * @description Password for the new admin account. Minimum 8 characters.
+             * @description Password for the new admin account. Minimum 8 characters, maximum 72 (bcrypt limit).
              * @example s3cr3tpassword
              */
             password: string;
@@ -1680,12 +1740,12 @@ export interface components {
         /** @description Body for POST /auth/change-password. Changes the authenticated user's own password. */
         ChangePasswordRequest: {
             /**
-             * @description The user's current password for verification.
+             * @description The user's current password for verification. Maximum 72 characters (bcrypt limit).
              * @example oldpassword
              */
             current_password: string;
             /**
-             * @description The new password. Minimum 8 characters.
+             * @description The new password. Minimum 8 characters, maximum 72 (bcrypt limit).
              * @example newpassword123
              */
             new_password: string;
@@ -1728,10 +1788,11 @@ export interface components {
         /** @description Body for POST /onboarding/probe-provider. Tests an API key against a provider and returns available models. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete. */
         ProbeProviderRequest: {
             /**
-             * @description Provider protocol identifier (e.g. "anthropic", "openai", "openrouter").
+             * @description Provider protocol identifier. Must be one of the recognized protocol names that Omnipus can connect to. Validated server-side against the known protocol registry (pkg/providers.IsKnownProtocol).
              * @example openrouter
+             * @enum {string}
              */
-            id: string;
+            id: "anthropic" | "anthropic-messages" | "openai" | "openrouter" | "gemini" | "google" | "ollama" | "azure" | "azure-openai" | "bedrock" | "litellm" | "groq" | "zhipu" | "nvidia" | "moonshot" | "shengsuanyun" | "deepseek" | "cerebras" | "vivgrid" | "volcengine" | "vllm" | "qwen" | "qwen-intl" | "qwen-international" | "dashscope-intl" | "qwen-us" | "dashscope-us" | "mistral" | "avian" | "longcat" | "modelscope" | "novita" | "coding-plan" | "alibaba-coding" | "qwen-coding" | "mimo" | "minimax" | "coding-plan-anthropic" | "alibaba-coding-anthropic" | "antigravity" | "claude-cli" | "claudecli" | "codex-cli" | "codexcli" | "github-copilot" | "copilot";
             /**
              * @description API key to test against the provider.
              * @example sk-or-...
@@ -1802,7 +1863,7 @@ export interface components {
              */
             role: "admin" | "user";
             /**
-             * @description Initial password. Minimum 8 characters.
+             * @description Initial password. Minimum 8 characters, maximum 72 (bcrypt limit).
              * @example s3cr3tpassword
              */
             password: string;
@@ -1884,7 +1945,7 @@ export interface components {
         /** @description Body for PUT /users/{username}/password. Admin resets another user's password. This is NOT the self-change-password endpoint — that is POST /auth/change-password. After a successful reset the target user's bearer token is also invalidated, requiring them to log in again with the new password. */
         UserResetPasswordRequest: {
             /**
-             * @description New password for the target user. Minimum 8 characters.
+             * @description New password for the target user. Minimum 8 characters, maximum 72 (bcrypt limit).
              * @example newpassword123
              */
             password: string;
@@ -2314,22 +2375,7 @@ export interface components {
              * @enum {string}
              */
             sandbox_profile?: "workspace" | "workspace+net" | "host" | "off";
-            /** @description Per-agent shell command deny-pattern configuration. */
-            shell_policy?: {
-                /**
-                 * @description Enable pattern-based shell command blocking.
-                 * @example true
-                 */
-                enable_deny_patterns?: boolean;
-                /**
-                 * @description Additional Go regexp patterns to block in shell commands.
-                 * @example [
-                 *       "rm -rf /",
-                 *       "curl.*169\\.254"
-                 *     ]
-                 */
-                custom_deny_patterns?: string[];
-            };
+            shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
              * @description Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
              * @example [
@@ -2337,75 +2383,106 @@ export interface components {
              *     ]
              */
             fallback_models?: string[];
-            /** @description LLM sampling parameters applied to this agent's requests. */
-            model_params?: {
-                /**
-                 * Format: double
-                 * @description Sampling temperature (0.0 – 2.0). Lower = more deterministic.
-                 * @example 1
-                 */
-                temperature?: number;
-                /**
-                 * @description Maximum tokens to generate per turn.
-                 * @example 4096
-                 */
-                max_tokens?: number;
-                /**
-                 * Format: double
-                 * @description Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-                 * @example 1
-                 */
-                top_p?: number;
-            };
-            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
-            rate_limits?: {
-                /**
-                 * @description When true, global rate limits are used and per-agent overrides are ignored.
-                 * @example true
-                 */
-                use_global_defaults?: boolean;
-                /**
-                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-                 * @example 100
-                 */
-                max_llm_calls_per_hour?: number;
-                /**
-                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-                 * @example 60
-                 */
-                max_tool_calls_per_minute?: number;
-                /**
-                 * Format: double
-                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
-                 * @example 5
-                 */
-                max_cost_per_day?: number;
-            };
-            /** @description Aggregate runtime statistics for this agent. Absent when no sessions have been run. */
-            stats?: {
-                /**
-                 * @description Lifetime count of sessions created for this agent.
-                 * @example 42
-                 */
-                total_sessions: number;
-                /**
-                 * @description Lifetime token count across all sessions.
-                 * @example 1500000
-                 */
-                total_tokens: number;
-                /**
-                 * Format: double
-                 * @description Lifetime USD cost across all sessions.
-                 * @example 3.14
-                 */
-                total_cost: number;
-                /**
-                 * Format: date-time
-                 * @description RFC3339 timestamp of the last turn completed by this agent.
-                 * @example 2026-05-17T14:23:00Z
-                 */
-                last_active?: string;
-            };
+            model_params?: components["schemas"]["AgentModelParams"];
+            rate_limits?: components["schemas"]["AgentRateLimits"];
+            stats?: components["schemas"]["AgentStats"];
+        };
+        /**
+         * AgentModelParams
+         * @description LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
+         */
+        AgentModelParams: {
+            /**
+             * Format: double
+             * @description Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+             * @example 1
+             */
+            temperature?: number;
+            /**
+             * @description Maximum tokens to generate per turn.
+             * @example 4096
+             */
+            max_tokens?: number;
+            /**
+             * Format: double
+             * @description Nucleus sampling probability mass. 1.0 disables nucleus sampling.
+             * @example 1
+             */
+            top_p?: number;
+        };
+        /**
+         * AgentRateLimits
+         * @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
+         */
+        AgentRateLimits: {
+            /**
+             * @description When true, global rate limits are used and per-agent overrides are ignored.
+             * @example true
+             */
+            use_global_defaults?: boolean;
+            /**
+             * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+             * @example 100
+             */
+            max_llm_calls_per_hour?: number;
+            /**
+             * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+             * @example 60
+             */
+            max_tool_calls_per_minute?: number;
+            /**
+             * Format: double
+             * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
+             * @example 5
+             */
+            max_cost_per_day?: number;
+        };
+        /**
+         * AgentStats
+         * @description Aggregate runtime statistics for an agent. Absent on the Agent object when no sessions have been run.
+         */
+        AgentStats: {
+            /**
+             * @description Lifetime count of sessions created for this agent.
+             * @example 42
+             */
+            total_sessions: number;
+            /**
+             * @description Lifetime token count across all sessions.
+             * @example 1500000
+             */
+            total_tokens: number;
+            /**
+             * Format: double
+             * @description Lifetime USD cost across all sessions.
+             * @example 3.14
+             */
+            total_cost: number;
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp of the last turn completed by this agent.
+             * @example 2026-05-17T14:23:00Z
+             */
+            last_active?: string;
+        };
+        /**
+         * AgentShellPolicy
+         * @description Per-agent shell command deny-pattern configuration.
+         */
+        AgentShellPolicy: {
+            /**
+             * @description Enable pattern-based shell command blocking.
+             * @example true
+             */
+            enable_deny_patterns?: boolean;
+            /**
+             * @description Additional Go regexp patterns to block in shell commands.
+             * @example [
+             *       "rm -rf /",
+             *       "curl.*169\\.254"
+             *     ]
+             */
+            custom_deny_patterns?: string[];
         };
         /** @description Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts). */
         AgentToolsCfg: {
@@ -2845,6 +2922,12 @@ export interface components {
             };
         };
         /**
+         * ChannelId
+         * @description Stable identifier for a built-in channel.
+         * @enum {string}
+         */
+        ChannelId: "webchat" | "telegram" | "discord" | "slack" | "whatsapp" | "feishu" | "dingtalk" | "wecom" | "weixin" | "line" | "qq" | "onebot" | "irc" | "matrix" | "maixcam";
+        /**
          * ChannelEntry
          * @description A communication channel entry returned by GET /api/v1/channels.
          */
@@ -2852,9 +2935,8 @@ export interface components {
             /**
              * @description Canonical channel identifier.
              * @example telegram
-             * @enum {string}
              */
-            id: "webchat" | "telegram" | "discord" | "slack" | "whatsapp" | "feishu" | "dingtalk" | "wecom" | "weixin" | "line" | "qq" | "onebot" | "irc" | "matrix" | "maixcam";
+            id: components["schemas"]["ChannelId"];
             /**
              * @description Human-readable channel name.
              * @example Telegram
@@ -3050,7 +3132,7 @@ export interface components {
              */
             timestamp: string;
             /**
-             * @description Event type identifier. Well-known values: tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown. Custom values are permitted for extensibility (open-ended union).
+             * @description Event type identifier. Well-known values: tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown. Custom values are permitted for extensibility — must match ^[a-z_]+$ (lowercase letters and underscores only).
              * @example tool_call
              */
             event: string;
@@ -3381,6 +3463,11 @@ export interface components {
              */
             models: string[];
             /**
+             * @description True when the provider has a stored API key in credentials. The key itself is never returned. Absent on legacy entries that predate this field — treat as false when absent.
+             * @example true
+             */
+            has_api_key?: boolean;
+            /**
              * @description Non-fatal advisory message (e.g. "could not fetch upstream model list: ..."). Absent when there are no warnings.
              * @example could not fetch upstream model list: status 429
              */
@@ -3404,7 +3491,7 @@ export interface components {
              */
             name: string;
             /**
-             * @description Semantic version string (e.g. "1.2.3").
+             * @description Semantic version string (e.g. "1.2.3"). Must follow semver format.
              * @example 1.2.3
              */
             version: string;
@@ -3837,7 +3924,6 @@ export interface components {
          */
         DoctorResult: {
             /**
-             * Format: double
              * @description Overall health score (0 = critical issues; 100 = fully healthy).
              * @example 85
              */
@@ -4289,7 +4375,7 @@ export interface components {
              * @description Channel identifier.
              * @example telegram
              */
-            id: string;
+            id: components["schemas"]["ChannelId"];
             /**
              * @description Whether the channel is now enabled.
              * @example true
@@ -4449,11 +4535,7 @@ export interface components {
          * @description Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
          */
         RotateTokenResponse: {
-            /**
-             * @description The new gateway bearer token (64 hex characters, 32 random bytes). Store securely; this is the only time it is returned.
-             * @example a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
-             */
-            token: string;
+            token: components["schemas"]["BearerToken"];
         };
         /**
          * VersionResponse
@@ -4461,13 +4543,13 @@ export interface components {
          */
         VersionResponse: {
             /**
-             * @description Omnipus gateway version string (e.g. "0.1.0" or "dev").
+             * @description Omnipus gateway version string (e.g. "0.1.0"). Must follow semver format.
              * @example 0.1.0
              */
             version: string;
             /**
-             * @description VCS revision SHA embedded at build time via debug.ReadBuildInfo(). Value is "dev" when built outside a version-controlled tree or when vcs.revision is not set (e.g. go run).
-             * @example abc1234def5678
+             * @description VCS revision SHA embedded at build time via debug.ReadBuildInfo(). Value is "dev" when built outside a version-controlled tree or when vcs.revision is not set (e.g. go run). Otherwise a 7-40 character lowercase hex SHA.
+             * @example abc1234
              */
             build_sha: string;
         };
@@ -4477,7 +4559,7 @@ export interface components {
          */
         UserContextRequest: {
             /**
-             * @description Full replacement content for USER.md. May be empty to clear the file. No maximum length is enforced at the schema level — the underlying filesystem write via fileutil.WriteFileAtomic provides the practical limit.
+             * @description Full replacement content for USER.md. May be empty to clear the file. Maximum 262144 bytes (256 KB). The underlying filesystem write via fileutil.WriteFileAtomic provides the physical limit; this schema constraint enforces a reasonable upper bound at the API layer.
              * @example I am a senior Go developer focused on distributed systems.
              */
             content: string;
@@ -4526,8 +4608,9 @@ export interface components {
             /**
              * @description How the task was triggered. Defaults to "manual".
              * @example manual
+             * @enum {string}
              */
-            trigger_type?: string;
+            trigger_type?: "manual" | "time" | "event";
             /**
              * @description Backward-compat alias for title.
              * @example Analyze logs
@@ -4547,8 +4630,9 @@ export interface components {
             /**
              * @description New task status.
              * @example completed
+             * @enum {string}
              */
-            status?: string;
+            status?: "queued" | "assigned" | "running" | "completed" | "failed";
             /**
              * @description Task result or output summary.
              * @example Logs analyzed successfully.
@@ -4697,6 +4781,102 @@ export interface components {
              * @example alice
              */
             owner_username?: string;
+        };
+        /**
+         * BearerToken
+         * @description Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
+         * @example omnipus_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+         */
+        BearerToken: string;
+        /**
+         * ChannelConfigureRequest
+         * @description Request body for PUT /api/v1/channels/{id}/configure. Merges the supplied fields into the channel's config section. The "enabled" field is reserved and silently removed — use the separate enable/disable endpoints instead. Field names and value types are channel-specific; unknown fields are stored as-is and passed through to the channel implementation.
+         */
+        ChannelConfigureRequest: {
+            /** @description Channel authentication token (e.g. Telegram bot token, Discord bot token). */
+            token?: string;
+            /** @description Alias for token used by some channels. */
+            bot_token?: string;
+            /** @description Application ID (used by Slack, Discord). */
+            app_id?: string;
+            /** @description Application secret / signing secret. */
+            app_secret?: string;
+            /** @description HMAC secret for verifying incoming webhook payloads. */
+            webhook_secret?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * RetentionUpdateRequest
+         * @description Request body for PUT /api/v1/security/retention. Partial update — any subset of the two retention fields. Strict type validation rejects JSON strings for session_days, floats with fractional parts for session_days, and non-boolean values for disabled. An empty body {} is accepted as a no-op.
+         */
+        RetentionUpdateRequest: {
+            /**
+             * @description Number of days to retain session logs. 0 means use the system default (90 days). Floats and strings are rejected with 400.
+             * @example 30
+             */
+            session_days?: number;
+            /**
+             * @description When true, retention sweeps are disabled and session logs are kept forever. Strings ("true"/"false") and numbers are rejected with 400.
+             * @example false
+             */
+            disabled?: boolean;
+        };
+        /**
+         * McpToolsListResponse
+         * @description Response from GET /api/v1/tools/mcp. Returns all configured MCP servers with their status for the agent tool picker UI.
+         */
+        McpToolsListResponse: ({
+            /** @description Unique MCP server identifier (same as the config key name). */
+            id: string;
+            /** @description Display name for the MCP server. */
+            name: string;
+            /** @description Whether the MCP server is currently enabled. */
+            enabled: boolean;
+            /** @description The command used to start the MCP server. */
+            command?: string;
+            /** @description Arguments passed to the MCP server command. */
+            args?: string[];
+        } & {
+            [key: string]: unknown;
+        })[];
+        /**
+         * McpToolCallRequest
+         * @description Request body for POST /api/v1/tools/mcp. Invokes a tool on a specific MCP server by name, passing optional arguments.
+         */
+        McpToolCallRequest: {
+            /**
+             * @description The MCP server ID to invoke the tool on.
+             * @example filesystem
+             */
+            server_id: string;
+            /**
+             * @description The name of the tool to call on the MCP server.
+             * @example read_file
+             */
+            tool_name: string;
+            /**
+             * @description Key-value arguments to pass to the tool. Shape is tool-specific.
+             * @example {
+             *       "path": "/home/user/document.txt"
+             *     }
+             */
+            arguments?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * McpToolCallResponse
+         * @description Response from POST /api/v1/tools/mcp. Contains the result returned by the MCP server tool.
+         */
+        McpToolCallResponse: {
+            /** @description The tool's return value. Shape is tool-specific; may be any JSON type. */
+            result: unknown;
+            /**
+             * @description Error message if the tool call failed on the MCP server side. Only present when the call returned an error result.
+             * @example file not found: /home/user/missing.txt
+             */
+            error?: string;
         };
     };
     responses: {
@@ -8066,6 +8246,161 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
+    listMcpTools: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Array of MCP server entries. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpToolsListResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    callMcpTool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpToolCallRequest"];
+            };
+        };
+        responses: {
+            /** @description Tool call result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpToolCallResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    serveUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Session ID the file was uploaded under.
+                 * @example 550e8400-e29b-41d4-a716-446655440000
+                 */
+                session_id: string;
+                /**
+                 * @description Sanitized filename as returned by the upload endpoint.
+                 * @example screenshot.png
+                 */
+                filename: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description File content streamed with appropriate Content-Type. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            404: components["responses"]["404NotFound"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    serveMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The opaque media reference ID (not a path — no slashes or dots).
+                 * @example a1b2c3d4e5f6
+                 */
+                ref_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Media file content streamed with appropriate Content-Type. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            /** @description Forbidden — invalid or path-traversal ref_id. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["404NotFound"];
+            /** @description Method not allowed. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Media store not available. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
 }
 
 // ── Named type re-exports from components.schemas ────────────────────────────
@@ -8098,6 +8433,10 @@ export type Message = components["schemas"]["Message"];
 export type ToolCall = components["schemas"]["ToolCall"];
 export type Attachment = components["schemas"]["Attachment"];
 export type Agent = components["schemas"]["Agent"];
+export type AgentModelParams = components["schemas"]["AgentModelParams"];
+export type AgentRateLimits = components["schemas"]["AgentRateLimits"];
+export type AgentStats = components["schemas"]["AgentStats"];
+export type AgentShellPolicy = components["schemas"]["AgentShellPolicy"];
 export type AgentToolsCfg = components["schemas"]["AgentToolsCfg"];
 export type AgentToolsUpdateRequest = components["schemas"]["AgentToolsUpdateRequest"];
 export type AgentCreateRequest = components["schemas"]["AgentCreateRequest"];
@@ -8109,6 +8448,7 @@ export type ToolRegistryEntry = components["schemas"]["ToolRegistryEntry"];
 export type AgentToolEntry = components["schemas"]["AgentToolEntry"];
 export type ToolPolicy = components["schemas"]["ToolPolicy"];
 export type GlobalToolPolicies = components["schemas"]["GlobalToolPolicies"];
+export type ChannelId = components["schemas"]["ChannelId"];
 export type ChannelEntry = components["schemas"]["ChannelEntry"];
 export type RetentionConfig = components["schemas"]["RetentionConfig"];
 export type RetentionSweepResult = components["schemas"]["RetentionSweepResult"];
@@ -8180,3 +8520,9 @@ export type ToolApprovalActionRequest = components["schemas"]["ToolApprovalActio
 export type CredentialSetRequest = components["schemas"]["CredentialSetRequest"];
 export type RestoreBackupRequest = components["schemas"]["RestoreBackupRequest"];
 export type AgentOwnershipUpdateRequest = components["schemas"]["AgentOwnershipUpdateRequest"];
+export type BearerToken = components["schemas"]["BearerToken"];
+export type ChannelConfigureRequest = components["schemas"]["ChannelConfigureRequest"];
+export type RetentionUpdateRequest = components["schemas"]["RetentionUpdateRequest"];
+export type McpToolsListResponse = components["schemas"]["McpToolsListResponse"];
+export type McpToolCallRequest = components["schemas"]["McpToolCallRequest"];
+export type McpToolCallResponse = components["schemas"]["McpToolCallResponse"];

@@ -379,6 +379,48 @@ func (e AgentUpdateRequestSandboxProfile) Valid() bool {
 	}
 }
 
+// Defines values for AgentUpdateRequestToolsCfgBuiltinDefaultPolicy.
+const (
+	AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAllow AgentUpdateRequestToolsCfgBuiltinDefaultPolicy = "allow"
+	AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAsk   AgentUpdateRequestToolsCfgBuiltinDefaultPolicy = "ask"
+	AgentUpdateRequestToolsCfgBuiltinDefaultPolicyDeny  AgentUpdateRequestToolsCfgBuiltinDefaultPolicy = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestToolsCfgBuiltinDefaultPolicy enum.
+func (e AgentUpdateRequestToolsCfgBuiltinDefaultPolicy) Valid() bool {
+	switch e {
+	case AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAllow:
+		return true
+	case AgentUpdateRequestToolsCfgBuiltinDefaultPolicyAsk:
+		return true
+	case AgentUpdateRequestToolsCfgBuiltinDefaultPolicyDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentUpdateRequestToolsCfgBuiltinPolicies.
+const (
+	AgentUpdateRequestToolsCfgBuiltinPoliciesAllow AgentUpdateRequestToolsCfgBuiltinPolicies = "allow"
+	AgentUpdateRequestToolsCfgBuiltinPoliciesAsk   AgentUpdateRequestToolsCfgBuiltinPolicies = "ask"
+	AgentUpdateRequestToolsCfgBuiltinPoliciesDeny  AgentUpdateRequestToolsCfgBuiltinPolicies = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestToolsCfgBuiltinPolicies enum.
+func (e AgentUpdateRequestToolsCfgBuiltinPolicies) Valid() bool {
+	switch e {
+	case AgentUpdateRequestToolsCfgBuiltinPoliciesAllow:
+		return true
+	case AgentUpdateRequestToolsCfgBuiltinPoliciesAsk:
+		return true
+	case AgentUpdateRequestToolsCfgBuiltinPoliciesDeny:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AuditEntryDecision.
 const (
 	AuditEntryDecisionAllow AuditEntryDecision = "allow"
@@ -2202,14 +2244,44 @@ type AgentCreateRequest struct {
 	// Description Short description of the agent's purpose.
 	Description *string `json:"description,omitempty"`
 
+	// FallbackModels Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
+	FallbackModels *[]string `json:"fallback_models,omitempty"`
+
 	// Icon Phosphor icon name for the agent avatar.
 	Icon *string `json:"icon,omitempty"`
 
 	// Model Model name for LLM calls. When omitted, the global agents.defaults.model_name is used.
 	Model *string `json:"model,omitempty"`
 
+	// ModelParams LLM sampling parameters applied to this agent's requests.
+	ModelParams *struct {
+		// MaxTokens Maximum tokens to generate per turn.
+		MaxTokens *int `json:"max_tokens,omitempty"`
+
+		// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+		Temperature *float64 `json:"temperature,omitempty"`
+
+		// TopP Nucleus sampling probability mass. 1.0 disables nucleus sampling.
+		TopP *float64 `json:"top_p,omitempty"`
+	} `json:"model_params,omitempty"`
+
 	// Name Display name for the new agent.
 	Name string `json:"name"`
+
+	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
+	RateLimits *struct {
+		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
+		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
+
+		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
+
+		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
+
+		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
+		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
+	} `json:"rate_limits,omitempty"`
 
 	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	ToolsCfg *struct {
@@ -2364,8 +2436,14 @@ type AgentToolsUpdateRequestBuiltinPolicies string
 
 // AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400.
 type AgentUpdateRequest struct {
+	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
+	Color *string `json:"color,omitempty"`
+
 	// Description New description. Rejected on locked agents. Empty string removes it.
 	Description *string `json:"description,omitempty"`
+
+	// FallbackModels Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
+	FallbackModels *[]string `json:"fallback_models,omitempty"`
 
 	// Heartbeat New HEARTBEAT.md content. Rejected on locked agents. Writing this triggers a config reload.
 	Heartbeat *string `json:"heartbeat,omitempty"`
@@ -2376,6 +2454,9 @@ type AgentUpdateRequest struct {
 	// HeartbeatInterval New heartbeat interval in seconds. Allowed on all agents.
 	HeartbeatInterval *int `json:"heartbeat_interval,omitempty"`
 
+	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
+	Icon *string `json:"icon,omitempty"`
+
 	// Instructions New AGENT.md body (after frontmatter). Rejected on locked agents. Writing this triggers a config reload.
 	Instructions *string `json:"instructions,omitempty"`
 
@@ -2385,8 +2466,35 @@ type AgentUpdateRequest struct {
 	// Model New model name. Allowed on all agents.
 	Model *string `json:"model,omitempty"`
 
+	// ModelParams LLM sampling parameters applied to this agent's requests.
+	ModelParams *struct {
+		// MaxTokens Maximum tokens to generate per turn.
+		MaxTokens *int `json:"max_tokens,omitempty"`
+
+		// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+		Temperature *float64 `json:"temperature,omitempty"`
+
+		// TopP Nucleus sampling probability mass. 1.0 disables nucleus sampling.
+		TopP *float64 `json:"top_p,omitempty"`
+	} `json:"model_params,omitempty"`
+
 	// Name New display name. Rejected on locked agents.
 	Name *string `json:"name,omitempty"`
+
+	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
+	RateLimits *struct {
+		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
+		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
+
+		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
+
+		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
+
+		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
+		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
+	} `json:"rate_limits,omitempty"`
 
 	// SandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
 	SandboxProfile *AgentUpdateRequestSandboxProfile `json:"sandbox_profile,omitempty"`
@@ -2409,10 +2517,40 @@ type AgentUpdateRequest struct {
 
 	// ToolFeedback Enable/disable tool feedback loop. Allowed on all agents.
 	ToolFeedback *bool `json:"tool_feedback,omitempty"`
+
+	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
+	ToolsCfg *struct {
+		// Builtin Controls builtin tool visibility for this agent.
+		Builtin *struct {
+			// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
+			DefaultPolicy *AgentUpdateRequestToolsCfgBuiltinDefaultPolicy `json:"default_policy,omitempty"`
+
+			// Policies Per-tool policy overrides. Keys are tool names or glob patterns (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
+			Policies *map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+		} `json:"builtin,omitempty"`
+
+		// Mcp MCP server bindings for this agent.
+		Mcp *struct {
+			// Servers List of MCP server bindings.
+			Servers *[]struct {
+				// Id MCP server identifier as registered in config.json.
+				Id string `json:"id"`
+
+				// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
+				Tools *[]string `json:"tools,omitempty"`
+			} `json:"servers,omitempty"`
+		} `json:"mcp,omitempty"`
+	} `json:"tools_cfg,omitempty"`
 }
 
 // AgentUpdateRequestSandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
 type AgentUpdateRequestSandboxProfile string
+
+// AgentUpdateRequestToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
+type AgentUpdateRequestToolsCfgBuiltinDefaultPolicy string
+
+// AgentUpdateRequestToolsCfgBuiltinPolicies defines model for AgentUpdateRequest.ToolsCfg.Builtin.Policies.
+type AgentUpdateRequestToolsCfgBuiltinPolicies string
 
 // AppState Application state returned by GET /api/v1/state. Reflects whether onboarding has been completed and optional diagnostic metadata.
 type AppState struct {
@@ -2812,6 +2950,12 @@ type McpServerCreate struct {
 
 // McpServerCreateTransport Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).
 type McpServerCreateTransport string
+
+// McpServerToolsResponse Response from GET /mcp-servers/{id}/tools. Returns the list of tool names exposed by a specific MCP server.
+type McpServerToolsResponse struct {
+	// Tools List of tool names exposed by the MCP server.
+	Tools []string `json:"tools"`
+}
 
 // McpToolCallRequest Request body for POST /api/v1/tools/mcp. Invokes a tool on a specific MCP server by name, passing optional arguments.
 type McpToolCallRequest struct {
