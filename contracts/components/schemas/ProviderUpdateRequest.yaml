@@ -4,6 +4,7 @@ description: >
   configuration. On new providers, api_key is required. On existing providers,
   api_key may be omitted to keep the current key.
 type: object
+additionalProperties: false
 properties:
   api_key:
     type: string

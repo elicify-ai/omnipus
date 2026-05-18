@@ -6,6 +6,7 @@ description: >
   mode format (builtin.mode + builtin.visible) for backward compatibility.
   Legacy fields are converted to policy format server-side before persisting.
 type: object
+additionalProperties: false
 properties:
   builtin:
     type: object

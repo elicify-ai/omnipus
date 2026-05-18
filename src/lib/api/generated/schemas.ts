@@ -145,7 +145,57 @@ type AgentCreateRequest = {
   color?: string | undefined;
   icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
+  fallback_models?: Array<string> | undefined;
+  model_params?:
+    | Partial<{
+        temperature: number;
+        max_tokens: number;
+        top_p: number;
+      }>
+    | undefined;
+  rate_limits?:
+    | Partial<{
+        use_global_defaults: boolean;
+        max_llm_calls_per_hour: number;
+        max_tool_calls_per_minute: number;
+        max_cost_per_day: number;
+      }>
+    | undefined;
 };
+type AgentUpdateRequest = Partial<{
+  name: string;
+  description: string;
+  model: string;
+  soul: string;
+  heartbeat: string;
+  instructions: string;
+  timeout_seconds: number;
+  max_tool_iterations: number;
+  steering_mode: string;
+  tool_feedback: boolean;
+  heartbeat_enabled: boolean;
+  heartbeat_interval: number;
+  sandbox_profile: "workspace" | "workspace+net" | "host" | "off";
+  shell_policy: Partial<{
+    enable_deny_patterns: boolean;
+    custom_deny_patterns: Array<string>;
+  }>;
+  color: string;
+  icon: string;
+  fallback_models: Array<string>;
+  model_params: Partial<{
+    temperature: number;
+    max_tokens: number;
+    top_p: number;
+  }>;
+  rate_limits: Partial<{
+    use_global_defaults: boolean;
+    max_llm_calls_per_hour: number;
+    max_tool_calls_per_minute: number;
+    max_cost_per_day: number;
+  }>;
+  tools_cfg: AgentToolsCfg;
+}>;
 type DoctorResult = {
   score: number;
   issues: Array<DoctorIssue>;
@@ -516,8 +566,28 @@ export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
   color: z.string().optional(),
   icon: z.string().optional(),
   tools_cfg: AgentToolsCfg.optional(),
+  fallback_models: z.array(z.string()).max(10).optional(),
+  model_params: z
+    .object({
+      temperature: z.number(),
+      max_tokens: z.number().int(),
+      top_p: z.number(),
+    })
+    .partial()
+    .passthrough()
+    .optional(),
+  rate_limits: z
+    .object({
+      use_global_defaults: z.boolean(),
+      max_llm_calls_per_hour: z.number().int(),
+      max_tool_calls_per_minute: z.number().int(),
+      max_cost_per_day: z.number(),
+    })
+    .partial()
+    .passthrough()
+    .optional(),
 });
-export const AgentUpdateRequest = z
+export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
   .object({
     name: z.string().min(1),
     description: z.string(),
@@ -539,12 +609,32 @@ export const AgentUpdateRequest = z
       })
       .partial()
       .passthrough(),
+    color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
+    icon: z.string().max(50),
+    fallback_models: z.array(z.string()).max(10),
+    model_params: z
+      .object({
+        temperature: z.number(),
+        max_tokens: z.number().int(),
+        top_p: z.number(),
+      })
+      .partial()
+      .passthrough(),
+    rate_limits: z
+      .object({
+        use_global_defaults: z.boolean(),
+        max_llm_calls_per_hour: z.number().int(),
+        max_tool_calls_per_minute: z.number().int(),
+        max_cost_per_day: z.number(),
+      })
+      .partial()
+      .passthrough(),
+    tools_cfg: AgentToolsCfg,
   })
   .partial();
 export const AgentOwnershipUpdateRequest = z
   .object({ owner_username: z.string() })
-  .partial()
-  .passthrough();
+  .partial();
 export const AgentOwnerUpdateResponse = z
   .object({
     success: z.boolean(),
@@ -590,8 +680,7 @@ export const AgentToolsUpdateRequest = z
       .partial()
       .passthrough(),
   })
-  .partial()
-  .passthrough();
+  .partial();
 export const SessionScopeResponse = z
   .object({
     dm_scope: z.enum([
@@ -646,9 +735,9 @@ export const ToolRegistryEntry = z
     source: z.enum(["builtin", "mcp"]),
   })
   .passthrough();
-export const ToolApprovalActionRequest = z
-  .object({ action: z.enum(["approve", "deny", "cancel"]) })
-  .passthrough();
+export const ToolApprovalActionRequest = z.object({
+  action: z.enum(["approve", "deny", "cancel"]),
+});
 export const ToolApprovalResponse = z
   .object({
     approval_id: z.string(),
@@ -931,8 +1020,7 @@ export const Provider = z.object({
 });
 export const ProviderUpdateRequest = z
   .object({ api_key: z.string(), model: z.string() })
-  .partial()
-  .passthrough();
+  .partial();
 export const Skill = z.object({
   id: z.string(),
   name: z.string(),
@@ -943,8 +1031,8 @@ export const Skill = z.object({
   status: z.enum(["active", "disabled", "inactive", "error"]),
   agent_assignment: z.string().optional(),
 });
-export const SkillInstallRequest = z.object({ name: z.string() }).passthrough();
-export const SseChatRequest = z.object({ message: z.string() }).passthrough();
+export const SkillInstallRequest = z.object({ name: z.string() });
+export const SseChatRequest = z.object({ message: z.string() });
 export const ActivityEvent: z.ZodType<ActivityEvent> = z
   .object({
     id: z.string(),
@@ -978,8 +1066,7 @@ export const AppState = z.object({
 });
 export const AppStatePatchRequest = z
   .object({ onboarding_complete: z.boolean() })
-  .partial()
-  .passthrough();
+  .partial();
 export const UserContextResponse = z.object({ content: z.string() });
 export const UserContextRequest = z.object({ content: z.string() });
 export const MeInfo = z.object({ role: z.enum(["admin", "user"]) });
@@ -1037,18 +1124,16 @@ export const Task = z
     completed_at: z.string().datetime({ offset: true }).optional(),
   })
   .passthrough();
-export const TaskCreateRequest = z
-  .object({
-    title: z.string(),
-    prompt: z.string().optional(),
-    agent_id: z.string().optional(),
-    priority: z.number().int().gte(0).optional(),
-    parent_task_id: z.string().optional(),
-    trigger_type: z.string().optional(),
-    name: z.string().optional(),
-    description: z.string().optional(),
-  })
-  .passthrough();
+export const TaskCreateRequest = z.object({
+  title: z.string(),
+  prompt: z.string().optional(),
+  agent_id: z.string().optional(),
+  priority: z.number().int().gte(0).optional(),
+  parent_task_id: z.string().optional(),
+  trigger_type: z.string().optional(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+});
 export const TaskUpdateRequest = z
   .object({
     status: z.string(),
@@ -1062,8 +1147,7 @@ export const TaskUpdateRequest = z
     name: z.string(),
     description: z.string(),
   })
-  .partial()
-  .passthrough();
+  .partial();
 export const TaskAcceptedResponse = z
   .object({ status: z.literal("accepted"), task_id: z.string() })
   .passthrough();
@@ -1084,6 +1168,7 @@ export const McpServerCreate = z.object({
   transport: z.enum(["stdio", "sse", "http"]),
   env: z.record(z.string()).optional(),
 });
+export const McpServerToolsResponse = z.object({ tools: z.array(z.string()) });
 export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
   LoginResponse;
 export const AgentSession = z
@@ -1308,10 +1393,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         name: "body",
         type: "Body",
-        schema: z
-          .object({ owner_username: z.string() })
-          .partial()
-          .passthrough(),
+        schema: z.object({ owner_username: z.string() }).partial(),
       },
       {
         name: "id",
@@ -1831,7 +1913,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         name: "body",
         type: "Body",
-        schema: z.object({ message: z.string() }).passthrough(),
+        schema: z.object({ message: z.string() }),
       },
     ],
     response: z.void(),
@@ -2128,7 +2210,7 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: z.string(),
       },
     ],
-    response: z.array(z.string()),
+    response: McpServerToolsResponse,
     errors: [
       {
         status: 401,
@@ -3152,7 +3234,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         name: "body",
         type: "Body",
-        schema: z.object({ name: z.string() }).passthrough(),
+        schema: z.object({ name: z.string() }),
       },
     ],
     response: Skill,
@@ -3201,10 +3283,7 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         name: "body",
         type: "Body",
-        schema: z
-          .object({ onboarding_complete: z.boolean() })
-          .partial()
-          .passthrough(),
+        schema: z.object({ onboarding_complete: z.boolean() }).partial(),
       },
     ],
     response: AppState,

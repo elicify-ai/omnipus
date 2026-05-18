@@ -96,6 +96,9 @@ import {
   UploadFilesResponse as UploadFilesResponseSchema,
   BackupCreateResponse as BackupCreateResponseSchema,
   User as UserSchema,
+  // fix-AC: promoted from hand-written inline schemas:
+  UserContextResponse as UserContextResponseSchema,
+  McpServerToolsResponse as McpServerToolsResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -246,6 +249,11 @@ import type {
   BackupCreateResponse,
   ChannelTestResponse,
   OperationResult,
+  // fix-AC: promoted from hand-written inline schemas:
+  UserContextResponse,
+  McpServerToolsResponse,
+  AgentUpdateRequest,
+  AgentCreateRequest,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -323,6 +331,11 @@ export type {
   BackupCreateResponse,
   ChannelTestResponse,
   OperationResult,
+  // fix-AC: promoted from hand-written inline schemas:
+  UserContextResponse,
+  McpServerToolsResponse,
+  AgentUpdateRequest,
+  AgentCreateRequest,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -525,11 +538,11 @@ export function fetchAgent(id: string): Promise<Agent> {
   return request<Agent>(`/agents/${encodeURIComponent(id)}`, undefined, AgentSchema as ZodType<Agent>)
 }
 
-export function createAgent(data: Partial<Agent>): Promise<Agent> {
+export function createAgent(data: AgentCreateRequest): Promise<Agent> {
   return request<Agent>('/agents', { method: 'POST', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
 }
 
-export function updateAgent(id: string, data: Partial<Agent>): Promise<Agent> {
+export function updateAgent(id: string, data: AgentUpdateRequest): Promise<Agent> {
   return request<Agent>(`/agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
 }
 
@@ -1183,10 +1196,9 @@ export function deleteMcpServer(id: string): Promise<void> {
   return request<void>(`/mcp-servers/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
-const _mcpServerToolsSchema = z.array(z.string())
-
-export function fetchMcpServerTools(id: string): Promise<string[]> {
-  return request<string[]>(`/mcp-servers/${encodeURIComponent(id)}/tools`, undefined, _mcpServerToolsSchema)
+export async function fetchMcpServerTools(id: string): Promise<string[]> {
+  const resp = await request<McpServerToolsResponse>(`/mcp-servers/${encodeURIComponent(id)}/tools`, undefined, McpServerToolsResponseSchema as ZodType<McpServerToolsResponse>)
+  return resp.tools
 }
 
 // ── Storage Stats ─────────────────────────────────────────────────────────────
@@ -1232,10 +1244,6 @@ export async function registerAdmin(username: string, password: string): Promise
     body: JSON.stringify({ username, password }),
   }, LoginResponseSchema)
 }
-
-// CompleteOnboardingRequest — replaced by OnboardingCompleteRequest from generated openapi-types (contract-first #8).
-// See contracts/components/schemas/OnboardingCompleteRequest.yaml.
-export type CompleteOnboardingRequest = OnboardingCompleteRequest
 
 export async function completeOnboardingTransaction(req: OnboardingCompleteRequest): Promise<LoginResponse> {
   return request<LoginResponse>('/onboarding/complete', {
@@ -1433,11 +1441,8 @@ export function fetchAuditLog(): Promise<AuditEntry[]> {
 
 // ── User Context (USER.md) ────────────────────────────────────────────────────
 
-// not-wire-format: pending fix-V spec addition — UserContextResponse not yet in contracts/components/schemas/; replace with generated UserContextResponseSchema once fix-V lands and gen-contracts is run
-const _userContextSchema = z.object({ content: z.string() }) // not-wire-format: deferred — see comment above
-
-export function fetchUserContext(): Promise<{ content: string }> {
-  return request<{ content: string }>('/user-context', undefined, _userContextSchema)
+export function fetchUserContext(): Promise<UserContextResponse> {
+  return request<UserContextResponse>('/user-context', undefined, UserContextResponseSchema as ZodType<UserContextResponse>)
 }
 
 export function updateUserContext(content: string): Promise<void> {
@@ -1639,14 +1644,11 @@ export function updateRateLimits(body: RateLimitsUpdateRequest): Promise<RateLim
 // sandbox fields — no extra SPA-specific shape is needed.
 export type SandboxConfigResponse = SandboxConfig
 
-// SandboxConfigUpdateBody is a backward-compat alias for the generated SandboxConfigUpdate.
-export type SandboxConfigUpdateBody = SandboxConfigUpdate
-
 export function fetchSandboxConfig(): Promise<SandboxConfigResponse> {
   return request<SandboxConfigResponse>('/security/sandbox-config', undefined, SandboxConfigSchema)
 }
 
-export function updateSandboxConfig(body: SandboxConfigUpdateBody): Promise<SandboxConfigResponse> {
+export function updateSandboxConfig(body: SandboxConfigUpdate): Promise<SandboxConfigResponse> {
   return request<SandboxConfigResponse>('/security/sandbox-config', {
     method: 'PUT',
     body: JSON.stringify(body),
@@ -1690,8 +1692,6 @@ export function retentionMode(resp: {
 // GET /security/retention returns RetentionConfig (session_days?, disabled?).
 // RetentionConfig — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/RetentionConfig.yaml.
-// RetentionResponse is a backward-compat alias for the GET response shape.
-export type RetentionResponse = RetentionConfig
 
 // RetentionUpdateBody is a backward-compat alias for the PUT request body.
 export type RetentionUpdateBody = RetentionConfig
@@ -1699,8 +1699,8 @@ export type RetentionUpdateBody = RetentionConfig
 // RetentionUpdateResponse — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/RetentionUpdateResponse.yaml.
 
-export function fetchRetention(): Promise<RetentionResponse> {
-  return request<RetentionResponse>('/security/retention', undefined, RetentionConfigSchema)
+export function fetchRetention(): Promise<RetentionConfig> {
+  return request<RetentionConfig>('/security/retention', undefined, RetentionConfigSchema)
 }
 
 export function updateRetention(body: RetentionUpdateBody): Promise<RetentionUpdateResponse> {
@@ -1712,11 +1712,9 @@ export function updateRetention(body: RetentionUpdateBody): Promise<RetentionUpd
 
 // Retention sweep — immediately purge sessions beyond the retention window.
 // RetentionSweepResult is re-exported from generated openapi-types above.
-// RetentionSweepResponse is a backward-compat alias.
-export type RetentionSweepResponse = RetentionSweepResult
 
-export function triggerRetentionSweep(): Promise<RetentionSweepResponse> {
-  return request<RetentionSweepResponse>('/security/retention/sweep', { method: 'POST' }, RetentionSweepResultSchema)
+export function triggerRetentionSweep(): Promise<RetentionSweepResult> {
+  return request<RetentionSweepResult>('/security/retention/sweep', { method: 'POST' }, RetentionSweepResultSchema)
 }
 
 // Users — list, create, delete, reset password, change role.
@@ -1724,36 +1722,14 @@ export function triggerRetentionSweep(): Promise<RetentionSweepResponse> {
 // See contracts/components/schemas/User.yaml.
 export type UserEntry = User
 
-// CreateUserBody — type alias for the generated UserCreateRequest schema (contract-first #8).
-// See contracts/components/schemas/UserCreateRequest.yaml.
-export type CreateUserBody = UserCreateRequest
-
-// UserCreateResponse, UserDeleteResponse, UserResetPasswordResponse, UserRoleChangeResponse
-// are re-exported from generated openapi-types above.
-// These backward-compat aliases allow existing callers to use the old names.
-export type CreateUserResponse = UserCreateResponse
-export type DeleteUserResponse = UserDeleteResponse
-
-// ResetUserPasswordBody is a backward-compat alias for the generated UserResetPasswordRequest.
-// See contracts/components/schemas/UserResetPasswordRequest.yaml.
-export type ResetUserPasswordBody = UserResetPasswordRequest
-
-export type ResetUserPasswordResponse = UserResetPasswordResponse
-
-// UpdateUserRoleBody is a backward-compat alias for the generated UserRoleChangeRequest.
-// See contracts/components/schemas/UserRoleChangeRequest.yaml.
-export type UpdateUserRoleBody = UserRoleChangeRequest
-
-export type UpdateUserRoleResponse = UserRoleChangeResponse
-
 // UserEntry is the SPA-internal type; the generated User schema is compatible (passthrough).
 // fix-X: replaced hand-written _userListSchema with z.array(UserSchema) from generated.
 export function fetchUsers(): Promise<UserEntry[]> {
   return request<UserEntry[]>('/users', undefined, z.array(UserSchema) as ZodType<UserEntry[]>)
 }
 
-export async function createUser(body: CreateUserBody): Promise<CreateUserResponse> {
-  const response = await request<CreateUserResponse & { token?: string }>('/users', {
+export async function createUser(body: UserCreateRequest): Promise<UserCreateResponse> {
+  const response = await request<UserCreateResponse & { token?: string }>('/users', {
     method: 'POST',
     body: JSON.stringify(body),
   }, UserCreateResponseSchema)
@@ -1763,21 +1739,21 @@ export async function createUser(body: CreateUserBody): Promise<CreateUserRespon
   return response
 }
 
-export function deleteUser(username: string): Promise<DeleteUserResponse> {
-  return request<DeleteUserResponse>(`/users/${encodeURIComponent(username)}`, { method: 'DELETE' }, UserDeleteResponseSchema)
+export function deleteUser(username: string): Promise<UserDeleteResponse> {
+  return request<UserDeleteResponse>(`/users/${encodeURIComponent(username)}`, { method: 'DELETE' }, UserDeleteResponseSchema)
 }
 
-export function resetUserPassword(username: string, password: string): Promise<ResetUserPasswordResponse> {
-  return request<ResetUserPasswordResponse>(`/users/${encodeURIComponent(username)}/password`, {
+export function resetUserPassword(username: string, password: string): Promise<UserResetPasswordResponse> {
+  return request<UserResetPasswordResponse>(`/users/${encodeURIComponent(username)}/password`, {
     method: 'PUT',
-    body: JSON.stringify({ password } satisfies ResetUserPasswordBody),
+    body: JSON.stringify({ password } satisfies UserResetPasswordRequest),
   }, UserResetPasswordResponseSchema)
 }
 
-export function updateUserRole(username: string, role: UserRole): Promise<UpdateUserRoleResponse> {
-  return request<UpdateUserRoleResponse>(`/users/${encodeURIComponent(username)}/role`, {
+export function updateUserRole(username: string, role: UserRole): Promise<UserRoleChangeResponse> {
+  return request<UserRoleChangeResponse>(`/users/${encodeURIComponent(username)}/role`, {
     method: 'PATCH',
-    body: JSON.stringify({ role } satisfies UpdateUserRoleBody),
+    body: JSON.stringify({ role } satisfies UserRoleChangeRequest),
   }, UserRoleChangeResponseSchema)
 }
 

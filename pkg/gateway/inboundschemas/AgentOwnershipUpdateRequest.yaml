@@ -5,6 +5,7 @@ description: >
   cannot have an owner assigned. Clearing the owner (empty string) requires
   the X-Confirm-Demote: 1 header.
 type: object
+additionalProperties: false
 properties:
   owner_username:
     type: string

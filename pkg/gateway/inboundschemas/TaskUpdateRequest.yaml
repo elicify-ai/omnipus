@@ -4,6 +4,8 @@ description: >
   All fields are optional — only provided fields are updated.
   The fields name/description are backward-compat aliases for title/result.
 type: object
+additionalProperties: false
+minProperties: 1
 properties:
   status:
     type: string

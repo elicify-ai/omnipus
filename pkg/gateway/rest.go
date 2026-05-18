@@ -1406,11 +1406,11 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// Allowed: model selection, heartbeat schedule (enabled/interval), tools (via updateAgentTools).
 	foundAgent := cfg.Agents.List[foundIdx]
 	if foundAgent.Locked {
-		// Protected: name, description, soul (prompt content), heartbeat (HEARTBEAT.md content), instructions.
-		// Color and icon are not in the update request struct so they are implicitly
-		// protected. If color/icon fields are ever added, gate them here too.
+		// Protected: name, description, soul (prompt content), heartbeat (HEARTBEAT.md content),
+		// instructions, color, and icon are identity fields — reject on locked agents.
 		if req.Name != nil || req.Description != nil ||
-			req.Soul != nil || req.Heartbeat != nil || req.Instructions != nil {
+			req.Soul != nil || req.Heartbeat != nil || req.Instructions != nil ||
+			req.Color != nil || req.Icon != nil {
 			jsonErr(w, http.StatusForbidden, "cannot modify locked agent identity or prompt")
 			return
 		}
@@ -1503,6 +1503,70 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 						existing["custom_deny_patterns"] = *req.ShellPolicy.CustomDenyPatterns
 					}
 					agentMap["shell_policy"] = existing
+				}
+				if req.Color != nil {
+					agentMap["color"] = *req.Color
+				}
+				if req.Icon != nil {
+					agentMap["icon"] = *req.Icon
+				}
+				if req.FallbackModels != nil {
+					agentMap["fallback_models"] = *req.FallbackModels
+				}
+				if req.ModelParams != nil {
+					mpMap := map[string]any{}
+					if req.ModelParams.Temperature != nil {
+						mpMap["temperature"] = *req.ModelParams.Temperature
+					}
+					if req.ModelParams.MaxTokens != nil {
+						mpMap["max_tokens"] = *req.ModelParams.MaxTokens
+					}
+					if req.ModelParams.TopP != nil {
+						mpMap["top_p"] = *req.ModelParams.TopP
+					}
+					agentMap["model_params"] = mpMap
+				}
+				if req.RateLimits != nil {
+					rlMap := map[string]any{}
+					if req.RateLimits.UseGlobalDefaults != nil {
+						rlMap["use_global_defaults"] = *req.RateLimits.UseGlobalDefaults
+					}
+					if req.RateLimits.MaxLlmCallsPerHour != nil {
+						rlMap["max_llm_calls_per_hour"] = *req.RateLimits.MaxLlmCallsPerHour
+					}
+					if req.RateLimits.MaxToolCallsPerMinute != nil {
+						rlMap["max_tool_calls_per_minute"] = *req.RateLimits.MaxToolCallsPerMinute
+					}
+					if req.RateLimits.MaxCostPerDay != nil {
+						rlMap["max_cost_per_day"] = *req.RateLimits.MaxCostPerDay
+					}
+					agentMap["rate_limits"] = rlMap
+				}
+				if req.ToolsCfg != nil {
+					tcMap := map[string]any{}
+					if req.ToolsCfg.Builtin != nil {
+						builtinMap := map[string]any{}
+						if req.ToolsCfg.Builtin.DefaultPolicy != nil {
+							builtinMap["default_policy"] = string(*req.ToolsCfg.Builtin.DefaultPolicy)
+						}
+						if req.ToolsCfg.Builtin.Policies != nil {
+							builtinMap["policies"] = *req.ToolsCfg.Builtin.Policies
+						}
+						tcMap["builtin"] = builtinMap
+					}
+					if req.ToolsCfg.Mcp != nil && req.ToolsCfg.Mcp.Servers != nil {
+						servers := make([]map[string]any, 0, len(*req.ToolsCfg.Mcp.Servers))
+						for _, s := range *req.ToolsCfg.Mcp.Servers {
+							srv := map[string]any{"id": s.Id}
+							if s.Tools != nil {
+								srv["tools"] = *s.Tools
+							}
+							servers = append(servers, srv)
+						}
+						mcpMap := map[string]any{"servers": servers}
+						tcMap["mcp"] = mcpMap
+					}
+					agentMap["tools_cfg"] = tcMap
 				}
 				break
 			}
@@ -2458,7 +2522,7 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("token saved but reload failed: %v", err))
 		return
 	}
-	jsonOK(w, map[string]string{"token": newToken})
+	jsonOK(w, gen.RotateTokenResponse{Token: newToken})
 }
 
 // httpHandlerRegistrar is the subset of channels.Manager used for route registration.
@@ -2559,9 +2623,9 @@ func (a *restAPI) HandleVersion(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	jsonOK(w, map[string]string{
-		"version":   Version,
-		"build_sha": buildSha,
+	jsonOK(w, gen.VersionResponse{
+		Version:  Version,
+		BuildSha: buildSha,
 	})
 }
 
@@ -3289,6 +3353,14 @@ func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 	sub := strings.TrimPrefix(path, "/api/v1/mcp-servers")
 	sub = strings.TrimPrefix(sub, "/")
 
+	// Determine if path is /{id}/tools.
+	parts := strings.SplitN(sub, "/", 2)
+	serverID := parts[0]
+	subSuffix := ""
+	if len(parts) == 2 {
+		subSuffix = parts[1]
+	}
+
 	switch {
 	case r.Method == http.MethodGet && sub == "":
 		a.listMCPServers(w, r)
@@ -3296,8 +3368,11 @@ func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && sub == "":
 		a.addMCPServer(w, r)
 
-	case r.Method == http.MethodDelete && sub != "":
-		a.deleteMCPServer(w, sub)
+	case r.Method == http.MethodDelete && sub != "" && subSuffix == "":
+		a.deleteMCPServer(w, serverID)
+
+	case r.Method == http.MethodGet && serverID != "" && subSuffix == "tools":
+		a.listMCPServerTools(w, serverID)
 
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -3330,6 +3405,28 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 	// Sort for deterministic response order.
 	sort.Slice(result, func(i, j int) bool { return result[i].Id < result[j].Id })
 	jsonOK(w, result)
+}
+
+// listMCPServerTools handles GET /api/v1/mcp-servers/{id}/tools.
+// Returns the tool names registered by the given MCP server via McpServerToolsResponse.
+// If the server has no registered tools (e.g. not yet connected), returns an empty list.
+// 404 if serverID is not present in the config.
+func (a *restAPI) listMCPServerTools(w http.ResponseWriter, serverID string) {
+	cfg := a.agentLoop.GetConfig()
+	if _, exists := cfg.Tools.MCP.Servers[serverID]; !exists {
+		jsonErr(w, http.StatusNotFound, fmt.Sprintf("mcp server %q not found", serverID))
+		return
+	}
+	toolNames := make([]string, 0)
+	if a.mcpRegistry != nil {
+		for _, entry := range a.mcpRegistry.Describe() {
+			if entry.ServerID == serverID {
+				toolNames = append(toolNames, entry.Name)
+			}
+		}
+	}
+	sort.Strings(toolNames)
+	jsonOK(w, gen.McpServerToolsResponse{Tools: toolNames})
 }
 
 // addMCPServer handles POST /api/v1/mcp-servers.
@@ -3536,80 +3633,6 @@ func (a *restAPI) HandleMCPTools(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, servers)
 }
 
-// getAgentTools handles GET /api/v1/agents/{id}/tools — returns the agent's
-// tool visibility config and the resolved effective tool list.
-func (a *restAPI) getAgentTools(w http.ResponseWriter, agentID string) {
-	cfg := a.agentLoop.GetConfig()
-
-	// Determine agent type and tool config.
-	agentType := "custom"
-	var toolsCfg *config.AgentToolsCfg
-	for _, ac := range cfg.Agents.List {
-		if ac.ID == agentID {
-			at := ac.ResolveType(coreagent.IsCoreAgent)
-			agentType = string(at)
-			toolsCfg = ac.Tools
-			break
-		}
-	}
-	// Core agents may not be in cfg.Agents.List (runtime-only). Detect them.
-	if agentType == "custom" && coreagent.IsCoreAgent(agentID) {
-		agentType = "core"
-	}
-
-	// Build the effective tool list using scope filtering.
-	registry := a.agentLoop.GetRegistry()
-	agent, ok := registry.GetAgent(agentID)
-	if !ok {
-		slog.Warn("rest: agent found in config but not in registry, tool list may be stale",
-			"agent_id", agentID)
-		agent = registry.GetDefaultAgent()
-	}
-
-	effectiveTools := []map[string]any{}
-	if agent != nil {
-		filtered, policyMap := tools.FilterToolsByPolicy(agent.Tools.GetAll(), agentType, toolsCfgToPolicy(toolsCfg))
-		for _, t := range filtered {
-			entry := toolToMap(t, "general")
-			if p, ok := policyMap[t.Name()]; ok {
-				entry["policy"] = p
-			}
-			effectiveTools = append(effectiveTools, entry)
-		}
-	}
-
-	// Build the response config with policy format (handles legacy conversion).
-	policyCfg := toolsCfgToPolicy(toolsCfg)
-	defaultPolicy := policyCfg.DefaultPolicy
-	policies := policyCfg.Policies
-	if policies == nil {
-		policies = map[string]string{}
-	}
-	servers := make([]map[string]any, 0)
-	if toolsCfg != nil {
-		for _, s := range toolsCfg.MCP.Servers {
-			srv := map[string]any{"id": s.ID}
-			if len(s.Tools) > 0 {
-				srv["tools"] = s.Tools
-			}
-			servers = append(servers, srv)
-		}
-	}
-	respCfg := map[string]any{
-		"builtin": map[string]any{
-			"default_policy": defaultPolicy,
-			"policies":       policies,
-		},
-		"mcp": map[string]any{"servers": servers},
-	}
-
-	jsonOK(w, map[string]any{
-		"config":          respCfg,
-		"effective_tools": effectiveTools,
-		"agent_type":      agentType,
-	})
-}
-
 // updateAgentTools handles PUT /api/v1/agents/{id}/tools — replaces the
 // agent's tool visibility config.
 func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agentID string) {
@@ -3776,22 +3799,6 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// `effective_tools`) — both paths must share the same wire shape to match
 	// the AgentToolsResponse spec and the SPA Zod schema (_agentToolsSchema).
 	a.HandleAgentToolsRegistry(w, r, agentID)
-}
-
-// toolsCfgToPolicy converts a config.AgentToolsCfg to ToolPolicyCfg.
-func toolsCfgToPolicy(cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
-	if cfg == nil {
-		return &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
-	}
-	policies := make(map[string]string, len(cfg.Builtin.Policies))
-	for k, v := range cfg.Builtin.Policies {
-		policies[k] = string(v)
-	}
-	dp := string(cfg.Builtin.DefaultPolicy)
-	if dp == "" {
-		dp = "allow"
-	}
-	return &tools.ToolPolicyCfg{DefaultPolicy: dp, Policies: policies}
 }
 
 // --- Channels ---

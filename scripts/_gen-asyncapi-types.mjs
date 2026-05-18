@@ -8,8 +8,6 @@
  *
  *   2. src/lib/api/generated/_asyncapi-zod-schemas.generated.ts
  *      Zod runtime schemas for every AsyncAPI component schema.
- *      These replace the hand-written scripts/_asyncapi-zod-schemas.ts that
- *      was previously concatenated by _gen-ts.sh.
  *
  * Approach: parse the AsyncAPI YAML, extract components.schemas, convert each
  * JSON Schema to TypeScript + Zod using purpose-built converters.
@@ -390,7 +388,6 @@ console.log(`Generated ${outPath} (${output.split("\n").length} lines)`);
 // ── Generate Zod schemas output ───────────────────────────────────────────────
 //
 // Emits src/lib/api/generated/_asyncapi-zod-schemas.generated.ts
-// This replaces the hand-written scripts/_asyncapi-zod-schemas.ts.
 // The generated file is concatenated into schemas.ts by _gen-ts.sh.
 
 // NOTE: This fragment file is concatenated into schemas.ts by _gen-ts.sh.

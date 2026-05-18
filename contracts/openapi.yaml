@@ -180,6 +180,8 @@ components:
       $ref: ./components/schemas/McpServer.yaml
     McpServerCreate:
       $ref: ./components/schemas/McpServerCreate.yaml
+    McpServerToolsResponse:
+      $ref: ./components/schemas/McpServerToolsResponse.yaml
     AppState:
       $ref: ./components/schemas/AppState.yaml
     ValidateTokenResponse:
@@ -3411,16 +3413,11 @@ paths:
         description: MCP server ID.
       responses:
         '200':
-          description: Array of tool names.
+          description: Tool names for the MCP server.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  type: string
-                example:
-                  - "search"
-                  - "fetch"
+                $ref: '#/components/schemas/McpServerToolsResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':

@@ -4,6 +4,7 @@ description: >
   Currently only supports marking onboarding as complete
   (onboarding_complete must be true — setting it to false is rejected 400).
 type: object
+additionalProperties: false
 properties:
   onboarding_complete:
     type: boolean

@@ -3,6 +3,7 @@ description: >
   Request body for POST /api/v1/chat (SSE streaming endpoint). Sends a
   user message to the agent and streams the response via Server-Sent Events.
 type: object
+additionalProperties: false
 required:
   - message
 properties:

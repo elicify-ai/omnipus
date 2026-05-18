@@ -410,3 +410,20 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		Status:     gen.Ok,
 	})
 }
+
+// toolsCfgToPolicy converts a config.AgentToolsCfg to ToolPolicyCfg.
+// Used by HandleAgentToolsRegistry to build the effective tool view.
+func toolsCfgToPolicy(cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
+	if cfg == nil {
+		return &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
+	}
+	policies := make(map[string]string, len(cfg.Builtin.Policies))
+	for k, v := range cfg.Builtin.Policies {
+		policies[k] = string(v)
+	}
+	dp := string(cfg.Builtin.DefaultPolicy)
+	if dp == "" {
+		dp = "allow"
+	}
+	return &tools.ToolPolicyCfg{DefaultPolicy: dp, Policies: policies}
+}

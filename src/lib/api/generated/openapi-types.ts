@@ -2511,6 +2511,57 @@ export interface components {
              */
             icon?: string;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
+            /**
+             * @description Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
+             * @example [
+             *       "anthropic/claude-3.5-haiku"
+             *     ]
+             */
+            fallback_models?: string[];
+            /** @description LLM sampling parameters applied to this agent's requests. */
+            model_params?: {
+                /**
+                 * Format: double
+                 * @description Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+                 * @example 1
+                 */
+                temperature?: number;
+                /**
+                 * @description Maximum tokens to generate per turn.
+                 * @example 4096
+                 */
+                max_tokens?: number;
+                /**
+                 * Format: double
+                 * @description Nucleus sampling probability mass. 1.0 disables nucleus sampling.
+                 * @example 1
+                 */
+                top_p?: number;
+            };
+            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
+            rate_limits?: {
+                /**
+                 * @description When true, global rate limits are used and per-agent overrides are ignored.
+                 * @example true
+                 */
+                use_global_defaults?: boolean;
+                /**
+                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+                 * @example 100
+                 */
+                max_llm_calls_per_hour?: number;
+                /**
+                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+                 * @example 60
+                 */
+                max_tool_calls_per_minute?: number;
+                /**
+                 * Format: double
+                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
+                 * @example 5
+                 */
+                max_cost_per_day?: number;
+            };
         };
         /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400. */
         AgentUpdateRequest: {
@@ -2592,6 +2643,68 @@ export interface components {
                  */
                 custom_deny_patterns?: string[];
             };
+            /**
+             * @description Hex color code for agent avatar display (e.g. "#D4AF37").
+             * @example #D4AF37
+             */
+            color?: string;
+            /**
+             * @description Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
+             * @example Robot
+             */
+            icon?: string;
+            /**
+             * @description Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
+             * @example [
+             *       "anthropic/claude-3.5-haiku"
+             *     ]
+             */
+            fallback_models?: string[];
+            /** @description LLM sampling parameters applied to this agent's requests. */
+            model_params?: {
+                /**
+                 * Format: double
+                 * @description Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+                 * @example 1
+                 */
+                temperature?: number;
+                /**
+                 * @description Maximum tokens to generate per turn.
+                 * @example 4096
+                 */
+                max_tokens?: number;
+                /**
+                 * Format: double
+                 * @description Nucleus sampling probability mass. 1.0 disables nucleus sampling.
+                 * @example 1
+                 */
+                top_p?: number;
+            };
+            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
+            rate_limits?: {
+                /**
+                 * @description When true, global rate limits are used and per-agent overrides are ignored.
+                 * @example true
+                 */
+                use_global_defaults?: boolean;
+                /**
+                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+                 * @example 100
+                 */
+                max_llm_calls_per_hour?: number;
+                /**
+                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+                 * @example 60
+                 */
+                max_tool_calls_per_minute?: number;
+                /**
+                 * Format: double
+                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
+                 * @example 5
+                 */
+                max_cost_per_day?: number;
+            };
+            tools_cfg?: components["schemas"]["AgentToolsCfg"];
         };
         /** @description Minimal session summary as returned by GET /agents/{id}/sessions. Maps to the AgentSession interface in src/lib/api.ts. This is the same underlying session.UnifiedMeta object, but the SPA consumes it through the AgentSession interface which reads id, title, created_at, and updated_at directly. */
         AgentSession: {
@@ -3610,6 +3723,17 @@ export interface components {
             env?: {
                 [key: string]: string;
             };
+        };
+        /** @description Response from GET /mcp-servers/{id}/tools. Returns the list of tool names exposed by a specific MCP server. */
+        McpServerToolsResponse: {
+            /**
+             * @description List of tool names exposed by the MCP server.
+             * @example [
+             *       "search",
+             *       "fetch"
+             *     ]
+             */
+            tools: string[];
         };
         /**
          * AppState
@@ -7929,13 +8053,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Array of tool names. */
+            /** @description Tool names for the MCP server. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": string[];
+                    "application/json": components["schemas"]["McpServerToolsResponse"];
                 };
             };
             401: components["responses"]["401Unauthorized"];
@@ -8009,6 +8133,7 @@ export type SandboxConfigUpdate = components["schemas"]["SandboxConfigUpdate"];
 export type Task = components["schemas"]["Task"];
 export type McpServer = components["schemas"]["McpServer"];
 export type McpServerCreate = components["schemas"]["McpServerCreate"];
+export type McpServerToolsResponse = components["schemas"]["McpServerToolsResponse"];
 export type AppState = components["schemas"]["AppState"];
 export type ValidateTokenResponse = components["schemas"]["ValidateTokenResponse"];
 export type DoctorIssue = components["schemas"]["DoctorIssue"];

@@ -3,6 +3,7 @@ description: >
   Request body for POST /api/v1/tasks. Creates a new task.
   The fields name/description are backward-compat aliases for title/prompt.
 type: object
+additionalProperties: false
 required:
   - title
 properties:

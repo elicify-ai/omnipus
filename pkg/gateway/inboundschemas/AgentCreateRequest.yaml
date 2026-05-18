@@ -30,3 +30,52 @@ properties:
     example: "ChartBar"
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
+  fallback_models:
+    type: array
+    maxItems: 10
+    items:
+      type: string
+    description: >
+      Ordered list of fallback model IDs tried when the primary model returns an
+      error. Each entry may be a bare model name or "provider/model" format.
+    example:
+      - "anthropic/claude-3.5-haiku"
+  model_params:
+    type: object
+    description: LLM sampling parameters applied to this agent's requests.
+    properties:
+      temperature:
+        type: number
+        format: double
+        description: Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+        example: 1.0
+      max_tokens:
+        type: integer
+        description: Maximum tokens to generate per turn.
+        example: 4096
+      top_p:
+        type: number
+        format: double
+        description: Nucleus sampling probability mass. 1.0 disables nucleus sampling.
+        example: 1.0
+  rate_limits:
+    type: object
+    description: Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
+    properties:
+      use_global_defaults:
+        type: boolean
+        description: When true, global rate limits are used and per-agent overrides are ignored.
+        example: true
+      max_llm_calls_per_hour:
+        type: integer
+        description: Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+        example: 100
+      max_tool_calls_per_minute:
+        type: integer
+        description: Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+        example: 60
+      max_cost_per_day:
+        type: number
+        format: double
+        description: Maximum USD cost per day for this agent. Absent = no per-agent cap.
+        example: 5.0

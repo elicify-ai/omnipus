@@ -89,8 +89,7 @@ node "$REPO_ROOT/scripts/_gen-asyncapi-types.mjs"
 # ── Step 3: schemas.ts ───────────────────────────────────────────────────────
 # Generate OpenAPI Zod schemas, then append the generated AsyncAPI Zod schemas.
 # The AsyncAPI Zod schemas are emitted by _gen-asyncapi-types.mjs (Step 2 above)
-# into $GEN/_asyncapi-zod-schemas.generated.ts. The hand-written
-# scripts/_asyncapi-zod-schemas.ts is no longer used; delete it if still present.
+# into $GEN/_asyncapi-zod-schemas.generated.ts.
 echo "▸ Generating schemas.ts (Zod) from contracts/openapi.yaml …"
 "$NODE_BIN/openapi-zod-client" \
   "$CONTRACTS/openapi.yaml" \
