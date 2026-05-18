@@ -390,7 +390,7 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		baseURL = *body.Endpoint
 	}
 	if baseURL == "" {
-		baseURL = providers.GetDefaultAPIBase(body.Id)
+		baseURL = providers.GetDefaultAPIBase(string(body.Id))
 	}
 	if baseURL == "" {
 		// Unknown provider and caller didn't supply an endpoint — the probe

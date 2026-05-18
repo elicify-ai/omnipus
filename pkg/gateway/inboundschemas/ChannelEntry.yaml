@@ -11,24 +11,8 @@ required:
 additionalProperties: false
 properties:
   id:
-    type: string
+    $ref: './ChannelId.yaml'
     description: Canonical channel identifier.
-    enum:
-      - webchat
-      - telegram
-      - discord
-      - slack
-      - whatsapp
-      - feishu
-      - dingtalk
-      - wecom
-      - weixin
-      - line
-      - qq
-      - onebot
-      - irc
-      - matrix
-      - maixcam
     example: telegram
   name:
     type: string

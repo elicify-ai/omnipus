@@ -1,0 +1,16 @@
+title: AgentShellPolicy
+description: Per-agent shell command deny-pattern configuration.
+type: object
+properties:
+  enable_deny_patterns:
+    type: boolean
+    description: Enable pattern-based shell command blocking.
+    example: true
+  custom_deny_patterns:
+    type: array
+    items:
+      type: string
+    description: Additional Go regexp patterns to block in shell commands.
+    example:
+      - "rm -rf /"
+      - "curl.*169\\.254"

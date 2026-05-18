@@ -110,6 +110,14 @@ components:
       $ref: ./components/schemas/Attachment.yaml
     Agent:
       $ref: ./components/schemas/Agent.yaml
+    AgentModelParams:
+      $ref: ./components/schemas/AgentModelParams.yaml
+    AgentRateLimits:
+      $ref: ./components/schemas/AgentRateLimits.yaml
+    AgentStats:
+      $ref: ./components/schemas/AgentStats.yaml
+    AgentShellPolicy:
+      $ref: ./components/schemas/AgentShellPolicy.yaml
     AgentToolsCfg:
       $ref: ./components/schemas/AgentToolsCfg.yaml
     AgentToolsUpdateRequest:
@@ -132,6 +140,8 @@ components:
       $ref: ./components/schemas/ToolPolicy.yaml
     GlobalToolPolicies:
       $ref: ./components/schemas/GlobalToolPolicies.yaml
+    ChannelId:
+      $ref: ./components/schemas/ChannelId.yaml
     ChannelEntry:
       $ref: ./components/schemas/ChannelEntry.yaml
     RetentionConfig:

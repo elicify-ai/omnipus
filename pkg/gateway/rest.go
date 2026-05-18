@@ -2828,7 +2828,7 @@ func (a *restAPI) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 	triggerType := "manual"
 	if req.TriggerType != nil && *req.TriggerType != "" {
-		triggerType = *req.TriggerType
+		triggerType = string(*req.TriggerType)
 	}
 	t := &taskstore.TaskEntity{
 		Title:        title,
@@ -2866,8 +2866,13 @@ func (a *restAPI) updateTask(w http.ResponseWriter, r *http.Request, id string) 
 	if req.Result == nil && req.Description != nil {
 		req.Result = req.Description
 	}
+	var patchStatus *string
+	if req.Status != nil {
+		s := string(*req.Status)
+		patchStatus = &s
+	}
 	patch := taskstore.TaskPatch{
-		Status:      req.Status,
+		Status:      patchStatus,
 		Result:      req.Result,
 		Artifacts:   req.Artifacts,
 		Title:       req.Title,
@@ -3989,7 +3994,7 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
-	jsonOK(w, gen.ChannelEnabledResponse{Id: channelID, Enabled: enabled})
+	jsonOK(w, gen.ChannelEnabledResponse{Id: gen.ChannelEnabledResponseId(channelID), Enabled: enabled})
 }
 
 // channelSensitiveFields maps channel IDs to their secret/credential field names.

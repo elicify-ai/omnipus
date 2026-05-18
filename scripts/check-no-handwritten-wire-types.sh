@@ -275,14 +275,15 @@ func myHandler() {
   _st_assert_contains "st11-found"   "_testProviderSchema" "$OUT"
   _st_assert_contains "st11-rule"    "ts-hand-zod" "$OUT"
 
-  # ── ST-12: TS z.object schema in non-target file → NOT caught ─────────────
+  # ── ST-12: TS z.object schema in non-generated non-api/ws .ts file → IS caught ─
   echo ""
-  echo "ST-12: TS z.object schema in a non-target file is NOT caught"
+  echo "ST-12: TS z.object schema in any src/lib/*.ts file IS caught (widened scope)"
   _st_clear
-  _st_setup_ts "src/lib/other.ts" 'const _someSchema = z.object({ foo: z.string() })
+  _st_setup_ts "src/lib/transforms.ts" 'const _someSchema = z.object({ foo: z.string() })
 '
   OUT=$(_st_run)
-  _st_assert_not_contains "st12-skipped" "_someSchema" "$OUT"
+  _st_assert_contains "st12-found" "_someSchema" "$OUT"
+  _st_assert_contains "st12-rule"  "ts-hand-zod" "$OUT"
 
   # ── ST-13: TS interface with not-wire-format opt-out → skipped (any justification)
   echo ""
@@ -294,6 +295,46 @@ func myHandler() {
 '
   OUT=$(_st_run)
   _st_assert_not_contains "st13-skipped" "RawSession" "$OUT"
+
+  # ── ST-15: Go body := struct{}{} composite literal → caught ──────────────
+  echo ""
+  echo "ST-15: Go body := struct{}{} composite literal with >=2 json tags is caught"
+  _st_clear
+  _st_setup_go "pkg/gateway/fixture.go" 'package gateway
+
+func myHandler() {
+	body := struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}{}
+}
+'
+  OUT=$(_st_run)
+  _st_assert_contains "st15-found" "body" "$OUT"
+  _st_assert_contains "st15-rule"  "go-wire-type" "$OUT"
+
+  # ── ST-16: TS z.union schema → caught ─────────────────────────────────────
+  echo ""
+  echo "ST-16: TS z.union schema is caught"
+  _st_clear
+  _st_setup_ts "src/lib/api.ts" 'const _loginResultSchema = z.union([z.object({ success: z.literal(true) }), z.object({ success: z.literal(false) })])
+'
+  OUT=$(_st_run)
+  _st_assert_contains "st16-found"   "_loginResultSchema" "$OUT"
+  _st_assert_contains "st16-rule"    "ts-hand-zod" "$OUT"
+
+  # ── ST-17: TS interface in non-api/ws src/lib/*.ts file → caught ──────────
+  echo ""
+  echo "ST-17: TS interface in any src/lib/*.ts file (not just api/ws) is caught"
+  _st_clear
+  _st_setup_ts "src/lib/helpers.ts" 'interface SomeHelper {
+  id: string
+  name: string
+}
+'
+  OUT=$(_st_run)
+  _st_assert_contains "st17-found" "SomeHelper" "$OUT"
+  _st_assert_contains "st17-rule"  "ts-wire-type" "$OUT"
 
   # ── ST-14: doc header example has sufficient justification (meta-test) ─────
   echo ""
@@ -379,6 +420,8 @@ schemas_dir = os.path.join(repo_root, 'contracts', 'components', 'schemas')
 STRUCT_TYPE_DEF = re.compile(r'\btype\s+(\w+)\s+struct\s*\{')
 # var body struct { … } / var req struct { … }
 STRUCT_VAR_DEF  = re.compile(r'\bvar\s+(\w+)\s+struct\s*\{')
+# body := struct{ … } / body := &struct{ … } composite literals
+STRUCT_ASSIGN_DEF = re.compile(r'\b(\w+)\s*:=\s*(?:&\s*)?struct\s*\{')
 NOT_WIRE_FORMAT = re.compile(r'//\s*not-wire-format', re.IGNORECASE)
 # Matches the annotation and captures everything after it (the justification text).
 NOT_WIRE_FORMAT_WITH_CAPTURE = re.compile(r'//\s*not-wire-format\s*:?\s*(.*)', re.IGNORECASE)
@@ -551,6 +594,48 @@ for dirpath, dirnames, filenames in os.walk(gateway_dir):
                         f"hand-written wire-format var struct '{var_name}' ({json_count} json field(s)) — "
                         f"migrate to contracts/components/schemas/ and regenerate; {suggestion}"
                     )
+                i += 1
+                continue
+
+            # ── `name := struct{ … }` / `name := &struct{ … }` composite literals ──
+            ma = STRUCT_ASSIGN_DEF.search(line)
+            if ma:
+                nwf_m = NOT_WIRE_FORMAT.search(line)
+                if nwf_m:
+                    cap_m = NOT_WIRE_FORMAT_WITH_CAPTURE.search(line)
+                    justification = cap_m.group(1).strip() if cap_m else ''
+                    if len(justification) < MIN_JUSTIFICATION_LEN:
+                        assign_start_line = i + 1
+                        assign_name = ma.group(1)
+                        relpath = os.path.relpath(fpath, repo_root)
+                        findings.append(
+                            f"{relpath}:{assign_start_line}: [go-wire-type-justification] "
+                            f"'// not-wire-format' on composite struct '{assign_name}' has {len(justification)}-char "
+                            f"justification (minimum {MIN_JUSTIFICATION_LEN}) — "
+                            f"add a descriptive reason, e.g.: "
+                            f"// not-wire-format: internal config cache decoded only at startup, never emitted"
+                        )
+                    i += 1
+                    continue
+
+                assign_start_line = i + 1
+                assign_name = ma.group(1)
+                json_count, field_names = collect_struct_body(lines, i)
+
+                flag = False
+                if json_count >= 2:
+                    flag = True
+                elif json_count >= 1 and assign_name.lower() in BODY_VAR_NAMES:
+                    flag = True
+
+                if flag:
+                    relpath = os.path.relpath(fpath, repo_root)
+                    suggestion = suggest_type(field_names)
+                    findings.append(
+                        f"{relpath}:{assign_start_line}: [go-wire-type] "
+                        f"hand-written wire-format composite struct '{assign_name}' ({json_count} json field(s)) — "
+                        f"migrate to contracts/components/schemas/ and regenerate; {suggestion}"
+                    )
 
             i += 1
 
@@ -585,16 +670,20 @@ fi
 # NOT flagged:
 #   - Re-exports: `export type { X } from '...'` (no inline body)
 #   - Files under src/lib/api/generated/
+#   - Test files (*_test.ts, *.test.ts, *.test.tsx)
 #   - Lines bearing `// not-wire-format` (case-insensitive)
 #
-# ─── Rule 3: TypeScript — hand-written z.object schemas in src/lib ───────────
+# ─── Rule 3: TypeScript — hand-written z.object/union/discriminatedUnion/
+#             intersection/lazy schemas in src/lib/*.ts ──────────────────────────
 #
-# Flags `const _fooSchema = z.object({` in src/lib/api.ts and src/lib/ws.ts.
+# Flags `const _fooSchema = z.object/union/discriminatedUnion/intersection/lazy(…`
+# in all src/lib/*.ts files (excluding generated dir and test files).
 
 TS_OFFENDERS=$(python3 - "$REPO_ROOT" <<'PYEOF'
 import re
 import os
 import sys
+import glob
 
 repo_root = sys.argv[1] if len(sys.argv) > 1 else '.'
 lib_dir = os.path.join(repo_root, 'src', 'lib')
@@ -620,24 +709,38 @@ EXPORT_TYPE_OBJ = re.compile(
     r')'
 )
 
-# Hand-written Zod schemas: const _fooSchema = z.object({
-HAND_ZOD = re.compile(r'\bconst\s+(_\w+Schema)\s*=\s*z\.object\s*\(\s*\{')
+# Hand-written Zod schemas: const _fooSchema = z.object/union/discriminatedUnion/intersection/lazy(
+HAND_ZOD = re.compile(
+    r'\bconst\s+(_\w+Schema)\s*=\s*z\.'
+    r'(?:object|union|discriminatedUnion|intersection|lazy)\s*\('
+)
 
 NOT_WIRE_FORMAT = re.compile(r'//\s*not-wire-format', re.IGNORECASE)
 
 findings = []
 
-# Only check the two designated files
-target_files = [
-    os.path.join(lib_dir, 'api.ts'),
-    os.path.join(lib_dir, 'ws.ts'),
-]
+# Collect all .ts files under src/lib/ (excluding generated dir and test files)
+all_ts_files = []
+if os.path.isdir(lib_dir):
+    for dirpath, dirnames, filenames in os.walk(lib_dir):
+        # Prune generated directory so we never descend into it
+        dirnames[:] = [d for d in dirnames
+                       if os.path.join(dirpath, d) != generated_dir
+                       and not os.path.join(dirpath, d).startswith(generated_dir + os.sep)]
+        for fname in filenames:
+            if not fname.endswith('.ts') and not fname.endswith('.tsx'):
+                continue
+            # Skip test files
+            if fname.endswith('_test.ts') or fname.endswith('.test.ts') or fname.endswith('.test.tsx'):
+                continue
+            fpath = os.path.join(dirpath, fname)
+            # Final safety check: skip if inside generated dir
+            if os.path.commonpath([fpath, generated_dir]) == generated_dir:
+                continue
+            all_ts_files.append(fpath)
 
-for fpath in target_files:
+for fpath in sorted(all_ts_files):
     if not os.path.isfile(fpath):
-        continue
-    # Skip if somehow inside generated directory
-    if os.path.commonpath([fpath, generated_dir]) == generated_dir:
         continue
 
     try:

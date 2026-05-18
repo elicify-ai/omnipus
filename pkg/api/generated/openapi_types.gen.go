@@ -400,57 +400,114 @@ func (e AuditEntryDecision) Valid() bool {
 	}
 }
 
+// Defines values for ChannelEnabledResponseId.
+const (
+	ChannelEnabledResponseIdDingtalk ChannelEnabledResponseId = "dingtalk"
+	ChannelEnabledResponseIdDiscord  ChannelEnabledResponseId = "discord"
+	ChannelEnabledResponseIdFeishu   ChannelEnabledResponseId = "feishu"
+	ChannelEnabledResponseIdIrc      ChannelEnabledResponseId = "irc"
+	ChannelEnabledResponseIdLine     ChannelEnabledResponseId = "line"
+	ChannelEnabledResponseIdMaixcam  ChannelEnabledResponseId = "maixcam"
+	ChannelEnabledResponseIdMatrix   ChannelEnabledResponseId = "matrix"
+	ChannelEnabledResponseIdOnebot   ChannelEnabledResponseId = "onebot"
+	ChannelEnabledResponseIdQq       ChannelEnabledResponseId = "qq"
+	ChannelEnabledResponseIdSlack    ChannelEnabledResponseId = "slack"
+	ChannelEnabledResponseIdTelegram ChannelEnabledResponseId = "telegram"
+	ChannelEnabledResponseIdWebchat  ChannelEnabledResponseId = "webchat"
+	ChannelEnabledResponseIdWecom    ChannelEnabledResponseId = "wecom"
+	ChannelEnabledResponseIdWeixin   ChannelEnabledResponseId = "weixin"
+	ChannelEnabledResponseIdWhatsapp ChannelEnabledResponseId = "whatsapp"
+)
+
+// Valid indicates whether the value is a known member of the ChannelEnabledResponseId enum.
+func (e ChannelEnabledResponseId) Valid() bool {
+	switch e {
+	case ChannelEnabledResponseIdDingtalk:
+		return true
+	case ChannelEnabledResponseIdDiscord:
+		return true
+	case ChannelEnabledResponseIdFeishu:
+		return true
+	case ChannelEnabledResponseIdIrc:
+		return true
+	case ChannelEnabledResponseIdLine:
+		return true
+	case ChannelEnabledResponseIdMaixcam:
+		return true
+	case ChannelEnabledResponseIdMatrix:
+		return true
+	case ChannelEnabledResponseIdOnebot:
+		return true
+	case ChannelEnabledResponseIdQq:
+		return true
+	case ChannelEnabledResponseIdSlack:
+		return true
+	case ChannelEnabledResponseIdTelegram:
+		return true
+	case ChannelEnabledResponseIdWebchat:
+		return true
+	case ChannelEnabledResponseIdWecom:
+		return true
+	case ChannelEnabledResponseIdWeixin:
+		return true
+	case ChannelEnabledResponseIdWhatsapp:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelEntryId.
 const (
-	Dingtalk ChannelEntryId = "dingtalk"
-	Discord  ChannelEntryId = "discord"
-	Feishu   ChannelEntryId = "feishu"
-	Irc      ChannelEntryId = "irc"
-	Line     ChannelEntryId = "line"
-	Maixcam  ChannelEntryId = "maixcam"
-	Matrix   ChannelEntryId = "matrix"
-	Onebot   ChannelEntryId = "onebot"
-	Qq       ChannelEntryId = "qq"
-	Slack    ChannelEntryId = "slack"
-	Telegram ChannelEntryId = "telegram"
-	Webchat  ChannelEntryId = "webchat"
-	Wecom    ChannelEntryId = "wecom"
-	Weixin   ChannelEntryId = "weixin"
-	Whatsapp ChannelEntryId = "whatsapp"
+	ChannelEntryIdDingtalk ChannelEntryId = "dingtalk"
+	ChannelEntryIdDiscord  ChannelEntryId = "discord"
+	ChannelEntryIdFeishu   ChannelEntryId = "feishu"
+	ChannelEntryIdIrc      ChannelEntryId = "irc"
+	ChannelEntryIdLine     ChannelEntryId = "line"
+	ChannelEntryIdMaixcam  ChannelEntryId = "maixcam"
+	ChannelEntryIdMatrix   ChannelEntryId = "matrix"
+	ChannelEntryIdOnebot   ChannelEntryId = "onebot"
+	ChannelEntryIdQq       ChannelEntryId = "qq"
+	ChannelEntryIdSlack    ChannelEntryId = "slack"
+	ChannelEntryIdTelegram ChannelEntryId = "telegram"
+	ChannelEntryIdWebchat  ChannelEntryId = "webchat"
+	ChannelEntryIdWecom    ChannelEntryId = "wecom"
+	ChannelEntryIdWeixin   ChannelEntryId = "weixin"
+	ChannelEntryIdWhatsapp ChannelEntryId = "whatsapp"
 )
 
 // Valid indicates whether the value is a known member of the ChannelEntryId enum.
 func (e ChannelEntryId) Valid() bool {
 	switch e {
-	case Dingtalk:
+	case ChannelEntryIdDingtalk:
 		return true
-	case Discord:
+	case ChannelEntryIdDiscord:
 		return true
-	case Feishu:
+	case ChannelEntryIdFeishu:
 		return true
-	case Irc:
+	case ChannelEntryIdIrc:
 		return true
-	case Line:
+	case ChannelEntryIdLine:
 		return true
-	case Maixcam:
+	case ChannelEntryIdMaixcam:
 		return true
-	case Matrix:
+	case ChannelEntryIdMatrix:
 		return true
-	case Onebot:
+	case ChannelEntryIdOnebot:
 		return true
-	case Qq:
+	case ChannelEntryIdQq:
 		return true
-	case Slack:
+	case ChannelEntryIdSlack:
 		return true
-	case Telegram:
+	case ChannelEntryIdTelegram:
 		return true
-	case Webchat:
+	case ChannelEntryIdWebchat:
 		return true
-	case Wecom:
+	case ChannelEntryIdWecom:
 		return true
-	case Weixin:
+	case ChannelEntryIdWeixin:
 		return true
-	case Whatsapp:
+	case ChannelEntryIdWhatsapp:
 		return true
 	default:
 		return false
@@ -811,6 +868,156 @@ func (e OnboardingCompleteResponseRole) Valid() bool {
 	case OnboardingCompleteResponseRoleAdmin:
 		return true
 	case OnboardingCompleteResponseRoleUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProbeProviderRequestId.
+const (
+	AlibabaCoding          ProbeProviderRequestId = "alibaba-coding"
+	AlibabaCodingAnthropic ProbeProviderRequestId = "alibaba-coding-anthropic"
+	Anthropic              ProbeProviderRequestId = "anthropic"
+	AnthropicMessages      ProbeProviderRequestId = "anthropic-messages"
+	Antigravity            ProbeProviderRequestId = "antigravity"
+	Avian                  ProbeProviderRequestId = "avian"
+	Azure                  ProbeProviderRequestId = "azure"
+	AzureOpenai            ProbeProviderRequestId = "azure-openai"
+	Bedrock                ProbeProviderRequestId = "bedrock"
+	Cerebras               ProbeProviderRequestId = "cerebras"
+	ClaudeCli              ProbeProviderRequestId = "claude-cli"
+	Claudecli              ProbeProviderRequestId = "claudecli"
+	CodexCli               ProbeProviderRequestId = "codex-cli"
+	Codexcli               ProbeProviderRequestId = "codexcli"
+	CodingPlan             ProbeProviderRequestId = "coding-plan"
+	CodingPlanAnthropic    ProbeProviderRequestId = "coding-plan-anthropic"
+	Copilot                ProbeProviderRequestId = "copilot"
+	DashscopeIntl          ProbeProviderRequestId = "dashscope-intl"
+	DashscopeUs            ProbeProviderRequestId = "dashscope-us"
+	Deepseek               ProbeProviderRequestId = "deepseek"
+	Gemini                 ProbeProviderRequestId = "gemini"
+	GithubCopilot          ProbeProviderRequestId = "github-copilot"
+	Google                 ProbeProviderRequestId = "google"
+	Groq                   ProbeProviderRequestId = "groq"
+	Litellm                ProbeProviderRequestId = "litellm"
+	Longcat                ProbeProviderRequestId = "longcat"
+	Mimo                   ProbeProviderRequestId = "mimo"
+	Minimax                ProbeProviderRequestId = "minimax"
+	Mistral                ProbeProviderRequestId = "mistral"
+	Modelscope             ProbeProviderRequestId = "modelscope"
+	Moonshot               ProbeProviderRequestId = "moonshot"
+	Novita                 ProbeProviderRequestId = "novita"
+	Nvidia                 ProbeProviderRequestId = "nvidia"
+	Ollama                 ProbeProviderRequestId = "ollama"
+	Openai                 ProbeProviderRequestId = "openai"
+	Openrouter             ProbeProviderRequestId = "openrouter"
+	Qwen                   ProbeProviderRequestId = "qwen"
+	QwenCoding             ProbeProviderRequestId = "qwen-coding"
+	QwenInternational      ProbeProviderRequestId = "qwen-international"
+	QwenIntl               ProbeProviderRequestId = "qwen-intl"
+	QwenUs                 ProbeProviderRequestId = "qwen-us"
+	Shengsuanyun           ProbeProviderRequestId = "shengsuanyun"
+	Vivgrid                ProbeProviderRequestId = "vivgrid"
+	Vllm                   ProbeProviderRequestId = "vllm"
+	Volcengine             ProbeProviderRequestId = "volcengine"
+	Zhipu                  ProbeProviderRequestId = "zhipu"
+)
+
+// Valid indicates whether the value is a known member of the ProbeProviderRequestId enum.
+func (e ProbeProviderRequestId) Valid() bool {
+	switch e {
+	case AlibabaCoding:
+		return true
+	case AlibabaCodingAnthropic:
+		return true
+	case Anthropic:
+		return true
+	case AnthropicMessages:
+		return true
+	case Antigravity:
+		return true
+	case Avian:
+		return true
+	case Azure:
+		return true
+	case AzureOpenai:
+		return true
+	case Bedrock:
+		return true
+	case Cerebras:
+		return true
+	case ClaudeCli:
+		return true
+	case Claudecli:
+		return true
+	case CodexCli:
+		return true
+	case Codexcli:
+		return true
+	case CodingPlan:
+		return true
+	case CodingPlanAnthropic:
+		return true
+	case Copilot:
+		return true
+	case DashscopeIntl:
+		return true
+	case DashscopeUs:
+		return true
+	case Deepseek:
+		return true
+	case Gemini:
+		return true
+	case GithubCopilot:
+		return true
+	case Google:
+		return true
+	case Groq:
+		return true
+	case Litellm:
+		return true
+	case Longcat:
+		return true
+	case Mimo:
+		return true
+	case Minimax:
+		return true
+	case Mistral:
+		return true
+	case Modelscope:
+		return true
+	case Moonshot:
+		return true
+	case Novita:
+		return true
+	case Nvidia:
+		return true
+	case Ollama:
+		return true
+	case Openai:
+		return true
+	case Openrouter:
+		return true
+	case Qwen:
+		return true
+	case QwenCoding:
+		return true
+	case QwenInternational:
+		return true
+	case QwenIntl:
+		return true
+	case QwenUs:
+		return true
+	case Shengsuanyun:
+		return true
+	case Vivgrid:
+		return true
+	case Vllm:
+		return true
+	case Volcengine:
+		return true
+	case Zhipu:
 		return true
 	default:
 		return false
@@ -1389,19 +1596,19 @@ func (e TaskStatus) Valid() bool {
 
 // Defines values for TaskTriggerType.
 const (
-	Event  TaskTriggerType = "event"
-	Manual TaskTriggerType = "manual"
-	Time   TaskTriggerType = "time"
+	TaskTriggerTypeEvent  TaskTriggerType = "event"
+	TaskTriggerTypeManual TaskTriggerType = "manual"
+	TaskTriggerTypeTime   TaskTriggerType = "time"
 )
 
 // Valid indicates whether the value is a known member of the TaskTriggerType enum.
 func (e TaskTriggerType) Valid() bool {
 	switch e {
-	case Event:
+	case TaskTriggerTypeEvent:
 		return true
-	case Manual:
+	case TaskTriggerTypeManual:
 		return true
-	case Time:
+	case TaskTriggerTypeTime:
 		return true
 	default:
 		return false
@@ -1417,6 +1624,54 @@ const (
 func (e TaskAcceptedResponseStatus) Valid() bool {
 	switch e {
 	case Accepted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskCreateRequestTriggerType.
+const (
+	TaskCreateRequestTriggerTypeEvent  TaskCreateRequestTriggerType = "event"
+	TaskCreateRequestTriggerTypeManual TaskCreateRequestTriggerType = "manual"
+	TaskCreateRequestTriggerTypeTime   TaskCreateRequestTriggerType = "time"
+)
+
+// Valid indicates whether the value is a known member of the TaskCreateRequestTriggerType enum.
+func (e TaskCreateRequestTriggerType) Valid() bool {
+	switch e {
+	case TaskCreateRequestTriggerTypeEvent:
+		return true
+	case TaskCreateRequestTriggerTypeManual:
+		return true
+	case TaskCreateRequestTriggerTypeTime:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TaskUpdateRequestStatus.
+const (
+	TaskUpdateRequestStatusAssigned  TaskUpdateRequestStatus = "assigned"
+	TaskUpdateRequestStatusCompleted TaskUpdateRequestStatus = "completed"
+	TaskUpdateRequestStatusFailed    TaskUpdateRequestStatus = "failed"
+	TaskUpdateRequestStatusQueued    TaskUpdateRequestStatus = "queued"
+	TaskUpdateRequestStatusRunning   TaskUpdateRequestStatus = "running"
+)
+
+// Valid indicates whether the value is a known member of the TaskUpdateRequestStatus enum.
+func (e TaskUpdateRequestStatus) Valid() bool {
+	switch e {
+	case TaskUpdateRequestStatusAssigned:
+		return true
+	case TaskUpdateRequestStatusCompleted:
+		return true
+	case TaskUpdateRequestStatusFailed:
+		return true
+	case TaskUpdateRequestStatusQueued:
+		return true
+	case TaskUpdateRequestStatusRunning:
 		return true
 	default:
 		return false
@@ -1695,25 +1950,25 @@ func (e ClearAllSessions200JSONResponseBodyStatus) Valid() bool {
 
 // Defines values for ListTasksParamsStatus.
 const (
-	ListTasksParamsStatusAssigned  ListTasksParamsStatus = "assigned"
-	ListTasksParamsStatusCompleted ListTasksParamsStatus = "completed"
-	ListTasksParamsStatusFailed    ListTasksParamsStatus = "failed"
-	ListTasksParamsStatusQueued    ListTasksParamsStatus = "queued"
-	ListTasksParamsStatusRunning   ListTasksParamsStatus = "running"
+	Assigned  ListTasksParamsStatus = "assigned"
+	Completed ListTasksParamsStatus = "completed"
+	Failed    ListTasksParamsStatus = "failed"
+	Queued    ListTasksParamsStatus = "queued"
+	Running   ListTasksParamsStatus = "running"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsStatus enum.
 func (e ListTasksParamsStatus) Valid() bool {
 	switch e {
-	case ListTasksParamsStatusAssigned:
+	case Assigned:
 		return true
-	case ListTasksParamsStatusCompleted:
+	case Completed:
 		return true
-	case ListTasksParamsStatusFailed:
+	case Failed:
 		return true
-	case ListTasksParamsStatusQueued:
+	case Queued:
 		return true
-	case ListTasksParamsStatusRunning:
+	case Running:
 		return true
 	default:
 		return false
@@ -1821,7 +2076,7 @@ type Agent struct {
 	// Model Model name string used for LLM calls (resolved from defaults when not explicitly set on the agent). May be "provider/model" format for OpenRouter.
 	Model *string `json:"model,omitempty"`
 
-	// ModelParams LLM sampling parameters applied to this agent's requests.
+	// ModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
 	ModelParams *struct {
 		// MaxTokens Maximum tokens to generate per turn.
 		MaxTokens *int `json:"max_tokens,omitempty"`
@@ -1836,7 +2091,7 @@ type Agent struct {
 	// Name Human-readable display name.
 	Name string `json:"name"`
 
-	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
+	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
 	RateLimits *struct {
 		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
 		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
@@ -1866,7 +2121,7 @@ type Agent struct {
 	// Soul Contents of SOUL.md — the agent's system prompt. Empty string for locked core agents (prompt is compiled in, not exposed via API). Empty string for draft agents (no SOUL.md written yet). Always present (never null).
 	Soul string `json:"soul"`
 
-	// Stats Aggregate runtime statistics for this agent. Absent when no sessions have been run.
+	// Stats Aggregate runtime statistics for an agent. Absent on the Agent object when no sessions have been run.
 	Stats *struct {
 		// LastActive RFC3339 timestamp of the last turn completed by this agent.
 		LastActive *time.Time `json:"last_active,omitempty"`
@@ -2200,7 +2455,7 @@ type AuditEntry struct {
 	// Details Event-specific metadata. Structure varies by event type.
 	Details *map[string]interface{} `json:"details,omitempty"`
 
-	// Event Event type identifier. Well-known values: tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown. Custom values are permitted for extensibility (open-ended union).
+	// Event Event type identifier. Well-known values: tool_call, exec, file_op, llm_call, policy_eval, rate_limit, ssrf, startup, shutdown. Custom values are permitted for extensibility — must match ^[a-z_]+$ (lowercase letters and underscores only).
 	Event string `json:"event"`
 
 	// Parameters Tool call parameters or other event-specific key-value pairs.
@@ -2260,10 +2515,10 @@ type BackupCreateResponse struct {
 
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
 type ChangePasswordRequest struct {
-	// CurrentPassword The user's current password for verification.
+	// CurrentPassword The user's current password for verification. Maximum 72 characters (bcrypt limit).
 	CurrentPassword string `json:"current_password"`
 
-	// NewPassword The new password. Minimum 8 characters.
+	// NewPassword The new password. Minimum 8 characters, maximum 72 (bcrypt limit).
 	NewPassword string `json:"new_password"`
 }
 
@@ -2272,9 +2527,12 @@ type ChannelEnabledResponse struct {
 	// Enabled Whether the channel is now enabled.
 	Enabled bool `json:"enabled"`
 
-	// Id Channel identifier.
-	Id string `json:"id"`
+	// Id Stable identifier for a built-in channel.
+	Id ChannelEnabledResponseId `json:"id"`
 }
+
+// ChannelEnabledResponseId Stable identifier for a built-in channel.
+type ChannelEnabledResponseId string
 
 // ChannelEntry A communication channel entry returned by GET /api/v1/channels.
 type ChannelEntry struct {
@@ -2284,7 +2542,7 @@ type ChannelEntry struct {
 	// Enabled Whether this channel is currently enabled.
 	Enabled bool `json:"enabled"`
 
-	// Id Canonical channel identifier.
+	// Id Stable identifier for a built-in channel.
 	Id ChannelEntryId `json:"id"`
 
 	// Name Human-readable channel name.
@@ -2294,7 +2552,7 @@ type ChannelEntry struct {
 	Transport ChannelEntryTransport `json:"transport"`
 }
 
-// ChannelEntryId Canonical channel identifier.
+// ChannelEntryId Stable identifier for a built-in channel.
 type ChannelEntryId string
 
 // ChannelEntryTransport Transport mechanism used by this channel.
@@ -2396,7 +2654,7 @@ type DoctorResult struct {
 	} `json:"issues"`
 
 	// Score Overall health score (0 = critical issues; 100 = fully healthy).
-	Score float64 `json:"score"`
+	Score int `json:"score"`
 }
 
 // DoctorResultIssuesSeverity Issue severity level.
@@ -2482,7 +2740,7 @@ type HealthResponseStatus string
 
 // LoginRequest Credentials for authenticating an existing user.
 type LoginRequest struct {
-	// Password The user's password.
+	// Password The user's password. Maximum 72 characters (bcrypt limit).
 	Password string `json:"password"`
 
 	// Username The user's login name.
@@ -2768,9 +3026,12 @@ type ProbeProviderRequest struct {
 	// Endpoint Optional override for the provider's API base URL. When omitted, the server uses the provider's well-known default endpoint.
 	Endpoint *string `json:"endpoint,omitempty"`
 
-	// Id Provider protocol identifier (e.g. "anthropic", "openai", "openrouter").
-	Id string `json:"id"`
+	// Id Provider protocol identifier. Must be one of the recognized protocol names that Omnipus can connect to. Validated server-side against the known protocol registry (pkg/providers.IsKnownProtocol).
+	Id ProbeProviderRequestId `json:"id"`
 }
+
+// ProbeProviderRequestId Provider protocol identifier. Must be one of the recognized protocol names that Omnipus can connect to. Validated server-side against the known protocol registry (pkg/providers.IsKnownProtocol).
+type ProbeProviderRequestId string
 
 // ProbeProviderResponse Response from POST /onboarding/probe-provider. Always HTTP 200. success=true means the API key was accepted; success=false means the upstream rejected it (the error field explains why).
 type ProbeProviderResponse struct {
@@ -2830,6 +3091,9 @@ type Provider struct {
 
 	// Error Fatal error message when status is "error". Absent for connected/disconnected providers.
 	Error *string `json:"error,omitempty"`
+
+	// HasApiKey True when the provider has a stored API key in credentials. The key itself is never returned. Absent on legacy entries that predate this field — treat as false when absent.
+	HasApiKey *bool `json:"has_api_key,omitempty"`
 
 	// Id Provider identifier (e.g. "anthropic", "openai", "openrouter").
 	Id string `json:"id"`
@@ -2913,7 +3177,7 @@ type RateLimitsUpdateResponse struct {
 
 // RegisterAdminRequest Body for POST /auth/register-admin. Creates the first admin user (fails 409 if one already exists).
 type RegisterAdminRequest struct {
-	// Password Password for the new admin account. Minimum 8 characters.
+	// Password Password for the new admin account. Minimum 8 characters, maximum 72 (bcrypt limit).
 	Password string `json:"password"`
 
 	// Username Must start with an alphanumeric character and contain only letters, digits, dots, dashes, and underscores. Length 2-63 characters.
@@ -3429,7 +3693,7 @@ type Skill struct {
 	// Verified True when the skill has been verified by the Omnipus team. Unverified skills require explicit trust grant before use.
 	Verified bool `json:"verified"`
 
-	// Version Semantic version string (e.g. "1.2.3").
+	// Version Semantic version string (e.g. "1.2.3"). Must follow semver format.
 	Version string `json:"version"`
 }
 
@@ -3595,8 +3859,11 @@ type TaskCreateRequest struct {
 	Title string `json:"title"`
 
 	// TriggerType How the task was triggered. Defaults to "manual".
-	TriggerType *string `json:"trigger_type,omitempty"`
+	TriggerType *TaskCreateRequestTriggerType `json:"trigger_type,omitempty"`
 }
+
+// TaskCreateRequestTriggerType How the task was triggered. Defaults to "manual".
+type TaskCreateRequestTriggerType string
 
 // TaskUpdateRequest Request body for PUT /api/v1/tasks/{id}. Updates fields on an existing task. All fields are optional — only provided fields are updated. The fields name/description are backward-compat aliases for title/result.
 type TaskUpdateRequest struct {
@@ -3625,11 +3892,14 @@ type TaskUpdateRequest struct {
 	StartedAt *time.Time `json:"started_at,omitempty"`
 
 	// Status New task status.
-	Status *string `json:"status,omitempty"`
+	Status *TaskUpdateRequestStatus `json:"status,omitempty"`
 
 	// Title New task title.
 	Title *string `json:"title,omitempty"`
 }
+
+// TaskUpdateRequestStatus New task status.
+type TaskUpdateRequestStatus string
 
 // ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, or cancelling it. For tools with RequiresAdminAsk=true the caller must hold the admin role (FR-015).
 type ToolApprovalActionRequest struct {
@@ -3720,7 +3990,7 @@ type UserRole string
 
 // UserContextRequest Request body for PUT /api/v1/user-context. Replaces the entire content of USER.md in the default workspace. Passing an empty string clears the file.
 type UserContextRequest struct {
-	// Content Full replacement content for USER.md. May be empty to clear the file. No maximum length is enforced at the schema level — the underlying filesystem write via fileutil.WriteFileAtomic provides the practical limit.
+	// Content Full replacement content for USER.md. May be empty to clear the file. Maximum 262144 bytes (256 KB). The underlying filesystem write via fileutil.WriteFileAtomic provides the physical limit; this schema constraint enforces a reasonable upper bound at the API layer.
 	Content string `json:"content"`
 }
 
@@ -3732,7 +4002,7 @@ type UserContextResponse struct {
 
 // UserCreateRequest Body for POST /users. Creates a new user account. Admin-only.
 type UserCreateRequest struct {
-	// Password Initial password. Minimum 8 characters.
+	// Password Initial password. Minimum 8 characters, maximum 72 (bcrypt limit).
 	Password string `json:"password"`
 
 	// Role RBAC role. Case-sensitive; exactly "admin" or "user".
@@ -3780,7 +4050,7 @@ type UserDeleteResponse struct {
 
 // UserResetPasswordRequest Body for PUT /users/{username}/password. Admin resets another user's password. This is NOT the self-change-password endpoint — that is POST /auth/change-password. After a successful reset the target user's bearer token is also invalidated, requiring them to log in again with the new password.
 type UserResetPasswordRequest struct {
-	// Password New password for the target user. Minimum 8 characters.
+	// Password New password for the target user. Minimum 8 characters, maximum 72 (bcrypt limit).
 	Password string `json:"password"`
 }
 
@@ -3840,10 +4110,10 @@ type ValidateTokenResponseRole string
 
 // VersionResponse Response from GET /api/v1/version. Returns build identity information. Used by the frontend to detect version drift and show "New version available" prompts (issue #110). No authentication required.
 type VersionResponse struct {
-	// BuildSha VCS revision SHA embedded at build time via debug.ReadBuildInfo(). Value is "dev" when built outside a version-controlled tree or when vcs.revision is not set (e.g. go run).
+	// BuildSha VCS revision SHA embedded at build time via debug.ReadBuildInfo(). Value is "dev" when built outside a version-controlled tree or when vcs.revision is not set (e.g. go run). Otherwise a 7-40 character lowercase hex SHA.
 	BuildSha string `json:"build_sha"`
 
-	// Version Omnipus gateway version string (e.g. "0.1.0" or "dev").
+	// Version Omnipus gateway version string (e.g. "0.1.0"). Must follow semver format.
 	Version string `json:"version"`
 }
 

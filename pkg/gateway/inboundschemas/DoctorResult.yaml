@@ -10,12 +10,11 @@ required:
 additionalProperties: false
 properties:
   score:
-    type: number
-    format: double
+    type: integer
     minimum: 0
     maximum: 100
     description: Overall health score (0 = critical issues; 100 = fully healthy).
-    example: 85.0
+    example: 85
   issues:
     type: array
     items:

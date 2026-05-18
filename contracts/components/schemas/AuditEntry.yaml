@@ -14,11 +14,12 @@ properties:
     example: "2026-05-16T10:30:00Z"
   event:
     type: string
+    pattern: '^[a-z_]+$'
     description: >
       Event type identifier. Well-known values:
       tool_call, exec, file_op, llm_call, policy_eval, rate_limit,
       ssrf, startup, shutdown. Custom values are permitted for
-      extensibility (open-ended union).
+      extensibility — must match ^[a-z_]+$ (lowercase letters and underscores only).
     example: tool_call
   decision:
     type: string

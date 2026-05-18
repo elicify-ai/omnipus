@@ -7,7 +7,7 @@ import {
 } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
 
-export interface ToolPreset {
+export interface ToolPreset { // not-wire-format: UI-only preset definition with Phosphor icon; never serialised over any API boundary
   label: string
   icon: Icon
   tools: string[] | 'all'

@@ -1,7 +1,7 @@
 // Channel configuration field definitions
 // Each entry maps to the Go ChannelsConfig struct fields in pkg/config/config.go
 
-export interface ChannelField {
+export interface ChannelField { // not-wire-format: UI form-field descriptor for channel config forms; never serialised over any HTTP/WS boundary
   key: string
   label: string
   type: 'text' | 'password' | 'url' | 'number' | 'toggle' | 'textarea'

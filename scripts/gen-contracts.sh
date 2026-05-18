@@ -36,10 +36,10 @@ echo "[gen-contracts] Working directory: ${REPO_ROOT}"
 # ---------------------------------------------------------------------------
 # Step 1: Lint specs
 # ---------------------------------------------------------------------------
-echo "[gen-contracts] Step 1/4: Linting contracts/openapi.yaml..."
+echo "[gen-contracts] Step 1/5: Linting contracts/openapi.yaml..."
 npx --no-install @redocly/cli lint contracts/openapi.yaml --skip-rule no-server-example.com
 
-echo "[gen-contracts] Step 1/4: Validating contracts/asyncapi.yaml..."
+echo "[gen-contracts] Step 1/5: Validating contracts/asyncapi.yaml..."
 node -e "
   const { Parser } = require('@asyncapi/parser');
   const fs = require('fs');
@@ -58,13 +58,13 @@ node -e "
 # ---------------------------------------------------------------------------
 # Step 2: TypeScript types + Zod (delegated to _gen-ts.sh)
 # ---------------------------------------------------------------------------
-echo "[gen-contracts] Step 2/4: Generating TypeScript types + Zod schemas..."
+echo "[gen-contracts] Step 2/5: Generating TypeScript types + Zod schemas..."
 bash scripts/_gen-ts.sh
 
 # ---------------------------------------------------------------------------
 # Step 3: Go types (delegated to _gen-go.sh, mirrors _gen-ts.sh symmetry)
 # ---------------------------------------------------------------------------
-echo "[gen-contracts] Step 3/4: Generating Go types..."
+echo "[gen-contracts] Step 3/5: Generating Go types..."
 mkdir -p pkg/api/generated
 bash scripts/_gen-go.sh
 

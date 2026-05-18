@@ -16,7 +16,7 @@
 // migrated to type-narrow on ApiError still produce the same string they
 // always did, so the migration is mechanical rather than a UX change.
 
-export interface ApiErrorOptions {
+export interface ApiErrorOptions { // not-wire-format: constructor options for the ApiError class; never sent over any HTTP/WS boundary
   /**
    * Optional machine-readable code from the backend. Most server endpoints
    * return `{"error": "..."}` without a code field today, so this is best-

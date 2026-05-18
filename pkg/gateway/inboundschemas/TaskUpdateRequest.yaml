@@ -9,6 +9,12 @@ minProperties: 1
 properties:
   status:
     type: string
+    enum:
+      - queued
+      - assigned
+      - running
+      - completed
+      - failed
     description: New task status.
     example: "completed"
   result:

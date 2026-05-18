@@ -156,21 +156,7 @@ properties:
       "off" = god-mode (requires --allow-god-mode at gateway boot).
     example: "workspace"
   shell_policy:
-    type: object
-    description: Per-agent shell command deny-pattern configuration.
-    properties:
-      enable_deny_patterns:
-        type: boolean
-        description: Enable pattern-based shell command blocking.
-        example: true
-      custom_deny_patterns:
-        type: array
-        items:
-          type: string
-        description: Additional Go regexp patterns to block in shell commands.
-        example:
-          - "rm -rf /"
-          - "curl.*169\\.254"
+    $ref: './AgentShellPolicy.yaml'
   fallback_models:
     type: array
     maxItems: 10
@@ -182,67 +168,8 @@ properties:
     example:
       - "anthropic/claude-3.5-haiku"
   model_params:
-    type: object
-    description: LLM sampling parameters applied to this agent's requests.
-    properties:
-      temperature:
-        type: number
-        format: double
-        description: Sampling temperature (0.0 – 2.0). Lower = more deterministic.
-        example: 1.0
-      max_tokens:
-        type: integer
-        description: Maximum tokens to generate per turn.
-        example: 4096
-      top_p:
-        type: number
-        format: double
-        description: Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-        example: 1.0
+    $ref: './AgentModelParams.yaml'
   rate_limits:
-    type: object
-    description: Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
-    properties:
-      use_global_defaults:
-        type: boolean
-        description: When true, global rate limits are used and per-agent overrides are ignored.
-        example: true
-      max_llm_calls_per_hour:
-        type: integer
-        description: Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-        example: 100
-      max_tool_calls_per_minute:
-        type: integer
-        description: Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-        example: 60
-      max_cost_per_day:
-        type: number
-        format: double
-        description: Maximum USD cost per day for this agent. Absent = no per-agent cap.
-        example: 5.0
+    $ref: './AgentRateLimits.yaml'
   stats:
-    type: object
-    description: Aggregate runtime statistics for this agent. Absent when no sessions have been run.
-    required:
-      - total_sessions
-      - total_tokens
-      - total_cost
-    properties:
-      total_sessions:
-        type: integer
-        description: Lifetime count of sessions created for this agent.
-        example: 42
-      total_tokens:
-        type: integer
-        description: Lifetime token count across all sessions.
-        example: 1500000
-      total_cost:
-        type: number
-        format: double
-        description: Lifetime USD cost across all sessions.
-        example: 3.14
-      last_active:
-        type: string
-        format: date-time
-        description: RFC3339 timestamp of the last turn completed by this agent.
-        example: "2026-05-17T14:23:00Z"
+    $ref: './AgentStats.yaml'

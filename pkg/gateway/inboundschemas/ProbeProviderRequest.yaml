@@ -10,7 +10,58 @@ additionalProperties: false
 properties:
   id:
     type: string
-    description: Provider protocol identifier (e.g. "anthropic", "openai", "openrouter").
+    minLength: 1
+    enum:
+      - anthropic
+      - anthropic-messages
+      - openai
+      - openrouter
+      - gemini
+      - google
+      - ollama
+      - azure
+      - azure-openai
+      - bedrock
+      - litellm
+      - groq
+      - zhipu
+      - nvidia
+      - moonshot
+      - shengsuanyun
+      - deepseek
+      - cerebras
+      - vivgrid
+      - volcengine
+      - vllm
+      - qwen
+      - qwen-intl
+      - qwen-international
+      - dashscope-intl
+      - qwen-us
+      - dashscope-us
+      - mistral
+      - avian
+      - longcat
+      - modelscope
+      - novita
+      - coding-plan
+      - alibaba-coding
+      - qwen-coding
+      - mimo
+      - minimax
+      - coding-plan-anthropic
+      - alibaba-coding-anthropic
+      - antigravity
+      - claude-cli
+      - claudecli
+      - codex-cli
+      - codexcli
+      - github-copilot
+      - copilot
+    description: >
+      Provider protocol identifier. Must be one of the recognized protocol names
+      that Omnipus can connect to. Validated server-side against the known protocol
+      registry (pkg/providers.IsKnownProtocol).
     example: "openrouter"
   api_key:
     type: string

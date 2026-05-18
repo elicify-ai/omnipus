@@ -1209,7 +1209,7 @@ func FixtureDoctorResult_Populated() DoctorResult {
 	actionLink := "/settings/providers"
 	actionLabel := "Configure Provider"
 	return DoctorResult{
-		Score:     85.0,
+		Score:     85,
 		CheckedAt: time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC),
 		Issues: []struct {
 			ActionLabel    *string                    `json:"action_label,omitempty"`
@@ -1244,7 +1244,7 @@ func FixtureDoctorResult_ZeroValue() DoctorResult {
 // FixtureDoctorResult_Edge — perfect score, empty issues (valid), unicode checked_at.
 func FixtureDoctorResult_Edge() DoctorResult {
 	return DoctorResult{
-		Score:     100.0,
+		Score:     100,
 		CheckedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		Issues: []struct {
 			ActionLabel    *string                    `json:"action_label,omitempty"`
@@ -1261,7 +1261,7 @@ func FixtureDoctorResult_Edge() DoctorResult {
 // FixtureDoctorResult_NilIssues — issues nil → JSON null → schema violation.
 func FixtureDoctorResult_NilIssues() DoctorResult {
 	return DoctorResult{
-		Score:     75.0,
+		Score:     75,
 		CheckedAt: time.Date(2026, 5, 17, 10, 0, 0, 0, time.UTC),
 		Issues:    nil, // THE BUG: nil slice → JSON null → schema requires type: array
 	}

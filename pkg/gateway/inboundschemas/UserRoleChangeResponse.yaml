@@ -3,6 +3,7 @@ description: Returned on successful PATCH /users/{username}/role.
 required:
   - username
   - role
+additionalProperties: false
 properties:
   username:
     type: string

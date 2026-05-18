@@ -9,8 +9,10 @@ additionalProperties: false
 properties:
   content:
     type: string
+    maxLength: 262144
     description: >
       Full replacement content for USER.md. May be empty to clear the file.
-      No maximum length is enforced at the schema level — the underlying
-      filesystem write via fileutil.WriteFileAtomic provides the practical limit.
+      Maximum 262144 bytes (256 KB). The underlying filesystem write via
+      fileutil.WriteFileAtomic provides the physical limit; this schema
+      constraint enforces a reasonable upper bound at the API layer.
     example: "I am a senior Go developer focused on distributed systems."

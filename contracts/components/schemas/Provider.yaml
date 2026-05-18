@@ -46,6 +46,13 @@ properties:
     example:
       - "anthropic/claude-3.5-haiku"
       - "anthropic/claude-sonnet-4-5"
+  has_api_key:
+    type: boolean
+    description: >
+      True when the provider has a stored API key in credentials.
+      The key itself is never returned. Absent on legacy entries that predate
+      this field — treat as false when absent.
+    example: true
   warning:
     type: string
     description: >

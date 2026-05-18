@@ -21,7 +21,8 @@ properties:
     example: "Web Research"
   version:
     type: string
-    description: Semantic version string (e.g. "1.2.3").
+    pattern: '^\d+\.\d+\.\d+(?:[-+].*)?$'
+    description: Semantic version string (e.g. "1.2.3"). Must follow semver format.
     example: "1.2.3"
   description:
     type: string

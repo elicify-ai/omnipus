@@ -46,11 +46,13 @@ properties:
     example: "2026-05-16T10:01:00Z"
   tokens:
     type: integer
+    minimum: 0
     description: Token count for this entry (input + output). Absent when zero.
     example: 150
   cost:
     type: number
     format: double
+    minimum: 0
     description: USD cost for this entry. Absent when zero.
     example: 0.00045
   status:

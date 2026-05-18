@@ -11,12 +11,14 @@ additionalProperties: false
 properties:
   version:
     type: string
-    description: Omnipus gateway version string (e.g. "0.1.0" or "dev").
+    pattern: '^\d+\.\d+\.\d+(?:[-+].*)?$'
+    description: Omnipus gateway version string (e.g. "0.1.0"). Must follow semver format.
     example: "0.1.0"
   build_sha:
     type: string
+    pattern: '^([0-9a-f]{7,40}|dev)$'
     description: >
       VCS revision SHA embedded at build time via debug.ReadBuildInfo().
       Value is "dev" when built outside a version-controlled tree or when
-      vcs.revision is not set (e.g. go run).
-    example: "abc1234def5678"
+      vcs.revision is not set (e.g. go run). Otherwise a 7-40 character lowercase hex SHA.
+    example: "abc1234"

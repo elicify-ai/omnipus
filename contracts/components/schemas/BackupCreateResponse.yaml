@@ -7,6 +7,7 @@ required:
   - path
   - size_bytes
   - created_at
+additionalProperties: false
 properties:
   path:
     type: string

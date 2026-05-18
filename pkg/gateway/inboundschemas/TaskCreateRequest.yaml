@@ -22,6 +22,7 @@ properties:
   priority:
     type: integer
     minimum: 0
+    maximum: 100
     description: Task priority (higher = more urgent). Defaults to 3.
     example: 5
   parent_task_id:
@@ -30,6 +31,10 @@ properties:
     example: "task-uuid-123"
   trigger_type:
     type: string
+    enum:
+      - manual
+      - time
+      - event
     description: How the task was triggered. Defaults to "manual".
     example: "manual"
   name:

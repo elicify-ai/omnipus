@@ -25,5 +25,6 @@ properties:
   password:
     type: string
     minLength: 8
-    description: Initial password. Minimum 8 characters.
+    maxLength: 72
+    description: Initial password. Minimum 8 characters, maximum 72 (bcrypt limit).
     example: "s3cr3tpassword"

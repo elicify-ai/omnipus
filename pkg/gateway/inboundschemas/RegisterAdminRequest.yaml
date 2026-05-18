@@ -17,5 +17,6 @@ properties:
   password:
     type: string
     minLength: 8
-    description: Password for the new admin account. Minimum 8 characters.
+    maxLength: 72
+    description: Password for the new admin account. Minimum 8 characters, maximum 72 (bcrypt limit).
     example: "s3cr3tpassword"

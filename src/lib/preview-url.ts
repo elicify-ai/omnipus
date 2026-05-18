@@ -257,7 +257,7 @@ export function rewriteLegacyURL(href: string, hostname: string, previewPort: nu
 /**
  * Arguments for `buildIframeURL`.
  */
-export interface BuildIframeURLArgs {
+export interface BuildIframeURLArgs { // not-wire-format: arguments bag for the buildIframeURL helper function; never serialised over any HTTP/WS boundary
   /**
    * The relative path from the tool result, e.g.
    * `"/preview/<agent>/<token>/"` (canonical) or the legacy

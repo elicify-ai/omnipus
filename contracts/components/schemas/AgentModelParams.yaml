@@ -1,0 +1,25 @@
+title: AgentModelParams
+description: >
+  LLM sampling parameters applied to an agent's requests.
+  When absent, the provider defaults are used.
+type: object
+properties:
+  temperature:
+    type: number
+    format: double
+    minimum: 0.0
+    maximum: 2.0
+    description: Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+    example: 1.0
+  max_tokens:
+    type: integer
+    minimum: 1
+    description: Maximum tokens to generate per turn.
+    example: 4096
+  top_p:
+    type: number
+    format: double
+    minimum: 0.0
+    maximum: 1.0
+    description: Nucleus sampling probability mass. 1.0 disables nucleus sampling.
+    example: 1.0
