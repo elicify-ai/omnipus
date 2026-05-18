@@ -74,7 +74,7 @@ export function DataSection() {
     mutationFn: createBackup,
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['backups'] })
-      addToast({ message: `Backup created: ${res.filename}`, variant: 'success' })
+      addToast({ message: `Backup created: ${res.path}`, variant: 'success' })
     },
     onError: (err: unknown) => addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Backup failed', variant: 'error' }),
   })

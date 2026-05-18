@@ -42,8 +42,6 @@ import {
   ProbeProviderResponse as ProbeProviderResponseSchema,
   Agent as AgentSchema,
   AgentSession as AgentSessionSchema,
-  AgentToolEntry as AgentToolEntrySchema,
-  AgentToolsCfg as AgentToolsCfgSchema,
   AuditEntry as AuditEntrySchema,
   AuditLogToggle as AuditLogToggleSchema,
   ExecAllowlist as ExecAllowlistSchema,
@@ -91,6 +89,13 @@ import {
   RateLimitsUpdateResponse as RateLimitsUpdateResponseSchema,
   SessionScopeUpdateResponse as SessionScopeUpdateResponseSchema,
   RetentionUpdateResponse as RetentionUpdateResponseSchema,
+  // fix-X: replacing hand-written Zod schemas with generated equivalents:
+  AgentToolsResponse as AgentToolsResponseSchema,
+  ChannelTestResponse as ChannelTestResponseSchema,
+  OperationResult as OperationResultSchema,
+  UploadFilesResponse as UploadFilesResponseSchema,
+  BackupCreateResponse as BackupCreateResponseSchema,
+  User as UserSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -125,7 +130,20 @@ export function resetApiSchemaErrorCount(): void {
   _apiSchemaErrorCount = 0
 }
 
-// Expose schema error counters on window.__omnipus_test_hooks in DEV/test builds
+// Config validEnum coercion counter — incremented each time validEnum replaces
+// an unexpected backend enum value with the fallback. Exposed on
+// window.__omnipus_test_hooks so Playwright tests can assert coercion health.
+let _configCoercionCount = 0
+
+export function getConfigCoercionCount(): number {
+  return _configCoercionCount
+}
+
+export function resetConfigCoercionCount(): void {
+  _configCoercionCount = 0
+}
+
+// Expose counters on window.__omnipus_test_hooks in DEV/test builds
 // so Playwright tests can assert on validation health without reaching into module
 // internals.
 if ((import.meta.env.DEV || import.meta.env.MODE === 'test') && typeof window !== 'undefined') {
@@ -133,6 +151,8 @@ if ((import.meta.env.DEV || import.meta.env.MODE === 'test') && typeof window !=
   w.__omnipus_test_hooks ??= {}
   w.__omnipus_test_hooks.getApiSchemaErrorCount = getApiSchemaErrorCount
   w.__omnipus_test_hooks.resetApiSchemaErrorCount = resetApiSchemaErrorCount
+  w.__omnipus_test_hooks.getConfigCoercionCount = getConfigCoercionCount
+  w.__omnipus_test_hooks.resetConfigCoercionCount = resetConfigCoercionCount
 }
 
 // ── Re-exports from generated types ───────────────────────────────────────────
@@ -220,6 +240,12 @@ import type {
   SessionScopeUpdateResponse,
   RetentionUpdateResponse,
   ChannelEnabledResponse,
+  // fix-X: types for hand-written schema replacement:
+  AgentToolsResponse,
+  UploadFilesResponse,
+  BackupCreateResponse,
+  ChannelTestResponse,
+  OperationResult,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -291,6 +317,12 @@ export type {
   SessionScopeUpdateResponse,
   RetentionUpdateResponse,
   ChannelEnabledResponse,
+  // fix-X: generated types replacing hand-written schemas:
+  AgentToolsResponse,
+  UploadFilesResponse,
+  BackupCreateResponse,
+  ChannelTestResponse,
+  OperationResult,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -525,7 +557,7 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   active_agent_id?: string  // the agent currently handling this session
 }
 
-interface RawSession { // not-wire-format: internal API deserialization shape before rawToSession() transform; never emitted to SPA consumers directly
+interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that renames nested stats fields before public Session type; the wire shape is validated via WireSessionSchema, this type only models the pre-transform intermediate
   id: string
   agent_id: string
   title: string
@@ -545,6 +577,9 @@ interface RawSession { // not-wire-format: internal API deserialization shape be
     message_count: number
   }
 }
+
+// Alias for backward-compat within this file (rawToSession signature).
+type RawSession = _RawSessionInternal
 
 function rawToSession(raw: RawSession): Session {
   return {
@@ -858,8 +893,13 @@ const VALID_EXEC_APPROVALS = ['auto', 'ask', 'deny'] as const
 const VALID_INJECTION_LEVELS = ['off', 'low', 'medium', 'high'] as const
 
 function validEnum<T extends string>(value: unknown, valid: readonly T[], fallback: T): T {
-  if ((valid as readonly string[]).includes(value as string)) return value as T
-  console.warn('[api] validEnum: unexpected value', value, '— falling back to', fallback)
+  if (typeof value === 'string' && (valid as readonly string[]).includes(value)) return value as T
+  if (value !== undefined && value !== null) {
+    _configCoercionCount++
+    if (import.meta.env.DEV) {
+      console.warn(`[api] validEnum coercion: ${JSON.stringify(value)} → ${fallback}`)
+    }
+  }
   return fallback
 }
 
@@ -998,10 +1038,8 @@ export function configureProvider(id: string, apiKey?: string, endpoint?: string
   }, ProviderSchema as ZodType<Provider>)
 }
 
-const _testProviderSchema = z.object({ success: z.boolean(), error: z.string().optional() }).passthrough() // not-wire-format: internal Zod validator for request(); migrate to generated schema in fix-X SPA migration
-
-export function testProvider(id: string): Promise<{ success: boolean; error?: string }> {
-  return request(`/providers/${id}/test`, { method: 'POST' }, _testProviderSchema)
+export function testProvider(id: string): Promise<OperationResult> {
+  return request<OperationResult>(`/providers/${id}/test`, { method: 'POST' }, OperationResultSchema as ZodType<OperationResult>)
 }
 
 export function rotateGatewayToken(): Promise<{ token: string }> {
@@ -1060,9 +1098,9 @@ export function fetchGatewayStatus(): Promise<GatewayStatus> {
 // See contracts/components/schemas/ToolRegistryEntry.yaml.
 export type Tool = ToolRegistryEntry
 
-export function fetchTools(): Promise<ToolRegistryEntry[]> {
-  return request<ToolRegistryEntry[]>('/tools', undefined, z.array(ToolRegistryEntrySchema) as ZodType<ToolRegistryEntry[]>)
-}
+// fetchTools is a backward-compat alias for fetchRegistryTools (fix-X dedup).
+// New callers should use fetchRegistryTools (or fetchBuiltinTools) directly.
+export function fetchTools(): Promise<ToolRegistryEntry[]> { return fetchRegistryTools() }
 
 // Channel — type alias for ChannelEntry (contract-first #8).
 // GET /channels returns ChannelEntry[]; this alias preserves backward compat.
@@ -1104,12 +1142,10 @@ export function configureChannel(id: string, config: Record<string, unknown>): P
   })
 }
 
-const _testChannelSchema = z.object({ success: z.boolean(), message: z.string() }).passthrough() // not-wire-format: internal Zod validator for request(); migrate to generated schema in fix-X SPA migration
-
-export function testChannel(id: string): Promise<{ success: boolean; message: string }> {
-  return request<{ success: boolean; message: string }>(`/channels/${encodeURIComponent(id)}/test`, {
+export function testChannel(id: string): Promise<ChannelTestResponse> {
+  return request<ChannelTestResponse>(`/channels/${encodeURIComponent(id)}/test`, {
     method: 'POST',
-  }, _testChannelSchema)
+  }, ChannelTestResponseSchema as ZodType<ChannelTestResponse>)
 }
 
 // ── Skills ────────────────────────────────────────────────────────────────────
@@ -1131,9 +1167,9 @@ export function deleteSkill(name: string): Promise<void> {
   return request<void>(`/skills/${encodeURIComponent(name)}`, { method: 'DELETE' })
 }
 
-export function fetchMcpServers(): Promise<McpServer[]> {
-  return request<McpServer[]>('/mcp-servers', undefined, z.array(McpServerSchema) as ZodType<McpServer[]>)
-}
+// fetchMcpServers is a backward-compat alias for fetchMcpServersForAgent (fix-X dedup).
+// New callers should use fetchMcpServersForAgent directly.
+export function fetchMcpServers(): Promise<McpServer[]> { return fetchMcpServersForAgent() }
 
 export function addMcpServer(data: McpServerCreate): Promise<McpServer> {
   return request<McpServer>('/mcp-servers', { method: 'POST', body: JSON.stringify(data) }, McpServerSchema as ZodType<McpServer>)
@@ -1304,8 +1340,8 @@ export function fetchDevices(): Promise<DevicesResponse> {
 // BackupEntry — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/BackupEntry.yaml.
 
-export function createBackup(): Promise<{ filename: string }> {
-  return request('/backup', { method: 'POST' })
+export function createBackup(): Promise<BackupCreateResponse> {
+  return request<BackupCreateResponse>('/backup', { method: 'POST' }, BackupCreateResponseSchema as ZodType<BackupCreateResponse>)
 }
 
 export function fetchBackups(): Promise<BackupEntry[]> {
@@ -1331,10 +1367,8 @@ export async function renameSession(id: string, title: string): Promise<Session>
   return rawToSession(raw)
 }
 
-const _deleteSessionSchema = z.object({ success: z.boolean() }).passthrough() // not-wire-format: internal Zod validator for request(); migrate to generated schema in fix-X SPA migration
-
-export function deleteSession(id: string): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }, _deleteSessionSchema)
+export function deleteSession(id: string): Promise<OperationResult> {
+  return request<OperationResult>(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }, OperationResultSchema as ZodType<OperationResult>)
 }
 
 // ── About ─────────────────────────────────────────────────────────────────────
@@ -1396,7 +1430,8 @@ export function fetchAuditLog(): Promise<AuditEntry[]> {
 
 // ── User Context (USER.md) ────────────────────────────────────────────────────
 
-const _userContextSchema = z.object({ content: z.string() }) // not-wire-format: internal Zod validator for request(); migrate to generated schema in fix-X SPA migration
+// not-wire-format: pending fix-V spec addition — UserContextResponse not yet in contracts/components/schemas/; replace with generated UserContextResponseSchema once fix-V lands and gen-contracts is run
+const _userContextSchema = z.object({ content: z.string() }) // not-wire-format: deferred — see comment above
 
 export function fetchUserContext(): Promise<{ content: string }> {
   return request<{ content: string }>('/user-context', undefined, _userContextSchema)
@@ -1426,7 +1461,7 @@ export async function fetchMe(): Promise<MeInfo> {
 // UploadedFile — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/UploadedFile.yaml.
 
-export async function uploadFiles(sessionId: string, files: File[]): Promise<{ files: UploadedFile[] }> {
+export async function uploadFiles(sessionId: string, files: File[]): Promise<UploadFilesResponse> {
   const formData = new FormData()
   formData.append('session_id', sessionId)
   for (const file of files) {
@@ -1465,18 +1500,24 @@ export async function uploadFiles(sessionId: string, files: File[]): Promise<{ f
   if (!res.ok) {
     throw await ApiError.fromResponse(res)
   }
-  return res.json()
+  const raw: unknown = await res.json()
+  const parsed = (UploadFilesResponseSchema as ZodType<UploadFilesResponse>).safeParse(raw)
+  if (!parsed.success) {
+    _apiSchemaErrorCount++
+    const issues = parsed.error.issues.map((i) => ({ path: i.path as (string | number)[], message: i.message }))
+    void maybeDevToast(`[api] uploadFiles response schema mismatch: ${issues[0]?.message ?? 'unknown'}`, 'POST:/upload:schema')
+    throw new ApiSchemaError('/upload', issues, raw)
+  }
+  return parsed.data
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
-const _changePasswordSchema = z.object({ success: z.boolean() }).passthrough() // not-wire-format: internal Zod validator for request(); migrate to generated schema in fix-X SPA migration
-
-export function changePassword(currentPassword: string, newPassword: string): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>('/auth/change-password', {
+export function changePassword(currentPassword: string, newPassword: string): Promise<OperationResult> {
+  return request<OperationResult>('/auth/change-password', {
     method: 'POST',
     body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
-  }, _changePasswordSchema)
+  }, OperationResultSchema as ZodType<OperationResult>)
 }
 
 // ── Exec Allowlist ────────────────────────────────────────────────────────────
@@ -1703,15 +1744,9 @@ export type UpdateUserRoleBody = UserRoleChangeRequest
 export type UpdateUserRoleResponse = UserRoleChangeResponse
 
 // UserEntry is the SPA-internal type; the generated User schema is compatible (passthrough).
-const _userListSchema = z.array(z.object({
-  username: z.string(),
-  role: z.enum(['admin', 'user']),
-  has_password: z.boolean(),
-  has_active_token: z.boolean(),
-}).passthrough())
-
+// fix-X: replaced hand-written _userListSchema with z.array(UserSchema) from generated.
 export function fetchUsers(): Promise<UserEntry[]> {
-  return request<UserEntry[]>('/users', undefined, _userListSchema)
+  return request<UserEntry[]>('/users', undefined, z.array(UserSchema) as ZodType<UserEntry[]>)
 }
 
 export async function createUser(body: CreateUserBody): Promise<CreateUserResponse> {
@@ -1779,21 +1814,19 @@ export function fetchMcpServersForAgent(): Promise<McpServer[]> {
   return request<McpServer[]>('/mcp-servers', undefined, z.array(McpServerSchema) as ZodType<McpServer[]>)
 }
 
-type AgentToolsResponse = { config: AgentToolsCfg; tools: AgentToolEntry[] } // not-wire-format: local alias for gen.AgentToolsResponse already in spec; migrate to generated type in fix-X SPA migration
-const _agentToolsSchema = z.object({ // not-wire-format: internal Zod validator for request(); migrate to generated schema in fix-X SPA migration
-  config: AgentToolsCfgSchema,
-  tools: z.array(AgentToolEntrySchema),
-}).passthrough() as ZodType<AgentToolsResponse>
+// AgentToolsResponse — imported from generated openapi-types (contract-first #8).
+// AgentToolsResponseSchema — imported from generated schemas (contract-first #8).
+// fix-X: replaced hand-written type + _agentToolsSchema with generated equivalents.
 
 export function fetchAgentTools(agentId: string): Promise<AgentToolsResponse> {
-  return request<AgentToolsResponse>(`/agents/${encodeURIComponent(agentId)}/tools`, undefined, _agentToolsSchema)
+  return request<AgentToolsResponse>(`/agents/${encodeURIComponent(agentId)}/tools`, undefined, AgentToolsResponseSchema as ZodType<AgentToolsResponse>)
 }
 
 export function updateAgentTools(agentId: string, cfg: AgentToolsCfg): Promise<AgentToolsResponse> {
   return request<AgentToolsResponse>(`/agents/${encodeURIComponent(agentId)}/tools`, {
     method: 'PUT',
     body: JSON.stringify(cfg),
-  }, _agentToolsSchema)
+  }, AgentToolsResponseSchema as ZodType<AgentToolsResponse>)
 }
 
 /**
