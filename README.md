@@ -104,7 +104,7 @@ Ask Ray to research then hand off to Max for a screenshot. Ray researches, calls
 The sandbox is deliberately scoped; be precise about what it does and doesn't do:
 
 - **No LSM enforcement on macOS, Windows, or Linux < 5.13.** The sandbox selects a `FallbackBackend` and enforcement reduces to in-process policy checks. The BRD's Windows story (Job Objects + Restricted Tokens + DACL) is specified in Appendix A but not yet implemented.
-- **Landlock ABI v4** (kernel 5.19+ / 6.x) has a `create_ruleset` incompatibility: the current `computeRights()` enumerates v1–v3 bits only, so on a v4-negotiated ruleset the call returns EINVAL and the backend downgrades to app-level checks. Tracked in [#103](https://github.com/dapicom-ai/omnipus/issues/103); out of scope for Sprint J.
+- **Landlock ABI v4** (kernel 5.19+ / 6.x) has a `create_ruleset` incompatibility: the current `computeRights()` enumerates v1–v3 bits only, so on a v4-negotiated ruleset the call returns EINVAL and the backend downgrades to app-level checks. Tracked in [#103](https://github.com/elicify-ai/omnipus/issues/103); out of scope for Sprint J.
 - **Permissive mode downgrades to audit-only skip on kernels < 6.12.** Native permissive `landlock_restrict_self` is not available; Omnipus logs the computed policy and installs seccomp with `SECCOMP_RET_LOG`, but does not call `restrict_self`. Plan for kernel ≥ 6.12 if you need a true log-then-enforce workflow.
 - **`sandbox.ssrf.allow_internal`** accepts exact hostnames, exact IPs, and CIDR ranges. Glob host patterns (`*.internal.corp`) are **not** supported yet.
 
@@ -155,29 +155,82 @@ Files (`read_file`, `write_file`, `edit_file`, `append_file`, `list_dir`), shell
 
 ---
 
-## Quick start
+## Install
+
+### Quick install (recommended)
 
 ```bash
-# 1. Clone and build
-git clone https://github.com/dapicom-ai/omnipus.git
-cd omnipus
-CGO_ENABLED=0 go build -o omnipus ./cmd/omnipus/
-
-# 2. Run the gateway (binds 0.0.0.0:3000 by default)
-./omnipus gateway
-# The gateway opens two ports: 5000 (SPA + API) and 5001 (preview iframes). Open both in your firewall.
-
-# 3. Open http://localhost:3000 and follow the onboarding wizard:
-#    Welcome → Provider → API Key → Model → Admin Account → Done
+curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/install.sh | sh
+omnipus gateway
+# open http://localhost:5000
 ```
 
-First boot auto-generates an encryption key at `~/.omnipus/master.key` (mode `0600`). **Back it up** — losing it makes the credential store unrecoverable. For headless deployments, pre-provision via `OMNIPUS_KEY_FILE` or `OMNIPUS_MASTER_KEY`.
+The script detects your OS+arch, downloads the matching binary from the latest GitHub Release, verifies its SHA256, and installs to `/usr/local/bin/omnipus`. Override the target with `OMNIPUS_INSTALL_DIR=$HOME/.local/bin` if you don't have sudo.
+
+### Docker
+
+```bash
+docker run -d \
+  -p 127.0.0.1:5000:5000 \
+  -p 127.0.0.1:5001:5001 \
+  -v "$PWD/data:/root/.omnipus" \
+  ghcr.io/elicify-ai/omnipus:latest
+
+# open http://localhost:5000
+```
+
+Or with compose:
+
+```bash
+curl -O https://raw.githubusercontent.com/elicify-ai/omnipus/main/docker/docker-compose.yml
+docker compose --profile gateway up
+```
+
+### Build from source (contributors)
+
+Requires Go 1.26+ and Node 24+:
+
+```bash
+git clone https://github.com/elicify-ai/omnipus.git
+cd omnipus
+make build               # builds SPA + Go binary in one step
+./build/omnipus gateway  # open http://localhost:5000
+```
+
+`make build` automatically runs the `spa-embed` target (Vite build + copy into `pkg/gateway/spa/` for `go:embed`) before compiling.
+
+### First boot
+
+The gateway opens **two ports**: `5000` for the SPA + API, `5001` for preview iframes (isolated origin). Both must be reachable from your browser.
+
+Onboarding wizard runs on first visit to `http://localhost:5000`: Welcome → Provider → API Key → Model → Admin Account → Done.
+
+First boot also auto-generates an encryption key at `~/.omnipus/master.key` (mode `0600`). **Back it up** — losing it makes the credential store unrecoverable. For headless deployments, pre-provision via `OMNIPUS_KEY_FILE` or `OMNIPUS_MASTER_KEY`.
 
 Rotate the key any time:
 
 ```bash
-./omnipus credentials rotate --old-key-file old.key --new-key-file new.key
+omnipus credentials rotate --old-key-file old.key --new-key-file new.key
 ```
+
+### Platform support
+
+**Officially supported in v0.1 (CI-tested):**
+
+| OS | Architecture | Notes |
+|---|---|---|
+| Linux | amd64 (`x86_64`) | Full Landlock + seccomp sandbox on kernel 5.13+ |
+| Linux | arm64 (`aarch64`) | Same sandbox support |
+| macOS | arm64 (Apple Silicon) | App-level fallback sandbox (no LSM) |
+
+**Planned but not in v0.1** (use source build or Docker for now; tracked for v0.1.1+):
+
+- **macOS amd64 (Intel)** — cross-compile path works; needs CI smoke test on a `macos-13` runner.
+- **Windows amd64** — ~15 unit tests assume POSIX semantics; tracked in [#113](https://github.com/elicify-ai/omnipus/issues/113).
+- **Linux riscv64, loong64, armv7, mipsle** — Go cross-compile targets exist; no CI verification.
+- **FreeBSD, NetBSD** — Go cross-compile targets exist; no GitHub Actions runners available.
+
+If you need a deferred platform, build from source — most still compile with `make build`. The kernel sandbox falls back to app-level enforcement on any non-Linux platform.
 
 ---
 
@@ -235,7 +288,7 @@ Pre-1.0. Three shipping variants:
 
 All three share the same Go core and the `@omnipus/ui` React components.
 
-Active development on [`feature/next-wave`](https://github.com/dapicom-ai/omnipus/tree/feature/next-wave) · tracked in [PR #69](https://github.com/dapicom-ai/omnipus/pull/69).
+Active development on [`feature/iframe-preview-tier13`](https://github.com/elicify-ai/omnipus/tree/feature/iframe-preview-tier13).
 
 ---
 
