@@ -296,19 +296,32 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 // Message.yaml — we exploit that to avoid a field-by-field copy into gen.SessionDetail.
 // The anonymous struct is not a named wire-format type and therefore does not trigger
 // the check-no-handwritten-wire-types lint rule.
+// jsonSessionDetail serializes a session detail response. The internal
+// session.UnifiedMeta is converted to gen.Session via unifiedMetaToGenSession
+// so that required-but-empty array fields (e.g. partitions) marshal as []
+// rather than null, honoring the Session.yaml contract (zod schema validates
+// type:array, rejecting null and dropping the whole list).
+//
+// Messages stay as []session.TranscriptEntry: the Message.yaml schema only
+// requires {id, timestamp, agent_id}, and every other field uses omitempty
+// in Go — so nil slices/maps are omitted, not emitted as null.
 func jsonSessionDetail(w http.ResponseWriter, meta *session.UnifiedMeta, messages []session.TranscriptEntry, agentRemoved bool) {
+	genSession := unifiedMetaToGenSession(meta)
+	if messages == nil {
+		messages = []session.TranscriptEntry{}
+	}
 	if agentRemoved {
 		jsonOK(w, struct {
-			Session      *session.UnifiedMeta      `json:"session"`
+			Session      gen.Session               `json:"session"`
 			Messages     []session.TranscriptEntry `json:"messages"`
 			AgentRemoved bool                      `json:"agent_removed,omitempty"`
-		}{Session: meta, Messages: messages, AgentRemoved: agentRemoved})
+		}{Session: genSession, Messages: messages, AgentRemoved: agentRemoved})
 		return
 	}
 	jsonOK(w, struct {
-		Session  *session.UnifiedMeta      `json:"session"`
+		Session  gen.Session               `json:"session"`
 		Messages []session.TranscriptEntry `json:"messages"`
-	}{Session: meta, Messages: messages})
+	}{Session: genSession, Messages: messages})
 }
 
 // --- Sessions ---
@@ -470,18 +483,20 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 		filtered = append(filtered, m)
 	}
 
+	// Always route through unifiedMetaToGenSession so that required array/map
+	// fields (Partitions in particular) marshal as [] not null — Zod on the SPA
+	// rejects null where the contract says type:array and drops the whole list.
+	genSessions := make([]gen.Session, 0, len(filtered))
+	for _, m := range filtered {
+		genSessions = append(genSessions, unifiedMetaToGenSession(m))
+	}
 	if len(partialErrs) == 0 {
-		jsonOK(w, filtered)
+		jsonOK(w, genSessions)
 		return
 	}
 	sanitized := make([]string, len(partialErrs))
 	for i, pe := range partialErrs {
 		sanitized[i] = sanitizePartialError(pe)
-	}
-	genSessions := make([]gen.Session, 0, len(filtered))
-	for _, m := range filtered {
-		s := unifiedMetaToGenSession(m)
-		genSessions = append(genSessions, s)
 	}
 	jsonOK(w, gen.ListSessions200JSONResponseBody1{
 		Sessions:      genSessions,
@@ -541,6 +556,13 @@ func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id 
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
 		return
 	}
+	// Coerce nil → empty slice so JSON marshals as [] not null. The SPA's
+	// fetchSessionMessages validates via z.array(WireMessageSchema), which
+	// rejects null — a fresh session with no transcript would surface as
+	// "Could not load messages." in the UI.
+	if messages == nil {
+		messages = []session.TranscriptEntry{}
+	}
 	jsonOK(w, messages)
 }
 
@@ -576,7 +598,7 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read updated session: %v", err))
 		return
 	}
-	jsonOK(w, meta)
+	jsonOK(w, unifiedMetaToGenSession(meta))
 }
 
 // deleteSession handles DELETE /api/v1/sessions/{id}.
@@ -651,7 +673,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, meta)
+	jsonOK(w, unifiedMetaToGenSession(meta))
 }
 
 // --- Agents ---
@@ -740,7 +762,7 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	// agentID is already validated by HandleAgents before reaching here.
 	store := a.agentLoop.GetAgentStore(agentID)
 	if store == nil {
-		jsonOK(w, []*session.UnifiedMeta{})
+		jsonOK(w, []gen.Session{})
 		return
 	}
 	metas, err := store.ListSessions()
@@ -749,10 +771,13 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list sessions: %v", err))
 		return
 	}
-	if metas == nil {
-		metas = []*session.UnifiedMeta{}
+	// Route every session through unifiedMetaToGenSession so required arrays
+	// (Partitions) marshal as [] not null — Zod requires type:array on the SPA.
+	genSessions := make([]gen.Session, 0, len(metas))
+	for _, m := range metas {
+		genSessions = append(genSessions, unifiedMetaToGenSession(m))
 	}
-	jsonOK(w, metas)
+	jsonOK(w, genSessions)
 }
 
 // resolveSessionStore finds which agent's UnifiedStore owns the given sessionID.
@@ -3140,6 +3165,16 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					} else if len(upstream) > 0 {
 						models = upstream
 					}
+				}
+			}
+			// Fall back to configured models if upstream fetch failed or returned
+			// nothing. Provider.yaml requires models:array — nil marshals as null
+			// which fails Zod validation on the SPA.
+			if models == nil {
+				if configured, ok := providerModels[name]; ok && configured != nil {
+					models = configured
+				} else {
+					models = []string{}
 				}
 			}
 			p := gen.Provider{

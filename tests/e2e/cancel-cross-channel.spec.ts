@@ -449,6 +449,35 @@ test(
 
     await page.goto('/')
 
+    // Precondition: the audit subsystem must be live on this gateway process.
+    // sandbox.audit_log is restart-gated (pkg/gateway/rest_pending_restart.go) —
+    // toggling it via REST persists the flag but does NOT activate it on the
+    // running process. The audit subsystem creates ~/.omnipus/system/audit.jsonl
+    // at boot when cfg.Sandbox.AuditLog=true (pkg/agent/loop.go:346). We check
+    // file existence directly because the /security/audit-log REST endpoint is
+    // guarded by RequireNotBypass and returns 503 in dev-mode-bypass test runs.
+    //
+    // If audit isn't live, attempt the REST PUT so a future restart picks it up,
+    // then fail loudly with an actionable message.
+    const auditPathPrecheck = path.join(OMNIPUS_HOME, 'system', 'audit.jsonl')
+    if (!fs.existsSync(auditPathPrecheck)) {
+      // Best-effort PUT to persist the flag for the next gateway restart. Ignore
+      // result — endpoint may be 503-guarded in dev-mode-bypass.
+      await page.request
+        .put(`${BASE_URL}/api/v1/security/audit-log`, {
+          headers: await apiHeaders(page),
+          data: { enabled: true },
+        })
+        .catch(() => undefined)
+      throw new Error(
+        'T26 precondition: audit.jsonl is absent from $OMNIPUS_HOME/system. ' +
+          'sandbox.audit_log must be enabled when the gateway BOOTS — it is restart-gated, ' +
+          'so toggling via REST mid-run does not activate it. Start the gateway with ' +
+          'sandbox.audit_log:true in config.json (the CI workflow seeds this; for local runs ' +
+          'add it to $OMNIPUS_HOME/config.json before launching the gateway).',
+      )
+    }
+
     // Create a fresh session so we can match session_id in audit log.
     // TanStack Router session URL is /#/sessions/<sessionId> (not /#/<sessionId>).
     const sessionId = await createSession(page)

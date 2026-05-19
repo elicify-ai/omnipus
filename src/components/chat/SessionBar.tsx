@@ -25,7 +25,7 @@ function formatTokens(tokens: number): string {
 }
 
 export function SessionBar() {
-  const { activeAgentId, setActiveSession, startNewSession } = useSessionStore()
+  const { activeAgentId, activeSessionId, setActiveSession, startNewSession } = useSessionStore()
   const { sessionTokens, sessionCost, isStreaming } = useChatStore()
 
   const { data: agents = [], isError: agentsError } = useQuery({
@@ -78,8 +78,15 @@ export function SessionBar() {
 
   const handleAgentSelect = (agentId: string) => {
     const selected = agents.find((a) => a.id === agentId)
-    // Pass agent type so the session store stays in sync with the selected agent
-    setActiveSession(null, agentId, selected?.type ?? null)
+    // Preserve the current session when switching agents. Passing null as
+    // sessionId clears activeSessionId while the route hash may still point
+    // at /#/sessions/<id>; the route hook then re-attaches → isReplaying
+    // flips true → composer disables → done frame → isReplaying flips false
+    // → composer re-enables. The textarea remounts on every flip, which
+    // detaches Playwright's locator between fill() and press(Enter) and
+    // causes T26 (audit log after cancel) to time out. Forward the current
+    // sessionId so the in-session agent switch is a single store update.
+    setActiveSession(activeSessionId, agentId, selected?.type ?? null)
   }
 
   return (

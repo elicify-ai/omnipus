@@ -389,6 +389,9 @@ jobs:
               "port": 6060,
               "dev_mode_bypass": true
             },
+            "sandbox": {
+              "audit_log": true
+            },
             "agents": {
               "defaults": {
                 "model_name": "openrouter-glm"
