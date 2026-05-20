@@ -82,7 +82,6 @@ type toolsConfigV0 struct {
 	AppendFile      ToolConfig          `json:"append_file"                                             envPrefix:"OMNIPUS_TOOLS_APPEND_FILE_"`
 	EditFile        ToolConfig          `json:"edit_file"                                               envPrefix:"OMNIPUS_TOOLS_EDIT_FILE_"`
 	FindSkills      ToolConfig          `json:"find_skills"                                             envPrefix:"OMNIPUS_TOOLS_FIND_SKILLS_"`
-	I2C             ToolConfig          `json:"i2c"                                                     envPrefix:"OMNIPUS_TOOLS_I2C_"`
 	InstallSkill    ToolConfig          `json:"install_skill"                                           envPrefix:"OMNIPUS_TOOLS_INSTALL_SKILL_"`
 	ListDir         ToolConfig          `json:"list_dir"                                                envPrefix:"OMNIPUS_TOOLS_LIST_DIR_"`
 	Message         ToolConfig          `json:"message"                                                 envPrefix:"OMNIPUS_TOOLS_MESSAGE_"`
@@ -90,7 +89,6 @@ type toolsConfigV0 struct {
 	SendFile        ToolConfig          `json:"send_file"                                               envPrefix:"OMNIPUS_TOOLS_SEND_FILE_"`
 	Spawn           ToolConfig          `json:"spawn"                                                   envPrefix:"OMNIPUS_TOOLS_SPAWN_"`
 	SpawnStatus     ToolConfig          `json:"spawn_status"                                            envPrefix:"OMNIPUS_TOOLS_SPAWN_STATUS_"`
-	SPI             ToolConfig          `json:"spi"                                                     envPrefix:"OMNIPUS_TOOLS_SPI_"`
 	Subagent        ToolConfig          `json:"subagent"                                                envPrefix:"OMNIPUS_TOOLS_SUBAGENT_"`
 	WebFetch        ToolConfig          `json:"web_fetch"                                               envPrefix:"OMNIPUS_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig          `json:"write_file"                                              envPrefix:"OMNIPUS_TOOLS_WRITE_FILE_"`
@@ -808,7 +806,6 @@ func (c *configV0) Migrate() (*Config, error) {
 	cfg.Tools.AppendFile = c.Tools.AppendFile
 	cfg.Tools.EditFile = c.Tools.EditFile
 	cfg.Tools.FindSkills = c.Tools.FindSkills
-	cfg.Tools.I2C = c.Tools.I2C
 	cfg.Tools.InstallSkill = c.Tools.InstallSkill
 	cfg.Tools.ListDir = c.Tools.ListDir
 	cfg.Tools.Message = c.Tools.Message
@@ -816,7 +813,6 @@ func (c *configV0) Migrate() (*Config, error) {
 	cfg.Tools.SendFile = c.Tools.SendFile
 	cfg.Tools.Spawn = c.Tools.Spawn
 	cfg.Tools.SpawnStatus = c.Tools.SpawnStatus
-	cfg.Tools.SPI = c.Tools.SPI
 	cfg.Tools.Subagent = c.Tools.Subagent
 	cfg.Tools.WebFetch = c.Tools.WebFetch
 	cfg.Tools.AllowReadPaths = c.Tools.AllowReadPaths

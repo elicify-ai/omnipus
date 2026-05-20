@@ -227,9 +227,6 @@
     "find_skills": {
       "enabled": false
     },
-    "i2c": {
-      "enabled": false
-    },
     "install_skill": {
       "enabled": false
     },
@@ -286,9 +283,6 @@
       "enabled": false
     },
     "spawn_status": {
-      "enabled": false
-    },
-    "spi": {
       "enabled": false
     },
     "subagent": {

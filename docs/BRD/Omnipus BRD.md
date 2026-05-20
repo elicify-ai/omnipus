@@ -400,7 +400,7 @@ Features included:
 |Security features increase RAM beyond budget         |Erodes Omnipus’s core value prop        |Low       |Profile continuously. Audit logging uses ring buffer with configurable max size. Policy engine uses minimal in-memory representation.                       |
 |Backward compatibility break in config               |Alienates existing 25K-star community    |Medium    |All new config sections are additive under a `security` key. Validate with v0.2.x config corpus before each release.                                        |
 |Channel integration APIs change or require paid tiers|Phase 3 scope creep                      |Medium    |Prioritize open-protocol channels (Nostr, Mattermost, Twitch/IRC) first. Enterprise channels (Teams, Google Chat) may require user-provided API credentials.|
-|Omnipus upstream moves fast (95% AI-bootstrapped)   |Merge conflicts, divergence from upstream|High      |Contribute security features upstream to sipeed/omnipus. Maintain Omnipus as a compatible fork if upstream declines.                                        |
+|Omnipus upstream moves fast (95% AI-bootstrapped)   |Merge conflicts, divergence from upstream|High      |Contribute security features upstream to upstream omnipus. Maintain Omnipus as a compatible fork if upstream declines.                                        |
 |NemoClaw matures faster than expected                |Competitive window closes                |Medium    |Focus on the lightweight differentiator — Omnipus runs where NemoClaw cannot (edge, IoT, constrained hardware). This is not a market NemoClaw targets.       |
 
 -----

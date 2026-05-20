@@ -1430,7 +1430,6 @@ type ToolsConfig struct {
 	TaskCreate      ToolConfig         `json:"task_create"       yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_TASK_CREATE_"`
 	TaskUpdate      ToolConfig         `json:"task_update"       yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_TASK_UPDATE_"`
 	FindSkills      ToolConfig         `json:"find_skills"       yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_FIND_SKILLS_"`
-	I2C             ToolConfig         `json:"i2c"               yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_I2C_"`
 	InstallSkill    ToolConfig         `json:"install_skill"     yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_INSTALL_SKILL_"`
 	ListDir         ToolConfig         `json:"list_dir"          yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_LIST_DIR_"`
 	Message         ToolConfig         `json:"message"           yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_MESSAGE_"`
@@ -1438,7 +1437,6 @@ type ToolsConfig struct {
 	SendFile        ToolConfig         `json:"send_file"         yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_SEND_FILE_"`
 	Spawn           ToolConfig         `json:"spawn"             yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_SPAWN_"`
 	SpawnStatus     ToolConfig         `json:"spawn_status"      yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_SPAWN_STATUS_"`
-	SPI             ToolConfig         `json:"spi"               yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_SPI_"`
 	Subagent        ToolConfig         `json:"subagent"          yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_SUBAGENT_"`
 	WebFetch        ToolConfig         `json:"web_fetch"         yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig         `json:"write_file"        yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_WRITE_FILE_"`
@@ -2101,8 +2099,6 @@ func (t *ToolsConfig) warnDeprecatedEnableFlags() {
 		{"web", t.Web.Enabled},
 		{"web_fetch", t.WebFetch.Enabled},
 		{"browser", t.Browser.Enabled},
-		{"i2c", t.I2C.Enabled},
-		{"spi", t.SPI.Enabled},
 		{"mcp", t.MCP.Enabled},
 		{"exec", t.Exec.Enabled},
 		{"cron", t.Cron.Enabled},

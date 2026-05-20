@@ -47,7 +47,7 @@ For substantial new features, please open an issue first to discuss the design b
    ```
 3. Add the upstream remote:
    ```bash
-   git remote add upstream https://github.com/sipeed/omnipus.git
+   git remote add upstream https://github.com/elicify-ai/omnipus.git
    ```
 
 ---

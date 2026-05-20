@@ -16,7 +16,7 @@ func newInstallCommand(installerFn func() (*skills.SkillInstaller, error)) *cobr
 		Use:   "install",
 		Short: "Install skill from GitHub",
 		Example: `
-omnipus skills install sipeed/omnipus-skills/weather
+omnipus skills install owner/repo/skill
 omnipus skills install --registry clawhub github
 `,
 		Args: func(cmd *cobra.Command, args []string) error {

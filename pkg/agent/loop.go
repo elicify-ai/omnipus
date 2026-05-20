@@ -1187,11 +1187,6 @@ func registerSharedTools(
 			agent.Tools.Register(fetchTool)
 		}
 
-		// Hardware tools (I2C, SPI) — Linux-only; their Execute methods return
-		// a clear error on non-Linux. Registered unconditionally.
-		agent.Tools.Register(tools.NewI2CTool())
-		agent.Tools.Register(tools.NewSPITool())
-
 		// Message tool — outbound inter-agent message via bus.
 		messageTool := tools.NewMessageTool()
 		messageTool.SetSendCallback(func(channel, chatID, content string) error {

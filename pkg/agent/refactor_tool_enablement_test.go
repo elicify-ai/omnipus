@@ -26,9 +26,9 @@ import (
 // shape Omnipus writes on fresh onboarding), every implemented tool ends up in
 // each agent's registry.
 //
-// Previously this test would have failed for browser, mcp, i2c, spi, task_*,
-// etc. — their Enabled default was false, so IsToolEnabled returned false and
-// the agent loop silently skipped registration.
+// Previously this test would have failed for browser, mcp, task_*, etc. —
+// their Enabled default was false, so IsToolEnabled returned false and the
+// agent loop silently skipped registration.
 func TestAllImplementedToolsRegistered_DefaultConfig(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Workspace = t.TempDir()
@@ -59,8 +59,6 @@ func TestAllImplementedToolsRegistered_DefaultConfig(t *testing.T) {
 		"exec",
 		// Web
 		"web_fetch",
-		// Hardware (Linux-only at runtime; registration is always performed)
-		"i2c", "spi",
 		// Communication
 		"message", "send_file",
 		// Skills

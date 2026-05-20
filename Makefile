@@ -272,14 +272,11 @@ clean:
 
 ## vet: Run go vet for static analysis
 vet: generate
-	@packages="$$($(GO) list $(GOFLAGS) ./...)" && \
-		$(GO) vet $(GOFLAGS) $$(printf '%s\n' "$$packages" | grep -v '^github.com/sipeed/omnipus/web/')
-	@cd web/backend && $(WEB_GO) vet ./...
+	@$(GO) vet $(GOFLAGS) ./...
 
 ## test: Test Go code
 test: generate
-	@$(GO) test $(GOFLAGS) $$($(GO) list $(GOFLAGS) ./... | grep -v github.com/sipeed/omnipus/web/)
-	@cd web && make test
+	@$(GO) test $(GOFLAGS) ./...
 
 ## fmt: Format Go code
 fmt:

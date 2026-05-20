@@ -216,5 +216,5 @@ api_key or api_base is required for HTTP-based protocol "xxx"
 
 ## Need Help?
 
-- [GitHub Issues](https://github.com/sipeed/omnipus/issues)
-- [Discussion #122](https://github.com/sipeed/omnipus/discussions/122): Original proposal
+- [GitHub Issues](https://github.com/elicify-ai/omnipus/issues)
+- [Discussion #122](https://github.com/elicify-ai/omnipus/discussions/122): Original proposal

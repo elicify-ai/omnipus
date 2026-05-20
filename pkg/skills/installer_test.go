@@ -26,17 +26,17 @@ func TestParseGitHubRef(t *testing.T) {
 	}{
 		{
 			name:         "simple owner/repo",
-			repo:         "sipeed/omnipus",
-			wantOwner:    "sipeed",
-			wantRepoName: "omnipus",
+			repo:         "example/repo",
+			wantOwner:    "example",
+			wantRepoName: "repo",
 			wantRef:      "main",
 			wantSubPath:  "",
 		},
 		{
 			name:         "owner/repo with subpath",
-			repo:         "sipeed/omnipus/skills/test",
-			wantOwner:    "sipeed",
-			wantRepoName: "omnipus",
+			repo:         "example/repo/skills/test",
+			wantOwner:    "example",
+			wantRepoName: "repo",
 			wantRef:      "main",
 			wantSubPath:  "skills/test",
 		},
@@ -66,7 +66,7 @@ func TestParseGitHubRef(t *testing.T) {
 		},
 		{
 			name:           "invalid format - single part",
-			repo:           "sipeed",
+			repo:           "ownerless",
 			wantErr:        true,
 			wantErrContain: "expected 'owner/repo'",
 		},
@@ -78,15 +78,15 @@ func TestParseGitHubRef(t *testing.T) {
 		},
 		{
 			name:           "invalid GitHub URL - only one path part",
-			repo:           "https://github.com/sipeed",
+			repo:           "https://github.com/owner-only",
 			wantErr:        true,
 			wantErrContain: "invalid GitHub URL",
 		},
 		{
 			name:         "with whitespace",
-			repo:         "  sipeed/omnipus  ",
-			wantOwner:    "sipeed",
-			wantRepoName: "omnipus",
+			repo:         "  example/repo  ",
+			wantOwner:    "example",
+			wantRepoName: "repo",
 			wantRef:      "main",
 			wantSubPath:  "",
 		},
@@ -436,12 +436,12 @@ func TestSkillInstaller_InstallFromGitHub_SkillAlreadyExists(t *testing.T) {
 	}
 
 	// Create an existing skill directory
-	existingSkill := filepath.Join(skillsDir, "omnipus")
+	existingSkill := filepath.Join(skillsDir, "repo")
 	os.MkdirAll(existingSkill, 0o755)
 	os.WriteFile(filepath.Join(existingSkill, "SKILL.md"), []byte("existing"), 0o644)
 
 	// Try to install the same skill - should fail
-	err = installer.InstallFromGitHub(context.Background(), "sipeed/omnipus")
+	err = installer.InstallFromGitHub(context.Background(), "example/repo")
 	if err == nil {
 		t.Error("InstallFromGitHub() expected error for existing skill, got nil")
 	}

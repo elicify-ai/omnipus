@@ -38,7 +38,6 @@ Before specifying gaps, the following capabilities are confirmed present in Omni
 | System tray UI | v0.2.3 | Windows and Linux. |
 | Channels: Telegram, Discord, Slack, QQ, DingTalk, LINE, WeCom, Matrix, IRC | v0.2.1 | 10 channels operational. |
 | Web search | v0.1.x+ | Brave, DuckDuckGo, Exa providers. |
-| Hardware I/O (I2C/SPI) | v0.2.1 | Unique to Omnipus — IoT/embedded integration. |
 | WhatsApp (bridge) | Config exists | Via external bridge at `ws://localhost:3001`. Not native — external dependency required. |
 | Feishu / Lark | Config exists | Present in config but disabled/incomplete. |
 | Gateway hot-reload | v0.2.3 | Experimental. |

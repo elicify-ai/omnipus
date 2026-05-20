@@ -165,7 +165,7 @@ Per-agent policy lives in a `ToolPolicyCfg` struct (`pkg/tools/compositor.go:109
 ### 3.3 Tool catalog and JSON schema
 
 - Tool catalog is derived at runtime from `BuiltinRegistry.Describe()` (`pkg/tools/builtin_registry.go:112`), replacing the deleted static `builtinCatalog` slice (`pkg/tools/catalog.go`).
-- File implementations include: `shell.go`, `filesystem.go`, `web.go`, `browser/`, `send_file.go`, `edit.go`, `handoff.go`, `message.go`, `mcp_tool.go`, `build_static.go`, `cron.go`, `spawn.go`, `subagent.go`, `task.go`, `skills_install.go`, `skills_search.go`, `skills_remove.go`, `i2c.go`/`i2c_linux.go`, `spi.go`/`spi_linux.go`.
+- File implementations include: `shell.go`, `filesystem.go`, `web.go`, `browser/`, `send_file.go`, `edit.go`, `handoff.go`, `message.go`, `mcp_tool.go`, `build_static.go`, `cron.go`, `spawn.go`, `subagent.go`, `task.go`, `skills_install.go`, `skills_search.go`, `skills_remove.go`.
 - Schema export: `ToolToSchema` (`pkg/tools/types.go:141-150`) emits OpenAI/Anthropic function format `{type:"function", function:{name, description, parameters}}`.
 
 ### 3.4 System tools (`pkg/sysagent/tools`)
