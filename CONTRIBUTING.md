@@ -1,8 +1,8 @@
 # Contributing to Omnipus
 
-Thank you for your interest in contributing to Omnipus! This project is a community-driven effort to build the lightweight and versatile personal AI assistant. We welcome contributions of all kinds: bug fixes, features, documentation, translations, and testing.
+Thank you for your interest in contributing to Omnipus. This project is a community-driven effort to build a sovereign, sandboxed, single-binary AI agent runtime. We welcome bug fixes, features, documentation, and testing contributions.
 
-Omnipus itself was substantially developed with AI assistance — we embrace this approach and have built our contribution process around it.
+Omnipus was substantially developed with AI assistance — we embrace this approach and have built our contribution process around it.
 
 ## Table of Contents
 
@@ -11,6 +11,7 @@ Omnipus itself was substantially developed with AI assistance — we embrace thi
 - [Getting Started](#getting-started)
 - [Development Setup](#development-setup)
 - [Making Changes](#making-changes)
+- [Contract-First Wire Formats](#contract-first-wire-formats)
 - [AI-Assisted Contributions](#ai-assisted-contributions)
 - [Pull Request Process](#pull-request-process)
 - [Branch Strategy](#branch-strategy)
@@ -31,9 +32,9 @@ We are committed to maintaining a welcoming and respectful community. Be kind, c
 - **Feature requests** — Open an issue using the feature request template; discuss before implementing.
 - **Code** — Fix bugs or implement features. See the workflow below.
 - **Documentation** — Improve READMEs, docs, inline comments, or translations.
-- **Testing** — Run Omnipus on new hardware, channels, or LLM providers and report your results.
+- **Testing** — Run Omnipus on new channels or LLM providers and report your results.
 
-For substantial new features, please open an issue first to discuss the design before writing code. This prevents wasted effort and ensures alignment with the project's direction.
+For substantial new features, please open an issue first to discuss the design before writing code. This prevents wasted effort and ensures alignment with the project's direction. Check `ROADMAP.md` to understand which release phase your work targets.
 
 ---
 
@@ -56,34 +57,41 @@ For substantial new features, please open an issue first to discuss the design b
 
 ### Prerequisites
 
-- Go 1.25 or later
+- Go 1.26.3 or later (`go.mod` pins `go 1.26.3`)
+- Node.js 24 or later
 - `make`
 
 ### Build
 
+The Go binary embeds the React SPA via `go:embed`. `make build` handles the full pipeline:
+
 ```bash
-make build       # Build binary (runs go generate first)
-make generate    # Run go generate only
-make check       # Full pre-commit check: deps + fmt + vet + test
+make build   # npm ci + npm run build + copy SPA into pkg/gateway/spa + go generate + go build
 ```
+
+The output is `build/omnipus-<platform>-<arch>` (plus a `build/omnipus` symlink to it).
+
+If you need to run the SPA build steps by hand (e.g. iterating on the frontend without re-linking the Go binary), the equivalent sequence is `npm ci && npm run build && rm -rf pkg/gateway/spa && cp -r dist/spa pkg/gateway/spa`. After that, plain `go build ./cmd/omnipus` works.
 
 ### Running Tests
 
 ```bash
-make test                                    # Run all tests
+make test                                    # Run all tests (go test ./...)
 go test -run TestName -v ./pkg/session/      # Run a single test
 go test -bench=. -benchmem -run='^$' ./...  # Run benchmarks
 ```
 
+The test suite requires the SPA to be built first (see Build section above) because the gateway package embeds it.
+
 ### Code Style
 
 ```bash
-make fmt   # Format code
-make vet   # Static analysis
-make lint  # Full linter run
+make fmt    # Format Go code (via golangci-lint fmt)
+make vet    # Static analysis (go vet)
+make lint   # Full golangci-lint run with project build tags
 ```
 
-All CI checks must pass before a PR can be merged. Run `make check` locally before pushing to catch issues early.
+Run `make check` before pushing — it runs `deps`, `fmt`, `vet`, and `test` in sequence.
 
 ---
 
@@ -91,7 +99,7 @@ All CI checks must pass before a PR can be merged. Run `make check` locally befo
 
 ### Branching
 
-Always branch off `main` and target `main` in your PR. Never push directly to `main` or any `release/*` branch:
+Always branch off `main` and target `main` in your PR. Never push directly to `main`:
 
 ```bash
 git checkout main
@@ -107,8 +115,7 @@ Use descriptive branch names, e.g. `fix/telegram-timeout`, `feat/ollama-provider
 - Use the imperative mood: "Add retry logic" not "Added retry logic".
 - Reference the related issue when relevant: `Fix session leak (#123)`.
 - Keep commits focused. One logical change per commit is preferred.
-- For minor cleanups or typo fixes, squash them into a single commit before opening a PR.
-- Refer to https://www.conventionalcommits.org/zh-hans/v1.0.0/
+- Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ### Keeping Up to Date
 
@@ -121,19 +128,41 @@ git rebase upstream/main
 
 ---
 
+## Contract-First Wire Formats
+
+**Hard constraint:** every type that crosses the gateway/SPA boundary (REST request/response, WebSocket frame, persisted JSON consumed by the SPA) must be defined in the contract specs **before** any Go or TypeScript code is written:
+
+- `contracts/openapi.yaml` — REST endpoints
+- `contracts/asyncapi.yaml` — WebSocket frames
+- `contracts/components/schemas/` — shared JSON Schema component definitions
+
+Generated artifacts live in `pkg/api/generated/` (Go) and `src/lib/api/generated/` (TypeScript + Zod). These are committed to the repo and must never be edited by hand.
+
+**To add a new wire type:**
+
+1. Add the schema to `contracts/components/schemas/<TypeName>.yaml`
+2. Reference it from `openapi.yaml` or `asyncapi.yaml`
+3. Run `make gen-contracts` to regenerate all artifacts
+4. Commit the generated diff alongside the spec change (one atomic commit)
+5. Write the handler or consumer using the generated type only
+
+`make verify-contracts` (also run as a CI job) fails if the committed generated files are stale relative to the spec. Hand-written wire-format structs in `pkg/gateway/*.go` or hand-written wire interfaces in `src/lib/api.ts` / `src/lib/ws.ts` are caught by the `wire-types-lint` CI job and must be corrected.
+
+---
+
 ## AI-Assisted Contributions
 
 Omnipus was built with substantial AI assistance, and we fully embrace AI-assisted development. However, contributors must understand their responsibilities when using AI tools.
 
 ### Disclosure Is Required
 
-Every PR must disclose AI involvement using the PR template's **🤖 AI Code Generation** section. There are three levels:
+Every PR must disclose AI involvement using the PR template's AI Code Generation section. There are three levels:
 
 | Level | Description |
 |---|---|
-| 🤖 Fully AI-generated | AI wrote the code; contributor reviewed and validated it |
-| 🛠️ Mostly AI-generated | AI produced the draft; contributor made significant modifications |
-| 👨‍💻 Mostly Human-written | Contributor led; AI provided suggestions or none at all |
+| Fully AI-generated | AI wrote the code; contributor reviewed and validated it |
+| Mostly AI-generated | AI produced the draft; contributor made significant modifications |
+| Mostly human-written | Contributor led; AI provided suggestions or none at all |
 
 Honest disclosure is expected. There is no stigma attached to any level — what matters is the quality of the contribution.
 
@@ -152,8 +181,8 @@ PRs where it is clear the contributor has not read or tested the AI-generated co
 
 AI-generated contributions are held to the **same quality bar** as human-written code:
 
-- It must pass all CI checks (`make check`).
-- It must be idiomatic Go and consistent with the existing codebase style.
+- All CI checks must pass.
+- Code must be idiomatic Go and consistent with the existing codebase style.
 - It must not introduce unnecessary abstractions, dead code, or over-engineering.
 - It must include or update tests where appropriate.
 
@@ -161,7 +190,7 @@ AI-generated contributions are held to the **same quality bar** as human-written
 
 AI-generated code requires extra security scrutiny. Pay special attention to:
 
-- File path handling and sandbox escapes (see commit `244eb0b` for a real example)
+- File path handling and sandbox escapes
 - External input validation in channel handlers and tool implementations
 - Credential or secret handling
 - Command execution (`exec.Command`, shell invocations)
@@ -175,6 +204,9 @@ If you are unsure whether a piece of AI-generated code is safe, say so in the PR
 ### Before Opening a PR
 
 - [ ] Run `make check` and ensure it passes locally.
+- [ ] Run `npm run typecheck` (`tsc -b --noEmit`) — use this form, not `tsc --noEmit` alone, which silently no-ops on this repo's project-references config.
+- [ ] Run `npx vitest run` for frontend tests.
+- [ ] Run `make verify-contracts` if you changed any contract spec or gateway handler.
 - [ ] Fill in the PR template completely, including the AI disclosure section.
 - [ ] Link any related issue(s) in the PR description.
 - [ ] Keep the PR focused. Avoid bundling unrelated changes together.
@@ -188,7 +220,7 @@ The PR template asks for:
 - **AI Code Generation** — Disclosure of AI involvement (required).
 - **Related Issue** — Link to the issue this addresses.
 - **Technical Context** — Reference URLs and reasoning (skip for pure docs PRs).
-- **Test Environment** — Hardware, OS, model/provider, and channels used for testing.
+- **Test Environment** — OS, model/provider, and channels used for testing.
 - **Evidence** — Optional logs or screenshots demonstrating the change works.
 - **Checklist** — Self-review confirmation.
 
@@ -209,7 +241,7 @@ Prefer small, reviewable PRs. A PR that changes 200 lines across 5 files is much
 
 A PR can only be merged when all of the following are satisfied:
 
-1. **CI passes** — All GitHub Actions workflows (lint, test, build) must be green.
+1. **CI passes** — All GitHub Actions jobs (typecheck, wire-types-lint, verify-contracts, lint, vuln\_check, test, security, perf-smoke, playwright) must be green.
 2. **Reviewer approval** — At least one maintainer has approved the PR.
 3. **No unresolved review comments** — All review threads must be resolved.
 4. **PR template is complete** — Including AI disclosure and test environment.
@@ -259,26 +291,9 @@ Review for:
 3. **Architecture** — Is the approach consistent with the existing design?
 4. **Simplicity** — Is there a simpler solution? Does this add unnecessary complexity?
 5. **Tests** — Are the changes covered by tests? Are existing tests still meaningful?
+6. **Contract compliance** — Any new cross-boundary types must go through the contract spec; generated types only.
 
 Be constructive and specific. "This could have a race condition if two goroutines call this concurrently — consider using a mutex here" is better than "this looks wrong".
-
-
-### Reviewer List
-Once your PR is submitted, you can reach out to the assigned reviewers listed in the following table.
-
-|Function| Reviewer|
-|---     |---      |
-|Provider|@yinwm   |
-|Channel |@yinwm/@alexhoshina   |
-|Agent   |@lxowalle/@Zhaoyikaiii|
-|Tools   |@lxowalle|
-|SKill   ||
-|MCP     ||
-|Optimization|@lxowalle|
-|Security||
-|AI CI   |@imguoguo|
-|UX      ||
-|Document||
 
 ---
 
@@ -287,7 +302,6 @@ Once your PR is submitted, you can reach out to the assigned reviewers listed in
 - **GitHub Issues** — Bug reports, feature requests, design discussions.
 - **GitHub Discussions** — General questions, ideas, community conversation.
 - **Pull Request comments** — Code-specific feedback.
-- **Wechat&Discord** — We will invite you when you have at least one merged PR
 
 When in doubt, open an issue before writing code. It costs little and prevents wasted effort.
 
@@ -299,4 +313,4 @@ Omnipus's architecture was substantially designed and implemented with AI assist
 
 We believe AI-assisted development done responsibly produces great results. We also believe humans must remain accountable for what they ship. These two beliefs are not in conflict.
 
-Thank you for contributing!
+Thank you for contributing.
