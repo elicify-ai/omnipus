@@ -60,7 +60,7 @@ pkg/channels/
 ├── discord/
 │   ├── init.go
 │   └── discord.go
-├── slack/ line/ onebot/ dingtalk/ feishu/ wecom/ qq/ whatsapp/ whatsapp_native/ maixcam/ pico/
+├── slack/ line/ onebot/ dingtalk/ feishu/ wecom/ qq/ whatsapp/ whatsapp_native/ maixcam/
 │   └── ...
 
 pkg/bus/
@@ -753,9 +753,9 @@ if c.owner != nil && c.placeholderRecorder != nil {
 ```
 
 **这意味着**：
-- 实现 `TypingCapable` 的 channel（Telegram、Discord、LINE、Pico）无需在 `handleMessage` 中手动调用 `StartTyping` + `RecordTypingStop`
+- 实现 `TypingCapable` 的 channel（Telegram、Discord、LINE）无需在 `handleMessage` 中手动调用 `StartTyping` + `RecordTypingStop`
 - 实现 `ReactionCapable` 的 channel（Slack、OneBot）无需在 `handleMessage` 中手动调用 `AddReaction` + `RecordTypingStop`
-- 实现 `PlaceholderCapable` 的 channel（Telegram、Discord、Pico）无需在 `handleMessage` 中手动发送占位消息并调用 `RecordPlaceholder`
+- 实现 `PlaceholderCapable` 的 channel（Telegram、Discord）无需在 `handleMessage` 中手动发送占位消息并调用 `RecordPlaceholder`
 - Channel 只需实现对应接口，`HandleMessage` 会自动完成编排
 - 不实现这些接口的 channel 不受影响（类型断言会失败，跳过）
 - `PlaceholderCapable` 的 `SendPlaceholder` 方法内部根据配置的 `PlaceholderConfig.Enabled` 决定是否发送；返回 `("", nil)` 时跳过注册
@@ -1259,7 +1259,6 @@ make test                                       # 全量测试
 | `pkg/channels/whatsapp/` | `"whatsapp"` | — (Bridge 模式) |
 | `pkg/channels/whatsapp_native/` | `"whatsapp_native"` | — (原生 whatsmeow 模式) |
 | `pkg/channels/maixcam/` | `"maixcam"` | — |
-| `pkg/channels/pico/` | `"pico"` | TypingCapable, PlaceholderCapable, MessageEditor, WebhookHandler |
 
 ### A.3 接口速查表
 
@@ -1371,12 +1370,10 @@ agentLoop.Stop()               // 停止 Agent
 
 3. **WeCom 现在只有一个 channel**：`"wecom"` 采用 WebSocket AI Bot 实现，带路由持久化；访问控制走统一的 channel 白名单机制，不再保留旧的 webhook/app 双分支。
 
-4. **Pico Protocol**：`pkg/channels/pico/` 实现了一个自定义的 Omnipus 原生协议 channel，通过 WebSocket webhook (`/pico/ws`) 接收消息。
+4. **WhatsApp 有两种模式**：`"whatsapp"`（Bridge 模式，通过外部 bridge URL 通信）和 `"whatsapp_native"`（原生 whatsmeow 模式，直接连接 WhatsApp）。Manager 根据 `WhatsAppConfig.UseNative` 决定初始化哪个。
 
-5. **WhatsApp 有两种模式**：`"whatsapp"`（Bridge 模式，通过外部 bridge URL 通信）和 `"whatsapp_native"`（原生 whatsmeow 模式，直接连接 WhatsApp）。Manager 根据 `WhatsAppConfig.UseNative` 决定初始化哪个。
+5. **DingTalk 使用 Stream 模式**：DingTalk 使用 SDK 的 Stream/WebSocket 模式（非 HTTP webhook），因此不实现 `WebhookHandler`。
 
-6. **DingTalk 使用 Stream 模式**：DingTalk 使用 SDK 的 Stream/WebSocket 模式（非 HTTP webhook），因此不实现 `WebhookHandler`。
+6. **PlaceholderConfig 的配置与实现**：`PlaceholderConfig` 出现在 5 个 channel config 中（Telegram、Discord、Slack、LINE、OneBot），但只有实现了 `PlaceholderCapable` + `MessageEditor` 的 channel（Telegram、Discord）能真正使用占位消息编辑功能。其余 channel 的 `PlaceholderConfig` 为预留字段。
 
-7. **PlaceholderConfig 的配置与实现**：`PlaceholderConfig` 出现在 6 个 channel config 中（Telegram、Discord、Slack、LINE、OneBot、Pico），但只有实现了 `PlaceholderCapable` + `MessageEditor` 的 channel（Telegram、Discord、Pico）能真正使用占位消息编辑功能。其余 channel 的 `PlaceholderConfig` 为预留字段。
-
-8. **ReasoningChannelID**：大多数 channel config 都包含 `reasoning_channel_id` 字段，用于将 LLM 的思维链（reasoning/thinking）路由到指定 channel（WhatsApp、Telegram、Feishu、Discord、MaixCam、QQ、DingTalk、Slack、LINE、OneBot、WeCom）。注意：`PicoConfig` 目前不包含该字段。`BaseChannel` 通过 `WithReasoningChannelID` 选项和 `ReasoningChannelID()` 方法暴露此配置。
+7. **ReasoningChannelID**：大多数 channel config 都包含 `reasoning_channel_id` 字段，用于将 LLM 的思维链（reasoning/thinking）路由到指定 channel（WhatsApp、Telegram、Feishu、Discord、MaixCam、QQ、DingTalk、Slack、LINE、OneBot、WeCom）。`BaseChannel` 通过 `WithReasoningChannelID` 选项和 `ReasoningChannelID()` 方法暴露此配置。

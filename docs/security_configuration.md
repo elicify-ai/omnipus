@@ -82,8 +82,6 @@ channels:
     secret: "your-wecom-aibot-secret"
     token: "your-wecom-aibot-token"
     encoding_aes_key: "your-wecom-aibot-encoding-aes-key"
-  pico:
-    token: "your-pico-token"
   irc:
     password: "your-irc-password"
     nickserv_password: "your-irc-nickserv-password"

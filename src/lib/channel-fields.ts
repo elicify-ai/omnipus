@@ -496,37 +496,6 @@ export const CHANNEL_FIELDS: Record<string, ChannelField[]> = {
   ],
 
 
-  pico: [
-    {
-      key: 'token',
-      label: 'Access Token',
-      type: 'password',
-      required: false,
-      helpText: 'Optional bearer token to restrict access to this channel',
-    },
-    {
-      key: 'allow_origins',
-      label: 'Allow Origins',
-      type: 'text',
-      required: false,
-      placeholder: 'https://example.com, *',
-      helpText: 'Comma-separated allowed CORS origins (empty = any)',
-    },
-    {
-      key: 'allow_from',
-      label: 'Allow From',
-      type: 'text',
-      required: false,
-      placeholder: 'client_id1, client_id2',
-    },
-    {
-      key: 'max_connections',
-      label: 'Max Connections',
-      type: 'number',
-      required: false,
-      placeholder: '100',
-    },
-  ],
 
   weixin: [
     {

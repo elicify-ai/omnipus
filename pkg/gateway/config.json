@@ -120,18 +120,6 @@
       "typing": {},
       "ws_url": ""
     },
-    "pico": {
-      "allow_from": null,
-      "enabled": false,
-      "placeholder": {
-        "enabled": false
-      }
-    },
-    "pico_client": {
-      "allow_from": null,
-      "enabled": false,
-      "url": ""
-    },
     "qq": {
       "allow_from": null,
       "app_id": "",

@@ -60,7 +60,7 @@ pkg/channels/
 ├── discord/
 │   ├── init.go
 │   └── discord.go
-├── slack/ line/ onebot/ dingtalk/ feishu/ wecom/ qq/ whatsapp/ whatsapp_native/ maixcam/ pico/
+├── slack/ line/ onebot/ dingtalk/ feishu/ wecom/ qq/ whatsapp/ whatsapp_native/ maixcam/
 │   └── ...
 
 pkg/bus/
@@ -754,9 +754,9 @@ if c.owner != nil && c.placeholderRecorder != nil {
 ```
 
 **This means**:
-- Channels implementing `TypingCapable` (Telegram, Discord, LINE, Pico) do not need to manually call `StartTyping` + `RecordTypingStop` in `handleMessage`
+- Channels implementing `TypingCapable` (Telegram, Discord, LINE) do not need to manually call `StartTyping` + `RecordTypingStop` in `handleMessage`
 - Channels implementing `ReactionCapable` (Slack, OneBot) do not need to manually call `AddReaction` + `RecordTypingStop` in `handleMessage`
-- Channels implementing `PlaceholderCapable` (Telegram, Discord, Pico) do not need to manually send placeholder messages and call `RecordPlaceholder` in `handleMessage`
+- Channels implementing `PlaceholderCapable` (Telegram, Discord) do not need to manually send placeholder messages and call `RecordPlaceholder` in `handleMessage`
 - Channels only need to implement the corresponding interface; `HandleMessage` handles orchestration automatically
 - Channels that don't implement these interfaces are unaffected (type assertions will fail and be skipped)
 - `PlaceholderCapable`'s `SendPlaceholder` method internally decides whether to send based on the configured `PlaceholderConfig.Enabled`; returning `("", nil)` skips registration
@@ -1260,7 +1260,6 @@ make test                                       # Full test suite
 | `pkg/channels/whatsapp/` | `"whatsapp"` | — (Bridge mode) |
 | `pkg/channels/whatsapp_native/` | `"whatsapp_native"` | — (Native whatsmeow mode) |
 | `pkg/channels/maixcam/` | `"maixcam"` | — |
-| `pkg/channels/pico/` | `"pico"` | TypingCapable, PlaceholderCapable, MessageEditor, WebhookHandler |
 
 ### A.3 Interface Quick Reference
 
@@ -1372,12 +1371,10 @@ agentLoop.Stop()               // Stop Agent
 
 3. **WeCom is now a single channel**: `"wecom"` is implemented as a WebSocket-based AI Bot channel with route persistence. Access control uses the shared channel allowlist mechanism. It no longer exposes the legacy webhook/app split.
 
-4. **Pico Protocol**: `pkg/channels/pico/` implements a custom Omnipus native protocol channel that receives messages via WebSocket webhook (`/pico/ws`).
+4. **WhatsApp has two modes**: `"whatsapp"` (Bridge mode, communicates via external bridge URL) and `"whatsapp_native"` (native whatsmeow mode, connects directly to WhatsApp). Manager selects which to initialize based on `WhatsAppConfig.UseNative`.
 
-5. **WhatsApp has two modes**: `"whatsapp"` (Bridge mode, communicates via external bridge URL) and `"whatsapp_native"` (native whatsmeow mode, connects directly to WhatsApp). Manager selects which to initialize based on `WhatsAppConfig.UseNative`.
+5. **DingTalk uses Stream mode**: DingTalk uses the SDK's Stream/WebSocket mode (not HTTP webhook), so it does not implement `WebhookHandler`.
 
-6. **DingTalk uses Stream mode**: DingTalk uses the SDK's Stream/WebSocket mode (not HTTP webhook), so it does not implement `WebhookHandler`.
+6. **PlaceholderConfig vs implementation**: `PlaceholderConfig` appears in 5 channel configs (Telegram, Discord, Slack, LINE, OneBot), but only channels that implement both `PlaceholderCapable` + `MessageEditor` (Telegram, Discord) can actually use placeholder message editing. The rest are reserved fields.
 
-7. **PlaceholderConfig vs implementation**: `PlaceholderConfig` appears in 6 channel configs (Telegram, Discord, Slack, LINE, OneBot, Pico), but only channels that implement both `PlaceholderCapable` + `MessageEditor` (Telegram, Discord, Pico) can actually use placeholder message editing. The rest are reserved fields.
-
-8. **ReasoningChannelID**: Most channel configs include a `reasoning_channel_id` field to route LLM reasoning/thinking output to a designated channel (WhatsApp, Telegram, Feishu, Discord, MaixCam, QQ, DingTalk, Slack, LINE, OneBot, WeCom). Note: `PicoConfig` does not currently expose this field. `BaseChannel` exposes this via the `WithReasoningChannelID` option and `ReasoningChannelID()` method.
+7. **ReasoningChannelID**: Most channel configs include a `reasoning_channel_id` field to route LLM reasoning/thinking output to a designated channel (WhatsApp, Telegram, Feishu, Discord, MaixCam, QQ, DingTalk, Slack, LINE, OneBot, WeCom). `BaseChannel` exposes this via the `WithReasoningChannelID` option and `ReasoningChannelID()` method.

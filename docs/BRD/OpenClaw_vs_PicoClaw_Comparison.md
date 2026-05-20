@@ -191,7 +191,7 @@ Omnipus's UI is simpler but less mature:
 | System Tray | OS-native (v0.2.3) | Gateway status on Windows/Linux. |
 | CLI | Terminal | Full operational control. |
 
-**Key observation:** Omnipus's Web UI was added in v0.2.0 (Feb 28, 2026) — less than one month old. It is primarily a **configuration launcher**, not a comprehensive agent management interface. The chat interface uses the "Pico Channel" protocol over WebSocket.
+**Key observation:** Omnipus's Web UI was added in v0.2.0 (Feb 28, 2026) — less than one month old. It is primarily a **configuration launcher**, not a comprehensive agent management interface. The chat interface uses a native WebSocket protocol.
 
 ### 4.4 Omnipus UI/UX Weaknesses
 

@@ -237,45 +237,45 @@ func TestConvertToOmnipus(t *testing.T) {
 		t.Fatalf("failed to load config: %v", err)
 	}
 
-	picoCfg, warnings, err := cfg.ConvertToOmnipus("")
+	omnipusCfg, warnings, err := cfg.ConvertToOmnipus("")
 	if err != nil {
 		t.Fatalf("failed to convert config: %v", err)
 	}
 
-	if picoCfg.Agents.Defaults.ModelName != "claude-sonnet-4-20250514" {
-		t.Errorf("expected model 'claude-sonnet-4-20250514', got '%s'", picoCfg.Agents.Defaults.ModelName)
+	if omnipusCfg.Agents.Defaults.ModelName != "claude-sonnet-4-20250514" {
+		t.Errorf("expected model 'claude-sonnet-4-20250514', got '%s'", omnipusCfg.Agents.Defaults.ModelName)
 	}
-	if picoCfg.Agents.Defaults.Workspace != "~/.omnipus/workspace" {
-		t.Errorf("expected workspace '~/.omnipus/workspace', got '%s'", picoCfg.Agents.Defaults.Workspace)
+	if omnipusCfg.Agents.Defaults.Workspace != "~/.omnipus/workspace" {
+		t.Errorf("expected workspace '~/.omnipus/workspace', got '%s'", omnipusCfg.Agents.Defaults.Workspace)
 	}
 
-	if len(picoCfg.Agents.List) != 2 {
-		t.Errorf("expected 2 agents, got %d", len(picoCfg.Agents.List))
+	if len(omnipusCfg.Agents.List) != 2 {
+		t.Errorf("expected 2 agents, got %d", len(omnipusCfg.Agents.List))
 	}
-	if picoCfg.Agents.List[0].ID != "main" {
-		t.Errorf("expected first agent id 'main', got '%s'", picoCfg.Agents.List[0].ID)
+	if omnipusCfg.Agents.List[0].ID != "main" {
+		t.Errorf("expected first agent id 'main', got '%s'", omnipusCfg.Agents.List[0].ID)
 	}
-	if picoCfg.Agents.List[1].Skills == nil || len(picoCfg.Agents.List[1].Skills) != 2 {
+	if omnipusCfg.Agents.List[1].Skills == nil || len(omnipusCfg.Agents.List[1].Skills) != 2 {
 		t.Errorf("expected 2 skills for assistant agent")
 	}
 
-	if !picoCfg.Channels.Telegram.Enabled {
+	if !omnipusCfg.Channels.Telegram.Enabled {
 		t.Error("telegram should be enabled")
 	}
-	if picoCfg.Channels.Telegram.Token != "test-token" {
-		t.Errorf("expected telegram token 'test-token', got '%s'", picoCfg.Channels.Telegram.Token)
+	if omnipusCfg.Channels.Telegram.Token != "test-token" {
+		t.Errorf("expected telegram token 'test-token', got '%s'", omnipusCfg.Channels.Telegram.Token)
 	}
 
-	if picoCfg.Channels.WhatsApp.BridgeURL != "http://localhost:3000" {
-		t.Errorf("expected whatsapp bridge URL 'http://localhost:3000', got '%s'", picoCfg.Channels.WhatsApp.BridgeURL)
+	if omnipusCfg.Channels.WhatsApp.BridgeURL != "http://localhost:3000" {
+		t.Errorf("expected whatsapp bridge URL 'http://localhost:3000', got '%s'", omnipusCfg.Channels.WhatsApp.BridgeURL)
 	}
 
-	if picoCfg.Channels.Feishu.AppID != "app-id" {
-		t.Errorf("expected feishu app ID 'app-id', got '%s'", picoCfg.Channels.Feishu.AppID)
+	if omnipusCfg.Channels.Feishu.AppID != "app-id" {
+		t.Errorf("expected feishu app ID 'app-id', got '%s'", omnipusCfg.Channels.Feishu.AppID)
 	}
 
-	if len(picoCfg.Providers) != 1 {
-		t.Errorf("expected 1 model config (no models.json provided), got %d", len(picoCfg.Providers))
+	if len(omnipusCfg.Providers) != 1 {
+		t.Errorf("expected 1 model config (no models.json provided), got %d", len(omnipusCfg.Providers))
 	}
 
 	foundWarning := false
@@ -332,33 +332,33 @@ func TestConvertToOmnipusWithQQAndDingTalk(t *testing.T) {
 		t.Fatalf("failed to load config: %v", err)
 	}
 
-	picoCfg, _, err := cfg.ConvertToOmnipus("")
+	omnipusCfg, _, err := cfg.ConvertToOmnipus("")
 	if err != nil {
 		t.Fatalf("failed to convert config: %v", err)
 	}
 
-	if !picoCfg.Channels.QQ.Enabled {
+	if !omnipusCfg.Channels.QQ.Enabled {
 		t.Error("qq should be enabled")
 	}
-	if picoCfg.Channels.QQ.AppID != "qq-app-id" {
-		t.Errorf("expected qq app ID 'qq-app-id', got '%s'", picoCfg.Channels.QQ.AppID)
+	if omnipusCfg.Channels.QQ.AppID != "qq-app-id" {
+		t.Errorf("expected qq app ID 'qq-app-id', got '%s'", omnipusCfg.Channels.QQ.AppID)
 	}
 
-	if !picoCfg.Channels.DingTalk.Enabled {
+	if !omnipusCfg.Channels.DingTalk.Enabled {
 		t.Error("dingtalk should be enabled")
 	}
-	if picoCfg.Channels.DingTalk.ClientID != "ding-app-id" {
-		t.Errorf("expected dingtalk client ID 'ding-app-id', got '%s'", picoCfg.Channels.DingTalk.ClientID)
+	if omnipusCfg.Channels.DingTalk.ClientID != "ding-app-id" {
+		t.Errorf("expected dingtalk client ID 'ding-app-id', got '%s'", omnipusCfg.Channels.DingTalk.ClientID)
 	}
 
-	if !picoCfg.Channels.Slack.Enabled {
+	if !omnipusCfg.Channels.Slack.Enabled {
 		t.Error("slack should be enabled")
 	}
-	if picoCfg.Channels.Slack.BotToken != "xoxb-test" {
-		t.Errorf("expected slack bot token 'xoxb-test', got '%s'", picoCfg.Channels.Slack.BotToken)
+	if omnipusCfg.Channels.Slack.BotToken != "xoxb-test" {
+		t.Errorf("expected slack bot token 'xoxb-test', got '%s'", omnipusCfg.Channels.Slack.BotToken)
 	}
-	if picoCfg.Channels.Slack.AppToken != "xapp-test" {
-		t.Errorf("expected slack app token 'xapp-test', got '%s'", picoCfg.Channels.Slack.AppToken)
+	if omnipusCfg.Channels.Slack.AppToken != "xapp-test" {
+		t.Errorf("expected slack app token 'xapp-test', got '%s'", omnipusCfg.Channels.Slack.AppToken)
 	}
 }
 
@@ -388,26 +388,26 @@ func TestConvertToOmnipusWithMatrix(t *testing.T) {
 		t.Fatalf("failed to load config: %v", err)
 	}
 
-	picoCfg, warnings, err := cfg.ConvertToOmnipus("")
+	omnipusCfg, warnings, err := cfg.ConvertToOmnipus("")
 	if err != nil {
 		t.Fatalf("failed to convert config: %v", err)
 	}
 
-	if !picoCfg.Channels.Matrix.Enabled {
+	if !omnipusCfg.Channels.Matrix.Enabled {
 		t.Error("matrix should be enabled")
 	}
-	if picoCfg.Channels.Matrix.Homeserver != "https://matrix.example.com" {
-		t.Errorf("expected matrix homeserver, got %q", picoCfg.Channels.Matrix.Homeserver)
+	if omnipusCfg.Channels.Matrix.Homeserver != "https://matrix.example.com" {
+		t.Errorf("expected matrix homeserver, got %q", omnipusCfg.Channels.Matrix.Homeserver)
 	}
-	if picoCfg.Channels.Matrix.UserID != "@bot:matrix.example.com" {
-		t.Errorf("expected matrix user_id, got %q", picoCfg.Channels.Matrix.UserID)
+	if omnipusCfg.Channels.Matrix.UserID != "@bot:matrix.example.com" {
+		t.Errorf("expected matrix user_id, got %q", omnipusCfg.Channels.Matrix.UserID)
 	}
-	if picoCfg.Channels.Matrix.AccessToken != "syt_test_token" {
-		t.Errorf("expected matrix access_token, got %q", picoCfg.Channels.Matrix.AccessToken)
+	if omnipusCfg.Channels.Matrix.AccessToken != "syt_test_token" {
+		t.Errorf("expected matrix access_token, got %q", omnipusCfg.Channels.Matrix.AccessToken)
 	}
-	if len(picoCfg.Channels.Matrix.AllowFrom) != 1 ||
-		picoCfg.Channels.Matrix.AllowFrom[0] != "@alice:matrix.example.com" {
-		t.Errorf("unexpected matrix allow_from: %#v", picoCfg.Channels.Matrix.AllowFrom)
+	if len(omnipusCfg.Channels.Matrix.AllowFrom) != 1 ||
+		omnipusCfg.Channels.Matrix.AllowFrom[0] != "@alice:matrix.example.com" {
+		t.Errorf("unexpected matrix allow_from: %#v", omnipusCfg.Channels.Matrix.AllowFrom)
 	}
 
 	for _, w := range warnings {
@@ -442,12 +442,12 @@ func TestConvertToOmnipusWithMatrixDisabled(t *testing.T) {
 		t.Fatalf("failed to load config: %v", err)
 	}
 
-	picoCfg, _, err := cfg.ConvertToOmnipus("")
+	omnipusCfg, _, err := cfg.ConvertToOmnipus("")
 	if err != nil {
 		t.Fatalf("failed to convert config: %v", err)
 	}
 
-	if picoCfg.Channels.Matrix.Enabled {
+	if omnipusCfg.Channels.Matrix.Enabled {
 		t.Error("matrix should respect enabled=false from source config")
 	}
 }
@@ -606,7 +606,7 @@ func TestLoadOpenClawConfigFromDir(t *testing.T) {
 }
 
 func TestToStandardConfig(t *testing.T) {
-	picoCfg := &OmnipusConfig{
+	omnipusCfg := &OmnipusConfig{
 		Agents: AgentsConfig{
 			Defaults: AgentDefaults{
 				Provider:  "anthropic",
@@ -645,7 +645,7 @@ func TestToStandardConfig(t *testing.T) {
 		},
 	}
 
-	stdCfg := picoCfg.ToStandardConfig()
+	stdCfg := omnipusCfg.ToStandardConfig()
 
 	if stdCfg.Agents.Defaults.Provider != "anthropic" {
 		t.Errorf("expected provider 'anthropic', got '%s'", stdCfg.Agents.Defaults.Provider)

@@ -11,7 +11,7 @@ import (
 func TestLoadAgentDefinitionParsesFrontmatterAndSoul(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
 		"AGENT.md": `---
-name: pico
+name: omnipus
 description: Structured agent
 model: claude-3-7-sonnet
 tools:
@@ -46,7 +46,7 @@ Act directly and use tools first.
 	if definition.Agent.Body == "" || !strings.Contains(definition.Agent.Body, "Act directly") {
 		t.Fatalf("expected AGENT.md body to be preserved, got %q", definition.Agent.Body)
 	}
-	if definition.Agent.Frontmatter.Name != "pico" {
+	if definition.Agent.Frontmatter.Name != "omnipus" {
 		t.Fatalf("expected name to be parsed, got %q", definition.Agent.Frontmatter.Name)
 	}
 	if definition.Agent.Frontmatter.Model != "claude-3-7-sonnet" {
@@ -130,7 +130,7 @@ func TestLoadAgentDefinitionLoadsWorkspaceUserMarkdown(t *testing.T) {
 func TestLoadAgentDefinitionInvalidFrontmatterFallsBackToEmptyStructuredFields(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
 		"AGENT.md": `---
-name: pico
+name: omnipus
 tools:
   - shell
   broken
@@ -166,7 +166,7 @@ Keep going.
 func TestLoadBootstrapFilesUsesAgentBodyNotFrontmatter(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
 		"AGENT.md": `---
-name: pico
+name: omnipus
 model: codex-mini
 ---
 # Agent
@@ -187,7 +187,7 @@ Follow the body prompt.
 	if !strings.Contains(bootstrap, "Speak plainly") {
 		t.Fatalf("expected resolved soul content in bootstrap, got %q", bootstrap)
 	}
-	if strings.Contains(bootstrap, "name: pico") {
+	if strings.Contains(bootstrap, "name: omnipus") {
 		t.Fatalf("bootstrap should not expose raw frontmatter, got %q", bootstrap)
 	}
 	if strings.Contains(bootstrap, "model: codex-mini") {
