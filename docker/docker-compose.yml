@@ -35,6 +35,12 @@ services:
     ports:
       - "127.0.0.1:5000:5000"
       - "127.0.0.1:5001:5001"
+    # OMNIPUS_GATEWAY_PORT aligns the in-container listener with the host
+    # port mapping above. Without this, datamodel.Init() seeds port 3000
+    # on first run and the published 5000 mapping points to a closed port.
+    environment:
+      - OMNIPUS_GATEWAY_PORT=5000
+      - OMNIPUS_GATEWAY_PREVIEW_PORT=5001
     # Uncomment to access host network; leave commented unless needed.
     #extra_hosts:
     #  - "host.docker.internal:host-gateway"
