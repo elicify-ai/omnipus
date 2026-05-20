@@ -24,7 +24,12 @@ before:
     # pkg/gateway/embed.go has //go:embed all:spa and pkg/gateway/spa/ is
     # gitignored. Vite builds into dist/spa; we mirror it into the embed target.
     # Mirrors .github/workflows/cross-platform.yml:50-58 — the proven pattern.
-    - npm ci
+    # npm install (not npm ci): CI's npm is strict about transitive lock
+    # entries; redoc's core-js@3.49.0 subdep doesn't appear in our top-level
+    # lock and breaks `npm ci` even though `npm install` resolves cleanly.
+    # The release pipeline doesn't need lock-strict installs — deterministic
+    # JS output comes from `npm run build` + Vite's content-hashed asset names.
+    - npm install --no-audit --no-fund
     - npm run build
     # Vite outputs to dist/; goreleaser also uses dist/ as its artifact dir.
     # After mirroring the SPA into the embed target, wipe dist/ so goreleaser
