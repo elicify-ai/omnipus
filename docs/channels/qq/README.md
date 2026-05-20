@@ -2,7 +2,7 @@
 
 # QQ
 
-Omnipus provides QQ support via the official Bot API from the QQ Open Platform.
+Omnipus connects to QQ via the official QQ Bot Open Platform API using a persistent WebSocket session (botgo library). It handles both direct (C2C) messages and group @-mention messages.
 
 ## Configuration
 
@@ -12,43 +12,49 @@ Omnipus provides QQ support via the official Bot API from the QQ Open Platform.
     "qq": {
       "enabled": true,
       "app_id": "YOUR_APP_ID",
-      "app_secret": "YOUR_APP_SECRET",
-      "allow_from": []
+      "app_secret_ref": "qq_app_secret",
+      "allow_from": [],
+      "group_trigger": {
+        "mention_only": false,
+        "prefixes": []
+      },
+      "max_message_length": 0,
+      "max_base64_file_size_mib": 0,
+      "send_markdown": false,
+      "reasoning_channel_id": ""
     }
   }
 }
 ```
 
-| Field      | Type   | Required | Description                                              |
-| ---------- | ------ | -------- | -------------------------------------------------------- |
-| enabled    | bool   | Yes      | Whether to enable the QQ channel                         |
-| app_id     | string | Yes      | App ID of the QQ bot application                         |
-| app_secret | string | Yes      | App Secret of the QQ bot application                     |
-| allow_from | array  | No       | Allowlist of user IDs; empty means all users are allowed |
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `enabled` | bool | Yes | Enable the QQ channel at startup |
+| `app_id` | string | Yes | App ID of the QQ bot application |
+| `app_secret_ref` | string | Yes | Credential name whose value is the App Secret |
+| `allow_from` | array | No | Allowlist of user IDs; empty allows all users |
+| `group_trigger.mention_only` | bool | No | In group chats, only respond when the bot is @-mentioned |
+| `group_trigger.prefixes` | array | No | In group chats, also respond when the message starts with one of these prefixes |
+| `max_message_length` | int | No | Maximum outbound message length in characters; `0` uses the channel default |
+| `max_base64_file_size_mib` | int | No | Maximum local file size (MiB) to send as base64 inline media; `0` uses the channel default |
+| `send_markdown` | bool | No | Send outbound text using QQ markdown message format instead of plain text |
+| `reasoning_channel_id` | string | No | Group ID that receives reasoning/thought output from a secondary agent |
 
 ## Setup
 
-### Quick Setup (Recommended)
+1. Log in to the [QQ Open Platform](https://q.qq.com/) with your QQ account and register as a developer.
+2. Create a QQ bot and set its avatar and display name.
+3. Store the **App Secret** in the Omnipus credential store (e.g. with key `qq_app_secret`), then set `app_secret_ref` to that key name in `config.json`.
+4. Set `app_id` to the App ID shown on the bot settings page.
+5. Run `omnipus gateway` to start the service.
+6. Search for your bot in QQ and start chatting.
 
-The QQ Open Platform provides a one-click creation entry:
+> During development, enable sandbox mode on the QQ Open Platform and add test users and groups to the sandbox before going live.
 
-1. Open [QQ Bot Quick Create](https://q.qq.com/qqbot/openclaw/index.html) and log in by scanning the QR code
-2. The system automatically creates a bot — copy the **App ID** and **App Secret**
-3. Fill in the credentials in the Omnipus configuration file
-4. Run `omnipus gateway` to start the service
-5. Open QQ and start chatting with the bot
+## Notes
 
-> The App Secret is only shown once — save it immediately. Viewing it again will force a reset.
->
-> Bots created via the quick entry are for the creator's personal use only and do not support group chats. For group chat support, configure sandbox mode on the [QQ Open Platform](https://q.qq.com/).
+**Capabilities implemented:** `TypingCapable` (typing status via QQ API), `MediaSender` (image and file upload via base64 inline or URL). The channel registers handlers for both C2C (`handleC2CMessage`) and group @-mention (`handleGroupATMessage`) events. Message deduplication is performed with a time-bounded map (5-minute TTL) to suppress duplicates from QQ's at-least-once delivery.
 
-### Manual Setup
+**Group chats.** The QQ Bot API requires an @-mention in group chats for the bot to receive the message. `group_trigger.mention_only` is therefore the effective default for group interactions regardless of its value; `group_trigger.prefixes` applies to the content after the @-mention is stripped.
 
-1. Log in to the [QQ Open Platform](https://q.qq.com/) with your QQ account and register as a developer
-2. Create a QQ bot and customize its avatar and name
-3. Obtain the **App ID** and **App Secret** from the bot settings
-4. Fill in the credentials in the Omnipus configuration file
-5. Run `omnipus gateway` to start the service
-6. Search for your bot in QQ and start chatting
-
-> During development, it is recommended to enable sandbox mode and add test users and groups to the sandbox for debugging.
+For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../../pkg/channels/README.md).
