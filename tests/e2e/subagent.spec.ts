@@ -378,12 +378,16 @@ test(
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
 
+    // The prompt gives the subagent a real reason to exist (running a shell
+    // command in isolation) so the LLM doesn't shortcut and answer directly.
+    // The previous prompt asked the subagent to "reply ok with no tools" —
+    // a smarter LLM correctly skipped spawn because the task was trivial.
     await input.fill(
       [
-        'Call the `spawn` tool exactly once, now, with these arguments:',
-        '  label: "axe test subagent"',
-        '  task: "Reply with the single word ok. Use no tools."',
-        'Do not call any other tool. Do not reply in prose. Call spawn now.',
+        'Use the `spawn` tool right now to delegate work to a subagent.',
+        'Set label to "axe test subagent".',
+        'Set task to: "Use the exec tool to run `echo hello-from-subagent` and return the exact stdout."',
+        'Do not run exec yourself — delegate by calling spawn now.',
       ].join('\n'),
     );
     await input.press('Enter');
