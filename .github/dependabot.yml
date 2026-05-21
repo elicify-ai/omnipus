@@ -11,14 +11,20 @@ updates:
       - "dependencies"
       - "go"
 
-  # Frontend dependencies
+  # Frontend dependencies (package.json at repo root)
   - package-ecosystem: "npm"
-    directory: "/web/frontend"
+    directory: "/"
     schedule:
       interval: "weekly"
     labels:
       - "dependencies"
       - "frontend"
+    # Group minor + patch updates into one PR per week to reduce churn.
+    groups:
+      frontend-minor:
+        update-types:
+          - "minor"
+          - "patch"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"

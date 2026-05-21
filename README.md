@@ -169,7 +169,7 @@ Pre-1.0, active development on [`feature/iframe-preview-tier13`](https://github.
 
 ## Contributing
 
-Issues, PRs, discussions — all welcome. Browse [open issues](https://github.com/elicify-ai/omnipus/issues) for live work, and see [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup. External PRs need a one-time [Contributor License Agreement](CLA.md); the Omnipus name and logo are reserved per the [trademark policy](TRADEMARKS.md). For internal context — BRDs, ADRs, in-flight specs, future designs — see the [For contributors](docs/README.md#for-contributors) section of the docs index.
+Issues, PRs, discussions — all welcome. Browse [open issues](https://github.com/elicify-ai/omnipus/issues) for live work, or jump straight to [SUPPORT.md](SUPPORT.md) for the channel that matches your question. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations, and [SECURITY.md](SECURITY.md) for vulnerability reporting. External PRs need a one-time [Contributor License Agreement](CLA.md); the Omnipus name and logo are reserved per the [trademark policy](TRADEMARKS.md). For internal context — BRDs, ADRs, in-flight specs, future designs — see the [For contributors](docs/README.md#for-contributors) section of the docs index.
 
 ## License
 
