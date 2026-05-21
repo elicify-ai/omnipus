@@ -134,7 +134,8 @@ User-facing guides, grouped by what you're trying to do:
 | **Credential vault** | [docs/credential_encryption.md](docs/credential_encryption.md) |
 | **Configuration reference** | [docs/configuration.md](docs/configuration.md) |
 | **Platform support** | [docs/operations/platform-support.md](docs/operations/platform-support.md) |
-| **Debug & troubleshooting** | [docs/debug.md](docs/debug.md) |
+| **Troubleshooting** | [docs/troubleshooting.md](docs/troubleshooting.md) |
+| **Debug & log spelunking** | [docs/debug.md](docs/debug.md) |
 
 Browse the full index at [docs/README.md](docs/README.md).
 
