@@ -123,11 +123,10 @@ func TestCancel_AbandonedAfterHardTimeout(t *testing.T) {
 
 	// Block for 30s — well past the 3+5=8s combined timer window.
 	// The shutdownCh allows cleanup to unblock the goroutine after the test
-	// ends, preventing goleak failures in subsequent tests.
+	// ends. sp.Shutdown is registered LAST below (closest to the test body
+	// end) so t.Cleanup's LIFO ordering runs it FIRST — unblocking the
+	// provider goroutine before any other cleanup tries to wait on it.
 	sp := newStubbornProvider(30 * time.Second)
-	// Register cleanup BEFORE the agent loop so sp.Shutdown() fires before
-	// the al.Run timeout, allowing the run goroutine to exit cleanly.
-	t.Cleanup(sp.Shutdown)
 
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 18803, DevModeBypass: true},
@@ -156,11 +155,25 @@ func TestCancel_AbandonedAfterHardTimeout(t *testing.T) {
 		}
 	}()
 	t.Cleanup(func() {
+		// Shut down provider FIRST so the stuck Chat() returns immediately
+		// (sp.Chat blocks on either time.After(30s) OR shutdownCh). Without
+		// this, cancelCtx alone leaves the goroutine waiting on the 30s
+		// timer, and the runDone wait below would have to ride out the
+		// full timer. Then signal context cancellation so the agent loop's
+		// own shutdown path runs, then wait for runDone to fire.
+		sp.Shutdown()
 		cancelCtx()
+		// Wait up to 30s for the run goroutine to drain — after sp.Shutdown
+		// this is normally milliseconds. The generous ceiling is the
+		// safety net for pathological CI scheduling. Without it (the
+		// previous 5s wait), heavily-loaded parallel-package runs saw
+		// the goroutine still writing transcript.jsonl when
+		// t.TempDir.RemoveAll ran, producing a "directory not empty"
+		// cleanup failure.
 		select {
 		case <-runDone:
-		case <-time.After(5 * time.Second):
-			t.Logf("agent loop Run did not exit within 5s")
+		case <-time.After(30 * time.Second):
+			t.Logf("agent loop Run did not exit within 30s — transcript writes may leak past TempDir cleanup")
 		}
 	})
 	time.Sleep(20 * time.Millisecond)

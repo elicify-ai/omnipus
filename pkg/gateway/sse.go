@@ -103,7 +103,7 @@ func (h *SSEHandler) GetStreamer(ctx context.Context, channel, chatID, _ string)
 func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	origin := h.allowedOrigin
 	if origin == "" {
-		origin = "http://localhost:3000"
+		origin = "http://localhost:5000"
 	}
 
 	// Handle CORS preflight before auth or body parsing.

@@ -37,7 +37,7 @@ type Tier13Deps struct {
 	DevServerRegistry *sandbox.DevServerRegistry
 
 	// GatewayBaseURL is the base URL (scheme + host + port) of the running
-	// gateway's MAIN listener, e.g. "http://localhost:3000".
+	// gateway's MAIN listener, e.g. "http://localhost:5000".
 	//
 	// Deprecated: kept for one release for replay safety on transcripts that
 	// embedded URLs minted before the two-port topology landed (FR-021). Use

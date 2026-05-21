@@ -506,10 +506,8 @@ def main() -> int:
 
             if not message_id:
                 if method == "hook.event" and LOG_EVENTS:
-                    # params['Kind'] arrives as an integer index into the
-                    # EventKind enum; convert via the table in §"Observable
-                    # event kinds" if you need the string name.
-                    # See §"Observable Event Kinds" for the int→name map.
+                    # params['Kind'] is the canonical string name
+                    # (e.g. "tool_exec_start"). See §"Observable Event Kinds".
                     log_stderr(f"observed event kind: {params.get('Kind')}")
                 continue
 
@@ -570,7 +568,7 @@ Full sample trace:
 {"ts":"2026-03-21T14:12:00+00:00","direction":"in","id":1,"method":"hook.hello","params":{"name":"py_review_gate","version":1,"modes":["observe","tool","approve"]},"notification":false}
 {"ts":"2026-03-21T14:12:00+00:00","direction":"out","id":1,"response":{"ok":true,"name":"python-review-gate"},"error":null}
 // ... intermediate hook.event notifications (id=0) and unrelated RPCs omitted ...
-{"ts":"2026-03-21T14:12:05+00:00","direction":"in","id":0,"method":"hook.event","params":{"Kind":8,"Time":"2026-03-21T14:12:05Z","Meta":{"agent":"jim"},"Payload":{}},"notification":true}
+{"ts":"2026-03-21T14:12:05+00:00","direction":"in","id":0,"method":"hook.event","params":{"Kind":"tool_exec_start","Time":"2026-03-21T14:12:05Z","Meta":{"agent":"jim"},"Payload":{}},"notification":true}
 {"ts":"2026-03-21T14:12:05+00:00","direction":"in","id":7,"method":"hook.before_tool","params":{"tool":"echo_text","arguments":{"text":"hello"}},"notification":false}
 {"ts":"2026-03-21T14:12:05+00:00","direction":"out","id":7,"response":{"action":"continue"},"error":null}
 {"ts":"2026-03-21T14:12:05+00:00","direction":"in","id":8,"method":"hook.approve_tool","params":{"tool":"echo_text","arguments":{"text":"hello"}},"notification":false}
@@ -660,15 +658,12 @@ hooks, failure results in a `deny` verdict.
 ## Observable Event Kinds
 
 All `EventKind` strings accepted by the `observe` config field
-(`pkg/agent/events.go:69-94`). When events are delivered over the
-process-hook wire (`hook.event` notification), `Kind` arrives as an
-**integer index** into this list — `EventKind` is a `uint8` with no
-`MarshalJSON`, so the JSON value is `8` not `"tool_exec_start"`.
-In-process observers receive the typed `EventKind` value directly and
-can call `evt.Kind.String()` to recover the name. Process-hook authors
-must either keep a local int→name map or filter on the integer.
-Adding `MarshalJSON` so the wire format uses the string name is tracked
-in [#164](https://github.com/elicify-ai/omnipus/issues/164).
+(`pkg/agent/events.go`). When events are delivered over the process-hook
+wire (`hook.event` notification), `Kind` arrives as the canonical string
+name (e.g. `"tool_exec_start"`) — `EventKind` implements `MarshalJSON`
+to emit the stable string form rather than the underlying uint8 index.
+In-process observers receive the typed `EventKind` value and can call
+`evt.Kind.String()` to recover the same name.
 
 ```
 turn_start            turn_end              llm_request

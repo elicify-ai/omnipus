@@ -225,12 +225,13 @@ func runProcessHookHelper() error {
 
 		if msg.ID == 0 {
 			if msg.Method == "hook.event" && eventLog != "" {
-				var evt map[string]any
+				// Event.Kind serializes as its canonical string name (#164).
+				// Unmarshal directly into Event so the helper picks up the
+				// EventKind.UnmarshalJSON path and stays in sync with the
+				// rest of the codebase if more enum values are added.
+				var evt Event
 				if err := json.Unmarshal(msg.Params, &evt); err == nil {
-					if rawKind, ok := evt["Kind"].(float64); ok {
-						kind := EventKind(rawKind)
-						_ = os.WriteFile(eventLog, []byte(kind.String()+"\n"), 0o644)
-					}
+					_ = os.WriteFile(eventLog, []byte(evt.Kind.String()+"\n"), 0o644)
 				}
 			}
 			continue
@@ -332,5 +333,39 @@ func handleProcessHookRequest(mode string, msg processHookRPCMessage) (any, *pro
 			Code:    -32601,
 			Message: "method not found",
 		}
+	}
+}
+
+// TestNewProcessHook_HungHandshake_TimesOut is the regression guard for #163.
+//
+// Before the fix, NewProcessHook applied a 5s defensive timeout only when the
+// caller passed a nil context. Production callers always pass a non-nil context
+// (often a turn-scoped one with no deadline). A subprocess that started but
+// never replied to hook.hello would block the calling goroutine until the
+// caller's context expired — which could be the entire turn lifetime.
+//
+// The fix wraps the caller's context with an unconditional 5s timeout for the
+// handshake. This test asserts the timeout fires within a bounded interval
+// even when the caller provides context.Background() (no deadline).
+func TestNewProcessHook_HungHandshake_TimesOut(t *testing.T) {
+	// Spawn a subprocess that sleeps for 30s without reading stdin or writing
+	// to stdout. NewProcessHook should send hook.hello and time out within ~5s
+	// rather than blocking until the sleep completes.
+	start := time.Now()
+	ph, err := NewProcessHook(context.Background(), "test-hung", ProcessHookOptions{
+		Command: []string{"sleep", "30"},
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		_ = ph.Close()
+		t.Fatalf("NewProcessHook must error when subprocess never replies to hook.hello")
+	}
+	if elapsed > 8*time.Second {
+		t.Fatalf("NewProcessHook must time out within ~5s; took %v", elapsed)
+	}
+	if elapsed < 4*time.Second {
+		t.Fatalf("NewProcessHook returned before the 5s deadline could fire (%v) — "+
+			"likely an unrelated error masked the timeout", elapsed)
 	}
 }

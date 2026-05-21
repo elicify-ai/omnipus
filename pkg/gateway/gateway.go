@@ -1790,9 +1790,6 @@ func emitGHSARemovalWarn(cfg *config.Config) {
 	if cfg.Channels.IRC.Enabled {
 		enabledRemoteChannels["irc"] = true
 	}
-	if cfg.Channels.Teams.Enabled {
-		enabledRemoteChannels["teams"] = true
-	}
 	if cfg.Channels.GoogleChat.Enabled {
 		enabledRemoteChannels["google-chat"] = true
 	}

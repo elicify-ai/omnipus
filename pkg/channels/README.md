@@ -301,7 +301,6 @@ From `pkg/channels/manager.go:63-72`:
 | line | 10 | 5 |
 | qq | 5 | 3 |
 | irc | 2 | 1 |
-| teams | 1 | 1 |
 | _all others_ | 10 (default) | 5 |
 
 Burst is computed as `max(1, ceil(rate/2))` (`pkg/channels/manager.go:916-918`).
@@ -451,12 +450,10 @@ The following factory names are registered. The gateway blank-imports each subpa
 | `whatsapp` | `pkg/channels/whatsapp/` | — (Bridge mode: connects to external bridge via `BridgeURL`) |
 | `whatsapp_native` | `pkg/channels/whatsapp_native/` | TypingCapable |
 | `google-chat` | `pkg/channels/googlechat/` | TypingCapable, WebhookHandler, CommandRegistrarCapable |
-| `teams` | `pkg/channels/teams/` | WebhookHandler, CommandRegistrarCapable — **not blank-imported; not active at runtime** (see notes) |
 
 **Notes on specific channels:**
 
 - **matrix**: Conditionally imported with build tag `!mipsle && !netbsd && !(freebsd && arm) && cgo` (`pkg/gateway/channel_matrix.go:1-28`) because its transitive dependencies (`mautrix`, `modernc.org/sqlite`) fail on those targets.
-- **teams**: Has `init.go` and is wired in `initChannels` (`pkg/channels/manager.go:558-560`), but is **not blank-imported** anywhere in production code. Its factory is never registered at runtime. The Teams branch in `initChannels` also **discards its construction error** without going through the boot-fail policy that every other branch follows (no `recordChannelFailure` wrapper), so a missing factory there is silently swallowed. Do not document Teams as a working channel until both the blank import and the error-propagation wiring are added.
 - **whatsapp vs whatsapp_native**: `initChannels` checks `WhatsAppConfig.UseNative` to select which factory to use (`pkg/channels/manager.go:467-477`). Only one of the two is initialized per run.
 - **weixin**: `RegisterFactory` call lives in `weixin.go` (no separate `init.go`) at `pkg/channels/weixin/weixin.go:40`.
 - **google-chat**: Factory name is `"google-chat"` (with hyphen), matching the `ChannelsConfig` JSON key (`pkg/config/config.go:789`).
@@ -706,6 +703,27 @@ Manager creates a `dynamicServeMux` (`pkg/channels/dynamic_mux.go`) that support
 HTTP server timeout: `ReadTimeout = 30s`, `WriteTimeout = 30s` (`pkg/channels/manager.go`).
 
 **Webhook security is the channel's responsibility.** The shared mux does not enforce HMAC signature checks, IP allow-lists, or replay protection — each `WebhookHandler` implementation must validate inbound requests itself (e.g. Slack/Telegram signing secrets, Google Chat JWT, Line signature header). When adding a new webhook channel, do this validation in the `http.Handler` before publishing to the bus.
+
+#### 12.1 Webhook signature verification — project-wide invariant (#162)
+
+**Every `WebhookHandler` MUST verify a platform-issued signature on the request body BEFORE parsing the payload or publishing to the `MessageBus`.** Without this check, anyone who knows the webhook path can inject fake messages, drive agent turns, and spend LLM/credential budget.
+
+Current implementations and the canonical primitives they use:
+
+| Channel | Header | Algorithm | Source |
+|---------|--------|-----------|--------|
+| `line` | `X-Line-Signature` | HMAC-SHA256, channel secret, base64 | `pkg/channels/line/line.go::verifySignature` |
+| `google-chat` | `Google-Signature` | HMAC-SHA256, project token, hex | `pkg/channels/googlechat/googlechat.go::verifySignature` |
+
+The verification is enforced by a hygiene test, `TestWebhookHandlers_HaveSignatureVerification` in `pkg/channels/webhook_signature_test.go`. It scans every package under `pkg/channels/*/` and fails if a package declares a `WebhookPath()` method but contains neither a `verifySignature` function nor an `hmac.Equal(...)` call. Adding a new webhook channel without a signature check breaks CI loudly.
+
+When implementing a new webhook channel:
+
+1. Read the body via `io.LimitReader` (cap it — match the existing `maxWebhookBodySize` patterns in line/googlechat).
+2. Pull the platform signature header (the platform's docs name it; treat the empty case as a hard fail, never as "skip verification").
+3. Compute the expected HMAC over the body using `crypto/hmac` and the secret your channel was configured with.
+4. Compare with `hmac.Equal` — never `==` (timing-side-channel).
+5. Only then unmarshal the body and dispatch events.
 
 ---
 

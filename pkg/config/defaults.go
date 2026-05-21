@@ -367,7 +367,7 @@ func DefaultConfig() *Config {
 		},
 		Gateway: GatewayConfig{
 			Host:      "127.0.0.1",
-			Port:      18790,
+			Port:      5000,
 			HotReload: false,
 			LogLevel:  "warn",
 		},

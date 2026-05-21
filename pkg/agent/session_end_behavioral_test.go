@@ -165,32 +165,47 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	}
 
 	// A retro file must exist too — date-directory under memory/sessions.
+	// WriteLastSession and AppendRetro run sequentially in the recap
+	// goroutine (pkg/agent/session_end.go:215-231), but the LAST_SESSION.md
+	// poll above can see the first write before the goroutine completes
+	// the second one under heavy CI load. Poll the retro the same way.
 	sessionsDir := filepath.Join(ag.Workspace, "memory", "sessions")
-	dateDirs, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		t.Fatalf("read sessions dir: %v", err)
-	}
-	foundRetro := false
-	for _, d := range dateDirs {
-		if !d.IsDir() {
-			continue
+	var foundRetro bool
+	var retroBytes []byte
+	retroDeadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(retroDeadline) && !foundRetro {
+		dateDirs, err := os.ReadDir(sessionsDir)
+		if err != nil {
+			t.Fatalf("read sessions dir: %v", err)
 		}
-		files, _ := os.ReadDir(filepath.Join(sessionsDir, d.Name()))
-		for _, f := range files {
-			if strings.HasSuffix(f.Name(), "_retro.md") {
-				foundRetro = true
-				retroBytes, _ := os.ReadFile(filepath.Join(sessionsDir, d.Name(), f.Name()))
-				if !strings.Contains(string(retroBytes), "trigger=explicit") {
-					t.Errorf("retro missing trigger=explicit; got:\n%s", retroBytes)
-				}
-				if !strings.Contains(string(retroBytes), "fallback=false") {
-					t.Errorf("happy-path retro should be fallback=false; got:\n%s", retroBytes)
+		for _, d := range dateDirs {
+			if !d.IsDir() {
+				continue
+			}
+			files, _ := os.ReadDir(filepath.Join(sessionsDir, d.Name()))
+			for _, f := range files {
+				if strings.HasSuffix(f.Name(), "_retro.md") {
+					foundRetro = true
+					retroBytes, _ = os.ReadFile(filepath.Join(sessionsDir, d.Name(), f.Name()))
+					break
 				}
 			}
+			if foundRetro {
+				break
+			}
+		}
+		if !foundRetro {
+			time.Sleep(20 * time.Millisecond)
 		}
 	}
 	if !foundRetro {
-		t.Error("no _retro.md file was produced in the happy path")
+		t.Fatal("no _retro.md file was produced in the happy path within 5s")
+	}
+	if !strings.Contains(string(retroBytes), "trigger=explicit") {
+		t.Errorf("retro missing trigger=explicit; got:\n%s", retroBytes)
+	}
+	if !strings.Contains(string(retroBytes), "fallback=false") {
+		t.Errorf("happy-path retro should be fallback=false; got:\n%s", retroBytes)
 	}
 }
 

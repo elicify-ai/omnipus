@@ -50,7 +50,7 @@ var defaultConfig = map[string]any{
 	"channels":  map[string]any{},
 	"gateway": map[string]any{
 		"host": "localhost",
-		"port": 3000,
+		"port": 5000,
 	},
 	"storage": map[string]any{
 		"retention": map[string]any{

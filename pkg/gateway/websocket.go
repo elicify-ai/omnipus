@@ -292,7 +292,7 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	origin := h.allowedOrigin
 	if origin == "" {
-		origin = "http://localhost:3000"
+		origin = "http://localhost:5000"
 	}
 
 	if r.Method == http.MethodOptions {
