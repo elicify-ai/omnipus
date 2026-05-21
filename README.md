@@ -195,12 +195,14 @@ The gateway opens **two ports**: `5000` for the SPA + API, `5001` for preview if
 
 Onboarding wizard runs on first visit to `http://localhost:5000`: Welcome → Provider → API Key → Model → Admin Account → Done.
 
-First boot also auto-generates an encryption key at `~/.omnipus/master.key` (mode `0600`). **Back it up** — losing it makes the credential store unrecoverable. For headless deployments, pre-provision via `OMNIPUS_KEY_FILE` or `OMNIPUS_MASTER_KEY`.
+First boot also auto-generates an encryption key at `~/.omnipus/master.key` (mode `0600`). **Back it up** — losing it makes the credential store unrecoverable. For headless deployments, pre-provision via `OMNIPUS_KEY_FILE` (path to a hex key file) or `OMNIPUS_MASTER_KEY` (hex key in the env).
 
-Rotate the key any time:
+Day-to-day credential management lives in the SPA at **Settings → Security → Credential Vault** (add/list/delete keys, all writes go through the same encrypted store). Rotate the passphrase from the CLI when needed:
 
 ```bash
-omnipus credentials rotate --old-key-file old.key --new-key-file new.key
+omnipus credentials rotate
+# prompts: enter the current passphrase to unlock, then a new passphrase
+# re-encrypts every credential under the new key
 ```
 
 ### Platform support
