@@ -53,9 +53,9 @@ All screenshots below are real conversations captured against the running binary
 
 ### Max screenshots a page, inline
 
-Ask Max to screenshot a URL. He chains `browser.navigate` → `browser.screenshot`, the image streams back into the chat through the media pipeline, and renders inline.
+Ask Max to screenshot a URL. He chains `browser.navigate` → `browser.screenshot`, the image streams back into the chat through the media pipeline, and renders inline so you can read the page without leaving the conversation.
 
-<img src="docs/marketing/screenshots/13-max-screenshot-demo.png" alt="Max screenshots example.com" width="900">
+<img src="docs/marketing/screenshots/13-max-screenshot-demo.png" alt="Max screenshots anthropic.com and describes the page in one sentence" width="900">
 
 ### Ray researches with sources
 
