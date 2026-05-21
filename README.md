@@ -145,35 +145,9 @@ Browse the full index at [docs/README.md](docs/README.md).
 
 ---
 
-## Architecture in 10 seconds
+## Architecture
 
-```
-                    ┌────────────────────┐
-                    │   Web UI (SPA)     │   React 19 · Vite 6 · shadcn/ui
-                    │   embedded via     │
-                    │   go:embed         │
-                    └─────────┬──────────┘
-                              │ HTTP · WebSocket · SSE
-                    ┌─────────┴──────────┐
-                    │      Gateway       │   auth, rate limits, CORS
-                    └─────────┬──────────┘
-                              │
-         ┌────────────────────┼────────────────────┐
-         │                    │                    │
-   ┌─────┴──────┐      ┌──────┴──────┐      ┌──────┴──────┐
-   │ Agent Loop │      │ Policy      │      │ Audit       │
-   │ + Hooks    │◄────►│ Engine      │      │ Logger      │
-   │ + Tools    │      │ allow/ask/  │      │ JSONL +     │
-   │ + Handoff  │      │ deny        │      │ redaction   │
-   └─────┬──────┘      └─────────────┘      └─────────────┘
-         │
-   ┌─────┴──────┐      ┌─────────────┐      ┌─────────────┐
-   │  Channels  │      │  Sandbox    │      │ Credentials │
-   │ 15 compiled│      │ Landlock +  │      │ AES-256-GCM │
-   │ in Go      │      │ seccomp +   │      │ Argon2id KDF│
-   └────────────┘      │ SSRF guard  │      └─────────────┘
-                       └─────────────┘
-```
+<img src="docs/marketing/diagrams/architecture.svg" alt="Omnipus architecture: clients on top, gateway with main port 5000 and sandboxed preview port 5001, channel-to-agent routing, agent runtime with hooks/tools/policy/event-bus, four persistence stores (memory, sessions, audit log, credential vault), all wrapped by the Linux kernel sandbox; LLM providers, MCP servers, and ClawHub registry live outside the sandbox and are reached via SSRF-checked outbound HTTP" width="960">
 
 Single Go binary. File-based JSON/JSONL storage at `~/.omnipus/`. No Postgres, no Redis. WhatsApp uses pure-Go SQLite (`modernc.org/sqlite`) in its own session namespace.
 
