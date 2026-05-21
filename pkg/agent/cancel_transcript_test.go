@@ -150,7 +150,7 @@ func TestCancel_TranscriptTurnCancelledEntry(t *testing.T) {
 
 	// ASSERT: entry fields match the cancel call parameters.
 	assert.Equal(t, session.EntryTypeTurnCancelled, cancelledEntry.Type,
-		"entry type must be 'turn_cancelled'")
+		"entry type must be 'turn_canceled'")
 	assert.Equal(t, "turn-T3-transcript", cancelledEntry.TurnID,
 		"TurnID must match the canceled turn")
 	assert.Equal(t, "dev-token", cancelledEntry.CancelledByUser,

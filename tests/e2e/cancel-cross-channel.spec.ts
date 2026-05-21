@@ -282,11 +282,11 @@ test(
 // BDD: Given a session with a parent turn that has spawned a subagent (spawn tool)
 //      When the user clicks Stop while the subagent is running
 //      Then the parent message shows "(interrupted)" within 5s
-//      And transcript.jsonl contains a {type: "turn_cancelled"} entry
+//      And transcript.jsonl contains a {type: "turn_canceled"} entry
 //      And that entry has a non-empty descendants_cancelled array.
 
 test(
-  'T24 — cancel cascades to subagent: transcript.jsonl records turn_cancelled with descendants',
+  'T24 — cancel cascades to subagent: transcript.jsonl records turn_canceled with descendants',
   async ({ page }) => {
     // 360s: spawn wait (180s) + subagent execution + cancel + assertions + settling window.
     // test.slow() only gives 270s which is insufficient when GLM enters extended thinking.
@@ -439,11 +439,11 @@ test(
 // BDD: Given any cancel request lands at the gateway
 //      When the audit log is queried
 //      Then exactly one turn_cancel_attempt entry exists with was_fired: true
-//      And exactly one turn_cancelled entry exists
+//      And exactly one turn_canceled entry exists
 //      And their session_id values match.
 
 test(
-  'T26 — audit log contains turn_cancel_attempt and turn_cancelled entries after cancel',
+  'T26 — audit log contains turn_cancel_attempt and turn_canceled entries after cancel',
   async ({ page }) => {
     test.slow()
 
@@ -536,7 +536,7 @@ test(
       )
     }
 
-    // Assert: turn_cancelled entry.
+    // Assert: turn_canceled entry.
     // events.go: EventTurnCancelled = "turn.cancelled"; struct tag json:"event"
     const cancelledEntry = newEntries.find((e) => e.event === 'turn.cancelled')
     if (!cancelledEntry) {

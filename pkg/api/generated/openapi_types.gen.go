@@ -805,6 +805,24 @@ func (e MessageAttachmentsType) Valid() bool {
 	}
 }
 
+// Defines values for MessageCancelMethod.
+const (
+	MessageCancelMethodGraceful MessageCancelMethod = "graceful"
+	MessageCancelMethodHard     MessageCancelMethod = "hard"
+)
+
+// Valid indicates whether the value is a known member of the MessageCancelMethod enum.
+func (e MessageCancelMethod) Valid() bool {
+	switch e {
+	case MessageCancelMethodGraceful:
+		return true
+	case MessageCancelMethodHard:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageRole.
 const (
 	MessageRoleAssistant MessageRole = "assistant"
@@ -879,9 +897,11 @@ func (e MessageToolCallsStatus) Valid() bool {
 
 // Defines values for MessageType.
 const (
-	MessageTypeCompaction MessageType = "compaction"
-	MessageTypeMessage    MessageType = "message"
-	MessageTypeSystem     MessageType = "system"
+	MessageTypeCompaction   MessageType = "compaction"
+	MessageTypeMessage      MessageType = "message"
+	MessageTypeSystem       MessageType = "system"
+	MessageTypeToolCall     MessageType = "tool_call"
+	MessageTypeTurnCanceled MessageType = "turn_canceled"
 )
 
 // Valid indicates whether the value is a known member of the MessageType enum.
@@ -892,6 +912,10 @@ func (e MessageType) Valid() bool {
 	case MessageTypeMessage:
 		return true
 	case MessageTypeSystem:
+		return true
+	case MessageTypeToolCall:
+		return true
+	case MessageTypeTurnCanceled:
 		return true
 	default:
 		return false
@@ -1339,6 +1363,24 @@ func (e SessionDetailMessagesAttachmentsType) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailMessagesCancelMethod.
+const (
+	SessionDetailMessagesCancelMethodGraceful SessionDetailMessagesCancelMethod = "graceful"
+	SessionDetailMessagesCancelMethodHard     SessionDetailMessagesCancelMethod = "hard"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesCancelMethod enum.
+func (e SessionDetailMessagesCancelMethod) Valid() bool {
+	switch e {
+	case SessionDetailMessagesCancelMethodGraceful:
+		return true
+	case SessionDetailMessagesCancelMethodHard:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailMessagesRole.
 const (
 	SessionDetailMessagesRoleAssistant SessionDetailMessagesRole = "assistant"
@@ -1413,9 +1455,11 @@ func (e SessionDetailMessagesToolCallsStatus) Valid() bool {
 
 // Defines values for SessionDetailMessagesType.
 const (
-	SessionDetailMessagesTypeCompaction SessionDetailMessagesType = "compaction"
-	SessionDetailMessagesTypeMessage    SessionDetailMessagesType = "message"
-	SessionDetailMessagesTypeSystem     SessionDetailMessagesType = "system"
+	SessionDetailMessagesTypeCompaction   SessionDetailMessagesType = "compaction"
+	SessionDetailMessagesTypeMessage      SessionDetailMessagesType = "message"
+	SessionDetailMessagesTypeSystem       SessionDetailMessagesType = "system"
+	SessionDetailMessagesTypeToolCall     SessionDetailMessagesType = "tool_call"
+	SessionDetailMessagesTypeTurnCanceled SessionDetailMessagesType = "turn_canceled"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesType enum.
@@ -1426,6 +1470,10 @@ func (e SessionDetailMessagesType) Valid() bool {
 	case SessionDetailMessagesTypeMessage:
 		return true
 	case SessionDetailMessagesTypeSystem:
+		return true
+	case SessionDetailMessagesTypeToolCall:
+		return true
+	case SessionDetailMessagesTypeTurnCanceled:
 		return true
 	default:
 		return false
@@ -3029,11 +3077,23 @@ type Message struct {
 		Type MessageAttachmentsType `json:"type"`
 	} `json:"attachments,omitempty"`
 
+	// CancelMethod How the cancel was applied — present only on type="turn_canceled" entries (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts immediately.
+	CancelMethod *MessageCancelMethod `json:"cancel_method,omitempty"`
+
+	// CanceledByChannel Channel that originated the cancel request — present only on type="turn_canceled" entries (FR-15).
+	CanceledByChannel *string `json:"canceled_by_channel,omitempty"`
+
+	// CanceledByUser Username of the actor who triggered the cancel — present only on type="turn_canceled" entries (FR-15).
+	CanceledByUser *string `json:"canceled_by_user,omitempty"`
+
 	// Content Raw markdown/text content of the message.
 	Content *string `json:"content,omitempty"`
 
 	// Cost USD cost for this entry. Absent when zero.
 	Cost *float64 `json:"cost,omitempty"`
+
+	// DescendantsCanceled IDs of descendant turns that were canceled in cascade — present only on type="turn_canceled" entries (FR-6a).
+	DescendantsCanceled *[]string `json:"descendants_canceled,omitempty"`
 
 	// Id Unique message identifier.
 	Id string `json:"id"`
@@ -3080,12 +3140,21 @@ type Message struct {
 		Tool string `json:"tool"`
 	} `json:"tool_calls,omitempty"`
 
-	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers.
+	// Truncated Set to true on the last assistant entry when a turn is canceled mid-stream (FR-14). Only present when true. The SPA renders an "(interrupted)" suffix on the bubble when this is set.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// TurnId Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
+	TurnId *string `json:"turn_id,omitempty"`
+
+	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 	Type *MessageType `json:"type,omitempty"`
 }
 
 // MessageAttachmentsType Attachment category. Aligned with MediaPart.type enum.
 type MessageAttachmentsType string
+
+// MessageCancelMethod How the cancel was applied — present only on type="turn_canceled" entries (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts immediately.
+type MessageCancelMethod string
 
 // MessageRole Author role. Absent on compaction entries.
 type MessageRole string
@@ -3096,7 +3165,7 @@ type MessageStatus string
 // MessageToolCallsStatus Outcome of the tool call.
 type MessageToolCallsStatus string
 
-// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers.
+// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type MessageType string
 
 // OnboardingCompleteRequest Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point).
@@ -3623,11 +3692,23 @@ type SessionDetail struct {
 			Type SessionDetailMessagesAttachmentsType `json:"type"`
 		} `json:"attachments,omitempty"`
 
+		// CancelMethod How the cancel was applied — present only on type="turn_canceled" entries (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts immediately.
+		CancelMethod *SessionDetailMessagesCancelMethod `json:"cancel_method,omitempty"`
+
+		// CanceledByChannel Channel that originated the cancel request — present only on type="turn_canceled" entries (FR-15).
+		CanceledByChannel *string `json:"canceled_by_channel,omitempty"`
+
+		// CanceledByUser Username of the actor who triggered the cancel — present only on type="turn_canceled" entries (FR-15).
+		CanceledByUser *string `json:"canceled_by_user,omitempty"`
+
 		// Content Raw markdown/text content of the message.
 		Content *string `json:"content,omitempty"`
 
 		// Cost USD cost for this entry. Absent when zero.
 		Cost *float64 `json:"cost,omitempty"`
+
+		// DescendantsCanceled IDs of descendant turns that were canceled in cascade — present only on type="turn_canceled" entries (FR-6a).
+		DescendantsCanceled *[]string `json:"descendants_canceled,omitempty"`
 
 		// Id Unique message identifier.
 		Id string `json:"id"`
@@ -3674,7 +3755,13 @@ type SessionDetail struct {
 			Tool string `json:"tool"`
 		} `json:"tool_calls,omitempty"`
 
-		// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers.
+		// Truncated Set to true on the last assistant entry when a turn is canceled mid-stream (FR-14). Only present when true. The SPA renders an "(interrupted)" suffix on the bubble when this is set.
+		Truncated *bool `json:"truncated,omitempty"`
+
+		// TurnId Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
+		TurnId *string `json:"turn_id,omitempty"`
+
+		// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 		Type *SessionDetailMessagesType `json:"type,omitempty"`
 	} `json:"messages"`
 
@@ -3757,6 +3844,9 @@ type SessionDetail struct {
 // SessionDetailMessagesAttachmentsType Attachment category. Aligned with MediaPart.type enum.
 type SessionDetailMessagesAttachmentsType string
 
+// SessionDetailMessagesCancelMethod How the cancel was applied — present only on type="turn_canceled" entries (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts immediately.
+type SessionDetailMessagesCancelMethod string
+
 // SessionDetailMessagesRole Author role. Absent on compaction entries.
 type SessionDetailMessagesRole string
 
@@ -3766,7 +3856,7 @@ type SessionDetailMessagesStatus string
 // SessionDetailMessagesToolCallsStatus Outcome of the tool call.
 type SessionDetailMessagesToolCallsStatus string
 
-// SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers.
+// SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type SessionDetailMessagesType string
 
 // SessionDetailSessionStatus Current lifecycle status of the session.

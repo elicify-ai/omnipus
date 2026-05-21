@@ -1110,6 +1110,93 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
 
     expect(messages[0].tool_calls![0].status).toBe('cancelled')
   })
+
+  // Regression guards for the 2026-05-21 production bug: Message.yaml's
+  // `type` enum was missing "tool_call" and "turn_canceled". A jim session
+  // with 44 tool_call entries failed the SPA's Zod validation with
+  // "Backend response failed validation". After the schema fix these
+  // shapes must round-trip without ApiSchemaError.
+
+  it('accepts type:"tool_call" entries (regression for 2026-05-21 bug)', async () => {
+    const wirePayload = [
+      {
+        id: 'call_abc',
+        type: 'tool_call',
+        agent_id: 'jim',
+        timestamp: '2026-05-21T04:20:00Z',
+        tool_calls: [
+          {
+            id: 'call_abc',
+            tool: 'write_file',
+            status: 'success',
+            parameters: { path: '/tmp/x.txt' },
+          },
+        ],
+      },
+    ]
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-toolcall')
+    expect(messages).toHaveLength(1)
+    expect(messages[0].id).toBe('call_abc')
+  })
+
+  it('accepts type:"turn_canceled" entries with cancel-specific fields', async () => {
+    // Includes the cancel-specific fields added to Message.yaml in this
+    // branch (turn_id, canceled_by_user, canceled_by_channel, cancel_method,
+    // descendants_canceled). These were silently stripped by Zod's non-strict
+    // object default; now they're modelled in the schema.
+    const wirePayload = [
+      {
+        id: 'cancel_xyz',
+        type: 'turn_canceled',
+        agent_id: 'mia',
+        timestamp: '2026-05-21T04:25:00Z',
+        turn_id: 'turn-T3',
+        canceled_by_user: 'admin',
+        canceled_by_channel: 'webchat',
+        cancel_method: 'graceful',
+        descendants_canceled: ['turn-T3-sub-1'],
+      },
+    ]
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-cancel')
+    expect(messages).toHaveLength(1)
+    expect(messages[0].id).toBe('cancel_xyz')
+  })
+
+  it('rejects unknown entry type with ApiSchemaError', async () => {
+    // Negative direction: a type value outside the enum must fail validation
+    // so a future code change emitting a new EntryType without updating the
+    // schema is caught loudly rather than silently.
+    const wirePayload = [
+      {
+        id: 'msg_x',
+        type: 'wholly_unknown_entry_kind',
+        agent_id: 'jim',
+        timestamp: '2026-05-21T10:00:00Z',
+      },
+    ]
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionMessages, ApiSchemaError } = await import('./api')
+    await expect(fetchSessionMessages('sid-unknown')).rejects.toBeInstanceOf(ApiSchemaError)
+  })
 })
 
 // ── updateConfig sends wire shape with gateway.host (not bind_address) ──────────

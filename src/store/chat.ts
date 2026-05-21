@@ -1534,10 +1534,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
           if (!targetSid) break
           sawReplayMessageThisTurn[targetSid] = true
           const replayFrame = frame as WsReplayMessageFrame
-          // FR-16: turn_cancelled entries are metadata-only and must not render
+          // FR-16: turn_canceled entries are metadata-only and must not render
           // as chat bubbles. The preceding assistant entry with truncated:true
           // (status:"interrupted") still renders with the (interrupted) suffix.
-          if (replayFrame.role === 'turn_cancelled') break
+          if (replayFrame.role === 'turn_canceled') break
           const role = (replayFrame.role || 'assistant') as 'user' | 'assistant'
           const text = replayFrame.content ?? ''
           const messageId = replayFrame.id

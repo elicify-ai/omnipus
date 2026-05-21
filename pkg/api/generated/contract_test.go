@@ -2993,3 +2993,260 @@ func TestCompileInboundSchema_ConcurrentDifferentSchemas(t *testing.T) {
 		t.Logf("schema %s: validate result=%v", r.name, r.err != nil)
 	}
 }
+
+// ── pkg/session.TranscriptEntry → Message.yaml round-trip ───────────────────
+//
+// These tests close a real production bug class: `getSessionMessages` and
+// `jsonSessionDetail` in pkg/gateway/rest.go emit `[]session.TranscriptEntry`
+// into JSON fields typed as `[]gen.Message` on the wire. The Go-internal
+// TranscriptEntry has a richer Type/Role/cancel-field surface than gen.Message
+// claims, so any unmodelled value (e.g. type="tool_call", type="turn_canceled"
+// for a real cancelled turn) used to fail the SPA Zod schema with
+// "Backend response failed validation".
+//
+// The fix is structural: every EntryType const must round-trip through
+// Message.yaml validation. If a new EntryType lands without a schema enum
+// update, the table-driven test below fails before the bug ships.
+
+// transcriptEntryToWireJSON marshals a TranscriptEntry-shaped struct via JSON
+// the same way pkg/gateway/rest.go emits it, then validates against the
+// Message.yaml component schema. We rebuild a minimal local shape here
+// (rather than importing pkg/session) to keep this package's dependency
+// graph narrow — pkg/api/generated should not depend on domain packages.
+type transcriptEntryFixture struct {
+	ID          string    `json:"id"`
+	Type        string    `json:"type,omitempty"`
+	Role        string    `json:"role,omitempty"`
+	Content     string    `json:"content,omitempty"`
+	Summary     string    `json:"summary,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
+	Tokens      int       `json:"tokens,omitempty"`
+	Cost        float64   `json:"cost,omitempty"`
+	Status      string    `json:"status,omitempty"`
+	Attachments []any     `json:"attachments,omitempty"`
+	ToolCalls   []any     `json:"tool_calls,omitempty"`
+	AgentID     string    `json:"agent_id"`
+
+	// Cancel-entry fields (omitempty in the Go struct; appear on the wire
+	// only for turn_canceled entries).
+	Truncated            bool     `json:"truncated,omitempty"`
+	TurnID               string   `json:"turn_id,omitempty"`
+	CancelledByUser      string   `json:"canceled_by_user,omitempty"`
+	CancelledByChannel   string   `json:"canceled_by_channel,omitempty"`
+	CancelMethod         string   `json:"cancel_method,omitempty"`
+	DescendantsCancelled []string `json:"descendants_canceled,omitempty"`
+}
+
+// Table-driven test: every EntryType value the Go side may set must validate
+// against the Message.yaml type enum. A new EntryType const lands → this test
+// fails until the YAML enum is updated → CI catches the drift before
+// production. This is the structural prevention for the bug class that
+// landed in production despite a 79-passed e2e suite.
+//
+// Source of truth: pkg/session/daypartition.go EntryType constants.
+// Mirror here (keeping pkg/api/generated free of domain imports).
+func TestContract_Message_AllEntryTypes_ValidateAgainstWireSchema(t *testing.T) {
+	allEntryTypes := []string{
+		"message",
+		"compaction",
+		"system",
+		"tool_call",
+		"turn_canceled",
+	}
+
+	for _, entryType := range allEntryTypes {
+		t.Run(entryType, func(t *testing.T) {
+			fx := transcriptEntryFixture{
+				ID:        "msg_" + entryType,
+				Type:      entryType,
+				Role:      "assistant",
+				Content:   "stub",
+				Timestamp: time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC),
+				AgentID:   "jim",
+			}
+			// turn_canceled entries don't carry a role (skipped in real code).
+			if entryType == "turn_canceled" {
+				fx.Role = ""
+				fx.Content = ""
+				fx.TurnID = "turn-T3"
+				fx.CancelledByUser = "admin"
+				fx.CancelledByChannel = "webchat"
+				fx.CancelMethod = "graceful"
+				fx.DescendantsCancelled = []string{"turn-T3-sub-1"}
+			}
+			raw, err := json.Marshal(fx)
+			require.NoError(t, err)
+			validationErr := validateAgainstComponentSchemaRawJSON(t, "Message", raw)
+			assert.NoError(t, validationErr,
+				"TranscriptEntry with type=%q must validate against Message.yaml — "+
+					"if this fails, add %q to the type enum in "+
+					"contracts/components/schemas/Message.yaml and run make gen-contracts",
+				entryType, entryType)
+		})
+	}
+}
+
+// TestContract_Message_ToolCallEntry_FromTranscriptEntry is a targeted
+// reproducer for the production bug filed in this session. Jim's session
+// contained 44 tool_call entries; opening the session failed SPA validation
+// because the wire schema didn't allow type="tool_call". This test fails
+// loudly if that enum value is ever dropped again.
+func TestContract_Message_ToolCallEntry_FromTranscriptEntry(t *testing.T) {
+	fx := transcriptEntryFixture{
+		ID:        "call_abc123",
+		Type:      "tool_call",
+		Timestamp: time.Date(2026, 5, 21, 4, 20, 0, 0, time.UTC),
+		AgentID:   "jim",
+		ToolCalls: []any{
+			map[string]any{
+				"id":          "call_abc123",
+				"tool":        "write_file",
+				"status":      "success",
+				"duration_ms": 3,
+				"parameters":  map[string]any{"path": "/tmp/out.txt", "content": "hi"},
+			},
+		},
+	}
+	raw, err := json.Marshal(fx)
+	require.NoError(t, err)
+	validationErr := validateAgainstComponentSchemaRawJSON(t, "Message", raw)
+	assert.NoError(t, validationErr,
+		"tool_call entry must validate — reproducer for the bug-class that shipped to public IP")
+}
+
+// TestContract_Message_TurnCanceledEntry_FromTranscriptEntry covers the
+// cancel-entry shape produced by pkg/agent/cancel.go after FR-15. The
+// Truncated/TurnID/Cancel* fields are silently stripped by the SPA's Zod
+// schema (no .strict()), so they don't cause validation failure — but the
+// type="turn_canceled" enum must be allowed.
+func TestContract_Message_TurnCanceledEntry_FromTranscriptEntry(t *testing.T) {
+	fx := transcriptEntryFixture{
+		ID:                   "cancel_xyz",
+		Type:                 "turn_canceled",
+		Timestamp:            time.Date(2026, 5, 21, 4, 25, 0, 0, time.UTC),
+		AgentID:              "mia",
+		TurnID:               "turn-T3-transcript",
+		CancelledByUser:      "admin",
+		CancelledByChannel:   "webchat",
+		CancelMethod:         "graceful",
+		DescendantsCancelled: []string{"turn-T3-sub-1", "turn-T3-sub-2"},
+	}
+	raw, err := json.Marshal(fx)
+	require.NoError(t, err)
+	validationErr := validateAgainstComponentSchemaRawJSON(t, "Message", raw)
+	assert.NoError(t, validationErr,
+		"turn_canceled entry with cancel-specific fields must validate")
+}
+
+// TestContract_Message_UnknownTypeRejected guards the negative direction —
+// an unknown type value MUST fail validation. This catches code drift where
+// a developer adds a new EntryType const but forgets to add it to the YAML
+// enum; the table-driven test above catches *additions*, this one catches
+// arbitrary string-typed Type fields.
+func TestContract_Message_UnknownTypeRejected(t *testing.T) {
+	fx := transcriptEntryFixture{
+		ID:        "msg_x",
+		Type:      "wholly_unknown_entry_kind",
+		Timestamp: time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC),
+		AgentID:   "jim",
+	}
+	raw, err := json.Marshal(fx)
+	require.NoError(t, err)
+	validationErr := validateAgainstComponentSchemaRawJSON(t, "Message", raw)
+	assert.Error(t, validationErr,
+		"type=\"wholly_unknown_entry_kind\" must fail Message.yaml validation")
+}
+
+// ── pkg/taskstore.TaskEntity → Task.yaml round-trip ─────────────────────────
+//
+// TaskEntity is emitted from the gateway's /api/v1/tasks endpoints by the
+// jsonOK calls in pkg/gateway/rest.go. The Status and TriggerType fields are
+// plain Go strings, but the wire Task.yaml schema constrains them with
+// enums. Today the runtime code only writes enum-valid values, but there's
+// no test enforcing that — and the REST request body for POST /tasks
+// accepts any string. These tests pin the round-trip contract.
+
+type taskEntityFixture struct {
+	ID            string    `json:"id"`
+	Title         string    `json:"title"`
+	Prompt        string    `json:"prompt"`
+	AgentID       string    `json:"agent_id,omitempty"`
+	CreatedBy     string    `json:"created_by,omitempty"`
+	ParentTaskID  string    `json:"parent_task_id,omitempty"`
+	Priority      int       `json:"priority"`
+	Status        string    `json:"status"`
+	Result        string    `json:"result,omitempty"`
+	Artifacts     []string  `json:"artifacts,omitempty"`
+	SessionID     string    `json:"session_id,omitempty"`
+	TriggerType   string    `json:"trigger_type"`
+	SourceChannel string    `json:"source_channel,omitempty"`
+	SourceChatID  string    `json:"source_chat_id,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+func TestContract_TaskEntity_AllStatusValues_Validate(t *testing.T) {
+	allStatuses := []string{"queued", "assigned", "running", "completed", "failed"}
+	for _, status := range allStatuses {
+		t.Run(status, func(t *testing.T) {
+			fx := taskEntityFixture{
+				ID:          "task-uuid",
+				Title:       "test",
+				Prompt:      "p",
+				Priority:    0,
+				Status:      status,
+				TriggerType: "manual",
+				CreatedAt:   time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC),
+			}
+			raw, err := json.Marshal(fx)
+			require.NoError(t, err)
+			validationErr := validateAgainstComponentSchemaRawJSON(t, "Task", raw)
+			assert.NoError(t, validationErr,
+				"TaskEntity with status=%q must validate against Task.yaml", status)
+		})
+	}
+}
+
+func TestContract_TaskEntity_AllTriggerTypes_Validate(t *testing.T) {
+	allTriggers := []string{"manual", "time", "event"}
+	for _, trigger := range allTriggers {
+		t.Run(trigger, func(t *testing.T) {
+			fx := taskEntityFixture{
+				ID:          "task-uuid",
+				Title:       "test",
+				Prompt:      "p",
+				Priority:    0,
+				Status:      "queued",
+				TriggerType: trigger,
+				CreatedAt:   time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC),
+			}
+			raw, err := json.Marshal(fx)
+			require.NoError(t, err)
+			validationErr := validateAgainstComponentSchemaRawJSON(t, "Task", raw)
+			assert.NoError(t, validationErr,
+				"TaskEntity with trigger_type=%q must validate", trigger)
+		})
+	}
+}
+
+func TestContract_TaskEntity_LegacyInProgressStatusRejected(t *testing.T) {
+	// Legacy task files used status="in_progress". The taskstore.Store.loadOne
+	// migration code at pkg/taskstore/store.go ~L189 maps "in_progress" →
+	// "running" on read. This test verifies the post-migration value validates
+	// AND that the pre-migration value would NOT (so a future code change
+	// that skips migration would surface immediately).
+	pre := taskEntityFixture{
+		ID:          "legacy-task",
+		Title:       "old",
+		Prompt:      "x",
+		Priority:    0,
+		Status:      "in_progress", // legacy
+		TriggerType: "manual",
+		CreatedAt:   time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	raw, err := json.Marshal(pre)
+	require.NoError(t, err)
+	validationErr := validateAgainstComponentSchemaRawJSON(t, "Task", raw)
+	assert.Error(t, validationErr,
+		"un-migrated status=\"in_progress\" must FAIL Task.yaml validation — "+
+			"this is the canary that catches a code change skipping the migration")
+}

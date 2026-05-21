@@ -19,9 +19,14 @@ properties:
       - message
       - compaction
       - system
+      - tool_call
+      - turn_canceled
     description: >
       Entry classification. Absent or empty means "message" (backwards compatible).
-      "compaction" entries summarize pruned context; "system" entries are internal markers.
+      "compaction" entries summarize pruned context; "system" entries are internal
+      markers; "tool_call" entries record tool invocations; "turn_canceled" entries
+      mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType
+      constant set is the source of truth (`pkg/session/daypartition.go`).
     example: "message"
   role:
     type: string
@@ -81,3 +86,46 @@ properties:
     type: integer
     description: Number of messages compacted (present only on compaction entries).
     example: 120
+  truncated:
+    type: boolean
+    description: >
+      Set to true on the last assistant entry when a turn is canceled mid-stream
+      (FR-14). Only present when true. The SPA renders an "(interrupted)" suffix
+      on the bubble when this is set.
+    example: true
+  turn_id:
+    type: string
+    description: >
+      Turn identifier — present only on type="turn_canceled" entries (FR-15).
+      Identifies the turn that was canceled.
+    example: "turn-T3"
+  canceled_by_user:
+    type: string
+    description: >
+      Username of the actor who triggered the cancel — present only on
+      type="turn_canceled" entries (FR-15).
+    example: "admin"
+  canceled_by_channel:
+    type: string
+    description: >
+      Channel that originated the cancel request — present only on
+      type="turn_canceled" entries (FR-15).
+    example: "webchat"
+  cancel_method:
+    type: string
+    enum:
+      - graceful
+      - hard
+    description: >
+      How the cancel was applied — present only on type="turn_canceled" entries
+      (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts
+      immediately.
+    example: "graceful"
+  descendants_canceled:
+    type: array
+    items:
+      type: string
+    description: >
+      IDs of descendant turns that were canceled in cascade — present only on
+      type="turn_canceled" entries (FR-6a).
+    example: ["turn-T3-sub-1"]

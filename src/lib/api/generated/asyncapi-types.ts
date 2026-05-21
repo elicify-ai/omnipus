@@ -199,7 +199,7 @@ export interface ReplayMessageFrame {
   type: "replay_message";
   session_id: string;
   content: string;
-  role: "user" | "assistant" | "system" | "turn_cancelled";
+  role: "user" | "assistant" | "system" | "turn_canceled";
   id?: string;
   timestamp?: string;
   agent_id?: string;

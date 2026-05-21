@@ -44,7 +44,9 @@ type SessionDetail = {
 };
 type Message = {
   id: string;
-  type?: ("message" | "compaction" | "system") | undefined;
+  type?:
+    | ("message" | "compaction" | "system" | "tool_call" | "turn_canceled")
+    | undefined;
   role?: ("user" | "assistant" | "system") | undefined;
   content?: string | undefined;
   summary?: string | undefined;
@@ -56,6 +58,12 @@ type Message = {
   tool_calls?: Array<ToolCall> | undefined;
   agent_id: string;
   messages_compacted?: number | undefined;
+  truncated?: boolean | undefined;
+  turn_id?: string | undefined;
+  canceled_by_user?: string | undefined;
+  canceled_by_channel?: string | undefined;
+  cancel_method?: ("graceful" | "hard") | undefined;
+  descendants_canceled?: Array<string> | undefined;
 };
 type Attachment = {
   type: "image" | "audio" | "video" | "file";
@@ -465,7 +473,9 @@ export const ToolCall: z.ZodType<ToolCall> = z.object({
 });
 export const Message: z.ZodType<Message> = z.object({
   id: z.string(),
-  type: z.enum(["message", "compaction", "system"]).optional(),
+  type: z
+    .enum(["message", "compaction", "system", "tool_call", "turn_canceled"])
+    .optional(),
   role: z.enum(["user", "assistant", "system"]).optional(),
   content: z.string().optional(),
   summary: z.string().optional(),
@@ -477,6 +487,12 @@ export const Message: z.ZodType<Message> = z.object({
   tool_calls: z.array(ToolCall).optional(),
   agent_id: z.string(),
   messages_compacted: z.number().int().optional(),
+  truncated: z.boolean().optional(),
+  turn_id: z.string().optional(),
+  canceled_by_user: z.string().optional(),
+  canceled_by_channel: z.string().optional(),
+  cancel_method: z.enum(["graceful", "hard"]).optional(),
+  descendants_canceled: z.array(z.string()).optional(),
 });
 export const SessionDetail: z.ZodType<SessionDetail> = z.object({
   session: Session,
@@ -4465,7 +4481,7 @@ export const ReplayMessageFrame = z
     type: z.literal("replay_message"),
     session_id: z.string().min(1),
     content: z.string(),
-    role: z.enum(["user", "assistant", "system", "turn_cancelled"]),
+    role: z.enum(["user", "assistant", "system", "turn_canceled"]),
     id: z.string().optional(),
     timestamp: z.string().optional(),
     agent_id: z.string().optional(),

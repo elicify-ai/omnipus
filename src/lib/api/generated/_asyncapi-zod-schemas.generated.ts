@@ -202,7 +202,7 @@ export const ReplayMessageFrame = z
     type: z.literal("replay_message"),
     session_id: z.string().min(1),
     content: z.string(),
-    role: z.enum(["user", "assistant", "system", "turn_cancelled"]),
+    role: z.enum(["user", "assistant", "system", "turn_canceled"]),
     id: z.string().optional(),
     timestamp: z.string().optional(),
     agent_id: z.string().optional(),

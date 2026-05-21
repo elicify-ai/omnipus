@@ -27,11 +27,13 @@ properties:
       - user
       - assistant
       - system
-      - turn_cancelled
+      - turn_canceled
     description: >
       Turn role. The SPA renders bubbles for user/assistant/system and
-      skips turn_cancelled (metadata-only). Role is normalised to "assistant"
-      if empty by the server before emitting.
+      skips turn_canceled (metadata-only). Role is normalised to "assistant"
+      if empty by the server before emitting. Single-l "turn_canceled"
+      matches the Go EntryType value and the Message.type enum (canonical
+      spelling across the wire).
   id:
     type: string
     description: >

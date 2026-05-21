@@ -2142,11 +2142,11 @@ export interface components {
              */
             id: string;
             /**
-             * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers.
+             * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
              * @example message
              * @enum {string}
              */
-            type?: "message" | "compaction" | "system";
+            type?: "message" | "compaction" | "system" | "tool_call" | "turn_canceled";
             /**
              * @description Author role. Absent on compaction entries.
              * @example assistant
@@ -2200,6 +2200,39 @@ export interface components {
              * @example 120
              */
             messages_compacted?: number;
+            /**
+             * @description Set to true on the last assistant entry when a turn is canceled mid-stream (FR-14). Only present when true. The SPA renders an "(interrupted)" suffix on the bubble when this is set.
+             * @example true
+             */
+            truncated?: boolean;
+            /**
+             * @description Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
+             * @example turn-T3
+             */
+            turn_id?: string;
+            /**
+             * @description Username of the actor who triggered the cancel — present only on type="turn_canceled" entries (FR-15).
+             * @example admin
+             */
+            canceled_by_user?: string;
+            /**
+             * @description Channel that originated the cancel request — present only on type="turn_canceled" entries (FR-15).
+             * @example webchat
+             */
+            canceled_by_channel?: string;
+            /**
+             * @description How the cancel was applied — present only on type="turn_canceled" entries (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts immediately.
+             * @example graceful
+             * @enum {string}
+             */
+            cancel_method?: "graceful" | "hard";
+            /**
+             * @description IDs of descendant turns that were canceled in cascade — present only on type="turn_canceled" entries (FR-6a).
+             * @example [
+             *       "turn-T3-sub-1"
+             *     ]
+             */
+            descendants_canceled?: string[];
         };
         /** @description A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts. */
         ToolCall: {
