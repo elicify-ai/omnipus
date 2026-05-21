@@ -17,9 +17,57 @@
  *   npx playwright test contract-counters --project=chromium
  */
 
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import * as fs from 'fs'
 import * as path from 'path'
+
+// Auth helpers — mirror the pattern from tests/e2e/cancel-cross-channel.spec.ts
+// so POST /api/v1/sessions succeeds (it requires both Authorization and the
+// CSRF cookie). Inlined rather than exported from a shared util to keep this
+// spec self-contained.
+
+function getStoredAuthToken(): string | null {
+  const authFile = process.env.OMNIPUS_AUTH_FILE
+    ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
+    : path.join(
+        path.dirname(new URL(import.meta.url).pathname),
+        'fixtures/.auth/admin.json',
+      )
+  if (!fs.existsSync(authFile)) return null
+  try {
+    const raw = fs.readFileSync(authFile, 'utf-8')
+    const state = JSON.parse(raw) as {
+      origins?: Array<{
+        origin: string
+        localStorage?: Array<{ name: string; value: string }>
+      }>
+    }
+    for (const origin of state.origins ?? []) {
+      for (const entry of origin.localStorage ?? []) {
+        if (entry.name === 'omnipus_auth_token') return entry.value
+      }
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+async function getCsrfToken(page: Page): Promise<string | null> {
+  const cookies = await page.context().cookies()
+  const csrfCookie = cookies.find((c) => c.name === '__Host-csrf' || c.name === 'csrf')
+  return csrfCookie?.value ?? null
+}
+
+async function apiHeaders(page: Page): Promise<Record<string, string>> {
+  const authToken = getStoredAuthToken()
+  const csrfToken = await getCsrfToken(page)
+  return {
+    'Content-Type': 'application/json',
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+  }
+}
 
 test('no schema-validation errors during authenticated page load + navigation', async ({ page }) => {
   // Navigate to the dashboard. Global storageState provides pre-authenticated session.
@@ -112,8 +160,11 @@ test('navigating to a session with tool_call + turn_canceled entries fires no Ap
     return
   }
 
-  // Use the existing default agent ("main") to create a session.
+  // Use the existing default agent ("main") to create a session. Must pass
+  // both Authorization (Bearer) and the CSRF token via the shared helper —
+  // bare page.request.post() 403s on the CSRF guard.
   const createResp = await page.request.post('/api/v1/sessions', {
+    headers: await apiHeaders(page),
     data: { agent_id: 'main', type: 'chat' },
   })
   expect(createResp.status(), 'must be able to create a session').toBe(201)
