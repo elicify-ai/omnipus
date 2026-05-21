@@ -1,0 +1,224 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 560" role="img" aria-labelledby="omnipus-roadmap-title omnipus-roadmap-desc">
+  <title id="omnipus-roadmap-title">Omnipus roadmap</title>
+  <desc id="omnipus-roadmap-desc">Four-phase timeline: v0.1 stabilize (complete), v0.2 pentest hardening (complete), v0.3/1.0 Rooms redesign (design complete, implementation pending), and post-1.0 variants (Desktop and Cloud/SaaS, planned). Each phase lists its key deliverables.</desc>
+
+  <!-- Palette: brand dark + accents -->
+  <defs>
+    <pattern id="grid-r" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1a1a1e" stroke-width="1"/>
+    </pattern>
+    <linearGradient id="track" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#10B981"/>
+      <stop offset="50%" stop-color="#10B981"/>
+      <stop offset="50%" stop-color="#D4AF37"/>
+      <stop offset="75%" stop-color="#D4AF37"/>
+      <stop offset="75%" stop-color="#4a5568"/>
+      <stop offset="100%" stop-color="#4a5568"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="980" height="560" fill="#0A0A0B"/>
+  <rect width="980" height="560" fill="url(#grid-r)"/>
+
+  <!-- Title block -->
+  <text x="490" y="40" font-family="'Outfit', 'Helvetica Neue', Arial, sans-serif"
+        font-size="24" font-weight="700" fill="#E2E8F0" text-anchor="middle">
+    Omnipus roadmap
+  </text>
+  <text x="490" y="62" font-family="'Inter', sans-serif" font-size="12"
+        fill="#4a5568" text-anchor="middle">
+    open-source core · single Go binary · variants follow after 1.0
+  </text>
+
+  <!-- Timeline track -->
+  <rect x="80" y="118" width="820" height="6" rx="3" fill="url(#track)"/>
+
+  <!-- Phase milestones (4 nodes) -->
+  <!-- Node 1: v0.1 — complete -->
+  <circle cx="170" cy="121" r="14" fill="#10B981" stroke="#0A0A0B" stroke-width="3"/>
+  <text x="170" y="126" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
+        fill="#0A0A0B" text-anchor="middle">✓</text>
+  <text x="170" y="92" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
+        fill="#10B981" text-anchor="middle">v0.1</text>
+  <text x="170" y="76" font-family="'Inter', sans-serif" font-size="10"
+        fill="#4a5568" text-anchor="middle">complete</text>
+
+  <!-- Node 2: v0.2 — complete -->
+  <circle cx="375" cy="121" r="14" fill="#10B981" stroke="#0A0A0B" stroke-width="3"/>
+  <text x="375" y="126" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
+        fill="#0A0A0B" text-anchor="middle">✓</text>
+  <text x="375" y="92" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
+        fill="#10B981" text-anchor="middle">v0.2</text>
+  <text x="375" y="76" font-family="'Inter', sans-serif" font-size="10"
+        fill="#4a5568" text-anchor="middle">complete · 2026-05-04</text>
+
+  <!-- Node 3: v0.3 / 1.0 — active -->
+  <circle cx="610" cy="121" r="14" fill="#D4AF37" stroke="#0A0A0B" stroke-width="3"/>
+  <circle cx="610" cy="121" r="20" fill="none" stroke="#D4AF37" stroke-width="1" stroke-opacity="0.5"/>
+  <text x="610" y="125" font-family="'Outfit', sans-serif" font-size="13" font-weight="700"
+        fill="#0A0A0B" text-anchor="middle">●</text>
+  <text x="610" y="92" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
+        fill="#D4AF37" text-anchor="middle">v0.3 / 1.0</text>
+  <text x="610" y="76" font-family="'Inter', sans-serif" font-size="10"
+        fill="#4a5568" text-anchor="middle">active</text>
+
+  <!-- Node 4: post-1.0 — planned -->
+  <circle cx="850" cy="121" r="14" fill="#0A0A0B" stroke="#4a5568" stroke-width="2"/>
+  <text x="850" y="92" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
+        fill="#4a5568" text-anchor="middle">post-1.0</text>
+  <text x="850" y="76" font-family="'Inter', sans-serif" font-size="10"
+        fill="#4a5568" text-anchor="middle">planned</text>
+
+  <!-- ============ PHASE CARDS (4 columns) ============ -->
+
+  <!-- Card 1: v0.1 -->
+  <g font-family="'Inter', sans-serif" fill="#E2E8F0">
+    <rect x="60" y="160" width="200" height="320" rx="8" fill="#111113" stroke="#10B981" stroke-width="1.2"/>
+    <text x="160" y="185" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
+          fill="#10B981" text-anchor="middle">Stabilize</text>
+    <text x="160" y="200" font-family="'Inter', sans-serif" font-size="10"
+          fill="#4a5568" text-anchor="middle">feature/iframe-preview-tier13</text>
+
+    <line x1="80" y1="215" x2="240" y2="215" stroke="#2d3748" stroke-width="1"/>
+
+    <g font-size="11" fill="#E2E8F0">
+      <text x="76" y="234">●  web_serve unification</text>
+      <text x="76" y="254">●  Bind-port allow-list</text>
+      <text x="76" y="274">●  Sandbox-aware exec</text>
+      <text x="76" y="294">●  Iframe preview (:5001)</text>
+      <text x="76" y="314">●  Multi-active sessions</text>
+      <text x="76" y="334">●  Vision in tool results</text>
+      <text x="76" y="354">●  Two-stage cancel + /cancel</text>
+      <text x="76" y="374">●  Auto-Chromium install</text>
+      <text x="76" y="394">●  Contract-first wire formats</text>
+      <text x="76" y="414">●  3-binary release pipeline</text>
+      <text x="76" y="434">●  CLI onboarding wizard</text>
+      <text x="76" y="454">●  12 issues closed (May)</text>
+    </g>
+
+    <text x="160" y="472" font-size="9" fill="#10B981" text-anchor="middle" font-style="italic">
+      all quality gates green
+    </text>
+  </g>
+
+  <!-- Card 2: v0.2 -->
+  <g font-family="'Inter', sans-serif" fill="#E2E8F0">
+    <rect x="280" y="160" width="200" height="320" rx="8" fill="#111113" stroke="#10B981" stroke-width="1.2"/>
+    <text x="380" y="185" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
+          fill="#10B981" text-anchor="middle">Pentest hardening</text>
+    <text x="380" y="200" font-family="'Inter', sans-serif" font-size="10"
+          fill="#4a5568" text-anchor="middle">#155 — closed 2026-05-04</text>
+
+    <line x1="300" y1="215" x2="460" y2="215" stroke="#2d3748" stroke-width="1"/>
+
+    <g font-size="11" fill="#E2E8F0">
+      <text x="296" y="234">●  HMAC-chained audit log</text>
+      <text x="296" y="254">●  CIDR egress default-deny</text>
+      <text x="296" y="274">●  Memory write rate limits</text>
+      <text x="296" y="294">●  Shell-guard fork-bomb</text>
+      <text x="296" y="314">●  RLIMIT_NPROC ceiling</text>
+      <text x="296" y="334">●  master.key path guard</text>
+      <text x="296" y="354">●  Env-var allowlist switch</text>
+      <text x="296" y="374">●  14-reviewer findings</text>
+      <text x="296" y="394">●  CRIT-1 / CRIT-2 / B1</text>
+      <text x="296" y="414">●  H1 / H2 / test gap</text>
+    </g>
+
+    <text x="380" y="472" font-size="9" fill="#10B981" text-anchor="middle" font-style="italic">
+      structural items → v0.3
+    </text>
+  </g>
+
+  <!-- Card 3: v0.3 / 1.0 — ACTIVE -->
+  <g font-family="'Inter', sans-serif" fill="#E2E8F0">
+    <rect x="500" y="160" width="200" height="320" rx="8" fill="#111113" stroke="#D4AF37" stroke-width="1.5"/>
+    <text x="600" y="185" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
+          fill="#D4AF37" text-anchor="middle">"Rooms" redesign</text>
+    <text x="600" y="200" font-family="'Inter', sans-serif" font-size="10"
+          fill="#4a5568" text-anchor="middle">#156 — design ✓, impl pending</text>
+
+    <line x1="520" y1="215" x2="680" y2="215" stroke="#2d3748" stroke-width="1"/>
+
+    <g font-size="11" fill="#E2E8F0">
+      <text x="516" y="234">○  Two-room sandbox topology</text>
+      <text x="516" y="254">○  4-tier memory model</text>
+      <text x="516" y="274">○  Dreamcatcher consolidation</text>
+      <text x="516" y="294">○  bleve + JSONL + MinHash</text>
+      <text x="516" y="314">○  Tasks scoped per-room</text>
+      <text x="516" y="334">○  Cascade-delete + audit</text>
+      <text x="516" y="354">○  Projects UI (3 surfaces)</text>
+      <text x="516" y="374">○  Memory settings + retention</text>
+      <text x="516" y="394">○  Structural process isolation</text>
+      <text x="516" y="414">○  Capability-based RBAC</text>
+    </g>
+
+    <text x="600" y="448" font-size="10" fill="#D4AF37" text-anchor="middle" font-weight="600">
+      Cut version: 1.0
+    </text>
+    <text x="600" y="464" font-size="9" fill="#4a5568" text-anchor="middle" font-style="italic">
+      no backward compat
+    </text>
+    <text x="600" y="476" font-size="9" fill="#4a5568" text-anchor="middle" font-style="italic">
+      5 locked design docs in docs/design/
+    </text>
+  </g>
+
+  <!-- Card 4: post-1.0 -->
+  <g font-family="'Inter', sans-serif" fill="#E2E8F0">
+    <rect x="720" y="160" width="200" height="320" rx="8" fill="#111113" stroke="#4a5568"/>
+    <text x="820" y="185" font-family="'Outfit', sans-serif" font-size="14" font-weight="700"
+          fill="#4a5568" text-anchor="middle">Variants &amp; ecosystem</text>
+    <text x="820" y="200" font-family="'Inter', sans-serif" font-size="10"
+          fill="#4a5568" text-anchor="middle">long-term plan</text>
+
+    <line x1="740" y1="215" x2="900" y2="215" stroke="#2d3748" stroke-width="1"/>
+
+    <g font-size="11" fill="#E2E8F0">
+      <text x="736" y="240">○  Omnipus Open Source</text>
+      <text x="747" y="254" font-size="10" fill="#4a5568">  this repo · always free</text>
+
+      <text x="736" y="278">○  Omnipus Desktop</text>
+      <text x="747" y="292" font-size="10" fill="#4a5568">  Electron · auto-update · free</text>
+
+      <text x="736" y="316">○  Omnipus Cloud / SaaS</text>
+      <text x="747" y="330" font-size="10" fill="#4a5568">  hosted · SSO · billing · team</text>
+    </g>
+
+    <line x1="740" y1="350" x2="900" y2="350" stroke="#2d3748" stroke-width="1"/>
+
+    <text x="820" y="372" font-family="'Inter', sans-serif" font-size="10" font-weight="600"
+          fill="#4a5568" text-anchor="middle">CONTINUOUS</text>
+
+    <g font-size="11" fill="#E2E8F0">
+      <text x="736" y="392">●  Plugin system (#151)</text>
+      <text x="736" y="412">●  Skills ecosystem</text>
+      <text x="736" y="432">●  More providers / channels</text>
+      <text x="736" y="452">●  Docs &amp; community</text>
+    </g>
+
+    <text x="820" y="472" font-size="9" fill="#4a5568" text-anchor="middle" font-style="italic">
+      none in active dev today
+    </text>
+  </g>
+
+  <!-- ============ LEGEND ============ -->
+  <g font-family="'Inter', sans-serif" font-size="10" fill="#4a5568">
+    <circle cx="80" cy="514" r="6" fill="#10B981"/>
+    <text x="92" y="518">Complete</text>
+
+    <circle cx="180" cy="514" r="6" fill="#D4AF37"/>
+    <text x="192" y="518">Active</text>
+
+    <circle cx="270" cy="514" r="6" fill="#0A0A0B" stroke="#4a5568" stroke-width="1.5"/>
+    <text x="282" y="518">Planned</text>
+
+    <text x="900" y="518" text-anchor="end">●  shipped · ○  not yet</text>
+  </g>
+
+  <!-- Footer -->
+  <text x="490" y="546" font-family="'Inter', sans-serif" font-size="10"
+        fill="#4a5568" text-anchor="middle" font-style="italic">
+    omnipus.ai  ·  MIT  ·  see ROADMAP.md for full detail
+  </text>
+</svg>
