@@ -1,11 +1,12 @@
 # Library Refactor — Impact Assessment
 
-**Status:** Assessment for architectural review
+**Status:** Historical assessment for architectural review
 **Base commit:** `da790c5` (origin/main at time of writing)
-**Prompted by:** *OmniPus — Three-Edition Architecture & Repo Strategy* (April 2026)
+**Prompted by:** an April 2026 multi-edition strategy proposal (Community + Desktop + Enterprise). **That multi-edition framing is no longer the plan** — Omnipus today ships as a single open-source Go binary. The "Desktop" and "EE" naming below refers to hypothetical second consumers that motivated the original library-boundary analysis. The code-quality findings (CLA, `os.Exit` in logger, OpenAPI as source of truth, etc.) are independently valid and remain useful regardless of whether a second consumer ever appears.
+
 **Purpose:** Ground-truth the strategy doc's claims against the current codebase and size the real work.
 
-> This is **not** a decision record. It is a sizing document intended to inform the architect's sign-off decision on §9 of the strategy doc. Line references are against `origin/main@da790c5`.
+> This is **not** a decision record. It is a sizing document. Line references are against `origin/main@da790c5`.
 
 ---
 
@@ -30,7 +31,7 @@ These claims are accurate and should proceed to sign-off unchanged:
 | Community code cannot contain `if enterprise` / `if desktop` conditionals (§3.2) | **Correct and currently upheld** | Zero hits for edition conditionals in `pkg/`. |
 | Extension interfaces must be versioned as first-class API (§4.4) | **Correct, and absent today** | No `pkg/ext` directory exists. No documented interface stability policy. |
 | OpenAPI as source of truth (§4.5) | **Correct, and absent today** | No `openapi.yaml` / `swagger.json` anywhere in repo. Contract exists only implicitly, encoded in `src/lib/api.ts` (1,075 LOC) and handler-by-handler in `pkg/gateway/rest*.go`. |
-| CLA on day one (§6.4) | **Correct and urgent** | No CLA mechanism currently in the repo. The moment any contribution lands in Community and is built into a closed Desktop/EE binary, this is a live legal exposure. Cheap to fix; blocks every downstream decision. |
+| CLA on day one (§6.4) | **Correct and urgent** | No CLA mechanism currently in the repo. The moment any contribution lands in Community and is later relicensed or rebundled, this is a live legal exposure. Cheap to fix; blocks every downstream decision. |
 | "No private repo until the library boundary is validated" (§7.2) | **Correct** | The single highest-leverage rule in the whole doc. Worth enforcing. |
 | Contract tests in CI (§4.5) | **Correct, and absent today** | No contract-test job in CI; API/UI alignment is manual. |
 
@@ -96,7 +97,7 @@ Verified on `main@da790c5`. Line numbers are stable unless noted.
 
 **Correct.** Verified at `src/lib/api.ts:1–28`: the UI authenticates via Bearer token (same token path as any other HTTP client), calls `/api/v1/...` via `fetch`, and has no privileged "UI-only" endpoints. The same auth middleware that protects external calls protects UI calls. The UI is `go:embed`-ded (`pkg/gateway/embed.go`) as a convenience — the Go server does not *require* it; it is served alongside the API.
 
-**One nuance worth flagging:** `src/lib/api.ts` is 1,075 LOC of hand-maintained fetch wrappers. This is the single biggest *latent* risk when the UI splits across three editions — any drift between Go handlers and this file is silent. Generating it from OpenAPI (§4.5 of the strategy doc) is not optional once Desktop/EE exist.
+**One nuance worth flagging:** `src/lib/api.ts` is 1,075 LOC of hand-maintained fetch wrappers. This is the single biggest *latent* risk if a second UI consumer ever appears — any drift between Go handlers and this file is silent. Generating it from OpenAPI (§4.5 of the strategy doc) is not optional once a second consumer exists.
 
 ### 4.4 Gate-level coupling hotspots
 

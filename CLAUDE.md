@@ -4,13 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Omnipus is an agentic core built on Omnipus's foundation, shipping as three product variants:
-
-1. **Omnipus Open Source** (primary, ships first) — Single Go binary with embedded web UI, similar to Omnipus/OpenClaw. Community-facing, builds adoption.
-2. **Omnipus Desktop** (ships second) — Free polished Electron desktop app. Premium UX, auto-updates, native menus.
-3. **Omnipus Cloud/SaaS** (ships third) — Scalable hosted version with team features and managed infrastructure.
-
-All variants share a common Go agentic core with kernel-level sandboxing, RBAC, audit logging, credential management, compiled-in Go channels, and a shared `@omnipus/ui` React component library.
+Omnipus is an agentic core: a single Go binary with the SPA embedded via `go:embed`, kernel-level sandboxing (Landlock + seccomp on Linux 5.13+), RBAC, audit logging, encrypted credential management, and compiled-in Go channels. Community-facing, MIT-licensed, no telemetry.
 
 **Domain:** omnipus.ai
 
@@ -58,7 +52,7 @@ Three-phase plan locked 2026-05-03 to resolve the dilemma of an unstable WIP bra
 
 These are non-negotiable and apply to every decision:
 
-1. **Single Go binary (agentic core)** — all backend features compile into one binary. No new runtime dependencies. Desktop wraps this in Electron. Open source embeds web UI via go:embed.
+1. **Single Go binary (agentic core)** — all backend features compile into one binary. No new runtime dependencies. The SPA is embedded via `go:embed`.
 2. **Pure Go** — no CGo, no external C libraries, no shelling out for security-critical paths. Use `golang.org/x/sys/unix` for kernel interfaces.
 3. **Minimal footprint** — total RAM overhead for all security features must stay under 10MB beyond baseline.
 4. **Graceful degradation** — features requiring Linux 5.13+ (Landlock, seccomp) must fall back to application-level enforcement on older kernels, non-Linux platforms, and Android/Termux.
@@ -71,7 +65,7 @@ These are non-negotiable and apply to every decision:
 
 **Backend:** Go (targeting Go 1.22+ — go.mod requires go 1.26.3; `//go:build go1.22` tags in generated files; `slog` added in 1.21). Key packages: `golang.org/x/sys/unix` (Landlock, seccomp), `chromedp` (browser automation), `whatsmeow` (WhatsApp), `discordgo` (Discord), `telebot` (Telegram), `slack-go` (Slack), `go-nostr` (Nostr), `modernc.org/sqlite` (pure Go SQLite for whatsmeow — no CGo). All channels currently in the codebase are compiled into the single binary as in-process Go implementations. Channels that depend on a non-Go runtime (e.g. Signal, which requires `signal-cli`/JRE) wrap the dependency by spawning a sidecar binary from inside their own `Start()` and communicating with it over local HTTP (Signal) or WebSocket (WhatsApp bridge). There is no generic stdio "bridge protocol"; HTTP-localhost is the de facto pattern.
 
-**Frontend:** TypeScript, React 19, Vite 6, shadcn/ui (Radix + Tailwind CSS v4), AssistantUI (chat), Phosphor Icons (`@phosphor-icons/react`), Zustand (UI state), TanStack Query (server state), TanStack Router, Framer Motion. Shared `@omnipus/ui` component library across three variants: web (go:embed in binary for open source, ships first), Electron desktop (ships second), npm package (for SaaS/embedded, ships third).
+**Frontend:** TypeScript, React 19, Vite 6, shadcn/ui (Radix + Tailwind CSS v4), AssistantUI (chat), Phosphor Icons (`@phosphor-icons/react`), Zustand (UI state), TanStack Query (server state), TanStack Router, Framer Motion. The SPA is built by Vite into `dist/spa/`, copied into `pkg/gateway/spa/`, and embedded into the Go binary via `go:embed`.
 
 **Storage:** File-based only (JSON/JSONL) for all Omnipus data. No PostgreSQL or Redis. Exception: WhatsApp session uses SQLite via whatsmeow with `modernc.org/sqlite` (pure Go, no CGo). SQLite is isolated to WhatsApp session storage only — never used for Omnipus's own data. Data directory: `~/.omnipus/`. Atomic writes (temp file + rename). Credentials in `credentials.json` (AES-256-GCM encrypted, Argon2id KDF), never in `config.json`. **Sessions:** Day-partitioned JSONL transcripts (`sessions/<id>/<YYYY-MM-DD>.jsonl`) with configurable retention (default 90 days). **Context compression** is single-layer: when the token budget is exceeded, `forceCompression` (`pkg/agent/loop.go:4473-4550`) drops ~50% of the oldest turns and writes a summary note via `SetHistory` + `Save`. The historical claim of a second "tool result pruning" pass is not implemented today. **Concurrency:** per-entity files for high-contention data (tasks, pins). Sessions and memory use a 64-shard mutex pool keyed by FNV hash of session ID (`pkg/memory/jsonl.go:21-77`), not a single-writer goroutine. Atomic writes via temp-file + rename (`fileutil.WriteFileAtomic`). Advisory `unix.Flock` on Linux/macOS (`pkg/fileutil/flock_unix.go:18-22`); on Windows, `LockFileEx` is **not** used — the code relies on the single-writer goroutine pattern instead (see `pkg/fileutil/flock_windows.go:15`).
 
@@ -243,7 +237,7 @@ OMNIPUS_BEARER_TOKEN="" ./omnipus gateway --allow-empty &
    **When to set `dev_mode_bypass: true`:**
    - Driving a `withAuth`-protected endpoint (e.g., `curl /api/v1/agents`, `/api/v1/sessions`, `/api/v1/config`) before onboarding has minted a real admin user.
    - Go test scaffolding — `pkg/gateway/routes_admin_test.go`, `websocket_m4_test.go`, etc. flip the flag so admin-route tests don't have to register users + log in just to authenticate.
-   - Electron / local-dev shells where you intentionally don't want a login step.
+   - Local-dev shells where you intentionally don't want a login step.
 
    **Defense-in-depth contract:** the paired `RequireNotBypass` middleware (see `TestSandboxConfigPUT_RealMux_DevModeBypass503`) explicitly returns **503** when `dev_mode_bypass=true` is set, on a hand-picked allow-list of high-blast-radius admin routes (e.g., sandbox-config PUT). The flag is loud and self-limiting by design — never set it in production, never remove the `RequireNotBypass` guard without an ADR.
 

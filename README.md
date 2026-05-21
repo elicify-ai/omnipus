@@ -163,11 +163,7 @@ Single Go binary. File-based JSON/JSONL storage at `~/.omnipus/`. No Postgres, n
 
 ## Status
 
-Pre-1.0, active development on [`feature/iframe-preview-tier13`](https://github.com/elicify-ai/omnipus/tree/feature/iframe-preview-tier13). Three shipping variants share the same Go core and `@omnipus/ui` components:
-
-1. **Omnipus Open Source** (this repo, primary) — single binary, embedded SPA, community focus.
-2. **Omnipus Desktop** — Electron wrapper with native menus and auto-update.
-3. **Omnipus Cloud / SaaS** — hosted variant with team features.
+Pre-1.0, active development on [`feature/iframe-preview-tier13`](https://github.com/elicify-ai/omnipus/tree/feature/iframe-preview-tier13). Single Go binary with the SPA embedded via `go:embed` — that's the product. MIT-licensed, community-focused, no telemetry.
 
 ---
 
