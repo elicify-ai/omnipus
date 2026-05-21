@@ -45,7 +45,7 @@ You don't have to. The MIT license lets you fork Omnipus, modify it, and distrib
 - **Will Omnipus ever go closed-source?** The upstream MIT code is irrevocable — anyone who has it today keeps the MIT grant forever. The CLA gives us the *option* to distribute the same code under different terms in future commercial variants, while the open-source MIT version continues in parallel.
 - **Why not DCO instead?** [DCO](https://developercertificate.org/) is a lighter alternative that asserts contributor authorship without assigning copyright. It works well for projects that commit to staying single-license. Omnipus needs the option to ship commercial variants alongside open source, which DCO doesn't enable — so we chose CLA.
 
-For any other questions, email **legal@elicify.ai** or open a discussion in the GitHub repository.
+For any other questions, email **contact@elicify.ai** or open a discussion in the GitHub repository.
 
 ---
 
