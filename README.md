@@ -60,7 +60,7 @@ Four live screenshots, captured against the running gateway.
 
 ## What you actually get
 
-- **Real multi-agent orchestration.** Hand-off, sub-agents, task delegation, shared transcript, per-agent budgets — not just a chatbot with personas. → [docs/architecture/AS-IS-architecture.md](docs/architecture/AS-IS-architecture.md)
+- **Real multi-agent orchestration.** Hand-off, sub-agents, task delegation, shared transcript, per-agent budgets — not just a chatbot with personas.
 - **Memory that compounds.** Every session closes with an automatic retro and a rolling `LAST_SESSION.md`. The next turn recalls them. Single binary, no embeddings, no extra services. → [docs/memory.md](docs/memory.md)
 - **Kernel-level sandbox.** Landlock + seccomp applied to the gateway process *before* `net.Listen` on Linux 5.13+. Three-tier per-tool policy (allow/ask/deny). SSRF guard wired into every outbound HTTP tool. → [docs/operations/sandbox-config.md](docs/operations/sandbox-config.md)
 - **15+ chat channels** compiled in: Telegram, Discord, Slack, WhatsApp, Matrix, Line, Feishu, DingTalk, Google Chat, IRC, WeCom, Weixin, QQ, OneBot, plus Web Chat. → [pkg/channels/README.md](pkg/channels/README.md)
@@ -116,23 +116,25 @@ A 256-bit AES key auto-generates at `~/.omnipus/master.key` (mode `0600`). **Bac
 
 ## Documentation
 
+User-facing guides, grouped by what you're trying to do:
+
 | Topic | Where to go |
 |---|---|
-| Get started | This README + [docs/README.md](docs/README.md) index |
-| Architecture | [AS-IS architecture](docs/architecture/AS-IS-architecture.md), [ADRs](docs/architecture/) (16 decisions) |
-| Memory system | [docs/memory.md](docs/memory.md) |
-| Channels (per-channel guides) | [pkg/channels/README.md](pkg/channels/README.md) |
-| Hooks (subprocess + in-process) | [docs/hooks/README.md](docs/hooks/README.md) |
-| Skills & MCP | [docs/skills.md](docs/skills.md) · [docs/tools_configuration.md](docs/tools_configuration.md) |
-| Tools reference (full catalog) | [docs/tools-reference.md](docs/tools-reference.md) |
-| Sandbox: config & status | [docs/operations/sandbox-config.md](docs/operations/sandbox-config.md) |
-| Sandbox: known limitations | [docs/operations/sandbox-limitations.md](docs/operations/sandbox-limitations.md) |
-| Reverse proxy & TLS | [docs/operations/reverse-proxy.md](docs/operations/reverse-proxy.md) |
-| Credential vault | [docs/credential_encryption.md](docs/credential_encryption.md) |
-| Configuration reference | [docs/configuration.md](docs/configuration.md) |
-| Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
-| Business requirements (intent of record) | [docs/BRD/Omnipus BRD.md](docs/BRD/Omnipus%20BRD.md) + 5 appendices |
-| Active specs & future designs | [docs/specs/](docs/specs/) · [docs/design/](docs/design/) |
+| **Getting started** | This README + [docs/README.md](docs/README.md) index |
+| **Memory system** | [docs/memory.md](docs/memory.md) |
+| **Skills & MCP** | [docs/skills.md](docs/skills.md) · [docs/tools_configuration.md](docs/tools_configuration.md) |
+| **Channels (per-channel guides)** | [pkg/channels/README.md](pkg/channels/README.md) |
+| **Hooks (subprocess + in-process)** | [docs/hooks/README.md](docs/hooks/README.md) |
+| **Tools reference (full catalog)** | [docs/tools-reference.md](docs/tools-reference.md) |
+| **LLM providers** | [docs/providers.md](docs/providers.md) |
+| **Sandbox: config & status** | [docs/operations/sandbox-config.md](docs/operations/sandbox-config.md) |
+| **Sandbox: known limitations** | [docs/operations/sandbox-limitations.md](docs/operations/sandbox-limitations.md) |
+| **Reverse proxy & TLS** | [docs/operations/reverse-proxy.md](docs/operations/reverse-proxy.md) |
+| **Docker** | [docs/docker.md](docs/docker.md) |
+| **Credential vault** | [docs/credential_encryption.md](docs/credential_encryption.md) |
+| **Configuration reference** | [docs/configuration.md](docs/configuration.md) |
+| **Platform support** | [docs/operations/platform-support.md](docs/operations/platform-support.md) |
+| **Debug & troubleshooting** | [docs/debug.md](docs/debug.md) |
 
 Browse the full index at [docs/README.md](docs/README.md).
 
@@ -192,7 +194,7 @@ Pre-1.0, active development on [`feature/iframe-preview-tier13`](https://github.
 
 ## Contributing
 
-Issues, PRs, discussions — all welcome. Start with the [BRD](docs/BRD/Omnipus%20BRD.md) for context, browse [open issues](https://github.com/elicify-ai/omnipus/issues) for live work, or skim the [ADRs](docs/architecture/) for design decisions already locked.
+Issues, PRs, discussions — all welcome. Browse [open issues](https://github.com/elicify-ai/omnipus/issues) for live work, and see [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup. If you want the internal context — BRDs, ADRs, in-flight specs, future designs — see the [For contributors](docs/README.md#for-contributors) section of the docs index.
 
 ## License
 
