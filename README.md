@@ -1,14 +1,14 @@
 <div align="center">
-<img src="IMG_0432.svg" alt="Omnipus" width="400">
+<img src="public/social-preview.svg" alt="Omnipus — Elite Simplicity. Sovereign Control." width="720">
 
 <h1>Omnipus</h1>
 
 <h3>Multi-agent orchestration — sovereign, sandboxed, single binary.</h3>
 
-<p>An opinionated agent runtime with five named coworkers, hand-off between them, a Landlock+seccomp sandbox applied to the gateway itself on Linux 5.13+, and 17 chat channels. One <code>go build</code>, no database, runs on a $10 VPS.</p>
+<p>An opinionated agent runtime with five named coworkers, hand-off between them, a Landlock+seccomp sandbox applied to the gateway itself on Linux 5.13+, and 15 chat channels. One <code>go build</code>, no database, runs on a $10 VPS.</p>
 
 <p>
-  <img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
   <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react&logoColor=white" alt="React">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
   <a href="https://omnipus.ai"><img src="https://img.shields.io/badge/Website-omnipus.ai-D4AF37?style=flat&logo=google-chrome&logoColor=white" alt="Website"></a>
@@ -142,7 +142,7 @@ Files (`read_file`, `write_file`, `edit_file`, `append_file`, `list_dir`), shell
 
 **20+ LLM providers** compiled in — OpenRouter, Anthropic, OpenAI, Google Gemini, DeepSeek, Qwen, Moonshot, Groq, Cerebras, Mistral, MiniMax, Ollama, vLLM, Azure, GitHub Copilot, Volcengine, ModelScope, NVIDIA, Avian, LongCat, Shengsuanyun, Vivgrid, Zhipu. Fallback chains, multi-key rotation, streaming, vision.
 
-**17 chat channels** — Web Chat, Telegram, Discord, Slack, Teams, Matrix, WhatsApp, Line, QQ, WeChat, WeCom, Weixin, IRC, Feishu, DingTalk, Google Chat, OneBot, MaixCAM. All compiled in; no external services needed.
+**15 chat channels** — Web Chat, Telegram, Discord, Slack, Matrix, WhatsApp, Line, QQ, WeCom, Weixin, IRC, Feishu, DingTalk, Google Chat, OneBot. All compiled in; no external services needed.
 
 ### Operator surfaces
 
@@ -274,7 +274,7 @@ Single binary. File-based storage (`~/.omnipus/` — JSON + JSONL, atomic writes
 
 **Frontend:** TypeScript · React 19 · Vite 6 · shadcn/ui (Radix + Tailwind CSS v4) · AssistantUI · Phosphor Icons · Zustand · TanStack Query / Router · Framer Motion
 
-**Storage:** File-based JSON / JSONL. Day-partitioned session transcripts with configurable retention (default 90 days) and two-layer context compression.
+**Storage:** File-based JSON / JSONL. Day-partitioned session transcripts with configurable retention (default 90 days) and single-layer context compression (drops ~50% of oldest turns and writes a summary note when the token budget is exceeded).
 
 ---
 
@@ -309,7 +309,7 @@ The full design is written down, not vibes:
 
 ## Contributing
 
-Issues, PRs, discussions — all welcome. Start with the BRD, then check the [project board](https://github.com/users/Dapicom/projects/1) for open work.
+Issues, PRs, discussions — all welcome. Start with the BRD, then browse [open issues](https://github.com/elicify-ai/omnipus/issues) for work in progress.
 
 ## License
 
