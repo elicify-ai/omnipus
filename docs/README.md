@@ -17,7 +17,9 @@ For deep internal context (architecture audits, design decisions, in-flight spec
 
 ## Using Omnipus
 
-- **Memory (sessions, retros, recall)** — [memory.md](memory.md)
+- **Memory (auto-recap, idle retros, search)** — [memory.md](memory.md)
+- **Channel-to-agent routing & handoff** — [routing.md](routing.md)
+- **Session history & event stream** — [observability.md](observability.md)
 - **Skills (ClawHub installs, SKILL.md format)** — [skills.md](skills.md)
 - **Channels (15 chat platforms)** — [../pkg/channels/README.md](../pkg/channels/README.md)
 - **Chat-apps configuration** — [chat-apps.md](chat-apps.md)

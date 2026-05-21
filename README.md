@@ -60,11 +60,13 @@ Four live screenshots, captured against the running gateway.
 
 ## What you actually get
 
-- **Real multi-agent orchestration.** Hand-off, sub-agents, task delegation, shared transcript, per-agent budgets — not just a chatbot with personas.
-- **Memory that compounds.** Every session closes with an automatic retro and a rolling `LAST_SESSION.md`. The next turn recalls them. Single binary, no embeddings, no extra services. → [docs/memory.md](docs/memory.md)
-- **Kernel-level sandbox.** Landlock + seccomp applied to the gateway process *before* `net.Listen` on Linux 5.13+. Three-tier per-tool policy (allow/ask/deny). SSRF guard wired into every outbound HTTP tool. → [docs/operations/sandbox-config.md](docs/operations/sandbox-config.md)
-- **15+ chat channels** compiled in: Telegram, Discord, Slack, WhatsApp, Matrix, Line, Feishu, DingTalk, Google Chat, IRC, WeCom, Weixin, QQ, OneBot, plus Web Chat. → [pkg/channels/README.md](pkg/channels/README.md)
-- **Skills & MCP.** Install reusable skill bundles from ClawHub; register MCP servers at runtime. Hooks observe or rewrite any tool call. → [docs/skills.md](docs/skills.md) · [docs/hooks/README.md](docs/hooks/README.md)
+- **A team of agents, not a chatbot.** Five named coworkers with locked identity and editable model/tool policy. Hand-off transfers control mid-conversation in the same transcript — no copy-paste, no re-explaining. Sub-agents, task delegation, shared transcript, per-agent budgets.
+- **Channel-to-agent routing.** Inbound messages from Telegram, Slack, Discord, WhatsApp, and 11 other platforms route to specific agents by channel, account, guild, team, or peer. The default agent (Mia) routes by intent — give her the goal and she picks the right teammate. → [docs/routing.md](docs/routing.md)
+- **Memory the agent maintains itself.** When a conversation goes quiet, Omnipus writes a retro. When it ends, it writes another. When the gateway restarts, it catches up on the ones it missed. `recall_memory` searches across long-term notes, last-session summaries, and 30 days of retros in one query. No vector DB, no embeddings, no extra services. → [docs/memory.md](docs/memory.md)
+- **Full transparency by default.** Every tool call, every LLM request, every cancel, every agent event lands in a day-partitioned JSONL transcript on disk, replayable any time. Live event stream (24 typed event kinds) feeds the UI, subprocess hooks, and the HMAC-chained audit log. → [docs/observability.md](docs/observability.md)
+- **Kernel-level sandbox.** Landlock + seccomp applied to the gateway process *before* `net.Listen` on Linux 5.13+. Three-tier per-tool policy (allow/ask/deny). SSRF guard wired into every outbound HTTP tool. AES-256-GCM credential vault with Argon2id KDF. → [docs/operations/sandbox-config.md](docs/operations/sandbox-config.md)
+- **15 chat channels** compiled in: Telegram, Discord, Slack, WhatsApp, Matrix, Line, Feishu, DingTalk, Google Chat, IRC, WeCom, Weixin, QQ, OneBot, plus Web Chat. → [pkg/channels/README.md](pkg/channels/README.md)
+- **Skills, hooks, and MCP.** Install reusable skill bundles from ClawHub; register MCP servers at runtime; subscribe subprocess hooks to the live event stream. → [docs/skills.md](docs/skills.md) · [docs/hooks/README.md](docs/hooks/README.md)
 - **20+ LLM providers.** OpenRouter, Anthropic, OpenAI, Google Gemini, DeepSeek, Qwen, Moonshot, Groq, Cerebras, Mistral, MiniMax, Ollama, vLLM, Azure, GitHub Copilot, NVIDIA, Volcengine, ModelScope, Zhipu, and more. Fallback chains, multi-key rotation, streaming, vision. → [docs/providers.md](docs/providers.md)
 
 ---
@@ -122,6 +124,8 @@ User-facing guides, grouped by what you're trying to do:
 |---|---|
 | **Getting started** | This README + [docs/README.md](docs/README.md) index |
 | **Memory system** | [docs/memory.md](docs/memory.md) |
+| **Channel-to-agent routing** | [docs/routing.md](docs/routing.md) |
+| **Session history & event stream** | [docs/observability.md](docs/observability.md) |
 | **Skills & MCP** | [docs/skills.md](docs/skills.md) · [docs/tools_configuration.md](docs/tools_configuration.md) |
 | **Channels (per-channel guides)** | [pkg/channels/README.md](pkg/channels/README.md) |
 | **Hooks (subprocess + in-process)** | [docs/hooks/README.md](docs/hooks/README.md) |
