@@ -1,0 +1,117 @@
+# Release-drafter configuration.
+# Builds the next release's changelog from PR titles + labels.
+# https://github.com/release-drafter/release-drafter
+
+name-template: 'v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+
+# Map PR labels to changelog sections. PRs without a label land in "Other changes".
+categories:
+  - title: '🚀 Features'
+    labels:
+      - 'enhancement'
+      - 'type:performance'
+  - title: '🐛 Bug fixes'
+    labels:
+      - 'bug'
+  - title: '🔐 Security'
+    labels:
+      - 'security'
+  - title: '⚠️ Breaking changes'
+    labels:
+      - 'type:breaking-change'
+  - title: '📚 Documentation'
+    labels:
+      - 'documentation'
+      - 'area:docs'
+  - title: '🧹 Refactoring & tech debt'
+    labels:
+      - 'type:refactor'
+      - 'tech-debt'
+  - title: '🤖 Dependencies'
+    labels:
+      - 'dependencies'
+      - 'github_actions'
+  - title: '🧪 Testing'
+    labels:
+      - 'test-coverage'
+
+# Semver bump rules driven by labels.
+version-resolver:
+  major:
+    labels:
+      - 'type:breaking-change'
+  minor:
+    labels:
+      - 'enhancement'
+      - 'security'
+  patch:
+    labels:
+      - 'bug'
+      - 'documentation'
+      - 'dependencies'
+      - 'test-coverage'
+      - 'tech-debt'
+      - 'type:refactor'
+      - 'type:performance'
+  default: patch
+
+# Headers + footers around the auto-built body.
+template: |
+  ## What's changed in v$RESOLVED_VERSION
+
+  $CHANGES
+
+  ## Contributors
+
+  $CONTRIBUTORS
+
+  ---
+
+  **Full Changelog:** https://github.com/elicify-ai/omnipus/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+
+change-template: '- $TITLE (#$NUMBER) by @$AUTHOR'
+change-title-escapes: '\<*_&'
+
+# Exclude PRs that just sync labels / chore / merge commits from the changelog.
+exclude-labels:
+  - 'duplicate'
+  - 'invalid'
+  - 'wontfix'
+  - 'status:in-review'
+
+# Auto-label uncategorised PRs as needs-triage.
+autolabeler:
+  - label: 'security'
+    branch:
+      - '/security\/.+/'
+    title:
+      - '/^security[:(]/i'
+      - '/security:/i'
+  - label: 'bug'
+    title:
+      - '/^fix[:(]/i'
+  - label: 'enhancement'
+    title:
+      - '/^feat[:(]/i'
+  - label: 'documentation'
+    title:
+      - '/^docs[:(]/i'
+  - label: 'dependencies'
+    title:
+      - '/^chore\(deps[):]/i'
+  - label: 'github_actions'
+    title:
+      - '/^ci[:(]/i'
+  - label: 'type:refactor'
+    title:
+      - '/^refactor[:(]/i'
+  - label: 'tech-debt'
+    title:
+      - '/^chore[:(]/i'
+  - label: 'type:performance'
+    title:
+      - '/^perf[:(]/i'
+  - label: 'test-coverage'
+    title:
+      - '/^test[:(]/i'
