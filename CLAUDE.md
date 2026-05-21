@@ -95,7 +95,7 @@ chmod 600 /var/lib/omnipus/master.key
 export OMNIPUS_KEY_FILE=/var/lib/omnipus/master.key
 ```
 
-**Key rotation:** Generate a new key, then re-encrypt using `omnipus credentials rotate` (checks `--old-key-file` and `--new-key-file`). The rotate command decrypts with the old key and re-encrypts every credential with the new key atomically. Update `OMNIPUS_KEY_FILE` to point at the new key (or replace `$OMNIPUS_HOME/master.key`) before restarting the gateway. There is no zero-downtime rotation path in the current CLI — a brief restart is required.
+**Key rotation:** Run `omnipus credentials rotate` — the command takes no arguments (`cobra.NoArgs` per `cmd/omnipus/internal/credentials/command.go::newRotateCommand`) and is **passphrase-based**: it unlocks the store via the current mode (env var / key file / interactive prompt), then prompts twice for the new passphrase, then calls `store.RotateWithPassphrase` which atomically re-encrypts every credential under the new key. A `--key-file` flag was never wired up; the rotation path is passphrase-only today. For headless key-file deployments the operational workflow is: stop the gateway, replace `$OMNIPUS_HOME/master.key` with a freshly minted hex key, restart, and re-onboard any agent secrets via `omnipus credentials set` (or the Settings → Security → Credential Vault UI). There is no zero-downtime rotation path in the current CLI — a brief restart is required.
 
 **Boot order:** `NewStore → Unlock → LoadConfigWithStore → InjectFromConfig → ResolveBundle → RegisterSensitiveValues → NewManager → Start` — any failure aborts boot. Channel secrets are passed directly as a `credentials.SecretBundle` to channel constructors; they do not require environment injection.
 
