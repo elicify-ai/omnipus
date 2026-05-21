@@ -104,7 +104,6 @@ Mia routes by intent, not by name. Tell her what you need — "I need an agent t
 The sandbox is deliberately scoped; be precise about what it does and doesn't do:
 
 - **No LSM enforcement on macOS, Windows, or Linux < 5.13.** The sandbox selects a `FallbackBackend` and enforcement reduces to in-process policy checks. The BRD's Windows story (Job Objects + Restricted Tokens + DACL) is specified in Appendix A but not yet implemented.
-- **Landlock ABI v4** (kernel 5.19+ / 6.x) has a `create_ruleset` incompatibility: the current `computeRights()` enumerates v1–v3 bits only, so on a v4-negotiated ruleset the call returns EINVAL and the backend downgrades to app-level checks. Tracked in [#103](https://github.com/elicify-ai/omnipus/issues/103); out of scope for Sprint J.
 - **Permissive mode downgrades to audit-only skip on kernels < 6.12.** Native permissive `landlock_restrict_self` is not available; Omnipus logs the computed policy and installs seccomp with `SECCOMP_RET_LOG`, but does not call `restrict_self`. Plan for kernel ≥ 6.12 if you need a true log-then-enforce workflow.
 - **`sandbox.ssrf.allow_internal`** accepts exact hostnames, exact IPs, and CIDR ranges. Glob host patterns (`*.internal.corp`) are **not** supported yet.
 
@@ -112,25 +111,16 @@ When `OMNIPUS_ENV=production` is set and the sandbox is `off` or `permissive`, t
 
 ### Operator configuration
 
-Sandbox behaviour is controlled by the `sandbox` key in `~/.omnipus/config.json`:
+The sandbox is configured from the SPA at **Settings → Security → Process Sandbox**. Live backend status (`landlock-v4` here), mode toggle, allowed filesystem paths, SSRF policy presets, and the default per-agent profile all live in one panel.
 
-```json
-{
-  "sandbox": {
-    "mode": "enforce",
-    "allowed_paths": ["/var/lib/omnipus-data"],
-    "ssrf": {
-      "enabled": true,
-      "allow_internal": ["localhost", "10.0.0.0/8", "internal.api.corp"]
-    }
-  }
-}
-```
+<img src="docs/marketing/screenshots/17-sandbox-settings.png" alt="Settings → Security → Process Sandbox showing landlock-v4 active, Enforce mode selected, allowed-paths input, SSRF policy presets, and the default per-agent profile" width="900">
 
-- `mode`: `enforce` | `permissive` | `off`. Legacy `enabled: true/false` still works (maps to `enforce`/`off`).
-- CLI override: `./omnipus gateway --sandbox=enforce|permissive|off` — always trumps the config value.
-- Apply/Install failure on a kernel that claims Landlock support aborts boot with exit code **78** (`EX_CONFIG`); the HTTP listener never binds. Other boot failures keep exit 1.
-- Status is surfaced at `/health` under `sandbox.{applied,mode,backend,disabled_by}` and in more detail at `/api/v1/security/sandbox-status`.
+Operator notes:
+
+- **Mode**: `enforce` | `permissive` | `off`. Persisted under `sandbox.mode` in `~/.omnipus/config.json`. Changes take effect at the next gateway restart — the UI surfaces a "Restart required" banner when the saved mode diverges from the running one.
+- **CLI override**: `./omnipus gateway --sandbox=enforce|permissive|off` always trumps the config value, useful for one-shot debugging without persisting state.
+- **Apply/Install failure** on a kernel that claims Landlock support aborts boot with exit code **78** (`EX_CONFIG`); the HTTP listener never binds. Other boot failures keep exit 1.
+- **Status endpoints**: `GET /health` returns `sandbox.{applied, mode, backend}` always, and conditionally `disabled_by`, `audit_only`, `landlock_enforced`, `seccomp_enforced` when relevant. `GET /api/v1/security/sandbox-status` (admin-only) returns the full apply-state including backend capabilities and the bind-port allow-list.
 
 ### Built-in tools (27 loaded by default)
 
