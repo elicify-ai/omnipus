@@ -1,5 +1,5 @@
 <div align="center">
-<img src="public/social-preview.svg" alt="Omnipus — Elite Simplicity. Sovereign Control." width="720">
+<img src="src/assets/logo/omnipus-avatar.svg" alt="Omnipus" width="240">
 
 <h1>Omnipus</h1>
 
@@ -71,9 +71,9 @@ Tell Ava what you need. She writes the persona, picks the tools, calls `system.a
 
 ### Hand-off across agents
 
-Ask Ray to research then hand off to Max for a screenshot. Ray researches, calls the `handoff` tool with a short brief, the session's active agent switches to Max, and Max finishes the job in the same transcript — no context loss, no copy-paste.
+Ask Mia for help with something outside her remit. She calls the `handoff` tool with a short brief, the session's active agent switches to Jim, and Jim picks up the task in the same transcript — no context loss, no copy-paste. Below, Mia hands a "build me a marketing landing page" request to Jim, who immediately responds with five scoping questions about the SaaS, stack, sections, branding, and references.
 
-<img src="docs/marketing/screenshots/16-handoff-ray-to-max.png" alt="Ray hands off to Max" width="900">
+<img src="docs/marketing/screenshots/16-handoff-mia-to-jim.png" alt="Mia hands off to Jim for a landing-page build" width="900">
 
 ---
 
