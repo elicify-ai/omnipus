@@ -71,9 +71,9 @@ Tell Ava what you need. She writes the persona, picks the tools, calls `system.a
 
 ### Hand-off across agents
 
-Ask Mia for help with something outside her remit. She calls the `handoff` tool with a short brief, the session's active agent switches to Jim, and Jim picks up the task in the same transcript — no context loss, no copy-paste. Below, Mia hands a "build me a marketing landing page" request to Jim, who immediately responds with five scoping questions about the SaaS, stack, sections, branding, and references.
+Mia routes by intent, not by name. Tell her what you need — "I need an agent to help me build a marketing website" — and she picks the right agent on the team, says why, and calls the `handoff` tool. The receiving agent picks up in the same transcript with full context — no copy-paste, no re-explaining. Below, Mia evaluates the request, names **Jim** ("our everyday task agent — excellent at hands-on work like writing code, creating files"), hands off in 12 ms, and Jim immediately scopes the build with five questions about the SaaS, stack, sections, design, and assets.
 
-<img src="docs/marketing/screenshots/16-handoff-mia-to-jim.png" alt="Mia hands off to Jim for a landing-page build" width="900">
+<img src="docs/marketing/screenshots/16-handoff-mia-to-jim.png" alt="Mia routes a website-build request to Jim by intent" width="900">
 
 ---
 
