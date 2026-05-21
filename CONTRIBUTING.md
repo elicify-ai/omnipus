@@ -7,6 +7,8 @@ Omnipus was substantially developed with AI assistance — we embrace this appro
 ## Table of Contents
 
 - [Code of Conduct](#code-of-conduct)
+- [Contributor License Agreement (CLA)](#contributor-license-agreement-cla)
+- [Trademarks](#trademarks)
 - [Ways to Contribute](#ways-to-contribute)
 - [Getting Started](#getting-started)
 - [Development Setup](#development-setup)
@@ -23,6 +25,26 @@ Omnipus was substantially developed with AI assistance — we embrace this appro
 ## Code of Conduct
 
 We are committed to maintaining a welcoming and respectful community. Be kind, constructive, and assume good faith. Harassment or discrimination of any kind will not be tolerated.
+
+---
+
+## Contributor License Agreement (CLA)
+
+Omnipus is developed by **elicify.ai Pte. Ltd.** under the MIT license. Before your first pull request can be merged, you (or your employer, if you contribute on company time) must sign a one-time **Contributor License Agreement** based on the Apache Individual CLA.
+
+The CLA assigns copyright in your contribution to elicify.ai Pte. Ltd. while granting you a perpetual license back to your own work. It exists so that future Omnipus variants (Desktop, Cloud / SaaS — see [`ROADMAP.md`](ROADMAP.md)) can be distributed under terms appropriate to each variant, without retroactively chasing every contributor for permission. The upstream MIT-licensed code is **irrevocable** — anyone who downloads Omnipus today keeps the MIT grant forever.
+
+See [`CLA.md`](CLA.md) for the full text and rationale, including the corporate CLA path for contributions made on company time.
+
+**Status:** The CLA scaffolding is in place; the `cla-assistant.io` bot integration and final lawyer-reviewed text are being prepared. **Until that lands, outside pull requests are not being merged.** Inside contributors (elicify.ai employees and direct contractors) are covered by their employment / contractor agreement and proceed normally.
+
+---
+
+## Trademarks
+
+The **Omnipus** name, logo, the **"Sovereign Deep"** design system, and the octopus mascot are trademarks of **elicify.ai Pte. Ltd.** The MIT license covers source code only — it does not grant rights to use the Omnipus brand on a fork, a commercial variant, or any goods or services.
+
+You can refer to "Omnipus" in articles, integrations ("Omnipus-compatible"), and unmodified redistributions. You **cannot** name your fork "Omnipus Pro" or sell a "Omnipus Cloud" service without written permission. Full policy: [`TRADEMARKS.md`](TRADEMARKS.md).
 
 ---
 
