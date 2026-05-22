@@ -66,9 +66,23 @@ jobs:
           CGO_ENABLED=0 go test -tags goolm,stdjson \
             -run '^(TestBootUnder1Second|TestPerTurnSLO|TestNoTranscriptDataLoss|TestMediaResolveSLO|TestCompactionBoundsMemory|TestLoad2000Sessions)$' \
             -timeout 15m -v ./tests/perf/...
+          # -benchtime=1x: exactly one iteration per benchmark. The CI
+          # workflow's job is to verify benchmarks compile and run cleanly
+          # (smoke test), not to produce statistically meaningful timing —
+          # the per-op numbers from one iteration on a noisy shared runner
+          # are not actionable. Real timing data comes from
+          # BenchmarkPerTurnScripted's percentile metrics (still produced
+          # at 1x because each iteration internally samples N latencies),
+          # and from the dedicated perf-nightly box (gate by
+          # OMNIPUS_PERF_NIGHTLY=1) when we have one.
+          #
+          # -benchtime=3s previously caused BenchmarkCompactionMemory to
+          # exceed the 10-minute step timeout on shared runners — each
+          # iteration is ~11s wall-time (gateway boot + 100 turns + close),
+          # and Go's adaptive scaler overshoots the target.
           CGO_ENABLED=0 go test -tags goolm,stdjson \
-            -bench=. -benchtime=3s -benchmem -run='^$' \
-            -timeout 10m ./tests/perf/... | tee tests/perf/results/bench-$(date -u +%Y-%m-%d).txt
+            -bench=. -benchtime=1x -benchmem -run='^$' \
+            -timeout 8m ./tests/perf/... | tee tests/perf/results/bench-$(date -u +%Y-%m-%d).txt
 
       - name: Commit perf results
         run: |
