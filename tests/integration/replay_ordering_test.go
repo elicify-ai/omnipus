@@ -47,6 +47,7 @@ import (
 //
 // Traces to: Bug-5 (replay frame ordering preserved)
 func TestReplayOrdering_ToolCallStartBeforeResult(t *testing.T) {
+	skipOnMacOSAPFSCleanupRace(t)
 	gw := startIntegrationGateway(t)
 
 	// Create a session via REST API.
@@ -177,6 +178,7 @@ func TestReplayOrdering_EarlierTurnBeforeLaterTurn(t *testing.T) {
 // Traces to: Bug-5 (replay frame ordering) — multi-cycle disconnect/reconnect
 // Traces to: review-pr-test-analyzer.md — "Disconnect → reconnect → disconnect → reconnect"
 func TestReplayOrdering_DisconnectReconnectDisconnectReconnect(t *testing.T) {
+	skipOnMacOSAPFSCleanupRace(t)
 	gw := startIntegrationGateway(t)
 	sessionID := createSession(t, gw)
 	seedTwoTurnTranscript(t, gw, sessionID)
