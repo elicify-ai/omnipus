@@ -64,11 +64,22 @@ func (g *perfGateway) close(tb testing.TB) {
 // The scenario parameter is unused (kept for signature compatibility with
 // existing callers; the test_harness override hook was removed 2026-05-10).
 // DevModeBypass is always true (no bearer auth required for WS connections).
+//
+// LLM traffic targets a mock OpenAI-compatible server started inside this
+// function (see mockOpenRouterServer). This removes the dependency on real
+// OpenRouter — benchmarks no longer need OPENROUTER_API_KEY, no longer pay
+// API quota per CI run, and no longer fail when the upstream is rate-limited
+// or slow. The mock exercises the full provider stack (HTTP, JSON decode,
+// SSE streaming parse); only the network and the model latency are removed.
 func startPerfGateway(tb testing.TB, _ *testutil.ScenarioProvider) *perfGateway {
 	tb.Helper()
 
 	tb.Setenv("OMNIPUS_MASTER_KEY", testMasterKey)
 	tb.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	// Start a mock OpenAI-compatible provider before the gateway boots so
+	// the config below can point APIBase at it.
+	mock := mockOpenRouterServer(tb, "")
 
 	homeDir := tb.TempDir()
 	configPath := filepath.Join(homeDir, "config.json")
@@ -102,7 +113,7 @@ func startPerfGateway(tb testing.TB, _ *testutil.ScenarioProvider) *perfGateway 
 				ModelName: "openrouter-glm",
 				Model:     "openrouter/z-ai/glm-5-turbo",
 				Provider:  "openrouter",
-				APIBase:   "https://openrouter.ai/api/v1",
+				APIBase:   mock.URL, // mock OpenRouter — see mockOpenRouterServer
 				APIKeyRef: "OPENROUTER_API_KEY",
 			},
 		},

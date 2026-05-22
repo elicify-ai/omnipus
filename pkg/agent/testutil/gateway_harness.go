@@ -456,6 +456,12 @@ func buildConfig(hc *harnessConfig, homeDir string, port int) *config.Config {
 		},
 	}
 
+	// Optional APIBase override (perf tests redirect LLM traffic to a local
+	// mock server — see tests/perf/mock_openrouter_test.go).
+	if hc.apiBase != "" {
+		cfg.Providers[0].APIBase = hc.apiBase
+	}
+
 	if len(hc.agents) > 0 {
 		cfg.Agents.List = hc.agents
 	}

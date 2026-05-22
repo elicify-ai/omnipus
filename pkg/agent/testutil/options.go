@@ -12,6 +12,7 @@ type harnessConfig struct {
 	sandbox    *config.OmnipusSandboxConfig
 	bearerAuth bool
 	allowEmpty bool
+	apiBase    string // optional override for Providers[0].APIBase
 }
 
 // WithScenario uses the provided ScenarioProvider instead of a fresh empty one.
@@ -47,5 +48,15 @@ func WithBearerAuth() Option {
 func WithAllowEmpty() Option {
 	return func(hc *harnessConfig) {
 		hc.allowEmpty = true
+	}
+}
+
+// WithAPIBase overrides Providers[0].APIBase. Used by perf tests to redirect
+// LLM traffic to a local httptest.Server (see tests/perf/mock_openrouter_test.go)
+// so the load test exercises the gateway pipeline without depending on a real
+// OpenRouter endpoint, network latency, or rate limits.
+func WithAPIBase(apiBase string) Option {
+	return func(hc *harnessConfig) {
+		hc.apiBase = apiBase
 	}
 }
