@@ -747,3 +747,79 @@ describe('WsConnection direction-filter — all client frame types rejected when
     }
   )
 })
+
+// ── Bug 4: SPA reconnect survives 5 consecutive failures ─────────────────────
+describe('WsConnection — reconnect succeeds after 5 consecutive failures (Bug 4)', () => {
+  // Traces to: src/lib/ws.ts maxReconnectAttempts fix (Bug 4)
+  // The fix raises maxReconnectAttempts from 3 to ≥6 (expected: 10).
+  // These tests FAIL before the fix and PASS after.
+
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('does not give up after 5 consecutive server-side disconnects', () => {
+    // BDD: Given a WsConnection that has successfully connected once
+    //      When the server drops the connection 5 consecutive times
+    //      Then onError must NOT contain a give-up / "click retry" message
+    //      And the client must still schedule another reconnect attempt
+    // Traces to: src/lib/ws.ts _scheduleReconnect — Bug 4 fix raises maxReconnectAttempts
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    // Simulate successful initial connection so reconnectAttempts resets.
+    lastWsInstance.onopen?.()
+    cbs.onError.mockClear()
+    const wsCountAfterConnect = MockWebSocket.mock.calls.length
+
+    // Simulate 5 consecutive abnormal closes; advance past each backoff window.
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      lastWsInstance.onclose?.({ code: 1006, reason: 'server down' })
+      vi.advanceTimersByTime(65_000)
+    }
+
+    // The client must have scheduled at least 5 new WebSocket constructors
+    // (one per reconnect attempt) — proving it did not stop retrying.
+    expect(MockWebSocket.mock.calls.length).toBeGreaterThanOrEqual(wsCountAfterConnect + 5)
+
+    // No give-up message must have been emitted.
+    const giveUpCalls = cbs.onError.mock.calls.filter(
+      (args: unknown[]) => typeof args[0] === 'string' &&
+        (args[0] as string).toLowerCase().includes('failed after')
+    )
+    expect(giveUpCalls).toHaveLength(0)
+
+    conn.disconnect()
+  })
+
+  it('differentiation — after fix, attempt 4 must not trigger give-up (old limit was 3)', () => {
+    // BDD: Given a WsConnection that has successfully connected once
+    //      When the server drops the connection exactly 4 times (old limit was 3)
+    //      Then onError must NOT contain the give-up message
+    //      And a new WebSocket constructor call must follow each close
+    // Traces to: src/lib/ws.ts _scheduleReconnect — maxReconnectAttempts was 3
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+    cbs.onError.mockClear()
+    const wsCountAfterConnect = MockWebSocket.mock.calls.length
+
+    // 4 consecutive failures — old code gave up here; new code must not.
+    for (let i = 0; i < 4; i++) {
+      lastWsInstance.onclose?.({ code: 1006, reason: 'server down' })
+      vi.advanceTimersByTime(65_000)
+    }
+
+    // Must have attempted 4 new connections.
+    expect(MockWebSocket.mock.calls.length).toBeGreaterThanOrEqual(wsCountAfterConnect + 4)
+
+    // No permanent-failure message after 4 attempts.
+    const giveUpCalls = cbs.onError.mock.calls.filter(
+      (args: unknown[]) => typeof args[0] === 'string' &&
+        (args[0] as string).toLowerCase().includes('failed after')
+    )
+    expect(giveUpCalls).toHaveLength(0)
+
+    conn.disconnect()
+  })
+})
