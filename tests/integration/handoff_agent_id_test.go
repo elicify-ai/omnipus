@@ -202,8 +202,18 @@ func TestPostHandoff_ToolCallEntriesCarryNewAgentID(t *testing.T) {
 	logFrameTypes(t, frames1)
 	t.Log("first turn complete (handoff should have fired)")
 
+	// Capture the gateway-minted session_id from message 1 so message 2
+	// targets the SAME session — without it the gateway mints a fresh
+	// session for the second message, the handoff state lives only in
+	// session 1, and the test reads the WRONG session below.
+	sessionID := extractSessionID(frames1)
+	if sessionID == "" {
+		t.Fatal("BUG-1: no session_id captured from first turn's session_started frame")
+	}
+	t.Logf("captured session_id %s from first turn", sessionID)
+
 	// Send a second message: jim is now active and the mock LLM returns a tool call.
-	sendMessage(t, conn, "jim please run a tool")
+	sendMessage(t, conn, "jim please run a tool", sessionID)
 	t.Log("sent second message (expecting jim tool call)")
 
 	frames2 := collectFramesUntilDone(t, conn, 10*time.Second)
@@ -216,12 +226,6 @@ func TestPostHandoff_ToolCallEntriesCarryNewAgentID(t *testing.T) {
 	// Give the session store a moment to flush the transcript write.
 	time.Sleep(200 * time.Millisecond)
 
-	// Look up the gateway-minted session ID (the WS mints fresh on first
-	// message frame; pre-created REST sessions are not what the chat used).
-	sessionID := getMostRecentSessionID(t, gw)
-	if sessionID == "" {
-		t.Fatal("BUG-1: no session found via REST after two turns — gateway did not persist")
-	}
 	t.Logf("reading transcript for session %s", sessionID)
 
 	// Read the transcript and find all tool_call entries.

@@ -188,13 +188,37 @@ func wsConnect(tb testing.TB, gw *testutil.TestGateway) *websocket.Conn {
 }
 
 // sendMessage sends a "message" frame over conn and returns immediately.
+// When sessionID is non-empty it is included in the frame so the gateway
+// continues an existing session rather than minting a fresh one for each
+// message (a fresh session would silently lose mid-turn handoff state).
 // Traces to: Bug-3 (concurrent sessions).
-func sendMessage(tb testing.TB, conn *websocket.Conn, content string) {
+func sendMessage(tb testing.TB, conn *websocket.Conn, content string, sessionID ...string) {
 	tb.Helper()
-	frame := fmt.Sprintf(`{"type":"message","content":%s}`, jsonQuote(content))
+	var frame string
+	if len(sessionID) > 0 && sessionID[0] != "" {
+		frame = fmt.Sprintf(`{"type":"message","content":%s,"session_id":%s}`,
+			jsonQuote(content), jsonQuote(sessionID[0]))
+	} else {
+		frame = fmt.Sprintf(`{"type":"message","content":%s}`, jsonQuote(content))
+	}
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(frame)); err != nil {
 		tb.Fatalf("sendMessage: %v", err)
 	}
+}
+
+// extractSessionID scans frames for the first session_started frame and
+// returns its session_id. Used by tests that need to thread session_id
+// through subsequent sendMessage calls so they target the SAME session
+// rather than each minting a fresh one.
+func extractSessionID(frames []map[string]any) string {
+	for _, f := range frames {
+		if tp, _ := f["type"].(string); tp == "session_started" {
+			if sid, _ := f["session_id"].(string); sid != "" {
+				return sid
+			}
+		}
+	}
+	return ""
 }
 
 // waitForFirstToken reads frames from conn until it sees a token/done/content
