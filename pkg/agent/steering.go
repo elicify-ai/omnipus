@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/routing"
@@ -178,6 +179,30 @@ func (al *AgentLoop) Steer(msg providers.Message) error {
 		agentID = ts.agentID
 	}
 	return al.enqueueSteeringMessage(scope, agentID, msg)
+}
+
+// enqueueSteeringFromMessage redirects an inbound bus message into the
+// steering queue for the scope that owns the currently running turn for
+// this message's chat. Used by sessionWorker.enqueue when a same-scope
+// message arrives while the worker is mid-turn, so the agent auto-continues
+// with the late-append text rather than starting a fresh turn after.
+//
+// Returns an error if the routing target cannot be resolved, no turn is
+// active for the scope, or the steering queue is full (caller falls back
+// to inbox dispatch in that case).
+func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
+	route, ag, err := al.resolveMessageRoute(msg)
+	if err != nil || ag == nil {
+		return fmt.Errorf("enqueueSteeringFromMessage: route resolution failed: %w", err)
+	}
+	// The steering queue uses route.SessionKey ("agent:<id>:<sid>") — the same
+	// key that runTurn registered the active turn under in activeTurnStates.
+	pmsg := providers.Message{
+		Role:    "user",
+		Content: msg.Content,
+		Media:   append([]string(nil), msg.Media...),
+	}
+	return al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg)
 }
 
 func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
@@ -434,6 +459,12 @@ func (al *AgentLoop) InterruptSession(sessionID, hint string) (descendants []str
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					logger.ErrorCF("agent", "Panic in InterruptSession goroutine",
+						map[string]any{"panic": r, "turn_id": ts.turnID})
+				}
+			}()
 			// FR-12a: call providerCancel first so the in-flight HTTP stream is
 			// aborted immediately, before the graceful-interrupt flag is polled.
 			ts.mu.Lock()
@@ -487,6 +518,12 @@ func (al *AgentLoop) InterruptSessionHard(sessionID, hint string) (descendants [
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					logger.ErrorCF("agent", "Panic in InterruptSessionHard goroutine",
+						map[string]any{"panic": r, "turn_id": ts.turnID})
+				}
+			}()
 			// requestHardAbort sets hardAbort and fires providerCancel+turnCancel
 			// atomically (see turn.go:requestHardAbort). The else branch executes
 			// only when hardAbort was already true — meaning a concurrent caller
@@ -602,10 +639,7 @@ func (al *AgentLoop) dequeuePendingSubTurnResults(sessionKey string) []*tools.To
 	var results []*tools.ToolResult
 	for {
 		select {
-		case result, ok := <-ts.pendingResults:
-			if !ok {
-				return results
-			}
+		case result := <-ts.pendingResults:
 			if result != nil {
 				results = append(results, result)
 			}

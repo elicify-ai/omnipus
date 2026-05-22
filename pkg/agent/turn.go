@@ -604,11 +604,18 @@ func (ts *turnState) Finish(isHardAbort bool) {
 	// used to create a second channel that Finished() would never return.
 	ch := ts.Finished()
 
-	// Close pendingResults channel exactly once
+	// Signal completion exactly once.
+	//
+	// pendingResults is intentionally NOT closed here. Closing it while
+	// deliverSubTurnResult may hold a local copy of the channel reference and be
+	// mid-select-send creates an unavoidable runtime-level race between
+	// closechan() and chansend() that the race detector flags even when the
+	// channel field itself is zeroed under a mutex. Instead we rely on the
+	// finishedChan close as the sole stop signal; all consumers of pendingResults
+	// use non-blocking select+default (loop.go) or select+Finished() (subturn.go)
+	// so they never block waiting for a close. The channel is garbage-collected
+	// once all references drop after the turn is finished.
 	ts.closeOnce.Do(func() {
-		if ts.pendingResults != nil {
-			close(ts.pendingResults)
-		}
 		if ch != nil {
 			close(ch)
 		}

@@ -340,7 +340,12 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 	}
 }
 
-func TestDrainBusToSteering_RequeuesDifferentScopeMessage(t *testing.T) {
+// TestSessionWorker_DifferentScopesGetIndependentWorkers verifies that two
+// messages for different scopes resolve to different scope keys (which is the
+// pre-condition for the dispatcher to create independent workers).
+// With per-session workers, messages for different scopes are routed into
+// separate workers — there is no requeue path.
+func TestSessionWorker_DifferentScopesGetIndependentWorkers(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -364,79 +369,46 @@ func TestDrainBusToSteering_RequeuesDifferentScopeMessage(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
 
-	activeMsg := bus.InboundMessage{
+	msg1 := bus.InboundMessage{
 		Channel:  "telegram",
 		SenderID: "user1",
 		ChatID:   "chat1",
-		Content:  "active turn",
+		Content:  "session one",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
 		},
 	}
-	activeScope, activeAgentID, ok := al.resolveSteeringTarget(activeMsg)
-	if !ok {
-		t.Fatal("expected active message to resolve to a steering scope")
-	}
-
-	otherMsg := bus.InboundMessage{
+	msg2 := bus.InboundMessage{
 		Channel:  "telegram",
 		SenderID: "user2",
 		ChatID:   "chat2",
-		Content:  "other session",
+		Content:  "session two",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user2",
 		},
 	}
-	otherScope, _, ok := al.resolveSteeringTarget(otherMsg)
-	if !ok {
-		t.Fatal("expected other message to resolve to a steering scope")
-	}
-	if otherScope == activeScope {
-		t.Fatalf("expected different steering scopes, got same scope %q", activeScope)
-	}
 
-	if err := msgBus.PublishInbound(context.Background(), otherMsg); err != nil {
-		t.Fatalf("PublishInbound failed: %v", err)
+	scope1, _, ok1 := al.resolveSteeringTarget(msg1)
+	scope2, _, ok2 := al.resolveSteeringTarget(msg2)
+	if !ok1 || !ok2 {
+		t.Fatal("expected both messages to resolve to steering scopes")
+	}
+	if scope1 == scope2 {
+		t.Fatalf("expected different scopes, both resolved to %q", scope1)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	done := make(chan struct{})
-	go func() {
-		al.drainBusToSteering(ctx, activeScope, activeAgentID)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for drainBusToSteering to stop")
+	// Spawn workers for both scopes — they must be distinct.
+	w1 := newSessionWorker(scope1, al, func() {})
+	w2 := newSessionWorker(scope2, al, func() {})
+	if w1.scope == w2.scope {
+		t.Fatalf("worker scopes must differ: %q == %q", w1.scope, w2.scope)
 	}
 
-	if msgs := al.dequeueSteeringMessagesForScope(activeScope); len(msgs) != 0 {
-		t.Fatalf("expected no steering messages for active scope, got %v", msgs)
-	}
-
-	// After the drain goroutine exits, out-of-scope messages must have been
-	// re-published to the inbound bus (not the outbound bus) so that
-	// runAgentLoop can process them as new turns.
-	requeueCtx, requeueCancel := context.WithTimeout(context.Background(), time.Second)
-	defer requeueCancel()
-	select {
-	case <-requeueCtx.Done():
-		t.Fatal("timeout waiting for requeued message on inbound bus")
-	case requeued, ok := <-msgBus.InboundChan():
-		if !ok {
-			t.Fatal("inbound channel was closed unexpectedly")
-		}
-		if requeued.Channel != otherMsg.Channel || requeued.ChatID != otherMsg.ChatID ||
-			requeued.Content != otherMsg.Content {
-			t.Fatalf("requeued message mismatch: got %+v want %+v", requeued, otherMsg)
-		}
-	}
+	// Cancel workers immediately (we only needed the scope check).
+	w1.cancel()
+	w2.cancel()
 }
 
 // slowTool simulates a tool that takes some time to execute.
@@ -964,9 +936,11 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 	}
 
 	sessionKey := routing.BuildAgentMainSessionKey(routing.DefaultAgentID)
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
 	provider := &blockingDirectProvider{
-		firstStarted: make(chan struct{}),
-		releaseFirst: make(chan struct{}),
+		firstStarted: firstStarted,
+		releaseFirst: releaseFirst,
 		firstResp:    "stale direct response",
 		finalResp:    "fresh response after steering",
 	}
@@ -992,8 +966,10 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 		}{resp: resp, err: err}
 	}()
 
+	// Use the local channel snapshot to avoid a race with Chat() setting
+	// provider.firstStarted = nil under its mutex.
 	select {
-	case <-provider.firstStarted:
+	case <-firstStarted:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for first LLM call to start")
 	}
@@ -1001,7 +977,7 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 	if err := al.Steer(providers.Message{Role: "user", Content: "follow-up instruction"}); err != nil {
 		t.Fatalf("Steer failed: %v", err)
 	}
-	close(provider.releaseFirst)
+	close(releaseFirst)
 
 	select {
 	case result := <-resultCh:
