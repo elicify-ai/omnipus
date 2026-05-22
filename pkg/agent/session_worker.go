@@ -56,6 +56,16 @@ type sessionWorker struct {
 	// turn after the current one finishes). Set/cleared by processTurn.
 	inTurn atomic.Bool
 
+	// exiting is set the moment runLoop decides to terminate (idle-timeout,
+	// ctx cancel, or panic). Dispatchers consult this BEFORE relying on the
+	// sessionWorkers.Load() result: if exiting=true, the worker will not
+	// drain its inbox, so the dispatcher must spawn a fresh worker for the
+	// message instead of enqueueing into the dying one. Without this flag,
+	// the window between idleTimer.C firing and the deferred Delete from
+	// sessionWorkers running was a silent-message-drop race (pass-2
+	// silent-failure-hunter Finding N1).
+	exiting atomic.Bool
+
 	// admissionRelease is called when the worker exits to release its slot
 	// in the AdmissionController. Set at construction time by the dispatcher.
 	admissionRelease func()
@@ -162,14 +172,17 @@ func (w *sessionWorker) runLoop() {
 	for {
 		select {
 		case <-ctx.Done():
+			w.exiting.Store(true)
 			return
 		case <-idleTimer.C:
+			w.exiting.Store(true)
 			logger.DebugCF("agent.worker", "Session worker idle-timeout — exiting",
 				map[string]any{"scope": w.scope})
 			return
 
 		case msg, ok := <-w.inbox:
 			if !ok {
+				w.exiting.Store(true)
 				return
 			}
 

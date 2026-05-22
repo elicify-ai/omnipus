@@ -33,6 +33,10 @@ export default defineConfig({
     css: false,
     pool: 'forks',
     testTimeout: 15000,
+    // beforeAll in onboarding.test.tsx dynamically imports the route module which
+    // triggers TanStack router plugin transform across all route files — this can
+    // take 20–30s on a cold run. Raise hookTimeout to prevent spurious timeouts.
+    hookTimeout: 60000,
   },
   build: {
     outDir: 'dist/spa',

@@ -275,7 +275,7 @@ type OmnipusSandboxConfig struct {
 	// Unknown values are rejected at config-load time by SandboxMode's
 	// UnmarshalJSON. An empty Mode on a fresh config is treated as
 	// "enforce on capable kernels" by the gateway boot path.
-	Mode SandboxMode `json:"mode,omitempty"`
+	Mode SandboxMode `json:"mode,omitempty" env:"OMNIPUS_SANDBOX_MODE"`
 
 	// AllowNetworkOutbound permits sandboxed processes to make outbound TCP
 	// connections. When false (default), outbound connections are blocked

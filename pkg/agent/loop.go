@@ -1540,7 +1540,14 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 								})
 						}
 					}()
-					_, _ = al.processSystemMessage(runCtx, msg)
+					if _, err := al.processSystemMessage(runCtx, msg); err != nil {
+						logger.WarnCF("agent", "processSystemMessage returned error",
+							map[string]any{
+								"channel": msg.Channel,
+								"chat_id": msg.ChatID,
+								"error":   err.Error(),
+							})
+					}
 				}()
 				continue
 			}
@@ -1571,10 +1578,20 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				continue
 			}
 
-			// If a worker already exists for this scope, enqueue into it.
+			// If a worker already exists for this scope AND is not in the
+			// middle of exiting, enqueue into it. The exiting check closes
+			// the silent-drop race (pass-2 silent-failure-hunter N1) where
+			// the dispatcher Load'd a worker whose idleTimer had already
+			// fired but whose deferred sessionWorkers.Delete had not yet
+			// run — enqueue into the dying worker's inbox would never be
+			// drained. When exiting=true we fall through to the spawn path
+			// below, which will create a fresh worker.
 			if existing, ok := al.sessionWorkers.Load(scope); ok {
-				existing.(*sessionWorker).enqueue(msg)
-				continue
+				if w := existing.(*sessionWorker); !w.exiting.Load() {
+					w.enqueue(msg)
+					continue
+				}
+				// Dying worker — fall through to spawn replacement.
 			}
 
 			// No worker yet — atomically claim an admission slot for this scope.

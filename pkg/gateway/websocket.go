@@ -1372,9 +1372,14 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 		// Re-check under the lock: the drain may have disarmed the flag while we were
 		// waiting for RLock.
 		if wc.isReplayingLive.Load() && wc.replayDivertCh != nil {
-			// Route to divert channel while holding the read-lock.
+			// Route to divert channel while holding the read-lock for the ENTIRE
+			// send. Pass-2 reviewer caught: previous version RUnlock'd before the
+			// send, letting the drain disarm + close the divert channel between
+			// our RUnlock and the targetCh <- data write — orphaned-frame race.
+			// Holding RLock through the send ensures the drain's exclusive Lock()
+			// cannot fire until after our send completes.
 			targetCh := wc.replayDivertCh
-			wc.replayMu.RUnlock()
+			defer wc.replayMu.RUnlock()
 			switch {
 			case isCritical:
 				select {
