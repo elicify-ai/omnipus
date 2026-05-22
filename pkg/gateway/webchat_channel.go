@@ -16,6 +16,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/channels"
 )
 
 // webchatChannel implements channels.Channel so the channel Manager can route
@@ -82,7 +83,17 @@ func (c *webchatChannel) Send(_ context.Context, msg bus.OutboundMessage) error 
 	c.wsHandler.mu.Unlock()
 
 	if len(conns) == 0 {
-		return fmt.Errorf("webchat: no active connection for chat %s", msg.ChatID)
+		// Wrap as channels.ErrSendFailed so the Manager's sendWithRetry loop
+		// classifies the failure as PERMANENT and stops immediately. Under
+		// concurrent load (e.g. 2000 in-process WS clients all hanging up
+		// near simultaneously) the default "unknown error" classification
+		// triggered exponential-backoff retries — each blocking the worker
+		// for up to maxBackoff seconds, multiplied by 3 attempts per
+		// dead chat. There is no recovery path when a chat's only WS
+		// connection has closed; retrying just wastes the worker's time
+		// and starves live chats sharing the same goroutine.
+		return fmt.Errorf("webchat: no active connection for chat %s: %w",
+			msg.ChatID, channels.ErrSendFailed)
 	}
 
 	for _, conn := range conns {
@@ -146,7 +157,9 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 	c.wsHandler.mu.Unlock()
 
 	if !ok {
-		return fmt.Errorf("webchat: no active connection for chat %s", msg.ChatID)
+		// Same permanent-failure classification as Send — see comment above.
+		return fmt.Errorf("webchat: no active connection for chat %s: %w",
+			msg.ChatID, channels.ErrSendFailed)
 	}
 
 	parts := make([]generated.MediaPart, 0, len(msg.Parts))
