@@ -50,6 +50,16 @@ var (
 
 	// sharedCompiler is the singleton compiler with all schemas pre-loaded.
 	sharedCompiler *jsonschema.Compiler
+
+	// sharedCompilerMu guards concurrent calls to sharedCompiler.Compile.
+	// jsonschema/v6's Compiler mutates internal state during Compile (it
+	// caches resolved schemas in an unsynchronised map), so calling Compile
+	// from multiple goroutines on the same instance is a data race —
+	// observed as "fatal error: concurrent map read and map write" on CI
+	// runners running TestCompileInboundSchema_ConcurrentDifferentSchemas.
+	// We serialise access here; the lock is held only across the Compile
+	// call so the cache hit path stays fast.
+	sharedCompilerMu sync.Mutex
 )
 
 // contractsDir returns the absolute path to the contracts/ directory.
@@ -158,7 +168,9 @@ func validateAgainstAsyncAPISchema(t *testing.T, schemaName string, v any) error
 	fragment := "/components/schemas/" + schemaName
 	url := fileURL(asyncapiFilePath) + "#" + fragment
 
+	sharedCompilerMu.Lock()
 	sch, err := c.Compile(url)
+	sharedCompilerMu.Unlock()
 	require.NoError(t, err, "could not compile asyncapi schema %q", schemaName)
 
 	return sch.Validate(doc)
@@ -180,7 +192,9 @@ func validateAgainstComponentSchema(t *testing.T, schemaName string, v any) erro
 	schemaPath := filepath.Join(componentSchemaDir, schemaName+".yaml")
 	url := fileURL(schemaPath)
 
+	sharedCompilerMu.Lock()
 	sch, err := c.Compile(url)
+	sharedCompilerMu.Unlock()
 	require.NoError(t, err, "could not compile component schema %q from %s", schemaName, schemaPath)
 
 	return sch.Validate(doc)
@@ -197,7 +211,9 @@ func validateAgainstComponentSchemaRawJSON(t *testing.T, schemaName string, raw 
 	schemaPath := filepath.Join(componentSchemaDir, schemaName+".yaml")
 	url := fileURL(schemaPath)
 
+	sharedCompilerMu.Lock()
 	sch, err := c.Compile(url)
+	sharedCompilerMu.Unlock()
 	require.NoError(t, err, "could not compile component schema %q", schemaName)
 
 	return sch.Validate(doc)
@@ -2972,12 +2988,13 @@ func TestCompileInboundSchema_ConcurrentDifferentSchemas(t *testing.T) {
 	for _, name := range schemas {
 		n := name
 		go func() {
-			// validateAgainstComponentSchema forces schema compilation (lazy init).
-			schemaPath := componentSchemaDir
-			if schemaPath == "" {
-				// initSchemas not called yet — run a quick init
-				_ = initSchemas(t)
-			}
+			// Always call initSchemas first — sync.Once serialises the write
+			// to componentSchemaDir + sharedCompiler. Reading the global var
+			// directly (the previous "skip init if non-empty" optimisation)
+			// races with the in-flight Once.Do on the first call, producing
+			// "fatal error: concurrent map read and map write" under -race
+			// when many goroutines hit this path on a cold cache.
+			_ = initSchemas(t)
 			raw := []byte(`{"name":"test"}`)
 			err := validateAgainstComponentSchemaRawJSON(t, n, raw)
 			// We expect validation to either pass or fail — no panic or race.
