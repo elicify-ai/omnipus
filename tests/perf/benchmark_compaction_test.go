@@ -121,9 +121,17 @@ func TestCompactionBoundsMemory(t *testing.T) {
 		scenario = scenario.WithText(compactionTurnText(i))
 	}
 
+	// Redirect Providers[0].APIBase to a local mock OpenAI-compatible server.
+	// Without this the test hits real OpenRouter when OPENROUTER_API_KEY is
+	// set in CI env, turning each of compactionTurns turns into a real LLM
+	// call (~5s each). Combined that pushed the test from 2.5 s to 535 s on
+	// the Nightly Perf workflow, which then ran past the 20-min cap.
+	mock := mockOpenRouterServer(t, compactionTurnText(0))
+
 	gw := testutil.StartTestGateway(t,
 		testutil.WithAllowEmpty(),
 		testutil.WithScenario(scenario),
+		testutil.WithAPIBase(mock.URL),
 	)
 
 	wsURL := "ws" + strings.TrimPrefix(gw.URL, "http") + "/api/v1/chat/ws"
