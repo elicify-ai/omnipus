@@ -19,6 +19,11 @@ jobs:
     env:
       CGO_ENABLED: "0"
       OMNIPUS_RUN_LOAD_TEST: "1"
+      # Perf benchmarks (BenchmarkBootHealth, BenchmarkCompactionMemory) hit
+      # real OpenRouter — startPerfGateway seeds a stub key if this env var
+      # is unset, which then 401s in-bench. Wire the repo secret so benches
+      # actually run end-to-end in CI.
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY_CI }}
 
     steps:
       - name: Checkout
