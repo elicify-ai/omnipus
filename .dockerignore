@@ -8,3 +8,14 @@ config/
 *.md
 LICENSE
 assets/
+
+# Build artifacts and host dependencies — the Dockerfile rebuilds these
+# inside the container (stage 1: `npm ci && npm run build`). Copying them
+# from the host into the build context adds ~1.2 GB per build and on
+# slim runners triggers "no space left on device" during COPY . .
+node_modules/
+dist/
+
+# Test output that should never reach a production image.
+tests/perf/results/
+*.log
