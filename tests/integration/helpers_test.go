@@ -133,11 +133,15 @@ func startIntegrationGateway(t *testing.T) *testutil.TestGateway {
 	// gw.Close (t.Cleanup is LIFO). On macOS APFS, t.TempDir's RemoveAll
 	// cleanup races with the gateway's background session/context writers
 	// — even after TestGateway.Close returns, in-flight writes to
-	// $home/sessions/<id>/.context can hold the directory non-empty. A
-	// short drain gives those writers time to settle so unlinkat
-	// succeeds. Linux ext4 doesn't surface this because of looser
-	// directory-empty semantics; the drain is a no-op penalty there.
-	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
+	// $home/sessions/<id>/.context can hold the directory non-empty. The
+	// drain gives those writers time to settle so unlinkat succeeds.
+	// 100 ms was insufficient on macos-latest/arm64 CI runners; 1 s is
+	// the empirical safe window (one APFS journal flush cycle). Linux
+	// ext4 doesn't surface this — the drain is a no-op penalty there.
+	// Filed as a v0.2 follow-up to instead drain the gateway's session
+	// writers inside TestGateway.Close so the test side doesn't need
+	// this knob at all.
+	t.Cleanup(func() { time.Sleep(1 * time.Second) })
 	return testutil.StartTestGateway(t, testutil.WithAPIBase(mock.URL), testutil.WithBearerAuth())
 }
 
