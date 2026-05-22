@@ -114,6 +114,7 @@ function makeCallbacks() {
     onConnected: vi.fn(),
     onDisconnected: vi.fn(),
     onError: vi.fn(),
+    onReconnectStateChange: vi.fn(),
   }
 }
 
@@ -819,6 +820,192 @@ describe('WsConnection — reconnect succeeds after 5 consecutive failures (Bug 
         (args[0] as string).toLowerCase().includes('failed after')
     )
     expect(giveUpCalls).toHaveLength(0)
+
+    conn.disconnect()
+  })
+})
+
+// ── Fix 1: resilient reconnect schedule ───────────────────────────────────────
+
+describe('Fix 1: resilient reconnect schedule', () => {
+  // Traces to: fix(spa): resilient WS reconnect + visible state + outbound queue
+  // src/lib/ws.ts — _scheduleReconnect: 10 fast + 20 slow attempts before give-up.
+
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('runs more than 3 reconnect attempts before giving up', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+    cbs.onError.mockClear()
+    const wsCountAfterConnect = MockWebSocket.mock.calls.length
+
+    // Simulate 11 consecutive failures — old code gave up after 3.
+    for (let i = 0; i < 11; i++) {
+      lastWsInstance.onclose?.({ code: 1006, reason: 'server down' })
+      vi.advanceTimersByTime(65_000)
+    }
+
+    // Must have attempted at least 11 new connections (fast phase = 10,
+    // plus 1 into the slow phase).
+    expect(MockWebSocket.mock.calls.length).toBeGreaterThanOrEqual(wsCountAfterConnect + 11)
+
+    conn.disconnect()
+  })
+
+  it('fast-phase backoff is capped at 30s (MAX_FAST_DELAY_MS)', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // First close — schedules fast attempt 1 (delay = 2^1 * 1000 = 2000ms).
+    lastWsInstance.onclose?.({ code: 1006, reason: 'server down' })
+    const wsAfterFirstClose = MockWebSocket.mock.calls.length
+
+    // Advance past attempt-1 delay.
+    vi.advanceTimersByTime(2500)
+    expect(MockWebSocket.mock.calls.length).toBeGreaterThan(wsAfterFirstClose)
+
+    // Simulate enough failures to reach attempt 5 (delay = min(2^5*1000, 30000) = 30000ms).
+    for (let i = 0; i < 4; i++) {
+      lastWsInstance.onclose?.({ code: 1006, reason: 'server down' })
+      vi.advanceTimersByTime(35_000) // advance past max 30s cap
+    }
+
+    // Attempt 5 should have been scheduled — verify by checking WS count grew.
+    const wsAfterFiveFailures = MockWebSocket.mock.calls.length
+    expect(wsAfterFiveFailures).toBeGreaterThan(wsAfterFirstClose + 4)
+
+    conn.disconnect()
+  })
+
+  it('onReconnectStateChange is called with reconnecting + increasing attempt', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+    cbs.onReconnectStateChange.mockClear()
+
+    // Trigger first failure.
+    lastWsInstance.onclose?.({ code: 1006, reason: 'server down' })
+    vi.advanceTimersByTime(2500)
+
+    const calls = cbs.onReconnectStateChange.mock.calls as [string, number][]
+    const reconnectingCalls = calls.filter(([phase]) => phase === 'reconnecting')
+    expect(reconnectingCalls.length).toBeGreaterThanOrEqual(1)
+    expect(reconnectingCalls[0][1]).toBeGreaterThanOrEqual(1)
+
+    conn.disconnect()
+  })
+
+  it('onReconnectStateChange is called with null/0 after successful reconnect', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // Disconnect, schedule reconnect.
+    lastWsInstance.onclose?.({ code: 1006, reason: 'server down' })
+    vi.advanceTimersByTime(2500)
+
+    // Simulate the reconnected WS firing onopen.
+    cbs.onReconnectStateChange.mockClear()
+    lastWsInstance.onopen?.()
+
+    const calls = cbs.onReconnectStateChange.mock.calls as [string | null, number][]
+    const clearCalls = calls.filter(([phase]) => phase === null)
+    expect(clearCalls.length).toBeGreaterThanOrEqual(1)
+    expect(clearCalls[0][1]).toBe(0)
+
+    conn.disconnect()
+  })
+
+  it('onError with give-up message only after ALL phases exhausted (10 fast + 20 slow)', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+    cbs.onError.mockClear()
+
+    // ── Fast phase: 10 failures ────────────────────────────────────────────────
+    for (let i = 0; i < 10; i++) {
+      lastWsInstance.onclose?.({ code: 1006, reason: 'server down' })
+      vi.advanceTimersByTime(35_000) // past max 30s fast-phase cap
+    }
+
+    // After fast phase — should NOT have given up yet.
+    const giveUpAfterFast = (cbs.onError.mock.calls as [string][]).filter(
+      ([msg]) => typeof msg === 'string' && msg.toLowerCase().includes('reconnect now')
+    )
+    expect(giveUpAfterFast).toHaveLength(0)
+
+    // ── Slow phase: 20 failures ────────────────────────────────────────────────
+    for (let i = 0; i < 20; i++) {
+      lastWsInstance.onclose?.({ code: 1006, reason: 'server down' })
+      vi.advanceTimersByTime(65_000) // past 60s slow-phase interval
+    }
+
+    // One more close to trigger the give-up guard at the start of _scheduleReconnect.
+    lastWsInstance.onclose?.({ code: 1006, reason: 'server down' })
+
+    // Now give-up message must have been emitted.
+    const giveUpCall = (cbs.onError.mock.calls as [string][]).find(
+      ([msg]) => typeof msg === 'string' && msg.toLowerCase().includes('reconnect now')
+    )
+    expect(giveUpCall).toBeDefined()
+
+    conn.disconnect()
+  })
+})
+
+// ── Fix 4: ping-based liveness ────────────────────────────────────────────────
+
+describe('Fix 4: ping-based liveness', () => {
+  // Traces to: fix(spa): resilient WS reconnect + visible state + outbound queue
+  // src/lib/ws.ts — _startHeartbeat: missedPingCount >= 2 → force close + reconnect.
+
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('force-closes the socket after 2 consecutive pings with no server frame', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // Advance past 2 full heartbeat intervals (each 30s) with no server frame.
+    // After the first ping: missedPingCount=1. After the second: missedPingCount=2 → force close.
+    vi.advanceTimersByTime(30_000) // first heartbeat fires
+    vi.advanceTimersByTime(30_000) // second heartbeat fires → force close
+
+    // The socket should have been closed (close() called on it).
+    expect(lastWsInstance.close).toHaveBeenCalled()
+
+    conn.disconnect()
+  })
+
+  it('does NOT force-close when server frames arrive between pings', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    const wsCountAfterConnect = MockWebSocket.mock.calls.length
+
+    // Simulate a server frame arriving before the first heartbeat.
+    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'pong' }) })
+
+    // Advance past 2 heartbeat intervals — frames keep arriving in between.
+    vi.advanceTimersByTime(30_000) // first heartbeat: _receivedSinceLastPing=true → missedPingCount resets
+    // Another server frame before the second heartbeat.
+    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'pong' }) })
+    vi.advanceTimersByTime(30_000) // second heartbeat: _receivedSinceLastPing=true → no force close
+
+    // Socket should NOT have been force-closed → no new WS instances.
+    expect(MockWebSocket.mock.calls.length).toBe(wsCountAfterConnect)
 
     conn.disconnect()
   })

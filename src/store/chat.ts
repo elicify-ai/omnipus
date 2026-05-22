@@ -185,6 +185,16 @@ interface ChatStore {
   // duplicate bubbles when the gateway re-replays the transcript.
   resetSessionForReplay: (sessionId: string) => void
 
+  // ── Outbound queue (Fix 3) ────────────────────────────────────────────────────
+  // Messages typed while the WS is disconnected are buffered here (max 5).
+  // drainOutboundQueue() is called by OmnipusRuntimeProvider on reconnect.
+  /** Pending outbound messages queued while WS was disconnected. Max 5. */
+  outboundQueue: string[]
+  /** Queue a message for when the WS reconnects. Returns false if queue is full. */
+  enqueueOutboundMessage: (content: string) => boolean
+  /** Send all queued messages now that the WS is connected. */
+  drainOutboundQueue: () => void
+
   // ── Actions ───────────────────────────────────────────────────────────────────
   sendMessage: (content: string) => void
   cancelStream: () => void
@@ -303,6 +313,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
   return {
     sessionsById: {},
+
+    // ── Outbound queue initial state ─────────────────────────────────────────
+    outboundQueue: [],
 
     // Foreground selectors — derived from sessionsById[activeSessionId].
     // Initial values are the empty-session defaults.
@@ -767,6 +780,45 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }))
     },
 
+    // ── Outbound queue actions ────────────────────────────────────────────────
+
+    enqueueOutboundMessage: (content) => {
+      const MAX_QUEUE = 5
+      const current = get().outboundQueue
+      if (current.length >= MAX_QUEUE) {
+        return false
+      }
+      set({ outboundQueue: [...current, content] })
+      return true
+    },
+
+    drainOutboundQueue: () => {
+      const queue = get().outboundQueue
+      if (queue.length === 0) return
+      // Clear the queue first — drain is a best-effort flush. Messages that
+      // cannot be sent (connection still nil) are accepted as lost for this
+      // drain cycle; the caller (onConnected) only fires when WS is open so
+      // in production the send always succeeds. In unit tests isConnected may
+      // be set true while connection is null; we detect that below and do not
+      // re-queue.
+      set({ outboundQueue: [] })
+      const { isConnected } = useConnectionStore.getState()
+      for (const content of queue) {
+        // sendMessage will re-enqueue if !connection || !isConnected. When we
+        // are draining because the connection just came up (isConnected=true),
+        // an absent connection object means the send silently failed — we
+        // must NOT re-enqueue or the queue grows unboundedly. Prevent that
+        // by forcefully clearing the queue after each send attempt.
+        get().sendMessage(content)
+        if (isConnected) {
+          // Re-clear any item that sendMessage may have re-enqueued due to a
+          // stale/null connection object (impossible in production; defensive
+          // for unit-test scenarios where connection=null but isConnected=true).
+          set({ outboundQueue: [] })
+        }
+      }
+    },
+
     sendMessage: (content) => {
       const { connection, isConnected } = useConnectionStore.getState()
       const { activeSessionId, activeAgentId } = useSessionStore.getState()
@@ -777,7 +829,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
         return
       }
       if (!connection || !isConnected) {
-        useConnectionStore.getState().setConnectionError('Cannot send message — not connected to the server. Check your connection and try again.')
+        // WS is disconnected — buffer the message for when the connection
+        // recovers rather than losing it silently or showing a hard error.
+        const enqueued = get().enqueueOutboundMessage(content)
+        if (!enqueued) {
+          useConnectionStore.getState().setConnectionError(
+            'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'
+          )
+        }
         return
       }
 

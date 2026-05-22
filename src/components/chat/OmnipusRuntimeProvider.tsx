@@ -34,6 +34,7 @@ function WsLifecycle() {
   const setConnection = useConnectionStore((s) => s.setConnection);
   const setConnected = useConnectionStore((s) => s.setConnected);
   const setConnectionError = useConnectionStore((s) => s.setConnectionError);
+  const setReconnectState = useConnectionStore((s) => s.setReconnectState);
   const connectionRef = useRef<WsConnection | null>(null);
 
   useEffect(() => {
@@ -42,6 +43,8 @@ function WsLifecycle() {
       onConnected: async () => {
         setConnected(true);
         setConnectionError(null);
+        // Drain any messages that were buffered while the connection was down.
+        useChatStore.getState().drainOutboundQueue();
         // Re-bind any in-flight session to the freshly-opened WS so the
         // gateway's per-connection sessionID is restored. Without this, a
         // browser-suspended WS that auto-reconnects on focus would cause the
@@ -69,6 +72,9 @@ function WsLifecycle() {
       },
       onDisconnected: () => setConnected(false),
       onError: setConnectionError,
+      // Fix 2: wire reconnect phase changes into the connection store so the
+      // chat header banner can show live progress (attempt N / gave_up CTA).
+      onReconnectStateChange: (phase, attempt) => setReconnectState(phase, attempt),
     });
     conn.connect();
     connectionRef.current = conn;

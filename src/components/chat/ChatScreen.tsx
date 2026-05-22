@@ -22,6 +22,9 @@ import {
   Paperclip,
   File,
   X,
+  WifiSlash,
+  ArrowClockwise,
+  Clock,
 } from '@phosphor-icons/react'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 import { IconRenderer } from '@/components/shared/IconRenderer'
@@ -438,8 +441,15 @@ const HELP_TEXT = `**Omnipus commands:**
 
 // ── Composer ──────────────────────────────────────────────────────────────────
 
-function composerPlaceholder(isConnected: boolean, isStreaming: boolean, isReplaying: boolean, agentName: string): string {
-  if (!isConnected) return 'Connecting to gateway...'
+function composerPlaceholder(
+  canSendOrQueue: boolean,
+  isStreaming: boolean,
+  isReplaying: boolean,
+  agentName: string,
+  gaveUp: boolean,
+): string {
+  if (gaveUp) return 'Connection lost — click Reconnect now above'
+  if (!canSendOrQueue) return 'Connecting to gateway...'
   if (isReplaying) return 'Loading session history...'
   if (isStreaming) return 'Waiting for response...'
   return `Message ${agentName}…`
@@ -467,6 +477,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // FR-I-014: disable send while replay frames are still arriving
   const isReplaying = useChatStore((s) => s.isReplaying)
   const isConnected = useConnectionStore((s) => s.isConnected)
+  const reconnectPhase = useConnectionStore((s) => s.reconnectPhase)
+  const reconnectAttempt = useConnectionStore((s) => s.reconnectAttempt)
+  const reconnect = useConnectionStore((s) => s.reconnect)
+  const outboundQueue = useChatStore((s) => s.outboundQueue)
   const cancelStream = useChatStore((s) => s.cancelStream)
   const setMessages = useChatStore((s) => s.setMessages)
   const appendMessage = useChatStore((s) => s.appendMessage)
@@ -522,16 +536,20 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // so we only fire one toast per paste/input event that exceeds 1MB.
   const hasWarnedLargeInput = useRef(false)
 
+  // Input is enabled unless: agent removed, replaying, uploading, or gave up on reconnect.
+  // While reconnecting (fast or slow phase), input stays enabled — messages go to the queue.
+  const inputEnabled = !agentRemoved && !isReplaying && !isUploading && !(reconnectPhase === 'gave_up')
+
   // FR-3a: during streaming, show the slash menu ONLY if at least one command
   // with availableWhileStreaming:true matches the current input prefix.
   // Outside streaming, show all commands as before.
   const visibleSlashCommands = (() => {
-    if (!inputValue.startsWith('/') || isReplaying || !isConnected) return []
+    if (!inputValue.startsWith('/') || isReplaying || !inputEnabled) return []
     const all = SLASH_COMMANDS.filter((cmd) => cmd.label.startsWith(inputValue) || inputValue === '/')
     if (isStreaming) return all.filter((cmd) => cmd.availableWhileStreaming === true)
     return all
   })()
-  const shouldShowSlash = visibleSlashCommands.length > 0 && (inputValue.startsWith('/')) && !isReplaying && isConnected
+  const shouldShowSlash = visibleSlashCommands.length > 0 && (inputValue.startsWith('/')) && !isReplaying && inputEnabled
 
   // T23: record when a new stream starts so the global Escape handler can detect
   // the race window where the done frame arrived before Escape was pressed.
@@ -770,10 +788,57 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         </div>
       )}
 
-      {!isConnected && (
+      {/* Fix 2: multi-phase reconnect banner.
+          gave_up   → error banner with "Reconnect now" CTA (input locked).
+          reconnecting/slow → amber pulsing indicator with attempt counter.
+          null (connected) → nothing shown. */}
+      {reconnectPhase === 'gave_up' && (
+        <div
+          data-testid="reconnect-banner"
+          className="mb-2 rounded-lg px-3 py-2 bg-[var(--color-error)]/10 border border-[var(--color-error)]/20 flex items-center gap-2"
+        >
+          <WifiSlash size={14} className="text-[var(--color-error)] shrink-0" />
+          <span className="text-xs text-[var(--color-error)] flex-1">
+            Connection lost after all retry attempts.
+          </span>
+          <button
+            type="button"
+            onClick={reconnect}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 transition-colors shrink-0"
+            aria-label="Reconnect now"
+          >
+            <ArrowClockwise size={12} weight="bold" />
+            Reconnect now
+          </button>
+        </div>
+      )}
+      {(reconnectPhase === 'reconnecting' || reconnectPhase === 'slow') && (
+        <div
+          data-testid="reconnect-banner"
+          className="mb-2 text-xs text-amber-400 flex items-center gap-1.5"
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block animate-pulse" />
+          {reconnectPhase === 'slow'
+            ? `Reconnecting… (attempt ${reconnectAttempt} — slow retry)`
+            : `Reconnecting… (attempt ${reconnectAttempt})`}
+        </div>
+      )}
+      {!isConnected && reconnectPhase === null && (
         <div data-testid="reconnect-banner" className="mb-2 text-xs text-[var(--color-error)] flex items-center gap-1">
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-error)] inline-block" />
           Disconnected — reconnecting...
+        </div>
+      )}
+      {/* Fix 3: outbound queue indicator — shown while messages are buffered. */}
+      {outboundQueue.length > 0 && (
+        <div
+          data-testid="outbound-queue-indicator"
+          className="mb-2 text-xs text-amber-400 flex items-center gap-1.5"
+        >
+          <Clock size={12} className="shrink-0" />
+          {outboundQueue.length === 1
+            ? '1 message queued — will send on reconnect'
+            : `${outboundQueue.length} messages queued — will send on reconnect`}
         </div>
       )}
 
@@ -848,7 +913,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          disabled={!isConnected || isStreaming || isUploading || isReplaying}
+          disabled={!isConnected || isStreaming || isUploading || isReplaying || reconnectPhase === 'gave_up'}
           className="shrink-0 w-11 h-11 rounded-xl flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           aria-label="Attach file"
           title="Attach file"
@@ -875,15 +940,15 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       >
         <ComposerPrimitive.Input
           data-testid="chat-input"
-          placeholder={agentRemoved ? 'Agent has been removed — this session is read-only' : composerPlaceholder(isConnected, isStreaming || isUploading, isReplaying, activeAgentName)}
-          disabled={agentRemoved || !isConnected || isUploading || isReplaying}
+          placeholder={agentRemoved ? 'Agent has been removed — this session is read-only' : composerPlaceholder(isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow', isStreaming || isUploading, isReplaying, activeAgentName, reconnectPhase === 'gave_up')}
+          disabled={!inputEnabled || isStreaming}
           rows={1}
           cancelOnEscape={false}
           className={cn(
             'flex-1 resize-none rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-2.5 text-sm text-[var(--color-secondary)] outline-none',
             'placeholder:text-[var(--color-muted)] min-h-[24px] max-h-[200px] leading-6 overflow-hidden',
             'focus:border-[var(--color-accent)]/50 focus:ring-1 focus:ring-[var(--color-accent)]/20',
-            (agentRemoved || !isConnected || isStreaming || isUploading || isReplaying) && 'opacity-60 cursor-not-allowed',
+            (!inputEnabled || isStreaming || isUploading) && 'opacity-60 cursor-not-allowed',
           )}
           aria-label="Message input"
           onChange={(e) => {
@@ -962,17 +1027,27 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             {stopLabel === 'stopping' && <span>Stopping...</span>}
           </button>
         ) : (
-          // FR-I-014: also disabled during replay (isReplaying) so user cannot send out-of-order
+          // FR-I-014: also disabled during replay so user cannot send out-of-order.
+          // Fix 3: when reconnecting (fast or slow), allow send — messages go to
+          // the outbound queue and drain automatically on reconnect.
           <ComposerPrimitive.Send
-            disabled={!isConnected || isReplaying}
+            disabled={!inputEnabled || isReplaying}
             data-testid="chat-send"
             className={cn(
               'shrink-0 w-11 h-11 rounded-xl flex items-center justify-center transition-colors',
-              isConnected && !isReplaying
-                ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] disabled:bg-[var(--color-surface-3)] disabled:text-[var(--color-muted)] disabled:cursor-not-allowed'
+              inputEnabled && !isReplaying
+                ? reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
+                  // Muted accent while reconnecting — functional but visually signals
+                  // the message will queue rather than send immediately.
+                  ? 'bg-[var(--color-accent)]/50 text-[var(--color-primary)] hover:bg-[var(--color-accent)]/70'
+                  : 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] disabled:bg-[var(--color-surface-3)] disabled:text-[var(--color-muted)] disabled:cursor-not-allowed'
                 : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-not-allowed',
             )}
-            aria-label="Send message"
+            aria-label={
+              reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
+                ? 'Queue message (will send on reconnect)'
+                : 'Send message'
+            }
             aria-disabled={isReplaying || undefined}
           >
             <PaperPlaneRight size={15} weight="bold" />

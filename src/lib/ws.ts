@@ -356,12 +356,37 @@ export interface WsConnectionCallbacks { // not-wire-format: SPA-only callback i
   onConnected: () => void
   onDisconnected: () => void
   onError: (error: string) => void
+  /**
+   * Called whenever the reconnect state changes so the UI can show attempt
+   * progress. phase=null means not reconnecting (connected or gave up).
+   * 'reconnecting' = fast backoff phase (attempts 1-10, up to 30s delay).
+   * 'slow'         = slow retry phase (attempts 1-20, 60s delay each).
+   * 'gave_up'      = all attempts exhausted; waiting for manual retry.
+   */
+  onReconnectStateChange?: (phase: 'reconnecting' | 'slow' | 'gave_up' | null, attempt: number) => void
 }
+
+// ── Reconnect schedule constants ──────────────────────────────────────────────
+//
+// Fast phase: up to MAX_FAST_ATTEMPTS retries with exponential backoff capped
+// at MAX_FAST_DELAY_MS. Delay = min(2^n * 1000, MAX_FAST_DELAY_MS).
+// Slow phase: up to MAX_SLOW_ATTEMPTS retries at a fixed SLOW_RETRY_DELAY_MS.
+// After both phases are exhausted, we call onError once and stop — the user
+// must click "Reconnect now" to trigger connection.connect() again.
+
+const MAX_FAST_ATTEMPTS = 10
+const MAX_FAST_DELAY_MS = 30_000
+const MAX_SLOW_ATTEMPTS = 20
+const SLOW_RETRY_DELAY_MS = 60_000
 
 export class WsConnection {
   private ws: WebSocket | null = null
+  /** Fast-phase attempt counter — resets on successful connect. */
   private reconnectAttempts = 0
-  private maxReconnectAttempts = 3
+  /** Slow-phase attempt counter — resets on successful connect. */
+  private slowRetryAttempts = 0
+  /** Whether we are currently in the slow-retry phase. */
+  private inSlowPhase = false
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private intentionalClose = false
@@ -369,6 +394,16 @@ export class WsConnection {
   /** Consecutive malformed/invalid frame counter — reset on every valid frame */
   private droppedFrameCount = 0
   private readonly droppedFrameThreshold = 5
+  /**
+   * Fix 4 — ping-based liveness.
+   * Incremented each time the heartbeat fires without a server frame having
+   * arrived since the previous ping. Reset to 0 whenever any server frame
+   * is received. When this reaches 2, the socket is force-closed to trigger
+   * a reconnect rather than waiting for the OS-level TCP timeout.
+   */
+  private missedPingCount = 0
+  /** True when at least one server frame arrived since the last ping sent. */
+  private _receivedSinceLastPing = false
 
   // Bound event handler references so they can be removed on disconnect.
   private _onVisibilityChange: (() => void) | null = null
@@ -382,6 +417,8 @@ export class WsConnection {
   connect(): void {
     this.intentionalClose = false
     this.reconnectAttempts = 0
+    this.slowRetryAttempts = 0
+    this.inSlowPhase = false
     this._attachWindowListeners()
     this._createSocket()
   }
@@ -400,12 +437,16 @@ export class WsConnection {
       this.ws.send(JSON.stringify(frame))
       return true
     }
-    this.callbacks.onError('Not connected — message not sent')
     return false
   }
 
   get isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN
+  }
+
+  /** Current attempt count within the active reconnect phase — exposed for tests and UI state. */
+  get currentReconnectAttempt(): number {
+    return this.inSlowPhase ? this.slowRetryAttempts : this.reconnectAttempts
   }
 
   private _createSocket(): void {
@@ -428,6 +469,12 @@ export class WsConnection {
 
     this.ws.onopen = () => {
       this.reconnectAttempts = 0
+      this.slowRetryAttempts = 0
+      this.inSlowPhase = false
+      this.missedPingCount = 0
+      this._receivedSinceLastPing = false
+      // Notify UI that we are now connected (phase=null, attempt=0).
+      this.callbacks.onReconnectStateChange?.(null, 0)
       // Auth token is re-read on every (re-)connect so changes after
       // initial load take effect without a page refresh.
       // Check sessionStorage first (XSS protection), fall back to localStorage.
@@ -452,8 +499,10 @@ export class WsConnection {
         }
         return
       }
-      // Valid frame received — reset the consecutive drop counter
+      // Valid frame received — reset consecutive drop counter and liveness tracker.
       this.droppedFrameCount = 0
+      this._receivedSinceLastPing = true
+      this.missedPingCount = 0
       this.callbacks.onFrame(parsed)
     }
 
@@ -498,13 +547,34 @@ export class WsConnection {
   }
 
   private _scheduleReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.callbacks.onError('Connection failed after 3 attempts. Click retry to reconnect.')
+    // ── Slow-phase exhausted → give up ────────────────────────────────────────
+    if (this.inSlowPhase && this.slowRetryAttempts >= MAX_SLOW_ATTEMPTS) {
+      this.callbacks.onReconnectStateChange?.('gave_up', this.slowRetryAttempts)
+      this.callbacks.onError(
+        `Connection lost after ${MAX_FAST_ATTEMPTS + MAX_SLOW_ATTEMPTS} attempts. Click "Reconnect now" to try again.`
+      )
       return
     }
 
-    const delay = Math.pow(2, this.reconnectAttempts) * 1000 // 1s, 2s, 4s
+    // ── Fast-phase exhausted → transition to slow phase ───────────────────────
+    if (!this.inSlowPhase && this.reconnectAttempts >= MAX_FAST_ATTEMPTS) {
+      this.inSlowPhase = true
+      this.slowRetryAttempts = 0
+    }
+
+    if (this.inSlowPhase) {
+      this.slowRetryAttempts++
+      this.callbacks.onReconnectStateChange?.('slow', this.slowRetryAttempts)
+      this.reconnectTimer = setTimeout(() => {
+        this._createSocket()
+      }, SLOW_RETRY_DELAY_MS)
+      return
+    }
+
+    // ── Fast phase: exponential backoff capped at MAX_FAST_DELAY_MS ───────────
+    const delay = Math.min(Math.pow(2, this.reconnectAttempts) * 1000, MAX_FAST_DELAY_MS)
     this.reconnectAttempts++
+    this.callbacks.onReconnectStateChange?.('reconnecting', this.reconnectAttempts)
 
     this.reconnectTimer = setTimeout(() => {
       this._createSocket()
@@ -537,6 +607,8 @@ export class WsConnection {
         // when the new socket connects in <50ms (localhost / LAN). This
         // avoids the banner flicker that would otherwise be invisible.
         this.reconnectAttempts = 0
+        this.slowRetryAttempts = 0
+        this.inSlowPhase = false
         this._clearReconnectTimer()
         this.reconnectTimer = setTimeout(() => this._createSocket(), 250)
       }
@@ -548,6 +620,8 @@ export class WsConnection {
         // 250ms minimum delay as visibilitychange to keep the banner
         // observable on fast networks.
         this.reconnectAttempts = 0
+        this.slowRetryAttempts = 0
+        this.inSlowPhase = false
         this._clearReconnectTimer()
         this.reconnectTimer = setTimeout(() => this._createSocket(), 250)
       }
@@ -588,9 +662,32 @@ export class WsConnection {
 
   private _startHeartbeat(): void {
     this._stopHeartbeat()
-    // Send a ping every 30s to keep the connection alive through proxies and firewalls
+    // Send a ping every 30s to keep the connection alive through proxies and firewalls.
+    // Fix 4 — ping-based liveness: if 2 consecutive pings elapse with no server frame
+    // received in between, the connection is silently dead (e.g. NAT timeout, Chrome
+    // background throttling dropped the OS-level TCP keepalive). Force-close the socket
+    // so onclose fires and _scheduleReconnect takes over — this is far faster than
+    // waiting for the OS-level TCP timeout (which can take minutes).
     this.heartbeatTimer = setInterval(() => {
       if (this.ws?.readyState === WebSocket.OPEN) {
+        if (!this._receivedSinceLastPing) {
+          this.missedPingCount++
+          if (this.missedPingCount >= 2) {
+            // No server frame in 60s — force close to trigger reconnect.
+            console.warn(
+              `[ws] ${this.missedPingCount} consecutive pings with no server response — forcing reconnect`
+            )
+            try {
+              this.ws.close(1006, 'ping timeout')
+            } catch {
+              // ignore — onclose will fire regardless
+            }
+            return
+          }
+        } else {
+          this.missedPingCount = 0
+        }
+        this._receivedSinceLastPing = false
         this.ws.send(JSON.stringify({ type: 'ping' }))
       }
     }, 30_000)
