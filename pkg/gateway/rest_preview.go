@@ -340,7 +340,23 @@ func (a *restAPI) serveStaticFile(
 			return
 		}
 		if resolved, evalErr := filepath.EvalSymlinks(cleaned); evalErr == nil {
-			if resolved != absDir && !strings.HasPrefix(resolved, dirWithSep) {
+			// Resolve the registered base too — on macOS, /var/folders/... resolves
+			// to /private/var/folders/..., and on Linux/Termux /tmp can be a symlink
+			// to a real path under /private or /data. Without resolving the base,
+			// a symlink-equivalent ancestor (not an attacker's symlink-escape)
+			// causes the safety check to mis-fire and reject legitimate requests.
+			resolvedBase := absDir
+			resolvedBaseWithSep := dirWithSep
+			if rb, baseErr := filepath.EvalSymlinks(absDir); baseErr == nil {
+				resolvedBase = rb
+				resolvedBaseWithSep = rb
+				if !strings.HasSuffix(resolvedBaseWithSep, string(filepath.Separator)) {
+					resolvedBaseWithSep += string(filepath.Separator)
+				}
+			}
+			if resolved != absDir && resolved != resolvedBase &&
+				!strings.HasPrefix(resolved, dirWithSep) &&
+				!strings.HasPrefix(resolved, resolvedBaseWithSep) {
 				a.auditServeFailure(r, "serve.path_invalid", "error", agentID, token, http.StatusForbidden, startedAt)
 				jsonErr(w, http.StatusForbidden, "access denied: path is outside the registered directory")
 				return

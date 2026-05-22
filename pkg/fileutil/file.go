@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"time"
 )
 
 // WriteFileAtomic atomically writes data to a file using a temp file + rename pattern.
@@ -57,15 +56,23 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	// Create temp file in the same directory (ensures atomic rename works)
-	// Using a hidden prefix (.tmp-) to avoid issues with some tools
-	tmpFile, err := os.OpenFile(
-		filepath.Join(dir, fmt.Sprintf(".tmp-%d-%d", os.Getpid(), time.Now().UnixNano())),
-		os.O_WRONLY|os.O_CREATE|os.O_EXCL,
-		perm,
-	)
+	// Create temp file in the same directory (ensures atomic rename works).
+	// Using a hidden prefix (".tmp-") and os.CreateTemp's crypto-random suffix.
+	//
+	// History: previous versions used ".tmp-<pid>-<nano>" which collided on
+	// macOS arm64 — `time.Now().UnixNano()` resolution is bounded by the
+	// system clock backing, and WithFlock locks the inode rather than the
+	// path, so os.Rename swaps the inode and lets two writers run
+	// WriteFileAtomic concurrently. CreateTemp's retry loop with random
+	// suffix is collision-proof regardless of clock resolution.
+	tmpFile, err := os.CreateTemp(dir, ".tmp-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	if err := tmpFile.Chmod(perm); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
+		return fmt.Errorf("failed to chmod temp file: %w", err)
 	}
 
 	tmpPath := tmpFile.Name()
