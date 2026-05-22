@@ -302,7 +302,7 @@ func runSession(
 ) {
 	t.Helper()
 
-	wsURL := wsBase + "/api/v1/ws"
+	wsURL := wsBase + "/api/v1/chat/ws"
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
 	}
@@ -313,6 +313,18 @@ func runSession(
 	if err != nil {
 		// Count as dropped — the session never opened.
 		atomic.AddInt64(dropped, 1)
+		// Surface the first few dial failures so a future "all 2000
+		// dropped" failure has actionable detail (HTTP status) instead
+		// of an opaque counter. Caught the /api/v1/ws → /api/v1/chat/ws
+		// route rename via this exact instrumentation; keep it in place
+		// so the next breakage of a similar shape is one log read away.
+		if idx < 5 {
+			if resp != nil {
+				t.Logf("session %d dial failed: err=%v status=%d", idx, err, resp.StatusCode)
+			} else {
+				t.Logf("session %d dial failed: err=%v (no resp)", idx, err)
+			}
+		}
 		if resp != nil {
 			_ = resp.Body.Close()
 		}
@@ -321,8 +333,25 @@ func runSession(
 	defer conn.Close()
 	atomic.AddInt64(done, 1)
 
+	// Send the mandatory auth frame first — the gateway requires every WS
+	// client to authenticate before any other frame is honoured. In dev-mode
+	// (StartTestGateway with WithAllowEmpty → DevModeBypass=true) any
+	// non-empty token is accepted; the frame's structural validity matters,
+	// not the token value. Without this frame the server silently drops
+	// every subsequent payload, which previously caused all 2000 sessions
+	// to report `recv=0 dropped=2000`.
+	authFrame := `{"type":"auth","token":"dev-token"}`
+	if wErr := conn.WriteMessage(websocket.TextMessage, []byte(authFrame)); wErr != nil {
+		atomic.AddInt64(dropped, 1)
+		return
+	}
+
 	// Send one initial user message, time until first assistant frame.
-	userMsg := fmt.Sprintf(`{"type":"user_message","content":"load test message %d"}`, idx)
+	// The wire-format frame `type` is "message" (see contracts/components/
+	// schemas/MessageFrame.yaml — `type: const: message`). Earlier
+	// versions of this test used "user_message", which is not in the
+	// WsFrameType enum and was silently ignored by the server.
+	userMsg := fmt.Sprintf(`{"type":"message","content":"load test message %d"}`, idx)
 	sendStart := time.Now()
 	if wErr := conn.WriteMessage(websocket.TextMessage, []byte(userMsg)); wErr != nil {
 		atomic.AddInt64(dropped, 1)
@@ -345,6 +374,9 @@ func runSession(
 		}
 		if jsonErr := json.Unmarshal(msg, &frame); jsonErr == nil {
 			switch frame.Type {
+			case "session_started", "session_state":
+				// Pre-token bookkeeping frames — ignore and keep reading.
+				continue
 			case "token", "content", "text", "assistant_message":
 				if !firstTokenReceived {
 					lat := time.Since(sendStart)
@@ -411,7 +443,7 @@ holdPhase:
 
 	for time.Now().Before(holdEnd) {
 		<-holdTicker.C
-		holdMsg := fmt.Sprintf(`{"type":"user_message","content":"keep-alive %d"}`, idx)
+		holdMsg := fmt.Sprintf(`{"type":"message","content":"keep-alive %d"}`, idx)
 		if wErr := conn.WriteMessage(websocket.TextMessage, []byte(holdMsg)); wErr != nil {
 			atomic.AddInt64(dropped, 1)
 			break

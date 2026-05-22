@@ -42,15 +42,21 @@ jobs:
           rm -rf pkg/gateway/spa
           cp -r dist/spa pkg/gateway/spa
 
-      - name: Raise open-file limit for 2000 concurrent WS sessions
-        # GitHub ubuntu-latest runners default to 1024 open files.
-        # Each WS session uses a file descriptor; raise to 4096 so the OS
-        # does not reject new connections during the load ramp.
-        run: ulimit -n 4096 || true
-
       - name: Run benchmarks + SLOs + 2000-session load
+        # ulimit MUST be raised in the same shell step that runs go test —
+        # a separate `run:` step gets its own shell and the limit doesn't
+        # propagate. Previous configuration ran `ulimit -n 4096 || true` as
+        # its own step, which was a no-op for the actual test execution:
+        # all 2000 WebSocket sessions dropped frames because the runner's
+        # default 1024-fd cap was hit during the connection ramp.
+        #
+        # 8192 gives 2× headroom over the 4096 originally targeted (2000
+        # sessions × ~2 fds each = ~4000 used at peak, plus listener +
+        # logging + Go runtime overhead).
         run: |
           set -euo pipefail
+          ulimit -n 8192
+          echo "fd limit: $(ulimit -n)"
           mkdir -p tests/perf/results
           CGO_ENABLED=0 go test -tags goolm,stdjson \
             -run '^(TestBootUnder1Second|TestPerTurnSLO|TestNoTranscriptDataLoss|TestMediaResolveSLO|TestCompactionBoundsMemory|TestLoad2000Sessions)$' \

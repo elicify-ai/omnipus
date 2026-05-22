@@ -117,6 +117,15 @@ func TestSpawnBackgroundChild_EnvMerging(t *testing.T) {
 // TestSpawnBackgroundChild_PortInjection verifies that PORT=<port> is
 // appended when port > 0 and that it takes precedence over any PORT in
 // the caller-supplied env.
+//
+// The redirect path is passed via $ENV_OUT (set in callerEnv) and then
+// dereferenced inside the shell as "$ENV_OUT". Previously the path was
+// concatenated directly into the command string, which broke when
+// t.TempDir() returned a path containing characters sh treats as
+// metacharacters (parentheses on macOS Sonoma+, brackets on some
+// gh-actions runners) — sh would exit 2 (syntax error) before ever
+// running `env`. Quoting the var keeps the redirect literal regardless
+// of TMPDIR layout.
 func TestSpawnBackgroundChild_PortInjection(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix-only test")
@@ -126,10 +135,13 @@ func TestSpawnBackgroundChild_PortInjection(t *testing.T) {
 	dir := t.TempDir()
 	envFile := dir + "/env_out.txt"
 	// Provide a conflicting PORT in the caller env; our injected PORT should win.
-	callerEnv := []string{"PORT=9999"}
+	// ENV_OUT carries the output-file path so the shell never sees it as
+	// part of its command string — no escaping required for paths with
+	// spaces or shell metacharacters.
+	callerEnv := []string{"PORT=9999", "ENV_OUT=" + envFile}
 
 	cmd, err := sandbox.SpawnBackgroundChild(
-		[]string{"sh", "-c", "env > " + envFile},
+		[]string{"sh", "-c", `env > "$ENV_OUT"`},
 		dir,
 		callerEnv,
 		int32(18000), // injected port
@@ -139,6 +151,11 @@ func TestSpawnBackgroundChild_PortInjection(t *testing.T) {
 		t.Fatalf("SpawnBackgroundChild: %v", err)
 	}
 	if err := cmd.Wait(); err != nil {
+		// Surface the dev-server log file the spawn writes its stdout/stderr
+		// to, so a future failure has context beyond "exit status N".
+		if log, readErr := readFile(t, dir+"/.dev-server.log"); readErr == nil {
+			t.Fatalf("cmd.Wait: %v\n--- .dev-server.log ---\n%s", err, log)
+		}
 		t.Fatalf("cmd.Wait: %v", err)
 	}
 
