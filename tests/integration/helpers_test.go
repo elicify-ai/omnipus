@@ -129,6 +129,15 @@ func writeMockStream(w http.ResponseWriter, content string) {
 func startIntegrationGateway(t *testing.T) *testutil.TestGateway {
 	t.Helper()
 	mock := mockLLMServer(t, "")
+	// Register the drain delay BEFORE StartTestGateway so it runs AFTER
+	// gw.Close (t.Cleanup is LIFO). On macOS APFS, t.TempDir's RemoveAll
+	// cleanup races with the gateway's background session/context writers
+	// — even after TestGateway.Close returns, in-flight writes to
+	// $home/sessions/<id>/.context can hold the directory non-empty. A
+	// short drain gives those writers time to settle so unlinkat
+	// succeeds. Linux ext4 doesn't surface this because of looser
+	// directory-empty semantics; the drain is a no-op penalty there.
+	t.Cleanup(func() { time.Sleep(100 * time.Millisecond) })
 	return testutil.StartTestGateway(t, testutil.WithAPIBase(mock.URL), testutil.WithBearerAuth())
 }
 
