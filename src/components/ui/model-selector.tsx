@@ -6,20 +6,27 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 
+export interface ModelGroup {
+  providerName: string
+  models: string[]
+}
+
 interface ModelSelectorProps {
   models: string[]
   value: string
   onChange: (model: string) => void  // Named onChange (not onValueChange) since this supports free-text input, not just selection
   placeholder?: string
   disabled?: boolean
+  /** When provided, renders models grouped by provider (shown when ≥2 providers configured). */
+  providerGroups?: ModelGroup[]
 }
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled }: ModelSelectorProps) {
+export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups }: ModelSelectorProps) {
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState('')
 
   // Text input mode — no models available
-  if (models.length === 0) {
+  if (models.length === 0 && (!providerGroups || providerGroups.every((g) => g.models.length === 0))) {
     return (
       <Input
         value={value}
@@ -31,10 +38,35 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled }
     )
   }
 
+  // Build the effective flat model list (used for exactMatch check and allModels filter)
+  const allModels: string[] =
+    providerGroups && providerGroups.length > 0
+      ? providerGroups.flatMap((g) => g.models)
+      : models
+
   // Combobox mode — searchable dropdown
   const displayValue = value || placeholder || 'Select a model...'
-  const queryTrimmed = query.trim()
-  const exactMatch = models.some((m) => m.toLowerCase() === queryTrimmed.toLowerCase())
+  // queryRaw: exact user input (preserved case) — used for save and display
+  // queryLower: lowercased copy — used only for case-insensitive filtering and exactMatch
+  const queryRaw = query.trim()
+  const queryLower = queryRaw.toLowerCase()
+
+  // Filter models by model name (not provider name) — case-insensitive comparison only
+  const filterModel = (model: string) =>
+    queryLower === '' || model.toLowerCase().includes(queryLower)
+
+  const exactMatch = allModels.some((m) => m.toLowerCase() === queryLower)
+
+  // Determine whether to render grouped or flat
+  // Grouped: providerGroups supplied AND ≥2 groups with models
+  const groupsWithModels = providerGroups ? providerGroups.filter((g) => g.models.length > 0) : []
+  const useGrouped = groupsWithModels.length >= 2
+
+  const handleSelect = (model: string) => {
+    onChange(model)
+    setOpen(false)
+    setQuery('')
+  }
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -56,7 +88,8 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled }
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
-        <Command shouldFilter={true}>
+        {/* shouldFilter=false: we handle filtering ourselves so search targets model name only */}
+        <Command shouldFilter={false}>
           <CommandInput
             placeholder="Search models..."
             value={query}
@@ -64,39 +97,66 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled }
           />
           <CommandList>
             <CommandEmpty>No models found.</CommandEmpty>
-            <CommandGroup>
-              {models.map((model) => (
-                <CommandItem
-                  key={model}
-                  value={model}
-                  onSelect={() => {
-                    onChange(model)
-                    setOpen(false)
-                    setQuery('')
-                  }}
-                >
-                  <Check
-                    size={14}
-                    className="mr-2 shrink-0"
-                    style={{ opacity: value === model ? 1 : 0, color: 'var(--color-accent)' }}
-                  />
-                  <span className="font-mono text-xs">{model}</span>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-            {queryTrimmed && !exactMatch && (
+            {useGrouped ? (
+              // ≥2 providers: render one CommandGroup per provider with a heading
+              groupsWithModels.map((group) => {
+                const filteredModels = group.models.filter(filterModel)
+                if (filteredModels.length === 0) return null
+                return (
+                  <CommandGroup
+                    key={group.providerName}
+                    heading={group.providerName}
+                  >
+                    {filteredModels.map((model) => (
+                      <CommandItem
+                        key={model}
+                        value={model}
+                        onSelect={() => handleSelect(model)}
+                      >
+                        <Check
+                          size={14}
+                          className="mr-2 shrink-0"
+                          style={{ opacity: value === model ? 1 : 0, color: 'var(--color-accent)' }}
+                        />
+                        <span className="font-mono text-xs">{model}</span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                )
+              })
+            ) : (
+              // Single provider or flat list
+              <CommandGroup>
+                {(providerGroups && groupsWithModels.length === 1
+                  ? groupsWithModels[0].models
+                  : models
+                )
+                  .filter(filterModel)
+                  .map((model) => (
+                    <CommandItem
+                      key={model}
+                      value={model}
+                      onSelect={() => handleSelect(model)}
+                    >
+                      <Check
+                        size={14}
+                        className="mr-2 shrink-0"
+                        style={{ opacity: value === model ? 1 : 0, color: 'var(--color-accent)' }}
+                      />
+                      <span className="font-mono text-xs">{model}</span>
+                    </CommandItem>
+                  ))}
+              </CommandGroup>
+            )}
+            {queryRaw && !exactMatch && (
               <CommandGroup>
                 <CommandItem
-                  value={`custom:${queryTrimmed}`}
-                  onSelect={() => {
-                    onChange(queryTrimmed)
-                    setOpen(false)
-                    setQuery('')
-                  }}
+                  value={`custom:${queryLower}`}
+                  onSelect={() => handleSelect(queryRaw)}
                 >
                   <Keyboard size={14} className="mr-2 shrink-0" style={{ color: 'var(--color-muted)' }} />
                   <span className="text-xs">
-                    Use "<span className="font-mono" style={{ color: 'var(--color-accent)' }}>{queryTrimmed}</span>"
+                    Use "<span className="font-mono" style={{ color: 'var(--color-accent)' }}>{queryRaw}</span>"
                   </span>
                 </CommandItem>
               </CommandGroup>

@@ -113,7 +113,11 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
     .filter((e) => e.agent_id === agentId)
     .slice(0, 5)
 
-  const availableModels = providers.filter((p) => p.status === 'connected').flatMap((p) => p.models ?? [])
+  const connectedProviders = providers.filter((p) => p.status === 'connected')
+  const availableModels = connectedProviders.flatMap((p) => p.models ?? [])
+  const providerGroups = connectedProviders
+    .filter((p) => (p.models ?? []).length > 0)
+    .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, models: p.models ?? [] }))
 
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
@@ -554,6 +558,7 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                 value={model}
                 onChange={(v) => { markDirty(); setModel(v) }}
                 placeholder="Provider default"
+                providerGroups={providerGroups}
               />
               {canEdit && (
                 <div className="space-y-1.5">

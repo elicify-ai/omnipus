@@ -70,8 +70,11 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
     enabled: isOpen,
   })
   const providers = Array.isArray(providersData) ? providersData : []
-  const connectedModels = providers.filter((p) => p.status === 'connected').flatMap((p) => p.models ?? [])
-  const availableModels = connectedModels
+  const connectedProviders = providers.filter((p) => p.status === 'connected')
+  const availableModels = connectedProviders.flatMap((p) => p.models ?? [])
+  const providerGroups = connectedProviders
+    .filter((p) => (p.models ?? []).length > 0)
+    .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, models: p.models ?? [] }))
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -267,6 +270,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                     value={model}
                     onChange={setModel}
                     placeholder="Use provider default"
+                    providerGroups={providerGroups}
                   />
                 </div>
 

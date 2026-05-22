@@ -2,15 +2,14 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 // Wave 5b spec tests — OnboardingWizard frontend tests
-// Traces to: wave5b-system-agent-spec.md — US-7 Onboarding Flow BDD scenarios
+// Traces to: wave5b-system-agent-spec.md — Onboarding Flow BDD scenarios
 
 // Wave B migration: component evolved from 3-step to 4-step wizard.
 // Step 1 — Welcome, Step 2 — Provider Setup, Step 3 — Admin Credentials, Step 4 — Done.
 // All aria-valuemax assertions updated 3 → 4.
 // "Test Connection" button was renamed to "Connect & Load Models" in the component.
 // finish flow: component calls completeOnboardingTransaction (not completeOnboarding).
-// skip-on-failure test deleted: component intentionally does NOT navigate when
-//   completeOnboarding throws — it shows a toast only.
+// Skip button removed: the Welcome step no longer offers a skip path.
 
 // Mock TanStack Router navigate
 const mockNavigate = vi.fn()
@@ -49,7 +48,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     configureProvider: vi.fn(),
     probeProvider: vi.fn(),
-    completeOnboarding: vi.fn(),
     completeOnboardingTransaction: vi.fn(),
     // fetchProviders is called after a successful test to populate the model list.
     // Return empty models so ModelSelector renders in free-text (Input) mode.
@@ -60,7 +58,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 // Mock SVG import
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/test-avatar.svg' }))
 
-import { configureProvider, probeProvider, completeOnboarding, completeOnboardingTransaction } from '@/lib/api'
+import { configureProvider, probeProvider, completeOnboardingTransaction } from '@/lib/api'
 
 // Cache the dynamically imported component across all tests so the first import's
 // transform cost (~20s) only pays once and doesn't time out individual tests.
@@ -79,7 +77,6 @@ async function renderWizard() {
 beforeEach(() => {
   vi.clearAllMocks()
   mockNavigate.mockResolvedValue(undefined)
-  vi.mocked(completeOnboarding).mockResolvedValue(undefined)
   vi.mocked(completeOnboardingTransaction).mockResolvedValue({
     token: 'test-token',
     role: 'admin',
@@ -93,14 +90,15 @@ beforeEach(() => {
 // =====================================================================
 
 describe('OnboardingWizard — step navigation', () => {
-  it('renders step 1 (Welcome) by default with Get Started and Skip buttons', async () => {
+  it('renders step 1 (Welcome) by default with Get Started button and no Skip button', async () => {
     // Traces to: wave5b-system-agent-spec.md — Scenario: First-launch shows welcome screen
-    // BDD: Given fresh install, When onboarding route loads, Then step 1 Welcome is shown
+    // BDD: Given fresh install, When onboarding route loads, Then step 1 Welcome is shown.
+    // Skip button was removed to prevent users landing in an unconfigured app.
     await renderWizard()
 
     expect(screen.getByText('Welcome to Omnipus')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /get started/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /skip/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /skip/i })).not.toBeInTheDocument()
   })
 
   it('advances to step 2 (Provider) when Get Started is clicked', async () => {
@@ -319,28 +317,20 @@ describe('OnboardingWizard — test connection', () => {
 })
 
 // =====================================================================
-// Scenario: Skip onboarding (US-7 AC8)
-// Traces to: wave5b-system-agent-spec.md — Scenario: Skip for advanced users
+// Scenario: Skip onboarding — button removed
+// The Welcome step no longer exposes a skip path.
+// Users must complete provider + admin setup to reach the app.
 // =====================================================================
 
-describe('OnboardingWizard — skip', () => {
-  it('clicking Skip calls completeOnboarding and navigates to root', async () => {
-    // Traces to: wave5b-system-agent-spec.md — Scenario: Skip for advanced users (US-7 AC8)
-    // BDD: Given step 1, When Skip clicked, Then completeOnboarding called, navigate to /
+describe('OnboardingWizard — no skip button', () => {
+  it('Welcome step has no Skip button', async () => {
+    // BDD: Given step 1, Then no "Skip" or "skip" button exists in the DOM.
+    // The skip path was removed to prevent users landing in an unconfigured app.
     await renderWizard()
 
-    fireEvent.click(screen.getByRole('button', { name: /skip/i }))
-
-    await waitFor(() => {
-      expect(completeOnboarding).toHaveBeenCalledOnce()
-      expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
-    })
+    expect(screen.queryByRole('button', { name: /skip/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/skip/i)).not.toBeInTheDocument()
   })
-
-  // Test "skip works even if completeOnboarding fails" was deleted.
-  // The component intentionally does NOT navigate when completeOnboarding throws —
-  // it shows a toast and stays on the onboarding page. The previous test was
-  // asserting behaviour that does not exist in the component.
 })
 
 // =====================================================================
