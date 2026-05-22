@@ -325,9 +325,10 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 		_ = unix.Setrlimit(unix.RLIMIT_NPROC, &oldRlim)
 	}()
 	currentPIDs := uint64(countOurPIDs(t))
-	// safetyCap = current + 256 — comfortably above childNProcSlack (32) +
-	// production slack, comfortably below an exponential-bomb saturation.
-	safetyCap := currentPIDs + 256
+	// safetyCap = current + 512 — comfortably above childNProcSlack (128) +
+	// production slack, comfortably below an exponential-bomb saturation
+	// (a doubling fork-bomb reaches 1024 in 10 cycles ≈ <100ms).
+	safetyCap := currentPIDs + 512
 	if oldRlim.Cur > 0 && safetyCap > oldRlim.Cur {
 		// Don't try to RAISE NPROC above the OS-imposed soft limit; we
 		// only have CAP_SYS_RESOURCE if running as root (which we already
@@ -389,8 +390,8 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 		return
 	}
 
-	// Apply post-start hardening (RLIMIT_NPROC=childNProcSlack=32). This
-	// is the production contract — sandbox.Run does this automatically;
+	// Apply post-start hardening (RLIMIT_NPROC=baseline+childNProcSlack(128)).
+	// This is the production contract — sandbox.Run does this automatically;
 	// callers that bypass Run (web_serve, workspace.shell_bg, etc.) must
 	// invoke ApplyChildPostStartHardening themselves. v0.2 #155 item 5.
 	if err := sandbox.ApplyChildPostStartHardening(cmd, sandbox.Limits{}); err != nil {
@@ -407,18 +408,18 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 	_ = cmd.Wait()
 
 	// After v0.2 #155 item 5, the production hardened-exec code applies
-	// RLIMIT_NPROC=32 to every child. The bomb's growth must saturate
-	// against THAT cap, well below the test's own dynamically-sized
-	// safetyCap, proving the production limit is in effect. If growth
-	// approaches safetyCap the production limit is missing and the test
-	// cap is the only thing containing the bomb.
+	// RLIMIT_NPROC=baseline+128 to every child. The bomb's growth must
+	// saturate against THAT cap, well below the test's own dynamically-
+	// sized safetyCap, proving the production limit is in effect. If
+	// growth approaches safetyCap the production limit is missing and
+	// the test cap is the only thing containing the bomb.
 	//
-	// Pass criterion: growth ≤ childNProcSlack (32) + small slack for the
-	// initial sh + intermediate descendants. We use 48 as the threshold
+	// Pass criterion: growth ≤ childNProcSlack (128) + small slack for the
+	// initial sh + intermediate descendants. We use 160 as the threshold
 	// to leave room for transient PIDs (the bomb double-forks rapidly so
 	// some transient PIDs may appear during a sample tick).
 	growth := peakPIDs - baselinePIDs
-	productionCapWithSlack := 48 // childNProcSlack (32) + slack
+	productionCapWithSlack := 160 // childNProcSlack (128) + transient slack
 	if growth > productionCapWithSlack {
 		t.Errorf(
 			"C3-INDIRECT GAP CONFIRMED: bomb grew PID count from %d to %d (+%d), exceeding production cap %d. "+

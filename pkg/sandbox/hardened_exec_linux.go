@@ -57,10 +57,19 @@ const memoryLimitSupported = true
 // a fork-bomb that slips past the shell-guard regex (e.g. via `sh fork.sh`
 // indirection) hits the kernel limit before saturating the host.
 //
-// Sizing rationale: 32 is generous enough for a realistic build pipeline
+// Sizing rationale: 128 is generous enough for a realistic build pipeline
 // (npm install commonly spawns 8-16 concurrent worker subprocesses; nx /
-// turborepo can spawn slightly more) but tight enough that an exponential
-// fork-bomb saturates within microseconds.
+// turborepo can spawn slightly more; CI runners doing `go test -p N` can
+// spike the per-UID count by dozens between baseline snapshot and child
+// fork) but tight enough that an exponential fork-bomb still saturates
+// within microseconds — 2^7 = 128, so a doubling fork-bomb hits the cap
+// after seven cycles, taking under a millisecond.
+//
+// The original value of 32 was chosen for a quiet single-user host but
+// mis-fired on ubuntu-24.04-arm CI runners where parallel test packages
+// pushed the per-UID nproc above baseline+32 between snapshot and child
+// exec, producing `sh: Cannot fork` even for innocuous one-shot commands.
+// 128 closes that race without materially weakening the bomb defense.
 //
 // Why relative, not absolute: RLIMIT_NPROC is per-UID, not per-process tree.
 // On a multi-user host the gateway's UID may already own dozens or hundreds
@@ -70,7 +79,7 @@ const memoryLimitSupported = true
 // without falsely throttling normal operation. The value is hard-coded
 // rather than configurable because operator-supplied values defeat the
 // protection.
-const childNProcSlack uint64 = 32
+const childNProcSlack uint64 = 128
 
 // readCurrentUserNProc returns the number of processes currently owned by
 // the gateway's UID, for use as the RLIMIT_NPROC baseline. On read failure
