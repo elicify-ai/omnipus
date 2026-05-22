@@ -5,7 +5,7 @@ go 1.26
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/adhocore/gronx v1.19.6
-	github.com/anthropics/anthropic-sdk-go v1.37.0
+	github.com/anthropics/anthropic-sdk-go v1.45.0
 	github.com/aws/aws-sdk-go-v2 v1.41.6
 	github.com/aws/aws-sdk-go-v2/config v1.32.12
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.50.4
@@ -62,7 +62,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.17 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.9 // indirect
 	github.com/aws/smithy-go v1.25.0 // indirect
+	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/beeper/argo-go v1.1.2 // indirect
+	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/chromedp/cdproto v0.0.0-20260321001828-e3e3800016bc // indirect
 	github.com/chromedp/sysutil v1.1.0 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
@@ -80,6 +82,7 @@ require (
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/lestrrat-go/backoff/v2 v2.0.8 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.2 // indirect
 	github.com/lestrrat-go/httpcc v1.0.1 // indirect
@@ -87,6 +90,7 @@ require (
 	github.com/lestrrat-go/jwx v1.2.29 // indirect
 	github.com/lestrrat-go/option v1.0.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
+	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sqlite3 v1.14.34 // indirect
@@ -99,7 +103,9 @@ require (
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.27 // indirect
+	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	go.mau.fi/libsignal v0.2.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/otel v1.35.0 // indirect
