@@ -2004,7 +2004,7 @@ func (s *wsStreamer) fanOutToSessionPeers(data []byte) {
 	}
 }
 
-func (s *wsStreamer) Finalize(_ context.Context, _ string) error {
+func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	// Build the typed DoneStats for the done frame using the generated type.
 	doneStats := &generated.DoneStats{}
 	if dropped := s.conn.droppedTokens.Load(); dropped > 0 {
@@ -2044,6 +2044,14 @@ func (s *wsStreamer) Finalize(_ context.Context, _ string) error {
 	// Record the full assistant response to the session transcript.
 	if s.agentStore != nil && s.sessionID != "" {
 		content := s.accumulated.String()
+		// Fallback: when accumulated is empty (every Update() call silently
+		// failed because the client WS was already closed), use the
+		// finalContent the agent loop passed in. Without this fallback,
+		// disconnected mid-stream turns would leave no assistant entry in
+		// transcript.jsonl and the user sees nothing on reconnect/replay.
+		if content == "" && finalContent != "" {
+			content = finalContent
+		}
 		if content != "" {
 			entry := session.TranscriptEntry{
 				ID:        uuid.New().String(),

@@ -5065,7 +5065,11 @@ turnLoop:
 	// was active (WS disconnected, non-webchat channel, or headless run).
 	// When ts.lastStreamer != nil, the deferred ts.finalizeStreamer will call
 	// wsStreamer.Finalize which writes the accumulated streaming content to the
-	// transcript — so we only write here on the non-streaming path.
+	// transcript — but ONLY if the streamer's token buffer has content. When
+	// every Update() call silently failed (WS closed mid-stream) the buffer is
+	// empty and Finalize would skip the write. We hand finalContent to the
+	// streamer via SetFinalContent so it can fall back to that text.
+	ts.SetFinalContent(finalContent)
 	ts.mu.RLock()
 	hasActiveStreamer := ts.lastStreamer != nil
 	ts.mu.RUnlock()

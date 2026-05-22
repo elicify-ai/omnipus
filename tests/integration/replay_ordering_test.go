@@ -506,18 +506,25 @@ func getMostRecentSessionID(t *testing.T, gw *testutil.TestGateway) string {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("getMostRecentSessionID: unexpected status %d", resp.StatusCode)
 	}
-	var body struct {
+	// /api/v1/sessions returns a JSON array of session metadata, not an
+	// object wrapping it.
+	var sessions []struct {
+		ID        string `json:"id"`
+		UpdatedAt string `json:"updated_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&sessions); err != nil {
+		t.Fatalf("getMostRecentSessionID: decode: %v", err)
+	}
+	if len(sessions) == 0 {
+		return ""
+	}
+	// Wrap in the previous struct-shape for the rest of the helper.
+	body := struct {
 		Sessions []struct {
 			ID        string `json:"id"`
 			UpdatedAt string `json:"updated_at"`
-		} `json:"sessions"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("getMostRecentSessionID: decode: %v", err)
-	}
-	if len(body.Sessions) == 0 {
-		return ""
-	}
+		}
+	}{Sessions: sessions}
 	// Return the first (most recent) session — the server returns newest first.
 	return body.Sessions[0].ID
 }

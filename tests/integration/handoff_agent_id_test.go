@@ -183,13 +183,11 @@ func TestPostHandoff_ToolCallEntriesCarryNewAgentID(t *testing.T) {
 		testutil.WithBearerAuth(),
 	)
 
-	// Create a chat session via the REST API.
-	// The gateway seeds core agents (mia, jim, ...) on boot; no WithAgents needed.
-	sessionID := createSession(t, gw)
-	t.Logf("created session %s", sessionID)
-
-	// Connect a WebSocket and send the first message.
-	// The mock LLM will return handoff(jim) on request 1, completing the handoff.
+	// Connect a WebSocket and send the first message. The gateway mints a
+	// fresh session for this WS connection — the test must use the
+	// gateway-minted ID (looked up via getMostRecentSessionID after the
+	// first turn fires), not a pre-created REST session. The mock LLM
+	// returns handoff(jim) on request 1.
 	conn := wsConnect(t, gw)
 
 	// Send first message: triggers mia → handoff → jim switch.
@@ -217,6 +215,14 @@ func TestPostHandoff_ToolCallEntriesCarryNewAgentID(t *testing.T) {
 
 	// Give the session store a moment to flush the transcript write.
 	time.Sleep(200 * time.Millisecond)
+
+	// Look up the gateway-minted session ID (the WS mints fresh on first
+	// message frame; pre-created REST sessions are not what the chat used).
+	sessionID := getMostRecentSessionID(t, gw)
+	if sessionID == "" {
+		t.Fatal("BUG-1: no session found via REST after two turns — gateway did not persist")
+	}
+	t.Logf("reading transcript for session %s", sessionID)
 
 	// Read the transcript and find all tool_call entries.
 	entries := readTranscriptDirect(t, gw, sessionID)

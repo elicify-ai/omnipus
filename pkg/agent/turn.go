@@ -416,6 +416,14 @@ type streamerStatsSetter interface {
 	SetTurnStats(tokens int64, costUSD float64, duration time.Duration)
 }
 
+// SetFinalContent records the final assistant response on the turnState so
+// finalizeStreamer can pass it through to the streamer's Finalize call.
+func (ts *turnState) SetFinalContent(content string) {
+	ts.mu.Lock()
+	ts.finalContent = content
+	ts.mu.Unlock()
+}
+
 func (ts *turnState) finalizeStreamer(ctx context.Context) {
 	// B4: if the turn has been abandoned, suppress the final "done" frame so
 	// a stuck goroutine cannot send a spurious done signal to the frontend.
@@ -431,13 +439,19 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 	tokens := ts.turnTokens
 	cost := ts.turnCostUSD
 	duration := time.Since(ts.startedAt)
+	finalContent := ts.finalContent
 	ts.lastStreamer = nil
 	ts.mu.Unlock()
 	if s != nil {
 		if setter, ok := s.(streamerStatsSetter); ok {
 			setter.SetTurnStats(tokens, cost, duration)
 		}
-		if err := s.Finalize(ctx, ""); err != nil {
+		// Pass finalContent so the streamer can persist the assistant message
+		// even when its own accumulated-from-token buffer is empty — happens
+		// when the WS client disconnects mid-stream and every Update() call
+		// silently failed against a closed sendCh, leaving the streamer
+		// without any tokens to record.
+		if err := s.Finalize(ctx, finalContent); err != nil {
 			logger.WarnCF("agent", "Turn-end streaming finalize error", map[string]any{"error": err.Error()})
 		}
 	}
