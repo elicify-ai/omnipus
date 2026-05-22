@@ -227,6 +227,51 @@ func collectAllFrames(tb testing.TB, conn *websocket.Conn, timeout time.Duration
 	return frames
 }
 
+// slowMockLLMServer returns an httptest.Server whose handler waits delay
+// before returning the LLM response. This simulates a slow provider so
+// concurrency tests can measure wall-clock time to prove that sessions run
+// in parallel rather than sequentially.
+//
+// The delay applies only to POST /chat/completions — other endpoints (e.g.,
+// /models probe) are answered immediately with 404 as usual.
+func slowMockLLMServer(tb testing.TB, replyText string, delay time.Duration) *httptest.Server {
+	tb.Helper()
+	if replyText == "" {
+		replyText = "slow integration test reply"
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		// Block for the configured delay to simulate a slow LLM.
+		select {
+		case <-time.After(delay):
+		case <-r.Context().Done():
+			return
+		}
+		var body struct {
+			Stream bool `json:"stream"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Stream {
+			writeMockStream(w, replyText)
+			return
+		}
+		writeMockJSON(w, replyText)
+	}))
+	tb.Cleanup(srv.Close)
+	return srv
+}
+
+// startSlowIntegrationGateway boots a gateway backed by a slow mock LLM that
+// delays each LLM call by delay. Used for timing-based concurrency proofs.
+func startSlowIntegrationGateway(t *testing.T, delay time.Duration) *testutil.TestGateway {
+	t.Helper()
+	mock := slowMockLLMServer(t, "", delay)
+	return testutil.StartTestGateway(t, testutil.WithAPIBase(mock.URL), testutil.WithBearerAuth())
+}
+
 // jsonQuote returns a JSON-encoded string literal, e.g. `"hello world"`.
 func jsonQuote(s string) string {
 	b, _ := json.Marshal(s)

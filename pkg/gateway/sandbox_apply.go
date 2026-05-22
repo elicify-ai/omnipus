@@ -131,7 +131,7 @@ type SandboxApplyResult struct {
 //
 // An invalid CLI value causes an error so cmd/omnipus can exit with code 2
 // (usage error) before any boot logic runs (FR-J-006 second sentence).
-func resolveMode(cliMode, cfgMode string, configTouched bool) (sandbox.Mode, string, error) {
+func resolveMode(cliMode, cfgMode string, configTouched bool, getEnv func(string) string) (sandbox.Mode, string, error) {
 	// CLI takes priority unconditionally. An empty CLIMode means no flag
 	// was passed — defer to config.
 	if cliMode != "" {
@@ -146,7 +146,21 @@ func resolveMode(cliMode, cfgMode string, configTouched bool) (sandbox.Mode, str
 	// section means a fresh install — apply the "enforce on capable
 	// kernels" default. Kernel capability is checked separately by
 	// SelectBackend → FallbackBackend on pre-5.13 kernels.
+	//
+	// Docker compat: when running inside a Docker container, the default
+	// unprivileged seccomp profile blocks several syscalls the hardened-exec
+	// path needs (RLIMIT_NPROC manipulation, prctl, Landlock prctl). With
+	// sandbox=enforce, every exec tool call then fails with "fork/exec
+	// /bin/sh: permission denied" and the agent can't do its job.
+	// Docker IS the outer isolation layer, so downgrade to permissive: exec
+	// works AND operators see what would have been blocked in the audit log.
+	// Operators who have configured Docker with the right caps + a custom
+	// seccomp can override with OMNIPUS_SANDBOX_MODE=enforce (env tag on
+	// cfg.Sandbox.Mode) or --sandbox=enforce.
 	if cfgMode == "" && !configTouched {
+		if getEnv != nil && isRunningInDocker(getEnv) {
+			return sandbox.ModePermissive, "docker_autodetect", nil
+		}
 		return sandbox.ModeEnforce, "", nil
 	}
 
@@ -155,6 +169,33 @@ func resolveMode(cliMode, cfgMode string, configTouched bool) (sandbox.Mode, str
 		return "", "", fmt.Errorf("gateway.sandbox.mode: %w", err)
 	}
 	return mode, "config", nil
+}
+
+// dockerenvPath is the filesystem path probed by isRunningInDocker.
+// Overridden in tests via a package-level variable so tests can create a
+// temp file without requiring root or a real /.dockerenv.
+var dockerenvPath = "/.dockerenv"
+
+// isRunningInDocker reports whether the process appears to be inside a
+// Docker container. Two signals: OMNIPUS_IN_DOCKER=1 explicit override
+// (used by tests), and /.dockerenv presence (the standard runtime marker
+// Docker drops into every container).
+func isRunningInDocker(getEnv func(string) string) bool {
+	if getEnv("OMNIPUS_IN_DOCKER") == "1" {
+		return true
+	}
+	if _, err := os.Stat(dockerenvPath); err == nil {
+		return true
+	} else if !os.IsNotExist(err) {
+		// EACCES, EPERM, or other non-ENOENT error: the file may exist but is
+		// unreadable (e.g. hardened AppArmor profile, read-only root with restricted
+		// stat).  Log so operators on those setups know why auto-detect fired or
+		// failed, and can set OMNIPUS_IN_DOCKER=1 to force the result.
+		slog.Warn("sandbox: /.dockerenv stat failed — defaulting to non-docker mode",
+			"err", err,
+			"hint", "set OMNIPUS_IN_DOCKER=1 if running inside a container")
+	}
+	return false
 }
 
 // productionNagBanner is the multi-line warning printed to stderr when the
@@ -215,7 +256,7 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 		configTouched = opts.Cfg.Sandbox.Mode != "" ||
 			len(opts.Cfg.Sandbox.AllowedPaths) > 0
 	}
-	mode, disabledBy, err := resolveMode(opts.CLIMode, cfgMode, configTouched)
+	mode, disabledBy, err := resolveMode(opts.CLIMode, cfgMode, configTouched, opts.GetEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -417,14 +458,22 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 	if mode == sandbox.ModePermissive {
 		// FR-J-012: prominent banner at boot AND every 60 seconds.
 		fmt.Fprint(opts.Stderr, permissiveNagBanner)
-		slog.Warn("sandbox.permissive",
+		// Include disabled_by so operators can distinguish "I set permissive explicitly"
+		// from "docker_autodetect downgraded me" without having to curl /health.
+		// Mirrors the pattern in the sandbox.disabled log above (architect Finding #5).
+		warnArgs := []any{
 			"backend", backendName,
 			"mode", "permissive",
 			"landlock_abi", abiVersion,
 			"seccomp_syscalls", len(seccompProg.BlockedSyscalls()),
 			"landlock_enforced", false,
 			"seccomp_enforced", false,
-			"audit_only", true)
+			"audit_only", true,
+		}
+		if disabledBy != "" {
+			warnArgs = append(warnArgs, "disabled_by", disabledBy)
+		}
+		slog.Warn("sandbox.permissive", warnArgs...)
 		result.NagReason = "permissive"
 	} else {
 		slog.Info("sandbox.applied",

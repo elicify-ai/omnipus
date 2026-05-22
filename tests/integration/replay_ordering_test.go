@@ -158,6 +158,167 @@ func TestReplayOrdering_EarlierTurnBeforeLaterTurn(t *testing.T) {
 	t.Logf("turn ordering invariant satisfied; messages in order: %v", messages)
 }
 
+// ─── Disconnect / Reconnect cycle tests ───────────────────────────────────────
+
+// TestReplayOrdering_DisconnectReconnectDisconnectReconnect verifies that
+// across 4 consecutive disconnect/reconnect cycles, the replayed frame order
+// is preserved in every cycle.
+//
+// Bug-5 introduced a race between drain and flag-clear on attach_session.
+// A second (and subsequent) attach cycle on the same session reopens the same
+// replayDivertCh / isReplayingLive path. This test ensures the invariants hold
+// across multiple cycles, not just the first attach.
+//
+// BDD: Given a session with 2 user turns recorded
+//
+//	When the user attaches, disconnects, re-attaches — 4 cycles total
+//	Then each cycle replays the turns in the same order: turn1 before turn2
+//
+// Traces to: Bug-5 (replay frame ordering) — multi-cycle disconnect/reconnect
+// Traces to: review-pr-test-analyzer.md — "Disconnect → reconnect → disconnect → reconnect"
+func TestReplayOrdering_DisconnectReconnectDisconnectReconnect(t *testing.T) {
+	gw := startIntegrationGateway(t)
+	sessionID := createSession(t, gw)
+	seedTwoTurnTranscript(t, gw, sessionID)
+
+	const cycles = 4
+	for cycle := 0; cycle < cycles; cycle++ {
+		t.Logf("cycle %d/%d: connecting", cycle+1, cycles)
+
+		conn := wsConnectForAttach(t, gw)
+		attachFrame := fmt.Sprintf(`{"type":"attach_session","session_id":%s}`, jsonQuote(sessionID))
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(attachFrame)); err != nil {
+			t.Fatalf("cycle %d: attach_session send: %v", cycle+1, err)
+		}
+
+		frames := collectFramesUntilDone(t, conn, 5*time.Second)
+		if len(frames) == 0 {
+			t.Fatalf("cycle %d: no frames received after attach_session", cycle+1)
+		}
+		logFrameTypes(t, frames)
+
+		// Collect replay_message frames in order.
+		var messages []string
+		for _, f := range frames {
+			if tp, _ := f["type"].(string); tp == "replay_message" {
+				if content, ok := f["content"].(string); ok {
+					messages = append(messages, content)
+				}
+			}
+		}
+
+		if len(messages) < 2 {
+			t.Fatalf("cycle %d: expected at least 2 replay_message frames, got %d", cycle+1, len(messages))
+		}
+
+		// turn1 must precede turn2 in every cycle.
+		if !strings.Contains(messages[0], "turn1") {
+			t.Errorf("cycle %d: first replay_message should contain 'turn1', got %q", cycle+1, messages[0])
+		}
+		if !strings.Contains(messages[1], "turn2") {
+			t.Errorf("cycle %d: second replay_message should contain 'turn2', got %q", cycle+1, messages[1])
+		}
+
+		// Close the connection to simulate disconnect. The next iteration
+		// opens a fresh WS connection simulating a new browser tab load.
+		if err := conn.Close(); err != nil {
+			t.Logf("cycle %d: close conn: %v (acceptable if already closed)", cycle+1, err)
+		}
+		t.Logf("cycle %d/%d: ordering invariant satisfied (turn1 before turn2)", cycle+1, cycles)
+	}
+}
+
+// TestReplayOrdering_LateLiveFrameDuringDrain verifies that a live frame
+// emitted by sendConnGenFrame DURING the drain phase — after the replay is
+// complete but before isReplayingLive is cleared — routes through replayDivertCh
+// and appears after the drained history frames.
+//
+// This is the "production-realistic race" the pr-test-analyzer flagged:
+// the pre-loaded frame test proves correctness for the static case, but this
+// test adds a live concurrent writer that fires exactly during the drain window.
+//
+// Because the integration layer runs through the real gateway, we can only
+// approximate this: we seed a long-enough transcript (10 entries) that the
+// drain takes measurable time, then send a live message during the attach.
+// The ordering assertion checks that the replayed history is contiguous before
+// any live frames.
+//
+// BDD: Given a session with a long transcript (10 entries)
+//
+//	When the user attaches and a live message arrives during replay drain
+//	Then the replayed history appears first, then the live frame
+//	(the live frame does NOT interleave with the replay stream)
+//
+// Traces to: Bug-5 (replay frame ordering) — concurrent live frame during drain
+// Traces to: review-pr-test-analyzer.md — "Late-arriving live frame during replay drain"
+func TestReplayOrdering_LateLiveFrameDuringDrain(t *testing.T) {
+	gw := startIntegrationGateway(t)
+	sessionID := createSession(t, gw)
+
+	// Seed 10 turns to give the replay drain enough to do.
+	entries := make([]map[string]any, 10)
+	for i := range entries {
+		entries[i] = map[string]any{
+			"id":        fmt.Sprintf("entry-late-%d", i),
+			"role":      "user",
+			"content":   fmt.Sprintf("late-drain-turn%d message", i),
+			"timestamp": fmt.Sprintf("2026-01-01T00:00:%02dZ", i),
+		}
+	}
+	writeTranscriptEntries(t, gw, sessionID, entries)
+
+	conn := wsConnectForAttach(t, gw)
+	attachFrame := fmt.Sprintf(`{"type":"attach_session","session_id":%s}`, jsonQuote(sessionID))
+	if err := conn.WriteMessage(websocket.TextMessage, []byte(attachFrame)); err != nil {
+		t.Fatalf("attach_session send: %v", err)
+	}
+
+	// Send a new user message as a "live" event during the replay.
+	// This message will go through the agent loop while replay is draining.
+	// We send it immediately after attach so it races with the drain.
+	sendMessage(t, conn, "live frame during drain test")
+
+	// Collect all frames (replay + live response).
+	frames := collectAllFrames(t, conn, 8*time.Second)
+	if len(frames) == 0 {
+		t.Fatal("BUG-5: no frames received — replay and live message both silent")
+	}
+	logFrameTypes(t, frames)
+
+	// Verify invariant: all replay_message frames must appear as a contiguous
+	// group before the first "token" or "done" frame from the live message.
+	// A live token appearing between two replay_message frames indicates
+	// interleaving of live and replay streams.
+	foundLive := false
+	replayAfterLive := false
+	for _, f := range frames {
+		tp, _ := f["type"].(string)
+		switch tp {
+		case "token", "content", "text":
+			// First live token — mark it.
+			foundLive = true
+		case "replay_message":
+			if foundLive {
+				replayAfterLive = true
+			}
+		}
+	}
+
+	// Replay messages appearing after live tokens is the interleaving bug.
+	// It's possible on some frame sequences that the live LLM response is
+	// so fast it arrives before replay finishes — in that case this test
+	// is inconclusive (not a failure). Log and proceed.
+	if replayAfterLive {
+		t.Errorf(
+			"BUG-5: a replay_message frame appeared after a live token frame — " +
+				"replay and live streams interleaved during drain phase. " +
+				"Frame sequence: see logFrameTypes above.",
+		)
+	} else {
+		t.Log("ordering invariant satisfied: no replay frames interleaved with live tokens")
+	}
+}
+
 // ─── Transcript seeding helpers ───────────────────────────────────────────────
 
 // seedToolCallTranscript writes a one-turn transcript with a tool_call entry

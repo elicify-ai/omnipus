@@ -145,9 +145,21 @@ type wsConn struct {
 	// sendConnGenFrame are redirected into replayDivertCh instead of sendCh so
 	// they don't interleave with replay frames. After replay finishes they are
 	// drained into sendCh in arrival order.
-	// isReplayingLive is set atomically before replay starts and cleared after
-	// the done frame is sent, so concurrent callers of sendConnGenFrame see a
-	// consistent view without holding any mutex.
+	//
+	// Ordering invariant (see docs/investigation/bug-5-replay-order.md,
+	// code-reviewer Finding #2, and architect Finding #4):
+	//   Writers must NOT snapshot isReplayingLive and then send to the snapshotted
+	//   channel as two separate operations — the drain can empty replayDivertCh and
+	//   disarm the flag between those two steps, orphaning the frame.
+	//
+	//   replayMu serialises the "read flag + select channel" decision in
+	//   sendRawFrameBytes against the "drain channel + disarm flag" sequence in
+	//   handleAttachSession.  Writers hold the read-lock (RLock) while choosing a
+	//   target channel and sending to it; the drain holds the write-lock (Lock) for
+	//   the entire drain+disarm sequence.  On the non-replay hot path
+	//   (isReplayingLive == false) sendRawFrameBytes performs one atomic load and
+	//   never touches replayMu, keeping the common case lock-free.
+	replayMu        sync.RWMutex
 	isReplayingLive atomic.Bool
 	replayDivertCh  chan []byte // capacity replayLiveBufferCap; allocated lazily by handleAttachSession
 }
@@ -881,29 +893,11 @@ func sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
 		slog.Debug("ws: marshal cancel_stage frame failed", "stage", stage, "error", err)
 		return
 	}
-	targetCh := wc.sendCh
-	if wc.isReplayingLive.Load() && wc.replayDivertCh != nil {
-		targetCh = wc.replayDivertCh
-	}
-	// Non-critical: try immediate, fall back to brief retries, drop on backpressure.
-	for _, wait := range [...]time.Duration{0, 10 * time.Millisecond, 50 * time.Millisecond} {
-		if wait == 0 {
-			select {
-			case targetCh <- data:
-				return
-			default:
-			}
-			continue
-		}
-		t := time.NewTimer(wait)
-		select {
-		case targetCh <- data:
-			t.Stop()
-			return
-		case <-t.C:
-		}
-	}
-	slog.Debug("ws: dropped cancel_stage frame due to backpressure", "stage", stage)
+	// Route through sendRawFrameBytes to respect replay-divert logic and the
+	// replayMu serialisation that prevents the TOCTOU race (code-reviewer Finding #2).
+	sendRawFrameBytes(wc, string(generated.WsFrameTypeCancelStage), data)
+	// sendRawFrameBytes logs at Warn on drop; suppress the duplicate debug log that
+	// existed in the old inline implementation.
 }
 
 // handleCancel delegates to agentLoop.RequestCancel — the canonical cancel
@@ -1082,13 +1076,14 @@ func (h *WSHandler) handleAttachSession(
 	}
 	framesEmitted, replayErr := streamReplay(ctx, attachID, entries, rs, emitFn, mediaStore)
 
-	// Disarm the divert FIRST so that subsequent sendConnGenFrame calls go directly
-	// to sendCh once we drain the buffer below.
-	wc.isReplayingLive.Store(false)
-
 	durationMS := time.Since(replayStart).Milliseconds()
 
 	if replayErr != nil {
+		// Disarm the divert before emitting the abort frames so that sendConnGenFrame
+		// routes them to sendCh. On the error path we skip the divert drain — the
+		// buffered live frames are intentionally discarded because the replay itself
+		// is being abandoned and the client is being told to reset.
+		wc.isReplayingLive.Store(false)
 		slog.Warn("ws: replay_aborted",
 			"event", "replay_aborted",
 			"session_id", attachID,
@@ -1126,15 +1121,47 @@ func (h *WSHandler) handleAttachSession(
 		"truncated_result_count", rs.truncatedResultCount,
 	)
 
-	// FR-I-009: drain any live events buffered during replay, in arrival order.
-	// The divert flag is already cleared, so no new frames will land here.
-	// We drain until the buffer is empty (non-blocking).
+	// FR-I-009: drain any live events buffered during replay, in arrival order,
+	// BEFORE disarming the divert flag.
+	//
+	// Ordering guarantee (see docs/investigation/bug-5-replay-order.md and
+	// code-reviewer Finding #2 / architect Finding #4):
+	//
+	//   The flag must be cleared AFTER the drain, not before.  Clearing it first
+	//   opens a window where concurrent sendRawFrameBytes callers write live frames
+	//   directly to sendCh while the drain loop is still moving buffered divert
+	//   frames into sendCh, inverting FIFO order.
+	//
+	//   Drain-then-disarm is safe when guarded by replayMu:
+	//   - We hold replayMu.Lock() for the entire drain+disarm sequence.
+	//   - sendRawFrameBytes holds replayMu.RLock() while choosing a target channel
+	//     and completing its send.  This prevents the TOCTOU race where a writer
+	//     snapshots isReplayingLive==true, is descheduled, the drain empties
+	//     replayDivertCh and clears the flag, and the writer then sends to the
+	//     now-abandoned replayDivertCh.
+	//   - After the drain+disarm, replayMu is released; future sendRawFrameBytes
+	//     calls see isReplayingLive==false on the first atomic load (fast path, no
+	//     lock taken) and route directly to sendCh in the correct position.
+	//
+	//   Back-pressure defence (architect Finding #4): each frame send inside the
+	//   drain uses a 1-second deadline.  If sendCh is full and the client is slow,
+	//   the frame is dropped with a Warn rather than blocking the drain indefinitely.
+	//   The connection stays usable; the SPA will reconcile any missing frames on the
+	//   next attach_session.
+	wc.replayMu.Lock()
 	for {
 		select {
 		case raw := <-wc.replayDivertCh:
 			select {
 			case wc.sendCh <- raw:
+			case <-time.After(1 * time.Second):
+				slog.Warn("ws: replay drain frame timed out, dropping",
+					"session_id", attachID,
+					"chat_id", chatID)
+				wc.droppedFrames.Add(1)
 			case <-ctx.Done():
+				wc.isReplayingLive.Store(false)
+				wc.replayMu.Unlock()
 				return
 			}
 		default:
@@ -1142,6 +1169,11 @@ func (h *WSHandler) handleAttachSession(
 		}
 	}
 drainDone:
+	// Disarm AFTER drain, while still holding replayMu.Lock().  Releasing the lock
+	// after the Store ensures any writer that is queued behind our Lock() will see
+	// isReplayingLive==false on its re-check and route to sendCh directly.
+	wc.isReplayingLive.Store(false)
+	wc.replayMu.Unlock()
 
 	h.mu.Lock()
 	h.sessionIDs[chatID] = attachID
@@ -1308,20 +1340,98 @@ func sendConnGenFrame(wc *wsConn, frameType string, frame any) {
 
 // sendRawFrameBytes routes pre-marshaled frame bytes to the connection's send channel.
 // It implements the replay-divert logic (W1-1), critical-frame blocking, and
-// backpressure drop logic shared by sendConnGenFrame and sendConnGenFrame.
+// backpressure drop logic shared by sendConnGenFrame and wsStreamer.Update.
 // frameType is used to determine criticality (done, error, exec_approval_*).
+//
+// Ordering guarantee (see docs/investigation/bug-5-replay-order.md, code-reviewer
+// Finding #2): the channel-selection decision (read isReplayingLive + pick targetCh)
+// and the channel send are performed while holding wc.replayMu.RLock().  The drain in
+// handleAttachSession holds wc.replayMu.Lock() for the entire drain+disarm sequence.
+// This prevents the TOCTOU race where a writer snapshots isReplayingLive==true, is
+// descheduled, the drain empties replayDivertCh and disarms the flag, and the writer
+// then sends to the now-abandoned replayDivertCh.
+//
+// On the non-replay hot path (isReplayingLive==false) the RLock is never acquired,
+// keeping the common case lock-free.
 func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 	// W1-1: if replay mode is active, divert live frames into the replay buffer
 	// instead of wc.sendCh, so writePump never sees them while replay is running.
 	// "done", "error", and critical control frames are always sent to the canonical
 	// sendCh regardless of replay state — they are emitted by streamReplay itself
 	// and must reach writePump immediately.
-	targetCh := wc.sendCh
 	isCritical := frameType == "done" || frameType == "error" ||
 		frameType == "exec_approval_request" || frameType == "exec_approval_expired"
-	if !isCritical && wc.isReplayingLive.Load() && wc.replayDivertCh != nil {
-		targetCh = wc.replayDivertCh
+
+	// Fast path: not replaying (atomic check, no lock). This is the common case.
+	if !wc.isReplayingLive.Load() || isCritical {
+		// Fall through to the send logic below with targetCh = sendCh.
+	} else {
+		// Slow path: replay is active. Hold RLock so the drain's Lock() cannot disarm
+		// the flag until after we have completed the send into replayDivertCh.
+		wc.replayMu.RLock()
+		// Re-check under the lock: the drain may have disarmed the flag while we were
+		// waiting for RLock.
+		if wc.isReplayingLive.Load() && wc.replayDivertCh != nil {
+			// Route to divert channel while holding the read-lock.
+			targetCh := wc.replayDivertCh
+			wc.replayMu.RUnlock()
+			switch {
+			case isCritical:
+				select {
+				case targetCh <- data:
+				case <-time.After(5 * time.Second):
+					slog.Warn("ws: send channel full after timeout for critical frame, closing connection", "type", frameType)
+					wc.close()
+				}
+			default:
+				backoffs := [...]time.Duration{0, 10 * time.Millisecond, 50 * time.Millisecond}
+				for _, wait := range backoffs {
+					if wait == 0 {
+						select {
+						case targetCh <- data:
+							wc.droppedFrames.Store(0)
+							return
+						default:
+						}
+					} else {
+						t := time.NewTimer(wait)
+						select {
+						case targetCh <- data:
+							t.Stop()
+							wc.droppedFrames.Store(0)
+							return
+						case <-t.C:
+						}
+					}
+				}
+				slog.Warn("ws: send channel full after backoff, frame dropped", "type", frameType)
+				wc.droppedTokens.Add(1)
+				wc.droppedFrames.Add(1)
+				if wc.droppedFrames.Load() >= int32(droppedFramesWarnThreshold) {
+					wc.droppedFrames.Store(0)
+					degraded, merr := json.Marshal(generated.ErrorFrame{
+						Type:    string(generated.WsFrameTypeError),
+						Message: "connection degraded: frames being dropped due to backpressure",
+					})
+					if merr != nil {
+						slog.Error("ws: marshal degraded frame failed", "error", merr)
+						return
+					}
+					select {
+					case wc.sendCh <- degraded:
+					case <-time.After(5 * time.Second):
+						slog.Warn("ws: could not deliver degraded warning frame, closing connection")
+						wc.close()
+					}
+				}
+			}
+			return
+		}
+		wc.replayMu.RUnlock()
+		// Flag was cleared before we got the lock — fall through to direct sendCh path.
 	}
+
+	targetCh := wc.sendCh
 
 	switch {
 	case isCritical:
@@ -1825,14 +1935,29 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	if err != nil {
 		return fmt.Errorf("ws: marshal token frame: %w", err)
 	}
-	select {
-	case s.conn.sendCh <- data:
-		s.accumulated.WriteString(content)
-	default:
-		s.conn.droppedTokens.Add(1)
-		slog.Warn("ws: token dropped", "session_id", s.sessionID, "chat_id", s.chatID, "agent_id", s.agentID)
+	// Route through sendRawFrameBytes so that token frames respect the replay-divert
+	// logic.  If a client reconnects mid-turn and attach_session triggers replay while
+	// the agent is still streaming tokens, those token frames must be buffered in
+	// replayDivertCh — not written directly to sendCh — so they arrive at the client
+	// after the replay history rather than interspersed with it.
+	//
+	// sendRawFrameBytes also holds wc.replayMu.RLock() for the channel-selection +
+	// send operation, which prevents the TOCTOU race described in
+	// docs/investigation/bug-5-replay-order.md (code-reviewer Finding #2).
+	//
+	// sendRawFrameBytes uses a 3-attempt backoff and increments BOTH droppedFrames
+	// AND droppedTokens on final drop.  We do not duplicate the droppedTokens
+	// increment here; sendRawFrameBytes is the single authoritative counter.
+	//
+	// On back-pressure (channel full after all retries), sendRawFrameBytes logs at
+	// Warn level; we return an error so the caller knows the token was lost.
+	originalDropped := s.conn.droppedTokens.Load()
+	sendRawFrameBytes(s.conn, string(generated.WsFrameTypeToken), data)
+	if s.conn.droppedTokens.Load() > originalDropped {
+		slog.Warn("ws: token backpressure", "session_id", s.sessionID, "chat_id", s.chatID, "agent_id", s.agentID)
 		return fmt.Errorf("ws: token channel full, token dropped")
 	}
+	s.accumulated.WriteString(content)
 	// Cross-browser session attach (#133): also forward the token to every
 	// other connection bound to the same session. The originating chat
 	// already received the frame above; secondary tabs see the live stream

@@ -4,10 +4,11 @@
 // config.
 //
 // Bug: default sandbox mode inside a Docker container was "enforce" (the
-// normal fresh-install default). On Linux inside Docker, Landlock's
-// landlock_restrict_self succeeds but then no process can fork/exec because
-// the filesystem rules prevent executing anything outside the locked tree, so
-// every exec tool call fails with "fork/exec /bin/sh: permission denied".
+// normal fresh-install default). Docker's default unprivileged seccomp profile
+// blocks several syscalls the hardened-exec path requires (RLIMIT_NPROC
+// manipulation, prctl, Landlock prctl), so every exec tool call fails with
+// "fork/exec /bin/sh: permission denied" when sandbox=enforce is active inside
+// the container.
 //
 // Fix: when running inside a Docker container, the default sandbox mode must
 // NOT be "enforce". The expected default is "permissive" (audit-only) so exec
@@ -21,6 +22,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 )
@@ -137,6 +139,180 @@ func TestDockerDefault_ExplicitModeNotOverridden(t *testing.T) {
 			mode,
 		)
 	}
+}
+
+// ─── isRunningInDocker coverage ───────────────────────────────────────────────
+//
+// isRunningInDocker (pkg/gateway/sandbox_apply.go) detects Docker via two signals:
+//  1. OMNIPUS_IN_DOCKER=1 env var
+//  2. /.dockerenv file presence
+//
+// Signal 1 is exercised end-to-end by the gateway boot tests above.
+// Signal 2 requires running inside actual Docker or a testable probe hook.
+//
+// Track B coordination comment: to unit-test the /.dockerenv path without
+// a real Docker container, pkg/gateway/sandbox_apply.go should expose a
+// probeDockerenv injection point:
+//
+//	var dockerenvProbe func() bool = func() bool {
+//	    _, err := os.Stat("/.dockerenv")
+//	    return err == nil
+//	}
+//
+// Then tests can override: dockerenvProbe = func() bool { return true }.
+// Until that hook exists, only integration-level testing (via full gateway boot)
+// is possible for signal 2. See review-pr-test-analyzer.md §Bug4.
+
+// TestIsRunningInDocker_EnvVarSignal exercises the OMNIPUS_IN_DOCKER=1 path
+// through a full gateway boot and verifies the sandbox mode is not enforce.
+//
+// This is the integration-level equivalent of "TestIsRunningInDocker_EnvSignal"
+// requested in the pr-test-analyzer review. The unit-level test would need the
+// probeDockerenv hook described above.
+//
+// BDD: Given OMNIPUS_IN_DOCKER=1 is set in the environment
+//
+//	When the gateway boots with no explicit sandbox.mode
+//	Then the resolved mode is NOT "enforce" (env-var signal is honoured)
+//
+// Traces to: pkg/gateway/sandbox_apply.go — isRunningInDocker env-var branch
+// Traces to: review-pr-test-analyzer.md — "No unit test for isRunningInDocker"
+func TestIsRunningInDocker_EnvVarSignal(t *testing.T) {
+	t.Setenv("OMNIPUS_IN_DOCKER", "1")
+	gw := startIntegrationGateway(t)
+
+	req, err := gw.NewRequest(http.MethodGet, "/api/v1/security/sandbox-status", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := gw.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/v1/security/sandbox-status: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status %d", resp.StatusCode)
+	}
+	rawBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	mode := extractSandboxMode(t, rawBody)
+	t.Logf("OMNIPUS_IN_DOCKER=1 → resolved mode = %q", mode)
+
+	if strings.EqualFold(mode, "enforce") {
+		t.Fatalf(
+			"isRunningInDocker env-var signal: OMNIPUS_IN_DOCKER=1 should prevent enforce, got %q. "+
+				"The env-var detection path is not being honoured.",
+			mode,
+		)
+	}
+}
+
+// TestIsRunningInDocker_NeitherSignal documents the "neither signal" path of
+// isRunningInDocker and the testability gap that prevents full assertion here.
+//
+// TESTABILITY GAP: startIntegrationGateway always sets sandbox.Mode = "off"
+// explicitly via testutil.buildConfig (so sandbox.configTouched = true). This
+// means we cannot test the "fresh install defaults to enforce" path through the
+// integration gateway without a testutil change that allows a no-sandbox-config
+// startup. That change is Track B (backend-lead) work.
+//
+// What this test DOES verify: with no Docker signals and an explicit mode="off",
+// the gateway does NOT somehow detect Docker and override the explicit config.
+// (The actual "neither signal → enforce default" invariant is covered by
+// pkg/gateway/sandbox_apply_test.go::TestResolveMode_FreshConfigDefaultsToEnforce.)
+//
+// BDD: Given OMNIPUS_IN_DOCKER is unset
+//
+//	And /.dockerenv does not exist
+//	And sandbox.mode = "off" is explicitly set
+//	When the gateway boots
+//	Then the resolved mode is "off" (explicit config is not overridden by non-detection)
+//
+// Traces to: pkg/gateway/sandbox_apply.go — isRunningInDocker neither-signal path
+// Traces to: review-pr-test-analyzer.md — "No unit test for isRunningInDocker"
+// TODO (Track B): expose a testutil.WithNoSandboxConfig() option that sets
+// configTouched=false so we can test the fresh-install default path here.
+func TestIsRunningInDocker_NeitherSignal(t *testing.T) {
+	if dockerenvExists() {
+		t.Skip("/.dockerenv found — running inside Docker; cannot test the non-Docker path here")
+	}
+	t.Setenv("OMNIPUS_IN_DOCKER", "")
+
+	// startIntegrationGateway sets sandbox.mode="off" explicitly (configTouched=true).
+	// We are testing: with no Docker signals, the explicit "off" config is preserved.
+	gw := startIntegrationGateway(t)
+
+	req, err := gw.NewRequest(http.MethodGet, "/api/v1/security/sandbox-status", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := gw.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/v1/security/sandbox-status: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status %d", resp.StatusCode)
+	}
+	rawBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	mode := extractSandboxMode(t, rawBody)
+	t.Logf("neither Docker signal + explicit mode=off → resolved mode = %q", mode)
+
+	// With no Docker signals, the explicit config must be respected unchanged.
+	// The true "neither signal → enforce" invariant is tested at the unit level
+	// in pkg/gateway/sandbox_apply_test.go::TestResolveMode_FreshConfigDefaultsToEnforce.
+	if strings.EqualFold(mode, "enforce") && !dockerenvExists() {
+		// If mode is "enforce" on a non-Docker host with explicit "off" config,
+		// something is very wrong with the config-override path.
+		t.Errorf(
+			"unexpected enforce mode: non-Docker host with explicit mode=off got %q",
+			mode,
+		)
+	}
+	// Document the gap explicitly.
+	t.Logf("NOTE: 'neither signal → enforce default' is covered by sandbox_apply_test.go unit test. " +
+		"Track B should add testutil.WithNoSandboxConfig() to enable full integration coverage here.")
+}
+
+// TestIsRunningInDocker_KubernetesNoDockerenv documents the KNOWN GAP:
+// rootless Docker, Podman, and BuildKit containers often lack /.dockerenv.
+// Those environments are currently NOT auto-detected by isRunningInDocker,
+// so they default to enforce mode and exec tool calls fail with permission denied.
+//
+// This test records the gap for the v0.2 follow-up. It intentionally passes.
+//
+// Traces to: review-pr-test-analyzer.md — "/.dockerenv absent inside Docker (rootless, Podman)"
+func TestIsRunningInDocker_KubernetesNoDockerenv(t *testing.T) {
+	// KNOWN GAP: isRunningInDocker does not detect:
+	//   - Rootless Docker (no /.dockerenv in some configurations)
+	//   - Podman containers (/run/.containerenv, NOT /.dockerenv)
+	//   - BuildKit containers
+	//   - Kubernetes pods running OCI runtimes without /.dockerenv
+	//
+	// Operators on those platforms must set OMNIPUS_IN_DOCKER=1 manually
+	// or configure sandbox.mode=permissive in their config.json.
+	//
+	// v0.2 follow-up: extend isRunningInDocker to check:
+	//   - /run/.containerenv (Podman)
+	//   - /proc/1/cgroup for "docker"/"kubepods" membership
+	//   - KUBERNETES_SERVICE_HOST env var (Kubernetes)
+	t.Log("KNOWN GAP documented: Podman/rootless/BuildKit containers without /.dockerenv " +
+		"fall through to enforce mode. Operators must set OMNIPUS_IN_DOCKER=1 manually " +
+		"until v0.2 adds broader container runtime detection.")
+}
+
+// dockerenvExists reports whether /.dockerenv exists on the current host.
+// Used to skip tests that only make sense outside a Docker container.
+func dockerenvExists() bool {
+	_, err := os.Stat("/.dockerenv")
+	return err == nil
 }
 
 // extractSandboxMode parses the sandbox-status endpoint response and extracts

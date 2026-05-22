@@ -23,7 +23,7 @@ import (
 // TestResolveMode_CLIBeatsConfig verifies FR-J-006: --sandbox=off with
 // config.Sandbox.Mode="enforce" resolves to off. CLI always wins.
 func TestResolveMode_CLIBeatsConfig(t *testing.T) {
-	mode, src, err := resolveMode("off", "enforce", true)
+	mode, src, err := resolveMode("off", "enforce", true, func(string) string { return "" })
 	if err != nil {
 		t.Fatalf("resolveMode: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestResolveMode_CLIBeatsConfig(t *testing.T) {
 // TestResolveMode_ConfigDefault verifies fallback to config value when
 // CLI flag is not set.
 func TestResolveMode_ConfigDefault(t *testing.T) {
-	mode, src, err := resolveMode("", "off", true)
+	mode, src, err := resolveMode("", "off", true, func(string) string { return "" })
 	if err != nil {
 		t.Fatalf("resolveMode: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestResolveMode_ConfigDefault(t *testing.T) {
 // capable kernels. configTouched=false means the operator has not
 // written anything to the sandbox section.
 func TestResolveMode_FreshConfigDefaultsToEnforce(t *testing.T) {
-	mode, src, err := resolveMode("", "", false)
+	mode, src, err := resolveMode("", "", false, func(string) string { return "" })
 	if err != nil {
 		t.Fatalf("resolveMode: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestResolveMode_FreshConfigDefaultsToEnforce(t *testing.T) {
 // sentence: invalid --sandbox values surface as errors so cmd/omnipus
 // can exit 2 (usage error) before any boot logic.
 func TestResolveMode_InvalidCLIReturnsError(t *testing.T) {
-	_, _, err := resolveMode("of", "", false)
+	_, _, err := resolveMode("of", "", false, func(string) string { return "" })
 	if err == nil {
 		t.Fatal("resolveMode: expected error for --sandbox=of")
 	}
@@ -84,7 +84,7 @@ func TestResolveMode_InvalidCLIReturnsError(t *testing.T) {
 // gateway.sandbox.mode in the config file is also rejected, not
 // silently treated as default.
 func TestResolveMode_InvalidConfigReturnsError(t *testing.T) {
-	_, _, err := resolveMode("", "bogus", true)
+	_, _, err := resolveMode("", "bogus", true, func(string) string { return "" })
 	if err == nil {
 		t.Fatal("resolveMode: expected error for config Mode=bogus")
 	}
@@ -259,6 +259,47 @@ func TestApplySandbox_CLIOffEnforceConfig_Boots(t *testing.T) {
 	}
 	if result.Mode != sandbox.ModeOff {
 		t.Errorf("mode: got %q, want off", result.Mode)
+	}
+}
+
+// TestIsRunningInDocker_DockerenvPresent verifies that isRunningInDocker returns
+// true when /.dockerenv (overridden via dockerenvPath) exists on the filesystem.
+//
+// Regression for fix #3: previously os.Stat errors other than ENOENT were
+// silently treated as "not in Docker"; this test ensures the positive detection
+// path works when the file is present.
+func TestIsRunningInDocker_DockerenvPresent(t *testing.T) {
+	tmp, err := os.CreateTemp(t.TempDir(), ".dockerenv-*")
+	if err != nil {
+		t.Fatalf("create temp dockerenv: %v", err)
+	}
+	tmp.Close()
+
+	// Override the probe path for this test, restore after.
+	orig := dockerenvPath
+	dockerenvPath = tmp.Name()
+	t.Cleanup(func() { dockerenvPath = orig })
+
+	got := isRunningInDocker(func(string) string { return "" })
+	if !got {
+		t.Errorf("isRunningInDocker: got false, want true (/.dockerenv-equiv exists at %q)", tmp.Name())
+	}
+}
+
+// TestIsRunningInDocker_DockerenvAbsent verifies that isRunningInDocker returns
+// false when neither OMNIPUS_IN_DOCKER nor /.dockerenv are present.
+//
+// Regression for fix #3: the positive ENOENT path must not log a warning and
+// must return false cleanly.
+func TestIsRunningInDocker_DockerenvAbsent(t *testing.T) {
+	// Point dockerenvPath at a path that definitely does not exist.
+	orig := dockerenvPath
+	dockerenvPath = t.TempDir() + "/.dockerenv-nonexistent"
+	t.Cleanup(func() { dockerenvPath = orig })
+
+	got := isRunningInDocker(func(string) string { return "" })
+	if got {
+		t.Errorf("isRunningInDocker: got true, want false (file does not exist)")
 	}
 }
 

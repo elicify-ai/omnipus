@@ -52,6 +52,13 @@ EXPOSE 5000 5001
 # tag + env.Parse in loadConfigInternal — no code changes needed.
 ENV OMNIPUS_GATEWAY_HOST=0.0.0.0
 
+# Default sandbox mode = permissive inside Docker. The default unprivileged
+# container seccomp profile blocks syscalls the hardened-exec path requires,
+# causing "fork/exec /bin/sh: permission denied" with sandbox=enforce.
+# Override with OMNIPUS_SANDBOX_MODE=enforce if you have configured custom
+# capabilities. See pkg/gateway/sandbox_apply.go for the full rationale.
+ENV OMNIPUS_SANDBOX_MODE=permissive
+
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -fsS http://localhost:5000/health || exit 1
 
