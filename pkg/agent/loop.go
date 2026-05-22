@@ -3165,6 +3165,21 @@ func (al *AgentLoop) runAgentLoop(
 	}
 
 	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, opts.SessionKey))
+	// Bug 1 fix: wire a resolver so appendToolCallTranscript (and event payloads)
+	// use the runtime-current active agent rather than the turn's starting agent.
+	// After a handoff, sessionActiveAgent reflects the new agent; tool_call entries
+	// produced in the same turn will carry the correct post-handoff agent_id.
+	if opts.TranscriptSessionID != "" {
+		resolverKey := "session:" + opts.TranscriptSessionID
+		ts.activeAgentResolver = func() string {
+			if v, ok := al.sessionActiveAgent.Load(resolverKey); ok {
+				if id, ok := v.(string); ok && id != "" {
+					return id
+				}
+			}
+			return ""
+		}
+	}
 	result, err := al.runTurn(ctx, ts)
 	if err != nil {
 		return "", err
@@ -4534,7 +4549,7 @@ turnLoop:
 					Tool:              toolName,
 					Arguments:         cloneEventArguments(toolArgs),
 					ParentSpawnCallID: session.ToolCallID(ts.parentSpawnCallID),
-					AgentID:           ts.agentID,
+					AgentID:           ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
 				},
 			)
 
@@ -4877,7 +4892,7 @@ turnLoop:
 					Async:             toolResult.Async,
 					Result:            contentForLLM,
 					ParentSpawnCallID: session.ToolCallID(ts.parentSpawnCallID),
-					AgentID:           ts.agentID,
+					AgentID:           ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
 				},
 			)
 			tcStatus := "success"
@@ -5044,6 +5059,18 @@ turnLoop:
 			)
 			return turnResult{}, err
 		}
+	}
+
+	// Bug 3 fix: persist assistant text to transcript.jsonl when no wsStreamer
+	// was active (WS disconnected, non-webchat channel, or headless run).
+	// When ts.lastStreamer != nil, the deferred ts.finalizeStreamer will call
+	// wsStreamer.Finalize which writes the accumulated streaming content to the
+	// transcript — so we only write here on the non-streaming path.
+	ts.mu.RLock()
+	hasActiveStreamer := ts.lastStreamer != nil
+	ts.mu.RUnlock()
+	if !hasActiveStreamer && finalContent != "" {
+		ts.appendAssistantTranscript(finalContent)
 	}
 
 	if ts.opts.EnableSummary {

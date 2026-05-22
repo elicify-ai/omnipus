@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -143,6 +144,15 @@ type turnState struct {
 	// Transcript recording fields (nil transcriptStore disables recording)
 	transcriptSessionID string
 	transcriptStore     *session.UnifiedStore
+
+	// activeAgentResolver, when non-nil, returns the runtime-current active
+	// agent for this session's transcript. It is set at turn construction for
+	// webchat turns (where sessionActiveAgent tracks post-handoff overrides).
+	// appendToolCallTranscript calls it to tag each entry with the agent that
+	// is currently active rather than the one that started the turn — so
+	// tool_call entries produced after a handoff (same turn, new active agent)
+	// carry the correct agent_id in the transcript.
+	activeAgentResolver func() string
 
 	// syntheticErrorCount tracks consecutive synthetic-deny tool results within
 	// this turn. When it reaches the configured floor (FR-084,
@@ -564,6 +574,11 @@ func (ts *turnState) interruptHintMessage() providers.Message {
 // appendToolCallTranscript records a tool call to the session transcript.
 // It is a no-op when no transcript store or session ID is configured, or when
 // the turn has been marked abandoned (B4: suppresses writes from stuck goroutines).
+//
+// Bug 1 fix: the AgentID on the entry reflects the runtime-current active agent
+// (via activeAgentResolver) rather than the turn's starting agent. This ensures
+// that tool_call entries produced after a handoff carry the correct agent_id —
+// the new active agent — instead of the one that initiated the turn.
 func (ts *turnState) appendToolCallTranscript(tc session.ToolCall) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
@@ -572,16 +587,62 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall) {
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
 		return
 	}
+	agentID := ts.resolveActiveAgentID()
 	entry := session.TranscriptEntry{
 		ID:        string(tc.ID),
 		Type:      session.EntryTypeToolCall,
-		AgentID:   ts.agentID,
+		AgentID:   agentID,
 		Timestamp: time.Now().UTC(),
 		ToolCalls: []session.ToolCall{tc},
 	}
 	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
 		logger.WarnCF("agent", "could not record tool call to transcript",
 			map[string]any{"session_id": ts.transcriptSessionID, "tool": tc.Tool, "error": err.Error()})
+	}
+}
+
+// resolveActiveAgentID returns the runtime-current active agent ID for this
+// turn's session. When activeAgentResolver is set (webchat sessions), it
+// reflects post-handoff switches that may have occurred during the turn.
+// Falls back to the turn's starting agent ID for all other sessions.
+//
+// Use this — not ts.agentID — in any event payload or log field that should
+// attribute work to the agent that is currently active in the session.
+func (ts *turnState) resolveActiveAgentID() string {
+	if ts.activeAgentResolver != nil {
+		if id := ts.activeAgentResolver(); id != "" {
+			return id
+		}
+	}
+	return ts.agentID
+}
+
+// appendAssistantTranscript persists a completed assistant text response to the
+// session transcript. It is called on the non-streaming path (no wsStreamer) so
+// that replay can reconstruct the full conversation even after a WS disconnect.
+//
+// Bug 3 fix: the wsStreamer.Finalize path already handles streaming responses.
+// For non-streaming turns (WS disconnected or channel that never streams), this
+// ensures the assistant content reaches transcript.jsonl.
+func (ts *turnState) appendAssistantTranscript(content string) {
+	if ts.abandoned.Load() {
+		abandonedWritesSuppressed.Add(1)
+		return
+	}
+	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || content == "" {
+		return
+	}
+	agentID := ts.resolveActiveAgentID()
+	entry := session.TranscriptEntry{
+		ID:        fmt.Sprintf("assistant-%d", time.Now().UnixNano()),
+		Role:      "assistant",
+		AgentID:   agentID,
+		Content:   content,
+		Timestamp: time.Now().UTC(),
+	}
+	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
+		logger.WarnCF("agent", "could not record assistant message to transcript",
+			map[string]any{"session_id": ts.transcriptSessionID, "error": err.Error()})
 	}
 }
 
