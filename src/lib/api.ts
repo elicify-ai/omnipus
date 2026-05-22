@@ -795,9 +795,25 @@ export async function fetchSessions(agentId?: string, type?: Session['type']): P
   if (agentId) params.agent_id = agentId
   if (type) params.type = type
   const qs = Object.keys(params).length > 0 ? '?' + new URLSearchParams(params).toString() : ''
-  // Validate against the generated wire Session schema (array variant); the
-  // rawToSession transform runs after validation to flatten the nested stats.
-  const raw = await request<RawSession[]>(`/sessions${qs}`, undefined, z.array(WireSessionSchema) as ZodType<RawSession[]>)
+  // The OpenAPI contract for GET /sessions describes a oneOf response: a
+  // plain JSON array when there are no partial errors, OR
+  // {sessions: [...], partial_errors: [...]} when one or more agents failed
+  // to list. The previous code validated only the array variant — when
+  // partial_errors fired (e.g. a session with a missing .context entry),
+  // Zod rejected the whole response and the session panel showed empty.
+  // Accept both shapes so legitimate sessions still render alongside any
+  // partial-error info.
+  const unionSchema = z.union([
+    z.array(WireSessionSchema),
+    z.object({
+      sessions: z.array(WireSessionSchema),
+      partial_errors: z.array(z.string()).optional(),
+    }),
+  ])
+  const resp = await request<unknown>(`/sessions${qs}`, undefined, unionSchema as ZodType<unknown>)
+  const raw: RawSession[] = Array.isArray(resp)
+    ? (resp as RawSession[])
+    : ((resp as { sessions: RawSession[] }).sessions ?? [])
   return raw.map(rawToSession)
 }
 
