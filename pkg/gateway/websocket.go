@@ -127,6 +127,10 @@ type WSHandler struct {
 	// pairingStore is the global device pairing state (pending + paired devices).
 	pairingStore *pairing.PairingStore
 
+	// toolStore persists tool results that exceed InlineToolResultMaxBytes.
+	// Set by the gateway after construction (nil = disabled, which is the test default).
+	toolStore *toolResultStore
+
 	upgrader websocket.Upgrader
 }
 
@@ -162,6 +166,12 @@ type wsConn struct {
 	replayMu        sync.RWMutex
 	isReplayingLive atomic.Bool
 	replayDivertCh  chan []byte // capacity replayLiveBufferCap; allocated lazily by handleAttachSession
+
+	// lastPongSentUnixNano debounces pong responses to client pings. The SPA's
+	// heartbeat fires every 30 s; allowing one pong per 100 ms per connection
+	// gives ~300× headroom for legitimate clients while bounding amplification
+	// if a buggy or malicious client floods pings.
+	lastPongSentUnixNano atomic.Int64
 }
 
 func (c *wsConn) close() {
@@ -666,7 +676,7 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 				"requested_session_id", f.SessionId,
 			)
 			if f.SessionId != "" {
-				h.handleAttachSession(ctx, chatID, f.SessionId, wc)
+				h.handleAttachSession(ctx, chatID, f.SessionId, f.Since, wc)
 			} else {
 				slog.Warn("ws: attach_session with empty session_id", "chat_id", chatID)
 			}
@@ -701,7 +711,19 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 				Id:        &sid,
 			})
 		case string(generated.WsFrameTypePing):
-			// Client heartbeat — no action needed, the WebSocket pong handler keeps the connection alive
+			// Application-layer pong: the SPA's 60s "any frame received" liveness
+			// check needs a server-originated frame during idle. Gorilla WS-protocol
+			// ping/pong runs independently as NAT-keepalive.
+			// Debounced to 1 pong/100ms/conn so a flood of pings cannot amplify into
+			// outbound traffic against writePump's serialized sendCh.
+			nowNs := time.Now().UnixNano()
+			lastNs := wc.lastPongSentUnixNano.Load()
+			if nowNs-lastNs >= int64(100*time.Millisecond) {
+				wc.lastPongSentUnixNano.Store(nowNs)
+				sendConnGenFrame(wc, string(generated.WsFrameTypePong), generated.PongFrame{
+					Type: string(generated.WsFrameTypePong),
+				})
+			}
 		case string(generated.WsFrameTypeDevicePairingResponse):
 			var f generated.DevicePairingResponseFrame
 			if err := json.Unmarshal(data, &f); err != nil {
@@ -958,6 +980,88 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 	}
 }
 
+// applySinceCursor applies the since-cursor filter to a slice of transcript entries.
+//
+// Returns entries strictly after `since`. Entries with zero timestamps (legacy
+// data written before timestamps were added) are treated as oldest and dropped
+// when a non-zero cursor is set — clients with legacy sessions should omit
+// `since` to get full replay.
+//
+// When since is nil or empty, the original slice is returned unchanged (full
+// replay). On parse failure an error frame is sent and the original slice is
+// returned so the caller falls through to a full replay.
+//
+// wc may be nil in tests; the error-frame send is skipped when it is nil.
+func applySinceCursor(
+	_ context.Context,
+	sessionID string,
+	since *string,
+	entries []session.TranscriptEntry,
+	wc *wsConn,
+) []session.TranscriptEntry {
+	if since == nil || *since == "" {
+		return entries
+	}
+
+	// Try RFC3339Nano first; fall back to RFC3339.
+	cursor, parseErr := time.Parse(time.RFC3339Nano, *since)
+	if parseErr != nil {
+		var err2 error
+		cursor, err2 = time.Parse(time.RFC3339, *since)
+		if err2 != nil {
+			slog.Warn("ws: attach_session: invalid since cursor — falling through to full replay",
+				"event", "replay_since_parse_error",
+				"session_id", sessionID,
+				"since", *since,
+				"error", parseErr,
+			)
+			if wc != nil {
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "invalid since timestamp — performing full replay",
+				})
+			}
+			return entries
+		}
+	}
+
+	// Filter: keep only entries with Timestamp strictly after the cursor.
+	// <= cursor means the SPA already has this entry; > cursor is new to the SPA.
+	// Zero-timestamp entries (legacy data) are never After(cursor) when cursor is
+	// non-zero, so they are silently dropped — log a warning if any are present.
+	filtered := entries[:0:0] // reuse backing array without aliasing
+	var zeroTimestampCount int
+	for _, e := range entries {
+		if e.Timestamp.IsZero() {
+			zeroTimestampCount++
+			continue
+		}
+		if e.Timestamp.After(cursor) {
+			filtered = append(filtered, e)
+		}
+	}
+
+	if zeroTimestampCount > 0 {
+		slog.Warn("replay cursor: dropped legacy entries with zero timestamp",
+			"event", "replay_cursor_zero_timestamp_drop",
+			"session_id", sessionID,
+			"zero_timestamp_count", zeroTimestampCount,
+		)
+	}
+
+	skipped := len(entries) - len(filtered) - zeroTimestampCount
+	if skipped > 0 || zeroTimestampCount > 0 {
+		slog.Debug("replay cursor applied",
+			"event", "replay_cursor_applied",
+			"session_id", sessionID,
+			"cursor", cursor.Format(time.RFC3339Nano),
+			"skipped_count", skipped,
+			"zero_timestamp_dropped", zeroTimestampCount,
+		)
+	}
+	return filtered
+}
+
 // handleAttachSession loads an existing session's transcript and replays it to
 // the client via streamReplay, then sets the connection's active session to the
 // requested session.
@@ -966,10 +1070,16 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 // replay starts. Live events arriving during replay are buffered in a capped
 // channel; after the done frame is emitted the buffer is drained to the WS in
 // arrival order.
+//
+// since is the optional RFC3339/RFC3339Nano cursor from AttachSessionFrame.Since.
+// When non-nil and non-empty, only transcript entries with Timestamp > cursor
+// are replayed (O(missed-window) replay).  When nil or empty, a full replay is
+// performed (legacy behaviour).
 func (h *WSHandler) handleAttachSession(
 	ctx context.Context,
 	chatID string,
 	attachID string,
+	since *string,
 	wc *wsConn,
 ) {
 	if err := validateEntityID(attachID); err != nil {
@@ -998,6 +1108,16 @@ func (h *WSHandler) handleAttachSession(
 		})
 		return
 	}
+
+	// Apply since-cursor filter when the client requests incremental replay.
+	// On parse failure we log a warning, send an error frame, and fall through
+	// to full replay — the client stays functional.
+	//
+	// Boundary condition: entries with Timestamp == cursor are skipped (<=).
+	// Rationale: the cursor is the most recent frame the SPA has *already processed*,
+	// so an entry at exactly that timestamp was already seen.  Strict less-than would
+	// re-emit the boundary entry and cause a duplicate on the SPA.
+	entries = applySinceCursor(ctx, attachID, since, entries, wc)
 
 	rs := computeReplayStats(entries)
 
@@ -1074,7 +1194,7 @@ func (h *WSHandler) handleAttachSession(
 	if h.agentLoop != nil {
 		mediaStore = h.agentLoop.GetMediaStore()
 	}
-	framesEmitted, replayErr := streamReplay(ctx, attachID, entries, rs, emitFn, mediaStore)
+	framesEmitted, replayErr := streamReplay(ctx, attachID, entries, rs, emitFn, mediaStore, h.toolStore)
 
 	durationMS := time.Since(replayStart).Milliseconds()
 
@@ -1808,12 +1928,25 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			// FR-H-005: propagate parent_call_id when the tool fires inside a sub-turn.
 			// FR-I-008: propagate agent_id so live frames match replay frame parity.
 			// Use generated.ToolCallResultFrame (contract-first migration).
+			//
+			// Apply the lazy-fetch offload policy: when the string result exceeds
+			// InlineToolResultMaxBytes (50 KiB), persist it to disk and substitute a
+			// generated.ToolResultRef sentinel so the WS frame stays small.
+			var liveResult any = p.Result
+			if len(p.Result) > InlineToolResultMaxBytes {
+				// JSON-encode the string to get the exact wire size.
+				if encoded, merr := json.Marshal(p.Result); merr == nil {
+					if sentinel, offloaded := maybeOffloadResult(h.toolStore, evtSID, encoded); offloaded {
+						liveResult = sentinel
+					}
+				}
+			}
 			resultF := generated.ToolCallResultFrame{
 				Type:      string(generated.WsFrameTypeToolCallResult),
 				SessionId: evtSID,
 				CallId:    string(p.ToolCallID),
 				Tool:      p.Tool,
-				Result:    p.Result,
+				Result:    liveResult,
 				Status:    status,
 			}
 			if p.Duration != 0 {

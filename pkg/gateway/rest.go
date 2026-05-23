@@ -326,10 +326,11 @@ func jsonSessionDetail(w http.ResponseWriter, meta *session.UnifiedMeta, message
 
 // --- Sessions ---
 
-// HandleSessions routes /api/v1/sessions requests: GET (list/detail/messages), POST (create), PUT (rename), DELETE (delete).
+// HandleSessions routes /api/v1/sessions requests: GET (list/detail/messages/tool-results), POST (create), PUT (rename), DELETE (delete).
 func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 	// Extract optional session ID and sub-path from the URL.
-	// Supports: /api/v1/sessions, /api/v1/sessions/{id}, /api/v1/sessions/{id}/messages
+	// Supports: /api/v1/sessions, /api/v1/sessions/{id}, /api/v1/sessions/{id}/messages,
+	//           /api/v1/sessions/{id}/tool-results/{ref}
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	remainder := strings.TrimPrefix(path, "/api/v1/sessions")
 	remainder = strings.TrimPrefix(remainder, "/")
@@ -348,6 +349,13 @@ func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "invalid session ID")
 			return
 		}
+	}
+
+	// Dispatch tool-results sub-resource before the generic method switch so the
+	// full path (including ref) is available to HandleToolResults via r.URL.Path.
+	if strings.HasPrefix(subPath, "tool-results/") || subPath == "tool-results" {
+		a.HandleToolResults(w, r)
+		return
 	}
 
 	switch r.Method {

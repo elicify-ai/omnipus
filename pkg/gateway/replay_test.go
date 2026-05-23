@@ -72,7 +72,7 @@ func runReplay(t *testing.T, entries []session.TranscriptEntry) ([]replayFrameDe
 	t.Helper()
 	sink := &sliceSink{}
 	rs := computeReplayStats(entries)
-	n, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil)
+	n, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil, nil)
 	require.NoError(t, err, "streamReplay must not return an error for valid input")
 	return sink.all(), n
 }
@@ -121,7 +121,7 @@ func TestStreamReplay_Extracted_TestableSignature(t *testing.T) {
 	sink := &sliceSink{}
 	// Pass pre-computed stats; nil entries produce an empty stats struct.
 	rs := computeReplayStats(nil)
-	n, err := streamReplay(context.Background(), "s1", nil, rs, sink.emit, nil)
+	n, err := streamReplay(context.Background(), "s1", nil, rs, sink.emit, nil, nil)
 	require.NoError(t, err, "streamReplay must accept a nil entry slice")
 	// Done frame is NOT counted in framesEmitted (content frames only).
 	assert.Equal(t, 0, n, "empty transcript must emit 0 content frames (done frame excluded from count)")
@@ -663,7 +663,7 @@ func TestReplay_CtxCancelled_StopsCleanly(t *testing.T) {
 		return nil
 	}
 
-	_, err := streamReplay(ctx, "session_cancel", entries, computeReplayStats(entries), emitFn, nil)
+	_, err := streamReplay(ctx, "session_cancel", entries, computeReplayStats(entries), emitFn, nil, nil)
 	assert.ErrorIs(t, err, context.Canceled, "streamReplay must return context.Canceled on ctx cancellation")
 	// goleak.VerifyNone (deferred) will fail the test if any goroutine was leaked.
 }
@@ -706,7 +706,7 @@ func TestAttach_RegistersLiveEventsBeforeReplay(t *testing.T) {
 	chatID := "test-chat-live-before-replay"
 
 	ctx := context.Background()
-	handler.handleAttachSession(ctx, chatID, meta.ID, wc)
+	handler.handleAttachSession(ctx, chatID, meta.ID, nil, wc)
 
 	// Must have received at least: replay_message{user,"hello"} + done.
 	close(wc.sendCh)
@@ -759,7 +759,7 @@ func TestAttach_StartLogged(t *testing.T) {
 		sendCh: make(chan []byte, 512),
 		doneCh: make(chan struct{}),
 	}
-	handler.handleAttachSession(context.Background(), "chat-log-test", meta.ID, wc)
+	handler.handleAttachSession(context.Background(), "chat-log-test", meta.ID, nil, wc)
 
 	logOutput := logBuf.String()
 	assert.Contains(t, logOutput, "replay_start", "slog.Info must include event:replay_start")
@@ -791,7 +791,7 @@ func TestAttach_EndLogged(t *testing.T) {
 		sendCh: make(chan []byte, 512),
 		doneCh: make(chan struct{}),
 	}
-	handler.handleAttachSession(context.Background(), "chat-end-log-test", meta.ID, wc)
+	handler.handleAttachSession(context.Background(), "chat-end-log-test", meta.ID, nil, wc)
 
 	logOutput := logBuf.String()
 	assert.Contains(t, logOutput, "replay_end", "slog.Info must include event:replay_end")

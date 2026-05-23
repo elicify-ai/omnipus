@@ -68,6 +68,7 @@ func streamReplay(
 	rs replayStats,
 	emit func(any) error,
 	mediaStore media.MediaStore,
+	toolStore *toolResultStore,
 ) (framesEmitted int, err error) {
 	// Track underlying file paths already emitted so the SPA never receives
 	// two media frames for the same file. Older transcripts can carry
@@ -145,7 +146,7 @@ func streamReplay(
 
 	// buildResult returns a generated.ToolCallResultFrame for tc.
 	buildResult := func(tc session.ToolCall, agentID, parentCallID string) generated.ToolCallResultFrame {
-		resultPayload := truncateResult(sessionID, tc)
+		resultPayload := truncateResult(sessionID, tc, toolStore)
 		durationMs := int(tc.DurationMS)
 		f := generated.ToolCallResultFrame{
 			Type:       string(generated.WsFrameTypeToolCallResult),
@@ -291,7 +292,7 @@ func streamReplay(
 
 				// Emit all nested tool calls (children with ParentToolCallID == tc.ID).
 				nestedDurationMS, nestedStatus, nestedErr := emitNestedToolCalls(
-					ctx, sessionID, tcID, entries, latestByID, effectiveAgentID, emitFrame,
+					ctx, sessionID, tcID, entries, latestByID, effectiveAgentID, emitFrame, toolStore,
 				)
 				if nestedErr != nil {
 					return framesEmitted, nestedErr
@@ -507,6 +508,7 @@ func emitNestedToolCalls(
 	latestByID map[string]tcAddr,
 	agentID string,
 	emitFrame func(any) error,
+	toolStore *toolResultStore,
 ) (totalDurationMS int64, aggregateStatus string, err error) {
 	aggregateStatus = "success"
 
@@ -553,7 +555,7 @@ func emitNestedToolCalls(
 				return totalDurationMS, aggregateStatus, err2
 			}
 
-			resultPayload := truncateResult(sessionID, tc)
+			resultPayload := truncateResult(sessionID, tc, toolStore)
 			status := resolveStatus(tc.Status)
 			durationMs := int(tc.DurationMS)
 			resultFrame := generated.ToolCallResultFrame{
@@ -583,10 +585,18 @@ func emitNestedToolCalls(
 	return totalDurationMS, aggregateStatus, nil
 }
 
-// truncateResult JSON-encodes tc.Result and, if it exceeds replayMaxResultBytes,
-// replaces it with a truncation marker per FR-I-011.
+// truncateResult JSON-encodes tc.Result and applies the two-tier size policy:
+//
+//  1. <= InlineToolResultMaxBytes (50 KiB): inline — return tc.Result unchanged.
+//  2. > InlineToolResultMaxBytes and <= replayMaxResultBytes (1 MiB): offload to
+//     toolStore if available, emit generated.ToolResultRef sentinel.  When
+//     toolStore is nil or the write fails, fall through to inline (which is then
+//     capped at 1 MiB by the next check).
+//  3. > replayMaxResultBytes (1 MiB): truncate — emit TruncatedResult sentinel
+//     (FR-I-011).
+//
 // Returns the value to place in the ToolCallResultFrame's result field.
-func truncateResult(sessionID string, tc session.ToolCall) any {
+func truncateResult(sessionID string, tc session.ToolCall, toolStore *toolResultStore) any {
 	if tc.Result == nil {
 		return tc.Result
 	}
@@ -603,10 +613,18 @@ func truncateResult(sessionID string, tc session.ToolCall) any {
 		)
 		return map[string]any{"_marshal_error": err.Error()}
 	}
+
+	// Tier 2: offload to disk when size is in (50 KiB, 1 MiB].
+	if sentinel, offloaded := maybeOffloadResult(toolStore, sessionID, encoded); offloaded {
+		return sentinel
+	}
+
+	// Tier 1 or store unavailable/disabled: inline (< 50 KiB, or store write failed).
 	if len(encoded) <= replayMaxResultBytes {
 		return tc.Result
 	}
-	// Truncate: emit marker with preview.
+
+	// Tier 3: hard cap exceeded — truncate (FR-I-011).
 	originalSize := len(encoded)
 	preview := encoded
 	if len(preview) > replayResultPreviewBytes {

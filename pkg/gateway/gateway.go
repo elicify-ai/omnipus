@@ -1196,6 +1196,7 @@ func setupAndStartServices(
 
 	// WebSocket chat endpoint — primary transport for bi-directional chat streaming.
 	wsHandler := newWSHandler(msgBus, agentLoop, allowedOrigin)
+	wsHandler.toolStore = newToolResultStore(homePath)
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/chat/ws", wsHandler)
 	// Register WebSocket handler as stream fallback so streaming tokens route back for webchat.
 	runningServices.ChannelManager.SetStreamFallback(wsHandler)
@@ -1264,6 +1265,8 @@ func setupAndStartServices(
 		allowGodMode:    allowGodMode,                    // god-mode latch (2)
 	}
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/sessions", api.withAuth(api.HandleSessions))
+	// /api/v1/sessions/ handles: sessions CRUD AND the tool-results sub-resource
+	// GET /api/v1/sessions/{session_id}/tool-results/{ref} (dispatched inside HandleSessions).
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/sessions/", api.withAuth(api.HandleSessions))
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/agents", api.withAuth(api.HandleAgents))
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/agents/", api.withAuth(api.HandleAgents))
