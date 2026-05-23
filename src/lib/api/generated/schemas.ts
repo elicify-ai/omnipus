@@ -3340,6 +3340,44 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     ],
   },
   {
+    method: "get",
+    path: "/sessions/:session_id/tool-results/:ref",
+    alias: "getToolResult",
+    description: `Returns the full JSON body of a tool result that was emitted as a ToolResultRef sentinel on the WebSocket. The result is scoped to the session that produced it — a ref from session A cannot be fetched under session B&#x27;s path. The SPA fetches this lazily when the user expands a clamped tool call, keeping main-thread memory bounded during high-volume agent activity.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "session_id",
+        type: "Path",
+        schema: z.string().min(1).max(128),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(1).max(64),
+      },
+    ],
+    response: z.unknown(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "delete",
     path: "/sessions/all",
     alias: "clearAllSessions",
@@ -4285,7 +4323,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "exec_approval_request", "exec_approval_expired", "task_status_changed", "replay_message", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "session_close_ack", "exec_approval_response_ack", "device_pairing_request"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "exec_approval_request", "exec_approval_expired", "task_status_changed", "replay_message", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "exec_approval_response_ack", "device_pairing_request"]);
 
 export const AuthFrame = z
   .object({
@@ -4324,10 +4362,17 @@ export const PingFrame = z
   })
   .strict();
 
+export const PongFrame = z
+  .object({
+    type: z.literal("pong"),
+  })
+  .strict();
+
 export const AttachSessionFrame = z
   .object({
     type: z.literal("attach_session"),
     session_id: z.string().min(1).max(128),
+    since: z.string().optional(),
   })
   .strict();
 
@@ -4408,6 +4453,15 @@ export const TruncatedResult = z
 export const MarshalErrorResult = z
   .object({
     _marshal_error: z.string().min(1),
+  })
+  .strict();
+
+export const ToolResultRef = z
+  .object({
+    _ref: z.literal(true),
+    ref: z.string().min(1).max(128),
+    original_size_bytes: z.number().int().min(0),
+    preview: z.string(),
   })
   .strict();
 
@@ -4643,6 +4697,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   CancelFrame,
   ExecApprovalResponseFrame,
   PingFrame,
+  PongFrame,
   AttachSessionFrame,
   DevicePairingResponseFrame,
   SessionStartedFrame,

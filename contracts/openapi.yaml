@@ -780,6 +780,51 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '500':
           $ref: '#/components/responses/500InternalServerError'
+  /sessions/{session_id}/tool-results/{ref}:
+    get:
+      operationId: getToolResult
+      summary: Fetch a previously-stored tool result body
+      description: >
+        Returns the full JSON body of a tool result that was emitted as a
+        ToolResultRef sentinel on the WebSocket. The result is scoped to the
+        session that produced it — a ref from session A cannot be fetched under
+        session B's path. The SPA fetches this lazily when the user expands a
+        clamped tool call, keeping main-thread memory bounded during
+        high-volume agent activity.
+      tags:
+      - tools
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+        description: Session ID that produced the tool result.
+      - name: ref
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 64
+        description: Opaque ref id from the matching ToolResultRef sentinel.
+      responses:
+        '200':
+          description: The original tool result body.
+          content:
+            application/json:
+              schema:
+                description: Original tool return value of any JSON type.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
   /users:
     get:
       operationId: listUsers

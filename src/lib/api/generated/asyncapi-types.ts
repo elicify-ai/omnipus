@@ -35,6 +35,7 @@ export type WsFrameType =
   | "system_overload"
   | "replay_warning"
   | "cancel_stage"
+  | "pong"
   | "session_close_ack"
   | "exec_approval_response_ack"
   | "device_pairing_request";
@@ -68,9 +69,14 @@ export interface PingFrame {
   type: "ping";
 }
 
+export interface PongFrame {
+  type: "pong";
+}
+
 export interface AttachSessionFrame {
   type: "attach_session";
   session_id: string;
+  since?: string;
 }
 
 export interface DevicePairingResponseFrame {
@@ -136,6 +142,13 @@ export interface TruncatedResult {
 
 export interface MarshalErrorResult {
   _marshal_error: string;
+}
+
+export interface ToolResultRef {
+  _ref: true;
+  ref: string;
+  original_size_bytes: number;
+  preview: string;
 }
 
 export interface ToolCallResultFrame {
@@ -331,6 +344,7 @@ export type WsFrame =
   | CancelFrame
   | ExecApprovalResponseFrame
   | PingFrame
+  | PongFrame
   | AttachSessionFrame
   | DevicePairingResponseFrame
   | SessionStartedFrame
@@ -378,6 +392,7 @@ export const ClientFrameTypes = ["auth", "message", "cancel", "exec_approval_res
 // ── Server → client frames ──────────────────────────────────────────────────
 
 export type ServerFrame =
+  | PongFrame
   | SessionStartedFrame
   | TokenFrame
   | DoneFrame

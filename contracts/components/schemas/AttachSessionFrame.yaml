@@ -5,6 +5,10 @@ description: >
   tool_call_result, subagent_start, subagent_end, and media frames, followed by
   exactly one done frame. During replay, live frames from an in-progress agent
   turn are buffered and flushed after the done frame.
+
+  When `since` is provided, the server skips frames whose timestamp <= `since`,
+  sending only what the SPA has not yet seen. Used to keep reconnect replay
+  traffic O(missed window) instead of O(full session history).
 type: object
 required:
   - type
@@ -19,3 +23,11 @@ properties:
     minLength: 1
     maxLength: 128
     description: Session ID to attach to and replay.
+  since:
+    type: string
+    format: date-time
+    description: >
+      ISO 8601 timestamp of the most recent frame the SPA has already
+      processed. Server replays only frames with timestamp > this value.
+      Omit (or leave empty) for sessions that may contain legacy entries
+      without timestamps — otherwise those entries will be silently dropped.

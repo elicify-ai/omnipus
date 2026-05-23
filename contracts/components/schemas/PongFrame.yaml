@@ -1,0 +1,16 @@
+title: PongFrame
+description: >
+  Server → client. Heartbeat acknowledgement frame the gateway emits in response
+  to every client PingFrame. Lets the SPA's "any frame received since last ping"
+  liveness check observe a server-originated frame during idle periods, so it
+  does not force-close the WebSocket every 60 s of inactivity. The WebSocket
+  protocol-level ping/pong handled by gorilla/websocket continues to run
+  independently as defense-in-depth NAT-keepalive.
+type: object
+required:
+  - type
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: pong

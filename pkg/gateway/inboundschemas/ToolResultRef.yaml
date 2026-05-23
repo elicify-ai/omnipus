@@ -1,0 +1,41 @@
+title: ToolResultRef
+description: >
+  Sentinel emitted in the result field of a tool_call_result when the raw result
+  exceeds the inline-size threshold (default 50 KiB) but is still under the hard
+  cap (1 MiB). The SPA renders the preview by default; the user can request the
+  full body via GET /api/v1/sessions/{session_id}/tool-results/{ref}.
+
+  This sentinel is server → client only. The matching client-side sentinel
+  shape (when the SPA self-clamps a result it received inline) is
+  TruncatedResult.
+
+  Coexists with TruncatedResult: TruncatedResult applies when the result is
+  truncated AND the full body is not retrievable (replay path, > 1 MiB);
+  ToolResultRef applies when the full body has been preserved server-side and
+  can be fetched on demand.
+type: object
+required:
+  - _ref
+  - ref
+  - original_size_bytes
+  - preview
+additionalProperties: false
+properties:
+  _ref:
+    type: boolean
+    const: true
+    description: Discriminator distinguishing this sentinel from TruncatedResult.
+  ref:
+    type: string
+    minLength: 1
+    maxLength: 64
+    description: >
+      Opaque identifier the SPA passes to GET /api/v1/sessions/{session_id}/tool-results/{ref} to
+      retrieve the full body. Scoped to the session that produced it.
+  original_size_bytes:
+    type: integer
+    minimum: 0
+    description: Original JSON-encoded size in bytes.
+  preview:
+    type: string
+    description: First 4 KiB of the JSON-encoded result.

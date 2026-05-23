@@ -22,10 +22,12 @@ type AgentSwitchedFrame struct {
 	Type      string  `json:"type"`
 }
 
-// AttachSessionFrame — Client → server request transcript replay.
+// AttachSessionFrame — Client → server request to attach to an existing session. When `since` is provided, the server skips replay frames whose timestamp <= `since`, sending only frames the SPA has not yet seen. Omitting `since` requests a full replay (legacy behaviour).
 type AttachSessionFrame struct {
 	SessionId string `json:"session_id"`
-	Type      string `json:"type"`
+	// ISO 8601 timestamp of the most recent frame the SPA has already processed. Server replays only frames with timestamp > this value. Used to keep reconnect replay traffic O(missed window) instead of O(full session history).
+	Since *string `json:"since,omitempty"`
+	Type  string  `json:"type"`
 }
 
 // AuthFrame — Client → server authentication frame.
@@ -162,6 +164,11 @@ type MessageFrame struct {
 
 // PingFrame — Client → server heartbeat.
 type PingFrame struct {
+	Type string `json:"type"`
+}
+
+// PongFrame — Server → client heartbeat acknowledgement. Emitted in response to every client PingFrame so the SPA's "any frame received recently" liveness check observes a server frame during idle and does not force-close after 60 s of silence.
+type PongFrame struct {
 	Type string `json:"type"`
 }
 
@@ -307,7 +314,7 @@ type ToolCallResultFrame struct {
 	DurationMs   *int    `json:"duration_ms,omitempty"`
 	Error        *string `json:"error,omitempty"`
 	ParentCallId *string `json:"parent_call_id,omitempty"`
-	// Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult and MarshalErrorResult are alternative shapes.
+	// Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes.
 	Result    any    `json:"result"`
 	SessionId string `json:"session_id"`
 	Status    string `json:"status"`
@@ -325,6 +332,14 @@ type ToolCallStartFrame struct {
 	SessionId    string         `json:"session_id"`
 	Tool         string         `json:"tool"`
 	Type         string         `json:"type"`
+}
+
+// ToolResultRef — Sentinel for tool results > 50 KiB but <= 1 MiB whose full body is preserved server-side. SPA fetches via GET /api/v1/tool-results/{ref}.
+type ToolResultRef struct {
+	IsRef             bool   `json:"_ref"`
+	OriginalSizeBytes int    `json:"original_size_bytes"`
+	Preview           string `json:"preview"`
+	Ref               string `json:"ref"`
 }
 
 // TruncatedResult — Sentinel for tool results exceeding 1 MiB (FR-I-011).
@@ -367,6 +382,7 @@ const (
 	WsFrameTypeSystemOverload          WsFrameType = "system_overload"
 	WsFrameTypeReplayWarning           WsFrameType = "replay_warning"
 	WsFrameTypeCancelStage             WsFrameType = "cancel_stage"
+	WsFrameTypePong                    WsFrameType = "pong"
 	WsFrameTypeSessionCloseAck         WsFrameType = "session_close_ack"
 	WsFrameTypeExecApprovalResponseAck WsFrameType = "exec_approval_response_ack"
 	WsFrameTypeDevicePairingRequest    WsFrameType = "device_pairing_request"

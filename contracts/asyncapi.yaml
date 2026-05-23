@@ -117,6 +117,8 @@ channels:
         $ref: '#/components/messages/ReplayWarningFrame'
       CancelStageFrame:
         $ref: '#/components/messages/CancelStageFrame'
+      PongFrame:
+        $ref: '#/components/messages/PongFrame'
       SessionCloseAckFrame:
         $ref: '#/components/messages/SessionCloseAckFrame'
       ExecApprovalResponseAckFrame:
@@ -178,8 +180,11 @@ operations:
       $ref: '#/channels/chat'
     summary: >
       Heartbeat ping sent every 30 seconds by the SPA to keep the connection
-      alive through proxies. The server does not respond with an
-      application-layer pong; the WebSocket protocol handles keepalive.
+      alive through proxies. The server responds with a PongFrame so the SPA
+      observes a server-originated frame during idle periods (without it, the
+      client liveness check would force-close after 60 s of silence). The
+      gorilla/websocket protocol-level ping/pong cycle continues to run
+      independently as defense-in-depth NAT-keepalive.
     messages:
       - $ref: '#/channels/chat/messages/PingFrame'
 
@@ -408,6 +413,17 @@ operations:
       CRITICAL: stage must be validated — invalid values are dropped by isValidFrame().
     messages:
       - $ref: '#/channels/chat/messages/CancelStageFrame'
+
+  receivePong:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Pong response to a client PingFrame. Lets the SPA's liveness check see a
+      server-originated frame during idle so it does not force-close after 60 s
+      of inactivity. Carries no payload beyond the type discriminator.
+    messages:
+      - $ref: '#/channels/chat/messages/PongFrame'
 
   receiveSessionCloseAck:
     action: receive
@@ -672,6 +688,14 @@ components:
       payload:
         $ref: '#/components/schemas/CancelStageFrame'
 
+    PongFrame:
+      name: PongFrame
+      title: pong
+      summary: Heartbeat pong response to a client PingFrame (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/PongFrame'
+
     SessionCloseAckFrame:
       name: SessionCloseAckFrame
       title: session_close_ack
@@ -738,6 +762,7 @@ components:
         - system_overload
         - replay_warning
         - cancel_stage
+        - pong
         - session_close_ack
         - exec_approval_response_ack
         - device_pairing_request
@@ -840,9 +865,29 @@ components:
           type: string
           const: ping
 
+    PongFrame:
+      title: PongFrame
+      description: >
+        Server → client heartbeat acknowledgement. Emitted in response to every
+        client PingFrame so the SPA's "any frame received recently" liveness
+        check observes a server frame during idle and does not force-close after
+        60 s of silence.
+      type: object
+      required:
+        - type
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: pong
+
     AttachSessionFrame:
       title: AttachSessionFrame
-      description: Client → server request transcript replay.
+      description: >
+        Client → server request to attach to an existing session.
+        When `since` is provided, the server skips replay frames whose
+        timestamp <= `since`, sending only frames the SPA has not yet seen.
+        Omitting `since` requests a full replay (legacy behaviour).
       type: object
       required:
         - type
@@ -856,6 +901,14 @@ components:
           type: string
           minLength: 1
           maxLength: 128
+        since:
+          type: string
+          format: date-time
+          description: >
+            ISO 8601 timestamp of the most recent frame the SPA has already
+            processed. Server replays only frames with timestamp > this value.
+            Used to keep reconnect replay traffic O(missed window) instead of
+            O(full session history).
 
     DevicePairingResponseFrame:
       title: DevicePairingResponseFrame
@@ -1058,6 +1111,32 @@ components:
           type: string
           minLength: 1
 
+    ToolResultRef:
+      title: ToolResultRef
+      description: >
+        Sentinel for tool results > 50 KiB but <= 1 MiB whose full body is
+        preserved server-side. SPA fetches via GET /api/v1/tool-results/{ref}.
+      type: object
+      required:
+        - _ref
+        - ref
+        - original_size_bytes
+        - preview
+      additionalProperties: false
+      properties:
+        _ref:
+          type: boolean
+          const: true
+        ref:
+          type: string
+          minLength: 1
+          maxLength: 128
+        original_size_bytes:
+          type: integer
+          minimum: 0
+        preview:
+          type: string
+
     ToolCallResultFrame:
       title: ToolCallResultFrame
       description: Server → client tool execution completed.
@@ -1088,11 +1167,12 @@ components:
         result:
           description: >
             Tool return value. Any JSON type or null (null is the contract for error frames).
-            Sentinels TruncatedResult and MarshalErrorResult are alternative shapes.
+            Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes.
           oneOf:
             - type: ["object", "array", "string", "number", "boolean", "null"]
             - $ref: '#/components/schemas/TruncatedResult'
             - $ref: '#/components/schemas/MarshalErrorResult'
+            - $ref: '#/components/schemas/ToolResultRef'
         status:
           type: string
           enum:

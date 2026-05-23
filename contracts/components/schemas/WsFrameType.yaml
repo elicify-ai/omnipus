@@ -34,6 +34,7 @@ enum:
   - replay_warning
   - cancel_stage
   - exec_approval_expired
+  - pong
   # ── Server → client (internal / ack) ────────────────────────────────────────
   - session_close_ack
   - exec_approval_response_ack
