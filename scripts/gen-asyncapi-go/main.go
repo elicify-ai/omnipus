@@ -324,10 +324,68 @@ func writeStruct(buf *bytes.Buffer, goName string, s *schema, allSchemas map[str
 	writeComment(buf, goName, s.description)
 	fmt.Fprintf(buf, "type %s struct {\n", goName)
 
+	// First pass: resolve Go field names with collision detection.
+	// Underscore-prefixed JSON keys (e.g. "_ref", "_truncated") have their
+	// underscore stripped by toPascalCase, which can collide with a sibling
+	// non-underscored field (e.g. "ref"). When that happens, rename the
+	// underscore-prefixed field with an "Is" prefix to preserve both as
+	// distinct Go fields (e.g. "_ref" -> "IsRef" when "ref" already exists).
+	fieldNames := make(map[string]string, len(s.propertyOrder))
+	usedGoNames := make(map[string]string, len(s.propertyOrder)) // goName -> propName
+	for _, propName := range s.propertyOrder {
+		name := toPascalCase(propName)
+		if existingProp, collides := usedGoNames[name]; collides {
+			// Decide which one to rename: the underscore-prefixed one (the
+			// sentinel discriminator) gets the "Is" prefix. If neither is
+			// underscore-prefixed, that's a real spec bug — error out.
+			switch {
+			case strings.HasPrefix(propName, "_"):
+				renamed := "Is" + name
+				// Check for a three-way collision: "Is" + name is also taken.
+				if alreadyUsedBy, taken := usedGoNames[renamed]; taken {
+					return fmt.Errorf(
+						"struct %s: three-way Go field name collision — %q, %q, and %q all resolve to %q or %q",
+						goName, alreadyUsedBy, existingProp, propName, name, renamed,
+					)
+				}
+				name = renamed
+			case strings.HasPrefix(existingProp, "_"):
+				renamed := "Is" + name
+				// Check for a three-way collision before applying the rename:
+				// if `renamed` is already claimed, or if `existingProp` has already
+				// been renamed once (its current fieldName already has an "Is" prefix),
+				// the three properties form an irresolvable collision.
+				if alreadyUsedBy, taken := usedGoNames[renamed]; taken {
+					return fmt.Errorf(
+						"struct %s: three-way Go field name collision — %q, %q, and %q all resolve to %q or %q",
+						goName, alreadyUsedBy, existingProp, propName, name, renamed,
+					)
+				}
+				if current := fieldNames[existingProp]; strings.HasPrefix(current, "Is") {
+					return fmt.Errorf(
+						"struct %s: three-way Go field name collision — %q was already "+
+							"renamed to %q, and %q also resolves to %q",
+						goName, existingProp, current, propName, renamed,
+					)
+				}
+				fieldNames[existingProp] = renamed
+				delete(usedGoNames, name) // existingProp now uses renamed name
+				usedGoNames[renamed] = existingProp
+			default:
+				return fmt.Errorf(
+					"struct %s: properties %q and %q both map to Go field %s",
+					goName, existingProp, propName, name,
+				)
+			}
+		}
+		fieldNames[propName] = name
+		usedGoNames[name] = propName
+	}
+
 	for _, propName := range s.propertyOrder {
 		ps := s.properties[propName]
 		isRequired := s.required[propName]
-		fieldName := toPascalCase(propName)
+		fieldName := fieldNames[propName]
 		goType, err := resolveGoType(ps, propName, isRequired, allSchemas)
 		if err != nil {
 			return fmt.Errorf("field %s: %w", propName, err)
