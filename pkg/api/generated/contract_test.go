@@ -57,7 +57,7 @@ var (
 	// from multiple goroutines on the same instance is a data race —
 	// observed as "fatal error: concurrent map read and map write" on CI
 	// runners running TestCompileInboundSchema_ConcurrentDifferentSchemas.
-	// We serialise access here; the lock is held only across the Compile
+	// We serialize access here; the lock is held only across the Compile
 	// call so the cache hit path stays fast.
 	sharedCompilerMu sync.Mutex
 )
@@ -2988,7 +2988,7 @@ func TestCompileInboundSchema_ConcurrentDifferentSchemas(t *testing.T) {
 	for _, name := range schemas {
 		n := name
 		go func() {
-			// Always call initSchemas first — sync.Once serialises the write
+			// Always call initSchemas first — sync.Once serializes the write
 			// to componentSchemaDir + sharedCompiler. Reading the global var
 			// directly (the previous "skip init if non-empty" optimisation)
 			// races with the in-flight Once.Do on the first call, producing
@@ -3018,7 +3018,7 @@ func TestCompileInboundSchema_ConcurrentDifferentSchemas(t *testing.T) {
 // into JSON fields typed as `[]gen.Message` on the wire. The Go-internal
 // TranscriptEntry has a richer Type/Role/cancel-field surface than gen.Message
 // claims, so any unmodelled value (e.g. type="tool_call", type="turn_canceled"
-// for a real cancelled turn) used to fail the SPA Zod schema with
+// for a real canceled turn) used to fail the SPA Zod schema with
 // "Backend response failed validation".
 //
 // The fix is structural: every EntryType const must round-trip through

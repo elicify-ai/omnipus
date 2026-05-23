@@ -66,7 +66,14 @@ func TestNoHalfWiredChannels(t *testing.T) {
 	sort.Strings(halfWired)
 
 	if len(halfWired) > 0 {
-		t.Fatalf("half-wired channels — referenced by initChannel(...) in manager.go but no companion blank import in pkg/gateway/*.go:\n  %v\n\nEither blank-import the channel subpackage somewhere under pkg/gateway/ (so its init() can run and call channels.RegisterFactory), or delete the initChannel branch entirely.", halfWired)
+		t.Fatalf(
+			"half-wired channels — referenced by initChannel(...) in manager.go"+
+				" but no companion blank import in pkg/gateway/*.go:\n  %v\n\n"+
+				"Either blank-import the channel subpackage somewhere under pkg/gateway/"+
+				" (so its init() can run and call channels.RegisterFactory),"+
+				" or delete the initChannel branch entirely.",
+			halfWired,
+		)
 	}
 }
 

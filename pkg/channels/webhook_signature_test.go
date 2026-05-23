@@ -71,7 +71,8 @@ func TestWebhookHandlers_HaveSignatureVerification(t *testing.T) {
 	}
 
 	if len(findings) == 0 {
-		t.Fatal("scan found zero WebhookPath() declarations across pkg/channels/* — did AST detection break? expected at least line + googlechat")
+		t.Fatal("scan found zero WebhookPath() declarations across pkg/channels/*" +
+			" — did AST detection break? expected at least line + googlechat")
 	}
 
 	var missing []string
@@ -88,7 +89,18 @@ func TestWebhookHandlers_HaveSignatureVerification(t *testing.T) {
 
 	if len(missing) > 0 {
 		t.Fatalf(
-			"webhook channels missing signature verification — found WebhookPath() declarations but no verifySignature() function or hmac.Equal() call in the same package:\n  %v\n\nEvery webhook handler MUST verify the platform-issued HMAC signature on the request body BEFORE parsing or acting on the payload. Compare:\n  - pkg/channels/line/line.go:228 (LINE: X-Line-Signature + hmac-sha256)\n  - pkg/channels/googlechat/googlechat.go:342 (Google Chat: Google-Signature + hmac-sha256)\n\nPicked up channels: %v",
+			"webhook channels missing signature verification"+
+				" — found WebhookPath() declarations"+
+				" but no verifySignature() function or hmac.Equal() call"+
+				" in the same package:\n  %v\n\n"+
+				"Every webhook handler MUST verify the platform-issued HMAC"+
+				" signature on the request body BEFORE parsing or acting on"+
+				" the payload. Compare:\n"+
+				"  - pkg/channels/line/line.go:228"+
+				" (LINE: X-Line-Signature + hmac-sha256)\n"+
+				"  - pkg/channels/googlechat/googlechat.go:342"+
+				" (Google Chat: Google-Signature + hmac-sha256)\n\n"+
+				"Picked up channels: %v",
 			missing, present,
 		)
 	}

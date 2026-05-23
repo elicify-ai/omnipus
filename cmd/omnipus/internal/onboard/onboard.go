@@ -148,7 +148,10 @@ func Run(home string, io wizardIO) error {
 	mgr := onboarding.NewManager(home)
 	if mgr.IsComplete() {
 		fmt.Fprintln(io.stdout, "Onboarding is already complete; nothing to do.")
-		fmt.Fprintln(io.stdout, "To re-run, delete ~/.omnipus/system/state.json (or the equivalent under your OMNIPUS_HOME).")
+		fmt.Fprintln(io.stdout,
+			"To re-run, delete ~/.omnipus/system/state.json"+
+				" (or the equivalent under your OMNIPUS_HOME).",
+		)
 		return nil
 	}
 
@@ -330,8 +333,8 @@ func mutateConfigFile(path string, in Input, credRef, passwordHash, tokenHash st
 		return fmt.Errorf("read: %w", err)
 	}
 	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return fmt.Errorf("parse: %w", err)
+	if unmarshalErr := json.Unmarshal(raw, &m); unmarshalErr != nil {
+		return fmt.Errorf("parse: %w", unmarshalErr)
 	}
 
 	// --- Providers ---

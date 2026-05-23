@@ -394,7 +394,9 @@ func TestMigrateFromJSON_SkipsMetaJSONFiles(t *testing.T) {
 	if addErr := store.AddMessage(ctx, "agent:main:omnipus:direct:omnipus:test", "user", "keep me"); addErr != nil {
 		t.Fatalf("AddMessage: %v", addErr)
 	}
-	if summaryErr := store.SetSummary(ctx, "agent:main:omnipus:direct:omnipus:test", "keep summary"); summaryErr != nil {
+	if summaryErr := store.SetSummary(
+		ctx, "agent:main:omnipus:direct:omnipus:test", "keep summary",
+	); summaryErr != nil {
 		t.Fatalf("SetSummary: %v", summaryErr)
 	}
 

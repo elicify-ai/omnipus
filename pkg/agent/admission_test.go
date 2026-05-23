@@ -197,7 +197,6 @@ func TestAdmissionController_TryAdmit_NoOvercommit(t *testing.T) {
 	)
 
 	for i := 0; i < numGoroutines; i++ {
-		i := i
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

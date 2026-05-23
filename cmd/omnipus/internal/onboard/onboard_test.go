@@ -83,12 +83,12 @@ func TestRun_FreshInstall_WritesUsableConfig(t *testing.T) {
 	// 2. credentials.json exists and decrypts to the API key under the
 	//    expected ref name.
 	credPath := filepath.Join(home, "credentials.json")
-	if _, err := os.Stat(credPath); err != nil {
-		t.Fatalf("credentials.json missing: %v", err)
+	if _, statErr := os.Stat(credPath); statErr != nil {
+		t.Fatalf("credentials.json missing: %v", statErr)
 	}
 	store := credentials.NewStore(credPath)
-	if err := credentials.Unlock(store); err != nil {
-		t.Fatalf("re-unlock store: %v", err)
+	if unlockErr := credentials.Unlock(store); unlockErr != nil {
+		t.Fatalf("re-unlock store: %v", unlockErr)
 	}
 	gotKey, err := store.Get("openai_api_key")
 	if err != nil {

@@ -1013,7 +1013,7 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 				PortRange:       [2]int32{portRange[0], portRange[1]},
 				MaxConcurrent:   cfg.Sandbox.MaxConcurrentDevServers,
 				EgressAllowList: cfg.Sandbox.EgressAllowList,
-				AuditFailClosed: resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, true),
+				AuditFailClosed: resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
 			}
 			webServeTool := tools.NewWebServeTool(
 				ag.Workspace,
@@ -1083,11 +1083,14 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 				}
 			}
 			shellTool := tools.NewWorkspaceShellTool(tools.WorkspaceShellDeps{
-				WorkspaceDir:            ag.Workspace,
-				Profile:                 agentProfile,
-				Proxy:                   deps.EgressProxy,
-				AuditLogger:             al.auditLogger,
-				AuditFailClosed:         resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, true),
+				WorkspaceDir: ag.Workspace,
+				Profile:      agentProfile,
+				Proxy:        deps.EgressProxy,
+				AuditLogger:  al.auditLogger,
+				AuditFailClosed: resolveBoolWithDefault(
+					cfg.Sandbox.PathGuardAuditFailClosed,
+					cfg.Sandbox.AuditLog,
+				),
 				GlobalShellDenyPatterns: cfg.Sandbox.ShellDenyPatterns,
 				AgentShellPolicy:        agentShellPolicy,
 			})
@@ -1099,11 +1102,14 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 			if deps.DevServerRegistry != nil {
 				portRange := cfg.Sandbox.DevServerPortRange
 				shellBgTool := tools.NewWorkspaceShellBgTool(tools.WorkspaceShellBgDeps{
-					WorkspaceDir:            ag.Workspace,
-					Profile:                 agentProfile,
-					Proxy:                   deps.EgressProxy,
-					AuditLogger:             al.auditLogger,
-					AuditFailClosed:         resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, true),
+					WorkspaceDir: ag.Workspace,
+					Profile:      agentProfile,
+					Proxy:        deps.EgressProxy,
+					AuditLogger:  al.auditLogger,
+					AuditFailClosed: resolveBoolWithDefault(
+						cfg.Sandbox.PathGuardAuditFailClosed,
+						cfg.Sandbox.AuditLog,
+					),
 					Registry:                deps.DevServerRegistry,
 					MaxConcurrent:           cfg.Sandbox.MaxConcurrentDevServers,
 					PortRange:               [2]int32{portRange[0], portRange[1]},
@@ -1640,7 +1646,7 @@ func (al *AgentLoop) stopSessionWorkers() {
 	const workerShutdownBudget = 5 * time.Second
 
 	// Collect first, then cancel — avoids holding sync.Map's range lock
-	// while cancelling (which could deadlock against concurrent Store calls).
+	// while canceling (which could deadlock against concurrent Store calls).
 	var workers []*sessionWorker
 	al.sessionWorkers.Range(func(_, v any) bool {
 		workers = append(workers, v.(*sessionWorker))

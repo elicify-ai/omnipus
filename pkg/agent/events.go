@@ -8,6 +8,13 @@ import (
 )
 
 // EventKind identifies a structured agent-loop event.
+//
+// MarshalJSON uses a value receiver and UnmarshalJSON uses a pointer receiver
+// — the standard Go JSON codec pair. recvcheck is suppressed here because
+// MarshalJSON cannot use a pointer receiver without breaking fmt.Stringer
+// for value instances (e.g. range-loop variables).
+//
+//nolint:recvcheck
 type EventKind uint8
 
 const (
@@ -134,21 +141,21 @@ func (k *EventKind) UnmarshalJSON(data []byte) error {
 
 // Event is the structured envelope broadcast by the agent EventBus.
 type Event struct {
-	Kind    EventKind
-	Time    time.Time
-	Meta    EventMeta
-	Payload any
+	Kind    EventKind `json:"Kind"`
+	Time    time.Time `json:"Time"`
+	Meta    EventMeta `json:"Meta"`
+	Payload any       `json:"Payload"`
 }
 
 // EventMeta contains correlation fields shared by all agent-loop events.
 type EventMeta struct {
-	AgentID      string
-	TurnID       string
-	ParentTurnID string
-	SessionKey   string
-	Iteration    int
-	TracePath    string
-	Source       string
+	AgentID      string `json:"AgentID"`
+	TurnID       string `json:"TurnID"`
+	ParentTurnID string `json:"ParentTurnID"`
+	SessionKey   string `json:"SessionKey"`
+	Iteration    int    `json:"Iteration"`
+	TracePath    string `json:"TracePath"`
+	Source       string `json:"Source"`
 }
 
 // TurnEndStatus describes the terminal state of a turn.

@@ -267,7 +267,8 @@ func TestConvertToOmnipus(t *testing.T) {
 	}
 
 	if omnipusCfg.Channels.WhatsApp.BridgeURL != "http://localhost:3000" {
-		t.Errorf("expected whatsapp bridge URL 'http://localhost:3000', got '%s'", omnipusCfg.Channels.WhatsApp.BridgeURL)
+		t.Errorf("expected whatsapp bridge URL 'http://localhost:3000', got '%s'",
+			omnipusCfg.Channels.WhatsApp.BridgeURL)
 	}
 
 	if omnipusCfg.Channels.Feishu.AppID != "app-id" {

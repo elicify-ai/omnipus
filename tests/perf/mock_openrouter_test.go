@@ -12,6 +12,8 @@
 // (request marshal, response decode, streaming-chunk parser) is fully
 // exercised — only the network and the model latency are removed.
 
+//go:build !cgo
+
 package perf
 
 import (
@@ -43,7 +45,7 @@ func mockOpenRouterServer(tb testing.TB, replyText string) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 
-		// Only POST /chat/completions is honoured. Other endpoints
+		// Only POST /chat/completions is honored. Other endpoints
 		// (e.g., /models for capability probes) return 404 — the
 		// gateway tolerates this and continues.
 		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/chat/completions") {

@@ -87,7 +87,7 @@ func TestSessionWorker_EnqueueAndProcess(t *testing.T) {
 }
 
 // TestSessionWorker_CancelExits verifies that a worker removes itself from
-// the parent's sessionWorkers map when its context is cancelled.
+// the parent's sessionWorkers map when its context is canceled.
 //
 // NOTE: This test exercises the ctx-cancel exit path only — it does NOT test
 // the workerIdleTimeout (60 s) path. The real idle-timer test requires a
@@ -105,7 +105,7 @@ func TestSessionWorker_CancelExits(t *testing.T) {
 	w := newSessionWorker(scope, al, func() {})
 	al.sessionWorkers.Store(scope, w)
 
-	// Override idle timer by cancelling the context quickly — we simulate the
+	// Override idle timer by canceling the context quickly — we simulate the
 	// idle-timeout path by using a very tight context rather than waiting 60 s.
 	// We cancel the worker's own context directly.
 	go w.runLoop()
@@ -141,7 +141,7 @@ func TestSessionWorker_CancelExits(t *testing.T) {
 // Regression test structure:
 //   - WITHOUT the fix: Run() processes turns synchronously, so the mockProvider
 //     (which returns immediately) would normally hide the bug. To reproduce the
-//     original blocking behaviour we need a slow provider. Instead, we verify the
+//     original blocking behavior we need a slow provider. Instead, we verify the
 //     dispatch mechanism directly by checking that two different scopes spawn
 //     independent workers that both process their messages.
 func TestSessionWorker_TwoSessionsConcurrent(t *testing.T) {
