@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
 import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
@@ -6,8 +7,19 @@ import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay }
 import { queryClient } from '@/lib/queryClient'
 import type { Message, ToolCall } from '@/lib/api'
 import type { WsReceiveFrame, WsExecApprovalRequestFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
+import type { ToolResultRef, TruncatedResult } from '@/lib/api/generated/asyncapi-types'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { registerSyncChatForeground } from '@/store/session'
+
+// Maximum messages kept in the visible ring buffer per session.
+// Older messages are evicted once this limit is exceeded; full transcript is preserved server-side.
+export const MAX_MESSAGES_PER_SESSION = 500
+
+// Maximum byte size of a tool result stored in client state; oversized results become a sentinel.
+const MAX_TOOL_RESULT_BYTES = 50_000
+
+// Preview size for client-side truncated results (4 KiB).
+const CLIENT_TRUNCATION_PREVIEW_BYTES = 4_096
 
 export interface MediaAttachment {
   type: 'image' | 'audio' | 'video' | 'file'
@@ -45,7 +57,7 @@ export interface SubagentSpanTerminal extends SubagentSpanBase {
   status: 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout'
   durationMs: number
   finalResult?: string
-  /** W1-9 coordination: reason populated when status is 'interrupted'. */
+  /** Reason populated when status is 'interrupted'. */
   reason?: 'parent_timeout' | 'parent_cancelled' | 'parent_done_early' | 'unknown'
 }
 
@@ -63,6 +75,66 @@ export interface ChatMessage extends Message {
   spans?: SubagentSpan[]
   /** Agent that produced this message (assistant messages only). */
   agentId?: string
+}
+
+// Client-side truncation sentinel — parallel to server TruncatedResult/ToolResultRef shapes.
+export interface ClientTruncatedResult {
+  _truncated_client: true
+  original_size_bytes: number
+  preview: string
+}
+
+/** Returns true when the value is the client-side truncation sentinel. */
+export function isClientTruncatedResult(value: unknown): value is ClientTruncatedResult {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<string, unknown>)['_truncated_client'] === true
+  )
+}
+
+/** Returns true when the value is the server-side ToolResultRef sentinel. */
+export function isToolResultRef(value: unknown): value is ToolResultRef {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<string, unknown>)['_ref'] === true &&
+    typeof (value as Record<string, unknown>)['ref'] === 'string'
+  )
+}
+
+/** Returns true when the value is the server-side TruncatedResult sentinel. */
+export function isTruncatedResult(value: unknown): value is TruncatedResult {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<string, unknown>)['_truncated'] === true
+  )
+}
+
+/** Clamp a tool result to MAX_TOOL_RESULT_BYTES; pass-through for existing sentinels. */
+export function clampToolResult(result: unknown): unknown {
+  // Pass-through for existing sentinels.
+  if (isToolResultRef(result) || isTruncatedResult(result) || isClientTruncatedResult(result)) {
+    return result
+  }
+  let serialized: string
+  try {
+    serialized = typeof result === 'string' ? result : JSON.stringify(result)
+  } catch {
+    serialized = String(result)
+  }
+  if (serialized.length <= MAX_TOOL_RESULT_BYTES) {
+    return result
+  }
+  const preview = serialized.slice(0, CLIENT_TRUNCATION_PREVIEW_BYTES)
+  const originalSizeBytes = new TextEncoder().encode(serialized).length
+  const sentinel: ClientTruncatedResult = {
+    _truncated_client: true,
+    original_size_bytes: originalSizeBytes,
+    preview,
+  }
+  return sentinel
 }
 
 export interface RateLimitEventData {
@@ -84,7 +156,12 @@ export interface ExecApprovalRequest {
 
 /** All per-session chat state for one concurrent session. */
 export interface SessionChatState {
-  messages: ChatMessage[]
+  // Map-indexed ring buffer. Use getMessages(bucket) to get the ordered array.
+  messagesById: Record<string, ChatMessage>
+  messageOrder: string[]
+  /** Number of messages trimmed from the front of messageOrder (evicted from the ring buffer). */
+  trimmedCount: number
+
   toolCalls: Record<string, ToolCall & { call_id: string }>
   toolCallOrder: string[]
   textAtToolCallStart: Record<string, string>
@@ -113,11 +190,23 @@ export interface SessionChatState {
    * Cleared to null when a done frame arrives.
    */
   cancelStage: 'graceful' | 'hard' | 'detached' | null
+  /**
+   * ISO timestamp of the most recent server frame the SPA has applied.
+   * Used as the `since` cursor in attach_session to avoid replaying already-seen frames.
+   */
+  lastReceivedEventTime: string | null
+  /**
+   * O(1) index from parent_call_id → { messageId, spanIdx } for the currently-running subagent span.
+   * Written by subagent_start, cleared by subagent_end.
+   */
+  spanByParentCallId: Record<string, { messageId: string; spanIdx: number }>
 }
 
 function emptySessionState(): SessionChatState {
   return {
-    messages: [],
+    messagesById: {},
+    messageOrder: [],
+    trimmedCount: 0,
     toolCalls: {},
     toolCallOrder: [],
     textAtToolCallStart: {},
@@ -130,7 +219,137 @@ function emptySessionState(): SessionChatState {
     rateLimitEvent: null,
     lastUserMessageAt: null,
     cancelStage: null,
+    lastReceivedEventTime: null,
+    spanByParentCallId: {},
   }
+}
+
+/** Return the ordered message array for a bucket. O(N) — call once per reducer, not per frame. */
+export function getMessages(bucket: Pick<SessionChatState, 'messagesById' | 'messageOrder'>): ChatMessage[] {
+  return bucket.messageOrder.map((id) => bucket.messagesById[id]).filter(Boolean)
+}
+
+/** Test helper: build ring-buffer fields for a SessionChatState from a plain ChatMessage array. */
+export function makeBucketMessages(msgs: ChatMessage[]): Pick<SessionChatState, 'messagesById' | 'messageOrder' | 'trimmedCount'> {
+  const messagesById: Record<string, ChatMessage> = {}
+  const messageOrder: string[] = []
+  for (const m of msgs) { messagesById[m.id] = m; messageOrder.push(m.id) }
+  return { messagesById, messageOrder, trimmedCount: 0 }
+}
+
+/**
+ * Evict one message from a bucket, purging all dependent maps.
+ *
+ * Removes the message from messagesById/messageOrder, evicts its tool calls
+ * from toolCalls/toolCallOrder/textAtToolCallStart, and removes any
+ * spanByParentCallId entries whose messageId matches the evicted message.
+ */
+export function evictMessageFromBucket(
+  bucket: SessionChatState,
+  messageId: string,
+): void {
+  // Remove from order and map.
+  const orderIdx = bucket.messageOrder.indexOf(messageId)
+  if (orderIdx !== -1) bucket.messageOrder.splice(orderIdx, 1)
+  const msg = bucket.messagesById[messageId]
+  delete bucket.messagesById[messageId]
+
+  // Evict tool calls owned by this message.
+  const evictedCallIds = new Set((msg?.tool_calls ?? []).map((tc) => tc.id))
+  if (evictedCallIds.size > 0) {
+    for (const id of evictedCallIds) {
+      delete bucket.toolCalls[id]
+      delete bucket.textAtToolCallStart[id]
+    }
+    bucket.toolCallOrder = bucket.toolCallOrder.filter((id) => !evictedCallIds.has(id))
+  }
+
+  // Evict spanByParentCallId entries pointing at this message.
+  for (const [parentCallId, entry] of Object.entries(bucket.spanByParentCallId)) {
+    if (entry.messageId === messageId) {
+      delete bucket.spanByParentCallId[parentCallId]
+    }
+  }
+}
+
+/**
+ * Convert an ordered messages array into ring-buffer state, applying the cap.
+ * Emits a one-time toast when trimming first occurs (trimmedCount 0 → >0).
+ */
+function applyMessageArray(
+  msgs: ChatMessage[],
+  bucket: SessionChatState,
+): Partial<SessionChatState> {
+  let finalMsgs = msgs
+  let newTrimmedCount = bucket.trimmedCount
+  let toolCallsPatch: typeof bucket.toolCalls = { ...bucket.toolCalls }
+  let toolCallOrderPatch: string[] = [...bucket.toolCallOrder]
+  let textAtToolCallStartPatch: typeof bucket.textAtToolCallStart = { ...bucket.textAtToolCallStart }
+  let spanByParentCallIdPatch: typeof bucket.spanByParentCallId = { ...bucket.spanByParentCallId }
+
+  if (msgs.length > MAX_MESSAGES_PER_SESSION) {
+    const evictCount = msgs.length - MAX_MESSAGES_PER_SESSION
+    const evicted = msgs.slice(0, evictCount)
+    finalMsgs = msgs.slice(evictCount)
+
+    // Emit one-time toast on first trim for this session.
+    if (newTrimmedCount === 0) {
+      useUiStore.getState().addToast({
+        message: 'Session is long — earlier messages are hidden from this view; the full transcript is preserved on the server.',
+        variant: 'default',
+      })
+    }
+    newTrimmedCount += evictCount
+
+    // Evict tool calls owned by evicted messages.
+    const evictedCallIds = new Set(evicted.flatMap((m) => (m.tool_calls ?? []).map((tc) => tc.id)))
+    if (evictedCallIds.size > 0) {
+      const newToolCalls: typeof bucket.toolCalls = {}
+      for (const [k, v] of Object.entries(toolCallsPatch)) {
+        if (!evictedCallIds.has(k)) newToolCalls[k] = v
+      }
+      toolCallsPatch = newToolCalls
+      toolCallOrderPatch = toolCallOrderPatch.filter((id) => !evictedCallIds.has(id))
+      // Evict textAtToolCallStart entries for the evicted call ids.
+      const newText: typeof bucket.textAtToolCallStart = {}
+      for (const [k, v] of Object.entries(textAtToolCallStartPatch)) {
+        if (!evictedCallIds.has(k)) newText[k] = v
+      }
+      textAtToolCallStartPatch = newText
+    }
+
+    // Evict spanByParentCallId entries whose message is being evicted.
+    const evictedMessageIds = new Set(evicted.map((m) => m.id))
+    const newSpanIndex: typeof bucket.spanByParentCallId = {}
+    for (const [parentCallId, entry] of Object.entries(spanByParentCallIdPatch)) {
+      if (!evictedMessageIds.has(entry.messageId)) newSpanIndex[parentCallId] = entry
+    }
+    spanByParentCallIdPatch = newSpanIndex
+  }
+
+  const messagesById: Record<string, ChatMessage> = {}
+  const messageOrder: string[] = []
+  for (const m of finalMsgs) {
+    messagesById[m.id] = m
+    messageOrder.push(m.id)
+  }
+
+  return {
+    messagesById,
+    messageOrder,
+    trimmedCount: newTrimmedCount,
+    toolCalls: toolCallsPatch,
+    toolCallOrder: toolCallOrderPatch,
+    textAtToolCallStart: textAtToolCallStartPatch,
+    spanByParentCallId: spanByParentCallIdPatch,
+  }
+}
+
+/** Advance lastReceivedEventTime if the provided timestamp is newer (lexicographic ISO-8601 comparison). */
+function advanceEventTime(current: string | null, incoming: string | null | undefined): string | null {
+  if (!incoming) return current
+  if (!current) return incoming
+  return incoming > current ? incoming : current
 }
 
 interface ChatStore {
@@ -140,6 +359,11 @@ interface ChatStore {
   // ── Foreground selectors (derived from sessionsById[activeSessionId]) ────────
   // These are convenience getters for the UI to read the active session's state.
   // They return stable empty values when no session is active.
+  //
+  // NOTE: `messages` is the COMPUTED ordered array derived from the active
+  // bucket's messagesById + messageOrder. It is synced after every bucket
+  // mutation. Consumers should NOT access sessionsById[id].messagesById or
+  // sessionsById[id].messageOrder directly — use getMessages(bucket) instead.
   messages: ChatMessage[]
   isStreaming: boolean
   isReplaying: boolean
@@ -154,6 +378,8 @@ interface ChatStore {
   lastUserMessageAt: number | null
   /** B3: cancel progress stage for the active session, or null when idle. */
   cancelStage: 'graceful' | 'hard' | 'detached' | null
+  /** ISO timestamp of the most recent server frame for the active session. */
+  lastReceivedEventTime: string | null
 
   // ── Actions that operate on the foreground session ───────────────────────────
   setReplaying: (value: boolean) => void
@@ -216,7 +442,7 @@ const replayingStartedAt: Record<string, number> = {}
 // stale timer before it stomps the freshly-started replay window.
 const replayingClearTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 
-// W1-7: diagnostic flag per session — true when at least one replay_message was processed.
+// Diagnostic flag per session — true when at least one replay_message was processed this turn.
 const sawReplayMessageThisTurn: Record<string, boolean> = {}
 
 // FR-H-009: out-of-order frame buffer — tool_call_start/result frames that
@@ -228,10 +454,9 @@ const orphanTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 
 // ── Frame-routing helpers ─────────────────────────────────────────────────────
 
-function hasOpenSpan(messages: ChatMessage[], parentCallId: string): boolean {
-  return messages.some(
-    (m) => m.role === 'assistant' && m.spans?.some((s) => s.parentCallId === parentCallId)
-  )
+/** O(1) span check using the spanByParentCallId index. */
+function hasOpenSpanFast(bucket: SessionChatState, parentCallId: string): boolean {
+  return parentCallId in bucket.spanByParentCallId
 }
 
 function bufferForSpan(
@@ -288,6 +513,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
     return useSessionStore.getState().activeSessionId ?? FALLBACK_SID
   }
 
+  /** Project a session bucket to foreground ChatStore fields (messagesById+messageOrder → messages[]). */
+  function bucketToForeground(bucket: SessionChatState): Omit<SessionChatState, 'messagesById' | 'messageOrder' | 'trimmedCount' | 'spanByParentCallId'> & { messages: ChatMessage[] } {
+    const { messagesById: _mb, messageOrder: _mo, trimmedCount: _tc, spanByParentCallId: _sp, ...rest } = bucket
+    return { ...rest, messages: getMessages(bucket) }
+  }
+
   /** Find or lazily create a bucket for sid. No-op if sid is null. */
   function withBucket(sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>): void {
     if (!sid) return
@@ -298,7 +529,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const sessionsById = { ...state.sessionsById, [sid]: updated }
       const activeSid = getActiveSid()
       const activeBucket = (activeSid ? sessionsById[activeSid] : null) ?? EMPTY_BUCKET
-      return { sessionsById, ...activeBucket }
+      return { sessionsById, ...bucketToForeground(activeBucket) }
     })
   }
 
@@ -307,7 +538,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     set((state) => {
       const activeSid = getActiveSid()
       const fg = (activeSid ? state.sessionsById[activeSid] : null) ?? EMPTY_BUCKET
-      return { ...fg }
+      return bucketToForeground(fg)
     })
   }
 
@@ -318,8 +549,24 @@ export const useChatStore = create<ChatStore>((set, get) => {
     outboundQueue: [],
 
     // Foreground selectors — derived from sessionsById[activeSessionId].
-    // Initial values are the empty-session defaults.
-    ...emptySessionState(),
+    // Initial values are the empty-session defaults projected through bucketToForeground.
+    // Note: we spread emptySessionState() here but consumers of messages: ChatMessage[]
+    // expect an array — the ring buffer fields (messagesById/messageOrder) are not
+    // exported on ChatStore; only messages (the derived array) is.
+    messages: [],
+    isStreaming: false,
+    isReplaying: false,
+    replayCompletedForSession: null,
+    toolCalls: {},
+    toolCallOrder: [],
+    textAtToolCallStart: {},
+    pendingApprovals: [],
+    sessionTokens: 0,
+    sessionCost: 0,
+    rateLimitEvent: null,
+    lastUserMessageAt: null,
+    cancelStage: null,
+    lastReceivedEventTime: null,
 
     setReplaying: (value) => {
       const sid = getActiveSid()
@@ -377,49 +624,69 @@ export const useChatStore = create<ChatStore>((set, get) => {
     setMessages: (messages) => {
       const sid = getActiveSid()
       if (!sid) return
-      withBucket(sid, () => ({ ...emptySessionState(), messages: messages as ChatMessage[] }))
+      const empty = emptySessionState()
+      const msgs = messages as ChatMessage[]
+      const msgById: Record<string, ChatMessage> = {}
+      const msgOrder: string[] = []
+      for (const m of msgs) { msgById[m.id] = m; msgOrder.push(m.id) }
+      withBucket(sid, () => ({
+        ...empty,
+        messagesById: msgById,
+        messageOrder: msgOrder,
+      }))
     },
 
     appendMessage: (message) => {
       const sid = getActiveSid()
       if (!sid) return
-      withBucket(sid, (b) => ({ messages: [...b.messages, message] }))
+      withBucket(sid, (b) => {
+        const msgs = [...getMessages(b), message]
+        return applyMessageArray(msgs, b)
+      })
     },
 
     updateLastAssistantMessage: (content, done = false) => {
       const sid = getActiveSid()
       if (!sid) return
       withBucket(sid, (b) => {
-        const msgs = [...b.messages]
-        let lastIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
-        if (lastIdx === -1) {
-          const placeholder: ChatMessage = {
-            id: generateId(),
-            role: 'assistant',
-            content: '',
-            timestamp: new Date().toISOString(),
-            status: 'streaming',
-            isStreaming: true,
+        return produce(b, (draft) => {
+          const order = draft.messageOrder
+          let lastIdx = -1
+          for (let i = order.length - 1; i >= 0; i--) {
+            if (draft.messagesById[order[i]]?.role === 'assistant') { lastIdx = i; break }
           }
-          msgs.push(placeholder)
-          lastIdx = msgs.length - 1
-        }
-        msgs[lastIdx] = {
-          ...msgs[lastIdx],
-          content: msgs[lastIdx].content + content,
-          isStreaming: !done,
-          status: done ? 'done' : 'streaming',
-        }
-        return { messages: msgs, isStreaming: !done }
+          if (lastIdx === -1) {
+            const placeholder: ChatMessage = {
+              id: generateId(),
+              role: 'assistant',
+              content: '',
+              timestamp: new Date().toISOString(),
+              status: 'streaming',
+              isStreaming: true,
+            }
+            draft.messagesById[placeholder.id] = placeholder
+            draft.messageOrder.push(placeholder.id)
+            lastIdx = draft.messageOrder.length - 1
+          }
+          const msgId = draft.messageOrder[lastIdx]
+          const msg = draft.messagesById[msgId]
+          msg.content = msg.content + content
+          msg.isStreaming = !done
+          msg.status = done ? 'done' : 'streaming'
+          draft.isStreaming = !done
+        }) as Partial<SessionChatState>
       })
     },
 
     markLastMessageInterrupted: () => {
       const sid = getActiveSid()
       withBucket(sid, (b) => {
-        const msgs = [...b.messages]
-        const lastIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
-        if (lastIdx === -1) {
+        const order = b.messageOrder
+        let lastMsgId: string | null = null
+        for (let i = order.length - 1; i >= 0; i--) {
+          if (b.messagesById[order[i]]?.role === 'assistant') { lastMsgId = order[i]; break }
+        }
+        if (!lastMsgId) {
           // FR-21 / T21–T23: No assistant message exists yet (cancel fired between
           // session_started and the first token frame). The server may still send
           // "Error processing message: turn canceled" as token+done frames via the
@@ -443,7 +710,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
             status: 'interrupted',
             isStreaming: false,
           }
-          return { messages: [...msgs, placeholder], isStreaming: false }
+          const msgs = [...getMessages(b), placeholder]
+          return { ...applyMessageArray(msgs, b), isStreaming: false }
         }
         // FR-21 / T21–T26: set isStreaming:false AND status:'interrupted' on the message.
         // Setting isStreaming:false is necessary so that buildMessageStatus() in
@@ -453,38 +721,43 @@ export const useChatStore = create<ChatStore>((set, get) => {
         // Trailing tokens from the server are handled in the 'token' case handler which
         // now checks `status === 'interrupted'` FIRST and discards any trailing tokens
         // rather than creating a second placeholder or overwriting the interrupted status.
-        msgs[lastIdx] = {
-          ...msgs[lastIdx],
-          isStreaming: false,
-          status: 'interrupted',
-        }
-        return { messages: msgs }
+        return produce(b, (draft) => {
+          const m = draft.messagesById[lastMsgId!]
+          if (m) { m.isStreaming = false; m.status = 'interrupted' }
+        }) as Partial<SessionChatState>
       })
       // If no streaming assistant message was found in the active bucket, search
       // all buckets. This handles scenarios where a message was appended to a
       // different bucket before the active session was set (e.g. in test scaffolding).
       const state = get()
       const activeBucket = sid ? state.sessionsById[sid] : undefined
-      const hasInterruptedInActive = activeBucket?.messages.some((m: ChatMessage) => m.role === 'assistant' && m.status === 'interrupted')
+      const hasInterruptedInActive = activeBucket && getMessages(activeBucket).some(
+        (m: ChatMessage) => m.role === 'assistant' && m.status === 'interrupted'
+      )
       if (!hasInterruptedInActive) {
         for (const [bucketSid, bucket] of Object.entries(state.sessionsById)) {
           if (bucketSid === sid) continue
-          const lastIdx = bucket.messages.map((m) => m.role).lastIndexOf('assistant')
-          if (lastIdx !== -1 && bucket.messages[lastIdx].isStreaming) {
+          const order = bucket.messageOrder
+          let lastMsgId: string | null = null
+          for (let i = order.length - 1; i >= 0; i--) {
+            if (bucket.messagesById[order[i]]?.role === 'assistant') { lastMsgId = order[i]; break }
+          }
+          if (lastMsgId && bucket.messagesById[lastMsgId].isStreaming) {
             // Update the background bucket AND sync the updated messages to the foreground
             // flat field so callers reading get().messages can see the change.
             useChatStore.setState((s) => {
               const b = s.sessionsById[bucketSid]
               if (!b) return {}
-              const msgs = [...b.messages]
-              const idx = msgs.map((m) => m.role).lastIndexOf('assistant')
-              if (idx === -1) return {}
-              msgs[idx] = { ...msgs[idx], isStreaming: false, status: 'interrupted' }
-              const updated = { ...b, messages: msgs }
+              const updatedById = { ...b.messagesById }
+              if (updatedById[lastMsgId!]) {
+                updatedById[lastMsgId!] = { ...updatedById[lastMsgId!], isStreaming: false, status: 'interrupted' }
+              }
+              const updated: SessionChatState = { ...b, messagesById: updatedById }
+              const updatedSessions = { ...s.sessionsById, [bucketSid]: updated }
+              // Propagate to flat foreground so observers see the interrupted message.
               return {
-                sessionsById: { ...s.sessionsById, [bucketSid]: updated },
-                // Propagate to flat foreground so observers see the interrupted message.
-                messages: msgs,
+                sessionsById: updatedSessions,
+                messages: getMessages(updated),
               }
             })
             break
@@ -497,7 +770,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const sid = getActiveSid()
       if (!sid) return
       withBucket(sid, (b) => {
-        const lastMsg = b.messages[b.messages.length - 1]
+        const lastMsgId = b.messageOrder[b.messageOrder.length - 1]
+        const lastMsg = lastMsgId ? b.messagesById[lastMsgId] : undefined
         const textSnapshot = (lastMsg?.role === 'assistant' ? lastMsg.content : '') ?? ''
         return {
           toolCalls: {
@@ -545,9 +819,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const sid = getActiveSid()
       if (!sid) return
       withBucket(sid, (b) => {
-        const msgs = [...b.messages]
-        const lastIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
-        if (lastIdx === -1) return {}
+        // Find last assistant message id
+        let lastMsgId: string | null = null
+        for (let i = b.messageOrder.length - 1; i >= 0; i--) {
+          if (b.messagesById[b.messageOrder[i]]?.role === 'assistant') { lastMsgId = b.messageOrder[i]; break }
+        }
+        if (!lastMsgId) return {}
         const span: SubagentSpanRunning = {
           spanId: frame.span_id,
           parentCallId: frame.parent_call_id,
@@ -585,7 +862,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   kind: 'tool',
                   tool: {
                     ...existing.tool,
-                    result: bf.result,
+                    result: clampToolResult(bf.result),
                     status: bf.status,
                     duration_ms: bf.duration_ms,
                     error: bf.error,
@@ -595,11 +872,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
             }
           }
         }
-        msgs[lastIdx] = {
-          ...msgs[lastIdx],
-          spans: [...(msgs[lastIdx].spans ?? []), span],
+        const lastMsg = b.messagesById[lastMsgId]
+        const spanIdx = (lastMsg.spans ?? []).length
+        const updatedMsg = {
+          ...lastMsg,
+          spans: [...(lastMsg.spans ?? []), span],
         }
-        return { messages: msgs }
+        // Record the span index for O(1) tool_call_result lookup.
+        const spanByParentCallId = {
+          ...b.spanByParentCallId,
+          [frame.parent_call_id]: { messageId: lastMsgId, spanIdx },
+        }
+        return {
+          messagesById: { ...b.messagesById, [lastMsgId]: updatedMsg },
+          spanByParentCallId,
+        }
       })
     },
 
@@ -607,30 +894,31 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const sid = getActiveSid()
       if (!sid) return
       withBucket(sid, (b) => {
-        const msgs = [...b.messages]
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const msg = msgs[i]
-          if (msg.role !== 'assistant' || !msg.spans) continue
-          const spanIdx = msg.spans.findIndex((s) => s.spanId === frame.span_id)
-          if (spanIdx === -1) continue
-          const existingSpan = msg.spans[spanIdx]
-          const updatedSpans = [...msg.spans]
-          const terminalSpan: SubagentSpanTerminal = {
-            spanId: existingSpan.spanId,
-            parentCallId: existingSpan.parentCallId,
-            taskLabel: existingSpan.taskLabel,
-            steps: existingSpan.steps,
-            status: frame.status,
-            durationMs: frame.duration_ms ?? 0,
-            finalResult: frame.final_result,
-            reason: frame.reason,
+        return produce(b, (draft) => {
+          for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+            const msgId = draft.messageOrder[i]
+            const msg = draft.messagesById[msgId]
+            if (msg.role !== 'assistant' || !msg.spans) continue
+            const spanIdx = msg.spans.findIndex((s) => s.spanId === frame.span_id)
+            if (spanIdx === -1) continue
+            const existingSpan = msg.spans[spanIdx]
+            const terminalSpan: SubagentSpanTerminal = {
+              spanId: existingSpan.spanId,
+              parentCallId: existingSpan.parentCallId,
+              taskLabel: existingSpan.taskLabel,
+              steps: existingSpan.steps,
+              status: frame.status,
+              durationMs: frame.duration_ms ?? 0,
+              finalResult: frame.final_result,
+              reason: frame.reason,
+            }
+            msg.spans[spanIdx] = terminalSpan
+            // Clear the span index entry since the span is now terminal.
+            delete draft.spanByParentCallId[existingSpan.parentCallId]
+            return
           }
-          updatedSpans[spanIdx] = terminalSpan
-          msgs[i] = { ...msgs[i], spans: updatedSpans }
-          return { messages: msgs }
-        }
-        console.warn('[chat] subagent_end received for unknown span_id', { spanId: frame.span_id })
-        return {}
+          console.warn('[chat] subagent_end received for unknown span_id', { spanId: frame.span_id })
+        }) as Partial<SessionChatState>
       })
     },
 
@@ -638,31 +926,50 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const sid = getActiveSid()
       if (!sid) return
       withBucket(sid, (b) => {
-        const msgs = [...b.messages]
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const msg = msgs[i]
+        // O(1) lookup first.
+        const indexEntry = b.spanByParentCallId[parentCallId]
+        if (indexEntry) {
+          return produce(b, (draft) => {
+            const msg = draft.messagesById[indexEntry.messageId]
+            if (!msg?.spans) return
+            const span = msg.spans[indexEntry.spanIdx]
+            if (!span) return
+            const existingIdx = span.steps.findIndex(
+              (s) => s.kind === 'tool' && s.tool.call_id === step.call_id
+            )
+            if (existingIdx !== -1) {
+              const existingStep = span.steps[existingIdx]
+              if (existingStep.kind === 'tool') {
+                span.steps[existingIdx] = { kind: 'tool', tool: { ...existingStep.tool, ...step } }
+              }
+            } else {
+              span.steps.push({ kind: 'tool', tool: step })
+            }
+          }) as Partial<SessionChatState>
+        }
+        // Fallback: O(N) scan (legacy path, index miss).
+        console.warn('[chat] attachStepToSpan: span index miss, falling back to O(N) scan', { parentCallId })
+        for (let i = b.messageOrder.length - 1; i >= 0; i--) {
+          const msgId = b.messageOrder[i]
+          const msg = b.messagesById[msgId]
           if (msg.role !== 'assistant' || !msg.spans) continue
           const spanIdx = msg.spans.findIndex((s) => s.parentCallId === parentCallId)
           if (spanIdx === -1) continue
-          const updatedSpans = [...msg.spans]
-          const existingIdx = updatedSpans[spanIdx].steps.findIndex(
-            (s) => s.kind === 'tool' && s.tool.call_id === step.call_id
-          )
-          if (existingIdx !== -1) {
-            const existingStep = updatedSpans[spanIdx].steps[existingIdx]
-            if (existingStep.kind === 'tool') {
-              const updatedSteps = [...updatedSpans[spanIdx].steps]
-              updatedSteps[existingIdx] = { kind: 'tool', tool: { ...existingStep.tool, ...step } }
-              updatedSpans[spanIdx] = { ...updatedSpans[spanIdx], steps: updatedSteps }
+          return produce(b, (draft) => {
+            const draftMsg = draft.messagesById[msgId]
+            const span = draftMsg.spans![spanIdx]
+            const existingIdx = span.steps.findIndex(
+              (s) => s.kind === 'tool' && s.tool.call_id === step.call_id
+            )
+            if (existingIdx !== -1) {
+              const existingStep = span.steps[existingIdx]
+              if (existingStep.kind === 'tool') {
+                span.steps[existingIdx] = { kind: 'tool', tool: { ...existingStep.tool, ...step } }
+              }
+            } else {
+              span.steps.push({ kind: 'tool', tool: step })
             }
-          } else {
-            updatedSpans[spanIdx] = {
-              ...updatedSpans[spanIdx],
-              steps: [...updatedSpans[spanIdx].steps, { kind: 'tool', tool: step }],
-            }
-          }
-          msgs[i] = { ...msgs[i], spans: updatedSpans }
-          return { messages: msgs }
+          }) as Partial<SessionChatState>
         }
         return {}
       })
@@ -710,7 +1017,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           const sessionsById = { ...state.sessionsById, [sid]: updated }
           const activeSid = getActiveSid()
           const fg = (activeSid ? sessionsById[activeSid] : undefined) ?? EMPTY_BUCKET
-          return { sessionsById, ...fg }
+          return { sessionsById, ...bucketToForeground(fg) }
         })
       }, 60_000)
     },
@@ -864,10 +1171,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
         }
 
         withBucket(activeSessionId, (b) => {
-          const msgs = [...b.messages]
-          const prevAssistantIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
+          const msgs = getMessages(b)
+          let prevAssistantIdx = -1
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            if (msgs[i].role === 'assistant') { prevAssistantIdx = i; break }
+          }
           let toolCallsAfterReset: typeof b.toolCalls = b.toolCalls
           let toolCallOrderAfterReset: string[] = b.toolCallOrder
+          let finalMsgs = msgs
 
           if (prevAssistantIdx !== -1) {
             const prev = msgs[prevAssistantIdx]
@@ -894,7 +1205,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
               const mergedById = new Map<string, NonNullable<typeof prev.tool_calls>[number]>()
               for (const tc of (prev.tool_calls ?? [])) mergedById.set(tc.id, tc)
               for (const tc of baked) mergedById.set(tc.id, tc)
-              msgs[prevAssistantIdx] = {
+              finalMsgs = [...msgs]
+              finalMsgs[prevAssistantIdx] = {
                 ...prev,
                 tool_calls: Array.from(mergedById.values()),
               }
@@ -908,10 +1220,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
             }
           }
 
+          const allMsgs = [...finalMsgs, userMsg, assistantMsg]
+          const msgArrayPatch = applyMessageArray(allMsgs, { ...b, toolCalls: toolCallsAfterReset, toolCallOrder: toolCallOrderAfterReset })
           return {
-            messages: [...msgs, userMsg, assistantMsg],
-            toolCalls: toolCallsAfterReset,
-            toolCallOrder: toolCallOrderAfterReset,
+            ...msgArrayPatch,
             isStreaming: true,
             // H1-FE: record when user last sent a message so the unknown-sid
             // done handler can tell whether the active bucket is mid-stream.
@@ -927,10 +1239,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
         })
 
         if (!sent) {
-          withBucket(activeSessionId, (b) => ({
-            messages: b.messages.filter((m) => m.id !== userMsg.id && m.id !== assistantMsg.id),
-            isStreaming: false,
-          }))
+          withBucket(activeSessionId, (b) => {
+            const msgs = getMessages(b).filter((m) => m.id !== userMsg.id && m.id !== assistantMsg.id)
+            return { ...applyMessageArray(msgs, b), isStreaming: false }
+          })
           useConnectionStore.getState().setConnectionError('Message could not be sent — connection dropped. Please try again.')
         }
       } else {
@@ -1082,7 +1394,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             if (state.sessionsById[newSid]) return {}
             const newBucket: SessionChatState = { ...emptySessionState(), isStreaming: true }
             const sessionsById = { ...state.sessionsById, [newSid]: newBucket }
-            return { sessionsById, ...newBucket }
+            return { sessionsById, ...bucketToForeground(newBucket) }
           })
           // Invalidate sessions list so SessionPanel shows the new session.
           queryClient.invalidateQueries({ queryKey: ['sessions'] })
@@ -1092,47 +1404,49 @@ export const useChatStore = create<ChatStore>((set, get) => {
         case 'token':
           if (targetSid) {
             withBucket(targetSid, (b) => {
-              const msgs = [...b.messages]
-              let lastIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
-              // FR-21 / T21–T26: if the last assistant message was already
-              // interrupted (user clicked Stop / pressed Escape / used /cancel),
-              // discard any trailing tokens the server sends before it processes
-              // the cancel. markLastMessageInterrupted() sets isStreaming:false on
-              // the message so that AssistantUI renders the correct "incomplete/cancelled"
-              // status. We must NOT append to the interrupted message or create a new
-              // placeholder — either would erase the (interrupted) label or create a
-              // ghost streaming bubble without the label.
-              if (lastIdx !== -1 && msgs[lastIdx].status === 'interrupted') {
-                return {}
-              }
-              // Only reuse the last assistant bubble if it is still
-              // streaming. A closed bubble (status=done) means the prior
-              // LLM call has finalized and any new tokens are part of a
-              // *new* turn-segment — typically a follow-up call after a
-              // tool returned. Stuffing them back into the closed bubble
-              // is what produced the "text-then-image-at-bottom" ordering.
-              if (lastIdx !== -1 && !msgs[lastIdx].isStreaming) {
-                lastIdx = -1
-              }
-              if (lastIdx === -1) {
-                const placeholder: ChatMessage = {
-                  id: generateId(),
-                  role: 'assistant',
-                  content: '',
-                  timestamp: new Date().toISOString(),
-                  status: 'streaming',
-                  isStreaming: true,
+              return produce(b, (draft) => {
+                const order = draft.messageOrder
+                let lastMsgId: string | null = null
+                for (let i = order.length - 1; i >= 0; i--) {
+                  if (draft.messagesById[order[i]]?.role === 'assistant') { lastMsgId = order[i]; break }
                 }
-                msgs.push(placeholder)
-                lastIdx = msgs.length - 1
-              }
-              msgs[lastIdx] = {
-                ...msgs[lastIdx],
-                content: msgs[lastIdx].content + frame.content,
-                isStreaming: true,
-                status: 'streaming',
-              }
-              return { messages: msgs, isStreaming: true }
+                // FR-21 / T21–T26: if the last assistant message was already
+                // interrupted (user clicked Stop / pressed Escape / used /cancel),
+                // discard any trailing tokens the server sends before it processes
+                // the cancel. markLastMessageInterrupted() sets isStreaming:false on
+                // the message so that AssistantUI renders the correct "incomplete/cancelled"
+                // status. We must NOT append to the interrupted message or create a new
+                // placeholder — either would erase the (interrupted) label or create a
+                // ghost streaming bubble without the label.
+                if (lastMsgId && draft.messagesById[lastMsgId].status === 'interrupted') return
+                // Only reuse the last assistant bubble if it is still
+                // streaming. A closed bubble (status=done) means the prior
+                // LLM call has finalized and any new tokens are part of a
+                // *new* turn-segment — typically a follow-up call after a
+                // tool returned. Stuffing them back into the closed bubble
+                // is what produced the "text-then-image-at-bottom" ordering.
+                if (lastMsgId && !draft.messagesById[lastMsgId].isStreaming) {
+                  lastMsgId = null
+                }
+                if (!lastMsgId) {
+                  const placeholder: ChatMessage = {
+                    id: generateId(),
+                    role: 'assistant',
+                    content: '',
+                    timestamp: new Date().toISOString(),
+                    status: 'streaming',
+                    isStreaming: true,
+                  }
+                  draft.messagesById[placeholder.id] = placeholder
+                  draft.messageOrder.push(placeholder.id)
+                  lastMsgId = placeholder.id
+                }
+                const msg = draft.messagesById[lastMsgId]
+                msg.content = msg.content + frame.content
+                msg.isStreaming = true
+                msg.status = 'streaming'
+                draft.isStreaming = true
+              }) as Partial<SessionChatState>
             })
           }
           break
@@ -1202,36 +1516,29 @@ export const useChatStore = create<ChatStore>((set, get) => {
               }
             }
             withBucket(sid, (b) => {
-              const msgs = [...b.messages]
-              const lastIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
-              if (lastIdx !== -1) {
-                // FR-21 / T21–T25: do NOT overwrite 'interrupted' status with 'done'.
-                // A done frame can arrive after the user clicked Stop (because the
-                // server was already finishing the turn when the cancel request arrived).
-                // Preserving 'interrupted' keeps the "(interrupted)" label visible.
-                const prevStatus = msgs[lastIdx].status
-                msgs[lastIdx] = {
-                  ...msgs[lastIdx],
-                  isStreaming: false,
-                  status: prevStatus === 'interrupted' ? 'interrupted' : 'done',
+              return produce(b, (draft) => {
+                const order = draft.messageOrder
+                let lastMsgId: string | null = null
+                for (let i = order.length - 1; i >= 0; i--) {
+                  if (draft.messagesById[order[i]]?.role === 'assistant') { lastMsgId = order[i]; break }
                 }
-              }
-              const tokenDelta = frame.stats?.tokens ?? 0
-              const costDelta = frame.stats?.cost ?? 0
-              const replayCompleted = b.isReplaying ? sid : b.replayCompletedForSession
-              const patch: Partial<SessionChatState> = {
-                messages: msgs,
-                isStreaming: false,
-                sessionTokens: b.sessionTokens + tokenDelta,
-                sessionCost: b.sessionCost + costDelta,
-                replayCompletedForSession: replayCompleted,
-                // B3: clear cancel stage once the turn is definitively done.
-                cancelStage: null,
-              }
-              if (clearReplayingNow) {
-                patch.isReplaying = false
-              }
-              return patch
+                if (lastMsgId) {
+                  // FR-21 / T21–T25: do NOT overwrite 'interrupted' status with 'done'.
+                  const msg = draft.messagesById[lastMsgId]
+                  msg.isStreaming = false
+                  msg.status = msg.status === 'interrupted' ? 'interrupted' : 'done'
+                }
+                const tokenDelta = frame.stats?.tokens ?? 0
+                const costDelta = frame.stats?.cost ?? 0
+                draft.isStreaming = false
+                draft.sessionTokens = draft.sessionTokens + tokenDelta
+                draft.sessionCost = draft.sessionCost + costDelta
+                draft.replayCompletedForSession = draft.isReplaying ? sid : draft.replayCompletedForSession
+                draft.cancelStage = null
+                if (clearReplayingNow) {
+                  draft.isReplaying = false
+                }
+              }) as Partial<SessionChatState>
             })
           }
           break
@@ -1239,51 +1546,44 @@ export const useChatStore = create<ChatStore>((set, get) => {
         case 'error':
           {
             withBucket(targetSid, (b) => {
-              const msgs = [...b.messages]
-              const lastIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
-              if (lastIdx !== -1) {
-                const prevStatus = msgs[lastIdx].status
+              const order = b.messageOrder
+              let lastMsgId: string | null = null
+              for (let i = order.length - 1; i >= 0; i--) {
+                if (b.messagesById[order[i]]?.role === 'assistant') { lastMsgId = order[i]; break }
+              }
+              if (lastMsgId) {
+                const prevMsg = b.messagesById[lastMsgId]
+                const prevStatus = prevMsg.status
                 // FR-21 / T21–T23: do NOT overwrite 'interrupted' status with 'error'.
-                // When the user clicks Stop or presses Escape, cancelStream() calls
-                // markLastMessageInterrupted() which sets status:'interrupted' BEFORE
-                // the WS cancel frame is sent. The server may then respond with an error
-                // frame (e.g. "turn canceled"). Without this guard the error handler
-                // would overwrite 'interrupted' with 'error', hiding the (interrupted)
-                // label and showing "Error processing message" instead.
-                //
-                // Additionally, treat any error whose message mentions "turn cancel" as
-                // an interrupted turn rather than a hard error — the server uses this
-                // phrase to signal a clean cancellation acknowledgement.
                 const isCancelAck = /turn.cancel/i.test(frame.message ?? '')
                 const resolvedStatus = (prevStatus === 'interrupted' || isCancelAck)
                   ? 'interrupted'
                   : 'error'
-                msgs[lastIdx] = {
-                  ...msgs[lastIdx],
-                  // Keep existing content if it was already set; for cancel-ack errors
-                  // don't replace the streamed text with the error message.
-                  content: (resolvedStatus === 'interrupted')
-                    ? msgs[lastIdx].content
-                    : (msgs[lastIdx].content || frame.message),
-                  isStreaming: false,
-                  status: resolvedStatus,
-                }
-                return { messages: msgs, isStreaming: false }
+                return produce(b, (draft) => {
+                  const msg = draft.messagesById[lastMsgId!]
+                  msg.content = (resolvedStatus === 'interrupted')
+                    ? msg.content
+                    : (msg.content || frame.message)
+                  msg.isStreaming = false
+                  msg.status = resolvedStatus
+                  draft.isStreaming = false
+                }) as Partial<SessionChatState>
               }
               // No assistant message — push one. Only show an error toast for non-cancel errors.
               const isCancelAck = /turn.cancel/i.test(frame.message ?? '')
               if (!isCancelAck) {
                 useConnectionStore.getState().setConnectionError(frame.message)
               }
-              msgs.push({
+              const errMsg: ChatMessage = {
                 id: generateId(),
                 role: 'assistant',
                 content: isCancelAck ? '' : frame.message,
                 timestamp: new Date().toISOString(),
                 status: isCancelAck ? 'interrupted' : 'error',
                 isStreaming: false,
-              })
-              return { messages: msgs, isStreaming: false }
+              }
+              const msgs = [...getMessages(b), errMsg]
+              return { ...applyMessageArray(msgs, b), isStreaming: false }
             })
           }
           break
@@ -1293,7 +1593,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           const parentCallId = frame.parent_call_id
           if (parentCallId) {
             const b = get().sessionsById[targetSid] ?? emptySessionState()
-            if (hasOpenSpan(b.messages, parentCallId)) {
+            if (hasOpenSpanFast(b, parentCallId)) {
               // Temporarily patch active session for attachStepToSpan.
               if (targetSid === originalActiveSid) {
                 store.attachStepToSpan(parentCallId, {
@@ -1304,26 +1604,19 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   status: 'running',
                 })
               } else {
-                // Direct bucket mutation for non-foreground session.
                 withBucket(targetSid, (bucket) => {
-                  const msgs = [...bucket.messages]
-                  for (let i = msgs.length - 1; i >= 0; i--) {
-                    const msg = msgs[i]
-                    if (msg.role !== 'assistant' || !msg.spans) continue
-                    const spanIdx = msg.spans.findIndex((s) => s.parentCallId === parentCallId)
-                    if (spanIdx === -1) continue
-                    const updatedSpans = [...msg.spans]
-                    updatedSpans[spanIdx] = {
-                      ...updatedSpans[spanIdx],
-                      steps: [...updatedSpans[spanIdx].steps, {
-                        kind: 'tool' as const,
-                        tool: { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: frame.params, status: 'running' as const },
-                      }],
-                    }
-                    msgs[i] = { ...msgs[i], spans: updatedSpans }
-                    return { messages: msgs }
-                  }
-                  return {}
+                  const entry = bucket.spanByParentCallId[parentCallId]
+                  if (!entry) return {}
+                  return produce(bucket, (draft) => {
+                    const msg = draft.messagesById[entry.messageId]
+                    if (!msg?.spans) return
+                    const span = msg.spans[entry.spanIdx]
+                    if (!span) return
+                    span.steps.push({
+                      kind: 'tool' as const,
+                      tool: { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: frame.params, status: 'running' as const },
+                    })
+                  }) as Partial<SessionChatState>
                 })
               }
             } else {
@@ -1338,7 +1631,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   let patchToolCalls = { ...bucket.toolCalls }
                   let patchOrder = [...bucket.toolCallOrder]
                   let patchText = { ...bucket.textAtToolCallStart }
-                  let patchMsgs = [...bucket.messages]
+                  let patchMsgs = getMessages(bucket)
                   for (const { frame: bf } of buffered) {
                     if (bf.type === 'tool_call_start') {
                       const lastMsg = patchMsgs[patchMsgs.length - 1]
@@ -1352,23 +1645,20 @@ export const useChatStore = create<ChatStore>((set, get) => {
                       patchText[bf.call_id] = textSnapshot
                     } else if (bf.type === 'tool_call_result') {
                       if (patchToolCalls[bf.call_id]) {
-                        patchToolCalls[bf.call_id] = { ...patchToolCalls[bf.call_id], result: bf.result, status: bf.status, duration_ms: bf.duration_ms, error: bf.error }
+                        patchToolCalls[bf.call_id] = { ...patchToolCalls[bf.call_id], result: clampToolResult(bf.result), status: bf.status, duration_ms: bf.duration_ms, error: bf.error }
                       }
                     }
                   }
-                  return { toolCalls: patchToolCalls, toolCallOrder: patchOrder, textAtToolCallStart: patchText, messages: patchMsgs }
+                  const msgArrayPatch = applyMessageArray(patchMsgs, { ...bucket, toolCalls: patchToolCalls, toolCallOrder: patchOrder })
+                  return { ...msgArrayPatch, textAtToolCallStart: patchText }
                 })
               })
             }
           } else {
             withBucket(targetSid, (b) => {
-              const msgs = [...b.messages]
-              const lastMsg = msgs[msgs.length - 1]
+              const lastMsgId = b.messageOrder[b.messageOrder.length - 1]
+              const lastMsg = lastMsgId ? b.messagesById[lastMsgId] : undefined
               const textSnapshot = (lastMsg?.role === 'assistant' ? lastMsg.content : '') ?? ''
-              if (!lastMsg || lastMsg.role !== 'assistant') {
-                const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true }
-                msgs.push(ph)
-              }
               // Reconnect/replay safety: if this call_id is already recorded
               // (we have a textAtToolCallStart snapshot for it), keep the
               // ORIGINAL snapshot. A reattach replays from the start of the
@@ -1389,20 +1679,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
               // write_file).  Do not set it during replay (b.isReplaying) because
               // replay frames reconstruct history and should not trigger the spinner.
               const shouldMarkStreaming = !b.isReplaying
-              return {
-                messages: msgs,
-                ...(shouldMarkStreaming && { isStreaming: true }),
-                toolCalls: existingTC && existingTC.status !== 'running'
-                  ? b.toolCalls
-                  : {
-                      ...b.toolCalls,
-                      [frame.call_id]: { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: frame.params, status: 'running' },
-                    },
-                toolCallOrder: orderHasCall ? b.toolCallOrder : [...b.toolCallOrder, frame.call_id],
-                textAtToolCallStart: existingSnapshot !== undefined
-                  ? b.textAtToolCallStart
-                  : { ...b.textAtToolCallStart, [frame.call_id]: textSnapshot },
-              }
+              return produce(b, (draft) => {
+                if (!lastMsg || lastMsg.role !== 'assistant') {
+                  const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true }
+                  draft.messagesById[ph.id] = ph
+                  draft.messageOrder.push(ph.id)
+                }
+                if (shouldMarkStreaming) draft.isStreaming = true
+                if (!existingTC || existingTC.status === 'running') {
+                  draft.toolCalls[frame.call_id] = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: frame.params, status: 'running' }
+                }
+                if (!orderHasCall) draft.toolCallOrder.push(frame.call_id)
+                if (existingSnapshot === undefined) {
+                  draft.textAtToolCallStart[frame.call_id] = textSnapshot
+                }
+              }) as Partial<SessionChatState>
             })
           }
           break
@@ -1410,32 +1701,53 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
         case 'tool_call_result': {
           if (!targetSid) break
+          const clampedResult = clampToolResult(frame.result)
           const parentCallId = frame.parent_call_id
           if (parentCallId) {
             const b = get().sessionsById[targetSid] ?? emptySessionState()
-            if (hasOpenSpan(b.messages, parentCallId)) {
+            if (hasOpenSpanFast(b, parentCallId)) {
               withBucket(targetSid, (bucket) => {
-                const msgs = [...bucket.messages]
-                for (let i = msgs.length - 1; i >= 0; i--) {
-                  const msg = msgs[i]
+                const entry = bucket.spanByParentCallId[parentCallId]
+                if (entry) {
+                  return produce(bucket, (draft) => {
+                    const msg = draft.messagesById[entry.messageId]
+                    if (!msg?.spans) return
+                    const span = msg.spans[entry.spanIdx]
+                    if (!span) return
+                    const step = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: {}, result: clampedResult, status: frame.status ?? 'success' as const, duration_ms: frame.duration_ms, error: frame.error }
+                    const existingIdx = span.steps.findIndex((s) => s.kind === 'tool' && s.tool.call_id === frame.call_id)
+                    if (existingIdx !== -1) {
+                      const existingStep = span.steps[existingIdx]
+                      if (existingStep.kind === 'tool') {
+                        span.steps[existingIdx] = { kind: 'tool', tool: { ...existingStep.tool, ...step } }
+                      }
+                    } else {
+                      span.steps.push({ kind: 'tool' as const, tool: step })
+                    }
+                  }) as Partial<SessionChatState>
+                }
+                // Fallback: O(N) scan (index miss — log a warning).
+                console.warn('[chat] tool_call_result: span index miss, falling back to O(N) scan', { parentCallId, callId: frame.call_id })
+                for (let i = bucket.messageOrder.length - 1; i >= 0; i--) {
+                  const msgId = bucket.messageOrder[i]
+                  const msg = bucket.messagesById[msgId]
                   if (msg.role !== 'assistant' || !msg.spans) continue
                   const spanIdx = msg.spans.findIndex((s) => s.parentCallId === parentCallId)
                   if (spanIdx === -1) continue
-                  const updatedSpans = [...msg.spans]
-                  const existingIdx = updatedSpans[spanIdx].steps.findIndex((s) => s.kind === 'tool' && s.tool.call_id === frame.call_id)
-                  const step = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: {}, result: frame.result, status: frame.status ?? 'success' as const, duration_ms: frame.duration_ms, error: frame.error }
-                  if (existingIdx !== -1) {
-                    const existingStep = updatedSpans[spanIdx].steps[existingIdx]
-                    if (existingStep.kind === 'tool') {
-                      const updatedSteps = [...updatedSpans[spanIdx].steps]
-                      updatedSteps[existingIdx] = { kind: 'tool', tool: { ...existingStep.tool, ...step } }
-                      updatedSpans[spanIdx] = { ...updatedSpans[spanIdx], steps: updatedSteps }
+                  return produce(bucket, (draft) => {
+                    const draftMsg = draft.messagesById[msgId]
+                    const span = draftMsg.spans![spanIdx]
+                    const step = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: {}, result: clampedResult, status: frame.status ?? 'success' as const, duration_ms: frame.duration_ms, error: frame.error }
+                    const existingIdx = span.steps.findIndex((s) => s.kind === 'tool' && s.tool.call_id === frame.call_id)
+                    if (existingIdx !== -1) {
+                      const existingStep = span.steps[existingIdx]
+                      if (existingStep.kind === 'tool') {
+                        span.steps[existingIdx] = { kind: 'tool', tool: { ...existingStep.tool, ...step } }
+                      }
+                    } else {
+                      span.steps.push({ kind: 'tool' as const, tool: step })
                     }
-                  } else {
-                    updatedSpans[spanIdx] = { ...updatedSpans[spanIdx], steps: [...updatedSpans[spanIdx].steps, { kind: 'tool' as const, tool: step }] }
-                  }
-                  msgs[i] = { ...msgs[i], spans: updatedSpans }
-                  return { messages: msgs }
+                  }) as Partial<SessionChatState>
                 }
                 return {}
               })
@@ -1451,7 +1763,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   let patchToolCalls = { ...bucket.toolCalls }
                   let patchOrder = [...bucket.toolCallOrder]
                   let patchText = { ...bucket.textAtToolCallStart }
-                  let patchMsgs = [...bucket.messages]
+                  let patchMsgs = getMessages(bucket)
                   for (const { frame: bf } of buffered) {
                     if (bf.type === 'tool_call_start') {
                       const lastMsg = patchMsgs[patchMsgs.length - 1]
@@ -1461,11 +1773,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
                       patchText[bf.call_id] = textSnapshot
                     } else if (bf.type === 'tool_call_result') {
                       if (patchToolCalls[bf.call_id]) {
-                        patchToolCalls[bf.call_id] = { ...patchToolCalls[bf.call_id], result: bf.result, status: bf.status, duration_ms: bf.duration_ms, error: bf.error }
+                        patchToolCalls[bf.call_id] = { ...patchToolCalls[bf.call_id], result: clampToolResult(bf.result), status: bf.status, duration_ms: bf.duration_ms, error: bf.error }
                       }
                     }
                   }
-                  return { toolCalls: patchToolCalls, toolCallOrder: patchOrder, textAtToolCallStart: patchText, messages: patchMsgs }
+                  const msgArrayPatch = applyMessageArray(patchMsgs, { ...bucket, toolCalls: patchToolCalls, toolCallOrder: patchOrder })
+                  return { ...msgArrayPatch, textAtToolCallStart: patchText }
                 })
               })
             }
@@ -1475,18 +1788,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 console.debug('[chat] resolveToolCall for unknown call_id', frame.call_id)
                 return {}
               }
-              return {
-                toolCalls: {
-                  ...b.toolCalls,
-                  [frame.call_id]: {
-                    ...b.toolCalls[frame.call_id],
-                    result: frame.result,
-                    status: frame.status ?? 'success',
-                    duration_ms: frame.duration_ms,
-                    error: frame.error,
-                  },
-                },
-              }
+              return produce(b, (draft) => {
+                const tc = draft.toolCalls[frame.call_id]
+                tc.result = clampedResult
+                tc.status = frame.status ?? 'success'
+                tc.duration_ms = frame.duration_ms
+                tc.error = frame.error
+              }) as Partial<SessionChatState>
             })
           }
           break
@@ -1495,40 +1803,47 @@ export const useChatStore = create<ChatStore>((set, get) => {
         case 'subagent_start': {
           if (!targetSid) break
           const sf = frame as WsSubagentStartFrame
-          // For subagent_start we need to operate on the target bucket directly.
           withBucket(targetSid, (b) => {
-            const msgs = [...b.messages]
-            const lastIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
-            if (lastIdx === -1) return {}
-            const span: SubagentSpanRunning = {
-              spanId: sf.span_id,
-              parentCallId: sf.parent_call_id,
-              taskLabel: sf.task_label,
-              status: 'running',
-              steps: [],
-            }
-            const bufferKey = `${targetSid}:${sf.parent_call_id}`
-            const buffered = pendingByParentCallId[bufferKey] ?? []
-            delete pendingByParentCallId[bufferKey]
-            if (orphanTimers[bufferKey]) {
-              clearTimeout(orphanTimers[bufferKey])
-              delete orphanTimers[bufferKey]
-            }
-            for (const { frame: bf } of buffered) {
-              if (bf.type === 'tool_call_start') {
-                span.steps.push({ kind: 'tool', tool: { id: bf.call_id, call_id: bf.call_id, tool: bf.tool, params: bf.params, status: 'running' } })
-              } else if (bf.type === 'tool_call_result') {
-                const existingIdx = span.steps.findIndex((s) => s.kind === 'tool' && s.tool.call_id === bf.call_id)
-                if (existingIdx !== -1) {
-                  const existing = span.steps[existingIdx]
-                  if (existing.kind === 'tool') {
-                    span.steps[existingIdx] = { kind: 'tool', tool: { ...existing.tool, result: bf.result, status: bf.status, duration_ms: bf.duration_ms, error: bf.error } }
+            return produce(b, (draft) => {
+              const order = draft.messageOrder
+              let lastMsgId: string | null = null
+              for (let i = order.length - 1; i >= 0; i--) {
+                if (draft.messagesById[order[i]]?.role === 'assistant') { lastMsgId = order[i]; break }
+              }
+              if (!lastMsgId) return
+              const span: SubagentSpanRunning = {
+                spanId: sf.span_id,
+                parentCallId: sf.parent_call_id,
+                taskLabel: sf.task_label,
+                status: 'running',
+                steps: [],
+              }
+              const bufferKey = `${targetSid}:${sf.parent_call_id}`
+              const buffered = pendingByParentCallId[bufferKey] ?? []
+              delete pendingByParentCallId[bufferKey]
+              if (orphanTimers[bufferKey]) {
+                clearTimeout(orphanTimers[bufferKey])
+                delete orphanTimers[bufferKey]
+              }
+              for (const { frame: bf } of buffered) {
+                if (bf.type === 'tool_call_start') {
+                  span.steps.push({ kind: 'tool', tool: { id: bf.call_id, call_id: bf.call_id, tool: bf.tool, params: bf.params, status: 'running' } })
+                } else if (bf.type === 'tool_call_result') {
+                  const existingIdx = span.steps.findIndex((s) => s.kind === 'tool' && s.tool.call_id === bf.call_id)
+                  if (existingIdx !== -1) {
+                    const existing = span.steps[existingIdx]
+                    if (existing.kind === 'tool') {
+                      span.steps[existingIdx] = { kind: 'tool', tool: { ...existing.tool, result: clampToolResult(bf.result), status: bf.status, duration_ms: bf.duration_ms, error: bf.error } }
+                    }
                   }
                 }
               }
-            }
-            msgs[lastIdx] = { ...msgs[lastIdx], spans: [...(msgs[lastIdx].spans ?? []), span] }
-            return { messages: msgs }
+              const lastMsg = draft.messagesById[lastMsgId]
+              const spanIdx = (lastMsg.spans ?? []).length
+              if (!lastMsg.spans) lastMsg.spans = []
+              lastMsg.spans.push(span)
+              draft.spanByParentCallId[sf.parent_call_id] = { messageId: lastMsgId, spanIdx }
+            }) as Partial<SessionChatState>
           })
           break
         }
@@ -1537,30 +1852,30 @@ export const useChatStore = create<ChatStore>((set, get) => {
           if (!targetSid) break
           const ef = frame as WsSubagentEndFrame
           withBucket(targetSid, (b) => {
-            const msgs = [...b.messages]
-            for (let i = msgs.length - 1; i >= 0; i--) {
-              const msg = msgs[i]
-              if (msg.role !== 'assistant' || !msg.spans) continue
-              const spanIdx = msg.spans.findIndex((s) => s.spanId === ef.span_id)
-              if (spanIdx === -1) continue
-              const existingSpan = msg.spans[spanIdx]
-              const updatedSpans = [...msg.spans]
-              const terminalSpan: SubagentSpanTerminal = {
-                spanId: existingSpan.spanId,
-                parentCallId: existingSpan.parentCallId,
-                taskLabel: existingSpan.taskLabel,
-                steps: existingSpan.steps,
-                status: ef.status,
-                durationMs: ef.duration_ms ?? 0,
-                finalResult: ef.final_result,
-                reason: ef.reason,
+            return produce(b, (draft) => {
+              for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+                const msgId = draft.messageOrder[i]
+                const msg = draft.messagesById[msgId]
+                if (msg.role !== 'assistant' || !msg.spans) continue
+                const spanIdx = msg.spans.findIndex((s) => s.spanId === ef.span_id)
+                if (spanIdx === -1) continue
+                const existingSpan = msg.spans[spanIdx]
+                const terminalSpan: SubagentSpanTerminal = {
+                  spanId: existingSpan.spanId,
+                  parentCallId: existingSpan.parentCallId,
+                  taskLabel: existingSpan.taskLabel,
+                  steps: existingSpan.steps,
+                  status: ef.status,
+                  durationMs: ef.duration_ms ?? 0,
+                  finalResult: ef.final_result,
+                  reason: ef.reason,
+                }
+                msg.spans[spanIdx] = terminalSpan
+                delete draft.spanByParentCallId[existingSpan.parentCallId]
+                return
               }
-              updatedSpans[spanIdx] = terminalSpan
-              msgs[i] = { ...msgs[i], spans: updatedSpans }
-              return { messages: msgs }
-            }
-            console.warn('[chat] subagent_end received for unknown span_id', { spanId: ef.span_id })
-            return {}
+              console.warn('[chat] subagent_end received for unknown span_id', { spanId: ef.span_id })
+            }) as Partial<SessionChatState>
           })
           break
         }
@@ -1603,94 +1918,84 @@ export const useChatStore = create<ChatStore>((set, get) => {
           const messageTimestamp = replayFrame.timestamp
           const replayAgentId = replayFrame.agent_id
           withBucket(targetSid, (b) => {
-            const msgs = [...b.messages]
-            // Reconnection dedup: prefer server-assigned id match when present;
-            // fall back to (content + role + timestamp) tuple. Content-only dedup
-            // was silently dropping legitimate identical user retries.
-            if (messageId) {
-              if (msgs.some((m) => m.id === messageId)) {
-                console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: 'id-match' })
-                return {}
-              }
-            } else {
-              const tail = msgs[msgs.length - 1]
-              const tailTs = tail?.timestamp ?? ''
-              const frameTs = messageTimestamp ?? ''
-              // Only dedup on content+role if timestamps also match (or both absent),
-              // preventing silent drops of identical retries with different timestamps.
-              if (
-                tail &&
-                tail.role === role &&
-                (tail.content ?? '') === text &&
-                (tailTs === frameTs || (tailTs === '' && frameTs === ''))
-              ) {
-                console.warn('chat.replay_dedup_skipped', { role, reason: 'content-tuple-match' })
-                return {}
-              }
-            }
-            // Coalesce assistant text into the trailing empty assistant bubble
-            // that tool_call_start frames already created. Without this, replay
-            // splits one agent turn into two bubbles: the first with media/tool
-            // calls and an empty body (still showing "Thinking…"), the second
-            // with the final text — visually out of chronological order.
-            if (role === 'assistant') {
-              const lastIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
-              if (lastIdx !== -1 && (msgs[lastIdx].content ?? '') === '') {
-                msgs[lastIdx] = {
-                  ...msgs[lastIdx],
-                  content: text,
-                  status: 'done',
-                  isStreaming: false,
-                  ...(replayAgentId ? { agentId: replayAgentId } : {}),
+            return produce(b, (draft) => {
+              draft.lastReceivedEventTime = advanceEventTime(draft.lastReceivedEventTime, messageTimestamp)
+              const msgs = getMessages(b)
+              // Reconnection dedup: prefer server-assigned id match when present;
+              // fall back to (content + role + timestamp) tuple. Content-only dedup
+              // was silently dropping legitimate identical user retries.
+              if (messageId) {
+                if (draft.messageOrder.includes(messageId)) {
+                  console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: 'id-match' })
+                  return
                 }
-                return { messages: msgs }
-              }
-              // T1.10: A new assistant turn is starting. Bake any live tool calls
-              // from the previous turn into the previous assistant message so they
-              // are anchored to the correct bubble via msg.tool_calls.  Without
-              // this, the live store entries stay "unclaimed" and buildContentParts
-              // renders them in the NEW (last) assistant message instead — the
-              // "badge teleport" regression caught by multi-turn-render.spec.ts.
-              if (lastIdx !== -1 && b.toolCallOrder.length > 0) {
-                const baked = b.toolCallOrder
-                  .filter((id) => b.toolCalls[id])
-                  .map((id) => {
-                    const tc = b.toolCalls[id]
-                    return {
-                      id,
-                      tool: tc.tool,
-                      params: tc.params ?? {},
-                      result: tc.result,
-                      status: tc.status,
-                      duration_ms: tc.duration_ms,
-                      error: tc.error,
-                    }
-                  })
-                const existing = msgs[lastIdx].tool_calls ?? []
-                const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
-                for (const tc of baked) mergedById.set(tc.id, tc)
-                msgs[lastIdx] = {
-                  ...msgs[lastIdx],
-                  tool_calls: Array.from(mergedById.values()),
-                }
-                // Clear the live store so these calls don't bleed into the new turn.
-                return {
-                  messages: msgs,
-                  toolCalls: {},
-                  toolCallOrder: [],
-                  textAtToolCallStart: {},
+              } else {
+                const tailId = draft.messageOrder[draft.messageOrder.length - 1]
+                const tail = tailId ? draft.messagesById[tailId] : null
+                const tailTs = tail?.timestamp ?? ''
+                const frameTs = messageTimestamp ?? ''
+                // Only dedup on content+role if timestamps also match (or both absent).
+                if (
+                  tail &&
+                  tail.role === role &&
+                  (tail.content ?? '') === text &&
+                  (tailTs === frameTs || (tailTs === '' && frameTs === ''))
+                ) {
+                  console.warn('chat.replay_dedup_skipped', { role, reason: 'content-tuple-match' })
+                  return
                 }
               }
-            }
-            msgs.push({
-              id: messageId ?? generateId(),
-              role,
-              content: text,
-              timestamp: messageTimestamp ?? new Date().toISOString(),
-              status: 'done' as const,
-              ...(replayAgentId ? { agentId: replayAgentId } : {}),
-            })
-            return { messages: msgs }
+              // Coalesce assistant text into the trailing empty assistant bubble
+              // that tool_call_start frames already created.
+              if (role === 'assistant') {
+                let lastMsgId: string | null = null
+                for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+                  if (draft.messagesById[draft.messageOrder[i]]?.role === 'assistant') { lastMsgId = draft.messageOrder[i]; break }
+                }
+                if (lastMsgId && (draft.messagesById[lastMsgId].content ?? '') === '') {
+                  const m = draft.messagesById[lastMsgId]
+                  m.content = text
+                  m.status = 'done'
+                  m.isStreaming = false
+                  if (replayAgentId) m.agentId = replayAgentId
+                  return
+                }
+                // T1.10: Bake any live tool calls from the previous turn.
+                if (lastMsgId && draft.toolCallOrder.length > 0) {
+                  const baked = draft.toolCallOrder
+                    .filter((id) => draft.toolCalls[id])
+                    .map((id) => {
+                      const tc = draft.toolCalls[id]
+                      return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
+                    })
+                  const lastMsg = draft.messagesById[lastMsgId]
+                  const existing = lastMsg.tool_calls ?? []
+                  const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+                  for (const tc of baked) mergedById.set(tc.id, tc)
+                  lastMsg.tool_calls = Array.from(mergedById.values())
+                  draft.toolCalls = {}
+                  draft.toolCallOrder = []
+                  draft.textAtToolCallStart = {}
+                }
+              }
+              const newMsg: ChatMessage = {
+                id: messageId ?? generateId(),
+                role,
+                content: text,
+                timestamp: messageTimestamp ?? new Date().toISOString(),
+                status: 'done' as const,
+                ...(replayAgentId ? { agentId: replayAgentId } : {}),
+              }
+              draft.messagesById[newMsg.id] = newMsg
+              draft.messageOrder.push(newMsg.id)
+              // Ring buffer enforcement during replay — evict oldest entry plus all dependent maps.
+              if (draft.messageOrder.length > MAX_MESSAGES_PER_SESSION) {
+                const evictId = draft.messageOrder[0]
+                evictMessageFromBucket(draft as unknown as SessionChatState, evictId)
+                draft.trimmedCount += 1
+              }
+              void msgs // suppress unused warning — only used for dedup context above
+            }) as Partial<SessionChatState>
           })
           break
         }
@@ -1699,22 +2004,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
           if (!targetSid) break
           if (!Array.isArray(frame.parts) || frame.parts.length === 0) {
             console.warn('[chat] Received media frame with empty or invalid parts — appending notice')
-            // Append a visible inline notice rather than silently dropping so
-            // the user sees "1 attachment could not be displayed" instead of
-            // "I screenshotted X" with no screenshot visible.
             withBucket(targetSid, (b) => {
-              const msgs = [...b.messages]
-              const lastIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
-              if (lastIdx !== -1) {
-                msgs[lastIdx] = {
-                  ...msgs[lastIdx],
-                  content: (msgs[lastIdx].content ?? '') +
-                    (msgs[lastIdx].content ? '\n\n' : '') +
-                    '_1 attachment could not be displayed._',
+              return produce(b, (draft) => {
+                let lastMsgId: string | null = null
+                for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+                  if (draft.messagesById[draft.messageOrder[i]]?.role === 'assistant') { lastMsgId = draft.messageOrder[i]; break }
                 }
-                return { messages: msgs }
-              }
-              return {}
+                if (lastMsgId) {
+                  const msg = draft.messagesById[lastMsgId]
+                  msg.content = (msg.content ?? '') + (msg.content ? '\n\n' : '') + '_1 attachment could not be displayed._'
+                }
+              }) as Partial<SessionChatState>
             })
             break
           }
@@ -1728,49 +2028,50 @@ export const useChatStore = create<ChatStore>((set, get) => {
               caption: p.caption,
             }))
           if (attachments.length === 0) {
-            // Parts array was non-empty but all parts failed the url+type filter.
             withBucket(targetSid, (b) => {
-              const msgs = [...b.messages]
-              const lastIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
-              if (lastIdx !== -1) {
-                msgs[lastIdx] = {
-                  ...msgs[lastIdx],
-                  content: (msgs[lastIdx].content ?? '') +
-                    (msgs[lastIdx].content ? '\n\n' : '') +
-                    `_${frame.parts.length} attachment${frame.parts.length > 1 ? 's' : ''} could not be displayed._`,
+              return produce(b, (draft) => {
+                let lastMsgId: string | null = null
+                for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+                  if (draft.messagesById[draft.messageOrder[i]]?.role === 'assistant') { lastMsgId = draft.messageOrder[i]; break }
                 }
-                return { messages: msgs }
-              }
-              return {}
+                if (lastMsgId) {
+                  const msg = draft.messagesById[lastMsgId]
+                  msg.content = (msg.content ?? '') + (msg.content ? '\n\n' : '') +
+                    `_${frame.parts.length} attachment${frame.parts.length > 1 ? 's' : ''} could not be displayed._`
+                }
+              }) as Partial<SessionChatState>
             })
             break
           }
           withBucket(targetSid, (b) => {
-            const msgs = [...b.messages]
-            const lastIdx = msgs.map((m) => m.role).lastIndexOf('assistant')
-            const canAttach =
-              lastIdx !== -1 &&
-              (msgs[lastIdx].isStreaming || (msgs[lastIdx].content ?? '') === '')
-            const dedupe = (existing: MediaAttachment[] | undefined, incoming: MediaAttachment[]) => {
-              const seen = new Set((existing ?? []).map((a) => a.url))
-              const fresh = incoming.filter((a) => !seen.has(a.url))
-              return [...(existing ?? []), ...fresh]
-            }
-            if (canAttach) {
-              msgs[lastIdx] = {
-                ...msgs[lastIdx],
-                media: dedupe(msgs[lastIdx].media, attachments),
+            return produce(b, (draft) => {
+              let lastMsgId: string | null = null
+              for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
+                if (draft.messagesById[draft.messageOrder[i]]?.role === 'assistant') { lastMsgId = draft.messageOrder[i]; break }
               }
-              return { messages: msgs }
-            }
-            msgs.push({
-              id: generateId(),
-              role: 'assistant',
-              content: '',
-              timestamp: new Date().toISOString(),
-              media: attachments,
-            })
-            return { messages: msgs }
+              const dedupe = (existing: MediaAttachment[] | undefined, incoming: MediaAttachment[]) => {
+                const seen = new Set((existing ?? []).map((a) => a.url))
+                const fresh = incoming.filter((a) => !seen.has(a.url))
+                return [...(existing ?? []), ...fresh]
+              }
+              if (lastMsgId) {
+                const msg = draft.messagesById[lastMsgId]
+                const canAttach = msg.isStreaming || (msg.content ?? '') === ''
+                if (canAttach) {
+                  msg.media = dedupe(msg.media, attachments)
+                  return
+                }
+              }
+              const newMsg: ChatMessage = {
+                id: generateId(),
+                role: 'assistant',
+                content: '',
+                timestamp: new Date().toISOString(),
+                media: attachments,
+              }
+              draft.messagesById[newMsg.id] = newMsg
+              draft.messageOrder.push(newMsg.id)
+            }) as Partial<SessionChatState>
           })
           break
         }
@@ -1801,7 +2102,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               const sessionsById = { ...state.sessionsById, [sid]: updated }
               const activeSidNow = getActiveSid()
               const fg = (activeSidNow ? sessionsById[activeSidNow] : null) ?? EMPTY_BUCKET
-              return { sessionsById, ...fg }
+              return { sessionsById, ...bucketToForeground(fg) }
             })
           }, 60_000)
           break
@@ -1869,7 +2170,9 @@ export function syncChatForeground(): void {
   const activeSid = useSessionStore.getState().activeSessionId ?? FALLBACK_SID
   useChatStore.setState((state) => {
     const fg = (activeSid ? state.sessionsById[activeSid] : null) ?? EMPTY_BUCKET
-    return { ...fg }
+    // Project messagesById+messageOrder → messages for foreground consumers.
+    const { messagesById: _mb, messageOrder: _mo, trimmedCount: _tc, spanByParentCallId: _sp, ...rest } = fg
+    return { ...rest, messages: getMessages(fg) }
   })
 }
 

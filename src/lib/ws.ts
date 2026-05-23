@@ -4,10 +4,9 @@
 import { maybeDevToast } from '@/lib/dev-toast'
 
 // ── Generated type imports ────────────────────────────────────────────────────
-//
 // All wire-format frame types are sourced from the generated AsyncAPI types.
 // Hand-written interface declarations for wire-format frames are FORBIDDEN —
-// see CLAUDE.md hard-constraint #8. This file re-exports and aliases only.
+// see CLAUDE.md hard-constraint #8.
 
 import { WsFrame as WsFrameSchema, WsFrameType as WsFrameTypeSchema } from '@/lib/api/generated/schemas'
 import { ClientFrameTypes } from '@/lib/api/generated/asyncapi-types'
@@ -352,27 +351,20 @@ function getWsUrl(): string {
 // ── Connection ────────────────────────────────────────────────────────────────
 
 export interface WsConnectionCallbacks { // not-wire-format: SPA-only callback interface passed to WsConnection constructor. Never serialized to or from the gateway — purely internal to the SPA's WebSocket connection manager.
-  onFrame: (frame: ServerFrame) => void
+  /** Batch callback: called at most once per rAF with all validated frames. Preferred over onFrame. */
+  onFrames?: (frames: ServerFrame[]) => void
+  /** Legacy single-frame callback. Used when onFrames is not provided. */
+  onFrame?: (frame: ServerFrame) => void
   onConnected: () => void
   onDisconnected: () => void
   onError: (error: string) => void
-  /**
-   * Called whenever the reconnect state changes so the UI can show attempt
-   * progress. phase=null means not reconnecting (connected or gave up).
-   * 'reconnecting' = fast backoff phase (attempts 1-10, up to 30s delay).
-   * 'slow'         = slow retry phase (attempts 1-20, 60s delay each).
-   * 'gave_up'      = all attempts exhausted; waiting for manual retry.
-   */
+  /** Reconnect progress. phase=null when connected; gave_up when all retries exhausted. */
   onReconnectStateChange?: (phase: 'reconnecting' | 'slow' | 'gave_up' | null, attempt: number) => void
 }
 
 // ── Reconnect schedule constants ──────────────────────────────────────────────
-//
-// Fast phase: up to MAX_FAST_ATTEMPTS retries with exponential backoff capped
-// at MAX_FAST_DELAY_MS. Delay = min(2^n * 1000, MAX_FAST_DELAY_MS).
-// Slow phase: up to MAX_SLOW_ATTEMPTS retries at a fixed SLOW_RETRY_DELAY_MS.
-// After both phases are exhausted, we call onError once and stop — the user
-// must click "Reconnect now" to trigger connection.connect() again.
+// Fast phase: exponential backoff capped at MAX_FAST_DELAY_MS (10 attempts).
+// Slow phase: fixed SLOW_RETRY_DELAY_MS (20 attempts). Then onError + give up.
 
 const MAX_FAST_ATTEMPTS = 10
 const MAX_FAST_DELAY_MS = 30_000
@@ -405,6 +397,31 @@ export class WsConnection {
   /** True when at least one server frame arrived since the last ping sent. */
   private _receivedSinceLastPing = false
 
+  // ── Frame batching ──────────────────────────────────────────────────────────
+  // Parsed frames queue into _inboundBatch; a single rAF (or setTimeout fallback
+  // when hidden) drains them all in one Zustand update per display frame.
+
+  /** Validated frames waiting for the next rAF/microtask flush. */
+  private _inboundBatch: ServerFrame[] = []
+  /** True when a rAF/setTimeout flush is already scheduled for this batch. */
+  private _rafPending = false
+
+  // ── Web Worker ──────────────────────────────────────────────────────────────
+  // Zod parse runs off-main-thread. Falls back to inline parse when Worker
+  // construction fails (older Safari, strict CSP, jsdom).
+
+  private _worker: Worker | null = null
+  private _workerAvailable = false
+  /** Monotonic counter for worker request ids. */
+  private _nextWorkerId = 0
+  /**
+   * Pending worker entries. raw+sentAt are set immediately on postMessage;
+   * frame+droppedReason+replied are set when the worker responds.
+   */
+  private _workerPending: Map<number, { frame: ServerFrame | null; droppedReason?: string; raw: string; sentAt: number; replied: boolean }> = new Map()
+  /** Next worker response id we expect to drain (FIFO ordering). */
+  private _workerNextExpected = 0
+
   // Bound event handler references so they can be removed on disconnect.
   private _onVisibilityChange: (() => void) | null = null
   private _onOnline: (() => void) | null = null
@@ -419,6 +436,12 @@ export class WsConnection {
     this.reconnectAttempts = 0
     this.slowRetryAttempts = 0
     this.inSlowPhase = false
+    this._inboundBatch = []
+    this._rafPending = false
+    this._nextWorkerId = 0
+    this._workerNextExpected = 0
+    this._workerPending.clear()
+    this._startWorker()
     this._attachWindowListeners()
     this._createSocket()
   }
@@ -428,8 +451,178 @@ export class WsConnection {
     this._clearReconnectTimer()
     this._stopHeartbeat()
     this._detachWindowListeners()
+    this._stopWorker()
+    // Flush any pending batch before tearing down so callers don't lose frames
+    // queued just before disconnect() was called.
+    this._flushBatch()
     this.ws?.close(1000, 'User disconnected')
     this.ws = null
+  }
+
+  // ── Worker lifecycle ──────────────────────────────────────────────────────
+
+  // One-time flag so the construction-failure log fires exactly once per process.
+  private static _workerConstructionFailureLogged = false
+
+  private _startWorker(): void {
+    if (this._worker !== null) return
+
+    try {
+      // Vite requires `new URL(...)` inlined inside `new Worker(...)` so its
+      // static analysis bundles the worker entry point at build time and emits
+      // it under dist/spa/assets/ with a content hash for the Go binary embed.
+      this._worker = new Worker(
+        new URL('../workers/ws-parser.worker.ts', import.meta.url),
+        { type: 'module' },
+      )
+      this._workerAvailable = true
+
+      this._worker.onmessage = (event: MessageEvent) => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        const { id, frame, droppedReason } = event.data as {
+          id: number
+          frame: ServerFrame | null
+          droppedReason?: string
+        }
+        const pending = this._workerPending.get(id)
+        if (pending) {
+          pending.frame = frame
+          pending.droppedReason = droppedReason
+          pending.replied = true
+        }
+        this._drainWorkerPending()
+      }
+
+      this._worker.onerror = () => {
+        this._workerAvailable = false
+        this._worker = null
+      }
+    } catch (err) {
+      if (!WsConnection._workerConstructionFailureLogged) {
+        WsConnection._workerConstructionFailureLogged = true
+        console.warn(
+          '[ws] Web Worker construction failed — WS frame parsing will run inline on the main thread; this is a performance regression under burst input',
+          err,
+        )
+      }
+      this._workerAvailable = false
+      this._worker = null
+    }
+  }
+
+  private _stopWorker(): void {
+    if (this._worker) {
+      this._worker.terminate()
+      this._worker = null
+    }
+    this._workerAvailable = false
+  }
+
+  /** Drain worker responses in FIFO order; fall back to inline parse on 5s timeout. */
+  private _drainWorkerPending(): void {
+    const WORKER_TIMEOUT_MS = 5_000
+
+    // Check for a stalled head-of-line entry (oldest pending id older than 5s).
+    if (this._workerPending.size > 0) {
+      const now = Date.now()
+      let staleCount = 0
+      let oldestAgeMs = 0
+      for (const [, entry] of this._workerPending) {
+        const age = now - entry.sentAt
+        if (age > WORKER_TIMEOUT_MS) {
+          staleCount++
+          if (age > oldestAgeMs) oldestAgeMs = age
+        }
+      }
+      if (staleCount > 0) {
+        console.error(
+          '[ws] WS parser worker timeout — falling back to inline parse; pending frames replayed inline',
+          { staleCount, oldestAgeMs },
+        )
+        this._workerAvailable = false
+        // Collect raw payloads for all pending entries in id order.
+        const pendingIds = Array.from(this._workerPending.keys()).sort((a, b) => a - b)
+        const rawsToReplay = pendingIds.map((id) => this._workerPending.get(id)!.raw)
+        this._workerPending.clear()
+        this._workerNextExpected = this._nextWorkerId
+        // Inline-parse each stale raw and push to batch.
+        for (const raw of rawsToReplay) {
+          const parsed = _parseServerFrame(raw)
+          this._onFrameParsed(parsed)
+        }
+        return
+      }
+    }
+
+    // Drain only entries that have received a worker reply (replied=true).
+    // Entries without a reply yet block the FIFO drain until they arrive.
+    while (this._workerPending.has(this._workerNextExpected)) {
+      const resp = this._workerPending.get(this._workerNextExpected)!
+      if (!resp.replied) break
+      this._workerPending.delete(this._workerNextExpected)
+      this._workerNextExpected++
+      this._onFrameParsed(resp.frame, resp.droppedReason)
+    }
+  }
+
+  // ── Batch flush ───────────────────────────────────────────────────────────
+
+  /** Enqueue a parsed frame into the batch (or count the drop). */
+  private _onFrameParsed(frame: ServerFrame | null, droppedReason?: string): void {
+    if (frame === null) {
+      this.droppedFrameCount++
+      if (droppedReason) {
+        _maybeDevToast('_worker_drop', `[ws] ${droppedReason}`)
+      }
+      if (this.droppedFrameCount >= this.droppedFrameThreshold) {
+        this.callbacks.onError(
+          `Received ${this.droppedFrameCount} invalid frames in a row — the connection may be unstable.`,
+        )
+      }
+      return
+    }
+    // Valid frame — reset consecutive drop counter.
+    this.droppedFrameCount = 0
+
+    // Pong is transport-layer only: it already set _receivedSinceLastPing /
+    // missedPingCount in the synchronous onmessage path (before the worker
+    // path). Do not enqueue it; surfacing it would trip the unknown-frame toast
+    // in chatStore.handleFrame.
+    if (frame.type === 'pong') return
+
+    this._inboundBatch.push(frame)
+    this._scheduleFlush()
+  }
+
+  /** Schedule the next rAF/setTimeout flush. Idempotent. */
+  private _scheduleFlush(): void {
+    if (this._rafPending) return
+    this._rafPending = true
+
+    if (typeof requestAnimationFrame !== 'undefined' && document.visibilityState !== 'hidden') {
+      requestAnimationFrame(() => this._flushBatch())
+    } else {
+      // Tab is hidden OR rAF not available (jsdom / node). Use setTimeout(0)
+      // as a near-zero-delay microtask equivalent that still drains the batch.
+      setTimeout(() => this._flushBatch(), 0)
+    }
+  }
+
+  /** Drain the entire inbound batch in one call. */
+  private _flushBatch(): void {
+    this._rafPending = false
+    if (this._inboundBatch.length === 0) return
+
+    const batch = this._inboundBatch
+    this._inboundBatch = []
+
+    if (this.callbacks.onFrames) {
+      this.callbacks.onFrames(batch)
+    } else if (this.callbacks.onFrame) {
+      for (const frame of batch) {
+        this.callbacks.onFrame(frame)
+      }
+    }
   }
 
   send(frame: ClientFrame): boolean {
@@ -489,21 +682,35 @@ export class WsConnection {
     }
 
     this.ws.onmessage = (event: MessageEvent) => {
-      const parsed = _parseServerFrame(event.data as string)
-      if (parsed === null) {
-        this.droppedFrameCount++
-        if (this.droppedFrameCount >= this.droppedFrameThreshold) {
-          this.callbacks.onError(
-            `Received ${this.droppedFrameCount} invalid frames in a row — the connection may be unstable.`,
-          )
+      const raw = event.data as string
+
+      // ── Synchronous liveness sniff ────────────────────────────────────────────
+      // Update heartbeat state before the worker round-trip. Intercept pong here
+      // so it never enters the batch (transport-layer only).
+      let maybePong = false
+      try {
+        const sniff = JSON.parse(raw) as { type?: string }
+        if (sniff && typeof sniff.type === 'string') {
+          // Any parseable frame with a type field counts as "alive".
+          this._receivedSinceLastPing = true
+          this.missedPingCount = 0
+          if (sniff.type === 'pong') maybePong = true
         }
-        return
+      } catch {
+        // Not JSON — will be caught and dropped during full parse below.
       }
-      // Valid frame received — reset consecutive drop counter and liveness tracker.
-      this.droppedFrameCount = 0
-      this._receivedSinceLastPing = true
-      this.missedPingCount = 0
-      this.callbacks.onFrame(parsed)
+      if (maybePong) return
+
+      // ── Parse path (worker or inline) ────────────────────────────────────────
+      if (this._workerAvailable && this._worker) {
+        const id = this._nextWorkerId++
+        this._workerPending.set(id, { frame: null, raw, sentAt: Date.now(), replied: false })
+        this._worker.postMessage({ id, raw })
+      } else {
+        // Inline fallback: synchronous parse on the main thread.
+        const parsed = _parseServerFrame(raw)
+        this._onFrameParsed(parsed)
+      }
     }
 
     this.ws.onerror = () => {
@@ -523,6 +730,15 @@ export class WsConnection {
           if (idx >= 0) w.__ws_instances.splice(idx, 1)
         }
       }
+
+      // Flush frames already queued before the drop so callers don't lose them.
+      // Chat reducers are idempotent on replay, so flushing on unintentional
+      // close is safe. Also clear any in-flight worker entries whose responses
+      // will never arrive so they don't pile up against the next connection.
+      this._flushBatch()
+      this._workerPending.clear()
+      this._workerNextExpected = this._nextWorkerId
+
       this.ws = null
       this._stopHeartbeat()
       this.callbacks.onDisconnected()

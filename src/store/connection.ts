@@ -15,10 +15,17 @@ interface ConnectionStore {
   reconnectPhase: 'reconnecting' | 'slow' | 'gave_up' | null
   /** Current attempt number within the active reconnect phase (1-based). */
   reconnectAttempt: number
+  /**
+   * W2: lite mode is activated when heap pressure exceeds 250 MiB (iOS threshold).
+   * When true the UI skips auto-expanding tool calls and the ring-buffer cap is
+   * lowered to 200 messages via getEffectiveMessageLimit() in chat.ts.
+   */
+  liteMode: boolean
   setConnection: (conn: WsConnection | null) => void
   setConnected: (connected: boolean) => void
   setConnectionError: (error: string | null) => void
   setReconnectState: (phase: 'reconnecting' | 'slow' | 'gave_up' | null, attempt: number) => void
+  setLiteMode: (liteMode: boolean) => void
   reconnect: () => void
 }
 
@@ -28,6 +35,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   connectionError: null,
   reconnectPhase: null,
   reconnectAttempt: 0,
+  liteMode: false,
   setConnection: (conn) => set({ connection: conn }),
   setConnected: (connected) =>
     set({
@@ -39,6 +47,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
     }),
   setConnectionError: (error) => set({ connectionError: error }),
   setReconnectState: (phase, attempt) => set({ reconnectPhase: phase, reconnectAttempt: attempt }),
+  setLiteMode: (liteMode) => set({ liteMode }),
 
   reconnect: () => {
     const { connection } = get()

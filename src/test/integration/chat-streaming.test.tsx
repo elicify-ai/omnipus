@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { useChatStore } from '@/store/chat'
+import { useChatStore, makeBucketMessages } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { ChatThread } from '@/components/chat/ChatThread'
@@ -159,18 +159,19 @@ describe('cancel integration (test #40)', () => {
     act(() => {
       // Seed the session bucket directly so the message lands in the right session.
       useSessionStore.setState({ activeSessionId: 'sess_cancel' })
+      const cancelMsg = {
+        id: 'asst_cancel',
+        session_id: 'sess_cancel',
+        role: 'assistant' as const,
+        content: 'Here is the analysis of...',
+        timestamp: new Date().toISOString(),
+        status: 'streaming' as const,
+        isStreaming: true,
+      }
       useChatStore.setState({
         sessionsById: {
           'sess_cancel': {
-            messages: [{
-              id: 'asst_cancel',
-              session_id: 'sess_cancel',
-              role: 'assistant',
-              content: 'Here is the analysis of...',
-              timestamp: new Date().toISOString(),
-              status: 'streaming',
-              isStreaming: true,
-            }],
+            ...makeBucketMessages([cancelMsg]),
             toolCalls: {},
             toolCallOrder: [],
             textAtToolCallStart: {},
@@ -183,18 +184,12 @@ describe('cancel integration (test #40)', () => {
             rateLimitEvent: null,
             cancelStage: null,
             lastUserMessageAt: null,
+            lastReceivedEventTime: null,
+            spanByParentCallId: {},
           },
         },
         isStreaming: true,
-        messages: [{
-          id: 'asst_cancel',
-          session_id: 'sess_cancel',
-          role: 'assistant',
-          content: 'Here is the analysis of...',
-          timestamp: new Date().toISOString(),
-          status: 'streaming',
-          isStreaming: true,
-        }],
+        messages: [cancelMsg],
       })
       useConnectionStore.setState({
         connection: {

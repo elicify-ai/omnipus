@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import { MessageInput } from './MessageInput'
-import { useChatStore } from '@/store/chat'
+import { useChatStore, makeBucketMessages } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 
@@ -187,7 +187,7 @@ describe('MessageInput — stop button label morphing (B3)', () => {
         messages: [seededMsg],
         sessionsById: {
           sess_1: {
-            messages: [seededMsg],
+            ...makeBucketMessages([seededMsg]),
             toolCalls: {},
             toolCallOrder: [],
             textAtToolCallStart: {},
@@ -200,6 +200,8 @@ describe('MessageInput — stop button label morphing (B3)', () => {
             rateLimitEvent: null,
             cancelStage: null,
             lastUserMessageAt: null,
+            lastReceivedEventTime: null,
+            spanByParentCallId: {},
           },
         },
       })

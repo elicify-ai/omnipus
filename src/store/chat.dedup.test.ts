@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
-import { useChatStore } from './chat'
+import { useChatStore, getMessages, makeBucketMessages } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 
@@ -80,26 +80,27 @@ describe('chat.dedup — T1.7: sendMessage merges duplicate tool_call ids', () =
     // already baked into the message during the original sendMessage call.
     act(() => {
       useChatStore.setState((_s) => {
+        const seedMsgs = [
+          {
+            id: 'user-1',
+            role: 'user' as const,
+            content: 'first message',
+            timestamp: '2026-01-01T00:00:00Z',
+            status: 'done' as const,
+          },
+          {
+            id: 'asst-1',
+            role: 'assistant' as const,
+            content: 'I ran some things.',
+            timestamp: '2026-01-01T00:00:01Z',
+            status: 'done' as const,
+            isStreaming: false,
+            // tc1 already baked via a prior sendMessage call
+            tool_calls: [{ id: 'tc1', tool: 'write_file', params: { path: '/x' }, status: 'success' as const }],
+          },
+        ]
         const bucket = {
-          messages: [
-            {
-              id: 'user-1',
-              role: 'user' as const,
-              content: 'first message',
-              timestamp: '2026-01-01T00:00:00Z',
-              status: 'done' as const,
-            },
-            {
-              id: 'asst-1',
-              role: 'assistant' as const,
-              content: 'I ran some things.',
-              timestamp: '2026-01-01T00:00:01Z',
-              status: 'done' as const,
-              isStreaming: false,
-              // tc1 already baked via a prior sendMessage call
-              tool_calls: [{ id: 'tc1', tool: 'write_file', params: { path: '/x' }, status: 'success' as const }],
-            },
-          ],
+          ...makeBucketMessages(seedMsgs),
           toolCalls: {
             // tc1 also still present in the live map (simulating replay re-inject)
             tc1: { id: 'tc1', call_id: 'tc1', tool: 'write_file', params: { path: '/x' }, status: 'success' as const },
@@ -115,11 +116,13 @@ describe('chat.dedup — T1.7: sendMessage merges duplicate tool_call ids', () =
           rateLimitEvent: null,
           cancelStage: null,
           lastUserMessageAt: null,
+          lastReceivedEventTime: null,
+          spanByParentCallId: {},
         }
         return {
           sessionsById: { [SID]: bucket },
           // sync foreground selectors
-          messages: bucket.messages,
+          messages: getMessages(bucket),
           toolCalls: bucket.toolCalls,
           toolCallOrder: bucket.toolCallOrder,
           textAtToolCallStart: bucket.textAtToolCallStart,
@@ -169,7 +172,7 @@ describe('chat.dedup — T1.8: replay_message tail dedup drops identical re-emit
       useChatStore.setState((_s) => ({
         sessionsById: {
           [SID]: {
-            messages: [],
+            ...makeBucketMessages([]),
             toolCalls: {},
             toolCallOrder: [],
             textAtToolCallStart: {},
@@ -182,6 +185,8 @@ describe('chat.dedup — T1.8: replay_message tail dedup drops identical re-emit
             rateLimitEvent: null,
             cancelStage: null,
             lastUserMessageAt: null,
+            lastReceivedEventTime: null,
+            spanByParentCallId: {},
           },
         },
         messages: [],
@@ -205,7 +210,8 @@ describe('chat.dedup — T1.8: replay_message tail dedup drops identical re-emit
       useChatStore.getState().handleFrame(replayFrame)
     })
 
-    const afterFirst = useChatStore.getState().sessionsById[SID]?.messages ?? []
+    const afterFirstBucket = useChatStore.getState().sessionsById[SID]
+    const afterFirst = afterFirstBucket ? getMessages(afterFirstBucket) : []
     expect(afterFirst).toHaveLength(1)
 
     // Second push: identical role + content — must be dropped (tail dedup)
@@ -213,7 +219,8 @@ describe('chat.dedup — T1.8: replay_message tail dedup drops identical re-emit
       useChatStore.getState().handleFrame(replayFrame)
     })
 
-    const afterSecond = useChatStore.getState().sessionsById[SID]?.messages ?? []
+    const afterSecondBucket = useChatStore.getState().sessionsById[SID]
+    const afterSecond = afterSecondBucket ? getMessages(afterSecondBucket) : []
     expect(
       afterSecond,
       'Second identical replay_message must not create a duplicate bubble',
@@ -228,7 +235,7 @@ describe('chat.dedup — T1.8: replay_message tail dedup drops identical re-emit
       useChatStore.setState((_s) => ({
         sessionsById: {
           [SID]: {
-            messages: [],
+            ...makeBucketMessages([]),
             toolCalls: {},
             toolCallOrder: [],
             textAtToolCallStart: {},
@@ -241,6 +248,8 @@ describe('chat.dedup — T1.8: replay_message tail dedup drops identical re-emit
             rateLimitEvent: null,
             cancelStage: null,
             lastUserMessageAt: null,
+            lastReceivedEventTime: null,
+            spanByParentCallId: {},
           },
         },
         messages: [],
@@ -271,7 +280,8 @@ describe('chat.dedup — T1.8: replay_message tail dedup drops identical re-emit
       })
     })
 
-    const messages = useChatStore.getState().sessionsById[SID]?.messages ?? []
+    const finalBucket = useChatStore.getState().sessionsById[SID]
+    const messages = finalBucket ? getMessages(finalBucket) : []
     expect(
       messages,
       'Two replay_messages with different content must both appear',

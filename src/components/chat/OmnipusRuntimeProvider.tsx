@@ -6,6 +6,7 @@ import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useOmnipusRuntime } from "@/lib/omnipus-runtime";
 import { useChatStore } from "@/store/chat";
 import { useConnectionStore } from "@/store/connection";
+import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
 import { useSessionStore, resetChatBucketForReplay } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
 import { TerminalOutputUI } from "./tools/TerminalOutput";
@@ -27,6 +28,34 @@ import {
   BrowserWaitUI, BrowserWaitUnderscoreUI,
   BrowserEvaluateUI, BrowserEvaluateUnderscoreUI,
 } from "./tools/BrowserTool";
+
+// Manages the memory pressure observer lifecycle.
+// Starts the polling loop on mount and wires heap-level transitions into the connection store.
+function MemoryObserverLifecycle() {
+  const setLiteMode = useConnectionStore((s) => s.setLiteMode)
+
+  useEffect(() => {
+    const observer = startMemoryObserver()
+    const unsubscribe = addMemoryObserver((snap) => {
+      // Activate lite mode at 250 MiB; deactivate if heap drops back below 200 MiB.
+      if (snap.level === 'lite_mode' || snap.level === 'critical') {
+        setLiteMode(true)
+      } else if (snap.level === 'ok') {
+        setLiteMode(false)
+      }
+      // dev_warn: no liteMode change — just the console.info already emitted
+      // by the observer itself (in memory-observer.ts).
+    })
+    return () => {
+      observer.dispose()
+      unsubscribe()
+    }
+    // setLiteMode is a stable Zustand reference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return null
+}
 
 // Manages WebSocket connection lifecycle — renders nothing, only side effects.
 function WsLifecycle() {
@@ -59,7 +88,9 @@ function WsLifecycle() {
           // bucket BEFORE replay starts so frames rebuild it from scratch
           // rather than appending duplicates ("Browse to … / Browse to …"
           // doubled bubbles after every reconnect).
-          const sent = conn.send({ type: "attach_session", session_id: activeSessionId });
+          // Pass the since-cursor so the gateway only replays frames the SPA hasn't seen.
+          const since = useChatStore.getState().sessionsById[activeSessionId]?.lastReceivedEventTime ?? undefined
+          const sent = conn.send({ type: "attach_session", session_id: activeSessionId, since });
           if (!sent) {
             // send() returned false — socket closed between onopen and here.
             // Preserve local state (do not wipe bucket) and surface an error.
@@ -163,6 +194,7 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
       <BrowserWaitUnderscoreUI />
       <BrowserEvaluateUI />
       <BrowserEvaluateUnderscoreUI />
+      <MemoryObserverLifecycle />
       <WsLifecycle />
       {children}
     </AssistantRuntimeProvider>

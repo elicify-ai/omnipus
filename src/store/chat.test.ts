@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
-import { useChatStore } from './chat'
+import { useChatStore, getMessages, makeBucketMessages, MAX_MESSAGES_PER_SESSION, clampToolResult, isClientTruncatedResult, evictMessageFromBucket } from './chat'
+import type { SessionChatState } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 
@@ -27,6 +28,7 @@ function resetStore() {
       rateLimitEvent: null,
       lastUserMessageAt: null,
       cancelStage: null,
+      lastReceivedEventTime: null,
     })
     useConnectionStore.setState({
       connection: null,
@@ -77,8 +79,9 @@ describe('chat store — session management', () => {
     expect(sessionState.activeAgentId).toBe('general-assistant')
     // Original bucket is intact (not wiped by session switch).
     const bucket = useChatStore.getState().sessionsById[TEST_SESSION_ID]
-    expect(bucket?.messages).toHaveLength(1)
-    expect(bucket?.messages[0].content).toBe('Original session message')
+    const msgs = bucket ? getMessages(bucket) : []
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].content).toBe('Original session message')
   })
 })
 
@@ -1182,14 +1185,15 @@ describe('chat store — H1-FE: unknown-sid done does not corrupt active stream'
   function seedActiveMidStream(lastUserMessageAt: number) {
     act(() => {
       useSessionStore.setState({ activeSessionId: ACTIVE_SID, activeAgentId: null, activeAgentType: null })
+      const seedMsgs = [
+        { id: 'u1', session_id: ACTIVE_SID, role: 'user' as const, content: 'hi', timestamp: new Date().toISOString(), status: 'done' as const },
+        { id: 'a1', session_id: ACTIVE_SID, role: 'assistant' as const, content: 'thinking…', timestamp: new Date().toISOString(), status: 'streaming' as const, isStreaming: true },
+      ]
       useChatStore.setState((state) => ({
         sessionsById: {
           ...state.sessionsById,
           [ACTIVE_SID]: {
-            messages: [
-              { id: 'u1', session_id: ACTIVE_SID, role: 'user', content: 'hi', timestamp: new Date().toISOString(), status: 'done' },
-              { id: 'a1', session_id: ACTIVE_SID, role: 'assistant', content: 'thinking…', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true },
-            ],
+            ...makeBucketMessages(seedMsgs),
             toolCalls: {},
             toolCallOrder: [],
             textAtToolCallStart: {},
@@ -1202,11 +1206,13 @@ describe('chat store — H1-FE: unknown-sid done does not corrupt active stream'
             rateLimitEvent: null,
             cancelStage: null,
             lastUserMessageAt,
+            lastReceivedEventTime: null,
+            spanByParentCallId: {},
           },
         },
         // Sync foreground fields
         isStreaming: true,
-        messages: [],
+        messages: seedMsgs,
         toolCalls: {},
         toolCallOrder: [],
         textAtToolCallStart: {},
@@ -1217,6 +1223,7 @@ describe('chat store — H1-FE: unknown-sid done does not corrupt active stream'
         replayCompletedForSession: null,
         rateLimitEvent: null,
         lastUserMessageAt,
+        lastReceivedEventTime: null,
       }))
     })
   }
@@ -1268,7 +1275,7 @@ describe('chat store — cancel_stage frame (B3)', () => {
         sessionsById: {
           [TEST_SESSION_ID]: {
             ...useChatStore.getState().sessionsById[TEST_SESSION_ID] ?? {
-              messages: [],
+              ...makeBucketMessages([]),
               toolCalls: {},
               toolCallOrder: [],
               textAtToolCallStart: {},
@@ -1280,6 +1287,8 @@ describe('chat store — cancel_stage frame (B3)', () => {
               rateLimitEvent: null,
               lastUserMessageAt: null,
               cancelStage: null,
+              lastReceivedEventTime: null,
+              spanByParentCallId: {},
             },
             isStreaming: true,
           },
@@ -1349,5 +1358,560 @@ describe('chat store — cancel_stage frame (B3)', () => {
 
     expect(useChatStore.getState().sessionsById[TEST_SESSION_ID]?.cancelStage).toBeNull()
     expect(useChatStore.getState().cancelStage).toBeNull()
+  })
+})
+
+// ── G1: MAX_MESSAGES_PER_SESSION ring-buffer enforcement ──────────────────────
+
+describe('G1: ring buffer — MAX_MESSAGES_PER_SESSION enforcement', () => {
+  it('appending 600 messages leaves exactly MAX_MESSAGES_PER_SESSION messages in the bucket', () => {
+    // Seed 600 replay_message frames via resetSessionForReplay + handleFrame.
+    act(() => {
+      useChatStore.getState().resetSessionForReplay(TEST_SESSION_ID)
+    })
+
+    for (let i = 0; i < 600; i++) {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message',
+          session_id: TEST_SESSION_ID,
+          role: i % 2 === 0 ? 'user' : 'assistant',
+          content: `Message ${i}`,
+          timestamp: new Date(Date.now() + i * 1000).toISOString(),
+        })
+      })
+    }
+
+    const bucket = useChatStore.getState().sessionsById[TEST_SESSION_ID]
+    const msgs = bucket ? getMessages(bucket) : []
+    expect(
+      msgs.length,
+      `Expected exactly ${MAX_MESSAGES_PER_SESSION} messages after ring-buffer trim, got ${msgs.length}`,
+    ).toBe(MAX_MESSAGES_PER_SESSION)
+
+    // Verify the oldest messages were evicted (we should see messages 100–599)
+    expect(msgs[0].content).toBe('Message 100')
+    expect(msgs[msgs.length - 1].content).toBe('Message 599')
+
+    // trimmedCount must reflect the eviction
+    expect(bucket?.trimmedCount).toBeGreaterThan(0)
+  })
+})
+
+// ── G4: clampToolResult — client-side truncation ──────────────────────────────
+
+describe('G4: clampToolResult — large result is clamped to ClientTruncatedResult', () => {
+  it('a 100 KiB string result is replaced with a _truncated_client sentinel', () => {
+    // Build a 100 KiB string (100 * 1024 = 102400 chars).
+    const largeString = 'x'.repeat(100 * 1024)
+    const clamped = clampToolResult(largeString)
+
+    expect(
+      isClientTruncatedResult(clamped),
+      'clampToolResult must return a ClientTruncatedResult for a 100 KiB input',
+    ).toBe(true)
+
+    if (isClientTruncatedResult(clamped)) {
+      expect(clamped._truncated_client).toBe(true)
+      expect(clamped.original_size_bytes).toBeGreaterThan(0)
+      // Preview must be exactly 4 KiB (4096 chars from the original)
+      expect(clamped.preview.length).toBe(4096)
+      expect(clamped.preview).toBe(largeString.slice(0, 4096))
+    }
+  })
+
+  it('a small result (under 50 KiB) passes through unchanged', () => {
+    const small = { status: 'ok', data: 'hello' }
+    const result = clampToolResult(small)
+    expect(result).toBe(small)
+    expect(isClientTruncatedResult(result)).toBe(false)
+  })
+
+  it('an existing _truncated sentinel passes through unchanged (no double-wrapping)', () => {
+    const serverTruncated = { _truncated: true as const, original_size_bytes: 500_000, preview: 'first bytes...' }
+    const result = clampToolResult(serverTruncated)
+    expect(result).toBe(serverTruncated)
+    expect(isClientTruncatedResult(result)).toBe(false)
+  })
+})
+
+// ── G2: span-index O(1) hit before scan-fallback ──────────────────────────────
+
+describe('G2: spanByParentCallId O(1) index is written on subagent_start and cleared on subagent_end', () => {
+  it('spanByParentCallId has the parentCallId → {messageId, spanIdx} entry after subagent_start', () => {
+    // Arrange: an active streaming assistant message (so the span attaches to it).
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'session_started',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'token',
+        session_id: TEST_SESSION_ID,
+        content: 'Planning...',
+      })
+    })
+
+    // Inject subagent_start with a known parentCallId.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'subagent_start',
+        session_id: TEST_SESSION_ID,
+        span_id: 'span-g2-test',
+        parent_call_id: 'tc-g2-parent',
+        task_label: 'Run subtask',
+      })
+    })
+
+    const bucket = useChatStore.getState().sessionsById[TEST_SESSION_ID]
+    expect(bucket).toBeDefined()
+
+    const index = bucket!.spanByParentCallId
+    expect(
+      'tc-g2-parent' in index,
+      'spanByParentCallId must contain the parentCallId after subagent_start',
+    ).toBe(true)
+    expect(index['tc-g2-parent'].messageId).toBeTruthy()
+    expect(typeof index['tc-g2-parent'].spanIdx).toBe('number')
+  })
+
+  it('spanByParentCallId entry is removed after subagent_end', () => {
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'session_started',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'token',
+        session_id: TEST_SESSION_ID,
+        content: 'Planning...',
+      })
+    })
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'subagent_start',
+        session_id: TEST_SESSION_ID,
+        span_id: 'span-g2-end-test',
+        parent_call_id: 'tc-g2-end',
+        task_label: 'Run subtask',
+      })
+    })
+
+    // Verify the index was written.
+    const before = useChatStore.getState().sessionsById[TEST_SESSION_ID]
+    expect('tc-g2-end' in (before?.spanByParentCallId ?? {})).toBe(true)
+
+    // subagent_end must clear the index entry.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'subagent_end',
+        session_id: TEST_SESSION_ID,
+        span_id: 'span-g2-end-test',
+        status: 'success',
+        duration_ms: 500,
+        final_result: 'done',
+      })
+    })
+
+    const after = useChatStore.getState().sessionsById[TEST_SESSION_ID]
+    expect(
+      'tc-g2-end' in (after?.spanByParentCallId ?? {}),
+      'spanByParentCallId must NOT contain the parentCallId after subagent_end',
+    ).toBe(false)
+  })
+})
+
+// ── G5: lastReceivedEventTime advances monotonically ─────────────────────────
+
+describe('G5: lastReceivedEventTime advances on each replay_message with a newer timestamp', () => {
+  it('lastReceivedEventTime is null initially, then advances with each timestamped replay frame', () => {
+    act(() => {
+      useChatStore.getState().resetSessionForReplay(TEST_SESSION_ID)
+    })
+
+    const t0 = '2026-01-01T00:00:00.000Z'
+    const t1 = '2026-01-01T00:00:01.000Z'
+    const t2 = '2026-01-01T00:00:02.000Z'
+
+    // Initial state: no lastReceivedEventTime.
+    const init = useChatStore.getState().sessionsById[TEST_SESSION_ID]
+    expect(init?.lastReceivedEventTime).toBeNull()
+
+    // First frame at t0.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        session_id: TEST_SESSION_ID,
+        role: 'user',
+        content: 'hello',
+        timestamp: t0,
+      })
+    })
+    const after0 = useChatStore.getState().sessionsById[TEST_SESSION_ID]
+    expect(after0?.lastReceivedEventTime).toBe(t0)
+
+    // Second frame at t1 (newer) — must advance.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        session_id: TEST_SESSION_ID,
+        role: 'assistant',
+        content: 'world',
+        timestamp: t1,
+      })
+    })
+    const after1 = useChatStore.getState().sessionsById[TEST_SESSION_ID]
+    expect(after1?.lastReceivedEventTime).toBe(t1)
+
+    // Third frame at t2 (newer) — must advance.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        session_id: TEST_SESSION_ID,
+        role: 'user',
+        content: 'again',
+        timestamp: t2,
+      })
+    })
+    const after2 = useChatStore.getState().sessionsById[TEST_SESSION_ID]
+    expect(after2?.lastReceivedEventTime).toBe(t2)
+
+    // An older frame must NOT rewind the cursor.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_message',
+        session_id: TEST_SESSION_ID,
+        role: 'user',
+        content: 'old',
+        timestamp: t0, // older than t2
+      })
+    })
+    const afterOld = useChatStore.getState().sessionsById[TEST_SESSION_ID]
+    expect(
+      afterOld?.lastReceivedEventTime,
+      'lastReceivedEventTime must not rewind when an older-timestamped frame arrives',
+    ).toBe(t2)
+  })
+})
+
+// ── evictMessageFromBucket unit tests ─────────────────────────────────────────
+
+describe('evictMessageFromBucket — full sweep of dependent maps', () => {
+  it('removes the message from messagesById and messageOrder', () => {
+    const bucket: SessionChatState = {
+      messagesById: { 'm1': { id: 'm1', role: 'user', content: 'hi', timestamp: '', status: 'done' } },
+      messageOrder: ['m1'],
+      trimmedCount: 0,
+      toolCalls: {},
+      toolCallOrder: [],
+      textAtToolCallStart: {},
+      spanByParentCallId: {},
+      pendingApprovals: [],
+      isStreaming: false,
+      isReplaying: false,
+      replayCompletedForSession: null,
+      sessionTokens: 0,
+      sessionCost: 0,
+      rateLimitEvent: null,
+      lastUserMessageAt: null,
+      cancelStage: null,
+      lastReceivedEventTime: null,
+    }
+    evictMessageFromBucket(bucket, 'm1')
+    expect(bucket.messageOrder).toHaveLength(0)
+    expect(bucket.messagesById['m1']).toBeUndefined()
+  })
+
+  it('removes tool calls owned by the evicted message (via tool_calls array)', () => {
+    const bucket: SessionChatState = {
+      messagesById: {
+        'm1': {
+          id: 'm1', role: 'assistant', content: '', timestamp: '', status: 'done',
+          tool_calls: [{ id: 'tc1', tool: 'exec', params: {}, status: 'success' }],
+        },
+      },
+      messageOrder: ['m1'],
+      trimmedCount: 0,
+      toolCalls: { tc1: { id: 'tc1', call_id: 'tc1', tool: 'exec', params: {}, status: 'success' } },
+      toolCallOrder: ['tc1'],
+      textAtToolCallStart: { tc1: 'some text' },
+      spanByParentCallId: {},
+      pendingApprovals: [],
+      isStreaming: false,
+      isReplaying: false,
+      replayCompletedForSession: null,
+      sessionTokens: 0,
+      sessionCost: 0,
+      rateLimitEvent: null,
+      lastUserMessageAt: null,
+      cancelStage: null,
+      lastReceivedEventTime: null,
+    }
+    evictMessageFromBucket(bucket, 'm1')
+    expect(bucket.toolCalls['tc1']).toBeUndefined()
+    expect(bucket.toolCallOrder).toHaveLength(0)
+    expect(bucket.textAtToolCallStart['tc1']).toBeUndefined()
+  })
+
+  it('removes spanByParentCallId entries pointing at the evicted message', () => {
+    const bucket: SessionChatState = {
+      messagesById: {
+        'm1': { id: 'm1', role: 'assistant', content: '', timestamp: '', status: 'done' },
+      },
+      messageOrder: ['m1'],
+      trimmedCount: 0,
+      toolCalls: {},
+      toolCallOrder: [],
+      textAtToolCallStart: {},
+      spanByParentCallId: {
+        'pc1': { messageId: 'm1', spanIdx: 0 },
+        'pc2': { messageId: 'm2', spanIdx: 0 }, // belongs to a different message — must survive
+      },
+      pendingApprovals: [],
+      isStreaming: false,
+      isReplaying: false,
+      replayCompletedForSession: null,
+      sessionTokens: 0,
+      sessionCost: 0,
+      rateLimitEvent: null,
+      lastUserMessageAt: null,
+      cancelStage: null,
+      lastReceivedEventTime: null,
+    }
+    evictMessageFromBucket(bucket, 'm1')
+    expect(bucket.spanByParentCallId['pc1']).toBeUndefined()
+    // pc2 belongs to a different message and must not be touched.
+    expect(bucket.spanByParentCallId['pc2']).toBeDefined()
+  })
+})
+
+// ── Eviction-leak regression: applyMessageArray path ─────────────────────────
+// Seeds 600 messages where every assistant message has 3 tool calls and 1 span.
+// Trims via appendMessage (applyMessageArray path) and asserts dependent maps
+// evict the correct entries.
+
+describe('eviction-leak regression — applyMessageArray evicts spanByParentCallId and textAtToolCallStart', () => {
+  it('after trimming 100 messages, spanByParentCallId and textAtToolCallStart track the surviving set', () => {
+    act(() => {
+      useChatStore.getState().resetSession()
+    })
+
+    // Seed 600 assistant messages, each with 3 tool calls (in tool_calls array).
+    // Also manually populate spanByParentCallId and textAtToolCallStart to simulate
+    // in-flight spans and tool call snapshots.
+    const TOTAL = 600
+
+    // Build the bucket directly to avoid the test going through 600 handleFrame cycles.
+    const msgs: import('./chat').ChatMessage[] = []
+    const toolCalls: SessionChatState['toolCalls'] = {}
+    const toolCallOrder: string[] = []
+    const textAtToolCallStart: SessionChatState['textAtToolCallStart'] = {}
+    const spanByParentCallId: SessionChatState['spanByParentCallId'] = {}
+
+    for (let i = 0; i < TOTAL; i++) {
+      const msgId = `msg_${i}`
+      const tcIds = [`tc_${i}_0`, `tc_${i}_1`, `tc_${i}_2`]
+      const parentCallId = `pc_${i}`
+
+      msgs.push({
+        id: msgId,
+        role: 'assistant' as const,
+        content: `Message ${i}`,
+        timestamp: new Date(Date.now() + i * 1000).toISOString(),
+        status: 'done' as const,
+        tool_calls: tcIds.map((tcId) => ({ id: tcId, tool: 'exec', params: {}, status: 'success' as const })),
+      })
+
+      for (const tcId of tcIds) {
+        toolCalls[tcId] = { id: tcId, call_id: tcId, tool: 'exec', params: {}, status: 'success' }
+        toolCallOrder.push(tcId)
+        textAtToolCallStart[tcId] = `snapshot for ${tcId}`
+      }
+
+      // Each message also has a span entry in the index.
+      spanByParentCallId[parentCallId] = { messageId: msgId, spanIdx: 0 }
+    }
+
+    act(() => {
+      useChatStore.setState((s) => ({
+        sessionsById: {
+          ...s.sessionsById,
+          [TEST_SESSION_ID]: {
+            ...makeBucketMessages(msgs),
+            toolCalls,
+            toolCallOrder,
+            textAtToolCallStart,
+            spanByParentCallId,
+            pendingApprovals: [],
+            isStreaming: false,
+            isReplaying: false,
+            replayCompletedForSession: null,
+            sessionTokens: 0,
+            sessionCost: 0,
+            rateLimitEvent: null,
+            lastUserMessageAt: null,
+            cancelStage: null,
+            lastReceivedEventTime: null,
+          },
+        },
+      }))
+    })
+
+    // Now trigger appendMessage which will go through applyMessageArray and trim.
+    act(() => {
+      useChatStore.getState().appendMessage({
+        id: 'trigger_msg',
+        role: 'user',
+        content: 'trigger',
+        timestamp: new Date().toISOString(),
+        status: 'done',
+      })
+    })
+
+    const bucket = useChatStore.getState().sessionsById[TEST_SESSION_ID]!
+    const survivingMsgIds = new Set(bucket.messageOrder)
+
+    // There should be exactly MAX_MESSAGES_PER_SESSION messages after trim.
+    expect(bucket.messageOrder.length).toBe(MAX_MESSAGES_PER_SESSION)
+
+    // All spanByParentCallId entries must point to surviving messages.
+    for (const [parentCallId, entry] of Object.entries(bucket.spanByParentCallId)) {
+      expect(
+        survivingMsgIds.has(entry.messageId),
+        `spanByParentCallId["${parentCallId}"] points to evicted message "${entry.messageId}"`,
+      ).toBe(true)
+    }
+
+    // Count how many span entries we expect: one per surviving assistant message.
+    const survivingAssistantMsgIds = new Set(
+      bucket.messageOrder.filter((id) => bucket.messagesById[id]?.role === 'assistant')
+    )
+    expect(Object.keys(bucket.spanByParentCallId).length).toBe(survivingAssistantMsgIds.size)
+
+    // All textAtToolCallStart entries must have call_ids present in toolCallOrder.
+    const liveCallIdSet = new Set(bucket.toolCallOrder)
+    for (const callId of Object.keys(bucket.textAtToolCallStart)) {
+      expect(
+        liveCallIdSet.has(callId),
+        `textAtToolCallStart has entry for evicted call_id "${callId}"`,
+      ).toBe(true)
+    }
+  })
+})
+
+// ── Eviction-leak regression: replay_message path ────────────────────────────
+// Sends 600+ replay_message frames so the inline replay-path eviction fires.
+// Asserts spanByParentCallId and textAtToolCallStart are clean after replay.
+
+describe('eviction-leak regression — replay_message path evicts dependent maps', () => {
+  it('after replaying 600 messages with spans, spanByParentCallId has no dangling entries', () => {
+    act(() => {
+      useChatStore.getState().resetSessionForReplay(TEST_SESSION_ID)
+    })
+
+    const TOTAL = 600
+
+    // Pre-populate spanByParentCallId with entries for messages 0..599,
+    // then send replay_message frames for all 600 messages so the ring buffer
+    // evicts the oldest 100 via the inline replay-path.
+    const spanByParentCallId: SessionChatState['spanByParentCallId'] = {}
+    for (let i = 0; i < TOTAL; i++) {
+      spanByParentCallId[`pc_${i}`] = { messageId: `replay_msg_${i}`, spanIdx: 0 }
+    }
+
+    act(() => {
+      useChatStore.setState((s) => ({
+        sessionsById: {
+          ...s.sessionsById,
+          [TEST_SESSION_ID]: {
+            ...s.sessionsById[TEST_SESSION_ID]!,
+            spanByParentCallId,
+          },
+        },
+      }))
+    })
+
+    // Replay 600 messages — the ring buffer evicts old ones via the replay path.
+    for (let i = 0; i < TOTAL; i++) {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message',
+          session_id: TEST_SESSION_ID,
+          id: `replay_msg_${i}`,
+          role: i % 2 === 0 ? 'user' : 'assistant',
+          content: `Replay ${i}`,
+          timestamp: new Date(Date.now() + i * 1000).toISOString(),
+        })
+      })
+    }
+
+    const bucket = useChatStore.getState().sessionsById[TEST_SESSION_ID]!
+    const survivingMsgIds = new Set(bucket.messageOrder)
+
+    expect(bucket.messageOrder.length).toBe(MAX_MESSAGES_PER_SESSION)
+
+    // After replay, all spanByParentCallId entries must point to surviving messages only.
+    for (const [parentCallId, entry] of Object.entries(bucket.spanByParentCallId)) {
+      expect(
+        survivingMsgIds.has(entry.messageId),
+        `spanByParentCallId["${parentCallId}"] points to evicted message "${entry.messageId}" after replay eviction`,
+      ).toBe(true)
+    }
+  })
+})
+
+// ── Eviction-leak regression: tool_call_result burst path ────────────────────
+// Verifies the ring buffer stays clean when a burst of tool_call_result frames
+// (not just replay_message) causes eviction.
+
+describe('eviction-leak regression — tool_call_result burst triggers eviction with clean maps', () => {
+  it('after 501 appendMessage calls with tool calls, textAtToolCallStart contains no evicted entries', () => {
+    act(() => {
+      useChatStore.getState().resetSession()
+    })
+
+    // Append MAX+1 messages where each is an assistant message with a tool call
+    // snapshot recorded via startToolCall (which writes textAtToolCallStart).
+    // We drive this through handleFrame to exercise the full pipeline.
+    for (let i = 0; i < MAX_MESSAGES_PER_SESSION + 1; i++) {
+      act(() => {
+        // A tool_call_start frame adds a textAtToolCallStart entry.
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_start',
+          call_id: `burst_tc_${i}`,
+          tool: 'exec',
+          params: { cmd: `cmd_${i}` },
+          session_id: TEST_SESSION_ID,
+        })
+      })
+      act(() => {
+        // A done frame bakes the tool calls into the message and closes the turn.
+        // Each done frame appends a completed assistant message + resets toolCalls.
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_result',
+          call_id: `burst_tc_${i}`,
+          tool: 'exec',
+          result: { exit_code: 0 },
+          status: 'success',
+          duration_ms: 10,
+          session_id: TEST_SESSION_ID,
+        })
+      })
+    }
+
+    const bucket = useChatStore.getState().sessionsById[TEST_SESSION_ID]!
+
+    // All textAtToolCallStart entries must have a corresponding live toolCallOrder entry.
+    const liveCallIdSet = new Set(bucket.toolCallOrder)
+    for (const callId of Object.keys(bucket.textAtToolCallStart)) {
+      expect(
+        liveCallIdSet.has(callId),
+        `textAtToolCallStart has a dangling entry for "${callId}" not in toolCallOrder`,
+      ).toBe(true)
+    }
   })
 })

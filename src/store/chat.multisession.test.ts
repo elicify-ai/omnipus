@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { act } from 'react'
-import { useChatStore } from './chat'
+import { useChatStore, getMessages } from './chat'
 import { useSessionStore } from './session'
 import { queryClient } from '@/lib/queryClient'
 
@@ -38,6 +38,7 @@ function resetStores() {
       isReplaying: false,
       replayCompletedForSession: null,
       rateLimitEvent: null,
+      lastReceivedEventTime: null,
     })
     useSessionStore.setState({
       activeSessionId: null,
@@ -83,12 +84,12 @@ describe('chat.multisession — (a) two session_started frames create two distin
     // Each bucket has independent empty defaults.
     // FR-21 / T21-T25: session_started pre-sets isStreaming=true so the Stop
     // button appears immediately without waiting for the first token frame.
-    expect(bucketA.messages).toEqual([])
+    expect(getMessages(bucketA)).toEqual([])
     expect(bucketA.isStreaming).toBe(true)
     expect(bucketA.sessionTokens).toBe(0)
     expect(bucketA.sessionCost).toBe(0)
 
-    expect(bucketB.messages).toEqual([])
+    expect(getMessages(bucketB)).toEqual([])
     expect(bucketB.isStreaming).toBe(true)
     expect(bucketB.sessionTokens).toBe(0)
     expect(bucketB.sessionCost).toBe(0)
@@ -121,15 +122,16 @@ describe('chat.multisession — (b) token frame routes to correct bucket only', 
     // BDD: Then A's bucket has the token content
     const state = useChatStore.getState()
     const bucketA = state.sessionsById[SID_A]
-    expect(bucketA.messages.length).toBeGreaterThan(0)
-    const lastMsgA = bucketA.messages[bucketA.messages.length - 1]
+    const msgsA = getMessages(bucketA)
+    expect(msgsA.length).toBeGreaterThan(0)
+    const lastMsgA = msgsA[msgsA.length - 1]
     expect(lastMsgA.content).toBe('hello from A')
 
     // BDD: And B's bucket is content-isolated — no token leaked across.
     // (B's isStreaming is true because session_started pre-set it for B; this
     // test asserts content isolation, not streaming-flag isolation.)
     const bucketB = state.sessionsById[SID_B]
-    expect(bucketB.messages).toHaveLength(0)
+    expect(getMessages(bucketB)).toHaveLength(0)
   })
 })
 
@@ -160,8 +162,9 @@ describe('chat.multisession — (c) setActiveSession(B) leaves A bucket intact',
     const state = useChatStore.getState()
     const bucketA = state.sessionsById[SID_A]
     expect(bucketA).toBeDefined()
-    expect(bucketA.messages.length).toBeGreaterThan(0)
-    const msgA = bucketA.messages.find((m) => m.content === 'A-content-must-survive')
+    const msgsA = getMessages(bucketA)
+    expect(msgsA.length).toBeGreaterThan(0)
+    const msgA = msgsA.find((m) => m.content === 'A-content-must-survive')
     expect(msgA).toBeDefined()
 
     // Foreground selectors now point to B (empty)
@@ -200,8 +203,9 @@ describe('chat.multisession — (d) startNewSession clears activeSessionId only'
     const state = useChatStore.getState()
     const bucketA = state.sessionsById[SID_A]
     expect(bucketA).toBeDefined()
-    expect(bucketA.messages.length).toBeGreaterThan(0)
-    const msgA = bucketA.messages.find((m) => m.content === 'A-preserved-on-new-session')
+    const msgsA2 = getMessages(bucketA)
+    expect(msgsA2.length).toBeGreaterThan(0)
+    const msgA = msgsA2.find((m) => m.content === 'A-preserved-on-new-session')
     expect(msgA).toBeDefined()
 
     // Foreground selectors show empty defaults (no active session)
@@ -262,7 +266,8 @@ describe('chat.multisession — (e) done frame on background session A while act
     // BDD: And B's bucket is unchanged (still streaming, different content)
     const bucketB = state.sessionsById[SID_B]
     expect(bucketB.isStreaming).toBe(true)
-    const lastBMsg = bucketB.messages[bucketB.messages.length - 1]
+    const msgsB = getMessages(bucketB)
+    const lastBMsg = msgsB[msgsB.length - 1]
     expect(lastBMsg.content).toBe('B foreground token')
 
     // BDD: And foreground selectors still show B (activeSessionId=B)
@@ -332,9 +337,11 @@ describe('chat.multisession — (g) concurrent token streams for A and B', () =>
     const state = useChatStore.getState()
     const bucketA = state.sessionsById[SID_A]
     const bucketB = state.sessionsById[SID_B]
+    const msgsAi = getMessages(bucketA)
+    const msgsBi = getMessages(bucketB)
 
-    const lastA = bucketA.messages[bucketA.messages.length - 1]
-    const lastB = bucketB.messages[bucketB.messages.length - 1]
+    const lastA = msgsAi[msgsAi.length - 1]
+    const lastB = msgsBi[msgsBi.length - 1]
 
     // A's message content is A1+A2 concatenated, not B's tokens
     expect(lastA.content).toContain('A1')
@@ -383,7 +390,7 @@ describe('chat.multisession — (h) frame missing session_id falls back with con
     const state = useChatStore.getState()
     const bucketA = state.sessionsById[SID_A]
     // The bucket should have received the token (routed to fallback SID_A)
-    const hasToken = bucketA?.messages?.some((m) => m.content.includes('fallback-token'))
+    const hasToken = bucketA ? getMessages(bucketA).some((m) => m.content.includes('fallback-token')) : false
     expect(hasToken).toBe(true)
   })
 })
@@ -464,7 +471,7 @@ describe('chat.multisession — (k) untagged session-scoped frame in production 
     // BDD: And the token was NOT routed to SID_A's bucket (frame dropped)
     const state = useChatStore.getState()
     const bucketA = state.sessionsById[SID_A]
-    const hasToken = bucketA?.messages?.some((m) => m.content.includes('should be dropped'))
+    const hasToken = bucketA ? getMessages(bucketA).some((m) => m.content.includes('should be dropped')) : false
     expect(hasToken).toBeFalsy()
 
     // Restore MODE

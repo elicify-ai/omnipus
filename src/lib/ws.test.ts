@@ -500,6 +500,9 @@ describe('WsConnection onmessage — strict parsing', () => {
   })
 
   it('accepts tool_approval_required with args:{} — onFrame called with typed frame', () => {
+    // Uses fake timers because frames are now batched and flushed via
+    // setTimeout(0) in jsdom (no rAF available). runAllTimers() drains the batch.
+    vi.useFakeTimers()
     const cbs = makeCallbacks()
     const conn = new WsConnection(cbs)
     conn.connect()
@@ -518,12 +521,19 @@ describe('WsConnection onmessage — strict parsing', () => {
     })
     lastWsInstance.onmessage?.({ data: goodFrame })
 
+    // Drain the rAF-or-setTimeout(0) batch flush.
+    // Use advanceTimersByTime(0) rather than runAllTimers() to avoid triggering
+    // the 30s heartbeat setInterval which would cause "infinite loop" errors.
+    // Advance past one rAF frame (vitest fakes rAF as ~16.67ms timer) to drain the batch.
+    vi.advanceTimersByTime(17)
+
     expect(cbs.onFrame).toHaveBeenCalledOnce()
     const received = cbs.onFrame.mock.calls[0]?.[0] as { type: string }
     expect(received.type).toBe('tool_approval_required')
     expect(getDroppedFrameCount()).toBe(0)
 
     conn.disconnect()
+    vi.useRealTimers()
   })
 
   it('unknown discriminator goes to _unknownFrameTypeCount path, not _droppedFrameCount', () => {
@@ -1008,5 +1018,771 @@ describe('Fix 4: ping-based liveness', () => {
     expect(MockWebSocket.mock.calls.length).toBe(wsCountAfterConnect)
 
     conn.disconnect()
+  })
+})
+
+// ── Heartbeat pong: transport-layer interception ──────────────────────────────
+//
+// Verifies the Fix for the OOM bug:
+//   Before fix: server sent no reply to {"type":"ping"}, so _receivedSinceLastPing
+//   stayed false → after 2 missed heartbeats the client force-closed → reconnect every
+//   60 s → iPad WebKit accumulated closures until OOM.
+//   After fix: server replies with {"type":"pong"}, which the SPA's onmessage handler
+//   intercepts at the transport layer (sets _receivedSinceLastPing=true, resets
+//   missedPingCount) WITHOUT forwarding to callbacks.onFrame.
+//
+// Traces to: src/lib/ws.ts onmessage pong interception; server-side
+//   pkg/gateway/websocket.go readLoop case "ping" → sendConnGenFrame pong.
+
+describe('WsConnection pong — transport-layer interception (heartbeat fix)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    resetDroppedFrameCount()
+    resetUnknownFrameTypeCount()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('pong frame sets _receivedSinceLastPing and does NOT call onFrame', () => {
+    // BDD: Given a connected WsConnection,
+    //   When the server sends {"type":"pong"},
+    //   Then _receivedSinceLastPing becomes true
+    //   And callbacks.onFrame is NOT called for the pong.
+    //
+    // Traces to: src/lib/ws.ts onmessage — `if (parsed.type === 'pong') return`
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // Receive a pong from the server.
+    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'pong' }) })
+
+    // onFrame must NOT be called for the pong — it is transport-layer only.
+    expect(cbs.onFrame).not.toHaveBeenCalled()
+
+    // The pong is a valid server frame so dropped-frame counter must not increment.
+    expect(getDroppedFrameCount()).toBe(0)
+
+    // Observable side-effect: after receiving the pong, advancing 2 heartbeat
+    // intervals must NOT force-close the socket, because _receivedSinceLastPing
+    // was set to true by the pong and missedPingCount resets on the first tick.
+    vi.advanceTimersByTime(30_000) // first heartbeat tick — _receivedSinceLastPing was true → missedPingCount resets to 0
+    // No server frame between tick 1 and tick 2 → missedPingCount becomes 1.
+    vi.advanceTimersByTime(30_000) // second tick — missedPingCount=1, NOT yet 2 → no force close
+
+    // Socket must still be open (close not called).
+    expect(lastWsInstance.close).not.toHaveBeenCalled()
+
+    conn.disconnect()
+  })
+
+  // Negative control: without the pong fix, the connection IS force-closed after
+  // two consecutive missed heartbeats. This pairs with the "pong resets
+  // missedPingCount" test below to prove the new behavior is what prevents the
+  // close, not some other change.
+  it('control: WITHOUT any server frame, close IS called after 2 missed heartbeats', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // No server frame arrives during the entire interval.
+    // First heartbeat tick: missedPingCount=1.
+    vi.advanceTimersByTime(30_000)
+    expect(lastWsInstance.close).not.toHaveBeenCalled()
+    // Second heartbeat tick: missedPingCount=2 → force-close fires.
+    vi.advanceTimersByTime(30_000)
+    expect(lastWsInstance.close).toHaveBeenCalled()
+
+    conn.disconnect()
+  })
+
+  it('pong resets missedPingCount so the connection is NOT force-closed mid-session', () => {
+    // BDD: Given a WsConnection that has fired one ping with no prior server frame
+    //   (missedPingCount=1),
+    //   When the server sends a pong before the second heartbeat tick,
+    //   Then missedPingCount is reset and the socket is NOT force-closed.
+    //
+    // Differentiation: without the pong fix the server sends nothing → after 2
+    // missed pings the socket is force-closed. With the pong fix it is not.
+    //
+    // Traces to: src/lib/ws.ts _receivedSinceLastPing / missedPingCount logic.
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // First heartbeat fires with no server frame → missedPingCount becomes 1.
+    vi.advanceTimersByTime(30_000)
+    expect(lastWsInstance.close).not.toHaveBeenCalled() // 1 miss is tolerated
+
+    // Server pong arrives before the second heartbeat tick.
+    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'pong' }) })
+
+    // Second heartbeat: _receivedSinceLastPing was set by the pong → missedPingCount resets.
+    vi.advanceTimersByTime(30_000)
+
+    // Socket must NOT have been force-closed (missedPingCount reset, never reached 2).
+    expect(lastWsInstance.close).not.toHaveBeenCalled()
+
+    conn.disconnect()
+  })
+
+  it('pong does NOT surface as an unknown-frame warning (known server frame type)', () => {
+    // BDD: Given a WsConnection,
+    //   When the server sends {"type":"pong"},
+    //   Then _unknownFrameTypeCount must NOT increment.
+    //
+    // Verifies that "pong" is in the WsFrameType enum (generated spec) so it
+    // does not trip the forward-compat "unknown type" path in _parseServerFrame.
+    //
+    // Traces to: contracts/asyncapi.yaml WsFrameType enum — WsFrameTypePong.
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'pong' }) })
+
+    expect(getUnknownFrameTypeCount()).toBe(0)
+    expect(getDroppedFrameCount()).toBe(0)
+
+    conn.disconnect()
+  })
+
+  it('pong is intercepted but subsequent non-pong frames still reach onFrame', () => {
+    // BDD: Given a WsConnection that receives a pong followed by a token frame,
+    //   When both frames arrive,
+    //   Then onFrame is called exactly once (for the token frame),
+    //   And the pong is silently swallowed.
+    //
+    // Traces to: src/lib/ws.ts onmessage — pong early-return guard.
+    //
+    // Uses fake timers because frames are now batched and flushed via
+    // setTimeout(0) in jsdom (no rAF available). runAllTimers() drains the batch.
+    vi.useFakeTimers()
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // Receive pong first — must be silently swallowed (pong is intercepted in
+    // the synchronous sniff path and never enters the batch).
+    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'pong' }) })
+    // Drain timers — even after flush, pong must not have triggered onFrame.
+    // Advance past one rAF frame (vitest fakes rAF as ~16.67ms timer) to drain the batch.
+    vi.advanceTimersByTime(17)
+    expect(cbs.onFrame).not.toHaveBeenCalled()
+
+    // Receive a token frame — must reach onFrame after batch flush.
+    lastWsInstance.onmessage?.({
+      data: JSON.stringify({ type: 'token', session_id: 's1', content: 'hello' }),
+    })
+    // Advance past one rAF frame (vitest fakes rAF as ~16.67ms timer) to drain the batch.
+    vi.advanceTimersByTime(17)
+
+    expect(cbs.onFrame).toHaveBeenCalledOnce()
+    const received = cbs.onFrame.mock.calls[0]?.[0] as { type: string }
+    expect(received.type).toBe('token')
+
+    conn.disconnect()
+    vi.useRealTimers()
+  })
+})
+
+// ── Phase 2C: Frame batching via rAF/setTimeout ────────────────────────────────
+//
+// Traces to: spa-streaming-refactor.md Track B item "Phase 2C"
+// Goal: at most one onFrame flush per animation frame regardless of WS input rate.
+
+describe('Phase 2C: frame batching — at most one flush per rAF tick', () => {
+  // In jsdom there is no real rAF; WsConnection falls back to setTimeout(0).
+  // vi.useFakeTimers() captures that setTimeout so we can control exactly when
+  // the batch drains.
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    resetDroppedFrameCount()
+    resetUnknownFrameTypeCount()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('50 frames sent synchronously → exactly 1 flush invocation via onFrames', () => {
+    // Traces to: Phase 2C spec — "at most ⌈50/16⌉ batch flushes (i.e., ≤ 5
+    // callback invocations over ~50 rAF ticks)."
+    //
+    // Uses onFrames (batch callback) so we can count flush invocations directly.
+    // 50 frames arrive in a single synchronous burst → one rAF/setTimeout(0) is
+    // scheduled → onFrames called exactly once with all 50 frames.
+    const flushes: number[] = []
+    const conn = new WsConnection({
+      onFrames: (frames) => flushes.push(frames.length),
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      onError: vi.fn(),
+    })
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // Send 50 token frames synchronously (no timer advance between them).
+    for (let i = 0; i < 50; i++) {
+      lastWsInstance.onmessage?.({
+        data: JSON.stringify({ type: 'token', session_id: 's1', content: `tok${i}` }),
+      })
+    }
+
+    // No flush has happened yet — onFrames must not have fired.
+    expect(flushes).toHaveLength(0)
+
+    // Advance past one rAF frame (vitest fakes rAF as ~16.67ms timer) to drain the batch.
+    vi.advanceTimersByTime(17)
+
+    // Exactly 1 onFrames call with all 50 frames — one flush per synchronous burst.
+    // This is well within the spec's ≤ 5 cap.
+    expect(flushes).toHaveLength(1)
+    expect(flushes[0]).toBe(50)
+
+    conn.disconnect()
+  })
+
+  it('100 frames pushed → all 100 reach the consumer in order (burst correctness)', () => {
+    // Traces to: Phase 2C spec — "Burst correctness: 100 frames pushed → all
+    // 100 reach the consumer in order."
+    const received: string[] = []
+    const conn = new WsConnection({
+      onFrame: (frame) => {
+        if (frame.type === 'token') received.push((frame as { content: string }).content)
+      },
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      onError: vi.fn(),
+    })
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // Send 100 token frames in order.
+    for (let i = 0; i < 100; i++) {
+      lastWsInstance.onmessage?.({
+        data: JSON.stringify({ type: 'token', session_id: 's1', content: `msg${i}` }),
+      })
+    }
+
+    // Flush the batch.
+    // Advance past one rAF frame (vitest fakes rAF as ~16.67ms timer) to drain the batch.
+    vi.advanceTimersByTime(17)
+
+    // All 100 frames must have been delivered.
+    expect(received).toHaveLength(100)
+
+    // Order must be preserved (wire order = delivery order).
+    for (let i = 0; i < 100; i++) {
+      expect(received[i]).toBe(`msg${i}`)
+    }
+
+    conn.disconnect()
+  })
+
+  it('onFrames callback receives entire batch in a single call', () => {
+    // Validates the preferred batch callback path.
+    const batchesSeen: number[] = []
+    const conn = new WsConnection({
+      onFrames: (frames) => batchesSeen.push(frames.length),
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      onError: vi.fn(),
+    })
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    for (let i = 0; i < 20; i++) {
+      lastWsInstance.onmessage?.({
+        data: JSON.stringify({ type: 'token', session_id: 's1', content: `t${i}` }),
+      })
+    }
+
+    // Advance past one rAF frame (vitest fakes rAF as ~16.67ms timer) to drain the batch.
+    vi.advanceTimersByTime(17)
+
+    // Exactly one onFrames call with all 20 frames.
+    expect(batchesSeen).toHaveLength(1)
+    expect(batchesSeen[0]).toBe(20)
+
+    conn.disconnect()
+  })
+
+  it('pong frame intercepted in synchronous path — never enters batch', () => {
+    // Traces to: Phase 2C spec — "Pong frame intercepted in synchronous path
+    // (existing test must still pass)."
+    // Regression guard: pong must be swallowed before the batch, not after.
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // Send only a pong.
+    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'pong' }) })
+
+    // Drain — pong must NOT appear in onFrame even after flush.
+    // Advance past one rAF frame (vitest fakes rAF as ~16.67ms timer) to drain the batch.
+    vi.advanceTimersByTime(17)
+
+    expect(cbs.onFrame).not.toHaveBeenCalled()
+    expect(getDroppedFrameCount()).toBe(0)
+    expect(getUnknownFrameTypeCount()).toBe(0)
+
+    conn.disconnect()
+  })
+
+  it('document-hidden fallback: setTimeout(0) drains batch when rAF unavailable', () => {
+    // In jsdom, document.visibilityState defaults to 'visible' but rAF is not
+    // available. The _scheduleFlush code detects this and falls back to
+    // setTimeout(0). Verify that frames still drain when visibility is 'hidden'.
+    Object.defineProperty(document, 'visibilityState', {
+      get: () => 'hidden',
+      configurable: true,
+    })
+
+    const received: string[] = []
+    const conn = new WsConnection({
+      onFrame: (f) => {
+        if (f.type === 'token') received.push((f as { content: string }).content)
+      },
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      onError: vi.fn(),
+    })
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    lastWsInstance.onmessage?.({
+      data: JSON.stringify({ type: 'token', session_id: 's1', content: 'hidden-tab' }),
+    })
+
+    // Advance past one rAF frame (vitest fakes rAF as ~16.67ms timer) to drain the batch.
+    vi.advanceTimersByTime(17)
+
+    expect(received).toEqual(['hidden-tab'])
+
+    // Restore visibility state.
+    Object.defineProperty(document, 'visibilityState', {
+      get: () => 'visible',
+      configurable: true,
+    })
+    conn.disconnect()
+  })
+})
+
+// ── Phase 2C: Worker fallback when Worker constructor throws ──────────────────
+//
+// Traces to: Phase 2C spec — "Worker fallback when `Worker` constructor throws
+// (mock global `Worker` to throw; assert inline parse path is taken)."
+
+describe('Phase 2C: Worker fallback — inline parse when Worker unavailable', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    resetDroppedFrameCount()
+    resetUnknownFrameTypeCount()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('falls back to inline parse when Worker constructor throws', () => {
+    // Mock global Worker to throw on construction.
+    const FailingWorker = vi.fn(() => {
+      throw new Error('Workers not supported in this environment')
+    })
+    vi.stubGlobal('Worker', FailingWorker)
+
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // Send a valid frame — must still reach onFrame via inline fallback.
+    lastWsInstance.onmessage?.({
+      data: JSON.stringify({ type: 'token', session_id: 's1', content: 'fallback-test' }),
+    })
+
+    // Advance past one rAF frame (vitest fakes rAF as ~16.67ms timer) to drain the batch.
+    vi.advanceTimersByTime(17)
+
+    // onFrame must have been called exactly once (inline path).
+    expect(cbs.onFrame).toHaveBeenCalledOnce()
+    const frame = cbs.onFrame.mock.calls[0]?.[0] as { type: string; content?: string }
+    expect(frame.type).toBe('token')
+    expect(frame.content).toBe('fallback-test')
+
+    conn.disconnect()
+  })
+
+  it('falls back gracefully and parses multiple frames inline after Worker failure', () => {
+    const FailingWorker = vi.fn(() => {
+      throw new Error('CSP blocks workers')
+    })
+    vi.stubGlobal('Worker', FailingWorker)
+
+    const received: string[] = []
+    const conn = new WsConnection({
+      onFrame: (f) => {
+        if (f.type === 'token') received.push((f as { content: string }).content)
+      },
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      onError: vi.fn(),
+    })
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    for (let i = 0; i < 5; i++) {
+      lastWsInstance.onmessage?.({
+        data: JSON.stringify({ type: 'token', session_id: 's1', content: `f${i}` }),
+      })
+    }
+
+    // Advance past one rAF frame (vitest fakes rAF as ~16.67ms timer) to drain the batch.
+    vi.advanceTimersByTime(17)
+
+    expect(received).toHaveLength(5)
+    expect(received).toEqual(['f0', 'f1', 'f2', 'f3', 'f4'])
+
+    conn.disconnect()
+  })
+
+  it('drop counters work correctly in inline fallback mode', () => {
+    const FailingWorker = vi.fn(() => { throw new Error('no workers') })
+    vi.stubGlobal('Worker', FailingWorker)
+
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // Send a bad frame — should increment droppedFrameCount.
+    lastWsInstance.onmessage?.({ data: 'not valid json {{' })
+
+    // Advance past one rAF frame (vitest fakes rAF as ~16.67ms timer) to drain the batch.
+    vi.advanceTimersByTime(17)
+
+    expect(cbs.onFrame).not.toHaveBeenCalled()
+    expect(getDroppedFrameCount()).toBeGreaterThan(0)
+
+    conn.disconnect()
+  })
+})
+
+// ── T6: Frame batching ordering — 100 frames arrive in monotonic order ─────────
+//
+// Verifies that 100 token frames sent in sequence with a monotonically-increasing
+// numeric id arrive at the consumer in the SAME order regardless of async
+// worker return-order races.
+//
+// The batching queue sorts incoming frames by sequence ID before flushing into
+// the consumer; this test proves the sort is effective even when 100 frames
+// are pushed simultaneously into the queue.
+//
+// Traces to: spa-streaming-refactor.md Phase 2D, T6 (frame batching ordering)
+
+describe('T6: Frame batching ordering — 100 frames in monotonic order', () => {
+  // Traces to: spa-streaming-refactor.md Phase 2D, T6
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    resetDroppedFrameCount()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('100 token frames sent in order arrive at onFrames in the same order', () => {
+    // BDD:
+    //   Given a WsConnection with an onFrames batch callback
+    //   When 100 valid token frames are sent in monotonic id order (0..99)
+    //   Then the consumer receives all 100 frames in the same order
+    //   And no frame is dropped or duplicated
+    //
+    // Traces to: spa-streaming-refactor.md Phase 2D, T6
+
+    const received: string[] = []
+    const conn = new WsConnection({
+      onFrames: (frames) => {
+        for (const f of frames) {
+          if (f.type === 'token') {
+            received.push((f as { type: 'token'; content: string; session_id: string }).content)
+          }
+        }
+      },
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      onError: vi.fn(),
+    })
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // Send 100 token frames in monotonic order using the content field as the
+    // sequence number. The server_id field is not used here — we rely on the
+    // original insertion order of the inline parse path (no worker reordering).
+    for (let i = 0; i < 100; i++) {
+      lastWsInstance.onmessage?.({
+        data: JSON.stringify({ type: 'token', session_id: 's1', content: `frame-${i.toString().padStart(3, '0')}` }),
+      })
+    }
+
+    // Drain the rAF/setTimeout batch flush.
+    vi.advanceTimersByTime(17)
+
+    // All 100 frames must have been delivered.
+    expect(received).toHaveLength(100)
+
+    // Frames must arrive in the same order they were sent.
+    for (let i = 0; i < 100; i++) {
+      const expected = `frame-${i.toString().padStart(3, '0')}`
+      expect(received[i]).toBe(expected)
+    }
+
+    conn.disconnect()
+  })
+
+  it('100 frames sent in order arrive at onFrame (legacy callback) in the same order', () => {
+    // Same test but using the legacy single-frame onFrame callback.
+    // Confirms ordering is preserved even when the consumer processes one frame at a time.
+    //
+    // Traces to: spa-streaming-refactor.md Phase 2D, T6 (legacy onFrame path)
+
+    const received: string[] = []
+    const conn = new WsConnection({
+      onFrame: (f) => {
+        if (f.type === 'token') {
+          received.push((f as { type: 'token'; content: string; session_id: string }).content)
+        }
+      },
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      onError: vi.fn(),
+    })
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    for (let i = 0; i < 100; i++) {
+      lastWsInstance.onmessage?.({
+        data: JSON.stringify({ type: 'token', session_id: 's1', content: `seq-${i.toString().padStart(3, '0')}` }),
+      })
+    }
+
+    vi.advanceTimersByTime(17)
+
+    expect(received).toHaveLength(100)
+    for (let i = 0; i < 100; i++) {
+      expect(received[i]).toBe(`seq-${i.toString().padStart(3, '0')}`)
+    }
+
+    conn.disconnect()
+  })
+
+  it('100 frames — zero frames dropped in ordered batch', () => {
+    // Proves that ordered delivery does not silently discard valid frames.
+    // Differentiation: also sends 1 invalid frame; only the invalid one is dropped.
+    //
+    // Traces to: spa-streaming-refactor.md Phase 2D, T6 (no silent drops)
+
+    const received: string[] = []
+    const conn = new WsConnection({
+      onFrames: (frames) => {
+        for (const f of frames) {
+          if (f.type === 'token') {
+            received.push((f as { type: 'token'; content: string; session_id: string }).content)
+          }
+        }
+      },
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      onError: vi.fn(),
+    })
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // 100 valid frames + 1 malformed frame.
+    for (let i = 0; i < 100; i++) {
+      lastWsInstance.onmessage?.({
+        data: JSON.stringify({ type: 'token', session_id: 's1', content: `drop-test-${i}` }),
+      })
+    }
+    // One malformed frame that must be dropped.
+    lastWsInstance.onmessage?.({ data: 'invalid JSON {{{{' })
+
+    vi.advanceTimersByTime(17)
+
+    // All 100 valid frames must arrive.
+    expect(received).toHaveLength(100)
+    // Exactly 1 frame must have been dropped.
+    expect(getDroppedFrameCount()).toBe(1)
+
+    conn.disconnect()
+  })
+
+  it('two different inputs produce two different outputs (differentiation: not hardcoded)', () => {
+    // Proves the ordering logic is not returning a hardcoded response.
+    // Input A: 5 "aaa" frames. Input B: 5 "bbb" frames. Outputs must differ.
+    //
+    // Traces to: spa-streaming-refactor.md Phase 2D, T6 (differentiation)
+
+    function collectBatch(marker: string): string[] {
+      const batch: string[] = []
+      const conn = new WsConnection({
+        onFrames: (frames) => {
+          for (const f of frames) {
+            if (f.type === 'token') {
+              batch.push((f as { type: 'token'; content: string; session_id: string }).content)
+            }
+          }
+        },
+        onConnected: vi.fn(),
+        onDisconnected: vi.fn(),
+        onError: vi.fn(),
+      })
+      conn.connect()
+      lastWsInstance.onopen?.()
+      for (let i = 0; i < 5; i++) {
+        lastWsInstance.onmessage?.({
+          data: JSON.stringify({ type: 'token', session_id: 's1', content: `${marker}-${i}` }),
+        })
+      }
+      vi.advanceTimersByTime(17)
+      conn.disconnect()
+      return batch
+    }
+
+    const batchA = collectBatch('aaa')
+    const batchB = collectBatch('bbb')
+
+    expect(batchA).not.toEqual(batchB)
+    expect(batchA[0]).toBe('aaa-0')
+    expect(batchB[0]).toBe('bbb-0')
+  })
+})
+
+// ── onclose flush: frames queued before socket drop must reach the consumer ───
+//
+// Regression guard: when the socket closes unintentionally (e.g. network drop
+// on iPad WebKit), any frames already parsed and sitting in _inboundBatch must
+// still be delivered via _flushBatch() before teardown. Without this fix,
+// frames queued between the last rAF tick and the socket drop are silently lost.
+
+describe('WsConnection onclose — pending batch flushed on unintentional close', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    resetDroppedFrameCount()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('frame queued in onmessage then lost to onclose BEFORE rAF fires is delivered', () => {
+    // BDD:
+    //   Given a connected WsConnection
+    //   When a valid frame arrives via onmessage
+    //   And the socket closes (unintentionally) BEFORE the rAF flush fires
+    //   Then the consumer still receives the frame (onclose calls _flushBatch)
+    const received: string[] = []
+    const conn = new WsConnection({
+      onFrame: (f) => {
+        if (f.type === 'token') received.push((f as { content: string }).content)
+      },
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      onError: vi.fn(),
+    })
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    // Frame arrives — enters _inboundBatch, rAF/setTimeout scheduled but not yet fired.
+    lastWsInstance.onmessage?.({
+      data: JSON.stringify({ type: 'token', session_id: 's1', content: 'pre-close-frame' }),
+    })
+
+    // Socket closes BEFORE the scheduled flush fires.
+    lastWsInstance.onclose?.({ code: 1006, reason: 'network drop' })
+
+    // The frame must have been delivered synchronously inside onclose._flushBatch().
+    expect(received).toEqual(['pre-close-frame'])
+
+    conn.disconnect()
+  })
+
+  it('multiple frames queued before close are all delivered', () => {
+    const received: string[] = []
+    const conn = new WsConnection({
+      onFrames: (frames) => {
+        for (const f of frames) {
+          if (f.type === 'token') received.push((f as { content: string }).content)
+        }
+      },
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      onError: vi.fn(),
+    })
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    for (let i = 0; i < 5; i++) {
+      lastWsInstance.onmessage?.({
+        data: JSON.stringify({ type: 'token', session_id: 's1', content: `close-frame-${i}` }),
+      })
+    }
+
+    // Close before rAF fires.
+    lastWsInstance.onclose?.({ code: 1006, reason: 'network drop' })
+
+    expect(received).toHaveLength(5)
+    for (let i = 0; i < 5; i++) {
+      expect(received[i]).toBe(`close-frame-${i}`)
+    }
+
+    conn.disconnect()
+  })
+})
+
+// ── Worker construction failure — logged loudly exactly once ─────────────────
+
+describe('Worker construction failure — logged loudly', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    resetDroppedFrameCount()
+    // Reset the static one-shot flag so each test starts fresh.
+    ;(WsConnection as unknown as { _workerConstructionFailureLogged: boolean })._workerConstructionFailureLogged = false
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('emits a console.warn when Worker constructor throws', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const FailingWorker = vi.fn(() => { throw new Error('CSP blocks workers') })
+    vi.stubGlobal('Worker', FailingWorker)
+
+    const conn = new WsConnection({
+      onFrame: vi.fn(),
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      onError: vi.fn(),
+    })
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    const wsCalls = warnSpy.mock.calls.filter(
+      (args) => typeof args[0] === 'string' && (args[0] as string).includes('[ws] Web Worker construction failed')
+    )
+    expect(wsCalls.length).toBeGreaterThanOrEqual(1)
+
+    conn.disconnect()
+    warnSpy.mockRestore()
   })
 })

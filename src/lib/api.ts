@@ -1850,3 +1850,12 @@ export function updateGlobalToolPolicies(cfg: GlobalToolPolicies): Promise<Globa
 export function fetchSandboxStatus(): Promise<SandboxStatus> {
   return request<SandboxStatus>('/security/sandbox-status', undefined, SandboxStatusSchema)
 }
+
+// ── Tool Results (lazy fetch for ToolResultRef sentinels) ─────────────────────
+// Endpoint: GET /api/v1/sessions/{session_id}/tool-results/{ref}
+// Session-scoped: a ref is only readable in the session that produced it.
+export function fetchToolResult(sessionId: string, ref: string): Promise<unknown> {
+  return request<unknown>(
+    `/sessions/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(ref)}`,
+  )
+}

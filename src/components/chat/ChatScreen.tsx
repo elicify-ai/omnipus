@@ -1,4 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { generateId } from '@/lib/constants'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -36,6 +39,7 @@ import { MarkdownText } from './markdown-text'
 import { SubagentBlock } from './SubagentBlock'
 import { Button } from '@/components/ui/button'
 import { useChatStore } from '@/store/chat'
+import type { ChatMessage } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
@@ -155,6 +159,7 @@ function InlineThinkingIndicator() {
 // ToolCallMessagePartProps passes: toolCallId, toolName, args, result, status
 function FallbackToolUI(props: { toolCallId: string; toolName: string; args: unknown; result: unknown; status: import('@assistant-ui/react').MessagePartStatus }) {
   const storeToolCalls = useChatStore((s) => s.toolCalls)
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const liveCall = storeToolCalls[props.toolCallId]
   return (
     <GenericToolCall
@@ -164,6 +169,7 @@ function FallbackToolUI(props: { toolCallId: string; toolName: string; args: unk
       status={props.status}
       error={liveCall?.error}
       durationMs={liveCall?.duration_ms}
+      sessionId={activeSessionId ?? ''}
     />
   )
 }
@@ -317,6 +323,365 @@ function InterruptedMessageMarkers() {
         </div>
       ))}
     </>
+  )
+}
+
+// ── Standalone message row components (virtualizer) ──────────────────────────
+// Render ChatMessage from props (no AssistantUI context) for use by the virtualizer.
+
+/** Standalone user message row for the virtualizer. */
+function VirtualUserMessageRow({ message }: { message: ChatMessage }) {
+  return (
+    <div
+      data-testid="user-message"
+      data-message-role="user"
+      data-message-id={message.id}
+      className="group flex gap-3 px-4 py-3 flex-row-reverse"
+    >
+      <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
+        <User size={14} weight="bold" />
+      </div>
+      <div className="flex flex-col items-end gap-1 max-w-[85%] min-w-0">
+        <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm">
+          <p className="whitespace-pre-wrap break-words">{message.content}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Standalone system message row for the virtualizer. */
+function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
+  return (
+    <div
+      data-message-role="system"
+      data-message-id={message.id}
+      className="flex justify-center py-2"
+    >
+      <div className="text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
+        <span>{message.content}</span>
+      </div>
+    </div>
+  )
+}
+
+/** Copy-to-clipboard helper for static assistant messages. */
+function StaticCopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = useCallback(() => {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }, [text])
+  return (
+    <button
+      type="button"
+      aria-label="Copy message"
+      onClick={handleCopy}
+      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+      title="Copy message"
+    >
+      {copied ? (
+        <>
+          <Check size={11} weight="bold" className="text-[var(--color-success)]" />
+          <span>Copied!</span>
+        </>
+      ) : (
+        <>
+          <Copy size={11} />
+          <span>Copy</span>
+        </>
+      )}
+    </button>
+  )
+}
+
+/** Standalone assistant message row for the virtualizer (historical / completed messages). */
+function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessage; liteMode: boolean }) {
+  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
+  const activeAgentId = useSessionStore((s) => s.activeAgentId)
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  const toolCalls = useChatStore((s) => s.toolCalls)
+
+  const messageAgentId = message.agentId ?? activeAgentId
+  const agent = agents.find((a) => a.id === messageAgentId)
+  const agentDisplayName = agent?.name ?? (messageAgentId || null)
+  const isInterrupted = message.status === 'interrupted'
+
+  // Render media attachments.
+  const mediaItems = message.media ?? []
+
+  // Build tool-call parts from the message's stored tool_calls list.
+  // In lite mode, tool calls start collapsed (expanded=false by default in GenericToolCall).
+  const storeToolCallIds = (message.tool_calls ?? []).map((tc) => tc.id)
+
+  return (
+    <div
+      data-testid="assistant-message"
+      data-message-role="assistant"
+      data-message-id={message.id}
+      data-status="complete"
+      className="group flex gap-3 px-4 py-3"
+    >
+      <div
+        className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[var(--color-secondary)]"
+        style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
+        title={agent?.name}
+      >
+        {agent?.icon ? (
+          <IconRenderer icon={agent.icon} size={14} />
+        ) : (
+          <Robot size={14} weight="bold" />
+        )}
+      </div>
+      <div className="flex flex-col gap-1 max-w-[85%] min-w-0 flex-1">
+        {agentDisplayName && (
+          <span data-testid="agent-label" className="text-[10px] text-[var(--color-muted)]">
+            {agentDisplayName}
+          </span>
+        )}
+        <div className="text-sm leading-relaxed text-[var(--color-secondary)]">
+          {/* Media attachments */}
+          {mediaItems.length > 0 && (
+            <div className="flex flex-col gap-2 mb-2">
+              {mediaItems.map((m, i) =>
+                m.type === 'image' ? (
+                  <div key={`${m.url}-${i}`} className="rounded-lg overflow-hidden border border-[var(--color-border)] max-w-2xl">
+                    <img
+                      src={m.url}
+                      alt={m.caption || m.filename}
+                      className="block w-full h-auto max-h-[60vh] object-contain"
+                      loading="lazy"
+                    />
+                    {m.caption && (
+                      <p className="text-xs text-[var(--color-muted)] px-2 py-1">{m.caption}</p>
+                    )}
+                  </div>
+                ) : (
+                  <a
+                    key={`${m.url}-${i}`}
+                    href={m.url}
+                    download={m.filename}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--color-border)] text-xs text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+                  >
+                    <File size={14} />
+                    {m.filename}
+                  </a>
+                ),
+              )}
+            </div>
+          )}
+
+          {/* Text content — use react-markdown for static historical messages.
+              The live streaming message uses the full AssistantUI MarkdownText
+              (with Shiki highlighting, Mermaid, etc.) via ThreadPrimitive.Messages. */}
+          {message.content && (
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                p: ({ children }) => <p className="text-sm leading-relaxed text-[var(--color-secondary)] mb-1 whitespace-pre-wrap">{children}</p>,
+                code: ({ children, className }) => {
+                  const isBlock = className?.includes('language-')
+                  if (isBlock) {
+                    return (
+                      <pre className="text-xs bg-[var(--color-surface-1)] rounded p-2 overflow-auto my-1 font-mono">
+                        <code>{children}</code>
+                      </pre>
+                    )
+                  }
+                  return <code className="text-xs bg-[var(--color-surface-1)] rounded px-1 py-0.5 font-mono text-[var(--color-accent)]">{children}</code>
+                },
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          )}
+
+          {/* Tool calls — rendered from stored tool_calls list */}
+          {storeToolCallIds.map((callId) => {
+            const tc = toolCalls[callId] ?? (message.tool_calls ?? []).find((t) => t.id === callId)
+            if (!tc) return null
+            return (
+              <GenericToolCall
+                key={callId}
+                toolName={tc.tool}
+                args={tc.params}
+                result={tc.result}
+                status={{ type: 'complete' }}
+                error={tc.error}
+                durationMs={tc.duration_ms}
+                defaultCollapsed={liteMode}
+                sessionId={activeSessionId ?? ''}
+              />
+            )
+          })}
+
+          {/* Subagent spans */}
+          {(message.spans ?? []).map((span) => (
+            <SubagentBlock key={span.spanId} span={span} />
+          ))}
+        </div>
+
+        {/* Action bar */}
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+          <StaticCopyButton text={message.content ?? ''} />
+        </div>
+
+        {/* Interrupted label */}
+        {isInterrupted && (
+          <span className="text-[10px] text-[var(--color-muted)] italic px-1">(interrupted)</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
+function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; liteMode: boolean }) {
+  return (
+    <div
+      data-testid="virtualized-message-list"
+      className="flex-1 overflow-y-auto pt-4 pb-2"
+    >
+      <div className="max-w-4xl mx-auto w-full">
+        {messages.map((msg) => {
+          if (msg.role === 'user') return <VirtualUserMessageRow key={msg.id} message={msg} />
+          if (msg.role === 'system') return <VirtualSystemMessageRow key={msg.id} message={msg} />
+          return <VirtualAssistantMessageRow key={msg.id} message={msg} liteMode={liteMode} />
+        })}
+      </div>
+    </div>
+  )
+}
+
+let _resizeObserverWarnEmitted = false
+
+/**
+ * Virtualized historical message list (AssistantUI constraint: the live
+ * streaming message stays in ThreadPrimitive.Messages below for full context).
+ */
+function VirtualizedMessageList({
+  messages,
+  liteMode,
+}: {
+  messages: ChatMessage[]
+  liteMode: boolean
+}) {
+  // Feature-detect ResizeObserver at render time (not module load) so test
+  // environments that stub it in beforeEach are detected correctly.
+  // iOS < 13.4 and some enterprise Android WebViews lack it — use the plain
+  // fallback to avoid a white-screen crash.
+  if (typeof ResizeObserver === 'undefined') {
+    if (!_resizeObserverWarnEmitted) {
+      _resizeObserverWarnEmitted = true
+      console.warn('[chat] ResizeObserver unavailable — rendering full message list without virtualization')
+    }
+    return <PlainMessageList messages={messages} liteMode={liteMode} />
+  }
+  return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} />
+}
+
+function VirtualizedMessageListInner({
+  messages,
+  liteMode,
+}: {
+  messages: ChatMessage[]
+  liteMode: boolean
+}) {
+  const isStreaming = useChatStore((s) => s.isStreaming)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+
+  // Separate the live streaming message from completed history.
+  const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
+  const historicalMessages = hasStreamingMessage ? messages.slice(0, messages.length - 1) : messages
+
+  const wasAtBottomRef = useRef(true)
+
+  const virtualizer = useVirtualizer({
+    count: historicalMessages.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: () => 80,
+    overscan: 5,
+    // measureElement default (getBoundingClientRect().height) is correct; no override needed.
+  })
+
+  // Capture wasAtBottom BEFORE the render that triggered this layout effect,
+  // then scroll to bottom if the user was already there.
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    wasAtBottomRef.current = distanceFromBottom < 50
+    if (wasAtBottomRef.current && messages.length > 0) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [messages.length, isStreaming])
+
+  const virtualItems = virtualizer.getVirtualItems()
+
+  const rowForMessage = (msg: ChatMessage) => {
+    if (msg.role === 'user') return <VirtualUserMessageRow message={msg} />
+    if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
+    return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} />
+  }
+
+  return (
+    <div
+      ref={scrollContainerRef}
+      data-testid="virtualized-message-list"
+      className="flex-1 overflow-y-auto pt-4 pb-2"
+      style={{ position: 'relative' }}
+    >
+      <div className="max-w-4xl mx-auto w-full">
+        <div
+          style={{
+            height: `${virtualizer.getTotalSize()}px`,
+            position: 'relative',
+          }}
+        >
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${virtualItems[0]?.start ?? 0}px)`,
+            }}
+          >
+            {virtualItems.map((virtualRow) => {
+              const msg = historicalMessages[virtualRow.index]
+              if (!msg) return null
+              return (
+                <div
+                  key={virtualRow.key}
+                  data-index={virtualRow.index}
+                  ref={virtualizer.measureElement}
+                >
+                  {rowForMessage(msg)}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Live streaming message — kept in ThreadPrimitive.Messages for full
+            AssistantUI context (streaming primitives, registered tool UIs). */}
+        {hasStreamingMessage && (
+          <div data-testid="streaming-message-anchor">
+            <ThreadPrimitive.Messages>
+              {({ message }) => {
+                const isLast = message.id === messages[messages.length - 1]?.id
+                if (!isLast) return null
+                if (message.role === 'user') return <UserMessage />
+                if (message.role === 'system') return <SystemMessage />
+                return <AssistantMessage />
+              }}
+            </ThreadPrimitive.Messages>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -1161,6 +1526,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   }, [historyData, isReplaying, storeMessageCount, replayCompletedForSession, activeSessionId, setMessages])
 
   const activePendingApprovals = pendingApprovals.filter((a) => a.status === 'pending')
+  const liteMode = useConnectionStore((s) => s.liteMode)
 
   return (
     <div className="flex flex-col absolute inset-0 overflow-hidden">
@@ -1204,22 +1570,14 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
             )}
           </div>
 
-          {/* Message viewport */}
-          <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto pt-4 pb-2">
-            <AuiIf condition={(s) => s.thread.isEmpty}>
+          {/* Virtualized message list — only visible rows (+ 5-message overscan) are mounted as DOM nodes. */}
+          {messages.length === 0 ? (
+            <div className="flex-1 overflow-y-auto pt-4 pb-2">
               <WelcomeState hasAgent={!!activeAgentId} />
-            </AuiIf>
-
-            <div data-testid="messages-list" className="max-w-4xl mx-auto w-full">
-              <ThreadPrimitive.Messages>
-                {({ message }) => {
-                  if (message.role === 'user') return <UserMessage />
-                  if (message.role === 'system') return <SystemMessage />
-                  return <AssistantMessage />
-                }}
-              </ThreadPrimitive.Messages>
             </div>
-          </ThreadPrimitive.Viewport>
+          ) : (
+            <VirtualizedMessageList messages={messages} liteMode={liteMode} />
+          )}
 
           {/* FR-21: Interrupted-message status markers — rendered inside
               ThreadPrimitive.Root but OUTSIDE the scrollable Viewport. This
