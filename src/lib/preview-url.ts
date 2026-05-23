@@ -255,6 +255,41 @@ export function rewriteLegacyURL(href: string, hostname: string, previewPort: nu
 }
 
 /**
+ * Resolve the effective preview hostname + port the SPA should use when
+ * rewriting legacy `0.0.0.0` / `::` URLs in markdown.
+ *
+ * Priority:
+ *   1. `aboutInfo.preview_origin` — operator-configured override (a full URL).
+ *      We extract hostname + port from it. If the hostname in preview_origin
+ *      is itself a legacy bind-all (operator misconfigured), fall back to the
+ *      caller's `windowHostname` so the result is still reachable.
+ *   2. `aboutInfo.preview_port` — the gateway's preview listener port,
+ *      combined with `windowHostname`.
+ *   3. nothing — return null; caller should leave the URL unchanged.
+ */
+export function resolveEffectivePreview(
+  aboutInfo: { preview_origin?: string; preview_port?: number } | null | undefined,
+  windowHostname: string,
+): { hostname: string; port: number } | null {
+  if (aboutInfo?.preview_origin) {
+    try {
+      const u = new URL(aboutInfo.preview_origin)
+      const port = u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 80)
+      if (port > 0) {
+        const host = LEGACY_HOSTS.has(u.hostname) ? windowHostname : u.hostname
+        return { hostname: host, port }
+      }
+    } catch {
+      // Malformed preview_origin → fall through to preview_port.
+    }
+  }
+  if (aboutInfo?.preview_port && aboutInfo.preview_port > 0) {
+    return { hostname: windowHostname, port: aboutInfo.preview_port }
+  }
+  return null
+}
+
+/**
  * Arguments for `buildIframeURL`.
  */
 export interface BuildIframeURLArgs { // not-wire-format: arguments bag for the buildIframeURL helper function; never serialised over any HTTP/WS boundary

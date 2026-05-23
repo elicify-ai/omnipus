@@ -91,9 +91,17 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('@/lib/api', () => ({
   fetchAgents: vi.fn().mockResolvedValue([]),
   fetchSessionMessages: vi.fn().mockResolvedValue([]),
+  fetchAboutInfo: vi.fn().mockResolvedValue({ preview_port: 5001 }),
   createSession: vi.fn(),
   uploadFiles: vi.fn(),
   isApiError: vi.fn().mockReturnValue(false),
+}))
+
+vi.mock('./historical-markdown', () => ({
+  HistoricalMessageMarkdown: ({ content }: { content: string }) => {
+    const React = require('react')
+    return React.createElement('div', { 'data-testid': 'historical-markdown' }, content)
+  },
 }))
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))

@@ -1,7 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { generateId } from '@/lib/constants'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -45,6 +43,7 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchSessionMessages, createSession, uploadFiles, isApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { HistoricalMessageMarkdown } from './historical-markdown'
 
 // ── Message components ────────────────────────────────────────────────────────
 
@@ -476,27 +475,7 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
           {/* Text content — use react-markdown for static historical messages.
               The live streaming message uses the full AssistantUI MarkdownText
               (with Shiki highlighting, Mermaid, etc.) via ThreadPrimitive.Messages. */}
-          {message.content && (
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                p: ({ children }) => <p className="text-sm leading-relaxed text-[var(--color-secondary)] mb-1 whitespace-pre-wrap">{children}</p>,
-                code: ({ children, className }) => {
-                  const isBlock = className?.includes('language-')
-                  if (isBlock) {
-                    return (
-                      <pre className="text-xs bg-[var(--color-surface-1)] rounded p-2 overflow-auto my-1 font-mono">
-                        <code>{children}</code>
-                      </pre>
-                    )
-                  }
-                  return <code className="text-xs bg-[var(--color-surface-1)] rounded px-1 py-0.5 font-mono text-[var(--color-accent)]">{children}</code>
-                },
-              }}
-            >
-              {message.content}
-            </ReactMarkdown>
-          )}
+          {message.content && <HistoricalMessageMarkdown content={message.content} />}
 
           {/* Tool calls — rendered from stored tool_calls list */}
           {storeToolCallIds.map((callId) => {
