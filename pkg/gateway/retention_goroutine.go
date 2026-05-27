@@ -94,6 +94,9 @@ func runRetentionSweepLoop(
 	}
 }
 
+//nolint:unused // overridable for tests; default delegates to toolStore.retentionSweep
+var retentionToolResultSweepFn func(days int) (int, error)
+
 //nolint:unused // called from runRetentionSweepLoop; gateway.go (!cgo) excluded by lint with goolm,stdjson
 func executeSweepTick(store *session.UnifiedStore, getCfg func() *config.Config) {
 	defer func() {
@@ -138,9 +141,25 @@ func executeSweepTick(store *session.UnifiedStore, getCfg func() *config.Config)
 		return
 	}
 
+	// Sweep tool-result files (offloaded > 50 KiB bodies) on the same schedule
+	// and retention window. When the gateway didn't wire the hook (tests with
+	// disabled toolStore), this is a no-op.
+	toolResultRemoved := 0
+	if retentionToolResultSweepFn != nil {
+		if n, terr := retentionToolResultSweepFn(days); terr != nil {
+			slog.Warn("retention_sweep: tool_results sweep failed",
+				"event", "retention_sweep_tool_results_failed",
+				"error", terr,
+			)
+		} else {
+			toolResultRemoved = n
+		}
+	}
+
 	slog.Info("retention_sweep: completed",
 		"event", "retention_sweep",
 		"removed", removed,
+		"tool_result_removed", toolResultRemoved,
 		"duration_ms", durationMs,
 	)
 }

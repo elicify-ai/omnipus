@@ -89,6 +89,9 @@ type services struct {
 	manualReloadChan chan struct{}
 	reloading        atomic.Bool
 	credStore        *credentials.Store
+	// toolStore owns the on-disk tool-result offload directory. Exposed here
+	// so RunContext can wire its retentionSweep into the nightly sweep loop.
+	toolStore *toolResultStore
 	// sandboxResult is the Apply/Install outcome from boot. Populated by
 	// applySandbox before services start (and before any HTTP listener
 	// binds). Read-only after initialization — sandbox config has no
@@ -731,6 +734,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	if sharedStore := agentLoop.GetSessionStore(); sharedStore != nil {
 		startRetentionSweepLoop(ctx, sharedStore, agentLoop.GetConfig, 24*time.Hour)
 	}
+	// Tool-result file sweep runs alongside the transcript sweep on the same
+	// retention window. setupAndStartServices already constructed the store.
+	if runningServices.toolStore != nil {
+		retentionToolResultSweepFn = runningServices.toolStore.retentionSweep
+	}
 
 	// FR-031: Launch the nightly retro sweep goroutine alongside the session sweep.
 	// Iterates all agents and calls SweepRetros per MemoryStore.
@@ -758,6 +766,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// can flag "audit_logger: unavailable" without exposing the pointer.
 	runningServices.HealthServer.SetAuditLoggerAvailableFunc(func() bool {
 		return agentLoop.AuditLogger() != nil
+	})
+	// audit_degraded should only fire when the operator asked for audit AND
+	// it isn't working. cfg.Sandbox.AuditLog=false is a deliberate off-state.
+	runningServices.HealthServer.SetAuditLoggerConfiguredFunc(func() bool {
+		return agentLoop.GetConfig().Sandbox.AuditLog
 	})
 
 	var configReloadChan <-chan *config.Config
@@ -1196,7 +1209,9 @@ func setupAndStartServices(
 
 	// WebSocket chat endpoint — primary transport for bi-directional chat streaming.
 	wsHandler := newWSHandler(msgBus, agentLoop, allowedOrigin)
-	wsHandler.toolStore = newToolResultStore(homePath)
+	toolStore := newToolResultStore(homePath)
+	wsHandler.toolStore = toolStore
+	runningServices.toolStore = toolStore
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/chat/ws", wsHandler)
 	// Register WebSocket handler as stream fallback so streaming tokens route back for webchat.
 	runningServices.ChannelManager.SetStreamFallback(wsHandler)

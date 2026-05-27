@@ -2,6 +2,8 @@ name: PR
 
 on:
   pull_request: { }
+  # Allow manual runs on feature branches without opening a PR.
+  workflow_dispatch:
 
 defaults:
   run:

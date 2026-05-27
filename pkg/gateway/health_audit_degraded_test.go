@@ -28,6 +28,10 @@ import (
 func TestHealth_FlipsAuditDegraded_OnLoggerUnavailable(t *testing.T) {
 	s := health.NewServer("127.0.0.1", 0)
 	s.SetAuditLoggerAvailableFunc(func() bool { return false })
+	// Operator configured audit (sandbox.audit_log=true) but the logger is
+	// broken — this IS degraded. The deliberately-off case is covered by
+	// the separate TestHealth_AuditNotDegraded_WhenDeliberatelyDisabled test.
+	s.SetAuditLoggerConfiguredFunc(func() bool { return true })
 
 	// Use RegisterOnMux so we can hit /health on an httptest server.
 	mux := http.NewServeMux()
@@ -135,5 +139,41 @@ func TestHealth_NotDegraded_WhenLoggerOkAndNoSkips(t *testing.T) {
 	auditDegraded, _ := body["audit_degraded"].(bool)
 	if auditDegraded {
 		t.Errorf("audit_degraded = true; want false when logger is ok and no skips")
+	}
+}
+
+// TestHealth_AuditNotDegraded_WhenDeliberatelyDisabled — operator did NOT
+// configure audit (cfg.Sandbox.AuditLog=false). audit_logger reads as
+// "unavailable" but audit_degraded must stay false: it's an intentional
+// off-state, not a broken-and-supposed-to-work state.
+func TestHealth_AuditNotDegraded_WhenDeliberatelyDisabled(t *testing.T) {
+	audit.ResetSkippedForTest()
+	t.Cleanup(audit.ResetSkippedForTest)
+
+	s := health.NewServer("127.0.0.1", 0)
+	s.SetAuditLoggerAvailableFunc(func() bool { return false })
+	s.SetAuditLoggerConfiguredFunc(func() bool { return false })
+
+	mux := http.NewServeMux()
+	s.RegisterOnMux(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/health")
+	if err != nil {
+		t.Fatalf("GET /health: %v", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode /health response: %v", err)
+	}
+
+	if logger, _ := body["audit_logger"].(string); logger != "unavailable" {
+		t.Errorf("audit_logger = %q; want %q", logger, "unavailable")
+	}
+	if degraded, _ := body["audit_degraded"].(bool); degraded {
+		t.Errorf("audit_degraded = true; want false when operator did not configure audit")
 	}
 }

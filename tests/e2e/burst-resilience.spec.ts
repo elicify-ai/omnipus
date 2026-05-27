@@ -32,17 +32,13 @@ const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 test(
   'SPA handles 200 synthetic tool_call_result frames without heap blow-up',
   async ({ page }) => {
-    // TODO(T4): Un-skip once the UI virtualization agent (ChatScreen.virtualization.test.tsx)
-    // has landed and been verified. The DOM node count assertion below (< 50 visible nodes)
-    // depends on @tanstack/react-virtual virtualization of <ThreadPrimitive.Messages>.
-    // Until that lands, the ring-buffer cap (≤ 500) is the only active bound.
-    //
-    // Remove the test.skip call and replace the DOM assertion constant when
-    // ChatScreen.tsx virtualization is wired. Leaving test.skip here makes the
-    // gap visible as a skipped test in CI rather than silently absent.
-    //
-    // Traces to: spa-streaming-refactor.md Phase 2D, T4 — "scaffold with test.skip"
-    test.skip(true, 'T4 deferred: UI virtualization agent not yet complete. Re-enable after ChatScreen.tsx virtualizes <ThreadPrimitive.Messages> and DOM node count is bounded to ≤ 50.')
+    // Skip when running against an unreachable target (CI without seeded gateway).
+    // Local dev: set OMNIPUS_URL=http://localhost:5000 (or similar). CI: seed via
+    // tests/e2e/global-setup.ts.
+    test.skip(
+      !process.env.OMNIPUS_URL,
+      'OMNIPUS_URL not set — set to a running gateway URL (e.g. http://localhost:5000) to run this test.',
+    )
 
     // ── Gate: requires a running Omnipus instance ─────────────────────────────
     // This test MUST run against the embedded SPA binary, not the Vite dev
@@ -87,26 +83,23 @@ test(
         duration_ms: 1,
       })
 
-      // Try to find the live WebSocket and inject frames via onmessage.
-      // This mirrors the pattern used in tests/e2e/ws-reconnect.spec.ts.
+      // src/lib/ws.ts already exposes every live WebSocket on
+      // window.__ws_instances for E2E testability. Use the most recent open
+      // socket and call its onmessage handler directly.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const globalAny = globalThis as any
-      const ws: WebSocket | undefined =
-        globalAny.__omnipus_ws ??
-        globalAny.__wsConnection?._ws ??
-        undefined
+      const sockets: WebSocket[] = Array.isArray(globalAny.__ws_instances)
+        ? globalAny.__ws_instances.filter((s: WebSocket) => s.readyState === 1)
+        : []
+      const ws: WebSocket | undefined = sockets[sockets.length - 1]
 
       if (ws && typeof ws.onmessage === 'function') {
         for (let i = 0; i < count; i++) {
           ws.onmessage(new MessageEvent('message', { data: syntheticFrame(i) }))
         }
       } else {
-        // Fallback: the WS handle is not exposed. Dispatch synthetic CustomEvents
-        // that the store reducer picks up. This path is test-harness-specific and
-        // requires the SPA to support it — document the limitation.
         // eslint-disable-next-line no-console
-        console.warn('T4: WS handle not found — synthetic frames cannot be injected. ' +
-          'Expose window.__omnipus_ws in the production WS bootstrap for E2E testability.')
+        console.warn('T4: no open WebSocket in window.__ws_instances — has the SPA connected yet?')
       }
     }, frameCount)
 

@@ -18,7 +18,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
@@ -38,7 +40,8 @@ var ErrToolResultNotFound = errors.New("tool result not found")
 // toolResultStore handles persistence of tool results that exceed InlineToolResultMaxBytes.
 //
 // Files are written to $OMNIPUS_HOME/tool_results/<session_id>/<ref>.json (mode 0600).
-// TODO(retention): files accumulate indefinitely; wire into session retention sweep.
+// Retention: retentionSweep is called by gateway.executeSweepTick on the same
+// schedule as the transcript sweep, using the same retentionDays config.
 //
 // A nil *toolResultStore is valid; all methods are no-ops and return appropriate zero/fallback values.
 type toolResultStore struct {
@@ -119,6 +122,78 @@ func (s *toolResultStore) readByRef(sessionID, ref string) ([]byte, error) {
 		return nil, fmt.Errorf("tool_result_store: read %s: %w", ref, err)
 	}
 	return data, nil
+}
+
+// retentionSweep deletes tool-result files whose mtime is older than
+// retentionDays*24h. Returns the count of files deleted.
+//
+// Mirrors session.RetentionSweep semantics:
+//   - retentionDays <= 0 → no-op (0, nil)
+//   - per-file delete errors are logged at Warn and the sweep continues
+//   - an error is returned only if the base directory walk cannot start
+//   - session subdirectories that contain zero remaining files are removed
+//
+// Called by gateway.executeSweepTick alongside the transcript sweep.
+func (s *toolResultStore) retentionSweep(retentionDays int) (int, error) {
+	if s == nil || s.homePath == "" || retentionDays <= 0 {
+		return 0, nil
+	}
+
+	base := filepath.Join(s.homePath, "tool_results")
+	if _, err := os.Stat(base); os.IsNotExist(err) {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
+	removed := 0
+	touchedDirs := make(map[string]struct{})
+
+	err := filepath.WalkDir(base, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if path == base {
+				return walkErr
+			}
+			slog.Warn("tool_result_store: retention_sweep: walk error", "path", path, "error", walkErr)
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".json") {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			slog.Warn("tool_result_store: retention_sweep: stat failed", "file", path, "error", err)
+			return nil
+		}
+		if info.ModTime().Before(cutoff) {
+			if rmErr := os.Remove(path); rmErr != nil {
+				slog.Warn("tool_result_store: retention_sweep: delete failed", "file", path, "error", rmErr)
+			} else {
+				removed++
+				touchedDirs[filepath.Dir(path)] = struct{}{}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return removed, err
+	}
+
+	// Sweep empty per-session dirs.
+	for dir := range touchedDirs {
+		entries, readErr := os.ReadDir(dir)
+		if readErr != nil {
+			continue
+		}
+		if len(entries) > 0 {
+			continue
+		}
+		if rmErr := os.RemoveAll(dir); rmErr != nil {
+			slog.Warn("tool_result_store: retention_sweep: dir remove failed", "dir", dir, "error", rmErr)
+		}
+	}
+	return removed, nil
 }
 
 // hasPathPrefix reports whether p is rooted at prefix (both must be clean absolute paths).
