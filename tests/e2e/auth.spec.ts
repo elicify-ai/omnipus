@@ -5,10 +5,17 @@ import { expectA11yClean } from './fixtures/a11y';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const AUTH_FILE = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  'fixtures/.auth/admin.json',
-);
+// Mirror playwright.config.ts:storageState and global-setup.ts:AUTH_FILE —
+// honor OMNIPUS_AUTH_FILE so the afterAll refreshed-token write lands in the
+// same file that storageState reads. Hardcoding the path caused every
+// post-auth.spec test to start with the stale (rotated-out) token from the
+// pre-auth-spec global-setup write.
+const AUTH_FILE = process.env.OMNIPUS_AUTH_FILE
+  ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
+  : path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      'fixtures/.auth/admin.json',
+    );
 
 // auth.spec.ts manages its own login flows — it tests the login paths themselves.
 // Each test explicitly controls its session state; do not use global storageState here.
