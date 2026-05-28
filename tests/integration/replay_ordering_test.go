@@ -58,7 +58,7 @@ func TestReplayOrdering_ToolCallStartBeforeResult(t *testing.T) {
 	seedToolCallTranscript(t, gw, sessionID)
 
 	// Attach via WebSocket and collect all frames until "done".
-	conn := wsConnectForAttach(t, gw)
+	conn := wsConnect(t, gw)
 
 	attachFrame := fmt.Sprintf(`{"type":"attach_session","session_id":%s}`, jsonQuote(sessionID))
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(attachFrame)); err != nil {
@@ -96,11 +96,20 @@ func TestReplayOrdering_ToolCallStartBeforeResult(t *testing.T) {
 			}
 			si, ok := startIdx[callID]
 			if !ok {
-				t.Errorf("BUG-5: tool_call_result for call_id=%q at frame[%d] has no preceding tool_call_start", callID, i)
+				t.Errorf(
+					"BUG-5: tool_call_result for call_id=%q at frame[%d] has no preceding tool_call_start",
+					callID,
+					i,
+				)
 				continue
 			}
 			if si >= i {
-				t.Errorf("BUG-5: tool_call_start for call_id=%q is at index %d but tool_call_result is at index %d (start must precede result)", callID, si, i)
+				t.Errorf(
+					"BUG-5: tool_call_start for call_id=%q is at index %d but tool_call_result is at index %d (start must precede result)",
+					callID,
+					si,
+					i,
+				)
 			}
 		}
 	}
@@ -122,7 +131,7 @@ func TestReplayOrdering_EarlierTurnBeforeLaterTurn(t *testing.T) {
 	// Seed two turns into the transcript.
 	seedTwoTurnTranscript(t, gw, sessionID)
 
-	conn := wsConnectForAttach(t, gw)
+	conn := wsConnect(t, gw)
 	attachFrame := fmt.Sprintf(`{"type":"attach_session","session_id":%s}`, jsonQuote(sessionID))
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(attachFrame)); err != nil {
 		t.Fatalf("attach_session send: %v", err)
@@ -187,7 +196,7 @@ func TestReplayOrdering_DisconnectReconnectDisconnectReconnect(t *testing.T) {
 	for cycle := 0; cycle < cycles; cycle++ {
 		t.Logf("cycle %d/%d: connecting", cycle+1, cycles)
 
-		conn := wsConnectForAttach(t, gw)
+		conn := wsConnect(t, gw)
 		attachFrame := fmt.Sprintf(`{"type":"attach_session","session_id":%s}`, jsonQuote(sessionID))
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(attachFrame)); err != nil {
 			t.Fatalf("cycle %d: attach_session send: %v", cycle+1, err)
@@ -269,7 +278,7 @@ func TestReplayOrdering_LateLiveFrameDuringDrain(t *testing.T) {
 	}
 	writeTranscriptEntries(t, gw, sessionID, entries)
 
-	conn := wsConnectForAttach(t, gw)
+	conn := wsConnect(t, gw)
 	attachFrame := fmt.Sprintf(`{"type":"attach_session","session_id":%s}`, jsonQuote(sessionID))
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(attachFrame)); err != nil {
 		t.Fatalf("attach_session send: %v", err)
@@ -325,7 +334,7 @@ func TestReplayOrdering_LateLiveFrameDuringDrain(t *testing.T) {
 // verifies that replay emits exactly 3 tool_call_start + 3 tool_call_result
 // frames (Bug 2 regression).
 //
-// The pre-fix behaviour emitted only replay_message per entry and zero
+// The pre-fix behavior emitted only replay_message per entry and zero
 // tool_call_start / tool_call_result pairs — the streamReplay path did not
 // iterate entry.ToolCalls when emitting replayed frames.
 //
@@ -362,7 +371,7 @@ func TestReplay_ToolCallPairsEmitted(t *testing.T) {
 	}
 	writeTranscriptEntries(t, gw, sessionID, entries)
 
-	conn := wsConnectForAttach(t, gw)
+	conn := wsConnect(t, gw)
 	attachFrame := fmt.Sprintf(`{"type":"attach_session","session_id":%s}`, jsonQuote(sessionID))
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(attachFrame)); err != nil {
 		t.Fatalf("attach_session send: %v", err)
@@ -408,7 +417,12 @@ func TestReplay_ToolCallPairsEmitted(t *testing.T) {
 			continue
 		}
 		if si >= ri {
-			t.Errorf("BUG-2: for call_id=%q, start is at index %d but result is at index %d (start must precede result)", callID, si, ri)
+			t.Errorf(
+				"BUG-2: for call_id=%q, start is at index %d but result is at index %d (start must precede result)",
+				callID,
+				si,
+				ri,
+			)
 		}
 	}
 	for callID := range resultIdxByCallID {
@@ -424,7 +438,7 @@ func TestReplay_ToolCallPairsEmitted(t *testing.T) {
 // reconnects and issues attach_session, the replay stream must include the
 // assistant text as a replay_message frame.
 //
-// The pre-fix behaviour: wsStreamer.Finalize() was not called if the WS send
+// The pre-fix behavior: wsStreamer.Finalize() was not called if the WS send
 // failed, so the assistant text was never appended to the transcript.
 //
 // BDD: Given an open session with one pending user message
@@ -465,7 +479,7 @@ func TestReplay_AssistantTextSurvivesDisconnect(t *testing.T) {
 	}
 	t.Logf("reattaching to session %s", sessionID)
 
-	conn2 := wsConnectForAttach(t, gw)
+	conn2 := wsConnect(t, gw)
 	attachFrame := fmt.Sprintf(`{"type":"attach_session","session_id":%s}`, jsonQuote(sessionID))
 	if err := conn2.WriteMessage(websocket.TextMessage, []byte(attachFrame)); err != nil {
 		t.Fatalf("attach_session send: %v", err)
@@ -486,7 +500,10 @@ func TestReplay_AssistantTextSurvivesDisconnect(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("BUG-3: assistant text %q not found in replay stream after reconnect — text was lost when WS disconnected before LLM responded", expectedText)
+		t.Fatalf(
+			"BUG-3: assistant text %q not found in replay stream after reconnect — text was lost when WS disconnected before LLM responded",
+			expectedText,
+		)
 	}
 }
 
@@ -660,37 +677,8 @@ func createSession(t *testing.T, gw *testutil.TestGateway) string {
 	return body.ID
 }
 
-// wsConnectForAttach dials the WS and sends the mandatory auth frame.
-// Registers t.Cleanup to close the connection.
-func wsConnectForAttach(t *testing.T, gw *testutil.TestGateway) *websocket.Conn {
-	t.Helper()
-	wsURL := strings.Replace(gw.URL, "http://", "ws://", 1) + "/api/v1/chat/ws"
-	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	header := http.Header{}
-	header.Set("Origin", gw.URL)
-
-	conn, resp, err := dialer.Dial(wsURL, header)
-	if err != nil {
-		if resp != nil {
-			_ = resp.Body.Close()
-		}
-		t.Fatalf("wsConnectForAttach: dial %s: %v", wsURL, err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-
-	// Use gw.Token() so the auth frame carries the real bearer token when the
-	// gateway was started with WithBearerAuth. When Token() is empty the
-	// gateway is in DevModeBypass mode and accepts any non-empty value.
-	tok := gw.Token()
-	if tok == "" {
-		tok = "dev-token"
-	}
-	authFrame := fmt.Sprintf(`{"type":"auth","token":%s}`, jsonQuote(tok))
-	if err := conn.WriteMessage(websocket.TextMessage, []byte(authFrame)); err != nil {
-		t.Fatalf("wsConnectForAttach: send auth: %v", err)
-	}
-	return conn
-}
+// wsConnectForAttach was an exact duplicate of wsConnect in helpers_test.go;
+// removed. All call sites in this file now use wsConnect directly.
 
 // collectFramesUntilDone reads WS frames until a "done" frame is received
 // or timeout elapses. Returns all collected frames including done.

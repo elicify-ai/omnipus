@@ -131,7 +131,11 @@ type SandboxApplyResult struct {
 //
 // An invalid CLI value causes an error so cmd/omnipus can exit with code 2
 // (usage error) before any boot logic runs (FR-J-006 second sentence).
-func resolveMode(cliMode, cfgMode string, configTouched bool, getEnv func(string) string) (sandbox.Mode, string, error) {
+func resolveMode(
+	cliMode, cfgMode string,
+	configTouched bool,
+	getEnv func(string) string,
+) (sandbox.Mode, string, error) {
 	// CLI takes priority unconditionally. An empty CLIMode means no flag
 	// was passed — defer to config.
 	if cliMode != "" {

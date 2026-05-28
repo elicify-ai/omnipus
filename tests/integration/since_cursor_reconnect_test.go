@@ -7,7 +7,7 @@
 //   - A client can attach to an existing session and receive only frames
 //     newer than the captured cursor (incremental replay).
 //   - A client that attaches without a since parameter receives the full
-//     replay (backward-compatible behaviour).
+//     replay (backward-compatible behavior).
 //   - The done frame arrives exactly once in both cases.
 //
 // Test must run against the embedded Go gateway + mock LLM (no real keys).
@@ -19,7 +19,6 @@
 package integration
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -84,7 +83,7 @@ func TestSinceCursor_IncrementalReplay(t *testing.T) {
 	t.Logf("cursor: %s", cursor)
 
 	// ── Step 2: Attach with since cursor ─────────────────────────────────────
-	conn := wsConnectForAttach(t, gw)
+	conn := wsConnect(t, gw)
 	attachFrame := fmt.Sprintf(
 		`{"type":"attach_session","session_id":%s,"since":%s}`,
 		jsonQuote(sessionID), jsonQuote(cursor),
@@ -151,7 +150,7 @@ func TestSinceCursor_IncrementalReplay(t *testing.T) {
 }
 
 // TestSinceCursor_FullReplayWithoutSince verifies that attach_session WITHOUT a
-// since parameter performs a full replay (backward-compatible behaviour).
+// since parameter performs a full replay (backward-compatible behavior).
 //
 // BDD:
 //
@@ -170,14 +169,34 @@ func TestSinceCursor_FullReplayWithoutSince(t *testing.T) {
 
 	base := time.Date(2026, 3, 1, 11, 0, 0, 0, time.UTC)
 	entries := []map[string]any{
-		{"id": "fr-entry-1", "role": "user", "content": "full-replay-turn1", "timestamp": base.Format(time.RFC3339Nano)},
-		{"id": "fr-entry-2", "role": "assistant", "content": "full-replay-reply1", "timestamp": base.Add(time.Second).Format(time.RFC3339Nano)},
-		{"id": "fr-entry-3", "role": "user", "content": "full-replay-turn2", "timestamp": base.Add(2 * time.Second).Format(time.RFC3339Nano)},
-		{"id": "fr-entry-4", "role": "assistant", "content": "full-replay-reply2", "timestamp": base.Add(3 * time.Second).Format(time.RFC3339Nano)},
+		{
+			"id":        "fr-entry-1",
+			"role":      "user",
+			"content":   "full-replay-turn1",
+			"timestamp": base.Format(time.RFC3339Nano),
+		},
+		{
+			"id":        "fr-entry-2",
+			"role":      "assistant",
+			"content":   "full-replay-reply1",
+			"timestamp": base.Add(time.Second).Format(time.RFC3339Nano),
+		},
+		{
+			"id":        "fr-entry-3",
+			"role":      "user",
+			"content":   "full-replay-turn2",
+			"timestamp": base.Add(2 * time.Second).Format(time.RFC3339Nano),
+		},
+		{
+			"id":        "fr-entry-4",
+			"role":      "assistant",
+			"content":   "full-replay-reply2",
+			"timestamp": base.Add(3 * time.Second).Format(time.RFC3339Nano),
+		},
 	}
 	writeTranscriptEntries(t, gw, sessionID, entries)
 
-	conn := wsConnectForAttach(t, gw)
+	conn := wsConnect(t, gw)
 	// No "since" field — triggers full replay.
 	attachFrame := fmt.Sprintf(`{"type":"attach_session","session_id":%s}`, jsonQuote(sessionID))
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(attachFrame)); err != nil {
@@ -200,7 +219,11 @@ func TestSinceCursor_FullReplayWithoutSince(t *testing.T) {
 		}
 	}
 	if len(replayContents) < 4 {
-		t.Errorf("T1-neg: expected 4 replay_message frames (full replay), got %d: %v", len(replayContents), replayContents)
+		t.Errorf(
+			"T1-neg: expected 4 replay_message frames (full replay), got %d: %v",
+			len(replayContents),
+			replayContents,
+		)
 	}
 
 	// Exactly one done frame.
@@ -235,15 +258,25 @@ func TestSinceCursor_CursorAtExactBoundary(t *testing.T) {
 	base := time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)
 	entries := []map[string]any{
 		{"id": "bnd-entry-1", "role": "user", "content": "boundary-turn1", "timestamp": base.Format(time.RFC3339Nano)},
-		{"id": "bnd-entry-2", "role": "user", "content": "boundary-turn2-AT-cursor", "timestamp": base.Add(time.Second).Format(time.RFC3339Nano)},
-		{"id": "bnd-entry-3", "role": "user", "content": "boundary-turn3-AFTER-cursor", "timestamp": base.Add(2 * time.Second).Format(time.RFC3339Nano)},
+		{
+			"id":        "bnd-entry-2",
+			"role":      "user",
+			"content":   "boundary-turn2-AT-cursor",
+			"timestamp": base.Add(time.Second).Format(time.RFC3339Nano),
+		},
+		{
+			"id":        "bnd-entry-3",
+			"role":      "user",
+			"content":   "boundary-turn3-AFTER-cursor",
+			"timestamp": base.Add(2 * time.Second).Format(time.RFC3339Nano),
+		},
 	}
 	writeTranscriptEntries(t, gw, sessionID, entries)
 
 	// Cursor is the exact timestamp of entry-2.
 	cursor := base.Add(time.Second).Format(time.RFC3339Nano)
 
-	conn := wsConnectForAttach(t, gw)
+	conn := wsConnect(t, gw)
 	attachFrame := fmt.Sprintf(
 		`{"type":"attach_session","session_id":%s,"since":%s}`,
 		jsonQuote(sessionID), jsonQuote(cursor),
@@ -313,14 +346,19 @@ func TestSinceCursor_FutureCursorProducesEmptyReplay(t *testing.T) {
 	base := time.Date(2026, 1, 15, 8, 0, 0, 0, time.UTC)
 	entries := []map[string]any{
 		{"id": "fut-entry-1", "role": "user", "content": "old message 1", "timestamp": base.Format(time.RFC3339Nano)},
-		{"id": "fut-entry-2", "role": "user", "content": "old message 2", "timestamp": base.Add(time.Second).Format(time.RFC3339Nano)},
+		{
+			"id":        "fut-entry-2",
+			"role":      "user",
+			"content":   "old message 2",
+			"timestamp": base.Add(time.Second).Format(time.RFC3339Nano),
+		},
 	}
 	writeTranscriptEntries(t, gw, sessionID, entries)
 
 	// Cursor far in the future — nothing after this timestamp exists.
 	futureCursor := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
 
-	conn := wsConnectForAttach(t, gw)
+	conn := wsConnect(t, gw)
 	attachFrame := fmt.Sprintf(
 		`{"type":"attach_session","session_id":%s,"since":%s}`,
 		jsonQuote(sessionID), jsonQuote(futureCursor),
@@ -351,7 +389,7 @@ func TestSinceCursor_FutureCursorProducesEmptyReplay(t *testing.T) {
 	}
 
 	// Differentiation test: the same session without since must have content.
-	conn2 := wsConnectForAttach(t, gw)
+	conn2 := wsConnect(t, gw)
 	attachFrame2 := fmt.Sprintf(`{"type":"attach_session","session_id":%s}`, jsonQuote(sessionID))
 	if err := conn2.WriteMessage(websocket.TextMessage, []byte(attachFrame2)); err != nil {
 		t.Fatalf("attach_session (no since) send: %v", err)
@@ -364,7 +402,9 @@ func TestSinceCursor_FutureCursorProducesEmptyReplay(t *testing.T) {
 		}
 	}
 	if msgCount == 0 {
-		t.Error("T1-future: differentiation: attach without since must replay stored entries — got zero replay_message frames")
+		t.Error(
+			"T1-future: differentiation: attach without since must replay stored entries — got zero replay_message frames",
+		)
 	}
 }
 
@@ -383,13 +423,23 @@ func TestSinceCursor_DifferentInputsDifferentOutputs(t *testing.T) {
 	base := time.Date(2026, 4, 1, 7, 0, 0, 0, time.UTC)
 	entries := []map[string]any{
 		{"id": "diff-entry-1", "role": "user", "content": "diff-msg-1", "timestamp": base.Format(time.RFC3339Nano)},
-		{"id": "diff-entry-2", "role": "user", "content": "diff-msg-2", "timestamp": base.Add(time.Second).Format(time.RFC3339Nano)},
-		{"id": "diff-entry-3", "role": "user", "content": "diff-msg-3", "timestamp": base.Add(2 * time.Second).Format(time.RFC3339Nano)},
+		{
+			"id":        "diff-entry-2",
+			"role":      "user",
+			"content":   "diff-msg-2",
+			"timestamp": base.Add(time.Second).Format(time.RFC3339Nano),
+		},
+		{
+			"id":        "diff-entry-3",
+			"role":      "user",
+			"content":   "diff-msg-3",
+			"timestamp": base.Add(2 * time.Second).Format(time.RFC3339Nano),
+		},
 	}
 	writeTranscriptEntries(t, gw, sessionID, entries)
 
 	countReplayMessages := func(since string) int {
-		conn := wsConnectForAttach(t, gw)
+		conn := wsConnect(t, gw)
 		var attachFrame string
 		if since != "" {
 			attachFrame = fmt.Sprintf(
@@ -420,7 +470,10 @@ func TestSinceCursor_DifferentInputsDifferentOutputs(t *testing.T) {
 
 	// The two inputs produce different outputs — proves the filter is not hardcoded.
 	if fullCount == partialCount {
-		t.Errorf("T1-diff: since-cursor filter produced same count for both inputs (%d); filter may be hardcoded", fullCount)
+		t.Errorf(
+			"T1-diff: since-cursor filter produced same count for both inputs (%d); filter may be hardcoded",
+			fullCount,
+		)
 	}
 	t.Logf("T1-diff: fullCount=%d partialCount=%d — differentiation confirmed", fullCount, partialCount)
 }
@@ -434,14 +487,3 @@ func TestSinceCursor_DifferentInputsDifferentOutputs(t *testing.T) {
 
 // NOTE: writeTranscriptEntries and createSession are defined in
 // replay_ordering_test.go in this same package, so they are reused here directly.
-
-// ── jsonDecodeFrame is a lightweight JSON decode used in assertions ────────────
-
-func jsonDecodeFrame(t *testing.T, raw []byte) map[string]any {
-	t.Helper()
-	var f map[string]any
-	if err := json.Unmarshal(raw, &f); err != nil {
-		t.Fatalf("jsonDecodeFrame: unmarshal: %v", err)
-	}
-	return f
-}

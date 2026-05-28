@@ -177,7 +177,7 @@ func formatSchemaError(err error) string {
 		return ""
 	}
 	// jsonschema/v6 ValidationError has a rich tree; use the top-level message
-	// which already summarises the first failure nicely.
+	// which already summarizes the first failure nicely.
 	msg := err.Error()
 	// Trim verbose path prefixes like "jsonschema: '' does not validate..."
 	// to leave just the actionable part.
@@ -224,7 +224,11 @@ func decodeAndValidate(w http.ResponseWriter, r *http.Request, schemaName string
 		if serverErr {
 			jsonErr(w, http.StatusInternalServerError, "inbound schema unavailable")
 		} else {
-			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("request body does not match schema %s: %s", schemaName, errMsg))
+			jsonErr(
+				w,
+				http.StatusBadRequest,
+				fmt.Sprintf("request body does not match schema %s: %s", schemaName, errMsg),
+			)
 		}
 		return false
 	}

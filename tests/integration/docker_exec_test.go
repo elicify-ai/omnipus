@@ -173,7 +173,7 @@ func TestDockerDefault_ExplicitModeNotOverridden(t *testing.T) {
 // BDD: Given OMNIPUS_IN_DOCKER=1 is set in the environment
 //
 //	When the gateway boots with no explicit sandbox.mode
-//	Then the resolved mode is NOT "enforce" (env-var signal is honoured)
+//	Then the resolved mode is NOT "enforce" (env-var signal is honored)
 //
 // Traces to: pkg/gateway/sandbox_apply.go — isRunningInDocker env-var branch
 // Traces to: review-pr-test-analyzer.md — "No unit test for isRunningInDocker"
@@ -204,7 +204,7 @@ func TestIsRunningInDocker_EnvVarSignal(t *testing.T) {
 	if strings.EqualFold(mode, "enforce") {
 		t.Fatalf(
 			"isRunningInDocker env-var signal: OMNIPUS_IN_DOCKER=1 should prevent enforce, got %q. "+
-				"The env-var detection path is not being honoured.",
+				"The env-var detection path is not being honored.",
 			mode,
 		)
 	}

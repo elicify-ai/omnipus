@@ -44,7 +44,7 @@ const replayLiveBufferCap = 1000
 // wsTypeOnly is used in the readLoop to peek at the "type" discriminator
 // before decoding the full frame into its specific generated type.
 // It is never emitted as a wire value; it is an inbound decode helper only.
-type wsTypeOnly struct { //nolint:govet // internal decode helper, not a wire type
+type wsTypeOnly struct {
 	Type string `json:"type"`
 }
 
@@ -55,7 +55,7 @@ type wsTypeOnly struct { //nolint:govet // internal decode helper, not a wire ty
 //
 // Fields cover the superset of all server→client frames so that test assertions
 // can inspect any field without knowing the concrete frame type.
-type replayFrameDecoder struct { //nolint:govet // not-wire-format: decode-only test assertion target, never emitted over the WebSocket connection
+type replayFrameDecoder struct {
 	Type      string `json:"type"`
 	SessionID string `json:"session_id,omitempty"`
 
@@ -156,7 +156,7 @@ type wsConn struct {
 	//   channel as two separate operations — the drain can empty replayDivertCh and
 	//   disarm the flag between those two steps, orphaning the frame.
 	//
-	//   replayMu serialises the "read flag + select channel" decision in
+	//   replayMu serializes the "read flag + select channel" decision in
 	//   sendRawFrameBytes against the "drain channel + disarm flag" sequence in
 	//   handleAttachSession.  Writers hold the read-lock (RLock) while choosing a
 	//   target channel and sending to it; the drain holds the write-lock (Lock) for
@@ -916,7 +916,7 @@ func sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
 		return
 	}
 	// Route through sendRawFrameBytes to respect replay-divert logic and the
-	// replayMu serialisation that prevents the TOCTOU race (code-reviewer Finding #2).
+	// replayMu serialization that prevents the TOCTOU race (code-reviewer Finding #2).
 	sendRawFrameBytes(wc, string(generated.WsFrameTypeCancelStage), data)
 	// sendRawFrameBytes logs at Warn on drop; suppress the duplicate debug log that
 	// existed in the old inline implementation.
@@ -1074,7 +1074,7 @@ func applySinceCursor(
 // since is the optional RFC3339/RFC3339Nano cursor from AttachSessionFrame.Since.
 // When non-nil and non-empty, only transcript entries with Timestamp > cursor
 // are replayed (O(missed-window) replay).  When nil or empty, a full replay is
-// performed (legacy behaviour).
+// performed (legacy behavior).
 func (h *WSHandler) handleAttachSession(
 	ctx context.Context,
 	chatID string,
@@ -1263,7 +1263,7 @@ func (h *WSHandler) handleAttachSession(
 	//     calls see isReplayingLive==false on the first atomic load (fast path, no
 	//     lock taken) and route directly to sendCh in the correct position.
 	//
-	//   Back-pressure defence (architect Finding #4): each frame send inside the
+	//   Back-pressure defense (architect Finding #4): each frame send inside the
 	//   drain uses a 1-second deadline.  If sendCh is full and the client is slow,
 	//   the frame is dropped with a Warn rather than blocking the drain indefinitely.
 	//   The connection stays usable; the SPA will reconcile any missing frames on the
@@ -1362,11 +1362,15 @@ func (h *WSHandler) handleApprovalResponse(id, decision, sessionID string, wc *w
 			sidCopy := sessionID
 			sidPtr = &sidCopy
 		}
-		sendConnGenFrame(wc, string(generated.WsFrameTypeExecApprovalResponseAck), generated.ExecApprovalResponseAckFrame{
-			Type:      string(generated.WsFrameTypeExecApprovalResponseAck),
-			Id:        &id,
-			SessionId: sidPtr,
-		})
+		sendConnGenFrame(
+			wc,
+			string(generated.WsFrameTypeExecApprovalResponseAck),
+			generated.ExecApprovalResponseAckFrame{
+				Type:      string(generated.WsFrameTypeExecApprovalResponseAck),
+				Id:        &id,
+				SessionId: sidPtr,
+			},
+		)
 	}
 }
 
@@ -1500,12 +1504,17 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 			// cannot fire until after our send completes.
 			targetCh := wc.replayDivertCh
 			defer wc.replayMu.RUnlock()
+			//nolint:dupl // Mirrors the sendCh path below; differs by target channel + lock-holding context.
 			switch {
 			case isCritical:
 				select {
 				case targetCh <- data:
 				case <-time.After(5 * time.Second):
-					slog.Warn("ws: send channel full after timeout for critical frame, closing connection", "type", frameType)
+					slog.Warn(
+						"ws: send channel full after timeout for critical frame, closing connection",
+						"type",
+						frameType,
+					)
 					wc.close()
 				}
 			default:
@@ -1558,6 +1567,7 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 
 	targetCh := wc.sendCh
 
+	//nolint:dupl // Mirrors the replayDivertCh path above; differs by target channel + lock-holding context.
 	switch {
 	case isCritical:
 		// Critical frames must not be dropped. Block briefly; force-close on timeout.

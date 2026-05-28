@@ -346,11 +346,3 @@ func newTestReq(t *testing.T, method, path string, _ any) *http.Request {
 	req.URL.Path = path
 	return req
 }
-
-// min returns the smaller of a and b.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

@@ -17,6 +17,7 @@
 //     agent_id="jim" (not the original creating agent's id).
 //
 // Traces to: Round-2 bug regressions — Bug 1 (post-handoff agent_id labeling)
+
 package integration
 
 import (
@@ -29,8 +30,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/gorilla/websocket"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent/testutil"
 	"github.com/dapicom-ai/omnipus/pkg/session"
@@ -254,7 +253,9 @@ func TestPostHandoff_ToolCallEntriesCarryNewAgentID(t *testing.T) {
 			}
 		}
 		if len(embeddedToolCalls) == 0 {
-			t.Logf("BUG-1: no tool_call entries found in transcript — tool call may not have reached appendToolCallTranscript. Transcript entry types:")
+			t.Logf(
+				"BUG-1: no tool_call entries found in transcript — tool call may not have reached appendToolCallTranscript. Transcript entry types:",
+			)
 			for _, e := range entries {
 				t.Logf("  type=%q role=%q agent_id=%q content_len=%d", e.Type, e.Role, e.AgentID, len(e.Content))
 			}
@@ -332,14 +333,4 @@ func readTranscriptDirect(t *testing.T, gw *testutil.TestGateway, sessionID stri
 		entries = append(entries, entry)
 	}
 	return entries
-}
-
-// wsConnectAndAuth dials the gateway WS and sends the auth frame.
-// Returns the open connection. Caller must close or rely on t.Cleanup.
-//
-// Note: wsConnect (helpers_test.go) requires gw.URL to be http:// format.
-// This is an alias with explicit auth.
-func wsConnectAndSendAuth(t *testing.T, gw *testutil.TestGateway) *websocket.Conn {
-	t.Helper()
-	return wsConnect(t, gw)
 }

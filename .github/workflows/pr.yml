@@ -90,7 +90,15 @@ jobs:
         # Pin to a known-good version that matches the generated file headers.
         # The binary is placed on PATH via GOPATH/bin which Go's setup-go action
         # adds to PATH automatically.
-        run: go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.4.1
+        #
+        # Bumped from v2.4.1 → v2.7.0 to match the version that produced the
+        # committed pkg/api/generated/*.gen.go files (see header comment).
+        # v2.4.1 generates a subset (no Valid() enum methods, no Bearer auth
+        # context-key type, different anonymous-response numbering), so the
+        # previous pin caused make verify-contracts to fail on every PR with
+        # a phantom drift diff. The codebase has been using v2.7.0 output
+        # since commit 6acaf2b on 2026-05-18.
+        run: go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.7.0
 
       - name: Run verify-contracts
         # gen-contracts.sh lints both specs, regenerates all artifacts, then

@@ -41,6 +41,7 @@ import (
 // location so the test works regardless of the cwd a test runner uses.
 func loadMessageSchema(t *testing.T) *jsonschema.Schema {
 	t.Helper()
+	//nolint:dogsled // runtime.Caller returns 4 values; only the file path is needed.
 	_, thisFile, _, _ := runtime.Caller(0)
 	contractsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "contracts", "components", "schemas")
 	loader := newYAMLSchemaLoader(t)
@@ -52,17 +53,6 @@ func loadMessageSchema(t *testing.T) *jsonschema.Schema {
 	schema, err := compiler.Compile(schemaURL)
 	require.NoError(t, err, "must be able to compile Message.yaml")
 	return schema
-}
-
-// validateMessage validates a single JSON-marshaled message against the
-// Message.yaml schema. The schema is loaded once per test via the closure.
-func validateMessage(t *testing.T, schema *jsonschema.Schema, raw []byte) error {
-	t.Helper()
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return err
-	}
-	return schema.Validate(v)
 }
 
 // TestGetSessionMessages_ToolCallEntries_PassesWireSchema reproduces the
@@ -138,7 +128,7 @@ func TestGetSessionMessages_ToolCallEntries_PassesWireSchema(t *testing.T) {
 }
 
 // TestGetSessionMessages_TurnCanceledEntry_PassesWireSchema covers the
-// second EntryType missing from the wire schema pre-fix. A real cancelled
+// second EntryType missing from the wire schema pre-fix. A real canceled
 // turn produces an entry with Type=turn_canceled plus cancel-specific
 // fields (TurnID, CancelledByUser, etc.). The post-fix schema accepts both
 // the new enum value AND the previously-undefined fields.
@@ -262,6 +252,7 @@ func TestGetSession_TranscriptWithMixedEntries_PassesSessionDetailSchema(t *test
 		"GET /sessions/{id} must return 200; got %d body=%s", w.Code, w.Body.String())
 
 	// Validate the envelope against SessionDetail.yaml.
+	//nolint:dogsled // runtime.Caller returns 4 values; only the file path is needed.
 	_, thisFile, _, _ := runtime.Caller(0)
 	contractsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "contracts", "components", "schemas")
 	loader := newYAMLSchemaLoader(t)

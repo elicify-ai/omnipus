@@ -401,7 +401,7 @@ func runSession(
 	atomic.AddInt64(done, 1)
 
 	// Send the mandatory auth frame first — the gateway requires every WS
-	// client to authenticate before any other frame is honoured. In dev-mode
+	// client to authenticate before any other frame is honored. In dev-mode
 	// (StartTestGateway with WithAllowEmpty → DevModeBypass=true) any
 	// non-empty token is accepted; the frame's structural validity matters,
 	// not the token value. Without this frame the server silently drops

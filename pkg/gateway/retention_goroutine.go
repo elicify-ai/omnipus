@@ -19,7 +19,7 @@ import (
 // POST /api/v1/security/retention/sweep endpoint. Both paths acquire
 // this mutex before calling the sweep function so they never run concurrently.
 //
-//nolint:unused // used in rest_retention.go (!cgo build); lint with goolm,stdjson excludes !cgo files
+
 var retentionSweepMu sync.Mutex
 
 // retentionSweepFn is the function called on each enabled tick. The default
@@ -27,7 +27,7 @@ var retentionSweepMu sync.Mutex
 // this variable with a mock to observe call counts without touching the
 // filesystem.
 //
-//nolint:unused // used in executeSweepTick; gateway.go (!cgo) excluded by lint with goolm,stdjson
+
 var retentionSweepFn func(store *session.UnifiedStore, days int) (int, error) = func(
 	store *session.UnifiedStore, days int,
 ) (int, error) {
@@ -38,7 +38,7 @@ var retentionSweepFn func(store *session.UnifiedStore, days int) (int, error) = 
 // gateway process (sync.Once is reset only at process exit, which is correct
 // for a singleton worker).
 //
-//nolint:unused // used in startRetentionSweepLoop; gateway.go (!cgo) excluded by lint with goolm,stdjson
+
 var retentionLoopStarted sync.Once
 
 // startRetentionSweepLoop launches the nightly retention sweep goroutine.
@@ -56,7 +56,7 @@ var retentionLoopStarted sync.Once
 //     are picked up without a restart.
 //   - tickInterval: normally 24*time.Hour; pass a smaller value in tests.
 //
-//nolint:unused // called from gateway.go (!cgo build); lint with goolm,stdjson excludes !cgo files
+
 func startRetentionSweepLoop(
 	ctx context.Context,
 	store *session.UnifiedStore,
@@ -68,7 +68,6 @@ func startRetentionSweepLoop(
 	})
 }
 
-//nolint:unused // called from startRetentionSweepLoop; gateway.go (!cgo) excluded by lint
 func runRetentionSweepLoop(
 	ctx context.Context,
 	store *session.UnifiedStore,
@@ -94,10 +93,8 @@ func runRetentionSweepLoop(
 	}
 }
 
-//nolint:unused // overridable for tests; default delegates to toolStore.retentionSweep
 var retentionToolResultSweepFn func(days int) (int, error)
 
-//nolint:unused // called from runRetentionSweepLoop; gateway.go (!cgo) excluded by lint with goolm,stdjson
 func executeSweepTick(store *session.UnifiedStore, getCfg func() *config.Config) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -167,7 +164,7 @@ func executeSweepTick(store *session.UnifiedStore, getCfg func() *config.Config)
 // retentionRetroSweepFn is the function called to sweep retro files per agent.
 // Tests replace this variable with a mock.
 //
-//nolint:unused // used in executeRetroSweepTick; gateway.go (!cgo) excluded by lint with goolm,stdjson
+
 var retentionRetroSweepFn func(al *agent.AgentLoop, retentionDays int) int = func(
 	al *agent.AgentLoop, retentionDays int,
 ) int {
@@ -176,7 +173,7 @@ var retentionRetroSweepFn func(al *agent.AgentLoop, retentionDays int) int = fun
 
 // retentionRetroLoopStarted ensures the retro sweep goroutine is launched at most once.
 //
-//nolint:unused // used in startRetentionRetroSweepLoop; gateway.go (!cgo) excluded by lint with goolm,stdjson
+
 var retentionRetroLoopStarted sync.Once
 
 // startRetentionRetroSweepLoop launches the nightly retro sweep goroutine (FR-031).
@@ -184,7 +181,7 @@ var retentionRetroLoopStarted sync.Once
 // each agent's MemoryStore. It is guarded by retentionRetroLoopStarted so it
 // runs exactly once per process.
 //
-//nolint:unused // called from gateway.go (!cgo build); lint with goolm,stdjson excludes !cgo files
+
 func startRetentionRetroSweepLoop(
 	ctx context.Context,
 	agentLoop *agent.AgentLoop,
@@ -199,7 +196,6 @@ func startRetentionRetroSweepLoop(
 	})
 }
 
-//nolint:unused // called from startRetentionRetroSweepLoop; gateway.go (!cgo) excluded by lint
 func runRetentionRetroSweepLoop(
 	ctx context.Context,
 	agentLoop *agent.AgentLoop,
@@ -219,7 +215,6 @@ func runRetentionRetroSweepLoop(
 	}
 }
 
-//nolint:unused // called from runRetentionRetroSweepLoop; gateway.go (!cgo) excluded by lint
 func executeRetroSweepTick(agentLoop *agent.AgentLoop, getCfg func() *config.Config) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -260,7 +255,7 @@ func executeRetroSweepTick(agentLoop *agent.AgentLoop, getCfg func() *config.Con
 // executeRetroSweep iterates all agents and calls SweepRetros on each agent's MemoryStore.
 // Returns the total count of deleted retro files.
 //
-//nolint:unused // called from retentionRetroSweepFn; gateway.go (!cgo) excluded by lint with goolm,stdjson
+
 func executeRetroSweep(agentLoop *agent.AgentLoop, retentionDays int) int {
 	registry := agentLoop.GetRegistry()
 	if registry == nil {

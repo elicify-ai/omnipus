@@ -382,7 +382,15 @@ func (a *restAPI) HandleUserChangeRole(w http.ResponseWriter, r *http.Request) {
 
 	if reloadErr := a.awaitReload(); reloadErr != nil {
 		emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, string(body.Role))
-		slog.Info("rest: user role changed (restart required)", "username", username, "old", oldRole, "new", string(body.Role))
+		slog.Info(
+			"rest: user role changed (restart required)",
+			"username",
+			username,
+			"old",
+			oldRole,
+			"new",
+			string(body.Role),
+		)
 		reqRestart := true
 		warningMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
 		jsonOK(w, gen.UserRoleChangeResponse{

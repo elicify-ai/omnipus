@@ -1,0 +1,309 @@
+goroutine 37 [running]:
+runtime/pprof.writeGoroutineStacks({0x2b12be0, 0x664f20853e0})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/runtime/pprof/pprof.go:819 +0x6b
+runtime/pprof.writeGoroutine({0x2b12be0?, 0x664f20853e0?}, 0x664f3893930?)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/runtime/pprof/pprof.go:782 +0x25
+runtime/pprof.(*Profile).WriteTo(0x151adc5?, {0x2b12be0?, 0x664f20853e0?}, 0x421db4?)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/runtime/pprof/pprof.go:408 +0x149
+github.com/dapicom-ai/omnipus/tests/perf.dumpGoroutineClasses(0x664f1964fc8, 0xf)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/tests/perf/load_2000_sessions_test.go:501 +0x77
+github.com/dapicom-ai/omnipus/tests/perf.TestLoad2000Sessions(0x664f1964fc8)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/tests/perf/load_2000_sessions_test.go:212 +0x83f
+testing.tRunner(0x664f1964fc8, 0x2afd3e8)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/testing/testing.go:2036 +0xea
+created by testing.(*T).Run in goroutine 1
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/testing/testing.go:2101 +0x4c5
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0x664f1964d88, {0x152f946?, 0x0?}, 0x2afd3e8)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/testing/testing.go:2109 +0x4e5
+testing.runTests.func1(0x664f1964d88)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/testing/testing.go:2585 +0x3e
+testing.tRunner(0x664f1964d88, 0x664f1d21c30)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/testing/testing.go:2036 +0xea
+testing.runTests({0x15472ea, 0x1d}, {0x156380b, 0x28}, 0x664f17b4228, {0x35d6aa0, 0x6, 0x6}, {0xc27c0bf8d876b7fb, 0x37e21fe6ee, ...})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/testing/testing.go:2583 +0x505
+testing.(*M).Run(0x664f19df7c0)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/testing/testing.go:2443 +0x6ac
+github.com/dapicom-ai/omnipus/tests/perf.TestMain(0x664f19df7c0)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/tests/perf/testmain_test.go:29 +0x29
+main.main()
+	_testmain.go:68 +0xa5
+
+goroutine 36 [chan receive]:
+github.com/dapicom-ai/omnipus/pkg/tools.NewSessionManager.func1()
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/tools/session.go:184 +0x97
+created by github.com/dapicom-ai/omnipus/pkg/tools.NewSessionManager in goroutine 1
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/tools/session.go:181 +0x8a
+
+goroutine 38 [select]:
+github.com/dapicom-ai/omnipus/pkg/gateway.RunContextWithOptions({0x2b277d0, 0x664f1bba000}, {0x0, {0x664f1bb65f0, 0x46}, {0x664f17e7080, 0x52}, 0x1, {0x0, 0x0}, ...})
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/gateway/gateway.go:772 +0x27a5
+github.com/dapicom-ai/omnipus/pkg/gateway.RunContext({0x2b277d0?, 0x664f1bba000?}, 0x0?, {0x664f1bb65f0?, 0x0?}, {0x664f17e7080?, 0x0?}, 0x0?)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/gateway/gateway.go:351 +0xaf
+github.com/dapicom-ai/omnipus/pkg/agent/testutil.StartTestGateway.func1()
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/testutil/gateway_harness.go:224 +0x103
+created by github.com/dapicom-ai/omnipus/pkg/agent/testutil.StartTestGateway in goroutine 37
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/testutil/gateway_harness.go:222 +0x7f7
+
+goroutine 40 [select]:
+github.com/dapicom-ai/omnipus/pkg/cron.(*CronService).runLoop(0x664f26980c0, 0x664f1c7f030)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/cron/service.go:156 +0x2a7
+created by github.com/dapicom-ai/omnipus/pkg/cron.(*CronService).Start in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/cron/service.go:106 +0x2c5
+
+goroutine 51 [chan receive]:
+github.com/dapicom-ai/omnipus/pkg/agent.(*HookManager).dispatchEvents(0x664f1f68a00)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/hooks.go:336 +0xcf
+created by github.com/dapicom-ai/omnipus/pkg/agent.NewHookManager in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/hooks.go:254 +0x138
+
+goroutine 52 [select]:
+github.com/dapicom-ai/omnipus/pkg/agent.(*ServedSubdirs).janitor(0x664f19a6040)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/served_subdirs.go:201 +0xe7
+created by github.com/dapicom-ai/omnipus/pkg/agent.NewServedSubdirs in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/served_subdirs.go:70 +0xf9
+
+goroutine 53 [select]:
+github.com/dapicom-ai/omnipus/pkg/sandbox.(*DevServerRegistry).runJanitor(0x664f19a6080)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/sandbox/dev_servers.go:363 +0xe7
+created by github.com/dapicom-ai/omnipus/pkg/sandbox.NewDevServerRegistry in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/sandbox/dev_servers.go:138 +0xd6
+
+goroutine 54 [IO wait]:
+internal/poll.runtime_pollWait(0x73b8e0eb2a00, 0x72)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0x664f1f68000?, 0x1284e40?, 0x0)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x664f1f68000)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/internal/poll/fd_unix.go:613 +0x28c
+net.(*netFD).accept(0x664f1f68000)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/fd_unix.go:150 +0x29
+net.(*TCPListener).accept(0x664f19a60c0)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/tcpsock_posix.go:159 +0x1b
+net.(*TCPListener).Accept(0x664f19a60c0)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/tcpsock.go:387 +0x30
+net/http.(*Server).Serve(0x664f2444300, {0x2b214d8, 0x664f19a60c0})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/server.go:3434 +0x30c
+github.com/dapicom-ai/omnipus/pkg/sandbox.NewEgressProxy.func1()
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/sandbox/egress_proxy.go:125 +0x27
+created by github.com/dapicom-ai/omnipus/pkg/sandbox.NewEgressProxy in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/sandbox/egress_proxy.go:124 +0x305
+
+goroutine 5 [select]:
+github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).sendWithRetry(0x664f220f1e0, {0x2b277d0, 0x664f208ac30}, {0x1517f0b, 0x7}, 0x664f1ab4480, {{0x1517f0b, 0x7}, {0x664f236d710, 0x2c}, ...})
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:1025 +0x373
+github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).runWorker(0x664f220f1e0, {0x2b277d0, 0x664f208ac30}, {0x1517f0b, 0x7}, 0x664f1ab4480)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:963 +0x3d8
+created by github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).StartAll in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:743 +0x655
+
+goroutine 6 [select]:
+github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).runMediaWorker(0x664f220f1e0, {0x2b277d0, 0x664f208ac30}, {0x1517f0b, 0x7}, 0x664f1ab4480)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:1139 +0x138
+created by github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).StartAll in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:744 +0x6f5
+
+goroutine 7 [select]:
+github.com/dapicom-ai/omnipus/pkg/channels.dispatchLoop[...]({0x2b277d0?, 0x664f208ac30}, 0x664f220f1e0, 0x664f1a3c230, 0x2afe560, 0x2afe568, {0x1542bfc, 0x0?}, {0x1542c17, 0x1b}, ...)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:1052 +0xfc
+github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).dispatchOutbound(0x0?, {0x2b277d0?, 0x664f208ac30?})
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:1092 +0x92
+created by github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).StartAll in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:754 +0x845
+
+goroutine 8 [select]:
+github.com/dapicom-ai/omnipus/pkg/channels.dispatchLoop[...]({0x2b277d0?, 0x664f208ac30}, 0x664f220f1e0, 0x664f1a3c2a0, 0x2afe570, 0x2afe578, {0x1553c1e, 0x0?}, {0x1553c3f, 0x21}, ...)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:1052 +0xfc
+github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).dispatchOutboundMedia(0x0?, {0x2b277d0?, 0x664f208ac30?})
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:1114 +0x92
+created by github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).StartAll in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:755 +0x8a8
+
+goroutine 9 [select]:
+github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).runTTLJanitor(0x664f220f1e0, {0x2b277d0, 0x664f208ac30})
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:1250 +0x259
+created by github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).StartAll in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:758 +0x90b
+
+goroutine 10 [IO wait]:
+internal/poll.runtime_pollWait(0x73b8e0eb2800, 0x72)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0x664f21d5780?, 0x900000036?, 0x0)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x664f21d5780)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/internal/poll/fd_unix.go:613 +0x28c
+net.(*netFD).accept(0x664f21d5780)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/fd_unix.go:150 +0x29
+net.(*TCPListener).accept(0x664f25f8040)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/tcpsock_posix.go:159 +0x1b
+net.(*TCPListener).Accept(0x664f25f8040)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/tcpsock.go:387 +0x30
+net/http.(*Server).Serve(0x664f2444100, {0x2b214d8, 0x664f25f8040})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/server.go:3434 +0x30c
+net/http.(*Server).ListenAndServe(0x664f2444100)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/server.go:3360 +0x72
+github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).StartAll.func1()
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:766 +0x145
+created by github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).StartAll in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:762 +0x95c
+
+goroutine 11 [IO wait]:
+internal/poll.runtime_pollWait(0x73b8e0eb2600, 0x72)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0x664f1f68100?, 0x370016?, 0x0)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0x664f1f68100)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/internal/poll/fd_unix.go:613 +0x28c
+net.(*netFD).accept(0x664f1f68100)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/fd_unix.go:150 +0x29
+net.(*TCPListener).accept(0x664f19a6d80)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/tcpsock_posix.go:159 +0x1b
+net.(*TCPListener).Accept(0x664f19a6d80)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/tcpsock.go:387 +0x30
+net/http.(*Server).Serve(0x664f2444200, {0x2b214d8, 0x664f19a6d80})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/server.go:3434 +0x30c
+net/http.(*Server).ListenAndServe(0x664f2444200)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/server.go:3360 +0x72
+github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).StartAll.func2()
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:787 +0x145
+created by github.com/dapicom-ai/omnipus/pkg/channels.(*Manager).StartAll in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/channels/manager.go:783 +0x9ad
+
+goroutine 12 [select]:
+net/http.(*http2ClientConn).roundTrip(0x664f19a9c00, 0x664f19c5180, 0x0)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/h2_bundle.go:8688 +0x525
+net/http.(*http2ClientConn).RoundTrip(...)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/h2_bundle.go:8603
+net/http.(*http2Transport).RoundTripOpt(0x664f1f5db80, 0x664f19c5180, {0x40?, 0xf4?})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/h2_bundle.go:7901 +0x1ed
+net/http.(*http2Transport).RoundTrip(...)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/h2_bundle.go:7852
+net/http.http2noDialH2RoundTripper.RoundTrip({0x35d8980?}, 0x664f19c5180?)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/h2_bundle.go:10560 +0x1c
+net/http.(*Transport).roundTrip(0x35d8980, 0x664f19c5040)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/transport.go:623 +0x4ff
+net/http.(*Transport).RoundTrip(0x664f19c5040?, 0x2b135a0?)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/roundtrip.go:33 +0x18
+net/http.send(0x664f19c4f00, {0x2b135a0, 0x35d8980}, {0x664f2618b38?, 0x48c446?, 0x35e7d20?})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/client.go:264 +0x64b
+net/http.(*Client).send(0x664f190fa70, 0x664f19c4f00, {0x664f2618b01?, 0x664f2618bc0?, 0x35e7d20?})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/client.go:185 +0x258
+net/http.(*Client).do(0x664f190fa70, 0x664f19c4f00)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/client.go:733 +0x9d7
+net/http.(*Client).Do(...)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/client.go:592
+github.com/dapicom-ai/omnipus/pkg/providers/openai_compat.(*Provider).Chat(0x664f1c46d00, {0x2b277d0, 0x664f29e6d70}, {0x664f292d008?, 0x7?, 0x664f2553260?}, {0x664f29be008?, 0x664f38481e0?, 0x22?}, {0x664f1c0e2cb, ...}, ...)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/providers/openai_compat/provider.go:195 +0x53f
+github.com/dapicom-ai/omnipus/pkg/providers.(*HTTPProvider).Chat(0x1517f0b?, {0x2b277d0?, 0x664f29e6d70?}, {0x664f292d008?, 0x664f38481e0?, 0x94da9643cc8de2ef?}, {0x664f29be008?, 0x0?, 0xffffffffffffffff?}, {0x664f1c0e2cb, ...}, ...)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/providers/http_provider.go:58 +0x56
+github.com/dapicom-ai/omnipus/pkg/agent.(*AgentLoop).runTurn.func4({0x664f292d008, 0x1a, 0x1a}, {0x664f29be008, 0x45, 0x45})
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/loop.go:3904 +0xc1c
+github.com/dapicom-ai/omnipus/pkg/agent.(*AgentLoop).runTurn(0x664f1a76708, {0x2b277d0, 0x664f25e4140}, 0x664f19acc08)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/loop.go:3913 +0x3b27
+github.com/dapicom-ai/omnipus/pkg/agent.(*AgentLoop).runAgentLoop(0x664f1a76708, {_, _}, _, {{0x664f1f276e0, 0xf}, {0x1517f0b, 0x7}, {0x664f2553260, 0x2c}, ...})
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/loop.go:3256 +0x3ed
+github.com/dapicom-ai/omnipus/pkg/agent.(*AgentLoop).processMessage(_, {_, _}, {{0x1517f0b, 0x7}, {0x15200ef, 0xc}, {{0x0, 0x0}, {0x0, ...}, ...}, ...})
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/loop.go:3033 +0x172a
+github.com/dapicom-ai/omnipus/pkg/agent.(*AgentLoop).Run.func2(0x664f1a76708, 0x664f261fd00, 0x664f25e3160, {0x2b277d0, 0x664f25e4140})
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/loop.go:1566 +0x208
+github.com/dapicom-ai/omnipus/pkg/agent.(*AgentLoop).Run(0x664f1a76708, {0x2b277d0, 0x664f208acd0})
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/loop.go:1657 +0x1d5
+github.com/dapicom-ai/omnipus/pkg/gateway.RunContextWithOptions.func4()
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/gateway/gateway.go:723 +0x72
+created by github.com/dapicom-ai/omnipus/pkg/gateway.RunContextWithOptions in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/gateway/gateway.go:708 +0x246e
+
+goroutine 13 [select]:
+github.com/dapicom-ai/omnipus/pkg/gateway.runRetentionSweepLoop({0x2b277d0, 0x664f1bba000}, 0x664f17fe9a0, 0x664f2234fe0, 0x4e94914f0000)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/gateway/retention_goroutine.go:88 +0xf9
+created by github.com/dapicom-ai/omnipus/pkg/gateway.startRetentionSweepLoop.func1 in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/gateway/retention_goroutine.go:67 +0xb1
+
+goroutine 14 [select]:
+github.com/dapicom-ai/omnipus/pkg/gateway.runRetentionRetroSweepLoop({0x2b277d0, 0x664f1bba000}, 0x664f1a76708, 0x664f2234ff0, 0x0?)
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/gateway/retention_goroutine.go:194 +0xdb
+created by github.com/dapicom-ai/omnipus/pkg/gateway.startRetentionRetroSweepLoop.func1 in goroutine 38
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/gateway/retention_goroutine.go:179 +0xb1
+
+goroutine 1321 [select]:
+github.com/dapicom-ai/omnipus/pkg/agent.(*AgentLoop).resetIdleTicker.func1()
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/loop.go:695 +0xf0
+created by github.com/dapicom-ai/omnipus/pkg/agent.(*AgentLoop).resetIdleTicker in goroutine 12
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/loop.go:688 +0x110
+
+goroutine 63 [select]:
+github.com/dapicom-ai/omnipus/pkg/agent.(*AgentLoop).resetIdleTicker.func1()
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/loop.go:695 +0xf0
+created by github.com/dapicom-ai/omnipus/pkg/agent.(*AgentLoop).resetIdleTicker in goroutine 12
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/loop.go:688 +0x110
+
+goroutine 32 [IO wait]:
+internal/poll.runtime_pollWait(0x73b8e0b26200, 0x72)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/runtime/netpoll.go:351 +0x85
+internal/poll.(*pollDesc).wait(0x664f23d2580?, 0x664f21dac00?, 0x0)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/internal/poll/fd_poll_runtime.go:84 +0x27
+internal/poll.(*pollDesc).waitRead(...)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Read(0x664f23d2580, {0x664f21dac00, 0x1300, 0x1300})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/internal/poll/fd_unix.go:165 +0x2ae
+net.(*netFD).Read(0x664f23d2580, {0x664f21dac00?, 0x664f21dac00?, 0x5?})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/fd_posix.go:68 +0x25
+net.(*conn).Read(0x664f1882968, {0x664f21dac00?, 0x73b8e0e71b88?, 0x73b927947bf0?})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/net.go:196 +0x45
+crypto/tls.(*atLeastReader).Read(0x664f29154a0, {0x664f21dac00?, 0x664f23e23c0?, 0x664f34eba48?})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/crypto/tls/conn.go:815 +0x3b
+bytes.(*Buffer).ReadFrom(0x664f1f250a8, {0x2b14480, 0x664f29154a0})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/bytes/buffer.go:229 +0x98
+crypto/tls.(*Conn).readFromUntil(0x664f1f24e08, {0x2b13cc0, 0x664f1882968}, 0x664f34ebc08?)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/crypto/tls/conn.go:837 +0xde
+crypto/tls.(*Conn).readRecordOrCCS(0x664f1f24e08, 0x0)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/crypto/tls/conn.go:626 +0x3db
+crypto/tls.(*Conn).readRecord(...)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/crypto/tls/conn.go:588
+crypto/tls.(*Conn).Read(0x664f1f24e08, {0x664f19f7000, 0x1000, 0x664f34ebcb0?})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/crypto/tls/conn.go:1393 +0x145
+bufio.(*Reader).Read(0x664f25f6ae0, {0x664f1fcd1c4, 0x9, 0x664f34ebd00?})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/bufio/bufio.go:245 +0x197
+io.ReadAtLeast({0x2b12fc0, 0x664f25f6ae0}, {0x664f1fcd1c4, 0x9, 0x9}, 0x9)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/io/io.go:335 +0x8e
+io.ReadFull(...)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/io/io.go:354
+net/http.http2readFrameHeader({0x664f1fcd1c4, 0x9, 0x66400000015?}, {0x2b12fc0?, 0x664f25f6ae0?})
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/h2_bundle.go:1805 +0x65
+net/http.(*http2Framer).ReadFrameHeader(0x664f1fcd180)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/h2_bundle.go:2071 +0x6b
+net/http.(*http2Framer).ReadFrame(0x664f1fcd180)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/h2_bundle.go:2130 +0x18
+net/http.(*http2clientConnReadLoop).run(0x664f34ebfa8)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/h2_bundle.go:9550 +0xca
+net/http.(*http2ClientConn).readLoop(0x664f19a9c00)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/h2_bundle.go:9419 +0x52
+created by net/http.(*http2Transport).newClientConn in goroutine 31
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/h2_bundle.go:8171 +0xda5
+
+goroutine 1279 [select]:
+net/http.(*http2clientStream).writeRequest(0x664f29c2600, 0x664f19c5180, 0x0)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/h2_bundle.go:8857 +0xc88
+net/http.(*http2clientStream).doRequest(0x664f29c2600, 0x664f29c4620?, 0x664f29c4620?)
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/h2_bundle.go:8718 +0x18
+created by net/http.(*http2ClientConn).roundTrip in goroutine 12
+	/home/Daniel/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.linux-amd64/src/net/http/h2_bundle.go:8624 +0x470
+
+goroutine 1306 [select]:
+github.com/dapicom-ai/omnipus/pkg/agent.(*AgentLoop).resetIdleTicker.func1()
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/loop.go:695 +0xf0
+created by github.com/dapicom-ai/omnipus/pkg/agent.(*AgentLoop).resetIdleTicker in goroutine 12
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/loop.go:688 +0x110
+
+goroutine 1230 [select]:
+github.com/dapicom-ai/omnipus/pkg/agent.(*AgentLoop).resetIdleTicker.func1()
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/loop.go:695 +0xf0
+created by github.com/dapicom-ai/omnipus/pkg/agent.(*AgentLoop).resetIdleTicker in goroutine 12
+	/mnt/volume_sgp1_01/projects/omnipus-security-wiring/pkg/agent/loop.go:688 +0x110

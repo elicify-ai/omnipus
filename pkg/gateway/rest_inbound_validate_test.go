@@ -361,7 +361,9 @@ func newTestRestAPIWithValidationAndAgent(t *testing.T) *restAPI {
 			},
 		},
 	}
-	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[{"id":"test-agent-001","name":"Test Agent","type":"custom"}]},"providers":[]}`)
+	minimalCfg := []byte(
+		`{"version":1,"agents":{"defaults":{},"list":[{"id":"test-agent-001","name":"Test Agent","type":"custom"}]},"providers":[]}`,
+	)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
 
 	msgBus := bus.NewMessageBus()
@@ -521,8 +523,13 @@ func TestUpdateAgent_ValidateInbound_EmptyPatchRejected(t *testing.T) {
 
 	api.updateAgent(w, r, "test-agent-001")
 
-	assert.Equal(t, http.StatusBadRequest, w.Code,
-		"empty patch body {} must be rejected 400 by minProperties:1 in AgentUpdateRequest inbound schema; body: %s", w.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		w.Code,
+		"empty patch body {} must be rejected 400 by minProperties:1 in AgentUpdateRequest inbound schema; body: %s",
+		w.Body.String(),
+	)
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Contains(t, resp["error"], "AgentUpdateRequest",
@@ -637,7 +644,7 @@ func TestPreCompileAllInboundSchemas_IsDeterministic(t *testing.T) {
 // ── Fail-closed 500 path tests ─────────────────────────────────────────────────
 
 // TestDecodeAndValidate_SchemaCompileFailure_Returns500 asserts the fail-closed
-// behaviour when a handler calls decodeAndValidate with a schema name that does
+// behavior when a handler calls decodeAndValidate with a schema name that does
 // not exist in the embedded FS (simulating a server misconfiguration).
 //
 // BDD:

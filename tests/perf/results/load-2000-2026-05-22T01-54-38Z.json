@@ -1,0 +1,19 @@
+{
+  "run_at": "2026-05-22T01:54:38Z",
+  "sessions_opened": 200,
+  "messages_sent": 223,
+  "messages_recv": 183,
+  "dropped_frames": 177,
+  "p50_first_token_ms": 2982,
+  "p95_first_token_ms": 3782,
+  "p99_first_token_ms": 7632,
+  "peak_rss_mb": 42.48671340942383,
+  "goroutines_before": 21,
+  "goroutines_after": 25,
+  "goroutine_leak": 4,
+  "duration_seconds": 47.724215608,
+  "slo_breaches": {
+    "dropped_frames": "dropped=177 \u003e SLO=0",
+    "p95_first_token": "p95=3.782595752s \u003e SLO=1s — distribution: p50=2.982796209s p95=3.782595752s p99=7.632818371s"
+  }
+}

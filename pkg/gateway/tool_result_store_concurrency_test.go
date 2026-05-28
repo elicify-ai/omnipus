@@ -7,7 +7,7 @@
 // exercising:
 //  1. Concurrent saves by 100 goroutines — all must succeed, no corruption.
 //  2. Duplicate-ref semantics — document and lock down the "second write wins"
-//     or "first write wins" behaviour of saveJSON.
+//     or "first write wins" behavior of saveJSON.
 //
 // Traces to: spa-streaming-refactor.md Phase 2D, T5.
 
@@ -58,7 +58,7 @@ func TestToolResultStore_ConcurrentSaves(t *testing.T) {
 	wg.Add(numGoroutines)
 
 	for i := 0; i < numGoroutines; i++ {
-		i := i // capture
+		// capture
 		go func() {
 			defer wg.Done()
 			ref, ok := store.saveJSON(fmt.Sprintf("session-concurrent-%d", i), bodies[i])
@@ -118,7 +118,10 @@ func TestToolResultStore_DifferentRefsPerSave(t *testing.T) {
 
 	// Refs are random — two calls must produce different identifiers.
 	if ref1 == ref2 {
-		t.Errorf("T5-dedup: two saveJSON calls returned the same ref %q — refs must be randomly generated, not content-addressed", ref1)
+		t.Errorf(
+			"T5-dedup: two saveJSON calls returned the same ref %q — refs must be randomly generated, not content-addressed",
+			ref1,
+		)
 	}
 
 	// Both refs must be readable and return the original content.
@@ -153,7 +156,6 @@ func TestToolResultStore_ConcurrentSaves_NoPartialWrites(t *testing.T) {
 	wg.Add(numPairs)
 
 	for i := 0; i < numPairs; i++ {
-		i := i
 		go func() {
 			defer wg.Done()
 			// Write a payload with a distinct numeric marker.
@@ -176,7 +178,10 @@ func TestToolResultStore_ConcurrentSaves_NoPartialWrites(t *testing.T) {
 			// The read-back must equal the written body exactly.
 			if string(got) != string(body) {
 				mu.Lock()
-				readErrors = append(readErrors, fmt.Sprintf("goroutine %d: content mismatch: wrote %d bytes, got %d bytes", i, len(body), len(got)))
+				readErrors = append(
+					readErrors,
+					fmt.Sprintf("goroutine %d: content mismatch: wrote %d bytes, got %d bytes", i, len(body), len(got)),
+				)
 				mu.Unlock()
 			}
 		}()

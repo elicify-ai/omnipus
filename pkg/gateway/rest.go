@@ -291,7 +291,7 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 
 // jsonSessionDetail writes a response that conforms to the gen.SessionDetail wire
 // shape: { session, messages, agent_removed? }.
-// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialise via
+// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize via
 // their own json tags to JSON layouts that match SessionDetail.yaml / Session.yaml /
 // Message.yaml — we exploit that to avoid a field-by-field copy into gen.SessionDetail.
 // The anonymous struct is not a named wire-format type and therefore does not trigger
@@ -305,7 +305,12 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 // Messages stay as []session.TranscriptEntry: the Message.yaml schema only
 // requires {id, timestamp, agent_id}, and every other field uses omitempty
 // in Go — so nil slices/maps are omitted, not emitted as null.
-func jsonSessionDetail(w http.ResponseWriter, meta *session.UnifiedMeta, messages []session.TranscriptEntry, agentRemoved bool) {
+func jsonSessionDetail(
+	w http.ResponseWriter,
+	meta *session.UnifiedMeta,
+	messages []session.TranscriptEntry,
+	agentRemoved bool,
+) {
 	genSession := unifiedMetaToGenSession(meta)
 	if messages == nil {
 		messages = []session.TranscriptEntry{}
@@ -546,7 +551,7 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 	}
 	// Build response matching gen.SessionDetail wire shape:
 	// { session, messages, agent_removed? }
-	// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialise to
+	// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize to
 	// the same JSON layout defined in SessionDetail.yaml and Session.yaml/Message.yaml.
 	// Using jsonSessionDetail avoids an import cycle while staying lint-compliant.
 	jsonSessionDetail(w, meta, messages, agentRemoved)
@@ -1044,7 +1049,7 @@ func buildAgentDefaults(cfg *config.Config) gen.Agent {
 		ToolFeedback:      cfg.Agents.Defaults.ToolFeedback.Enabled,
 		HeartbeatEnabled:  cfg.Heartbeat.Enabled,
 		HeartbeatInterval: cfg.Heartbeat.Interval,
-		// Required string fields — initialised to empty (overwritten per-agent).
+		// Required string fields — initialized to empty (overwritten per-agent).
 		Soul:         "",
 		Heartbeat:    "",
 		Instructions: "",
@@ -1215,7 +1220,8 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		for k, v := range baseCfg.Builtin.Policies {
 			builtin.Policies[k] = v
 		}
-		if req.ToolsCfg.Builtin != nil && req.ToolsCfg.Builtin.DefaultPolicy != nil && *req.ToolsCfg.Builtin.DefaultPolicy != "" {
+		if req.ToolsCfg.Builtin != nil && req.ToolsCfg.Builtin.DefaultPolicy != nil &&
+			*req.ToolsCfg.Builtin.DefaultPolicy != "" {
 			builtin.DefaultPolicy = config.ToolPolicy(*req.ToolsCfg.Builtin.DefaultPolicy)
 		}
 		// Merge caller-supplied policies; caller's system.* entry overrides seed.
@@ -3509,7 +3515,11 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 	case "stdio", "sse", "http":
 		// valid
 	default:
-		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("invalid transport %q: must be one of stdio, sse, http", transport))
+		jsonErr(
+			w,
+			http.StatusBadRequest,
+			fmt.Sprintf("invalid transport %q: must be one of stdio, sse, http", transport),
+		)
 		return
 	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
@@ -3642,23 +3652,6 @@ func (a *restAPI) HandleTools(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Tool Visibility (Issue #41) ---
-
-// toolToMap converts a Tool to its REST representation. The category is derived
-// from the name prefix before the first dot (e.g. "system.agent_list" →
-// "system"). Falls back to defaultCategory when no dot is present.
-func toolToMap(t tools.Tool, defaultCategory string) map[string]any {
-	name := t.Name()
-	category := defaultCategory
-	if idx := strings.Index(name, "."); idx > 0 {
-		category = name[:idx]
-	}
-	return map[string]any{
-		"name":        name,
-		"scope":       string(t.Scope()),
-		"category":    category,
-		"description": t.Description(),
-	}
-}
 
 // HandleMCPTools handles GET /api/v1/tools/mcp — returns all configured MCP
 // servers with their status and tool lists for the agent tool picker UI.

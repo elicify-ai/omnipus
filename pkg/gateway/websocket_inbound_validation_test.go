@@ -33,7 +33,7 @@ import (
 //
 // BDD:
 //
-//	Given a TokenFrame{Type:"token", Content:"", SessionId:"s1"} is marshalled,
+//	Given a TokenFrame{Type:"token", Content:"", SessionId:"s1"} is marshaled,
 //	When the resulting JSON is decoded into a map,
 //	Then the map contains exactly the keys "type", "content", "session_id"
 //	 and no "parts" key is present.
@@ -50,7 +50,7 @@ func TestWS_TokenFrame_NotSerializedAsNullParts(t *testing.T) {
 	require.NoError(t, err, "TokenFrame must marshal without error")
 
 	var decoded map[string]any
-	require.NoError(t, json.Unmarshal(data, &decoded), "marshalled TokenFrame must be valid JSON")
+	require.NoError(t, json.Unmarshal(data, &decoded), "marshaled TokenFrame must be valid JSON")
 
 	// Required fields must be present.
 	assert.Equal(t, "token", decoded["type"], "type field must be 'token'")
@@ -123,7 +123,7 @@ func TestWS_InboundCancel_RejectsEmptySessionID(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestWS_InboundApproval_RejectsUnknownDecision verifies that a
-// exec_approval_response frame carrying an unrecognised decision value (e.g.
+// exec_approval_response frame carrying an unrecognized decision value (e.g.
 // "banana") is rejected: the server sends an error frame and the connection
 // stays open.
 //
@@ -148,7 +148,7 @@ func TestWS_InboundApproval_RejectsUnknownDecision(t *testing.T) {
 
 	sendWSAuthFrameDevMode(t, conn)
 
-	// Send approval response with an unrecognised decision.
+	// Send approval response with an unrecognized decision.
 	approvalFrame := wsClientFrameTestHelper{
 		Type:     "exec_approval_response",
 		ID:       "approval-id-001",

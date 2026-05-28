@@ -58,7 +58,7 @@ func newToolResultStore(homePath string) *toolResultStore {
 
 // saveJSON writes body (raw JSON bytes) to disk and returns the opaque ref ID.
 // Returns ("", false) when the store is disabled (homePath == "") or on any
-// write error (callers should fall back to inline or truncated behaviour).
+// write error (callers should fall back to inline or truncated behavior).
 func (s *toolResultStore) saveJSON(sessionID string, body []byte) (ref string, ok bool) {
 	if s == nil || s.homePath == "" {
 		return "", false
@@ -209,14 +209,14 @@ func hasPathPrefix(p, prefix string) bool {
 // maybeOffloadResult checks whether the JSON-encoded size of result exceeds
 // InlineToolResultMaxBytes.  If so, it persists the body to disk and returns a
 // generated.ToolResultRef sentinel.  If the result is within the inline limit
-// it returns (nil, false) signalling "keep original".
+// it returns (nil, false) signaling "keep original".
 //
 // Callers must check the bool; when false, the original result value should be
 // used unchanged.
 //
 // When the store write fails (e.g. disk full, EPERM), this function emits a
 // TruncatedResult sentinel instead of re-inlining the large body.  Re-inlining
-// would regress to the pre-offload behaviour and risk OOM on constrained
+// would regress to the pre-offload behavior and risk OOM on constrained
 // clients (iPad, mobile SPA).
 func maybeOffloadResult(
 	store *toolResultStore,

@@ -595,8 +595,8 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// Pre-compile all embedded inbound validation schemas before the HTTP listener
 	// starts. Any schema-compile failure aborts boot immediately with a clear error
 	// rather than silently degrading to no-validation at first request.
-	if err := PreCompileAllInboundSchemas(); err != nil {
-		return fmt.Errorf("gateway: inbound schema pre-compile failed: %w", err)
+	if compileErr := PreCompileAllInboundSchemas(); compileErr != nil {
+		return fmt.Errorf("gateway: inbound schema pre-compile failed: %w", compileErr)
 	}
 
 	// Arm the permissive / production-off nag banner AFTER pre-compile so that a
@@ -1314,8 +1314,9 @@ func setupAndStartServices(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
-			if err := json.NewEncoder(w).Encode(map[string]string{"error": "endpoint not found"}); err != nil {
-				slog.Debug("404 handler: encode failed", "error", err)
+			if encodeErr := json.NewEncoder(w).
+				Encode(map[string]string{"error": "endpoint not found"}); encodeErr != nil {
+				slog.Debug("404 handler: encode failed", "error", encodeErr)
 			}
 		}),
 	)

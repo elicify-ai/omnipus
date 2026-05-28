@@ -148,7 +148,9 @@ func startIntegrationGateway(t *testing.T) *testutil.TestGateway {
 func skipOnMacOSAPFSCleanupRace(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "darwin" {
-		t.Skip("v0.2 follow-up: TestGateway.Close needs to drain session-store writers before returning (macOS APFS surfaces the race; Linux hides it)")
+		t.Skip(
+			"v0.2 follow-up: TestGateway.Close needs to drain session-store writers before returning (macOS APFS surfaces the race; Linux hides it)",
+		)
 	}
 }
 

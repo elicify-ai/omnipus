@@ -59,7 +59,6 @@ func TestConcurrentSessions_FiveSessions_SameAgent(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(numSessions)
 	for i, s := range slots {
-		i, s := i, s
 		go func() {
 			defer wg.Done()
 			sendMessage(t, s.conn, "same-agent concurrent test session "+string(rune('A'+i)))
@@ -70,7 +69,6 @@ func TestConcurrentSessions_FiveSessions_SameAgent(t *testing.T) {
 
 	// Collect replies concurrently.
 	for _, s := range slots {
-		s := s
 		go func() {
 			frameType := waitForFirstToken(t, s.conn, replyTimeout)
 			s.replied <- frameType
@@ -134,7 +132,6 @@ func TestConcurrentSessions_FiveSessions_SameAgent_TimingProof(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(numSessions)
 	for i, s := range slots {
-		i, s := i, s
 		go func() {
 			defer wg.Done()
 			sendMessage(t, s.conn, "slow same-agent concurrent timing test "+string(rune('A'+i)))
@@ -145,7 +142,6 @@ func TestConcurrentSessions_FiveSessions_SameAgent_TimingProof(t *testing.T) {
 
 	// Collect replies concurrently.
 	for _, s := range slots {
-		s := s
 		go func() {
 			ft := waitForFirstToken(t, s.conn, parallelDeadline+2*time.Second)
 			s.replied <- ft
@@ -165,7 +161,6 @@ func TestConcurrentSessions_FiveSessions_SameAgent_TimingProof(t *testing.T) {
 
 	// Re-launch collectors to a single fan-in channel for deadline checking.
 	for i, s := range slots {
-		i, s := i, s
 		go func() {
 			select {
 			case ft := <-s.replied:

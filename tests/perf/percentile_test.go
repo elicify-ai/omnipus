@@ -28,7 +28,7 @@ func computePercentile(sorted []float64, p float64) float64 {
 
 // logLatencyDistribution prints min/p50/p95/p99/max to the test log.
 //
-//nolint:unused // called from benchmark_per_turn_test.go (!cgo build); lint with goolm,stdjson excludes !cgo test files
+
 func logLatencyDistribution(t testing.TB, label string, sorted []float64) {
 	t.Helper()
 	if len(sorted) == 0 {
