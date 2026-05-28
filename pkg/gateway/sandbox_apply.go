@@ -376,6 +376,12 @@ func applySandbox(opts SandboxApplyOptions) (*SandboxApplyResult, error) {
 				bindPorts = append(bindPorts, uint16(p))
 			}
 		}
+		// Symmetric with the ConnectPortRules append below: the managed
+		// Chromium needs to bind the DevTools HTTP server on browser.DebugPort
+		// before the gateway can dial it. Without this allow-rule, Chrome
+		// hits `bind() failed: Permission denied` from Landlock and aborts
+		// every browser.* tool call under sandbox=enforce on ABI ≥ 4.
+		bindPorts = append(bindPorts, uint16(browser.DebugPort))
 	}
 	policy := sandbox.DefaultPolicy(opts.HomePath, allowedPaths, warnFn, bindPorts)
 

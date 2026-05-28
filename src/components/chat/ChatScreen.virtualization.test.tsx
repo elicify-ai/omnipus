@@ -69,6 +69,7 @@ vi.mock('@assistant-ui/react', () => {
       status: { type: 'running' },
       content: [],
     }),
+    makeAssistantToolUI: () => () => null,
   }
 })
 

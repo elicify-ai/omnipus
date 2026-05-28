@@ -31,6 +31,7 @@ import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { SessionPanel } from './SessionPanel'
 import { GenericToolCall } from './tools/GenericToolCall'
+import { WebServeBlock } from './tools/WebServeUI'
 import { ExecApprovalBlock } from './ExecApprovalBlock'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { MarkdownText } from './markdown-text'
@@ -481,6 +482,21 @@ function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessag
           {storeToolCallIds.map((callId) => {
             const tc = toolCalls[callId] ?? (message.tool_calls ?? []).find((t) => t.id === callId)
             if (!tc) return null
+            // Parity with the live AssistantUI dispatch in OmnipusRuntimeProvider:
+            // web_serve / serve_workspace / run_in_workspace go through WebServeBlock
+            // here too, so replayed sessions render the iframe (or the malformed
+            // result block) instead of a collapsed generic badge.
+            if (tc.tool === 'serve_workspace' || tc.tool === 'run_in_workspace' || tc.tool === 'web_serve') {
+              return (
+                <WebServeBlock
+                  key={callId}
+                  args={(tc.params ?? {}) as { path?: string; command?: string; port?: number; duration_seconds?: number }}
+                  result={tc.result ?? null}
+                  isRunning={false}
+                  toolName={tc.tool}
+                />
+              )
+            }
             return (
               <GenericToolCall
                 key={callId}
@@ -882,7 +898,11 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
 
   // Input is enabled unless: agent removed, replaying, uploading, or gave up on reconnect.
   // While reconnecting (fast or slow phase), input stays enabled — messages go to the queue.
-  const inputEnabled = !agentRemoved && !isReplaying && !isUploading && !(reconnectPhase === 'gave_up')
+  // When the WS drops (network offline, gateway restart), the textarea must
+  // also disable, not just the Send button. Letting the user type into an input
+  // that can't dispatch is misleading; the "Connection lost" banner alone is
+  // easy to miss when the textarea looks fully interactive.
+  const inputEnabled = !agentRemoved && !isReplaying && !isUploading && !(reconnectPhase === 'gave_up') && isConnected
 
   // FR-3a: during streaming, show the slash menu ONLY if at least one command
   // with availableWhileStreaming:true matches the current input prefix.
@@ -1285,7 +1305,15 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         <ComposerPrimitive.Input
           data-testid="chat-input"
           placeholder={agentRemoved ? 'Agent has been removed — this session is read-only' : composerPlaceholder(isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow', isStreaming || isUploading, isReplaying, activeAgentName, reconnectPhase === 'gave_up')}
-          disabled={!inputEnabled || isStreaming}
+          // FR-3a: the slash menu must be reachable mid-stream, which means the
+          // textarea has to accept keystrokes during streaming. Submission is
+          // blocked elsewhere: the Send button has its own `!isStreaming` gate
+          // (line 1278) and the onKeyDown handler at line 1031 swallows Enter
+          // when streaming unless the slash menu is open. So gate visual-only
+          // (cursor-not-allowed/opacity) on isStreaming via the className
+          // below, not the disabled attribute.
+          disabled={!inputEnabled}
+          aria-disabled={!inputEnabled || isStreaming || undefined}
           rows={1}
           cancelOnEscape={false}
           className={cn(

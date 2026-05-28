@@ -1528,6 +1528,29 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   msg.isStreaming = false
                   msg.status = msg.status === 'interrupted' ? 'interrupted' : 'done'
                 }
+                // End-of-replay bake: gateway emits tool_call_start + tool_call_result
+                // frames for each persisted ToolCall during replay (pkg/gateway/replay.go),
+                // and the last turn's done frame is the only signal that those frames are
+                // complete. The replay_message bake (~1964) only fires when a *next*
+                // replay_message arrives, so tool calls in the final assistant entry
+                // are never baked onto message.tool_calls — VirtualAssistantMessageRow
+                // then renders no tool block / no iframe.
+                if (wasReplaying && lastMsgId && draft.toolCallOrder.length > 0) {
+                  const baked = draft.toolCallOrder
+                    .filter((id) => draft.toolCalls[id])
+                    .map((id) => {
+                      const tc = draft.toolCalls[id]
+                      return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
+                    })
+                  const lastMsg = draft.messagesById[lastMsgId]
+                  const existing = lastMsg.tool_calls ?? []
+                  const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+                  for (const tc of baked) mergedById.set(tc.id, tc)
+                  lastMsg.tool_calls = Array.from(mergedById.values())
+                  draft.toolCalls = {}
+                  draft.toolCallOrder = []
+                  draft.textAtToolCallStart = {}
+                }
                 const tokenDelta = frame.stats?.tokens ?? 0
                 const costDelta = frame.stats?.cost ?? 0
                 draft.isStreaming = false
