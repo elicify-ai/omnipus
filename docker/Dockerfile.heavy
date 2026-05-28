@@ -1,22 +1,39 @@
 # ============================================================
-# Stage 1: Build the omnipus binary
+# Stage 1: Build the SPA (frontend) into dist/spa/
 # ============================================================
-FROM golang:1.26.0-alpine AS builder
+FROM node:24-alpine AS spa-builder
+
+WORKDIR /src
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+RUN npm run build
+
+# ============================================================
+# Stage 2: Build the Go binary with the SPA embedded
+# ============================================================
+FROM golang:1.26.3-alpine AS go-builder
 
 RUN apk add --no-cache git make
 
 WORKDIR /src
-
-# Cache dependencies
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy source and build
 COPY . .
-RUN make build
+
+# pkg/gateway/embed.go has //go:embed all:spa and pkg/gateway/spa/ is
+# gitignored. Mirror the Vite output from stage 1 into the embed target
+# before `go build` reads the directive.
+COPY --from=spa-builder /src/dist/spa /src/pkg/gateway/spa
+
+RUN CGO_ENABLED=0 go build -tags goolm,stdjson \
+    -ldflags "-s -w" \
+    -o /out/omnipus ./cmd/omnipus
 
 # ============================================================
-# Stage 2: Node.js runtime with Python + MCP support
+# Stage 3: Runtime with browser + MCP support (Chromium, Python, uv)
 # ============================================================
 FROM node:24-alpine3.23
 
@@ -29,24 +46,37 @@ RUN apk add --no-cache \
   chromium \
   jq
 
-# Install Playwright browsers for agent-browser
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
-RUN npm install -g agent-browser && \
-    npx playwright install chromium && \
-    chmod -R o+rx $PLAYWRIGHT_BROWSERS_PATH
+# Make the apk-installed Chromium discoverable by browser/manager.go's
+# PATH lookup (it tries `google-chrome`, `chromium`, `chromium-browser` in
+# order). Alpine's `chromium` package installs the binary as
+# /usr/bin/chromium-browser → /usr/lib/chromium/chrome, so the PATH lookup
+# already resolves; no symlink needed.
 
-# Install uv
+# Install uv (used by Python MCP servers)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
   ln -s /root/.local/bin/uv /usr/local/bin/uv && \
   ln -s /root/.local/bin/uvx /usr/local/bin/uvx && \
   uv --version
 
-# Health check
+# Gateway defaults: 5000 = SPA + API, 5001 = preview iframes.
+# See gateway.preview_port / preview_listener_enabled in pkg/config.
+EXPOSE 5000 5001
+
+# Inside a container the gateway must bind 0.0.0.0 so the published port
+# mapping is reachable from the host. Same rationale as the minimal
+# Dockerfile.
+ENV OMNIPUS_GATEWAY_HOST=0.0.0.0
+
+# Default sandbox mode = permissive inside Docker. The default unprivileged
+# container seccomp profile blocks syscalls the hardened-exec path requires,
+# causing "fork/exec /bin/sh: permission denied" with sandbox=enforce.
+ENV OMNIPUS_SANDBOX_MODE=permissive
+
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget -q --spider http://localhost:18790/health || exit 1
+  CMD curl -fsS http://localhost:5000/health || exit 1
 
 # Copy binary
-COPY --from=builder /src/build/omnipus /usr/local/bin/omnipus
+COPY --from=go-builder /out/omnipus /usr/local/bin/omnipus
 
 # Reuse existing node user (UID/GID 1000) — rename to omnipus
 RUN deluser node 2>/dev/null; delgroup node 2>/dev/null; \
@@ -55,13 +85,10 @@ RUN deluser node 2>/dev/null; delgroup node 2>/dev/null; \
 
 USER omnipus
 
-# Run onboard to create initial directories and config
-RUN /usr/local/bin/omnipus onboard
+VOLUME /home/omnipus/.omnipus
 
-# Copy default workspace
-COPY --chown=omnipus:omnipus workspace/ /home/omnipus/.omnipus/workspace/
-
-VOLUME /home/omnipus/.omnipus/workspace
-
+# --allow-empty (-E) is required on first boot — the seed config has no
+# providers configured yet. Once onboarding completes the providers list
+# is populated and the flag is a no-op. Same default as the minimal image.
 ENTRYPOINT ["omnipus"]
-CMD ["gateway"]
+CMD ["gateway", "--allow-empty"]
