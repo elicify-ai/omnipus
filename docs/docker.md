@@ -17,14 +17,59 @@ All Omnipus data — `config.json`, `master.key`, sessions, tasks, audit log —
 
 ---
 
+## Image variants
+
+Three `Dockerfile`s ship in `docker/`. Pick the variant that matches the agent tools you intend to run.
+
+| Variant | Dockerfile | Built size | Browser tools | Python MCP | Use case |
+|---|---|---|---|---|---|
+| **Minimal** (published) | [`docker/Dockerfile`](../docker/Dockerfile) | ~71 MB | ❌ | ❌ | Chat, channels, file/exec tools. The image published as `ghcr.io/elicify-ai/omnipus:latest`. |
+| **Heavy** (build-it-yourself) | [`docker/Dockerfile.heavy`](../docker/Dockerfile.heavy) | ~1.08 GB | ✅ apk Chromium | ✅ uv/uvx + python3 | `browser.*` tools, `web_serve` dev-server preview, `agent-browser`, Python MCP servers. |
+| **Full** (vestigial) | `docker/Dockerfile.full` | — | — | — | Inherited from upstream, not maintained as a v0.1 product. See [Vestigial files](#vestigial-files). |
+
+All variants share the same three-stage build internally: `node:24-alpine` compiles the SPA → `golang:1.26.3-alpine` embeds it and builds the binary → a runtime stage layers on what's needed (`alpine:3.23` for minimal, `node:24-alpine3.23` + chromium/python/uv for heavy). The Go binary itself is identical across variants.
+
+### Minimal image — what it can and can't do
+
+The minimal image (`ghcr.io/elicify-ai/omnipus:latest`) **deliberately omits Chromium** to stay small. Concretely, what won't work:
+
+- `browser.navigate`, `browser.screenshot`, `browser.read_content`, `browser.console_logs`, `browser.action` — the entire `browser.*` tool family.
+- `web_serve` dev-server previews (the iframe-preview feature on the chat surface).
+- Any custom skill or MCP server that shells out to a system chromium.
+
+The gateway falls through to its managed-Chromium download path on first call, but the downloaded binary is glibc-linked and Alpine is musl — `exec` returns a misleading `no such file or directory` (the missing ELF interpreter is `/lib64/ld-linux-x86-64.so.2`, not the binary itself). The Max agent gracefully degrades to `web_fetch` and surfaces the failure inline in chat.
+
+**If you need browser tools, use the heavy image.** Adding `apk add chromium` to a derived `FROM ghcr.io/elicify-ai/omnipus:latest` works too — the gateway's PATH lookup (`pkg/tools/browser/manager.go::resolveExecPath`) picks up `/usr/bin/chromium-browser` automatically once installed.
+
+### Building the heavy image
+
+```bash
+docker build -t omnipus:heavy -f docker/Dockerfile.heavy .
+```
+
+Then run it like the minimal image, but bind the data volume to `/home/omnipus/.omnipus` (heavy runs as UID 1000 like the local-build minimal):
+
+```bash
+docker run -d \
+  -p 127.0.0.1:5000:5000 \
+  -p 127.0.0.1:5001:5001 \
+  -v "$PWD/data:/home/omnipus/.omnipus" \
+  omnipus:heavy
+```
+
+Onboarding flow, sandbox behaviour, and the rest of this guide apply identically once the container is up.
+
+---
+
 ## Release image vs. dev image
 
 | Image | Source | Entrypoint |
 |---|---|---|
 | `ghcr.io/elicify-ai/omnipus:latest` | Built by goreleaser on release | `docker/entrypoint.sh` |
 | Local build (`docker build -f docker/Dockerfile .`) | Multi-stage SPA + Go build | `omnipus gateway` directly |
+| Local build (`docker build -f docker/Dockerfile.heavy .`) | Same SPA + Go build, chromium + python + uv runtime | `omnipus gateway --allow-empty` directly |
 
-The release image uses `entrypoint.sh` as a first-run guard (see [First-run behavior](#first-run-behavior)). The local-build image starts the gateway directly — it self-bootstraps on the first run.
+The release image uses `entrypoint.sh` as a first-run guard (see [First-run behavior](#first-run-behavior)). Locally-built images (minimal and heavy) start the gateway directly — they self-bootstrap on the first run.
 
 ---
 
@@ -348,7 +393,8 @@ For a production deployment, prefer host-side `logrotate` against the bind-mount
 
 The following files in `docker/` are inherited from upstream and are not part of the v0.1 product. Do not use them; they may be removed in a future cleanup commit:
 
-- `Dockerfile.full`
-- `Dockerfile.heavy`
+- `Dockerfile.full` — same broken Go-only builder stage that `Dockerfile.heavy` had before its fix. Untested; the v0.1 path for chat + MCP without browser tools is the minimal image plus a user-supplied MCP server.
 - `Dockerfile.goreleaser.launcher`
 - `docker-compose.full.yml`
+
+(`Dockerfile.heavy` was previously listed here but has been rewritten with a working three-stage build and is now a supported image variant — see [Image variants](#image-variants).)

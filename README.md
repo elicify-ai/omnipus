@@ -73,7 +73,15 @@ Four live screenshots, captured against the running gateway.
 
 ## Install
 
-### One-liner (recommended)
+Three supported paths. Pick the one that matches your host, then jump to [First boot](#first-boot).
+
+| Path | When to use | Browser tools (`browser.*`, `web_serve`) |
+|---|---|---|
+| [Native binary](#native-binary-recommended) | Bare-metal / VPS / WSL2; you own the host kernel | ✅ — Chromium auto-downloads on first `browser.*` call |
+| [Docker, minimal image](#docker-minimal-image) | Lowest-overhead deploy; chat + channels only, no browsing | ❌ — see [limitations](#minimal-image-limitations) |
+| [Docker, heavy image](#docker-heavy-image) | Full feature parity inside a container | ✅ — apk Chromium pre-baked |
+
+### Native binary (recommended)
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/install.sh | sh
@@ -81,9 +89,21 @@ omnipus gateway
 # open http://localhost:5000
 ```
 
-Detects your OS+arch, fetches the matching binary from the latest GitHub Release, verifies SHA256, installs to `/usr/local/bin/omnipus`. Override with `OMNIPUS_INSTALL_DIR=$HOME/.local/bin` if you don't have sudo.
+What the script does, in one paragraph: detects your OS + arch (`uname -s` / `uname -m`), downloads `omnipus_<OS>_<arch>.tar.gz` from the latest GitHub Release, verifies the SHA256 against the published `checksums.txt`, extracts a single ~30 MB self-contained Go binary (SPA embedded via `go:embed`, no shared-lib runtime), and installs to `/usr/local/bin/omnipus`. POSIX `sh` — no bash-isms, works on Alpine, BusyBox, macOS, Ubuntu.
 
-### Docker
+Customise via environment:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OMNIPUS_VERSION` | `latest` Release | Pin a tag, e.g. `OMNIPUS_VERSION=v0.1.0` |
+| `OMNIPUS_INSTALL_DIR` | `/usr/local/bin` | Use `$HOME/.local/bin` if you don't have sudo |
+| `OMNIPUS_REPO` | `elicify-ai/omnipus` | Override only for forks |
+
+**Browser tools.** On first `browser.navigate` / `browser.screenshot` / `web_serve` call, the gateway looks for `google-chrome`/`chromium`/`chromium-browser` on `$PATH`. If none is present, it downloads a managed Chromium under `$OMNIPUS_HOME/browser/chromium/` (Chrome for Testing, ~150 MB, one-time). The download path needs glibc, so on Alpine hosts install `chromium` via `apk` first; the PATH lookup then resolves and the managed download is skipped.
+
+**Supported platforms in v0.1:** Linux amd64, Linux arm64, macOS arm64. Other targets are tracked in [docs/operations/platform-support.md](docs/operations/platform-support.md).
+
+### Docker, minimal image
 
 ```bash
 docker run -d \
@@ -94,6 +114,33 @@ docker run -d \
 ```
 
 Or with compose: `curl -O https://raw.githubusercontent.com/elicify-ai/omnipus/main/docker/docker-compose.yml && docker compose up`.
+
+The published image (`ghcr.io/elicify-ai/omnipus:latest`) is built from [`docker/Dockerfile`](docker/Dockerfile): an Alpine multi-stage build that produces a **~71 MB** runtime image with only `ca-certificates`, `tzdata`, and `curl` on top of the Go binary. Same SPA, same channels, same memory + sessions + audit log as the native install.
+
+#### Minimal image limitations
+
+The minimal image **deliberately excludes Chromium** to keep the artefact small. This means:
+
+- `browser.navigate` / `browser.screenshot` / `browser.read_content` / `browser.console_logs` / `browser.action` and the entire `web_serve` dev-server preview flow **will not work** out of the box.
+- The auto-download fallback in `pkg/tools/browser/manager.go` will fetch a managed Chromium from Chrome for Testing — but the binary is **glibc-linked** and the runtime is **Alpine (musl)**, so `exec` fails with a misleading `no such file or directory` (the missing ELF interpreter is `/lib64/ld-linux-x86-64.so.2`, not the binary itself).
+- The Max agent will gracefully fall back to `web_fetch` for read-only tasks and explain the missing capability to the user.
+
+If you need browser tools inside Docker, use the heavy image below.
+
+### Docker, heavy image
+
+```bash
+docker build -t omnipus:heavy -f docker/Dockerfile.heavy .
+docker run -d \
+  -p 127.0.0.1:5000:5000 \
+  -p 127.0.0.1:5001:5001 \
+  -v "$PWD/data:/home/omnipus/.omnipus" \
+  omnipus:heavy
+```
+
+Built from [`docker/Dockerfile.heavy`](docker/Dockerfile.heavy): same three-stage SPA + Go build as the minimal image, but the runtime stage adds `chromium`, `python3`, `py3-pip`, `uv` / `uvx`, `git`, `jq`, and a global `agent-browser` npm install. About **1.08 GB** on disk in exchange for first-class browser tools and Python MCP server support out of the box.
+
+Heavy image is not currently published to GHCR — build it yourself per the snippet above. (Tracked: ship it from the same release pipeline.)
 
 ### From source (contributors)
 
@@ -111,8 +158,6 @@ Requires Go 1.26+ and Node 24+. `make build` runs `spa-embed` first so `go:embed
 Two ports open: **5000** for SPA + API, **5001** for sandboxed agent preview iframes. The onboarding wizard runs on first visit: Welcome → Provider → API Key → Model → Admin Account → Done.
 
 A 256-bit AES key auto-generates at `~/.omnipus/master.key` (mode `0600`). **Back it up** — losing it means losing every encrypted credential. For headless deployments, pre-provision via `OMNIPUS_KEY_FILE` or `OMNIPUS_MASTER_KEY`. → [docs/credential_encryption.md](docs/credential_encryption.md)
-
-**Supported platforms in v0.1:** Linux amd64, Linux arm64, macOS arm64. → [docs/operations/platform-support.md](docs/operations/platform-support.md)
 
 ---
 
