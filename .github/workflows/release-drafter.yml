@@ -1,0 +1,27 @@
+name: Release drafter
+
+# Maintains a draft GitHub Release that aggregates merged PR titles since the
+# last published release, grouped by label (per .github/release-drafter.yml).
+# When you're ready to ship, edit and publish the draft.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, reopened, synchronize, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: write       # required to write/update the release draft
+  pull-requests: write  # required for the autolabeler
+
+jobs:
+  update_release_draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: release-drafter/release-drafter@v6
+        with:
+          config-name: release-drafter.yml
+          disable-autolabeler: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
