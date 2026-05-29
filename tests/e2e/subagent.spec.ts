@@ -99,8 +99,11 @@ test(
 
     // Structural assertion: wait for at least one subagent-collapsed to appear (the parent spawn).
     // With temperature=0+seed=42 the LLM must comply — if it doesn't, the test fails honestly.
+    // 150s budget: GLM-5v-turbo can spend 60-120s in extended thinking before
+    // emitting the spawn tool call under suite load; 60s was insufficient and
+    // produced consistent variance failures that recovered on retry.
     const collapsedBlocks = page.locator('[data-testid="subagent-collapsed"]');
-    await expect(collapsedBlocks.first()).toBeVisible({ timeout: 60_000 });
+    await expect(collapsedBlocks.first()).toBeVisible({ timeout: 150_000 });
 
     const blockCount = await collapsedBlocks.count();
 
@@ -324,7 +327,9 @@ test(
     await input.press('Enter');
 
     // Wait for assistant to respond (with or without spawn).
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 60_000 });
+    // 90s budget: natural-language prompt (no temperature pinning) is non-deterministic;
+    // the assistant may take 30-75s to land its first message under suite load.
+    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 });
 
     // Best-effort: IF a SubagentBlock appeared, verify basic UI behavior.
     const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]');

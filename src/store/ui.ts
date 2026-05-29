@@ -24,6 +24,14 @@ interface UiStore {
   toasts: Toast[]
   addToast: (toast: Omit<Toast, 'id'>) => void
   removeToast: (id: string) => void
+
+  // SubagentBlock expansion state — keyed by spanId so the same span survives
+  // a live→historical render-tree swap (when streaming ends and the
+  // virtualizer takes over from the AssistantUI live message) and keeps its
+  // user-chosen expanded/collapsed state. Previously held in component-local
+  // useState which the parent-swap unmount reset to false.
+  expandedSpans: Record<string, boolean>
+  toggleSpanExpansion: (spanId: string) => void
 }
 
 // Tracks auto-dismiss timers outside state so they can be cleared on manual dismiss
@@ -57,4 +65,10 @@ export const useUiStore = create<UiStore>((set, get) => ({
     }
     set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }))
   },
+
+  expandedSpans: {},
+  toggleSpanExpansion: (spanId) =>
+    set((state) => ({
+      expandedSpans: { ...state.expandedSpans, [spanId]: !state.expandedSpans[spanId] },
+    })),
 }))

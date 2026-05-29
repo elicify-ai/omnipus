@@ -4,6 +4,7 @@ import { act } from 'react'
 import { SubagentBlock } from './SubagentBlock'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
 
 // W2-4: ChatScreen replay-render tests — TDD rows I-20 and I-21.
@@ -40,6 +41,10 @@ function resetStore() {
       sessionCost: 0,
     })
     useSessionStore.setState({ activeSessionId: 'sess_test', activeAgentId: null })
+    // SubagentBlock expansion state now lives in useUiStore (shared across the
+    // live-render and historical-virtualized-render trees). Reset between tests
+    // so default-collapsed assertions hold.
+    useUiStore.setState({ expandedSpans: {} })
   })
 }
 

@@ -288,11 +288,12 @@ test(
 test(
   'T24 — cancel cascades to subagent: transcript.jsonl records turn_canceled with descendants',
   async ({ page }) => {
-    // 360s: spawn wait (180s) + subagent execution + cancel + assertions + settling window.
+    // 420s: spawn wait (240s) + subagent execution + cancel + assertions + settling window.
     // test.slow() only gives 270s which is insufficient when GLM enters extended thinking.
     // Under full-suite load, prior tests (T21-T23) backlog the LLM queue; GLM-5v-turbo
-    // can take 120-150s before emitting the spawn tool call. 180s gives a safe margin.
-    test.setTimeout(360_000)
+    // can take 120-220s before emitting the spawn tool call. 240s gives a safer margin
+    // after observed 3.2-minute CI failures with the previous 180/360s budget.
+    test.setTimeout(420_000)
 
     await page.goto('/')
 
@@ -327,11 +328,12 @@ test(
     await input.press('Enter')
 
     // Wait for the subagent collapsed block to appear — confirms spawn fired.
-    // 180s: GLM-5v-turbo enters extended thinking mode under suite load, taking
-    // 60-150s before emitting the spawn tool call when the LLM queue is backlogged
-    // by T21-T23. 120s was insufficient under full-suite load.
+    // 240s: GLM-5v-turbo enters extended thinking mode under suite load, taking
+    // 60-220s before emitting the spawn tool call when the LLM queue is backlogged
+    // by T21-T23. 180s caused 3.2-minute CI timeouts; bumped to 240s with the
+    // matching test.setTimeout(420_000) above.
     const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]')
-    await expect(collapsedBlock).toBeVisible({ timeout: 180_000 })
+    await expect(collapsedBlock).toBeVisible({ timeout: 240_000 })
 
     // Click Stop while the subagent is running.
     const stopBtn = page.locator('[data-testid="stop-btn"]')

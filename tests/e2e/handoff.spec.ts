@@ -267,8 +267,11 @@ test(
 
     // Assert: expanded block has at least one tool-call-badge (the subagent called shell).
     // Structural assertion: checks [data-testid="tool-call-badge"] presence.
+    // 60s budget: the subagent's first LLM round-trip (extended-thinking + tool-call
+    // emission) can take 10-50s under suite load on z-ai/glm-5v-turbo; the previous
+    // 10s budget was tighter than the LLM's documented latency floor.
     const toolCallBadges = expandedBlock.locator('[data-testid="tool-call-badge"]');
-    await expect(toolCallBadges.first()).toBeVisible({ timeout: 10_000 });
+    await expect(toolCallBadges.first()).toBeVisible({ timeout: 60_000 });
 
     // a11y baseline check on subagent elements (BDD Scenario 11, FR-H-008).
     // Traces to: sprint-h-subagent-block-spec.md line 316 (Scenario 11)
