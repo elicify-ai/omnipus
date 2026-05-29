@@ -276,9 +276,20 @@ jobs:
         # Rationale: pre-existing dep CVEs (tracked in #95) would block
         # every PR until a cross-cutting upgrade sweep lands. PR-time
         # annotations remain visible to reviewers.
+        #
+        # Excludes mirror the weekly job (see security-weekly.yml for the
+        # per-path rationale) — keep both lists in sync with .grype.yaml.
         continue-on-error: true
         run: |
-          "$(go env GOPATH)/bin/grype" dir:. --fail-on high --only-fixed --add-cpes-if-none
+          "$(go env GOPATH)/bin/grype" dir:. --fail-on high --only-fixed --add-cpes-if-none \
+            --exclude './node_modules/**' \
+            --exclude './dist/**' \
+            --exclude './pkg/gateway/spa/**' \
+            --exclude './test-results/**' \
+            --exclude './tests/perf/results/**' \
+            --exclude './pkg/api/generated/**' \
+            --exclude './src/lib/api/generated/**' \
+            --exclude './src/routeTree.gen.ts'
       - name: Run security test suite
         run: CGO_ENABLED=0 go test -tags goolm,stdjson -v -count=1 -timeout 10m ./tests/security/...
 
