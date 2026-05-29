@@ -118,7 +118,17 @@ func (g *PromptGuard) escapeInjectionPhrases(content string) string {
 			runeIdx := utf8.RuneCountInString(lower[:byteIdx])
 
 			// Insert zero-width non-joiner after the first rune of the phrase.
-			replacement := make([]rune, 0, len(result)+1)
+			// CodeQL go/allocation-size-overflow flags the len(result)+1 sum
+			// even though prompt-guard input is hard-capped upstream and the
+			// sum cannot realistically approach math.MaxInt. The explicit
+			// bound below makes the safety obvious to the analyser and adds
+			// a defensive ceiling for runaway inputs.
+			const maxPromptGuardRunes = 1 << 24
+			cap := len(result) + 1
+			if cap < 0 || cap > maxPromptGuardRunes {
+				cap = maxPromptGuardRunes
+			}
+			replacement := make([]rune, 0, cap)
 			replacement = append(replacement, result[:runeIdx+1]...)
 			replacement = append(replacement, '\u200C')
 			replacement = append(replacement, result[runeIdx+1:]...)

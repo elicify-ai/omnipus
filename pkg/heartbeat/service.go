@@ -406,7 +406,12 @@ func (hs *HeartbeatService) logf(level, format string, args ...any) {
 		slog.Warn("heartbeat: could not open log file", "path", logFile, "error", err)
 		return
 	}
-	defer f.Close()
+	defer func() {
+		if closeErr := f.Close(); closeErr != nil {
+			slog.Warn("heartbeat: log file close failed — buffered writes may be lost",
+				"path", logFile, "error", closeErr)
+		}
+	}()
 
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	fmt.Fprintf(f, "[%s] [%s] %s\n", timestamp, level, fmt.Sprintf(format, args...))

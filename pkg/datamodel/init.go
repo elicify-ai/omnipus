@@ -79,8 +79,14 @@ func Init(home string) error {
 		if f, err := os.OpenFile(probe, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600); err != nil {
 			return fmt.Errorf("datamodel: home directory %q is not writable: %w", home, err)
 		} else {
-			f.Close()
-			os.Remove(probe)
+			// Surface the Close error so a partial-write doesn't go silent.
+			// closing a freshly-truncated empty file should always succeed —
+			// any failure here means something is fundamentally wrong with
+			// the filesystem (quota, disk full mid-fsync, etc.).
+			if closeErr := f.Close(); closeErr != nil {
+				return fmt.Errorf("datamodel: write-probe close failed for %q: %w", home, closeErr)
+			}
+			_ = os.Remove(probe)
 		}
 	}
 

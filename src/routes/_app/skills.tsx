@@ -441,7 +441,11 @@ function SkillsScreen() {
         <ChannelConfigPanel
           channelId={configuringChannel.id}
           channelName={configuringChannel.name}
-          open={configuringChannel !== null}
+          // `open` is always true here — the {configuringChannel && ...}
+          // guard above means we only render when configuringChannel is
+          // truthy. CodeQL js/useless-comparison flagged the redundant
+          // `!== null` check.
+          open={true}
           onOpenChange={(open) => {
             if (!open) setConfiguringChannel(null)
           }}

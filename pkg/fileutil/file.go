@@ -160,6 +160,15 @@ func AppendJSONL(path string, record any) error {
 	}
 	// Append record + newline in one write to stay atomic on Linux.
 	// Use explicit allocation to avoid mutating the backing array of data.
+	//
+	// Cap the per-record size at 1 GiB so the make() below cannot integer-
+	// overflow on a 32-bit build (CodeQL go/allocation-size-overflow) and
+	// so a runaway encoder cannot exhaust memory. JSONL records that hit
+	// this cap indicate a serious upstream bug; fail loudly.
+	const maxJsonlRecord = 1 << 30
+	if len(data) > maxJsonlRecord {
+		return fmt.Errorf("fileutil: jsonl record (%d bytes) exceeds %d cap", len(data), maxJsonlRecord)
+	}
 	line := make([]byte, len(data)+1)
 	copy(line, data)
 	line[len(data)] = '\n'

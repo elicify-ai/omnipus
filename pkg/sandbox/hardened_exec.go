@@ -528,7 +528,18 @@ func runOnCurrentThread(ctx context.Context, argv []string, env []string, lim Li
 // node_modules/.bin being on PATH.
 func mergeEnv(env []string, lim Limits) []string {
 	gateway := filterChildEnv()
-	merged := make([]string, 0, len(gateway)+len(env)+6)
+	// CodeQL go/allocation-size-overflow flags the implicit int sum
+	// len(gateway)+len(env)+6 as potentially overflowing. Per-process env
+	// count is bounded by the kernel (NCARGS = 128 KiB total on Linux), so
+	// the sum is always small in practice — but bound it explicitly so the
+	// allocation hint is safe even if filterChildEnv() ever misbehaves and
+	// hands back something pathological.
+	const maxMergedEnvHint = 1 << 16
+	cap := len(gateway) + len(env) + 6
+	if cap < 0 || cap > maxMergedEnvHint {
+		cap = maxMergedEnvHint
+	}
+	merged := make([]string, 0, cap)
 	merged = append(merged, gateway...)
 	merged = append(merged, env...)
 
