@@ -33,9 +33,14 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          # Pull in security-extended + security-and-quality queries so we catch
-          # both vulnerability classes and high-confidence code-quality bugs.
-          queries: security-extended,security-and-quality
+          # config-file pulls the queries (security-extended +
+          # security-and-quality) and the paths-ignore list from
+          # .github/codeql/codeql-config.yml. The ignore-list keeps vendored
+          # binaries (esbuild bundles its own Go runtime; ~80 Go stdlib CVEs
+          # appear on a tool we never run at runtime), Vite output, and
+          # generated code out of the analysis — see the comment block in
+          # that file for the full rationale.
+          config-file: ./.github/codeql/codeql-config.yml
 
       # Use Go autobuild — works for the simple `go build` path that the
       # repo uses today. If we ever need build tags (`goolm,stdjson`) for
