@@ -287,11 +287,67 @@ func (g *TestGateway) Close() {
 		return
 	}
 
+	// Drain hold-off — RunContext returning does NOT guarantee every
+	// background goroutine that touches the session store, cost tracker, or
+	// audit logger has finished its final write/rename. On macOS APFS and
+	// some Linux runners, t.TempDir's RemoveAll fires immediately after this
+	// returns and races those writers ("directory not empty" / cost.json
+	// rename misses). Wait for the sessions/ subtree to stop changing for a
+	// short window before yielding to the caller — drain is best-effort and
+	// capped, never blocks the test on its own. A proper fix wires the
+	// session-store backend's Close into omnipusGracefulShutdown (tracked
+	// as v0.2).
+	waitForHomeDirStability(g.homeDir, 200*time.Millisecond, 3*time.Second)
+
 	// Surface any boot error that occurred after the gateway became ready.
 	if p := g.bootErr.Load(); p != nil && *p != nil {
 		if g.t != nil {
 			g.t.Errorf("testutil.TestGateway.Close: gateway exited with error: %v", *p)
 		}
+	}
+}
+
+// waitForHomeDirStability polls homeDir/sessions until two consecutive scans
+// produce the same (file-count, total-size) snapshot, or the budget elapses.
+// Caller-side hold-off for the documented gateway-shutdown drain race; see
+// TestGateway.Close. Pure read-only — never errors, never blocks beyond budget.
+func waitForHomeDirStability(homeDir string, settleWindow, budget time.Duration) {
+	if homeDir == "" {
+		return
+	}
+	sessionsDir := filepath.Join(homeDir, "sessions")
+	deadline := time.Now().Add(budget)
+	var prevCount, prevSize int64 = -1, -1
+	stableSince := time.Time{}
+	for time.Now().Before(deadline) {
+		var count, size int64
+		_ = filepath.WalkDir(sessionsDir, func(_ string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			info, infoErr := d.Info()
+			if infoErr != nil {
+				return infoErr
+			}
+			count++
+			size += info.Size()
+			return nil
+		})
+		if count == prevCount && size == prevSize {
+			if stableSince.IsZero() {
+				stableSince = time.Now()
+			}
+			if time.Since(stableSince) >= settleWindow {
+				return
+			}
+		} else {
+			stableSince = time.Time{}
+			prevCount, prevSize = count, size
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
