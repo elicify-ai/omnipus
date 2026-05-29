@@ -828,6 +828,11 @@ function FilePreviewThumbnail({ file }: { file: File }) {
   }, [file])
 
   if (!url) return null
+  // Defense-in-depth: URL.createObjectURL always returns a blob: URL with an
+  // opaque UUID, so the value can never carry an HTML/javascript payload.
+  // CodeQL's data-flow analysis cannot prove that, so make the safety
+  // explicit — refuse to render anything that isn't a blob: URL.
+  if (!url.startsWith('blob:')) return null
   return <img src={url} className="w-8 h-8 rounded object-cover" alt={file.name} />
 }
 

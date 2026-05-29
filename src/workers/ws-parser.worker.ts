@@ -81,11 +81,23 @@ export interface WorkerResponse {
   droppedReason?: string
 }
 
+// Dedicated-worker postMessage handler. The "origin check missing" rule
+// (js/missing-origin-check) is a generic warning that applies to window
+// message handlers; this is a DedicatedWorker invoked from the same origin
+// via new Worker(import.meta.url) (see src/store/ws-worker-bridge.ts), so
+// cross-origin postMessage cannot reach this handler — only the page that
+// instantiated the worker can talk to it. The DedicatedWorkerGlobalScope
+// MessageEvent's .origin field is always the empty string for same-origin
+// dedicated workers, so we don't gate on it; we only validate the payload
+// shape before doing any work.
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
-  const { id, raw } = event.data
-  const result = parseServerFrameInWorker(raw)
+  const data = event.data
+  if (!data || typeof data !== 'object' || typeof data.id !== 'number' || typeof data.raw !== 'string') {
+    return
+  }
+  const result = parseServerFrameInWorker(data.raw)
   const response: WorkerResponse = {
-    id,
+    id: data.id,
     frame: result.frame,
     droppedReason: result.droppedReason,
   }

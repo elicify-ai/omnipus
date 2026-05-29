@@ -9,7 +9,12 @@
 // Uses dynamic import() so the Zustand store is resolved lazily, keeping the
 // toast store out of the api-module init path for dead-code elimination.
 
-const _lastToastAt: Record<string, number> = {}
+// Map (rather than a plain object) so an attacker-controlled `key` like
+// "__proto__" or "constructor" cannot pollute Object.prototype via the
+// `_lastToastAt[key] = now` assignment below. The risk window is small —
+// the function is gated on import.meta.env.DEV — but a Map closes the
+// CodeQL js/prototype-polluting-assignment finding regardless.
+const _lastToastAt = new Map<string, number>()
 const THROTTLE_MS = 1000
 
 /**
@@ -23,8 +28,8 @@ export async function maybeDevToast(
 ): Promise<void> {
   if (!import.meta.env.DEV) return
   const now = Date.now()
-  if (now - (_lastToastAt[key] ?? 0) < THROTTLE_MS) return
-  _lastToastAt[key] = now
+  if (now - (_lastToastAt.get(key) ?? 0) < THROTTLE_MS) return
+  _lastToastAt.set(key, now)
   try {
     const { useUiStore } = await import('@/store/ui') as {
       useUiStore: { getState: () => { addToast: (t: { message: string; variant: 'warning' | 'error' }) => void } }

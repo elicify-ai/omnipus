@@ -36,3 +36,16 @@ paths-ignore:
   - "**/*.gen.go"
   - src/lib/api/generated
   - src/routeTree.gen.ts
+
+  # Test files own their own threat model: tempdir creation, TOCTOU patterns,
+  # unused-import noise, and "negation always true" are all idiomatic and
+  # intentional in test code (parametric assertions, helpers shared across
+  # the suite, deliberate path setups for /tmp-scoped fixtures). CodeQL's
+  # `js/file-system-race`, `js/path-injection`, and unused-variable alerts
+  # on these files add ~24 findings that aren't actionable as security
+  # issues. Production code under pkg/, src/, and cmd/ stays in scope.
+  - "tests/**"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.spec.ts"
+  - "**/*_test.go"

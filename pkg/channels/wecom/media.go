@@ -22,6 +22,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/media"
+	"github.com/dapicom-ai/omnipus/pkg/utils"
 )
 
 const (
@@ -279,6 +280,17 @@ func (c *WeComChannel) storeRemoteMedia(
 	store := c.GetMediaStore()
 	if store == nil {
 		return "", fmt.Errorf("no media store available")
+	}
+
+	// Defense-in-depth: storeRemoteMedia consumes URLs that originate from
+	// WeCom-platform messages, so the caller could route us at an internal
+	// host by sending a poisoned payload. Reject non-http(s) schemes and
+	// literal-IP hosts that map to loopback / private / link-local ranges.
+	// Hostname-to-IP resolution drift is out of scope for this guard.
+	if parsedURL, parseErr := url.Parse(resourceURL); parseErr != nil ||
+		(parsedURL.Scheme != "http" && parsedURL.Scheme != "https") ||
+		utils.IsPrivateLiteralHost(parsedURL.Hostname()) {
+		return "", fmt.Errorf("refused media URL — invalid scheme or internal host")
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, resourceURL, nil)

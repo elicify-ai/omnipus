@@ -125,8 +125,18 @@ export function MessageItem({ message }: MessageItemProps) {
                         )
                       },
                       a({ href, children }) {
-                        // Block javascript: URLs to prevent XSS via markdown links
-                        if (href?.toLowerCase().startsWith('javascript:')) {
+                        // Block executable URL schemes to prevent XSS via markdown
+                        // links. javascript: runs script; data: can encode an HTML
+                        // payload with embedded <script>; vbscript: is legacy IE
+                        // but still flagged by CodeQL js/unsafe-jquery-plugin and
+                        // similar rules. Whitespace prefixes are stripped before
+                        // the comparison because browsers tolerate them in URLs.
+                        const trimmed = href?.trim().toLowerCase() ?? ''
+                        if (
+                          trimmed.startsWith('javascript:') ||
+                          trimmed.startsWith('data:') ||
+                          trimmed.startsWith('vbscript:')
+                        ) {
                           return <span>{children}</span>
                         }
                         return (

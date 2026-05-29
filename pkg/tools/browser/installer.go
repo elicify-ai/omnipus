@@ -262,14 +262,35 @@ func extractZip(zipPath, destDir string) error {
 	}
 	defer r.Close()
 
+	// Pre-resolve destDir once so the per-entry guard below is a cheap
+	// prefix compare instead of a per-entry Abs call.
+	absDest, absErr := filepath.Abs(destDir)
+	if absErr != nil {
+		return fmt.Errorf("resolve dest dir: %w", absErr)
+	}
+	absDestPrefix := absDest + string(os.PathSeparator)
+
 	for _, f := range r.File {
-		// Reject paths that try to escape destDir via traversal.
+		// First-pass: reject the obvious "../escape" patterns and absolute
+		// paths in the entry name before we touch the filesystem at all.
 		clean := filepath.Clean(f.Name)
-		if strings.HasPrefix(clean, "..") ||
+		if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") ||
 			strings.Contains(clean, string(os.PathSeparator)+".."+string(os.PathSeparator)) {
 			return fmt.Errorf("zip entry escapes archive root: %q", f.Name)
 		}
 		outPath := filepath.Join(destDir, clean)
+		// Second-pass: the Clean+Join above resolves intra-name traversal,
+		// but a symlink already on disk (from an earlier entry in the same
+		// archive) could still redirect a write outside destDir. Take the
+		// absolute path of outPath and require it to live strictly under
+		// absDest. This is the zip-slip canonical guard (CodeQL go/zipslip).
+		absOut, absOutErr := filepath.Abs(outPath)
+		if absOutErr != nil {
+			return fmt.Errorf("resolve entry path: %w", absOutErr)
+		}
+		if absOut != absDest && !strings.HasPrefix(absOut, absDestPrefix) {
+			return fmt.Errorf("zip entry escapes archive root: %q", f.Name)
+		}
 
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(outPath, 0o755); err != nil {
