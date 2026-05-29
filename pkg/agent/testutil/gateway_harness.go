@@ -227,8 +227,13 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 		}
 	}()
 
-	// Poll until /health returns 200 or the deadline expires.
-	deadline := time.Now().Add(5 * time.Second)
+	// Poll until /health returns 200 or the deadline expires. 15 s budget:
+	// GitHub-hosted CI runners under load can take 3-8 s to register all
+	// services + bind a port; the previous 5 s budget tripped intermittently
+	// on busy runners (TestSinceCursor_DifferentInputsDifferentOutputs in
+	// the Tests job on PR #178, while every matrix runner passed cleanly).
+	const bootDeadline = 15 * time.Second
+	deadline := time.Now().Add(bootDeadline)
 	for {
 		resp, httpErr := gw.HTTPClient.Get(baseURL + "/health")
 		if httpErr == nil {
@@ -245,7 +250,7 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 			}
 			cancel()
 			<-done
-			t.Fatalf("testutil.StartTestGateway: gateway at %s did not become ready within 5s%s", baseURL, bootErrMsg)
+			t.Fatalf("testutil.StartTestGateway: gateway at %s did not become ready within %s%s", baseURL, bootDeadline, bootErrMsg)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
