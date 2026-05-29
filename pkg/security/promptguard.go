@@ -124,11 +124,11 @@ func (g *PromptGuard) escapeInjectionPhrases(content string) string {
 			// bound below makes the safety obvious to the analyser and adds
 			// a defensive ceiling for runaway inputs.
 			const maxPromptGuardRunes = 1 << 24
-			cap := len(result) + 1
-			if cap < 0 || cap > maxPromptGuardRunes {
-				cap = maxPromptGuardRunes
+			capHint := len(result) + 1
+			if capHint < 0 || capHint > maxPromptGuardRunes {
+				capHint = maxPromptGuardRunes
 			}
-			replacement := make([]rune, 0, cap)
+			replacement := make([]rune, 0, capHint)
 			replacement = append(replacement, result[:runeIdx+1]...)
 			replacement = append(replacement, '\u200C')
 			replacement = append(replacement, result[runeIdx+1:]...)

@@ -535,11 +535,11 @@ func mergeEnv(env []string, lim Limits) []string {
 	// allocation hint is safe even if filterChildEnv() ever misbehaves and
 	// hands back something pathological.
 	const maxMergedEnvHint = 1 << 16
-	cap := len(gateway) + len(env) + 6
-	if cap < 0 || cap > maxMergedEnvHint {
-		cap = maxMergedEnvHint
+	capHint := len(gateway) + len(env) + 6
+	if capHint < 0 || capHint > maxMergedEnvHint {
+		capHint = maxMergedEnvHint
 	}
-	merged := make([]string, 0, cap)
+	merged := make([]string, 0, capHint)
 	merged = append(merged, gateway...)
 	merged = append(merged, env...)
 
