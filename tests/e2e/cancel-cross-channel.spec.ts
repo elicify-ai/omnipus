@@ -78,10 +78,10 @@ async function apiHeaders(page: Page): Promise<Record<string, string>> {
   }
 }
 
-async function createSession(page: Page): Promise<string> {
+async function createSession(page: Page, agentID: string = 'jim'): Promise<string> {
   const resp = await page.request.post(`${BASE_URL}/api/v1/sessions`, {
     headers: await apiHeaders(page),
-    data: { agent_id: 'jim', type: 'chat' },
+    data: { agent_id: agentID, type: 'chat' },
   })
   if (!resp.ok()) {
     const body = await resp.text()
@@ -288,33 +288,40 @@ test(
 test(
   'T24 — cancel cascades to subagent: transcript.jsonl records turn_canceled with descendants',
   async ({ page }) => {
-    // 600s: spawn wait (360s) + subagent execution + cancel + assertions + settling.
-    // T24 is uniquely Jim-driven (not Mia) and the subagent task asks for 3x
-    // read_file calls, so the parent's spawn-emission is the slowest LLM
-    // round-trip in the suite. Observed 4× CI failures at exactly 4.2m hit the
-    // previous 240s collapsed budget every time even after the model swap to
-    // glm-5v-turbo. Bumping to 360s + 600s total to absorb the upper tail.
-    test.setTimeout(600_000)
+    // 270s: matches sibling spawn-based tests (handoff(b), subagent(a/d)) which
+    // all use Mia and complete in 6-16s standalone, up to 60-90s under suite
+    // load. test.slow() ceiling. Previously inflated to 600s when this test
+    // forced agent=Jim and Jim's spawn was hitting 4-6 min in CI; with Mia
+    // restored we no longer need that headroom.
+    test.slow()
 
     await page.goto('/')
 
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 20_000 })
 
-    // We create a session explicitly so we have the ID for fs reads.
-    // TanStack Router session URL is /#/sessions/<sessionId> (not /#/<sessionId>).
-    const sessionId = await createSession(page)
-
-    // Navigate to the new session.
-    await page.goto(`/#/sessions/${sessionId}`)
+    // Use the SPA's own "New Chat" button to create a fresh session and bind
+    // the page to it. Empirically createSession + page.goto(/#/sessions/<id>)
+    // does NOT bind the SPA — the input falls back to creating a new session
+    // on first message, leaving us reading the wrong transcript file.
+    //
+    // Why Mia (default), NOT Jim: file-level "switch to Jim" comment applies
+    // to T22/T23/T25/T26 (cancel during inline prose — needs Jim's long
+    // streaming). T24's cancel window comes from the SUBAGENT's 3× read_file
+    // loop, so the parent's prose behaviour is irrelevant. Jim has 16 default
+    // tools with overlapping action options (spawn, subagent, workspace.shell,
+    // workspace.shell_bg) that push glm-5v-turbo into extended thinking when
+    // asked to spawn. Mia has 7 cleaner tools and reliably emits spawn in
+    // single-digit seconds — same agent every other spawn-based test uses
+    // (handoff(b), subagent(a/d)).
+    // Clicking "New Chat" only nullifies activeSessionId — it does NOT mint
+    // a new session in the URL. The SPA creates the session lazily on the
+    // first sent message. We need to (a) trigger that flow, then (b) read the
+    // sessionId from the URL hash once the SPA navigates.
+    const newChatBtn = page.getByRole('banner').getByRole('button', { name: 'New Chat' })
+    await expect(newChatBtn).toBeVisible({ timeout: 10_000 })
+    await newChatBtn.click()
     await expect(input).toBeEnabled({ timeout: 20_000 })
-
-    // Switch to Jim for deterministic spawn behaviour.
-    const picker = agentPicker(page)
-    await expect(picker).toBeVisible({ timeout: 15_000 })
-    await picker.click()
-    await page.getByRole('menuitem', { name: /Jim/i }).click()
-    await expect(picker).toContainText(/Jim/i, { timeout: 5_000 })
 
     // Trigger a turn that uses the spawn tool. The prompt must be explicit enough
     // to overcome GLM-5v-turbo's tendency to reply in prose on short prompts.
@@ -328,12 +335,24 @@ test(
     )
     await input.press('Enter')
 
+    // Now the SPA mints the session and navigates — read the ID from the URL
+    // hash. TanStack Router hash history format: /#/sessions/<id>.
+    await page.waitForFunction(
+      () => /\/sessions\/[A-Za-z0-9_]+/.test(window.location.hash),
+      { timeout: 15_000 },
+    )
+    const sessionId = await page.evaluate(() => {
+      const match = window.location.hash.match(/\/sessions\/([A-Za-z0-9_]+)/)
+      return match ? match[1] : ''
+    })
+    if (!sessionId) throw new Error('T24: no session ID in URL after first message')
+
     // Wait for the subagent collapsed block to appear — confirms spawn fired.
-    // 360s: Jim's spawn round-trip in CI consistently parks at ~252s on the
-    // failing tail; 240s budget timed out every attempt. Bumping to 360s
-    // covers the observed worst-case and matches test.setTimeout(600_000) above.
+    // 150s: matches the sibling Mia-spawn tests (subagent(a) uses 150s; the
+    // empirical CI tail for Mia's spawn is single-digit seconds, so 150s is
+    // already comfortable headroom).
     const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]')
-    await expect(collapsedBlock).toBeVisible({ timeout: 360_000 })
+    await expect(collapsedBlock).toBeVisible({ timeout: 150_000 })
 
     // Click Stop while the subagent is running.
     const stopBtn = page.locator('[data-testid="stop-btn"]')
