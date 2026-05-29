@@ -44,7 +44,7 @@ const replayLiveBufferCap = 1000
 // wsTypeOnly is used in the readLoop to peek at the "type" discriminator
 // before decoding the full frame into its specific generated type.
 // It is never emitted as a wire value; it is an inbound decode helper only.
-type wsTypeOnly struct {
+type wsTypeOnly struct { // not-wire-format: inbound decode-only helper to peek "type"; never marshaled as a wire value.
 	Type string `json:"type"`
 }
 
@@ -55,7 +55,7 @@ type wsTypeOnly struct {
 //
 // Fields cover the superset of all server→client frames so that test assertions
 // can inspect any field without knowing the concrete frame type.
-type replayFrameDecoder struct {
+type replayFrameDecoder struct { // not-wire-format: decode-only test assertion target, never emitted over the WebSocket connection.
 	Type      string `json:"type"`
 	SessionID string `json:"session_id,omitempty"`
 

@@ -313,9 +313,19 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Register the tunnel goroutines BEFORE writing the 200 response so the
+	// client never observes a connection-established without the WaitGroup
+	// having been incremented. Without this, a Close() that races between
+	// the 200 write and Add(2) reads tunnels==0, returns immediately, and
+	// orphans the goroutines that get spawned just after — exactly the
+	// regression TestClose_WaitsForTunnels guards against.
+	p.tunnels.Add(2)
+
 	// Tell the client the tunnel is open. From this point on bytes flow
 	// in both directions until either side closes.
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+		p.tunnels.Done()
+		p.tunnels.Done()
 		_ = clientConn.Close()
 		_ = upstream.Close()
 		return
@@ -324,7 +334,6 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Pipe bytes in both directions. Each direction runs in its own
 	// goroutine; either side closing terminates both. The WaitGroup lets
 	// Close drain in-flight tunnels rather than leaking them.
-	p.tunnels.Add(2)
 	go func() {
 		defer p.tunnels.Done()
 		_, _ = io.Copy(upstream, clientConn)
