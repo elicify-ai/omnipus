@@ -1,0 +1,36 @@
+# Grype configuration for omnipus.
+# Reference: https://github.com/anchore/grype#configuration
+#
+# Honored by:
+#  - .github/workflows/pr.yml          ("Run grype (dependency CVE scan — informational)")
+#  - .github/workflows/security-weekly.yml ("Run grype (SARIF output)")
+#
+# The weekly workflow uploads its SARIF report to GitHub code-scanning, which
+# is the channel that feeds the umbrella "CodeQL" check on PRs. Without the
+# exclusions below, that channel fills with ~80 alerts on esbuild's bundled Go
+# runtime (vite ships pre-compiled esbuild binaries that embed a copy of the
+# Go stdlib; every Go stdlib CVE then appears critical on a tool that only
+# ever runs at build time, not in production).
+
+# Excluded paths use doublestar glob syntax. Apply to file paths relative to
+# the scan root. Keep this list in sync with .github/codeql/codeql-config.yml
+# paths-ignore.
+exclude:
+  # Build-time vendored binaries that ship their own runtimes (esbuild,
+  # chrome-headless-shell). Not invoked at production runtime, not in our
+  # control, not actionable without an upstream release.
+  - "./node_modules/**"
+
+  # Vite build output and the go:embed mirror — regenerated every build,
+  # scanned via src/ upstream.
+  - "./dist/**"
+  - "./pkg/gateway/spa/**"
+
+  # Test artefacts — Playwright traces, perf trend JSON. Never shipped.
+  - "./test-results/**"
+  - "./tests/perf/results/**"
+
+  # Generated code — scanned via the source schemas in contracts/.
+  - "./pkg/api/generated/**"
+  - "./src/lib/api/generated/**"
+  - "./src/routeTree.gen.ts"
