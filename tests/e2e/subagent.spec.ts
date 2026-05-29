@@ -75,10 +75,12 @@ test(
   '(a) grandchild refused: subagent attempting spawn gets unknown-tool error, no nested block',
   async ({ page }) => {
     requireApiKey(test);
-    // test.slow() triples the global 90s test timeout to 270s. Subagent
-    // spawn + execution can take 30-90s end-to-end under suite load even
-    // though the same test passes in 5-15s alone.
-    test.slow();
+    // 420s total: this test triggers TWO LLM round-trips (parent spawn +
+    // subagent's failed grandchild-spawn attempt) before the collapsed block
+    // settles, so the budget is wider than the sibling subagent tests.
+    // test.slow()'s 270s was insufficient in CI under suite load — observed
+    // 4×156s failures consistently exceeding the 150s collapsed budget.
+    test.setTimeout(420_000);
 
     await startFreshChat(page);
 
@@ -99,11 +101,12 @@ test(
 
     // Structural assertion: wait for at least one subagent-collapsed to appear (the parent spawn).
     // With temperature=0+seed=42 the LLM must comply — if it doesn't, the test fails honestly.
-    // 150s budget: GLM-5v-turbo can spend 60-120s in extended thinking before
-    // emitting the spawn tool call under suite load; 60s was insufficient and
-    // produced consistent variance failures that recovered on retry.
+    // 300s budget: this test needs the parent spawn AND the subagent's failed
+    // grandchild-spawn round-trip to both complete; under CI load GLM-5v-turbo
+    // can take 150-280s for that pair. 150s gave 4×156s timeouts in CI even
+    // though local-isolated runs land in 20-40s.
     const collapsedBlocks = page.locator('[data-testid="subagent-collapsed"]');
-    await expect(collapsedBlocks.first()).toBeVisible({ timeout: 150_000 });
+    await expect(collapsedBlocks.first()).toBeVisible({ timeout: 300_000 });
 
     const blockCount = await collapsedBlocks.count();
 
