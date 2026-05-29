@@ -288,12 +288,13 @@ test(
 test(
   'T24 — cancel cascades to subagent: transcript.jsonl records turn_canceled with descendants',
   async ({ page }) => {
-    // 420s: spawn wait (240s) + subagent execution + cancel + assertions + settling window.
-    // test.slow() only gives 270s which is insufficient when GLM enters extended thinking.
-    // Under full-suite load, prior tests (T21-T23) backlog the LLM queue; GLM-5v-turbo
-    // can take 120-220s before emitting the spawn tool call. 240s gives a safer margin
-    // after observed 3.2-minute CI failures with the previous 180/360s budget.
-    test.setTimeout(420_000)
+    // 600s: spawn wait (360s) + subagent execution + cancel + assertions + settling.
+    // T24 is uniquely Jim-driven (not Mia) and the subagent task asks for 3x
+    // read_file calls, so the parent's spawn-emission is the slowest LLM
+    // round-trip in the suite. Observed 4× CI failures at exactly 4.2m hit the
+    // previous 240s collapsed budget every time even after the model swap to
+    // glm-5v-turbo. Bumping to 360s + 600s total to absorb the upper tail.
+    test.setTimeout(600_000)
 
     await page.goto('/')
 
@@ -328,12 +329,11 @@ test(
     await input.press('Enter')
 
     // Wait for the subagent collapsed block to appear — confirms spawn fired.
-    // 240s: GLM-5v-turbo enters extended thinking mode under suite load, taking
-    // 60-220s before emitting the spawn tool call when the LLM queue is backlogged
-    // by T21-T23. 180s caused 3.2-minute CI timeouts; bumped to 240s with the
-    // matching test.setTimeout(420_000) above.
+    // 360s: Jim's spawn round-trip in CI consistently parks at ~252s on the
+    // failing tail; 240s budget timed out every attempt. Bumping to 360s
+    // covers the observed worst-case and matches test.setTimeout(600_000) above.
     const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]')
-    await expect(collapsedBlock).toBeVisible({ timeout: 240_000 })
+    await expect(collapsedBlock).toBeVisible({ timeout: 360_000 })
 
     // Click Stop while the subagent is running.
     const stopBtn = page.locator('[data-testid="stop-btn"]')
