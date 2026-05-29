@@ -19,16 +19,21 @@ export const test = base.extend<{ consoleErrors: string[]; cancelOnTeardown: voi
     await use(errors);
     expect(errors, 'unexpected console errors').toEqual([]);
   },
-  // Auto-applied teardown: if the test leaves a streaming turn behind, click the
-  // Stop button before the page closes. Without this, the backend agent loop
-  // keeps running against the closed WebSocket, the gateway emits "no active
-  // connection for chat ... send failed" until the LLM finishes naturally, and
-  // the next test inherits a backlog of orphaned agent loops queued against the
-  // same OpenRouter rate limit. That backlog is the documented cause of the
-  // Group-A flakiness in playwright.config.ts (subagent×5, handoff b, T24,
-  // T26 — each takes >40s under suite load even though it passes in 5-25s
-  // standalone). See https://github.com/elicify-ai/omnipus/issues/180 for the
-  // permanent server-side fix (cancel-turn on WS close).
+  // Auto-applied teardown: simulate a well-behaved user clicking Stop before
+  // leaving. The gateway, by design, keeps an agent loop running after its
+  // WebSocket closes — agents may be doing long background work the user wants
+  // to come back to, headless channels (Slack/Telegram/…) have no WS at all,
+  // and the since-cursor replay path expects a turn to complete regardless of
+  // who's currently watching. Cancel only fires on explicit user action.
+  //
+  // That contract means a Playwright test that walks away mid-turn leaves a
+  // real agent loop behind, exactly as a real user would. Across the suite
+  // those loops queue against the same OpenRouter rate-limit window and starve
+  // later tests' tool calls — the documented Group-A variance in
+  // playwright.config.ts (subagent×5, handoff b, T24, T26 each takes >40s
+  // under suite load even though they pass in 5-25s standalone). The fix is
+  // for each test to act like a user: when it's done, click Stop. This
+  // fixture is that action, applied uniformly.
   cancelOnTeardown: [
     async ({ page }, use) => {
       await use();
