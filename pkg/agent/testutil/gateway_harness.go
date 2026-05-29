@@ -250,7 +250,12 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 			}
 			cancel()
 			<-done
-			t.Fatalf("testutil.StartTestGateway: gateway at %s did not become ready within %s%s", baseURL, bootDeadline, bootErrMsg)
+			t.Fatalf(
+				"testutil.StartTestGateway: gateway at %s did not become ready within %s%s",
+				baseURL,
+				bootDeadline,
+				bootErrMsg,
+			)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
