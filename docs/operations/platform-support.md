@@ -14,7 +14,7 @@ The `cross-platform.yml` workflow is a required PR gate and runs on every push t
 | Linux | arm64 (`aarch64`) | `ubuntu-24.04-arm` | Same as amd64. The `seccomp_linux_arm64.go` BPF emitter is exercised here. |
 | macOS | arm64 (Apple Silicon) | `macos-latest` | Application-level `FallbackBackend` only — no LSM. Path checks are enforced in Go. |
 
-Source of truth: `.github/workflows/cross-platform.yml:24-34`. Each job runs `go build`, `go test -short`, and a smoke boot of `omnipus gateway --allow-empty` that hits `/health`. Signed release binaries are produced for these same three targets by `.goreleaser.yaml:52-64`.
+Source of truth: `.github/workflows/cross-platform.yml:24-34`. Each job runs `go build`, `go test -short`, and a smoke boot of `omnipus start --allow-empty` that hits `/health`. Signed release binaries are produced for these same three targets by `.goreleaser.yaml:52-64`.
 
 ## Planned but not in v0.1
 

@@ -6,9 +6,9 @@ Omnipus performs multiple complex interactions under the hood for every single r
 To get detailed information about what the agent is doing (LLM requests, tool calls, message routing), you can start the Omnipus gateway with the debug flag:
 
 ```bash
-omnipus gateway --debug
+omnipus start --debug
 # or
-omnipus gateway -d
+omnipus start -d
 ```
 
 In this mode, the system will format the logs extensively and display previews of system prompts and tool execution results.
@@ -22,7 +22,7 @@ If you need to inspect the complete output of a command or the exact payload sen
 **Note:** This flag *only* works when combined with the `--debug` mode.
 
 ```bash
-omnipus gateway --debug --no-truncate
+omnipus start --debug --no-truncate
 
 ```
 

@@ -63,7 +63,7 @@ The Telegram channel receives messages via long polling (30-second timeout) usin
 3. Copy the HTTP API token that BotFather provides.
 4. Store the token in the Omnipus credential store (e.g. with key `telegram_bot_token`), then set `token_ref` to that key name in `config.json`.
 5. Optionally set `allow_from` to a list of numeric user IDs to restrict access (find your ID via `@userinfobot`).
-6. Run `omnipus gateway` to start the service.
+6. Run `omnipus start` to start the service.
 
 ## Built-in Commands
 

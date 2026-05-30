@@ -46,7 +46,7 @@ Omnipus connects to QQ via the official QQ Bot Open Platform API using a persist
 2. Create a QQ bot and set its avatar and display name.
 3. Store the **App Secret** in the Omnipus credential store (e.g. with key `qq_app_secret`), then set `app_secret_ref` to that key name in `config.json`.
 4. Set `app_id` to the App ID shown on the bot settings page.
-5. Run `omnipus gateway` to start the service.
+5. Run `omnipus start` to start the service.
 6. Search for your bot in QQ and start chatting.
 
 > During development, enable sandbox mode on the QQ Open Platform and add test users and groups to the sandbox before going live.

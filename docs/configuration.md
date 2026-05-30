@@ -20,7 +20,7 @@ You can override default paths using environment variables. This is useful for p
 ```bash
 # Run omnipus using a specific config file
 # The workspace path will be read from within that config file
-OMNIPUS_CONFIG=/etc/omnipus/production.json omnipus gateway
+OMNIPUS_CONFIG=/etc/omnipus/production.json omnipus start
 
 # Run omnipus with all its data stored in /opt/omnipus
 # Config will be loaded from the default ~/.omnipus/config.json
@@ -28,7 +28,7 @@ OMNIPUS_CONFIG=/etc/omnipus/production.json omnipus gateway
 OMNIPUS_HOME=/opt/omnipus omnipus agent
 
 # Use both for a fully customized setup
-OMNIPUS_HOME=/srv/omnipus OMNIPUS_CONFIG=/srv/omnipus/main.json omnipus gateway
+OMNIPUS_HOME=/srv/omnipus OMNIPUS_CONFIG=/srv/omnipus/main.json omnipus start
 ```
 
 ### Gateway Log Level

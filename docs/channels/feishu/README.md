@@ -54,7 +54,7 @@ Feishu (international name: Lark) is a ByteDance enterprise collaboration platfo
 2. Enable the **Bot** capability in the application settings.
 3. Store the **App Secret** in the Omnipus credential store (e.g. with key `feishu_app_secret`), then set `app_secret_ref` to that key name in `config.json`.
 4. Create a version and publish the application (settings take effect only after publishing).
-5. Run `omnipus gateway` to start the service.
+5. Run `omnipus start` to start the service.
 6. Search for the bot name in Feishu/Lark and start a conversation.
 
 ## Notes

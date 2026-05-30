@@ -54,7 +54,7 @@ Talk to your omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, 
 **3. Run**
 
 ```bash
-omnipus gateway
+omnipus start
 ```
 
 **4. Telegram command menu (auto-registered at startup)**
@@ -145,7 +145,7 @@ You can also trigger by keyword prefixes (e.g. `!bot`):
 **6. Run**
 
 ```bash
-omnipus gateway
+omnipus start
 ```
 
 </details>
@@ -174,7 +174,7 @@ Omnipus can connect to WhatsApp in two ways:
 }
 ```
 
-If `session_store_path` is empty, the session is stored in `<workspace>/whatsapp/`. Run `omnipus gateway`; on first run, scan the QR code printed in the terminal with WhatsApp → Linked Devices.
+If `session_store_path` is empty, the session is stored in `<workspace>/whatsapp/`. Run `omnipus start`; on first run, scan the QR code printed in the terminal with WhatsApp → Linked Devices.
 
 </details>
 
@@ -209,7 +209,7 @@ Scan the printed QR code with your WeChat mobile app. On success, the token is s
 
 **3. Run**
 ```bash
-omnipus gateway
+omnipus start
 ```
 
 </details>
@@ -239,7 +239,7 @@ QQ Open Platform provides a one-click setup page for OpenClaw-compatible bots:
 }
 ```
 
-4. Run `omnipus gateway` and open QQ to chat with your bot
+4. Run `omnipus start` and open QQ to chat with your bot
 
 > The App Secret is only shown once. Save it immediately — viewing it again will force a reset.
 >
@@ -252,7 +252,7 @@ If you prefer to create the bot manually:
 * Log in at [QQ Open Platform](https://q.qq.com/) to register as a developer
 * Create a QQ bot — customize its avatar and name
 * Copy the **App ID** and **App Secret** from the bot settings
-* Configure as shown above and run `omnipus gateway`
+* Configure as shown above and run `omnipus start`
 
 </details>
 
@@ -286,7 +286,7 @@ If you prefer to create the bot manually:
 **3. Run**
 
 ```bash
-omnipus gateway
+omnipus start
 ```
 </details>
 
@@ -318,7 +318,7 @@ omnipus gateway
 **3. Run**
 
 ```bash
-omnipus gateway
+omnipus start
 ```
 
 For full options (`device_id`, `join_on_invite`, `group_trigger`, `placeholder`, `reasoning_channel_id`), see [Matrix Channel Configuration Guide](channels/matrix/README.md).
@@ -367,7 +367,7 @@ Then set the Webhook URL in LINE Developers Console to `https://your-domain/webh
 **4. Run**
 
 ```bash
-omnipus gateway
+omnipus start
 ```
 
 > In group chats, the bot responds only when @mentioned. Replies quote the original message.
@@ -414,7 +414,7 @@ This command shows a QR code, waits for approval in WeCom, and writes `bot_id` +
 **3. Run**
 
 ```bash
-omnipus gateway
+omnipus start
 ```
 
 > Legacy `wecom_app` and `wecom_aibot` entries are replaced by the unified `channels.wecom` config in this branch.
@@ -454,7 +454,7 @@ Optional fields: `encrypt_key` and `verification_token` for event encryption (re
 **3. Run and chat**
 
 ```bash
-omnipus gateway
+omnipus start
 ```
 
 Open Feishu, search for your bot name, and start chatting. You can also add the bot to a group — use `group_trigger.mention_only: true` to only respond when @mentioned.
@@ -492,7 +492,7 @@ For full options, see [Feishu Channel Configuration Guide](channels/feishu/READM
 **3. Run**
 
 ```bash
-omnipus gateway
+omnipus start
 ```
 
 </details>
@@ -524,7 +524,7 @@ Optional: `nickserv_password` for NickServ authentication, `sasl_user`/`sasl_pas
 **2. Run**
 
 ```bash
-omnipus gateway
+omnipus start
 ```
 
 The bot will connect to the IRC server and join the specified channels.
@@ -565,7 +565,7 @@ Install and run a OneBot v11 compatible QQ bot framework. Enable its WebSocket s
 **3. Run**
 
 ```bash
-omnipus gateway
+omnipus start
 ```
 
 </details>
