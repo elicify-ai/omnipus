@@ -30,13 +30,11 @@ We are committed to maintaining a welcoming and respectful community. Be kind, c
 
 ## Contributor License Agreement (CLA)
 
-Omnipus is developed by **elicify.ai Pte. Ltd.** under the MIT license. Before your first pull request can be merged, you (or your employer, if you contribute on company time) must sign a one-time **Contributor License Agreement** based on the Apache Individual CLA.
+Omnipus is developed by **elicify.ai Pte. Ltd.** under the MIT license. Before your first pull request can be merged, you (or your employer, if you contribute on company time) sign a one-time **Contributor License Agreement** based on the Apache and Google Contributor License Agreements.
 
-The CLA assigns copyright in your contribution to elicify.ai Pte. Ltd. while granting you a perpetual license back to your own work. It exists so that future Omnipus variants (Desktop, Cloud / SaaS — see [`ROADMAP.md`](ROADMAP.md)) can be distributed under terms appropriate to each variant, without retroactively chasing every contributor for permission. The upstream MIT-licensed code is **irrevocable** — anyone who downloads Omnipus today keeps the MIT grant forever.
+**You keep the copyright to your contribution.** The CLA grants elicify.ai Pte. Ltd. a broad, irrevocable license to use your contribution — including in future Omnipus variants (Desktop, Cloud / SaaS — see [`ROADMAP.md`](ROADMAP.md)) — without retroactively chasing every contributor for permission. The upstream MIT-licensed code is **irrevocable** — anyone who downloads Omnipus today keeps the MIT grant forever.
 
-See [`CLA.md`](CLA.md) for the full text and rationale, including the corporate CLA path for contributions made on company time.
-
-**Status:** The CLA scaffolding is in place; the `cla-assistant.io` bot integration and final lawyer-reviewed text are being prepared. **Until that lands, outside pull requests are not being merged.** Inside contributors (elicify.ai employees and direct contractors) are covered by their employment / contractor agreement and proceed normally.
+See [`CLA.md`](CLA.md) for the full text, common questions, and the Corporate CLA path for contributions made on company time. You sign once per GitHub account; all future PRs from that account are covered.
 
 ---
 
