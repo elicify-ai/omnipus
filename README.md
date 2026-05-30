@@ -159,6 +159,24 @@ Two ports open: **5000** for SPA + API, **5001** for sandboxed agent preview ifr
 
 A 256-bit AES key auto-generates at `~/.omnipus/master.key` (mode `0600`). **Back it up** — losing it means losing every encrypted credential. For headless deployments, pre-provision via `OMNIPUS_KEY_FILE` or `OMNIPUS_MASTER_KEY`. → [docs/credential_encryption.md](docs/credential_encryption.md)
 
+### Headless onboarding (no browser)
+
+If you can't open `localhost:5000` — Docker host, remote VPS, CI runner — finish onboarding from the shell instead. Secrets read from stdin so they never appear in `ps`:
+
+```bash
+printf '%s\n%s\n' "$OPENROUTER_API_KEY" "$ADMIN_PASSWORD" | \
+  omnipus onboard --non-interactive \
+    --provider openrouter \
+    --api-key-stdin \
+    --model 'z-ai/glm-5v-turbo' \
+    --admin-username admin \
+    --admin-password-stdin
+
+omnipus gateway
+```
+
+`omnipus onboard --help` lists every flag (`--provider`, `--api-key`, `--api-key-stdin`, `--model`, `--admin-username`, `--admin-password`, `--admin-password-stdin`, `--non-interactive`). Same end-state mutations as the SPA wizard — config, credentials, admin user, state — so you can log in immediately with the credentials you just passed.
+
 ---
 
 ## Documentation
