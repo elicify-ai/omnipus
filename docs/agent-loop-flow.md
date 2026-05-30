@@ -51,10 +51,10 @@ sequenceDiagram
     Bus-->>Run: InboundChan() delivers msg
     Run->>Run: resolveSteeringTarget(msg) → scope
     alt worker exists & in a turn
-        Run->>SW: enqueueSteeringFromMessage(msg)  %% mid-turn: becomes steering
+        Run->>SW: enqueueSteeringFromMessage(msg) [mid-turn becomes steering]
     else no worker
         Run->>Run: admission.TryAdmit(scope)
-        Run->>SW: newSessionWorker + go runLoop(); enqueue(msg)
+        Run->>SW: newSessionWorker + go runLoop(), then enqueue(msg)
     end
     SW->>PM: processTurn → processMessage(ctx, msg)
 
@@ -85,7 +85,7 @@ sequenceDiagram
         end
 
         alt response has NO tool calls
-            RT->>RT: finalContent = response.Content; break
+            RT->>RT: finalContent = response.Content, then break
         else response HAS tool calls
             RT->>RT: normalize, append assistant msg to history
             loop each tool call
@@ -101,13 +101,13 @@ sequenceDiagram
                 RT->>RT: emitEvent(ToolExecEnd) → tool_call_result frame
                 RT->>RT: append tool result to history
             end
-            RT->>RT: dequeue steering for scope; continue loop
+            RT->>RT: dequeue steering for scope, continue loop
         end
     end
 
     Note over RT,Browser: 5 — Finalize (once per turn)
     RT->>Str: finalizeStreamer → wsStreamer.Finalize()
-    Str->>WCC: markStreamed(chatID)  %% only if content was streamed
+    Str->>WCC: markStreamed(chatID) [only if content was streamed]
     Str->>Browser: WS {type:"done", tokens, cost}
     RT-->>PM: turnResult{finalContent, status}
 
@@ -125,7 +125,7 @@ sequenceDiagram
         end
     end
 
-    Note over RT,RT: 7 — Post-turn: maybeSummarize() may compress history in the background
+    Note over RT: 7 — Post-turn: maybeSummarize() may compress history in the background
 ```
 
 ---
@@ -378,14 +378,14 @@ sequenceDiagram
 
     U->>RC: cancel (scope, canceller, hooks)
     RC->>TS: ClaimCancel() (first-cancel-wins)
-    RC->>RC: audit turn.cancel.attempt; register onCancelFinish
+    RC->>RC: audit turn.cancel.attempt, register onCancelFinish
 
     Note over RC,Prov: Stage 1 — GRACEFUL (immediate)
     RC->>IS: InterruptSession(sessionID)
     IS->>TS: providerCancel() first, then set gracefulInterrupt flag
     TS-->>Prov: in-flight HTTP stream aborted
     RC->>Br: cancel_stage {stage:"graceful"}
-    RC->>RC: auto-deny pending approvals; session → interrupted
+    RC->>RC: auto-deny pending approvals, session → interrupted
 
     Note over RC,Prov: Stage 2 — HARD (+3s, if still alive)
     RC->>IS: InterruptSessionHard(sessionID)
