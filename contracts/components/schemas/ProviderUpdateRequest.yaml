@@ -1,0 +1,21 @@
+title: ProviderUpdateRequest
+description: >
+  Request body for PUT /api/v1/providers/{id}. Adds or updates an LLM provider
+  configuration. On new providers, api_key is required. On existing providers,
+  api_key may be omitted to keep the current key.
+type: object
+additionalProperties: false
+properties:
+  api_key:
+    type: string
+    description: >
+      API key for the provider. Stored encrypted (AES-256-GCM) in
+      credentials.json. Required when adding a new provider; optional when
+      updating an existing one (omit to leave the current key unchanged).
+    example: "sk-abc123"
+  model:
+    type: string
+    description: >
+      Default model to use for this provider. Defaults to "default" when
+      not specified on new providers.
+    example: "gpt-4o"

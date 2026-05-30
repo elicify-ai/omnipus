@@ -80,8 +80,15 @@ const FAKE_SERVE_PATH = `/serve/${SYNTHETIC_AGENT_ID}/${FAKE_SERVE_TOKEN}/`
 /**
  * The absolute URL the SPA should construct for the iframe src.
  * Preview listener is on the same host as the SPA, port = PREVIEW_PORT.
+ *
+ * Hostname is derived from BASE_URL (which mirrors window.location.hostname in
+ * the browser) rather than hardcoded — when the gateway binds to 127.0.0.1 the
+ * SPA produces 127.0.0.1; when it's reverse-proxied behind omnipus.example.com
+ * the SPA produces that domain. The cross-origin contract is enforced by the
+ * differing PORT, not the hostname.
  */
-const EXPECTED_IFRAME_SRC = `http://localhost:${PREVIEW_PORT}${FAKE_SERVE_PATH}`
+const EXPECTED_IFRAME_HOSTNAME = new URL(BASE_URL).hostname
+const EXPECTED_IFRAME_SRC = `http://${EXPECTED_IFRAME_HOSTNAME}:${PREVIEW_PORT}${FAKE_SERVE_PATH}`
 
 /**
  * The sandbox attribute value mandated by FR-011 (IframePreview.tsx line 639).

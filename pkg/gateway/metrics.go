@@ -42,7 +42,7 @@ type toolMetrics struct {
 	// omnipus_tool_approval_latency_seconds: label outcome.
 	// Stored as sum + count per outcome for a simple histogram approximation.
 	// Buckets: .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, +Inf.
-	latencyMu   sync.Mutex
+	latencyMu      sync.Mutex
 	latencyBuckets map[string]*latencyHistogram // outcome → histogram
 }
 

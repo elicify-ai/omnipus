@@ -54,7 +54,9 @@ func TestRegistry_ToolDepsContract(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("Deps struct must have an exported *atomic.Pointer[Deps] field (FR-050 structural guarantee); none found")
+			t.Errorf(
+				"Deps struct must have an exported *atomic.Pointer[Deps] field (FR-050 structural guarantee); none found",
+			)
 		}
 	})
 

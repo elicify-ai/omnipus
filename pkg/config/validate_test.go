@@ -214,7 +214,12 @@ func TestConfigValidator_EmptyDir_NoResults(t *testing.T) {
 //
 // Traces to: pkg/config/validate.go — missing directory guard.
 func TestConfigValidator_MissingDir_NoResults(t *testing.T) {
-	results, abort := ValidateAgentConfigs("/nonexistent/path/to/agents", func(string) bool { return false }, nil, &noopAudit{})
+	results, abort := ValidateAgentConfigs(
+		"/nonexistent/path/to/agents",
+		func(string) bool { return false },
+		nil,
+		&noopAudit{},
+	)
 
 	assert.False(t, abort)
 	assert.Empty(t, results)

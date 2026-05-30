@@ -1,0 +1,26 @@
+title: DevicePairingResponseFrame
+description: >
+  Client → server. Admin's decision on a pending device pairing request.
+  Sent in response to a device_pairing_request server frame.
+type: object
+required:
+  - type
+  - device_id
+  - decision
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: device_pairing_response
+  device_id:
+    type: string
+    minLength: 1
+    description: The device ID from the device_pairing_request frame.
+  decision:
+    type: string
+    enum:
+      - approve
+      - reject
+    description: >
+      approve — generate a device token and store the pairing.
+      reject  — reject the pairing request.

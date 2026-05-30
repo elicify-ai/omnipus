@@ -43,7 +43,7 @@ func registryPath() string {
 	return filepath.Join(dir, "registry.json")
 }
 
-// SaveRegistry serialises the current ref → path/meta mapping to disk so a
+// SaveRegistry serializes the current ref → path/meta mapping to disk so a
 // subsequent process can resolve refs that outlived their original
 // in-memory store. Best-effort: failures are logged but do not block
 // callers. Safe to call from any code path that already holds, or does

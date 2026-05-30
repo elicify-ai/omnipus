@@ -20,7 +20,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
-import { useChatStore } from './chat'
+import { useChatStore, makeBucketMessages } from './chat'
 import { useSessionStore } from './session'
 
 const ACTIVE_SID = 'unknown-target-active-session'
@@ -57,20 +57,19 @@ describe('chat.unknown-target — T1.14: done for unknown targetSid force-clears
   it('a stale spinning active bucket is force-cleared when a done arrives for an unknown sid', () => {
     // Arrange: plant a spinning (isStreaming=true) active bucket
     // with NO recent lastUserMessageAt (null → stale spinner).
+    const spinnerMsg = {
+      id: 'asst-spinner',
+      role: 'assistant' as const,
+      content: '',
+      timestamp: new Date().toISOString(),
+      status: 'streaming' as const,
+      isStreaming: true,
+    }
     act(() => {
       useChatStore.setState((_s) => ({
         sessionsById: {
           [ACTIVE_SID]: {
-            messages: [
-              {
-                id: 'asst-spinner',
-                role: 'assistant' as const,
-                content: '',
-                timestamp: new Date().toISOString(),
-                status: 'streaming' as const,
-                isStreaming: true,
-              },
-            ],
+            ...makeBucketMessages([spinnerMsg]),
             toolCalls: {},
             toolCallOrder: [],
             textAtToolCallStart: {},
@@ -81,20 +80,14 @@ describe('chat.unknown-target — T1.14: done for unknown targetSid force-clears
             sessionTokens: 0,
             sessionCost: 0,
             rateLimitEvent: null,
+            cancelStage: null,
             // null = no user message sent recently → stale spinner
             lastUserMessageAt: null,
+            lastReceivedEventTime: null,
+            spanByParentCallId: {},
           },
         },
-        messages: [
-          {
-            id: 'asst-spinner',
-            role: 'assistant' as const,
-            content: '',
-            timestamp: new Date().toISOString(),
-            status: 'streaming' as const,
-            isStreaming: true,
-          },
-        ],
+        messages: [spinnerMsg],
         isStreaming: true,
         toolCalls: {},
         toolCallOrder: [],
@@ -125,20 +118,19 @@ describe('chat.unknown-target — T1.14: done for unknown targetSid force-clears
     // Arrange: active bucket is streaming AND lastUserMessageAt is recent (< 10 s ago)
     const recentUserMessageAt = Date.now() - 1000 // 1 second ago
 
+    const liveMsg = {
+      id: 'asst-live',
+      role: 'assistant' as const,
+      content: 'partial response...',
+      timestamp: new Date().toISOString(),
+      status: 'streaming' as const,
+      isStreaming: true,
+    }
     act(() => {
       useChatStore.setState((_s) => ({
         sessionsById: {
           [ACTIVE_SID]: {
-            messages: [
-              {
-                id: 'asst-live',
-                role: 'assistant' as const,
-                content: 'partial response...',
-                timestamp: new Date().toISOString(),
-                status: 'streaming' as const,
-                isStreaming: true,
-              },
-            ],
+            ...makeBucketMessages([liveMsg]),
             toolCalls: {},
             toolCallOrder: [],
             textAtToolCallStart: {},
@@ -149,8 +141,11 @@ describe('chat.unknown-target — T1.14: done for unknown targetSid force-clears
             sessionTokens: 0,
             sessionCost: 0,
             rateLimitEvent: null,
+            cancelStage: null,
             // RECENT user message → guard must preserve this spinner
             lastUserMessageAt: recentUserMessageAt,
+            lastReceivedEventTime: null,
+            spanByParentCallId: {},
           },
         },
         messages: [],

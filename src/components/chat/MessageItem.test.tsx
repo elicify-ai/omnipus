@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { act } from 'react'
+import { act, type ReactElement } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MessageItem } from './MessageItem'
 import { useChatStore } from '@/store/chat'
 import type { ChatMessage } from '@/store/chat'
@@ -13,6 +14,16 @@ import type { ChatMessage } from '@/store/chat'
 //             wave5a-wire-ui-spec.md — Scenario: Streaming response completes with markdown rendering
 //             wave5a-wire-ui-spec.md — Scenario: Thinking indicator shows before first token
 //             wave5a-wire-ui-spec.md — Scenario: Cancel preserves partial with "(interrupted)" label
+
+function makeQueryClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } })
+}
+
+function renderWithQuery(ui: ReactElement) {
+  return render(
+    <QueryClientProvider client={makeQueryClient()}>{ui}</QueryClientProvider>
+  )
+}
 
 beforeEach(() => {
   act(() => {
@@ -33,12 +44,12 @@ const makeMsg = (overrides: Partial<ChatMessage>): ChatMessage => ({
 describe('MessageItem — user message', () => {
   it('renders user message content', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: User message appears optimistically
-    render(<MessageItem message={makeMsg({ role: 'user', content: 'Hello, world!' })} />)
+    renderWithQuery(<MessageItem message={makeMsg({ role: 'user', content: 'Hello, world!' })} />)
     expect(screen.getByText('Hello, world!')).toBeInTheDocument()
   })
 
   it('renders timestamp for user message', () => {
-    render(<MessageItem message={makeMsg({ role: 'user', timestamp: '2026-03-29T10:30:00Z' })} />)
+    renderWithQuery(<MessageItem message={makeMsg({ role: 'user', timestamp: '2026-03-29T10:30:00Z' })} />)
     // Time formatted as HH:MM
     expect(document.querySelector('span')?.textContent).toBeTruthy()
   })
@@ -48,7 +59,7 @@ describe('MessageItem — assistant message with markdown', () => {
   it('renders markdown headings for assistant messages', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Streaming completes with markdown
     // Dataset: Message Rendering row 2
-    render(
+    renderWithQuery(
       <MessageItem
         message={makeMsg({ role: 'assistant', content: '# Main Heading' })}
       />
@@ -58,7 +69,7 @@ describe('MessageItem — assistant message with markdown', () => {
 
   it('renders markdown code blocks', () => {
     // Dataset: Message Rendering row 3
-    render(
+    renderWithQuery(
       <MessageItem
         message={makeMsg({ role: 'assistant', content: "```python\nprint('hello')\n```" })}
       />
@@ -69,7 +80,7 @@ describe('MessageItem — assistant message with markdown', () => {
   it('does not crash with empty content', () => {
     // Dataset: Message Rendering row 5 — empty content
     expect(() =>
-      render(<MessageItem message={makeMsg({ role: 'assistant', content: '' })} />)
+      renderWithQuery(<MessageItem message={makeMsg({ role: 'assistant', content: '' })} />)
     ).not.toThrow()
   })
 })
@@ -77,7 +88,7 @@ describe('MessageItem — assistant message with markdown', () => {
 describe('MessageItem — thinking indicator (test #4)', () => {
   it('shows "Thinking..." when assistant message is streaming with empty content', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Thinking indicator shows before first token
-    render(
+    renderWithQuery(
       <MessageItem
         message={makeMsg({
           role: 'assistant',
@@ -91,7 +102,7 @@ describe('MessageItem — thinking indicator (test #4)', () => {
   })
 
   it('does not show "Thinking..." once tokens arrive (content non-empty)', () => {
-    render(
+    renderWithQuery(
       <MessageItem
         message={makeMsg({
           role: 'assistant',
@@ -107,7 +118,7 @@ describe('MessageItem — thinking indicator (test #4)', () => {
 
 describe('MessageItem — streaming cursor (test #5)', () => {
   it('does not render a pulsing cursor (removed in favor of the rotating thinking indicator)', () => {
-    const { container } = render(
+    const { container } = renderWithQuery(
       <MessageItem
         message={makeMsg({
           role: 'assistant',
@@ -124,7 +135,7 @@ describe('MessageItem — streaming cursor (test #5)', () => {
 describe('MessageItem — system/compaction message', () => {
   it('renders compaction entry as centered pill message', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Compaction entries render as system messages (AC5)
-    render(
+    renderWithQuery(
       <MessageItem
         message={makeMsg({
           role: 'system',
@@ -139,7 +150,7 @@ describe('MessageItem — system/compaction message', () => {
 describe('MessageItem — interrupted status', () => {
   it('shows "(interrupted)" label for interrupted messages', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Cancel during streaming — AC5 partial preserved
-    render(
+    renderWithQuery(
       <MessageItem
         message={makeMsg({
           role: 'assistant',
@@ -155,7 +166,7 @@ describe('MessageItem — interrupted status', () => {
 describe('MessageItem — XSS safety', () => {
   it('renders XSS token content as escaped text', () => {
     // Dataset: WebSocket Message Parsing row 5 — XSS content must not execute
-    render(
+    renderWithQuery(
       <MessageItem
         message={makeMsg({
           role: 'assistant',

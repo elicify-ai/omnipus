@@ -1,6 +1,7 @@
 # Library Refactor — Risk & Regression Analysis
 
-**Status:** Companion to `library-refactor-impact-assessment.md`
+**Status:** Historical companion to `library-refactor-impact-assessment.md`. The original multi-edition framing (Community / Desktop / Enterprise) is no longer the plan — Omnipus today ships as a single open-source Go binary. References to "Desktop" or "Enterprise" below refer to hypothetical second consumers the original analysis assumed. The risks called out around code hygiene (`os.Exit` in the logger, hand-maintained `src/lib/api.ts` drift) still apply independently.
+
 **Audience:** Product owner, engineering lead, QA — anyone who needs to know what could break
 **Written in:** Plain English, not architect-ese
 **Base commit:** `origin/main@da790c5`
@@ -170,9 +171,9 @@ Some behaviours only show up in production, under real conditions:
 
 This is worth saying plainly.
 
-The current code has **two real library-hygiene bugs** that exist today, regardless of whether Desktop or Enterprise ever ship:
+The current code has **two real library-hygiene bugs** that exist today, regardless of whether any second consumer ever appears:
 
-1. **`os.Exit(1)` in the logger** means any wrapper around OmniPus — including future Desktop, including test harnesses, including a hypothetical third-party embedder — gets killed by a single FATAL log call, possibly from a subsystem that shouldn't have that authority.
+1. **`os.Exit(1)` in the logger** means any wrapper around Omnipus — test harnesses, hypothetical third-party embedders, future tooling — gets killed by a single FATAL log call, possibly from a subsystem that shouldn't have that authority.
 2. **Hand-maintained `src/lib/api.ts`** is drifting from the Go backend today, silently, before a second UI even exists. You just don't have visibility into it yet because the UI and the backend ship as one binary, so small mismatches usually get fixed in the same PR. The moment they ship separately, drift becomes a user-facing bug.
 
 Deferring the refactor is not zero-risk. It's just **moving the risk to a place where you can't measure it**. The handwritten API client keeps growing. Every caller relying on `os.Exit`-on-FATAL becomes harder to unwind later.
@@ -186,7 +187,7 @@ Deferring the refactor is not zero-risk. It's just **moving the risk to a place 
    - Remove `os.Exit(1)` from the logger. Medium risk, small scope, worth doing alone.
    - Write the OpenAPI spec and add a CI contract test (but don't regenerate `src/lib/api.ts` yet). Low risk, high value.
 
-2. **Only then, decide whether to proceed with the full refactor.** If Desktop / Enterprise revenue signal is weak, stop here. You've already improved the code.
+2. **Only then, decide whether to proceed with the full refactor.** If the strategic case for a second consumer is weak, stop here. You've already improved the code.
 
 3. **If you do proceed, follow the 8-PR sequence** from the impact assessment. Never bundle. Never do the startup extraction and the API regen in the same PR. Never do two medium-risk items together.
 

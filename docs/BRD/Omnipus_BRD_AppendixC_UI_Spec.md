@@ -212,7 +212,7 @@ Grouped by category: Agents & AI, Work, Development, Creative, Communication, Re
 
 | Agent | Phosphor icon | Color | Rendering |
 |---|---|---|---|
-| Omnipus | Custom lobster SVG | Brand color | Lobster on brand circle |
+| Omnipus | Custom octopus SVG | Brand color | Octopus on brand circle |
 | General Assistant | Robot | Green | White Robot on green circle |
 | Researcher | Microscope | Purple | White Microscope on purple circle |
 | Content Creator | PencilSimple | Yellow | White Pencil on yellow circle |
@@ -637,7 +637,7 @@ Responsive grid: 1 column (1-3 agents), 3 columns (4+). Cards show avatar, name,
 
 ```
 ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
-│  🦞         │ │  🟢 🤖      │ │  🟣 🔬      │ │  🟡 ✍️      │
+│  🐙         │ │  🟢 🤖      │ │  🟣 🔬      │ │  🟡 ✍️      │
 │  Omnipus     │ │  General    │ │  Researcher │ │  Content    │
 │  System     │ │  Assistant  │ │             │ │  Creator    │
 │  ● always on│ │  ● active   │ │  ● idle     │ │  ● idle     │
@@ -801,10 +801,10 @@ This is the only time the user sees a non-chat setup screen. It exists because t
 
 **Step 2: Omnipus system agent takes over in chat**
 
-After provider connects, the user is in the normal chat interface. The Omnipus system agent (🦞) introduces itself and presents preconfigured agents to activate:
+After provider connects, the user is in the normal chat interface. The Omnipus system agent (🐙) introduces itself and presents preconfigured agents to activate:
 
 ```
-🦞 Omnipus
+🐙 Omnipus
 You're connected! I'm Omnipus, your system assistant.
 
 You have 3 agents ready to activate:

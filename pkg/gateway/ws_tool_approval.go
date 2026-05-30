@@ -23,42 +23,17 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
-// toolApprovalRequiredPayload is the wire format for tool_approval_required (FR-082).
-// Uses expires_in_ms (relative) not expires_at (absolute) to avoid clock-skew issues (OBS-004).
-type toolApprovalRequiredPayload struct {
-	Type        string         `json:"type"`
-	ApprovalID  string         `json:"approval_id"`
-	ToolCallID  string         `json:"tool_call_id"`
-	ToolName    string         `json:"tool_name"`
-	Args        map[string]any `json:"args"`
-	AgentID     string         `json:"agent_id"`
-	SessionID   string         `json:"session_id"`
-	TurnID      string         `json:"turn_id"`
-	ExpiresInMs int64          `json:"expires_in_ms"` // OBS-004: relative, not absolute
-}
-
-// sessionStatePendingApproval is one entry in the session_state payload.
-type sessionStatePendingApproval struct {
-	ApprovalID  string `json:"approval_id"`
-	SessionID   string `json:"session_id"`
-	ToolName    string `json:"tool_name"`
-	AgentID     string `json:"agent_id"`
-	ExpiresInMs int64  `json:"expires_in_ms"`
-}
-
-// sessionStatePayload is the full session_state frame (FR-081 schema is binding).
-type sessionStatePayload struct {
-	Type             string                        `json:"type"`
-	UserID           string                        `json:"user_id"`
-	PendingApprovals []sessionStatePendingApproval `json:"pending_approvals"`
-	EmittedAt        string                        `json:"emitted_at"` // RFC3339
-}
-
 // broadcastToolApprovalRequired sends a tool_approval_required WS frame to
 // connected WebSocket clients scoped to the session's owner (FR-073).
+//
+// Wire format: generated.ToolApprovalRequiredFrame (contract-first, pkg/api/generated).
+// Nil-safety: args MUST be an object (never null). The SPA's ToolApprovalModal calls
+// Object.keys(args) directly — null crashes with "null is not an object" (Ava-chat bug).
+// When entry.Args is nil, we coerce to map[string]any{} at this site.
 //
 // Scoping rules:
 //   - Admin role: receives the frame (can act on any approval).
@@ -73,18 +48,27 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 	if entry == nil {
 		return
 	}
-	payload := toolApprovalRequiredPayload{
-		Type:        "tool_approval_required",
-		ApprovalID:  entry.ApprovalID,
-		ToolCallID:  entry.ToolCallID,
-		ToolName:    entry.ToolName,
-		Args:        entry.Args,
-		AgentID:     entry.AgentID,
-		SessionID:   entry.SessionID,
-		TurnID:      entry.TurnID,
-		ExpiresInMs: entry.expiresInMs(),
+	// Nil-safety: coerce nil args to empty map so JSON serializes as {} not null.
+	// The SPA's ToolApprovalModal calls Object.keys(args) — null would crash.
+	// cloneStringAnyMap (pkg/agent/hooks.go) returns nil for empty input, so a tool
+	// invoked without parameters lands here with entry.Args == nil.
+	args := entry.Args
+	if args == nil {
+		args = map[string]any{}
 	}
-	raw, err := json.Marshal(payload)
+
+	frame := generated.ToolApprovalRequiredFrame{
+		Type:        string(generated.WsFrameTypeToolApprovalRequired),
+		ApprovalId:  entry.ApprovalID,
+		ToolCallId:  entry.ToolCallID,
+		ToolName:    entry.ToolName,
+		Args:        args,
+		AgentId:     entry.AgentID,
+		SessionId:   entry.SessionID,
+		TurnId:      entry.TurnID,
+		ExpiresInMs: int(entry.expiresInMs()), // OBS-004: relative, not absolute
+	}
+	raw, err := json.Marshal(frame)
 	if err != nil {
 		slog.Error("ws: marshal tool_approval_required", "error", err)
 		return
@@ -120,6 +104,10 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 // emitSessionState sends the session_state one-shot frame to a single WS connection
 // immediately after authentication (FR-052, FR-073, FR-081).
 //
+// Wire format: generated.SessionStateFrame (contract-first, pkg/api/generated).
+// Nil-safety: pending_approvals MUST be an array (never null). The SPA calls
+// pending_approvals.map() — null would crash at render time. Coerced to [] when empty.
+//
 // Scoping rules (FR-073):
 //   - Admin role: sees pending approvals for ALL sessions.
 //   - Non-admin: sees only approvals for their own sessions (matched by session.AgentID
@@ -134,7 +122,8 @@ func (h *WSHandler) emitSessionState(wc *wsConn) {
 		return
 	}
 
-	var pendingApprovals []sessionStatePendingApproval
+	// Always initialize to non-nil slice so JSON encodes as [] not null.
+	pendingApprovals := make([]generated.SessionStatePendingApproval, 0)
 
 	if h.approvalRegV2 != nil {
 		allPending := h.approvalRegV2.pendingApprovals()
@@ -151,29 +140,24 @@ func (h *WSHandler) emitSessionState(wc *wsConn) {
 				// until then, non-admin users see nothing (safe default).
 				continue
 			}
-			pendingApprovals = append(pendingApprovals, sessionStatePendingApproval{
-				ApprovalID:  e.ApprovalID,
-				SessionID:   e.SessionID,
+			pendingApprovals = append(pendingApprovals, generated.SessionStatePendingApproval{
+				ApprovalId:  e.ApprovalID,
+				SessionId:   e.SessionID,
 				ToolName:    e.ToolName,
-				AgentID:     e.AgentID,
-				ExpiresInMs: e.expiresInMs(),
+				AgentId:     e.AgentID,
+				ExpiresInMs: int(e.expiresInMs()),
 			})
 		}
 	}
 
-	// Never send null — empty array per FR-081.
-	if pendingApprovals == nil {
-		pendingApprovals = []sessionStatePendingApproval{}
-	}
-
-	payload := sessionStatePayload{
-		Type:             "session_state",
-		UserID:           wc.userID,
+	frame := generated.SessionStateFrame{
+		Type:             string(generated.WsFrameTypeSessionState),
+		UserId:           wc.userID,
 		PendingApprovals: pendingApprovals,
 		EmittedAt:        time.Now().UTC().Format(time.RFC3339),
 	}
 
-	raw, err := json.Marshal(payload)
+	raw, err := json.Marshal(frame)
 	if err != nil {
 		slog.Error("ws: marshal session_state", "error", err)
 		return

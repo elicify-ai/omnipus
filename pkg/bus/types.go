@@ -30,15 +30,15 @@ type SenderInfo struct {
 type InboundMessage struct {
 	Channel string `json:"channel"`
 	// Deprecated: use Sender.CanonicalID instead. Retained for backward compatibility.
-	SenderID   string            `json:"sender_id"`
-	Sender     SenderInfo        `json:"sender"`
-	ChatID     string            `json:"chat_id"`
-	Content    string            `json:"content"`
-	Media      []string          `json:"media,omitempty"`
-	Peer       Peer              `json:"peer"`                  // routing peer
-	MessageID  string            `json:"message_id,omitempty"`  // platform message ID
-	MediaScope string            `json:"media_scope,omitempty"` // media lifecycle scope
-	SessionKey string            `json:"session_key"`
+	SenderID   string     `json:"sender_id"`
+	Sender     SenderInfo `json:"sender"`
+	ChatID     string     `json:"chat_id"`
+	Content    string     `json:"content"`
+	Media      []string   `json:"media,omitempty"`
+	Peer       Peer       `json:"peer"`                  // routing peer
+	MessageID  string     `json:"message_id,omitempty"`  // platform message ID
+	MediaScope string     `json:"media_scope,omitempty"` // media lifecycle scope
+	SessionKey string     `json:"session_key"`
 	// SessionID is the transcript-store session ID this message belongs to.
 	// Populated by the gateway from the WS frame.SessionID on every message
 	// (the gateway mints a new id when the SPA sends one without it). Used

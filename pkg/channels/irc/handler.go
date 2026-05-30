@@ -10,6 +10,7 @@ import (
 	"github.com/ergochat/irc-go/ircmsg"
 
 	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/channels"
 	"github.com/dapicom-ai/omnipus/pkg/identity"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
@@ -100,6 +101,17 @@ func (c *IRCChannel) onPrivmsg(conn *ircevent.Connection, e ircmsg.Message) {
 		metadata["channel"] = target
 	}
 
+	if channels.DispatchCancelIfRecognized(
+		c.ctx,
+		content,
+		"irc",
+		chatID,
+		nick,
+		c.GetCancelInterceptor(),
+		channels.CancelSendFn(c),
+	) {
+		return
+	}
 	c.HandleMessage(c.ctx, peer, messageID, nick, chatID, content, nil, metadata, sender)
 }
 

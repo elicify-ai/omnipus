@@ -4,11 +4,13 @@
 //
 // Documents gap C6 from the pentest report: a hardened child process can read
 // /proc/<parent-pid>/environ because Linux grants same-uid processes read access
-// to /proc/<pid>/environ and the production Landlock policy does not restrict /proc.
+// to /proc/<pid>/environ unless PR_SET_DUMPABLE is set to 0.
 //
-// THIS TEST IS EXPECTED TO FAIL TODAY — it documents the gap.
-// It will flip to a positive test once the v0.2 #155 fix (restricting /proc/self/.. or
-// per-process namespace isolation) lands.
+// CLOSED in v0.2 #155: sandbox.HardenGatewaySelf() applies PR_SET_DUMPABLE=0
+// at gateway boot, which makes /proc/<gateway-pid>/{environ,mem,maps,...}
+// owned by root and unreadable even by other same-uid processes. The test
+// now calls HardenGatewaySelf in the parent before spawning the child, so
+// the child gets EACCES on the environ read.
 
 package sandbox_test
 
@@ -19,6 +21,8 @@ import (
 	"strconv"
 	"syscall"
 	"testing"
+
+	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 )
 
 // TestChildCannotReadGatewayProcEnviron (T2.7) spawns a subprocess that
@@ -41,6 +45,14 @@ func TestChildCannotReadGatewayProcEnviron(t *testing.T) {
 
 	if os.Getuid() == 0 {
 		t.Skip("proc-environ test must run as non-root (root can always read /proc)")
+	}
+
+	// Apply the production self-hardening in this (parent) test process
+	// before forking the child. In production this is called by the
+	// gateway boot path (pkg/gateway/sandbox_apply.go); here we mirror it
+	// so the test exercises the same defense.
+	if err := sandbox.HardenGatewaySelf(); err != nil {
+		t.Fatalf("HardenGatewaySelf failed: %v", err)
 	}
 
 	parentPID := os.Getpid()
@@ -70,20 +82,17 @@ func TestChildCannotReadGatewayProcEnviron(t *testing.T) {
 
 	switch exitCode {
 	case 0:
-		// Child reported EACCES/EPERM — gap is fixed.
-		t.Logf("C6 gap is FIXED: child could not read parent's /proc/environ (child exited 0)")
+		// Child reported EACCES/EPERM — gap is closed.
+		t.Logf("C6 closed: child could not read parent /proc/%d/environ (PR_SET_DUMPABLE=0 enforced)",
+			parentPID)
 	case 1:
-		// Child successfully read the parent's environ — gap is still open.
-		// This is the expected outcome today; log clearly so CI shows the documented gap.
-		t.Logf("C6 gap OPEN (expected today): child read parent /proc/%d/environ\n%s",
-			parentPID, out)
-		t.Logf("documents C6 from pentest report: /proc/<pid>/environ readable by same-uid children")
-		// Mark as expected failure rather than t.Fatal so the test suite documents it.
-		t.Fail()
+		// Child successfully read the parent's environ — REGRESSION.
+		t.Errorf("C6 REGRESSION: child read parent /proc/%d/environ despite "+
+			"PR_SET_DUMPABLE=0:\n%s", parentPID, out)
 	case 77:
 		t.Skipf("/proc not mounted or parent PID not passed (child exit 77):\n%s", out)
 	default:
-		t.Fatalf("child exit %d (expected 0=blocked, 1=readable gap, 77=skip):\n%s",
+		t.Fatalf("child exit %d (expected 0=blocked, 1=regression, 77=skip):\n%s",
 			exitCode, out)
 	}
 }

@@ -1,0 +1,18 @@
+title: RetentionSweepResult
+description: >
+  Result of a POST /api/v1/security/retention/sweep on-demand sweep operation.
+type: object
+required:
+  - removed
+properties:
+  removed:
+    type: integer
+    minimum: 0
+    description: Number of session directories removed during the sweep.
+    example: 3
+  skipped_reason:
+    type: string
+    description: >
+      Present when the sweep was skipped without removing anything.
+      Currently only "disabled" (retention is configured as disabled).
+    example: disabled

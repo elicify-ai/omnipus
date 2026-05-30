@@ -11,7 +11,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -24,6 +23,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 )
@@ -283,12 +283,9 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 	ip := clientIP(r)
 
-	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var body gen.LoginRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "LoginRequest", &body, validateEnabled) {
 		return
 	}
 	if body.Username == "" || body.Password == "" {
@@ -402,10 +399,10 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonOK(w, map[string]any{
-		"token":    token,
-		"role":     foundRole,
-		"username": body.Username,
+	jsonOK(w, gen.LoginResponse{
+		Token:    token,
+		Role:     gen.LoginResponseRole(foundRole),
+		Username: body.Username,
 	})
 }
 
@@ -422,9 +419,9 @@ func (a *restAPI) HandleValidateToken(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnauthorized, "invalid token")
 		return
 	}
-	jsonOK(w, map[string]any{
-		"username": user.Username,
-		"role":     user.Role,
+	jsonOK(w, gen.ValidateTokenResponse{
+		Username: user.Username,
+		Role:     gen.ValidateTokenResponseRole(user.Role),
 	})
 }
 
@@ -438,12 +435,9 @@ func (a *restAPI) HandleRegisterAdmin(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var body gen.RegisterAdminRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "RegisterAdminRequest", &body, validateEnabled) {
 		return
 	}
 	if body.Username == "" || body.Password == "" {
@@ -494,7 +488,7 @@ func (a *restAPI) HandleRegisterAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Normalise users array: may be nil/absent on a fresh config.
-		var users []any
+		users := make([]any, 0, 1)
 		if raw, exists := gw["users"]; exists && raw != nil {
 			users, ok = raw.([]any)
 			if !ok {
@@ -553,10 +547,10 @@ func (a *restAPI) HandleRegisterAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("auth: admin user registered", "username", body.Username)
-	jsonOK(w, map[string]any{
-		"token":    token,
-		"role":     config.UserRoleAdmin,
-		"username": body.Username,
+	jsonOK(w, gen.LoginResponse{
+		Token:    token,
+		Role:     gen.LoginResponseRole(config.UserRoleAdmin),
+		Username: body.Username,
 	})
 }
 
@@ -621,12 +615,9 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
-	var body struct {
-		CurrentPassword string `json:"current_password"`
-		NewPassword     string `json:"new_password"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var body gen.ChangePasswordRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "ChangePasswordRequest", &body, validateEnabled) {
 		return
 	}
 	if body.CurrentPassword == "" || body.NewPassword == "" {
@@ -689,7 +680,7 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 	if err := a.awaitReload(); err != nil {
 		slog.Warn("auth: hot-reload after change-password failed", "error", err)
 	}
-	jsonOK(w, map[string]any{"success": true})
+	jsonOK(w, gen.OperationResult{Success: true})
 }
 
 // generateUserToken creates a random bearer token for authentication.

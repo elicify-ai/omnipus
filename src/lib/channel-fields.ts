@@ -1,7 +1,7 @@
 // Channel configuration field definitions
 // Each entry maps to the Go ChannelsConfig struct fields in pkg/config/config.go
 
-export interface ChannelField {
+export interface ChannelField { // not-wire-format: UI form-field descriptor for channel config forms; never serialised over any HTTP/WS boundary
   key: string
   label: string
   type: 'text' | 'password' | 'url' | 'number' | 'toggle' | 'textarea'
@@ -495,62 +495,7 @@ export const CHANNEL_FIELDS: Record<string, ChannelField[]> = {
     },
   ],
 
-  maixcam: [
-    {
-      key: 'host',
-      label: 'Host',
-      type: 'text',
-      required: true,
-      placeholder: '192.168.1.100',
-      helpText: 'IP address or hostname of the MaixCam device',
-    },
-    {
-      key: 'port',
-      label: 'Port',
-      type: 'number',
-      required: false,
-      placeholder: '8765',
-    },
-    {
-      key: 'allow_from',
-      label: 'Allow From',
-      type: 'text',
-      required: false,
-      placeholder: 'device_id1',
-    },
-  ],
 
-  pico: [
-    {
-      key: 'token',
-      label: 'Access Token',
-      type: 'password',
-      required: false,
-      helpText: 'Optional bearer token to restrict access to this channel',
-    },
-    {
-      key: 'allow_origins',
-      label: 'Allow Origins',
-      type: 'text',
-      required: false,
-      placeholder: 'https://example.com, *',
-      helpText: 'Comma-separated allowed CORS origins (empty = any)',
-    },
-    {
-      key: 'allow_from',
-      label: 'Allow From',
-      type: 'text',
-      required: false,
-      placeholder: 'client_id1, client_id2',
-    },
-    {
-      key: 'max_connections',
-      label: 'Max Connections',
-      type: 'number',
-      required: false,
-      placeholder: '100',
-    },
-  ],
 
   weixin: [
     {

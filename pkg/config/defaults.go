@@ -104,12 +104,7 @@ func DefaultConfig() *Config {
 				AllowFrom:   FlexibleStringSlice{},
 				MentionOnly: false,
 			},
-			MaixCam: MaixCamConfig{
-				Enabled:   false,
-				Host:      "0.0.0.0",
-				Port:      18790,
-				AllowFrom: FlexibleStringSlice{},
-			},
+
 			QQ: QQConfig{
 				Enabled:              false,
 				AppID:                "",
@@ -372,7 +367,7 @@ func DefaultConfig() *Config {
 		},
 		Gateway: GatewayConfig{
 			Host:      "127.0.0.1",
-			Port:      18790,
+			Port:      5000,
 			HotReload: false,
 			LogLevel:  "warn",
 		},
@@ -486,9 +481,6 @@ func DefaultConfig() *Config {
 			FindSkills: ToolConfig{
 				Enabled: true,
 			},
-			I2C: ToolConfig{
-				Enabled: false, // Hardware tool - Linux only
-			},
 			InstallSkill: ToolConfig{
 				Enabled: true,
 			},
@@ -507,9 +499,6 @@ func DefaultConfig() *Config {
 			},
 			SpawnStatus: ToolConfig{
 				Enabled: false,
-			},
-			SPI: ToolConfig{
-				Enabled: false, // Hardware tool - Linux only
 			},
 			Subagent: ToolConfig{
 				Enabled: true,

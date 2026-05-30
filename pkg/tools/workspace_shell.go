@@ -302,7 +302,13 @@ func (t *WorkspaceShellTool) resolveCWD(args map[string]any) (string, error) {
 }
 
 // run spawns the shell command and returns a workspaceShellResult.
-func (t *WorkspaceShellTool) run(ctx context.Context, command string, extraEnv []string, lim sandbox.Limits, timeoutSec int32) (workspaceShellResult, error) {
+func (t *WorkspaceShellTool) run(
+	ctx context.Context,
+	command string,
+	extraEnv []string,
+	lim sandbox.Limits,
+	timeoutSec int32,
+) (workspaceShellResult, error) {
 	// Choose the shell invocation. On Linux/macOS: sh -c. On Windows: powershell.
 	var argv []string
 	if runtime.GOOS == "windows" {
@@ -347,9 +353,9 @@ func (t *WorkspaceShellTool) run(ctx context.Context, command string, extraEnv [
 // god-mode child processes cannot read the gateway's master key or auth token.
 func scrubbedEnv(base []string) []string {
 	blocked := map[string]bool{
-		"OMNIPUS_MASTER_KEY":    true,
-		"OMNIPUS_KEY_FILE":      true,
-		"OMNIPUS_BEARER_TOKEN":  true,
+		"OMNIPUS_MASTER_KEY":   true,
+		"OMNIPUS_KEY_FILE":     true,
+		"OMNIPUS_BEARER_TOKEN": true,
 	}
 	out := make([]string, 0, len(base))
 	for _, kv := range base {

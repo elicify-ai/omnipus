@@ -7,11 +7,11 @@
 package gateway
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
@@ -50,8 +50,8 @@ func (a *restAPI) HandleSkillTrust(w http.ResponseWriter, r *http.Request) {
 		if level == "" {
 			level = string(config.SkillTrustWarnUnverified)
 		}
-		jsonOK(w, map[string]any{
-			"level": level,
+		jsonOK(w, gen.SkillTrustResponse{
+			Level: gen.SkillTrustResponseLevel(level),
 		})
 
 	case http.MethodPut:
@@ -67,22 +67,20 @@ func (a *restAPI) HandleSkillTrust(w http.ResponseWriter, r *http.Request) {
 func (a *restAPI) putSkillTrust(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	var body struct {
-		Level string `json:"level"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var body gen.SkillTrustUpdateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "SkillTrustUpdateRequest", &body, validateEnabled) {
 		return
 	}
 
-	if body.Level == "" {
+	if string(body.Level) == "" {
 		jsonErr(w, http.StatusBadRequest, skillTrustInvalidMsg)
 		return
 	}
 
 	valid := false
 	for _, v := range validSkillTrustLevels {
-		if body.Level == v {
+		if string(body.Level) == v {
 			valid = true
 			break
 		}
@@ -99,7 +97,7 @@ func (a *restAPI) putSkillTrust(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		ensureMap(m, "sandbox")["skill_trust"] = body.Level
+		ensureMap(m, "sandbox")["skill_trust"] = string(body.Level)
 		return nil
 	}); err != nil {
 		slog.Error("rest: update skill trust", "error", err)
@@ -114,25 +112,26 @@ func (a *restAPI) putSkillTrust(w http.ResponseWriter, r *http.Request) {
 				auditLogger,
 				"sandbox.skill_trust",
 				oldLevel,
-				body.Level,
+				string(body.Level),
 			); err != nil {
 				slog.Error("rest: audit emit skill trust change", "error", err)
 			}
 		}
 	}
 
-	slog.Info("rest: skill trust updated", "level", body.Level)
+	slog.Info("rest: skill trust updated", "level", string(body.Level))
 
-	resp := map[string]any{
-		"saved":            true,
-		"requires_restart": false,
-		"applied_level":    body.Level,
+	resp := gen.SkillTrustUpdateResponse{
+		Saved:           true,
+		RequiresRestart: false,
+		AppliedLevel:    gen.SkillTrustUpdateResponseAppliedLevel(body.Level),
 	}
-	if body.Level == string(config.SkillTrustAllowAll) {
-		resp["warning"] = fmt.Sprintf(
+	if string(body.Level) == string(config.SkillTrustAllowAll) {
+		warnMsg := fmt.Sprintf(
 			"skill_trust=%s disables hash verification — configure a trusted skills registry instead",
-			body.Level,
+			string(body.Level),
 		)
+		resp.Warning = &warnMsg
 	}
 	jsonOK(w, resp)
 }

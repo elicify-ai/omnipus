@@ -1,0 +1,21 @@
+title: TruncatedResult
+description: >
+  Sentinel emitted in the result field of a tool_call_result when the raw result
+  exceeds 1 MiB (FR-I-011). The result field of ToolCallResultFrame will be an
+  object matching this shape instead of the raw result.
+type: object
+required:
+  - _truncated
+  - original_size_bytes
+  - preview
+additionalProperties: false
+properties:
+  _truncated:
+    type: boolean
+    const: true
+  original_size_bytes:
+    type: integer
+    description: Original JSON-encoded size in bytes before truncation.
+  preview:
+    type: string
+    description: First 10 KiB of the JSON-encoded result.

@@ -110,7 +110,7 @@ type Deps struct {
 // merges rather than replaces — so a fn that added a map key would leave that
 // key present after rollback if the map were not cleared first.
 func clearMaps(v reflect.Value) {
-	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 		if v.IsNil() {
 			return
 		}

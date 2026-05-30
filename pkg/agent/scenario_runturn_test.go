@@ -80,18 +80,18 @@ func readAuditEntries(path string) ([]map[string]any, error) {
 // TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits drives runTurn end-to-end
 // using the ScenarioProvider harness. The scenario:
 //
-//   Step 1: LLM emits a tool call to "dangerous_tool" (denied by agent policy).
-//   Step 2: LLM emits a plain text reply after receiving the synthetic denial result.
+//	Step 1: LLM emits a tool call to "dangerous_tool" (denied by agent policy).
+//	Step 2: LLM emits a plain text reply after receiving the synthetic denial result.
 //
 // Assertions (per quizzical-marinating-frog.md V2.G step 1):
 //
-//   (a) The stub tool was NOT executed — wasCalled must stay false.
-//   (b) The audit log contains at least one entry with event="tool.policy.deny.attempted"
-//       and decision="deny" referencing "dangerous_tool".
-//   (c) Session history contains a role="tool" message with "permission_denied" in its
-//       content — the synthetic deny result was injected into history.
-//   (d) ScenarioProvider.CallCount() == 2 — the loop did NOT bail after the deny;
-//       it gave the LLM a second turn to recover.
+//	(a) The stub tool was NOT executed — wasCalled must stay false.
+//	(b) The audit log contains at least one entry with event="tool.policy.deny.attempted"
+//	    and decision="deny" referencing "dangerous_tool".
+//	(c) Session history contains a role="tool" message with "permission_denied" in its
+//	    content — the synthetic deny result was injected into history.
+//	(d) ScenarioProvider.CallCount() == 2 — the loop did NOT bail after the deny;
+//	    it gave the LLM a second turn to recover.
 //
 // Traces to: quizzical-marinating-frog.md — Wave V2.G step 1 (ScenarioProvider → runTurn bridge)
 func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
@@ -164,7 +164,11 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 	const sessionKey = "test-session-policy-deny"
 	ctx := context.Background()
 	finalContent, err := al.ProcessDirect(ctx, "please run dangerous_tool for me", sessionKey)
-	require.NoError(t, err, "ProcessDirect must not return an error — policy deny is a loop-level action, not an agent error")
+	require.NoError(
+		t,
+		err,
+		"ProcessDirect must not return an error — policy deny is a loop-level action, not an agent error",
+	)
 
 	// -----------------------------------------------------------------------
 	// Assert (a): tool was NOT executed.
@@ -231,7 +235,12 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 
 	const resolvedSessionKey = "agent:main:main" // BuildAgentMainSessionKey("main")
 	history := defaultAgent.Sessions.GetHistory(resolvedSessionKey)
-	require.NotEmpty(t, history, "session history must not be empty after a completed turn (checked key: %q)", resolvedSessionKey)
+	require.NotEmpty(
+		t,
+		history,
+		"session history must not be empty after a completed turn (checked key: %q)",
+		resolvedSessionKey,
+	)
 
 	var toolDenyMsg *struct{ Role, Content string }
 	for _, msg := range history {

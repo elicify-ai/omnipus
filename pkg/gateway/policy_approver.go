@@ -25,7 +25,7 @@ import (
 // approvalRegistryV2 and the WSHandler for broadcasting WS events (FR-073).
 //
 // Lifecycle: created once at gateway boot after both approvalReg and wsHandler
-// are initialised; passed to agentLoop.SetToolApprover before any turns start.
+// are initialized; passed to agentLoop.SetToolApprover before any turns start.
 type policyApproverAdapter struct {
 	reg       *approvalRegistryV2
 	wsHandler *WSHandler
@@ -40,7 +40,7 @@ func newPolicyApproverAdapter(reg *approvalRegistryV2, ws *WSHandler) *policyApp
 //
 // It creates a pending approval entry, broadcasts the tool_approval_required WS
 // frame (FR-082) scoped to the session owner (FR-073), then blocks on the result
-// channel until the user approves/denies, the timeout fires, or ctx is cancelled.
+// channel until the user approves/denies, the timeout fires, or ctx is canceled.
 //
 // Saturation path (FR-016, MAJ-009): if requestApproval returns accepted==false
 // the entry is already in denied_saturated state and resultCh has a pre-delivered
@@ -69,14 +69,14 @@ func (a *policyApproverAdapter) RequestApproval(ctx context.Context, req agent.P
 
 	approvalStart := time.Now()
 
-	// Block until the entry resolves or the turn context is cancelled.
+	// Block until the entry resolves or the turn context is canceled.
 	select {
 	case outcome := <-entry.resultCh:
 		// FR-039: record approval latency on every terminal transition.
 		globalToolMetrics.ObserveApprovalLatency(outcome.Reason, time.Since(approvalStart).Seconds())
 		return outcome.Approved, outcome.Reason
 	case <-ctx.Done():
-		// Turn was cancelled (hard abort, graceful shutdown, etc.). Cancel the entry.
+		// Turn was canceled (hard abort, graceful shutdown, etc.). Cancel the entry.
 		a.reg.resolve(entry.ApprovalID, ApprovalActionCancel)
 		globalToolMetrics.ObserveApprovalLatency("cancel", time.Since(approvalStart).Seconds())
 		return false, "cancel"

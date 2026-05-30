@@ -32,14 +32,46 @@ test('(a) Browse Skills modal opens', async ({ page }) => {
   await expectA11yClean(page);
 });
 
-test.skip(
-  '(b) skill install with hash mismatch shows block dialog',
-  // blocked on #109: SkillBrowser does not expose a file input on the /skills route.
-  // The hash-mismatch error dialog is unreachable via the current SPA surface.
-  // Needs a file input + hash-mismatch error dialog to be added to SkillBrowser.
-  // See tests/e2e/SPA-GAPS.md — "Skill hash-mismatch error UI not implemented".
-  async ({ page }) => {},
-);
+test('(b) skill install with hash mismatch shows block dialog', async ({ page }) => {
+  await expect(page).toHaveURL(/skills/, { timeout: 10_000 });
+
+  // Set up route to return a hash mismatch error
+  await page.route('**/api/v1/skills/install**', async (route) => {
+    await route.fulfill({
+      status: 409,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'hash mismatch', expected: 'abc123', got: 'def456' }),
+    });
+  });
+
+  // Open the Browse Skills modal
+  const browseBtn = page.getByRole('button', { name: /Browse Skills/i });
+  await expect(browseBtn).toBeVisible({ timeout: 10_000 });
+  await browseBtn.click();
+
+  // SkillBrowser dialog opens
+  const modal = page.locator('[role="dialog"]').first();
+  await expect(modal).toBeVisible({ timeout: 10_000 });
+
+  // Find the Install from file button
+  const installBtn = modal.getByRole('button', { name: /install.*file|upload.*skill/i }).first();
+  await expect(installBtn).toBeVisible({ timeout: 10_000 });
+
+  // Set the file input value directly (bypass click since we can set it programmatically)
+  const fileInput = modal.locator('input[type="file"]');
+  await fileInput.setInputFiles({
+    name: 'test-skill.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(FAKE_SKILL_JSON),
+  });
+
+  // Hash mismatch dialog must appear
+  const dialog = page
+    .locator('[data-testid="skill-hash-mismatch-dialog"]')
+    .or(page.locator('[role="dialog"]').filter({ hasText: /hash.*mismatch|integrity/i }))
+    .first();
+  await expect(dialog).toBeVisible({ timeout: 10_000 });
+});
 
 test('(c) MCP server add with duplicate name returns 409 and inline error', async ({ page }) => {
   // Intercept before clicking — route must be set before the request fires.
@@ -83,10 +115,11 @@ test('(c) MCP server add with duplicate name returns 409 and inline error', asyn
   await expect(submitBtn).toBeEnabled({ timeout: 5_000 });
   await submitBtn.click();
 
-  // McpServerModal calls addToast({ message: err.message, variant: 'error' }) on error
+  // McpServerModal calls addToast({ message: isApiError(err) ? err.userMessage : err.message })
   // (McpServerModal.tsx:44 — no role="alert", error surfaces as a toast notification).
-  // The api.ts request() helper throws new Error(`${status}: ${body}`) so the message is
-  // "409: {\"error\": \"MCP server name already exists\"}" — match on the status code.
-  const errorToast = page.locator('text=409').first();
+  // For a 409 response, err.userMessage = defaultUserMessage(409) =
+  // "This conflicts with the current state. Please refresh and try again."
+  // (see src/lib/api-error.ts:50 and src/components/skills/McpServerModal.tsx:44).
+  const errorToast = page.locator('text=conflicts with the current state').first();
   await expect(errorToast).toBeVisible({ timeout: 10_000 });
 });

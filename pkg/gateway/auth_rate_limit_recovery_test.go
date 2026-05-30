@@ -32,9 +32,10 @@ import (
 // expires the rate limiter allows requests again.
 //
 // BDD: Given a per-IP rate limiter with limit=3, window=200ms,
-//       When 3 requests exhaust the bucket,
-//       Then subsequent requests within the window are rejected (429),
-//       And after sleeping past the window, the next request is allowed.
+//
+//	When 3 requests exhaust the bucket,
+//	Then subsequent requests within the window are rejected (429),
+//	And after sleeping past the window, the next request is allowed.
 //
 // Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 2 (Rank-9)
 func TestAPIRateLimiter_BucketRecovery(t *testing.T) {
@@ -80,8 +81,9 @@ func TestAPIRateLimiter_BucketRecovery(t *testing.T) {
 // exhausted.
 //
 // BDD: Given a rate limiter with limit=2,
-//       When 3 requests are made from the same IP,
-//       Then the 3rd request returns 429 with a Retry-After header.
+//
+//	When 3 requests are made from the same IP,
+//	Then the 3rd request returns 429 with a Retry-After header.
 //
 // Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 2 (Rank-9)
 func TestWithRateLimit_Recovery_Returns429WithRetryAfterHeader(t *testing.T) {
@@ -123,9 +125,10 @@ func TestWithRateLimit_Recovery_Returns429WithRetryAfterHeader(t *testing.T) {
 // HTTP middleware (not just the limiter internals).
 //
 // BDD: Given a rate limiter with limit=2 and window=150ms,
-//       When 3 requests exhaust the bucket (3rd returns 429),
-//       And the client waits past the window,
-//       Then the next request returns 200 again.
+//
+//	When 3 requests exhaust the bucket (3rd returns 429),
+//	And the client waits past the window,
+//	Then the next request returns 200 again.
 //
 // Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 2 (Rank-9)
 func TestWithRateLimit_RecoveryAfterWindowExpiry(t *testing.T) {

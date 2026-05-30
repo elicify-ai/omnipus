@@ -4,7 +4,6 @@
 // Expanded body: nested ToolCallBadges + optional final result section.
 // Visual grammar matches ToolCallBadge (same border/surface palette).
 
-import { useState } from 'react'
 import {
   ArrowsClockwise,
   CheckCircle,
@@ -18,6 +17,7 @@ import {
 import { ToolCallBadge } from './ToolCallBadge'
 import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
 import type { WsSubagentEndFrame } from '@/lib/ws'
+import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
 
 type SubagentEndReason = WsSubagentEndFrame['reason']
@@ -135,7 +135,10 @@ export interface SubagentBlockProps {
 }
 
 export function SubagentBlock({ span }: SubagentBlockProps) {
-  const [expanded, setExpanded] = useState(false)
+  // Expansion state lives in the UI store so live-render → historical-virtualized-render
+  // swap (when streaming ends) preserves user-chosen expanded/collapsed state.
+  const expanded = useUiStore((s) => Boolean(s.expandedSpans[span.spanId]))
+  const toggleSpanExpansion = useUiStore((s) => s.toggleSpanExpansion)
   const isTerminal = span.status !== 'running'
 
   // W4-4: narrow to terminal type before accessing durationMs/finalResult.
@@ -146,7 +149,7 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
   const hasFinalResult = Boolean(terminal?.finalResult)
 
   function toggle() {
-    setExpanded((e) => !e)
+    toggleSpanExpansion(span.spanId)
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
@@ -182,7 +185,7 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
         </span>
 
         {/* Step count */}
-        <span className="text-[var(--color-muted)] shrink-0 tabular-nums">
+        <span data-testid="subagent-step-counter" className="text-[var(--color-muted)] shrink-0 tabular-nums">
           {stepCountText(stepCount)}
         </span>
 
@@ -228,11 +231,15 @@ export function SubagentBlock({ span }: SubagentBlockProps) {
           {/* Steps — in arrival order. W4-5: switch on step.kind */}
           {span.steps.map((step, idx) => {
             if (step.kind === 'tool') {
-              return <ToolCallBadge key={step.tool.call_id} toolCall={step.tool} />
+              return (
+                <div key={step.tool.call_id} data-testid="subagent-live-step">
+                  <ToolCallBadge toolCall={step.tool} />
+                </div>
+              )
             }
             // kind === 'text' — reserved for future subagent-text streaming
             return (
-              <p key={idx} className="text-[10px] text-[var(--color-secondary)] font-sans py-0.5">
+              <p key={idx} data-testid="subagent-live-step" className="text-[10px] text-[var(--color-secondary)] font-sans py-0.5">
                 {step.text}
               </p>
             )

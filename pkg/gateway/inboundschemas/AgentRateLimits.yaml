@@ -1,0 +1,26 @@
+title: AgentRateLimits
+description: >
+  Per-agent rate-limit overrides. When use_global_defaults is true the global
+  policy applies and per-agent overrides are ignored.
+type: object
+properties:
+  use_global_defaults:
+    type: boolean
+    description: When true, global rate limits are used and per-agent overrides are ignored.
+    example: true
+  max_llm_calls_per_hour:
+    type: integer
+    minimum: 0
+    description: Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+    example: 100
+  max_tool_calls_per_minute:
+    type: integer
+    minimum: 0
+    description: Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+    example: 60
+  max_cost_per_day:
+    type: number
+    format: double
+    minimum: 0
+    description: Maximum USD cost per day for this agent. Absent = no per-agent cap.
+    example: 5.0

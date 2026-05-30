@@ -1,0 +1,17 @@
+title: SkillTrustUpdateRequest
+description: >
+  Request body for PUT /api/v1/security/skill-trust.
+  Updates the skill trust level; controls how unverified community skills are handled.
+type: object
+required:
+  - level
+additionalProperties: false
+properties:
+  level:
+    type: string
+    enum:
+      - block_unverified
+      - warn_unverified
+      - allow_all
+    description: New skill trust level.
+    example: block_unverified

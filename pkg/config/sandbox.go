@@ -99,8 +99,8 @@ const (
 
 // IsValid reports whether p is one of the defined SandboxProfile constants.
 // An empty string is considered valid (means "use global default").
-func (p SandboxProfile) IsValid() bool {
-	switch p {
+func (p *SandboxProfile) IsValid() bool {
+	switch *p {
 	case SandboxProfileWorkspace, SandboxProfileWorkspaceNet,
 		SandboxProfileHost, SandboxProfileOff, "":
 		return true
@@ -110,11 +110,11 @@ func (p SandboxProfile) IsValid() bool {
 }
 
 // String implements fmt.Stringer.
-func (p SandboxProfile) String() string { return string(p) }
+func (p *SandboxProfile) String() string { return string(*p) }
 
-// MarshalJSON serialises the profile as a JSON string.
-func (p SandboxProfile) MarshalJSON() ([]byte, error) {
-	return json.Marshal(string(p))
+// MarshalJSON serializes the profile as a JSON string.
+func (p *SandboxProfile) MarshalJSON() ([]byte, error) {
+	return json.Marshal(string(*p))
 }
 
 // UnmarshalJSON validates and deserialises a SandboxProfile from JSON.
@@ -254,7 +254,7 @@ type OmnipusSandboxConfig struct {
 	// "binary subcommand" string. Comparison is case-sensitive exact-prefix.
 	Tier3Commands []string `json:"tier3_commands,omitempty"`
 
-	// PathGuardAuditFailClosed controls behaviour when the audit logger
+	// PathGuardAuditFailClosed controls behavior when the audit logger
 	// fails during a Tier 2 (build_static) or Tier 3 (web_serve / workspace
 	// shell) invocation. When nil or true (default via ResolveBool), the
 	// tool refuses to run without a guaranteed compliance trail. When
@@ -275,13 +275,43 @@ type OmnipusSandboxConfig struct {
 	// Unknown values are rejected at config-load time by SandboxMode's
 	// UnmarshalJSON. An empty Mode on a fresh config is treated as
 	// "enforce on capable kernels" by the gateway boot path.
-	Mode SandboxMode `json:"mode,omitempty"`
+	Mode SandboxMode `json:"mode,omitempty" env:"OMNIPUS_SANDBOX_MODE"`
 
 	// AllowNetworkOutbound permits sandboxed processes to make outbound TCP
 	// connections. When false (default), outbound connections are blocked
 	// at the Landlock/seccomp layer. Has effect only when Mode is enforce
 	// or permissive.
 	AllowNetworkOutbound bool `json:"allow_network_outbound,omitempty"`
+
+	// EgressAllowCIDRs is the operator-supplied list of CIDR ranges that are
+	// explicitly permitted for outbound connections from sandboxed children
+	// (v0.2 #155 item 4). The default-deny set covers RFC1918 (10/8,
+	// 172.16/12, 192.168/16), link-local (169.254/16 — including the cloud
+	// metadata endpoint), loopback (127/8, ::1/128), and IPv6 unique-local
+	// + link-local (fc00::/7, fe80::/10). Operators with a legitimate
+	// internal-service requirement add the CIDR here to bypass the deny.
+	//
+	// What is enforced where:
+	//   - Kernel layer (Landlock NET_CONNECT_TCP, ABI v4+): port-level
+	//     allow-list only — Landlock cannot filter by destination IP. The
+	//     gateway installs a port allow-list of {53, 80, 443} plus the
+	//     dev-server port range; everything else is blocked at connect(2).
+	//   - Go-side layer (pkg/security/SSRFChecker): the CIDR-level filter
+	//     applies to gateway-controlled HTTP clients (web_search, MCP fetches,
+	//     skills installer). Entries here are merged into the SSRFChecker's
+	//     allow-list at boot.
+	//
+	// Documented gap: a compiled binary spawned via workspace.shell can still
+	// dial RFC1918 IPs on allowed ports (e.g. https://192.168.1.1/) because
+	// kernel enforcement is port-only. CIDR-level enforcement for compiled
+	// children would require eBPF cgroup CGROUP_INET4_CONNECT, deferred to a
+	// later release. Operators concerned about this gap should keep
+	// experimental.workspace_shell_enabled=false on agents that handle
+	// untrusted content.
+	//
+	// Empty list (the default) means strict-block of the default-deny set
+	// for code paths the gateway controls.
+	EgressAllowCIDRs []string `json:"egress_allow_cidrs,omitempty"`
 
 	// AllowedPaths lists additional filesystem paths the sandbox may read.
 	// Paths outside this list (and the agent workspace) are inaccessible.

@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
@@ -31,8 +32,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
@@ -40,6 +42,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/media"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
 	providers_pkg "github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 	"github.com/dapicom-ai/omnipus/pkg/security"
 	"github.com/dapicom-ai/omnipus/pkg/session"
 	"github.com/dapicom-ai/omnipus/pkg/skills"
@@ -262,7 +265,10 @@ func jsonOK(w http.ResponseWriter, body any) {
 		slog.Error("rest: json encode failed", "error", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": "internal server error"})
+		errMsg := "internal server error"
+		if encErr := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: errMsg}); encErr != nil {
+			slog.Debug("rest: write fallback error response failed", "error", encErr)
+		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -270,23 +276,66 @@ func jsonOK(w http.ResponseWriter, body any) {
 		slog.Debug("rest: write response body failed", "error", err)
 		return
 	}
-	w.Write([]byte("\n"))
+	if _, err := w.Write([]byte("\n")); err != nil {
+		slog.Debug("rest: write newline failed", "error", err)
+	}
 }
 
 func jsonErr(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
+	if err := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: msg}); err != nil {
 		slog.Debug("rest: write error response failed", "error", err)
 	}
 }
 
+// jsonSessionDetail writes a response that conforms to the gen.SessionDetail wire
+// shape: { session, messages, agent_removed? }.
+// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize via
+// their own json tags to JSON layouts that match SessionDetail.yaml / Session.yaml /
+// Message.yaml — we exploit that to avoid a field-by-field copy into gen.SessionDetail.
+// The anonymous struct is not a named wire-format type and therefore does not trigger
+// the check-no-handwritten-wire-types lint rule.
+// jsonSessionDetail serializes a session detail response. The internal
+// session.UnifiedMeta is converted to gen.Session via unifiedMetaToGenSession
+// so that required-but-empty array fields (e.g. partitions) marshal as []
+// rather than null, honoring the Session.yaml contract (zod schema validates
+// type:array, rejecting null and dropping the whole list).
+//
+// Messages stay as []session.TranscriptEntry: the Message.yaml schema only
+// requires {id, timestamp, agent_id}, and every other field uses omitempty
+// in Go — so nil slices/maps are omitted, not emitted as null.
+func jsonSessionDetail(
+	w http.ResponseWriter,
+	meta *session.UnifiedMeta,
+	messages []session.TranscriptEntry,
+	agentRemoved bool,
+) {
+	genSession := unifiedMetaToGenSession(meta)
+	if messages == nil {
+		messages = []session.TranscriptEntry{}
+	}
+	if agentRemoved {
+		jsonOK(w, struct {
+			Session      gen.Session               `json:"session"`
+			Messages     []session.TranscriptEntry `json:"messages"`
+			AgentRemoved bool                      `json:"agent_removed,omitempty"`
+		}{Session: genSession, Messages: messages, AgentRemoved: agentRemoved})
+		return
+	}
+	jsonOK(w, struct {
+		Session  gen.Session               `json:"session"`
+		Messages []session.TranscriptEntry `json:"messages"`
+	}{Session: genSession, Messages: messages})
+}
+
 // --- Sessions ---
 
-// HandleSessions routes /api/v1/sessions requests: GET (list/detail/messages), POST (create), PUT (rename), DELETE (delete).
+// HandleSessions routes /api/v1/sessions requests: GET (list/detail/messages/tool-results), POST (create), PUT (rename), DELETE (delete).
 func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 	// Extract optional session ID and sub-path from the URL.
-	// Supports: /api/v1/sessions, /api/v1/sessions/{id}, /api/v1/sessions/{id}/messages
+	// Supports: /api/v1/sessions, /api/v1/sessions/{id}, /api/v1/sessions/{id}/messages,
+	//           /api/v1/sessions/{id}/tool-results/{ref}
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	remainder := strings.TrimPrefix(path, "/api/v1/sessions")
 	remainder = strings.TrimPrefix(remainder, "/")
@@ -305,6 +354,13 @@ func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "invalid session ID")
 			return
 		}
+	}
+
+	// Dispatch tool-results sub-resource before the generic method switch so the
+	// full path (including ref) is available to HandleToolResults via r.URL.Path.
+	if strings.HasPrefix(subPath, "tool-results/") || subPath == "tool-results" {
+		a.HandleToolResults(w, r)
+		return
 	}
 
 	switch r.Method {
@@ -352,6 +408,73 @@ func sanitizePartialError(pe error) string {
 	return "session_list_failed"
 }
 
+// unifiedMetaToGenSession converts a session.UnifiedMeta to the generated gen.Session wire type.
+// The two types have matching JSON field names; this explicit conversion satisfies the Go type checker.
+func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
+	s := gen.Session{
+		Id:        m.ID,
+		AgentId:   m.AgentID,
+		Channel:   m.Channel,
+		CreatedAt: m.CreatedAt,
+		Title:     m.Title,
+		Status:    gen.SessionStatus(m.Status),
+		Partitions: func() []string {
+			if m.Partitions == nil {
+				return []string{}
+			}
+			return m.Partitions
+		}(),
+		Stats: struct {
+			Cost         float64 `json:"cost"`
+			MessageCount int     `json:"message_count"`
+			TokensIn     int     `json:"tokens_in"`
+			TokensOut    int     `json:"tokens_out"`
+			TokensTotal  int     `json:"tokens_total"`
+			ToolCalls    int     `json:"tool_calls"`
+		}{
+			Cost:         m.Stats.Cost,
+			MessageCount: m.Stats.MessageCount,
+			TokensIn:     m.Stats.TokensIn,
+			TokensOut:    m.Stats.TokensOut,
+			TokensTotal:  m.Stats.TokensTotal,
+			ToolCalls:    m.Stats.ToolCalls,
+		},
+	}
+	if m.Model != "" {
+		s.Model = &m.Model
+	}
+	if m.Provider != "" {
+		s.Provider = &m.Provider
+	}
+	if m.ProjectID != "" {
+		s.ProjectId = &m.ProjectID
+	}
+	if m.TaskID != "" {
+		s.TaskId = &m.TaskID
+	}
+	if m.LastCompactionSummary != "" {
+		s.LastCompactionSummary = &m.LastCompactionSummary
+	}
+	if m.ActiveAgentID != "" {
+		s.ActiveAgentId = &m.ActiveAgentID
+	}
+	if len(m.AgentIDs) > 0 {
+		ids := make([]string, len(m.AgentIDs))
+		copy(ids, m.AgentIDs)
+		s.AgentIds = &ids
+	}
+	if len(m.CompactionSummaries) > 0 {
+		cs := make(map[string]string, len(m.CompactionSummaries))
+		for k, v := range m.CompactionSummaries {
+			cs[k] = v
+		}
+		s.CompactionSummaries = &cs
+	}
+	sessionType := gen.SessionType(m.Type)
+	s.Type = &sessionType
+	return s
+}
+
 func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	agentFilter := r.URL.Query().Get("agent_id")
 	typeFilter := r.URL.Query().Get("type")
@@ -373,19 +496,24 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 		filtered = append(filtered, m)
 	}
 
+	// Always route through unifiedMetaToGenSession so that required array/map
+	// fields (Partitions in particular) marshal as [] not null — Zod on the SPA
+	// rejects null where the contract says type:array and drops the whole list.
+	genSessions := make([]gen.Session, 0, len(filtered))
+	for _, m := range filtered {
+		genSessions = append(genSessions, unifiedMetaToGenSession(m))
+	}
 	if len(partialErrs) == 0 {
-		jsonOK(w, filtered)
+		jsonOK(w, genSessions)
 		return
 	}
 	sanitized := make([]string, len(partialErrs))
 	for i, pe := range partialErrs {
 		sanitized[i] = sanitizePartialError(pe)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]any{
-		"sessions":       filtered,
-		"partial_errors": sanitized,
+	jsonOK(w, gen.ListSessions200JSONResponseBody1{
+		Sessions:      genSessions,
+		PartialErrors: sanitized,
 	})
 }
 
@@ -406,7 +534,27 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
 		return
 	}
-	jsonOK(w, unifiedSessionDetailResponse{Session: meta, Messages: messages})
+	// Detect ghost sessions: if the session references an agent that no longer
+	// exists in the current config, surface agent_removed=true so the frontend
+	// can show the read-only "Agent removed" banner (#103).
+	agentRemoved := false
+	if meta.AgentID != "" {
+		cfg := a.agentLoop.GetConfig()
+		found := false
+		for _, ac := range cfg.Agents.List {
+			if ac.ID == meta.AgentID {
+				found = true
+				break
+			}
+		}
+		agentRemoved = !found
+	}
+	// Build response matching gen.SessionDetail wire shape:
+	// { session, messages, agent_removed? }
+	// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize to
+	// the same JSON layout defined in SessionDetail.yaml and Session.yaml/Message.yaml.
+	// Using jsonSessionDetail avoids an import cycle while staying lint-compliant.
+	jsonSessionDetail(w, meta, messages, agentRemoved)
 }
 
 func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id string) {
@@ -421,17 +569,22 @@ func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id 
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
 		return
 	}
+	// Coerce nil → empty slice so JSON marshals as [] not null. The SPA's
+	// fetchSessionMessages validates via z.array(WireMessageSchema), which
+	// rejects null — a fresh session with no transcript would surface as
+	// "Could not load messages." in the UI.
+	if messages == nil {
+		messages = []session.TranscriptEntry{}
+	}
 	jsonOK(w, messages)
 }
 
 // renameSession handles PUT /api/v1/sessions/{id}.
 // Accepts {"title": "new name"} and returns the updated session meta.
 func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id string) {
-	var req struct {
-		Title string `json:"title"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var req gen.SessionRenameRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "SessionRenameRequest", &req, validateEnabled) {
 		return
 	}
 	if req.Title == "" {
@@ -458,7 +611,7 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read updated session: %v", err))
 		return
 	}
-	jsonOK(w, meta)
+	jsonOK(w, unifiedMetaToGenSession(meta))
 }
 
 // deleteSession handles DELETE /api/v1/sessions/{id}.
@@ -478,16 +631,16 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id strin
 }
 
 func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		AgentID string `json:"agent_id"`
-		Type    string `json:"type"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var req gen.SessionCreateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "SessionCreateRequest", &req, validateEnabled) {
 		return
 	}
 
-	agentID := req.AgentID
+	agentID := ""
+	if req.AgentId != nil {
+		agentID = *req.AgentId
+	}
 	if agentID == "" {
 		agentID = "main"
 	}
@@ -513,7 +666,11 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var sessionType session.UnifiedSessionType
-	switch req.Type {
+	reqType := ""
+	if req.Type != nil {
+		reqType = string(*req.Type)
+	}
+	switch reqType {
 	case string(session.SessionTypeTask):
 		sessionType = session.SessionTypeTask
 	case string(session.SessionTypeChannel):
@@ -529,7 +686,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, meta)
+	jsonOK(w, unifiedMetaToGenSession(meta))
 }
 
 // --- Agents ---
@@ -603,6 +760,12 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 		} else {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
+	case http.MethodDelete:
+		if agentID != "" {
+			a.deleteAgent(w, agentID)
+		} else {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -612,7 +775,7 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	// agentID is already validated by HandleAgents before reaching here.
 	store := a.agentLoop.GetAgentStore(agentID)
 	if store == nil {
-		jsonOK(w, []*session.UnifiedMeta{})
+		jsonOK(w, []gen.Session{})
 		return
 	}
 	metas, err := store.ListSessions()
@@ -621,10 +784,13 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list sessions: %v", err))
 		return
 	}
-	if metas == nil {
-		metas = []*session.UnifiedMeta{}
+	// Route every session through unifiedMetaToGenSession so required arrays
+	// (Partitions) marshal as [] not null — Zod requires type:array on the SPA.
+	genSessions := make([]gen.Session, 0, len(metas))
+	for _, m := range metas {
+		genSessions = append(genSessions, unifiedMetaToGenSession(m))
 	}
-	jsonOK(w, metas)
+	jsonOK(w, genSessions)
 }
 
 // resolveSessionStore finds which agent's UnifiedStore owns the given sessionID.
@@ -633,42 +799,9 @@ func (a *restAPI) resolveSessionStore(sessionID string) *session.UnifiedStore {
 	return a.agentLoop.ResolveSessionStore(sessionID)
 }
 
-// skillResponse is the JSON shape returned for a single installed skill.
-// Matches the frontend Skill interface.
-type skillResponse struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	Description string `json:"description,omitempty"`
-	Author      string `json:"author,omitempty"`
-	Verified    bool   `json:"verified"`
-	Status      string `json:"status"` // "active" | "disabled"
-}
-
-// unifiedSessionDetailResponse is the JSON shape returned by GET /api/v1/sessions/{id}.
-type unifiedSessionDetailResponse struct {
-	Session  *session.UnifiedMeta      `json:"session"`
-	Messages []session.TranscriptEntry `json:"messages"`
-}
-
-// gatewayStatusResponse is the JSON shape returned by GET /api/v1/status.
-// Matches the frontend GatewayStatus type.
-type gatewayStatusResponse struct {
-	Online       bool    `json:"online"`
-	AgentCount   int     `json:"agent_count"`
-	ChannelCount int     `json:"channel_count"`
-	DailyCost    float64 `json:"daily_cost"`
-	Version      string  `json:"version"`
-}
-
-// providerResponse is the JSON shape returned for a single LLM provider.
-type providerResponse struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Status  string   `json:"status"` // "connected" | "disconnected"
-	Models  []string `json:"models"`
-	Warning string   `json:"warning,omitempty"`
-}
+// Skill, SessionDetail, GatewayStatus, and Provider response types are defined
+// in contracts/components/schemas/ and generated into pkg/api/generated/.
+// Use gen.Skill, gen.SessionDetail, gen.GatewayStatus, and gen.Provider directly.
 
 // strVal extracts a string value from a JSON-decoded map, returning "" if missing or wrong type.
 func strVal(m map[string]any, key string) string {
@@ -722,7 +855,7 @@ func fetchUpstreamModels(baseURL, apiKey string) ([]string, error) {
 		return nil, err
 	}
 
-	var result struct {
+	var result struct { // not-wire-format: decodes upstream provider /models API response, never emitted to SPA
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
@@ -741,28 +874,8 @@ func fetchUpstreamModels(baseURL, apiKey string) ([]string, error) {
 	return models, nil
 }
 
-// agentResponse is the JSON shape returned for a single agent.
-type agentResponse struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	Type              string `json:"type"` // "system" | "core" | "custom"
-	Locked            bool   `json:"locked"`
-	Color             string `json:"color,omitempty"`
-	Icon              string `json:"icon,omitempty"`
-	Model             string `json:"model,omitempty"`
-	Description       string `json:"description,omitempty"`
-	Status            string `json:"status"` // "active" | "idle" | "draft"
-	Soul              string `json:"soul"`
-	Heartbeat         string `json:"heartbeat"`
-	Instructions      string `json:"instructions"`
-	Warning           string `json:"warning,omitempty"` // non-fatal warning (e.g., reload failed)
-	TimeoutSeconds    int    `json:"timeout_seconds"`
-	MaxToolIterations int    `json:"max_tool_iterations"`
-	SteeringMode      string `json:"steering_mode"`
-	ToolFeedback      bool   `json:"tool_feedback"`
-	HeartbeatEnabled  bool   `json:"heartbeat_enabled"`
-	HeartbeatInterval int    `json:"heartbeat_interval"`
-}
+// Agent response type is defined in contracts/components/schemas/Agent.yaml
+// and generated into pkg/api/generated/. Use gen.Agent directly.
 
 // agentWorkspacePath returns the expanded workspace directory for the named agent.
 // Per FUNC-11 (BRD), each custom agent gets its own isolated workspace directory.
@@ -927,14 +1040,19 @@ func computeAgentStatus(agentID string, activeIDs map[string]bool, soul string, 
 }
 
 // buildAgentDefaults populates the execution-related fields from config defaults.
-func buildAgentDefaults(cfg *config.Config) agentResponse {
-	return agentResponse{
+func buildAgentDefaults(cfg *config.Config) gen.Agent {
+	sm := steeringModeOrDefault(cfg.Agents.Defaults.SteeringMode)
+	return gen.Agent{
 		TimeoutSeconds:    cfg.Agents.Defaults.TimeoutSeconds,
 		MaxToolIterations: cfg.Agents.Defaults.MaxToolIterations,
-		SteeringMode:      steeringModeOrDefault(cfg.Agents.Defaults.SteeringMode),
+		SteeringMode:      sm,
 		ToolFeedback:      cfg.Agents.Defaults.ToolFeedback.Enabled,
 		HeartbeatEnabled:  cfg.Heartbeat.Enabled,
 		HeartbeatInterval: cfg.Heartbeat.Interval,
+		// Required string fields — initialized to empty (overwritten per-agent).
+		Soul:         "",
+		Heartbeat:    "",
+		Instructions: "",
 	}
 }
 
@@ -965,7 +1083,7 @@ func (a *restAPI) readChannelConfigRaw(channelID string) (map[string]any, error)
 
 func (a *restAPI) listAgents(w http.ResponseWriter) {
 	cfg := a.agentLoop.GetConfig()
-	agents := make([]agentResponse, 0, len(cfg.Agents.List))
+	agents := make([]gen.Agent, 0, len(cfg.Agents.List))
 	activeIDs := a.activeAgentIDSet()
 
 	defaults := buildAgentDefaults(cfg)
@@ -987,15 +1105,21 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 			soul = readSoulMD(workspace)
 		}
 		ag := defaults
-		ag.ID = ac.ID
+		ag.Id = ac.ID
 		ag.Name = ac.Name
-		ag.Description = ac.Description
-		ag.Color = ac.Color
-		ag.Icon = ac.Icon
-		ag.Type = string(ac.ResolveType(coreagent.IsCoreAgent))
+		if ac.Description != "" {
+			ag.Description = &ac.Description
+		}
+		if ac.Color != "" {
+			ag.Color = &ac.Color
+		}
+		if ac.Icon != "" {
+			ag.Icon = &ac.Icon
+		}
+		ag.Type = gen.AgentType(ac.ResolveType(coreagent.IsCoreAgent))
 		ag.Locked = ac.Locked
-		ag.Model = model
-		ag.Status = computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked)
+		ag.Model = &model
+		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 		ag.Soul = soul
 		agents = append(agents, ag)
 	}
@@ -1024,15 +1148,21 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 				soul = ""
 			}
 			ag := defaults
-			ag.ID = ac.ID
+			ag.Id = ac.ID
 			ag.Name = ac.Name
-			ag.Description = ac.Description
-			ag.Color = ac.Color
-			ag.Icon = ac.Icon
-			ag.Type = string(ac.ResolveType(coreagent.IsCoreAgent))
+			if ac.Description != "" {
+				ag.Description = &ac.Description
+			}
+			if ac.Color != "" {
+				ag.Color = &ac.Color
+			}
+			if ac.Icon != "" {
+				ag.Icon = &ac.Icon
+			}
+			ag.Type = gen.AgentType(ac.ResolveType(coreagent.IsCoreAgent))
 			ag.Locked = ac.Locked
-			ag.Model = model
-			ag.Status = computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked)
+			ag.Model = &model
+			ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 			ag.Soul = soul
 			ag.Heartbeat = heartbeat
 			ag.Instructions = instructions
@@ -1045,43 +1175,37 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 }
 
 func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Model       string `json:"model"`
-		Color       string `json:"color"`
-		Icon        string `json:"icon"`
-		ToolsCfg    *struct {
-			Builtin struct {
-				DefaultPolicy string            `json:"default_policy"`
-				Policies      map[string]string `json:"policies"`
-			} `json:"builtin"`
-			MCP struct {
-				Servers []struct {
-					ID    string   `json:"id"`
-					Tools []string `json:"tools"`
-				} `json:"servers"`
-			} `json:"mcp"`
-		} `json:"tools_cfg"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var req gen.AgentCreateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "AgentCreateRequest", &req, validateEnabled) {
 		return
 	}
 	if req.Name == "" {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
 		return
 	}
+	description := ""
+	if req.Description != nil {
+		description = strings.TrimSpace(*req.Description)
+	}
+	color := ""
+	if req.Color != nil {
+		color = *req.Color
+	}
+	icon := ""
+	if req.Icon != nil {
+		icon = *req.Icon
+	}
 	ac := config.AgentConfig{
 		ID:          uuid.New().String(),
 		Name:        req.Name,
-		Description: strings.TrimSpace(req.Description),
-		Color:       req.Color,
-		Icon:        req.Icon,
+		Description: description,
+		Color:       color,
+		Icon:        icon,
 		Type:        config.AgentTypeCustom,
 	}
-	if req.Model != "" {
-		ac.Model = &config.AgentModelConfig{Primary: req.Model}
+	if req.Model != nil && *req.Model != "" {
+		ac.Model = &config.AgentModelConfig{Primary: *req.Model}
 	}
 	// Seed the privilege rail (FR-008/FR-022): custom agents always get
 	// system.*: deny unless the caller explicitly overrides it.
@@ -1096,18 +1220,25 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		for k, v := range baseCfg.Builtin.Policies {
 			builtin.Policies[k] = v
 		}
-		if req.ToolsCfg.Builtin.DefaultPolicy != "" {
-			builtin.DefaultPolicy = config.ToolPolicy(req.ToolsCfg.Builtin.DefaultPolicy)
+		if req.ToolsCfg.Builtin != nil && req.ToolsCfg.Builtin.DefaultPolicy != nil &&
+			*req.ToolsCfg.Builtin.DefaultPolicy != "" {
+			builtin.DefaultPolicy = config.ToolPolicy(*req.ToolsCfg.Builtin.DefaultPolicy)
 		}
 		// Merge caller-supplied policies; caller's system.* entry overrides seed.
-		for k, v := range req.ToolsCfg.Builtin.Policies {
-			builtin.Policies[k] = config.ToolPolicy(v)
+		if req.ToolsCfg.Builtin != nil && req.ToolsCfg.Builtin.Policies != nil {
+			for k, v := range *req.ToolsCfg.Builtin.Policies {
+				builtin.Policies[k] = config.ToolPolicy(v)
+			}
 		}
 		ac.Tools = &config.AgentToolsCfg{Builtin: builtin}
-		if len(req.ToolsCfg.MCP.Servers) > 0 {
-			servers := make([]config.AgentMCPServerBinding, 0, len(req.ToolsCfg.MCP.Servers))
-			for _, s := range req.ToolsCfg.MCP.Servers {
-				servers = append(servers, config.AgentMCPServerBinding{ID: s.ID, Tools: s.Tools})
+		if req.ToolsCfg.Mcp != nil && req.ToolsCfg.Mcp.Servers != nil && len(*req.ToolsCfg.Mcp.Servers) > 0 {
+			servers := make([]config.AgentMCPServerBinding, 0, len(*req.ToolsCfg.Mcp.Servers))
+			for _, s := range *req.ToolsCfg.Mcp.Servers {
+				var tools []string
+				if s.Tools != nil {
+					tools = *s.Tools
+				}
+				servers = append(servers, config.AgentMCPServerBinding{ID: s.Id, Tools: tools})
 			}
 			ac.Tools.MCP = config.AgentMCPToolsCfg{Servers: servers}
 		}
@@ -1192,17 +1323,80 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// Capture execution config AFTER reload (TriggerReload may have swapped the live config).
 	cfgAfterCreate := a.agentLoop.GetConfig()
 	ag := buildAgentDefaults(cfgAfterCreate)
-	ag.ID = ac.ID
+	ag.Id = ac.ID
 	ag.Name = ac.Name
-	ag.Description = ac.Description
-	ag.Color = ac.Color
-	ag.Icon = ac.Icon
-	ag.Type = "custom"
-	ag.Model = model
-	ag.Status = "draft"
-	ag.Warning = createReloadWarning
+	if ac.Description != "" {
+		ag.Description = &ac.Description
+	}
+	if ac.Color != "" {
+		ag.Color = &ac.Color
+	}
+	if ac.Icon != "" {
+		ag.Icon = &ac.Icon
+	}
+	ag.Type = gen.AgentTypeCustom
+	ag.Model = &model
+	ag.Status = gen.AgentStatusDraft
+	if createReloadWarning != "" {
+		ag.Warning = &createReloadWarning
+	}
 	w.WriteHeader(http.StatusCreated)
 	jsonOK(w, ag)
+}
+
+// deleteAgent handles DELETE /api/v1/agents/{id}.
+// Removes the agent from config.json and reloads the live config.
+// Core (locked) agents cannot be deleted (403).
+func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
+	cfg := a.agentLoop.GetConfig()
+	var found *config.AgentConfig
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID == id {
+			found = &cfg.Agents.List[i]
+			break
+		}
+	}
+	if found == nil {
+		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", id))
+		return
+	}
+	if found.Locked {
+		jsonErr(w, http.StatusForbidden, "cannot delete a locked (core) agent")
+		return
+	}
+	// Remove the agent from config.json.
+	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+		agents, _ := m["agents"].(map[string]any)
+		if agents == nil {
+			return nil
+		}
+		list, _ := agents["list"].([]any)
+		filtered := make([]any, 0, len(list))
+		for _, item := range list {
+			entry, _ := item.(map[string]any)
+			if entry == nil {
+				continue
+			}
+			if entryID, _ := entry["id"].(string); entryID == id {
+				continue // skip the deleted agent
+			}
+			filtered = append(filtered, item)
+		}
+		agents["list"] = filtered
+		return nil
+	}); err != nil {
+		slog.Error("rest: deleteAgent: save config failed", "agent_id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "failed to save config")
+		return
+	}
+	// Reload the live config so the deleted agent is no longer in memory.
+	// awaitReload sleeps 100ms after triggering so the in-memory config is
+	// updated before the 204 response is sent back to the caller (prevents a
+	// race where an immediate GET /sessions/:id still sees agent_removed=false).
+	if err := a.awaitReload(); err != nil {
+		slog.Error("rest: deleteAgent: reload failed", "agent_id", id, "error", err)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string) {
@@ -1218,30 +1412,15 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", id))
 		return
 	}
-	var req struct {
-		Name              *string                  `json:"name"`
-		Description       *string                  `json:"description"`
-		Model             *string                  `json:"model"`
-		Soul              *string                  `json:"soul"`
-		Heartbeat         *string                  `json:"heartbeat"`
-		Instructions      *string                  `json:"instructions"`
-		TimeoutSeconds    *int                     `json:"timeout_seconds"`
-		MaxToolIterations *int                     `json:"max_tool_iterations"`
-		SteeringMode      *string                  `json:"steering_mode"`
-		ToolFeedback      *bool                    `json:"tool_feedback"`
-		HeartbeatEnabled  *bool                    `json:"heartbeat_enabled"`
-		HeartbeatInterval *int                     `json:"heartbeat_interval"`
-		SandboxProfile    *config.SandboxProfile   `json:"sandbox_profile"`
-		ShellPolicy       *config.AgentShellPolicy `json:"shell_policy"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var req gen.AgentUpdateRequest
+	validateEnabled := cfg.Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "AgentUpdateRequest", &req, validateEnabled) {
 		return
 	}
 	// Enforce god-mode latches (1) and (2) at the REST write gate.
 	// Reject sandbox_profile=off unless both sandbox.GodModeAvailable (build
 	// tag) and a.allowGodMode (--allow-god-mode boot flag) are true.
-	if req.SandboxProfile != nil && *req.SandboxProfile == config.SandboxProfileOff {
+	if req.SandboxProfile != nil && config.SandboxProfile(*req.SandboxProfile) == config.SandboxProfileOff {
 		if !sandbox.GodModeAvailable {
 			jsonErr(w, http.StatusForbidden,
 				"sandbox_profile=off is not available in this build")
@@ -1254,8 +1433,8 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		}
 	}
 	// Validate any custom deny patterns in shell_policy — each must be a valid Go regexp.
-	if req.ShellPolicy != nil && len(req.ShellPolicy.CustomDenyPatterns) > 0 {
-		for _, pat := range req.ShellPolicy.CustomDenyPatterns {
+	if req.ShellPolicy != nil && req.ShellPolicy.CustomDenyPatterns != nil {
+		for _, pat := range *req.ShellPolicy.CustomDenyPatterns {
 			if _, compileErr := regexp.Compile(pat); compileErr != nil {
 				jsonErr(w, http.StatusBadRequest,
 					fmt.Sprintf("shell_policy.custom_deny_patterns: invalid regexp %q: %v", pat, compileErr))
@@ -1267,11 +1446,11 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// Allowed: model selection, heartbeat schedule (enabled/interval), tools (via updateAgentTools).
 	foundAgent := cfg.Agents.List[foundIdx]
 	if foundAgent.Locked {
-		// Protected: name, description, soul (prompt content), heartbeat (HEARTBEAT.md content), instructions.
-		// Color and icon are not in the update request struct so they are implicitly
-		// protected. If color/icon fields are ever added, gate them here too.
+		// Protected: name, description, soul (prompt content), heartbeat (HEARTBEAT.md content),
+		// instructions, color, and icon are identity fields — reject on locked agents.
 		if req.Name != nil || req.Description != nil ||
-			req.Soul != nil || req.Heartbeat != nil || req.Instructions != nil {
+			req.Soul != nil || req.Heartbeat != nil || req.Instructions != nil ||
+			req.Color != nil || req.Icon != nil {
 			jsonErr(w, http.StatusForbidden, "cannot modify locked agent identity or prompt")
 			return
 		}
@@ -1347,13 +1526,87 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					}
 				}
 				if req.ShellPolicy != nil {
-					spMap := map[string]any{
-						"enable_deny_patterns": req.ShellPolicy.EnableDenyPatterns,
+					// Load existing shell_policy from the persisted map (if any) so
+					// that a partial PATCH (e.g. only custom_deny_patterns) does not
+					// clobber fields the caller did not send.
+					existing, _ := agentMap["shell_policy"].(map[string]any)
+					if existing == nil {
+						existing = map[string]any{}
 					}
-					if len(req.ShellPolicy.CustomDenyPatterns) > 0 {
-						spMap["custom_deny_patterns"] = req.ShellPolicy.CustomDenyPatterns
+					// Only overwrite enable_deny_patterns when the caller explicitly
+					// sent it (non-nil pointer). Writing nil would persist JSON null
+					// and reset the flag to false on next decode.
+					if req.ShellPolicy.EnableDenyPatterns != nil {
+						existing["enable_deny_patterns"] = *req.ShellPolicy.EnableDenyPatterns
 					}
-					agentMap["shell_policy"] = spMap
+					if req.ShellPolicy.CustomDenyPatterns != nil && len(*req.ShellPolicy.CustomDenyPatterns) > 0 {
+						existing["custom_deny_patterns"] = *req.ShellPolicy.CustomDenyPatterns
+					}
+					agentMap["shell_policy"] = existing
+				}
+				if req.Color != nil {
+					agentMap["color"] = *req.Color
+				}
+				if req.Icon != nil {
+					agentMap["icon"] = *req.Icon
+				}
+				if req.FallbackModels != nil {
+					agentMap["fallback_models"] = *req.FallbackModels
+				}
+				if req.ModelParams != nil {
+					mpMap := map[string]any{}
+					if req.ModelParams.Temperature != nil {
+						mpMap["temperature"] = *req.ModelParams.Temperature
+					}
+					if req.ModelParams.MaxTokens != nil {
+						mpMap["max_tokens"] = *req.ModelParams.MaxTokens
+					}
+					if req.ModelParams.TopP != nil {
+						mpMap["top_p"] = *req.ModelParams.TopP
+					}
+					agentMap["model_params"] = mpMap
+				}
+				if req.RateLimits != nil {
+					rlMap := map[string]any{}
+					if req.RateLimits.UseGlobalDefaults != nil {
+						rlMap["use_global_defaults"] = *req.RateLimits.UseGlobalDefaults
+					}
+					if req.RateLimits.MaxLlmCallsPerHour != nil {
+						rlMap["max_llm_calls_per_hour"] = *req.RateLimits.MaxLlmCallsPerHour
+					}
+					if req.RateLimits.MaxToolCallsPerMinute != nil {
+						rlMap["max_tool_calls_per_minute"] = *req.RateLimits.MaxToolCallsPerMinute
+					}
+					if req.RateLimits.MaxCostPerDay != nil {
+						rlMap["max_cost_per_day"] = *req.RateLimits.MaxCostPerDay
+					}
+					agentMap["rate_limits"] = rlMap
+				}
+				if req.ToolsCfg != nil {
+					tcMap := map[string]any{}
+					if req.ToolsCfg.Builtin != nil {
+						builtinMap := map[string]any{}
+						if req.ToolsCfg.Builtin.DefaultPolicy != nil {
+							builtinMap["default_policy"] = string(*req.ToolsCfg.Builtin.DefaultPolicy)
+						}
+						if req.ToolsCfg.Builtin.Policies != nil {
+							builtinMap["policies"] = *req.ToolsCfg.Builtin.Policies
+						}
+						tcMap["builtin"] = builtinMap
+					}
+					if req.ToolsCfg.Mcp != nil && req.ToolsCfg.Mcp.Servers != nil {
+						servers := make([]map[string]any, 0, len(*req.ToolsCfg.Mcp.Servers))
+						for _, s := range *req.ToolsCfg.Mcp.Servers {
+							srv := map[string]any{"id": s.Id}
+							if s.Tools != nil {
+								srv["tools"] = *s.Tools
+							}
+							servers = append(servers, srv)
+						}
+						mcpMap := map[string]any{"servers": servers}
+						tcMap["mcp"] = mcpMap
+					}
+					agentMap["tools_cfg"] = tcMap
 				}
 				break
 			}
@@ -1455,28 +1708,31 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	}
 	activeIDs := a.activeAgentIDSet()
 	ag := buildAgentDefaults(cfg)
-	ag.ID = agentID
+	ag.Id = agentID
 	ag.Name = newName
 	// Description: use the just-updated value when provided, else fall back
 	// to what's on disk (which will be the previously-persisted value because
 	// TriggerReload has refreshed cfg.Agents.List).
 	if req.Description != nil {
-		ag.Description = strings.TrimSpace(*req.Description)
+		desc := strings.TrimSpace(*req.Description)
+		if desc != "" {
+			ag.Description = &desc
+		}
 	} else {
 		// Re-read from the current config after reload.
 		if cur := a.agentLoop.GetConfig(); cur != nil {
 			for _, ac := range cur.Agents.List {
-				if ac.ID == agentID {
-					ag.Description = ac.Description
+				if ac.ID == agentID && ac.Description != "" {
+					ag.Description = &ac.Description
 					break
 				}
 			}
 		}
 	}
-	ag.Type = string(foundAgent.ResolveType(coreagent.IsCoreAgent))
+	ag.Type = gen.AgentType(foundAgent.ResolveType(coreagent.IsCoreAgent))
 	ag.Locked = foundAgent.Locked
-	ag.Model = model
-	ag.Status = computeAgentStatus(agentID, activeIDs, soul, foundAgent.Locked)
+	ag.Model = &model
+	ag.Status = gen.AgentStatus(computeAgentStatus(agentID, activeIDs, soul, foundAgent.Locked))
 	// Hide compiled prompts for locked (core) agents.
 	if foundAgent.Locked {
 		soul = ""
@@ -1484,7 +1740,9 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	ag.Soul = soul
 	ag.Heartbeat = heartbeat
 	ag.Instructions = instructions
-	ag.Warning = reloadWarning
+	if reloadWarning != "" {
+		ag.Warning = &reloadWarning
+	}
 	// Override defaults with request values when provided.
 	if req.TimeoutSeconds != nil {
 		ag.TimeoutSeconds = *req.TimeoutSeconds
@@ -1493,7 +1751,8 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		ag.MaxToolIterations = *req.MaxToolIterations
 	}
 	if req.SteeringMode != nil {
-		ag.SteeringMode = steeringModeOrDefault(*req.SteeringMode)
+		sm := steeringModeOrDefault(*req.SteeringMode)
+		ag.SteeringMode = sm
 	}
 	if req.ToolFeedback != nil {
 		ag.ToolFeedback = *req.ToolFeedback
@@ -1861,24 +2120,24 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 	// GetStartupInfo returns aggregate metadata (total, available, names) — not per-skill entries.
 	skillsInfo, ok := info["skills"].(map[string]any)
 	if !ok {
-		jsonOK(w, []skillResponse{})
+		jsonOK(w, []gen.Skill{})
 		return
 	}
 	names, _ := skillsInfo["names"].([]string)
 	if len(names) == 0 {
-		jsonOK(w, []skillResponse{})
+		jsonOK(w, []gen.Skill{})
 		return
 	}
-	skills := make([]skillResponse, 0, len(names))
+	result := make([]gen.Skill, 0, len(names))
 	for _, name := range names {
-		skills = append(skills, skillResponse{
-			ID:      name,
+		result = append(result, gen.Skill{
+			Id:      name,
 			Name:    name,
 			Version: "0.0.0",
-			Status:  "active",
+			Status:  gen.SkillStatusActive,
 		})
 	}
-	jsonOK(w, skills)
+	jsonOK(w, result)
 }
 
 func (a *restAPI) searchSkills(w http.ResponseWriter, _ *http.Request) {
@@ -1886,10 +2145,12 @@ func (a *restAPI) searchSkills(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name string `json:"name"`
+	var req gen.SkillInstallRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "SkillInstallRequest", &req, validateEnabled) {
+		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+	if req.Name == "" {
 		jsonErr(w, http.StatusBadRequest, "name is required")
 		return
 	}
@@ -2073,15 +2334,13 @@ func (a *restAPI) getUserContext(w http.ResponseWriter) {
 	} else {
 		content = string(data)
 	}
-	jsonOK(w, map[string]string{"content": content})
+	jsonOK(w, gen.UserContextResponse{Content: content})
 }
 
 func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Content string `json:"content"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var req gen.UserContextRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "UserContextRequest", &req, validateEnabled) {
 		return
 	}
 	cfg := a.agentLoop.GetConfig()
@@ -2091,7 +2350,7 @@ func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write USER.md: %v", err))
 		return
 	}
-	jsonOK(w, map[string]string{"content": req.Content})
+	jsonOK(w, gen.UserContextResponse{Content: req.Content})
 }
 
 // registerAdditionalEndpoints registers handlers for endpoints the frontend calls.
@@ -2134,7 +2393,15 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/security/audit-log", a.adminWrap(a.HandleSandboxAuditLog))
 	cm.RegisterHTTPHandler("/api/v1/security/skill-trust", a.adminWrap(a.HandleSkillTrust))
 	cm.RegisterHTTPHandler("/api/v1/security/prompt-guard", a.adminWrap(a.HandlePromptGuard))
-	cm.RegisterHTTPHandler("/api/v1/security/rate-limits", a.withAuth(a.HandleRateLimits))
+	// /api/v1/security/rate-limits handles GET (read state, admin-only because
+	// the response carries the live daily-cost meter and current cap config —
+	// admin-sensitive observability) and PUT (write — must be admin and gated
+	// by RequireNotBypass, since dev_mode_bypass would otherwise let an
+	// anonymous caller change global rate-limit caps). Wrapped with adminWrap
+	// to bring it in line with the other admin security endpoints below and
+	// to satisfy item 7 of v0.2-#155 (admin-route bypass coverage). The inner
+	// handler keeps its own role check as a defense-in-depth belt-and-braces.
+	cm.RegisterHTTPHandler("/api/v1/security/rate-limits", a.adminWrap(a.HandleRateLimits))
 	cm.RegisterHTTPHandler("/api/v1/security/sandbox-config", a.adminWrap(a.HandleSandboxConfig))
 	cm.RegisterHTTPHandler("/api/v1/security/session-scope", a.adminWrap(a.HandleSessionScope))
 	cm.RegisterHTTPHandler("/api/v1/security/retention", a.adminWrap(a.HandleRetention))
@@ -2199,9 +2466,19 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// Unauthenticated for Prometheus scrape compatibility; does not expose secrets.
 	cm.RegisterHTTPHandler("/metrics", http.HandlerFunc(a.HandleMetrics))
 
-	// Register the test-harness scenario endpoint (test_harness build tag only).
-	// In non-test_harness builds this is a no-op stub in test_harness_disabled.go.
-	a.registerTestHarness(cm)
+	// Version endpoint — unauthenticated; returns build SHA for frontend version-drift detection (#110).
+	cm.RegisterHTTPHandler("/api/v1/version", http.HandlerFunc(a.HandleVersion))
+
+	// GET /api/v1/me — returns the authenticated user's RBAC role (MeInfo).
+	// Used by the SPA for feature gating (fetchMe in src/lib/api.ts:1250).
+	// Traces to: contracts/components/schemas/MeInfo.yaml.
+	cm.RegisterHTTPHandler("/api/v1/me", a.withAuth(a.HandleMe))
+
+	// GET /api/v1/devices — returns pending pairing requests and paired devices.
+	// Admin-only. Device pairing infrastructure is not yet implemented; the handler
+	// returns valid empty arrays so the SPA DevicesSection renders its empty state
+	// rather than 404-ing. Traces to: contracts/components/schemas/DevicesResponse.yaml.
+	cm.RegisterHTTPHandler("/api/v1/devices", a.adminWrap(a.HandleDevices))
 }
 
 // registerPreviewEndpoints registers /preview/, /serve/, and /dev/ on the
@@ -2262,7 +2539,9 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "could not generate token")
 		return
 	}
-	newToken := hex.EncodeToString(tokenBytes)
+	// Token format: "omnipus_" + 64-char lowercase hex (32 random bytes).
+	// This matches the BearerToken schema pattern '^omnipus_[a-f0-9]{64}$'.
+	newToken := "omnipus_" + hex.EncodeToString(tokenBytes)
 	// Persist to config.json BEFORE updating the live config.
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		gw, _ := m["gateway"].(map[string]any)
@@ -2285,7 +2564,7 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("token saved but reload failed: %v", err))
 		return
 	}
-	jsonOK(w, map[string]string{"token": newToken})
+	jsonOK(w, gen.RotateTokenResponse{Token: newToken})
 }
 
 // httpHandlerRegistrar is the subset of channels.Manager used for route registration.
@@ -2326,11 +2605,9 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonOK(w, resp)
 	case http.MethodPatch:
-		var body struct {
-			OnboardingComplete *bool `json:"onboarding_complete"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		var body gen.AppStatePatchRequest
+		validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+		if !decodeAndValidate(w, r, "AppStatePatchRequest", &body, validateEnabled) {
 			return
 		}
 		if body.OnboardingComplete == nil || !*body.OnboardingComplete {
@@ -2344,8 +2621,8 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		jsonOK(w, map[string]any{
-			"onboarding_complete": true,
+		jsonOK(w, gen.AppState{
+			OnboardingComplete: true,
 		})
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -2362,13 +2639,90 @@ func (a *restAPI) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := a.agentLoop.GetConfig()
-	jsonOK(w, gatewayStatusResponse{
+	v := Version
+	jsonOK(w, gen.GatewayStatus{
 		Online:       true,
 		AgentCount:   len(cfg.Agents.List) + 1,      // +1 for system agent
 		ChannelCount: countEnabledChannels(cfg) + 1, // +1 for webchat (always available)
 		DailyCost:    0,
-		Version:      Version,
+		Version:      &v,
 	})
+}
+
+// HandleVersion handles GET /api/v1/version — unauthenticated build-info endpoint
+// used by the frontend to detect version drift and prompt "New version available" (#110).
+func (a *restAPI) HandleVersion(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	buildSha := "dev"
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range info.Settings {
+			if s.Key == "vcs.revision" {
+				buildSha = s.Value
+				break
+			}
+		}
+	}
+	jsonOK(w, gen.VersionResponse{
+		Version:  Version,
+		BuildSha: buildSha,
+	})
+}
+
+// --- Me ---
+
+// HandleMe handles GET /api/v1/me. Returns the authenticated user's RBAC role.
+// The role is written into the request context by withAuth; this handler reads
+// it and returns a MeInfo-shaped response (contracts/components/schemas/MeInfo.yaml).
+// Traces to: contracts/openapi.yaml#/paths/~1me/get (operationId: getMe).
+func (a *restAPI) HandleMe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	role := config.UserRoleAdmin // default: dev-mode bypass treats callers as admin
+	if ctxRole, ok := r.Context().Value(RoleContextKey{}).(config.UserRole); ok && ctxRole != "" {
+		role = ctxRole
+	}
+	resp := gen.MeInfo{
+		Role: gen.MeInfoRole(role),
+	}
+	jsonOK(w, resp)
+}
+
+// --- Devices ---
+
+// HandleDevices handles GET /api/v1/devices. Returns pending pairing requests
+// and already-paired devices. Device pairing infrastructure is not yet implemented;
+// this handler returns valid empty arrays so the SPA renders its empty state.
+// Traces to: contracts/openapi.yaml#/paths/~1devices/get (operationId: listDevices).
+// Traces to: contracts/components/schemas/DevicesResponse.yaml.
+func (a *restAPI) HandleDevices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	resp := gen.DevicesResponse{
+		Pending: []struct {
+			CreatedAt   time.Time "json:\"created_at\""
+			DeviceId    string    "json:\"device_id\""
+			DeviceName  string    "json:\"device_name\""
+			ExpiresAt   time.Time "json:\"expires_at\""
+			Fingerprint string    "json:\"fingerprint\""
+			PairingCode string    "json:\"pairing_code\""
+		}{},
+		Paired: []struct {
+			DeviceId    string                          "json:\"device_id\""
+			DeviceName  string                          "json:\"device_name\""
+			Fingerprint string                          "json:\"fingerprint\""
+			LastSeenAt  time.Time                       "json:\"last_seen_at\""
+			PairedAt    time.Time                       "json:\"paired_at\""
+			Status      gen.DevicesResponsePairedStatus "json:\"status\""
+		}{},
+	}
+	jsonOK(w, resp)
 }
 
 // --- Tasks ---
@@ -2478,46 +2832,50 @@ func (a *restAPI) getTask(w http.ResponseWriter, id string) {
 }
 
 func (a *restAPI) createTask(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		// New fields
-		Title        string `json:"title"`
-		Prompt       string `json:"prompt"`
-		AgentID      string `json:"agent_id"`
-		Priority     int    `json:"priority"`
-		ParentTaskID string `json:"parent_task_id"`
-		TriggerType  string `json:"trigger_type"`
-		// Backward compat aliases
-		Name        string `json:"name"`
-		Description string `json:"description"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var req gen.TaskCreateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "TaskCreateRequest", &req, validateEnabled) {
 		return
 	}
 	// Backward compat: accept name→title, description→prompt
-	if req.Title == "" && req.Name != "" {
-		req.Title = req.Name
+	title := req.Title
+	prompt := ""
+	if req.Prompt != nil {
+		prompt = *req.Prompt
 	}
-	if req.Prompt == "" && req.Description != "" {
-		req.Prompt = req.Description
+	if title == "" && req.Name != nil && *req.Name != "" {
+		title = *req.Name
 	}
-	if req.Title == "" {
+	if prompt == "" && req.Description != nil && *req.Description != "" {
+		prompt = *req.Description
+	}
+	if title == "" {
 		jsonErr(w, http.StatusUnprocessableEntity, "title is required")
 		return
 	}
-	if req.Priority == 0 {
-		req.Priority = 3
+	agentID := ""
+	if req.AgentId != nil {
+		agentID = *req.AgentId
 	}
-	if req.TriggerType == "" {
-		req.TriggerType = "manual"
+	priority := 3
+	if req.Priority != nil && *req.Priority != 0 {
+		priority = *req.Priority
+	}
+	parentTaskID := ""
+	if req.ParentTaskId != nil {
+		parentTaskID = *req.ParentTaskId
+	}
+	triggerType := "manual"
+	if req.TriggerType != nil && *req.TriggerType != "" {
+		triggerType = string(*req.TriggerType)
 	}
 	t := &taskstore.TaskEntity{
-		Title:        req.Title,
-		Prompt:       req.Prompt,
-		AgentID:      req.AgentID,
-		Priority:     req.Priority,
-		ParentTaskID: req.ParentTaskID,
-		TriggerType:  req.TriggerType,
+		Title:        title,
+		Prompt:       prompt,
+		AgentID:      agentID,
+		Priority:     priority,
+		ParentTaskID: parentTaskID,
+		TriggerType:  triggerType,
 		CreatedBy:    "user",
 		Status:       "queued",
 	}
@@ -2535,21 +2893,9 @@ func (a *restAPI) updateTask(w http.ResponseWriter, r *http.Request, id string) 
 		jsonErr(w, http.StatusBadRequest, "invalid task ID")
 		return
 	}
-	var req struct {
-		Status      *string    `json:"status"`
-		Result      *string    `json:"result"`
-		Artifacts   *[]string  `json:"artifacts"`
-		Title       *string    `json:"title"`
-		AgentID     *string    `json:"agent_id"`
-		Priority    *int       `json:"priority"`
-		StartedAt   *time.Time `json:"started_at"`
-		CompletedAt *time.Time `json:"completed_at"`
-		// Backward compat
-		Name        *string `json:"name"`
-		Description *string `json:"description"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var req gen.TaskUpdateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "TaskUpdateRequest", &req, validateEnabled) {
 		return
 	}
 	// Backward compat mappings
@@ -2559,12 +2905,17 @@ func (a *restAPI) updateTask(w http.ResponseWriter, r *http.Request, id string) 
 	if req.Result == nil && req.Description != nil {
 		req.Result = req.Description
 	}
+	var patchStatus *string
+	if req.Status != nil {
+		s := string(*req.Status)
+		patchStatus = &s
+	}
 	patch := taskstore.TaskPatch{
-		Status:      req.Status,
+		Status:      patchStatus,
 		Result:      req.Result,
 		Artifacts:   req.Artifacts,
 		Title:       req.Title,
-		AgentID:     req.AgentID,
+		AgentID:     req.AgentId,
 		Priority:    req.Priority,
 		StartedAt:   req.StartedAt,
 		CompletedAt: req.CompletedAt,
@@ -2630,7 +2981,12 @@ func (a *restAPI) startTask(w http.ResponseWriter, r *http.Request, id string) {
 	}()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{"status": "accepted", "task_id": id})
+	if err := json.NewEncoder(w).Encode(gen.TaskAcceptedResponse{
+		TaskId: id,
+		Status: gen.Accepted,
+	}); err != nil {
+		slog.Warn("rest: start task: encode response failed", "error", err)
+	}
 }
 
 func (a *restAPI) deleteTask(w http.ResponseWriter, id string) {
@@ -2651,15 +3007,8 @@ func (a *restAPI) deleteTask(w http.ResponseWriter, id string) {
 
 // --- Activity ---
 
-// activityEvent is one item returned by GET /api/v1/activity.
-type activityEvent struct {
-	ID        string    `json:"id"`
-	Type      string    `json:"type"` // "session_start" | "task_created" | "task_updated"
-	AgentID   string    `json:"agent_id,omitempty"`
-	AgentName string    `json:"agent_name,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
-	Summary   string    `json:"summary,omitempty"`
-}
+// ActivityEvent type is defined in contracts/components/schemas/ActivityEvent.yaml
+// and generated into pkg/api/generated/. Use gen.ActivityEvent directly.
 
 // HandleActivity handles GET /api/v1/activity.
 // Returns up to 50 activity events from the last 24 hours, sorted reverse-chronological.
@@ -2670,7 +3019,7 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cutoff := time.Now().UTC().Add(-24 * time.Hour)
-	var events []activityEvent
+	var events []gen.ActivityEvent
 	var sessionWarning string
 
 	// Build agent name lookup
@@ -2705,14 +3054,21 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 					if summary == "" {
 						summary = "New session"
 					}
-					events = append(events, activityEvent{
-						ID:        "session-" + m.ID,
+					agentID := m.AgentID
+					agentName := agentNames[m.AgentID]
+					ev := gen.ActivityEvent{
+						Id:        "session-" + m.ID,
 						Type:      "session_start",
-						AgentID:   m.AgentID,
-						AgentName: agentNames[m.AgentID],
 						Timestamp: m.CreatedAt,
-						Summary:   summary,
-					})
+						Summary:   &summary,
+					}
+					if agentID != "" {
+						ev.AgentId = &agentID
+					}
+					if agentName != "" {
+						ev.AgentName = &agentName
+					}
+					events = append(events, ev)
 				}
 			}
 		}
@@ -2725,27 +3081,37 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, t := range recentTasks {
 		if t.CreatedAt.After(cutoff) {
-			events = append(events, activityEvent{
-				ID:        "task-c-" + t.ID,
+			taskAgentID := t.AgentID
+			title := t.Title
+			ev := gen.ActivityEvent{
+				Id:        "task-c-" + t.ID,
 				Type:      "task_created",
-				AgentID:   t.AgentID,
 				Timestamp: t.CreatedAt,
-				Summary:   t.Title,
-			})
+				Summary:   &title,
+			}
+			if taskAgentID != "" {
+				ev.AgentId = &taskAgentID
+			}
+			events = append(events, ev)
 		}
 		if t.CompletedAt != nil && t.CompletedAt.After(cutoff) {
-			events = append(events, activityEvent{
-				ID:        "task-u-" + t.ID,
+			taskAgentID := t.AgentID
+			title := t.Title
+			ev := gen.ActivityEvent{
+				Id:        "task-u-" + t.ID,
 				Type:      "task_updated",
-				AgentID:   t.AgentID,
 				Timestamp: *t.CompletedAt,
-				Summary:   t.Title,
-			})
+				Summary:   &title,
+			}
+			if taskAgentID != "" {
+				ev.AgentId = &taskAgentID
+			}
+			events = append(events, ev)
 		}
 	}
 
 	// Sort reverse-chronological.
-	slices.SortFunc(events, func(a, b activityEvent) int {
+	slices.SortFunc(events, func(a, b gen.ActivityEvent) int {
 		return b.Timestamp.Compare(a.Timestamp)
 	})
 
@@ -2754,11 +3120,10 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 		events = events[:50]
 	}
 	if events == nil {
-		events = []activityEvent{}
+		events = []gen.ActivityEvent{}
 	}
 	if sessionWarning != "" {
-		jsonOK(w, map[string]any{"events": events, "warning": sessionWarning})
-		return
+		slog.Warn("rest: activity: partial results due to session listing errors", "warning", sessionWarning)
 	}
 	jsonOK(w, events)
 }
@@ -2801,7 +3166,7 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		providers := make([]providerResponse, 0, len(providerOrder))
+		providers := make([]gen.Provider, 0, len(providerOrder))
 		for _, name := range providerOrder {
 			var models []string
 			var modelFetchWarning string
@@ -2816,19 +3181,32 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			providers = append(providers, providerResponse{
-				ID:      name,
-				Name:    name,
-				Status:  "connected",
-				Models:  models,
-				Warning: modelFetchWarning,
-			})
+			// Fall back to configured models if upstream fetch failed or returned
+			// nothing. Provider.yaml requires models:array — nil marshals as null
+			// which fails Zod validation on the SPA.
+			if models == nil {
+				if configured, ok := providerModels[name]; ok && configured != nil {
+					models = configured
+				} else {
+					models = []string{}
+				}
+			}
+			p := gen.Provider{
+				Id:     name,
+				Name:   name,
+				Status: gen.ProviderStatusConnected,
+				Models: models,
+			}
+			if modelFetchWarning != "" {
+				p.Warning = &modelFetchWarning
+			}
+			providers = append(providers, p)
 		}
 		if len(providers) == 0 {
-			providers = append(providers, providerResponse{
-				ID:     "default",
+			providers = append(providers, gen.Provider{
+				Id:     "default",
 				Name:   "Default",
-				Status: "disconnected",
+				Status: gen.ProviderStatusDisconnected,
 				Models: []string{},
 			})
 		}
@@ -2844,12 +3222,9 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		providerID := sub
-		var req struct {
-			APIKey string `json:"api_key"`
-			Model  string `json:"model"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		var req gen.ProviderUpdateRequest
+		validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+		if !decodeAndValidate(w, r, "ProviderUpdateRequest", &req, validateEnabled) {
 			return
 		}
 		// Check if the provider already exists.
@@ -2867,20 +3242,21 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		if !found {
 			// New provider — api_key is required.
-			if req.APIKey == "" {
+			if req.ApiKey == nil || *req.ApiKey == "" {
 				jsonErr(w, http.StatusUnprocessableEntity, "api_key is required")
 				return
 			}
-			if req.Model == "" {
-				req.Model = "default"
+			if req.Model == nil || *req.Model == "" {
+				defaultModel := "default"
+				req.Model = &defaultModel
 			}
 		}
 		// Store API key in the encrypted credentials store (AES-256-GCM) and
 		// reference it via api_key_ref in config.json. Refuses the operation if
 		// the credential store is locked (SEC-23: no plaintext fallback).
 		var credRefName string
-		if req.APIKey != "" {
-			ref, err := a.storeCredential(providerID+"_API_KEY", req.APIKey)
+		if req.ApiKey != nil && *req.ApiKey != "" {
+			ref, err := a.storeCredential(providerID+"_API_KEY", *req.ApiKey)
 			if err != nil {
 				slog.Error(
 					"rest: credential store unavailable for provider update",
@@ -2908,13 +3284,13 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				}
 				pName := inferProviderName(strVal(model, "provider"), strVal(model, "model"))
 				if pName == providerID {
-					if req.APIKey != "" {
+					if req.ApiKey != nil && *req.ApiKey != "" {
 						model["api_key_ref"] = credRefName
 						delete(model, "api_key")
 						delete(model, "api_keys")
 					}
-					if req.Model != "" {
-						model["model"] = req.Model
+					if req.Model != nil && *req.Model != "" {
+						model["model"] = *req.Model
 					}
 					model["provider"] = providerID
 					updated = true
@@ -2923,10 +3299,14 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			}
 			if !updated {
 				// Provider not found — add a new entry.
+				modelVal := ""
+				if req.Model != nil {
+					modelVal = *req.Model
+				}
 				newEntry := map[string]any{
 					"model_name":  providerID,
 					"provider":    providerID,
-					"model":       req.Model,
+					"model":       modelVal,
 					"api_key_ref": credRefName,
 				}
 				m["providers"] = append(providerList, newEntry)
@@ -2947,10 +3327,11 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			)
 			return
 		}
-		jsonOK(w, providerResponse{
-			ID:     providerID,
+		jsonOK(w, gen.Provider{
+			Id:     providerID,
 			Name:   providerID,
-			Status: "connected",
+			Status: gen.ProviderStatusConnected,
+			Models: []string{},
 		})
 
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/test"):
@@ -2965,12 +3346,14 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		providerID := strings.TrimSuffix(sub, "/test")
 		cfgData, err := os.ReadFile(a.configPath())
 		if err != nil {
-			jsonOK(w, map[string]any{"success": false, "error": "could not read config"})
+			errMsg := "could not read config"
+			jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
 			return
 		}
 		var cfgRaw map[string]any
 		if err := json.Unmarshal(cfgData, &cfgRaw); err != nil {
-			jsonOK(w, map[string]any{"success": false, "error": "could not parse config"})
+			errMsg := "could not parse config"
+			jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
 			return
 		}
 		providerList, _ := cfgRaw["providers"].([]any)
@@ -2997,17 +3380,19 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				if !hasPlaintextKey && !hasCredRef {
-					jsonOK(w, map[string]any{"success": false, "error": "no API key configured for this provider"})
+					errMsg := "no API key configured for this provider"
+					jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
 					return
 				}
 				break
 			}
 		}
 		if !found {
-			jsonOK(w, map[string]any{"success": false, "error": fmt.Sprintf("provider %q not configured", providerID)})
+			errMsg := fmt.Sprintf("provider %q not configured", providerID)
+			jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
 			return
 		}
-		jsonOK(w, map[string]any{"success": true})
+		jsonOK(w, gen.OperationResult{Success: true})
 
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -3017,41 +3402,98 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 // --- MCP Servers ---
 
 // HandleMCPServers handles GET/POST /api/v1/mcp-servers and DELETE /api/v1/mcp-servers/{id}.
+// GET returns McpServer[] shaped from cfg.Tools.MCP.Servers (contracts/components/schemas/McpServer.yaml).
+// POST accepts McpServerCreate (contracts/components/schemas/McpServerCreate.yaml) and
+// returns the newly created McpServer entry.
 func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	sub := strings.TrimPrefix(path, "/api/v1/mcp-servers")
 	sub = strings.TrimPrefix(sub, "/")
 
+	// Determine if path is /{id}/tools.
+	parts := strings.SplitN(sub, "/", 2)
+	serverID := parts[0]
+	subSuffix := ""
+	if len(parts) == 2 {
+		subSuffix = parts[1]
+	}
+
 	switch {
 	case r.Method == http.MethodGet && sub == "":
-		info := a.agentLoop.GetStartupInfo()
-		if mcpInfo, ok := info["mcp"]; ok {
-			jsonOK(w, mcpInfo)
-			return
-		}
-		jsonOK(w, []any{})
+		a.listMCPServers(w, r)
 
 	case r.Method == http.MethodPost && sub == "":
 		a.addMCPServer(w, r)
 
-	case r.Method == http.MethodDelete && sub != "":
-		a.deleteMCPServer(w, sub)
+	case r.Method == http.MethodDelete && sub != "" && subSuffix == "":
+		a.deleteMCPServer(w, serverID)
+
+	case r.Method == http.MethodGet && serverID != "" && subSuffix == "tools":
+		a.listMCPServerTools(w, serverID)
 
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
-func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name      string            `json:"name"`
-		Command   string            `json:"command"`
-		Args      []string          `json:"args"`
-		Env       map[string]string `json:"env"`
-		Transport string            `json:"transport"` // "stdio" | "sse" | "http"
+// listMCPServers reads configured MCP servers from config and returns them as
+// McpServer[] (contracts/components/schemas/McpServer.yaml).
+// Status is always "disconnected" — live connection state is not tracked at
+// the config layer (the MCP manager reconnects at agent loop startup, not per-request).
+func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
+	cfg := a.agentLoop.GetConfig()
+	result := make([]gen.McpServer, 0, len(cfg.Tools.MCP.Servers))
+	for name, srv := range cfg.Tools.MCP.Servers {
+		transport := gen.McpServerTransportStdio
+		switch srv.Type {
+		case "sse":
+			transport = gen.McpServerTransportSse
+		case "http":
+			transport = gen.McpServerTransportHttp
+		}
+		result = append(result, gen.McpServer{
+			Id:        name,
+			Name:      name,
+			Transport: transport,
+			Status:    gen.McpServerStatusDisconnected,
+			ToolCount: 0,
+		})
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	// Sort for deterministic response order.
+	sort.Slice(result, func(i, j int) bool { return result[i].Id < result[j].Id })
+	jsonOK(w, result)
+}
+
+// listMCPServerTools handles GET /api/v1/mcp-servers/{id}/tools.
+// Returns the tool names registered by the given MCP server via McpServerToolsResponse.
+// If the server has no registered tools (e.g. not yet connected), returns an empty list.
+// 404 if serverID is not present in the config.
+func (a *restAPI) listMCPServerTools(w http.ResponseWriter, serverID string) {
+	cfg := a.agentLoop.GetConfig()
+	if _, exists := cfg.Tools.MCP.Servers[serverID]; !exists {
+		jsonErr(w, http.StatusNotFound, fmt.Sprintf("mcp server %q not found", serverID))
+		return
+	}
+	toolNames := make([]string, 0)
+	if a.mcpRegistry != nil {
+		for _, entry := range a.mcpRegistry.Describe() {
+			if entry.ServerID == serverID {
+				toolNames = append(toolNames, entry.Name)
+			}
+		}
+	}
+	sort.Strings(toolNames)
+	jsonOK(w, gen.McpServerToolsResponse{Tools: toolNames})
+}
+
+// addMCPServer handles POST /api/v1/mcp-servers.
+// Accepts McpServerCreate (contracts/components/schemas/McpServerCreate.yaml).
+// Transport must be one of: stdio, sse, http (enforced by enum validation).
+// Returns the new McpServer entry shaped per contracts/components/schemas/McpServer.yaml.
+func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
+	var req gen.McpServerCreate
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "McpServerCreate", &req, validateEnabled) {
 		return
 	}
 	if req.Name == "" {
@@ -3062,9 +3504,23 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "invalid server name")
 		return
 	}
-	transport := req.Transport
+	transport := string(req.Transport)
 	if transport == "" {
 		transport = "stdio"
+	}
+	// Validate transport against the contract enum (stdio | sse | http).
+	// The "websocket" value is not supported — reject it early rather than storing
+	// a config entry that the MCP manager will refuse at connection time.
+	switch transport {
+	case "stdio", "sse", "http":
+		// valid
+	default:
+		jsonErr(
+			w,
+			http.StatusBadRequest,
+			fmt.Sprintf("invalid transport %q: must be one of stdio, sse, http", transport),
+		)
+		return
 	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
@@ -3090,11 +3546,11 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 			"command": req.Command,
 			"type":    transport,
 		}
-		if len(req.Args) > 0 {
-			entry["args"] = req.Args
+		if req.Args != nil && len(*req.Args) > 0 {
+			entry["args"] = *req.Args
 		}
-		if len(req.Env) > 0 {
-			entry["env"] = req.Env
+		if req.Env != nil && len(*req.Env) > 0 {
+			entry["env"] = *req.Env
 		}
 		servers[req.Name] = entry
 		return nil
@@ -3107,15 +3563,25 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
+	// Map the transport string to the generated enum value for the response.
+	var respTransport gen.McpServerTransport
+	switch transport {
+	case "sse":
+		respTransport = gen.McpServerTransportSse
+	case "http":
+		respTransport = gen.McpServerTransportHttp
+	default:
+		respTransport = gen.McpServerTransportStdio
+	}
+	resp := gen.McpServer{
+		Id:        req.Name,
+		Name:      req.Name,
+		Transport: respTransport,
+		Status:    gen.McpServerStatusDisconnected,
+		ToolCount: 0,
+	}
 	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, map[string]any{
-		"name":      req.Name,
-		"command":   req.Command,
-		"args":      req.Args,
-		"env":       req.Env,
-		"transport": transport,
-		"enabled":   true,
-	})
+	jsonOK(w, resp)
 }
 
 func (a *restAPI) deleteMCPServer(w http.ResponseWriter, id string) {
@@ -3187,23 +3653,6 @@ func (a *restAPI) HandleTools(w http.ResponseWriter, r *http.Request) {
 
 // --- Tool Visibility (Issue #41) ---
 
-// toolToMap converts a Tool to its REST representation. The category is derived
-// from the name prefix before the first dot (e.g. "system.agent_list" →
-// "system"). Falls back to defaultCategory when no dot is present.
-func toolToMap(t tools.Tool, defaultCategory string) map[string]any {
-	name := t.Name()
-	category := defaultCategory
-	if idx := strings.Index(name, "."); idx > 0 {
-		category = name[:idx]
-	}
-	return map[string]any{
-		"name":        name,
-		"scope":       string(t.Scope()),
-		"category":    category,
-		"description": t.Description(),
-	}
-}
-
 // HandleMCPTools handles GET /api/v1/tools/mcp — returns all configured MCP
 // servers with their status and tool lists for the agent tool picker UI.
 func (a *restAPI) HandleMCPTools(w http.ResponseWriter, r *http.Request) {
@@ -3226,80 +3675,6 @@ func (a *restAPI) HandleMCPTools(w http.ResponseWriter, r *http.Request) {
 		servers = append(servers, entry)
 	}
 	jsonOK(w, servers)
-}
-
-// getAgentTools handles GET /api/v1/agents/{id}/tools — returns the agent's
-// tool visibility config and the resolved effective tool list.
-func (a *restAPI) getAgentTools(w http.ResponseWriter, agentID string) {
-	cfg := a.agentLoop.GetConfig()
-
-	// Determine agent type and tool config.
-	agentType := "custom"
-	var toolsCfg *config.AgentToolsCfg
-	for _, ac := range cfg.Agents.List {
-		if ac.ID == agentID {
-			at := ac.ResolveType(coreagent.IsCoreAgent)
-			agentType = string(at)
-			toolsCfg = ac.Tools
-			break
-		}
-	}
-	// Core agents may not be in cfg.Agents.List (runtime-only). Detect them.
-	if agentType == "custom" && coreagent.IsCoreAgent(agentID) {
-		agentType = "core"
-	}
-
-	// Build the effective tool list using scope filtering.
-	registry := a.agentLoop.GetRegistry()
-	agent, ok := registry.GetAgent(agentID)
-	if !ok {
-		slog.Warn("rest: agent found in config but not in registry, tool list may be stale",
-			"agent_id", agentID)
-		agent = registry.GetDefaultAgent()
-	}
-
-	effectiveTools := []map[string]any{}
-	if agent != nil {
-		filtered, policyMap := tools.FilterToolsByPolicy(agent.Tools.GetAll(), agentType, toolsCfgToPolicy(toolsCfg))
-		for _, t := range filtered {
-			entry := toolToMap(t, "general")
-			if p, ok := policyMap[t.Name()]; ok {
-				entry["policy"] = p
-			}
-			effectiveTools = append(effectiveTools, entry)
-		}
-	}
-
-	// Build the response config with policy format (handles legacy conversion).
-	policyCfg := toolsCfgToPolicy(toolsCfg)
-	defaultPolicy := policyCfg.DefaultPolicy
-	policies := policyCfg.Policies
-	if policies == nil {
-		policies = map[string]string{}
-	}
-	servers := make([]map[string]any, 0)
-	if toolsCfg != nil {
-		for _, s := range toolsCfg.MCP.Servers {
-			srv := map[string]any{"id": s.ID}
-			if len(s.Tools) > 0 {
-				srv["tools"] = s.Tools
-			}
-			servers = append(servers, srv)
-		}
-	}
-	respCfg := map[string]any{
-		"builtin": map[string]any{
-			"default_policy": defaultPolicy,
-			"policies":       policies,
-		},
-		"mcp": map[string]any{"servers": servers},
-	}
-
-	jsonOK(w, map[string]any{
-		"config":          respCfg,
-		"effective_tools": effectiveTools,
-		"agent_type":      agentType,
-	})
 }
 
 // updateAgentTools handles PUT /api/v1/agents/{id}/tools — replaces the
@@ -3326,51 +3701,53 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
-	var req struct {
-		Builtin struct {
-			// New policy format
-			DefaultPolicy string            `json:"default_policy"`
-			Policies      map[string]string `json:"policies"`
-			// Legacy format (backward compat)
-			Mode    string   `json:"mode"`
-			Visible []string `json:"visible"`
-		} `json:"builtin"`
-		MCP struct {
-			Servers []struct {
-				ID    string   `json:"id"`
-				Tools []string `json:"tools"`
-			} `json:"servers"`
-		} `json:"mcp"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var req gen.AgentToolsUpdateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "AgentToolsUpdateRequest", &req, validateEnabled) {
 		return
 	}
 
-	// Convert legacy format to policy format if needed.
-	if req.Builtin.DefaultPolicy == "" && req.Builtin.Mode != "" {
-		switch req.Builtin.Mode {
-		case "explicit":
-			req.Builtin.DefaultPolicy = "deny"
-			req.Builtin.Policies = make(map[string]string, len(req.Builtin.Visible))
-			for _, name := range req.Builtin.Visible {
-				req.Builtin.Policies[name] = "allow"
+	// Extract builtin fields with defaults.
+	builtinDefaultPolicy := ""
+	var builtinPolicies map[string]string
+	if req.Builtin != nil {
+		if req.Builtin.DefaultPolicy != nil {
+			builtinDefaultPolicy = string(*req.Builtin.DefaultPolicy)
+		}
+		if req.Builtin.Policies != nil {
+			builtinPolicies = make(map[string]string, len(*req.Builtin.Policies))
+			for k, v := range *req.Builtin.Policies {
+				builtinPolicies[k] = string(v)
 			}
-		case "inherit":
-			req.Builtin.DefaultPolicy = "allow"
 		}
 	}
-	if req.Builtin.DefaultPolicy == "" {
-		req.Builtin.DefaultPolicy = "allow"
+
+	// Convert legacy format to policy format if needed.
+	if req.Builtin != nil && builtinDefaultPolicy == "" && req.Builtin.Mode != nil {
+		switch string(*req.Builtin.Mode) {
+		case "explicit":
+			builtinDefaultPolicy = "deny"
+			if req.Builtin.Visible != nil {
+				builtinPolicies = make(map[string]string, len(*req.Builtin.Visible))
+				for _, name := range *req.Builtin.Visible {
+					builtinPolicies[name] = "allow"
+				}
+			}
+		case "inherit":
+			builtinDefaultPolicy = "allow"
+		}
+	}
+	if builtinDefaultPolicy == "" {
+		builtinDefaultPolicy = "allow"
 	}
 
 	// Validate policy values.
 	validPolicies := map[string]bool{"allow": true, "ask": true, "deny": true}
-	if !validPolicies[req.Builtin.DefaultPolicy] {
+	if !validPolicies[builtinDefaultPolicy] {
 		jsonErr(w, http.StatusUnprocessableEntity, "builtin.default_policy must be 'allow', 'ask', or 'deny'")
 		return
 	}
-	for name, p := range req.Builtin.Policies {
+	for name, p := range builtinPolicies {
 		if !validPolicies[p] {
 			jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid policy %q for tool %q", p, name))
 			return
@@ -3378,17 +3755,29 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	}
 
 	// Validate MCP server IDs reference configured servers.
-	if len(req.MCP.Servers) > 0 {
+	var mcpServers []struct {
+		ID    string
+		Tools []string
+	}
+	if req.Mcp != nil && req.Mcp.Servers != nil {
 		configuredServers := cfg.Tools.MCP.Servers
-		for _, s := range req.MCP.Servers {
-			if s.ID == "" {
+		for _, s := range *req.Mcp.Servers {
+			if s.Id == "" {
 				jsonErr(w, http.StatusUnprocessableEntity, "mcp.servers[].id must not be empty")
 				return
 			}
-			if _, exists := configuredServers[s.ID]; !exists {
-				jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("MCP server %q is not configured", s.ID))
+			if _, exists := configuredServers[s.Id]; !exists {
+				jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("MCP server %q is not configured", s.Id))
 				return
 			}
+			toolList := []string{}
+			if s.Tools != nil {
+				toolList = *s.Tools
+			}
+			mcpServers = append(mcpServers, struct {
+				ID    string
+				Tools []string
+			}{ID: s.Id, Tools: toolList})
 		}
 	}
 
@@ -3406,17 +3795,17 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 			}
 			if agentMap["id"] == agentID {
 				builtinCfg := map[string]any{
-					"default_policy": req.Builtin.DefaultPolicy,
+					"default_policy": builtinDefaultPolicy,
 				}
-				if len(req.Builtin.Policies) > 0 {
-					builtinCfg["policies"] = req.Builtin.Policies
+				if len(builtinPolicies) > 0 {
+					builtinCfg["policies"] = builtinPolicies
 				}
 				toolsCfg := map[string]any{
 					"builtin": builtinCfg,
 				}
-				if len(req.MCP.Servers) > 0 {
-					servers := make([]map[string]any, 0, len(req.MCP.Servers))
-					for _, s := range req.MCP.Servers {
+				if len(mcpServers) > 0 {
+					servers := make([]map[string]any, 0, len(mcpServers))
+					for _, s := range mcpServers {
 						srv := map[string]any{"id": s.ID}
 						if len(s.Tools) > 0 {
 							srv["tools"] = s.Tools
@@ -3437,26 +3826,38 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 
-	// Tool policy changes are config-only — no reload needed. The policy is
-	// resolved at request time from the live config, not baked into agent instances.
-	// FR-061 invalidation fires inside safeUpdateConfigJSON above.
-	a.getAgentTools(w, agentID)
-}
-
-// toolsCfgToPolicy converts a config.AgentToolsCfg to ToolPolicyCfg.
-func toolsCfgToPolicy(cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
-	if cfg == nil {
-		return &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
+	// Trigger a reload so the agent's atomic toolPolicy pointer
+	// (pkg/agent/instance.go:290 — populated by ReloadProviderAndConfig)
+	// is swapped to the new policy. Without this the next turn's
+	// resolveToolPolicyAtExec / FilterToolsByPolicy still sees the previous
+	// snapshot, and (e.g.) an exec call freshly bumped to "ask" runs as
+	// "allow" because LoadToolPolicy returns the stale pointer. The earlier
+	// "no reload needed" claim was wrong — config-on-disk and the in-memory
+	// pointer are decoupled. Reload is cheap and idempotent.
+	if err := a.agentLoop.TriggerReload(); err != nil {
+		// ErrReloadNotConfigured is normal in unit tests where the full gateway
+		// reload pipeline is not wired — treat it as a no-op and continue.
+		if !errors.Is(err, agent.ErrReloadNotConfigured) {
+			slog.Error("agent tools update: reload failed — in-memory policy not updated",
+				"agent_id", agentID, "error", err)
+			if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
+				if auditErr := audit.EmitSecuritySettingChange(
+					r.Context(), auditLogger, "agent.tools_policy",
+					map[string]any{"agent_id": agentID, "saved": true},
+					map[string]any{"agent_id": agentID, "reload_error": err.Error()},
+				); auditErr != nil {
+					slog.Error("rest: audit emit agent tools reload failure", "error", auditErr)
+				}
+			}
+			jsonErr(w, http.StatusServiceUnavailable,
+				"config saved but in-memory reload failed; restart the gateway or retry")
+			return
+		}
 	}
-	policies := make(map[string]string, len(cfg.Builtin.Policies))
-	for k, v := range cfg.Builtin.Policies {
-		policies[k] = string(v)
-	}
-	dp := string(cfg.Builtin.DefaultPolicy)
-	if dp == "" {
-		dp = "allow"
-	}
-	return &tools.ToolPolicyCfg{DefaultPolicy: dp, Policies: policies}
+	// Use HandleAgentToolsRegistry so the PUT response emits `tools` (not
+	// `effective_tools`) — both paths must share the same wire shape to match
+	// the AgentToolsResponse spec and the SPA Zod schema (_agentToolsSchema).
+	a.HandleAgentToolsRegistry(w, r, agentID)
 }
 
 // --- Channels ---
@@ -3524,89 +3925,75 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := a.agentLoop.GetConfig()
 	ch := cfg.Channels
-	type channelEntry struct {
-		ID          string `json:"id"`
-		Name        string `json:"name"`
-		Transport   string `json:"transport"`
-		Enabled     bool   `json:"enabled"`
-		Description string `json:"description"`
-	}
-	channels := []channelEntry{
-		{ID: "webchat", Name: "Web Chat", Transport: "websocket", Enabled: true, Description: "Built-in browser chat"},
+	channels := []gen.ChannelEntry{
+		{Id: "webchat", Name: "Web Chat", Transport: "websocket", Enabled: true, Description: "Built-in browser chat"},
 		{
-			ID:          "telegram",
+			Id:          "telegram",
 			Name:        "Telegram",
 			Transport:   "webhook",
 			Enabled:     ch.Telegram.Enabled,
 			Description: "Telegram Bot API",
 		},
 		{
-			ID:          "discord",
+			Id:          "discord",
 			Name:        "Discord",
 			Transport:   "websocket",
 			Enabled:     ch.Discord.Enabled,
 			Description: "Discord Gateway",
 		},
 		{
-			ID:          "slack",
+			Id:          "slack",
 			Name:        "Slack",
 			Transport:   "websocket",
 			Enabled:     ch.Slack.Enabled,
 			Description: "Slack Socket Mode",
 		},
 		{
-			ID:          "whatsapp",
+			Id:          "whatsapp",
 			Name:        "WhatsApp",
 			Transport:   "bridge",
 			Enabled:     ch.WhatsApp.Enabled,
 			Description: "WhatsApp via bridge or native",
 		},
 		{
-			ID:          "feishu",
+			Id:          "feishu",
 			Name:        "Feishu / Lark",
 			Transport:   "webhook",
 			Enabled:     ch.Feishu.Enabled,
 			Description: "Feishu (Lark) Bot",
 		},
 		{
-			ID:          "dingtalk",
+			Id:          "dingtalk",
 			Name:        "DingTalk",
 			Transport:   "webhook",
 			Enabled:     ch.DingTalk.Enabled,
 			Description: "DingTalk Bot",
 		},
 		{
-			ID:          "wecom",
+			Id:          "wecom",
 			Name:        "WeCom",
 			Transport:   "webhook",
 			Enabled:     ch.WeCom.Enabled,
 			Description: "WeCom (WeChat Work) Bot",
 		},
 		{
-			ID:          "weixin",
+			Id:          "weixin",
 			Name:        "Weixin",
 			Transport:   "webhook",
 			Enabled:     ch.Weixin.Enabled,
 			Description: "Weixin (WeChat) Official Account",
 		},
-		{ID: "line", Name: "LINE", Transport: "webhook", Enabled: ch.LINE.Enabled, Description: "LINE Messaging API"},
-		{ID: "qq", Name: "QQ", Transport: "websocket", Enabled: ch.QQ.Enabled, Description: "QQ via napcat"},
+		{Id: "line", Name: "LINE", Transport: "webhook", Enabled: ch.LINE.Enabled, Description: "LINE Messaging API"},
+		{Id: "qq", Name: "QQ", Transport: "websocket", Enabled: ch.QQ.Enabled, Description: "QQ via napcat"},
 		{
-			ID:          "onebot",
+			Id:          "onebot",
 			Name:        "OneBot",
 			Transport:   "websocket",
 			Enabled:     ch.OneBot.Enabled,
 			Description: "OneBot v11 protocol",
 		},
-		{ID: "irc", Name: "IRC", Transport: "tcp", Enabled: ch.IRC.Enabled, Description: "Internet Relay Chat"},
-		{ID: "matrix", Name: "Matrix", Transport: "http", Enabled: ch.Matrix.Enabled, Description: "Matrix protocol"},
-		{
-			ID:          "maixcam",
-			Name:        "MaixCam",
-			Transport:   "serial",
-			Enabled:     ch.MaixCam.Enabled,
-			Description: "MaixCam edge device",
-		},
+		{Id: "irc", Name: "IRC", Transport: "tcp", Enabled: ch.IRC.Enabled, Description: "Internet Relay Chat"},
+		{Id: "matrix", Name: "Matrix", Transport: "http", Enabled: ch.Matrix.Enabled, Description: "Matrix protocol"},
 	}
 	jsonOK(w, channels)
 }
@@ -3617,7 +4004,7 @@ var validChannelIDs = map[string]bool{
 	"telegram": true, "discord": true, "slack": true, "whatsapp": true,
 	"feishu": true, "dingtalk": true, "wecom": true, "weixin": true,
 	"line": true, "qq": true, "onebot": true, "irc": true,
-	"matrix": true, "maixcam": true,
+	"matrix": true,
 }
 
 func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, enabled bool) {
@@ -3643,7 +4030,7 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
-	jsonOK(w, map[string]any{"id": channelID, "enabled": enabled})
+	jsonOK(w, gen.ChannelEnabledResponse{Id: gen.ChannelEnabledResponseId(channelID), Enabled: enabled})
 }
 
 // channelSensitiveFields maps channel IDs to their secret/credential field names.
@@ -3661,7 +4048,6 @@ var channelSensitiveFields = map[string][]string{
 	"onebot":   {"access_token"},
 	"irc":      {"password", "nickserv_password", "sasl_password"},
 	"weixin":   {"token"},
-	"maixcam":  {},
 	"whatsapp": {},
 }
 
@@ -3679,7 +4065,6 @@ var channelRequiredFields = map[string][]string{
 	"onebot":   {"ws_url"},
 	"irc":      {"server", "nick"},
 	"weixin":   {"token"},
-	"maixcam":  {},
 	"whatsapp": {},
 }
 
@@ -3719,9 +4104,9 @@ func (a *restAPI) getChannelConfig(w http.ResponseWriter, channelID string) {
 // Merges the request body fields into the channel's config section (does not overwrite absent fields).
 // Returns the updated channel config with credential fields redacted.
 func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, channelID string) {
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var updates map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeAndValidate(w, r, "ChannelConfigureRequest", &updates, validateEnabled) {
 		return
 	}
 	// Remove reserved fields that must not be set here.
@@ -3774,15 +4159,15 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 		}
 	}
 	if len(missing) > 0 {
-		jsonOK(w, map[string]any{
-			"success": false,
-			"message": fmt.Sprintf("missing required fields: %s", strings.Join(missing, ", ")),
+		jsonOK(w, gen.ChannelTestResponse{
+			Success: false,
+			Message: fmt.Sprintf("missing required fields: %s", strings.Join(missing, ", ")),
 		})
 		return
 	}
-	jsonOK(w, map[string]any{
-		"success": true,
-		"message": fmt.Sprintf("channel %q is configured", channelID),
+	jsonOK(w, gen.ChannelTestResponse{
+		Success: true,
+		Message: fmt.Sprintf("channel %q is configured", channelID),
 	})
 }
 
@@ -3804,7 +4189,6 @@ func countEnabledChannels(cfg *config.Config) int {
 		ch.OneBot.Enabled,
 		ch.IRC.Enabled,
 		ch.Matrix.Enabled,
-		ch.MaixCam.Enabled,
 	} {
 		if enabled {
 			count++
@@ -3877,13 +4261,8 @@ func (a *restAPI) withUploadAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return a.withAuthAndBodyLimit(handler, maxUploadFileSize*10)
 }
 
-// uploadedFileInfo describes a single file that was successfully uploaded.
-type uploadedFileInfo struct {
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	Size        int64  `json:"size"`
-	ContentType string `json:"content_type"`
-}
+// UploadedFile type is defined in contracts/components/schemas/UploadedFile.yaml
+// and generated into pkg/api/generated/. Use gen.UploadedFile directly.
 
 // HandleUpload handles POST /api/v1/upload — streams multipart file uploads to disk.
 // Files are stored at ~/.omnipus/uploads/{session_id}/{sanitized_filename}.
@@ -3907,7 +4286,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var uploaded []uploadedFileInfo
+	var resp gen.UploadFilesResponse
 
 	for {
 		part, err := reader.NextPart()
@@ -3997,7 +4376,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 		// cleanupUploaded removes all previously uploaded files on error.
 		cleanupUploaded := func() {
-			for _, prev := range uploaded {
+			for _, prev := range resp.Files {
 				os.Remove(filepath.Join(a.homePath, prev.Path))
 			}
 		}
@@ -4049,22 +4428,27 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			"content_type", contentType,
 		)
 
-		uploaded = append(uploaded, uploadedFileInfo{
+		resp.Files = append(resp.Files, struct {
+			ContentType string `json:"content_type"`
+			Name        string `json:"name"`
+			Path        string `json:"path"`
+			Size        int64  `json:"size"`
+		}{
+			ContentType: contentType,
 			Name:        sanitized,
 			Path:        relativePath,
 			Size:        written,
-			ContentType: contentType,
 		})
 	}
 
-	if len(uploaded) == 0 {
+	if len(resp.Files) == 0 {
 		jsonErr(w, http.StatusBadRequest, "no files found in upload")
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(map[string]any{"files": uploaded}); err != nil {
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		slog.Warn("rest: upload: encode response failed", "error", err)
 	}
 }

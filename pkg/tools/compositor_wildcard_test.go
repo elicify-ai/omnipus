@@ -65,7 +65,7 @@ func TestBuildWildcardIndex_TrailingOnlyWildcard(t *testing.T) {
 		"foo.*.bar":      "ask",   // embedded — not a valid wildcard
 		"*":              "deny",  // catch-all — not a valid wildcard (FR-009 §4)
 		"system.agent.*": "ask",   // valid: longer prefix
-		"normal_tool":   "allow",  // exact name — not a wildcard
+		"normal_tool":    "allow", // exact name — not a wildcard
 	}
 
 	entries := buildWildcardIndex(policies)
@@ -363,14 +363,14 @@ func TestFilterToolsByPolicy_LongestWildcard_FourSegment(t *testing.T) {
 // Traces to: tool-registry-redesign-spec.md TDD Plan §Dataset "Per-agent + global policy resolution"
 func TestFilterToolsByPolicy_WildcardDataset(t *testing.T) {
 	tests := []struct {
-		name               string
-		globalDefault      string
-		globalPolicies     map[string]string
-		defaultPolicy      string
-		policies           map[string]string
-		toolRequested      string
-		expectedInOutput   bool   // true = tool appears in filtered list
-		expectedPolicy     string // expected value in policyMap (empty if not in output)
+		name             string
+		globalDefault    string
+		globalPolicies   map[string]string
+		defaultPolicy    string
+		policies         map[string]string
+		toolRequested    string
+		expectedInOutput bool   // true = tool appears in filtered list
+		expectedPolicy   string // expected value in policyMap (empty if not in output)
 	}{
 		{
 			name:             "row9-exact-wins-over-wildcard",
@@ -417,7 +417,7 @@ func TestFilterToolsByPolicy_WildcardDataset(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			// Build a tool list containing the requested tool.
-			scope := ToolScope(ScopeGeneral)
+			scope := ScopeGeneral
 			if len(tc.toolRequested) > 7 && tc.toolRequested[:7] == "system." {
 				scope = ScopeCore
 			}

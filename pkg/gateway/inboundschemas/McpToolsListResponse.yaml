@@ -1,0 +1,30 @@
+title: McpToolsListResponse
+description: >
+  Response from GET /api/v1/tools/mcp.
+  Returns all configured MCP servers with their status for the agent tool picker UI.
+type: array
+items:
+  type: object
+  required:
+    - id
+    - name
+    - enabled
+  additionalProperties: true
+  properties:
+    id:
+      type: string
+      description: Unique MCP server identifier (same as the config key name).
+    name:
+      type: string
+      description: Display name for the MCP server.
+    enabled:
+      type: boolean
+      description: Whether the MCP server is currently enabled.
+    command:
+      type: string
+      description: The command used to start the MCP server.
+    args:
+      type: array
+      items:
+        type: string
+      description: Arguments passed to the MCP server command.

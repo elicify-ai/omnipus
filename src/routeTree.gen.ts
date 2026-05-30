@@ -20,6 +20,7 @@ import { Route as AppPoliciesRouteImport } from './routes/_app/policies'
 import { Route as AppCommandCenterRouteImport } from './routes/_app/command-center'
 import { Route as AppAgentsRouteImport } from './routes/_app/agents'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents.index'
+import { Route as AppSessionsSessionIdRouteImport } from './routes/_app/sessions.$sessionId'
 import { Route as AppAgentsAgentIdRouteImport } from './routes/_app/agents.$agentId'
 
 const OnboardingRoute = OnboardingRouteImport.update({
@@ -76,6 +77,11 @@ const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppAgentsRoute,
 } as any)
+const AppSessionsSessionIdRoute = AppSessionsSessionIdRouteImport.update({
+  id: '/sessions/$sessionId',
+  path: '/sessions/$sessionId',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAgentsAgentIdRoute = AppAgentsAgentIdRouteImport.update({
   id: '/$agentId',
   path: '/$agentId',
@@ -93,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof AppSettingsRoute
   '/skills': typeof AppSkillsRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
+  '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/agents/': typeof AppAgentsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -105,6 +112,7 @@ export interface FileRoutesByTo {
   '/skills': typeof AppSkillsRoute
   '/': typeof AppIndexRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
+  '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/agents': typeof AppAgentsIndexRoute
 }
 export interface FileRoutesById {
@@ -120,6 +128,7 @@ export interface FileRoutesById {
   '/_app/skills': typeof AppSkillsRoute
   '/_app/': typeof AppIndexRoute
   '/_app/agents/$agentId': typeof AppAgentsAgentIdRoute
+  '/_app/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/_app/agents/': typeof AppAgentsIndexRoute
 }
 export interface FileRouteTypes {
@@ -135,6 +144,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/skills'
     | '/agents/$agentId'
+    | '/sessions/$sessionId'
     | '/agents/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -147,6 +157,7 @@ export interface FileRouteTypes {
     | '/skills'
     | '/'
     | '/agents/$agentId'
+    | '/sessions/$sessionId'
     | '/agents'
   id:
     | '__root__'
@@ -161,6 +172,7 @@ export interface FileRouteTypes {
     | '/_app/skills'
     | '/_app/'
     | '/_app/agents/$agentId'
+    | '/_app/sessions/$sessionId'
     | '/_app/agents/'
   fileRoutesById: FileRoutesById
 }
@@ -250,6 +262,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAgentsIndexRouteImport
       parentRoute: typeof AppAgentsRoute
     }
+    '/_app/sessions/$sessionId': {
+      id: '/_app/sessions/$sessionId'
+      path: '/sessions/$sessionId'
+      fullPath: '/sessions/$sessionId'
+      preLoaderRoute: typeof AppSessionsSessionIdRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/agents/$agentId': {
       id: '/_app/agents/$agentId'
       path: '/$agentId'
@@ -281,6 +300,7 @@ interface AppRouteChildren {
   AppSettingsRoute: typeof AppSettingsRoute
   AppSkillsRoute: typeof AppSkillsRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppSessionsSessionIdRoute: typeof AppSessionsSessionIdRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -290,6 +310,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppSettingsRoute: AppSettingsRoute,
   AppSkillsRoute: AppSkillsRoute,
   AppIndexRoute: AppIndexRoute,
+  AppSessionsSessionIdRoute: AppSessionsSessionIdRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

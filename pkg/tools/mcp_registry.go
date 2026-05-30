@@ -71,10 +71,10 @@ type MCPPolicyUpdater func(oldServerID, newServerID string)
 // There is one per process. Entries are added and removed at runtime
 // as servers connect and disconnect.
 type MCPRegistry struct {
-	mu           sync.RWMutex
-	byName       map[string]*mcpToolRecord    // name → record (first-server-wins)
-	byServer     map[string][]string          // serverID → []tool names (for fast eviction)
-	serverMeta   map[string]*mcpServerMeta    // serverID → metadata
+	mu            sync.RWMutex
+	byName        map[string]*mcpToolRecord       // name → record (first-server-wins)
+	byServer      map[string][]string             // serverID → []tool names (for fast eviction)
+	serverMeta    map[string]*mcpServerMeta       // serverID → metadata
 	byFingerprint map[mcpServerFingerprint]string // fingerprint → serverID
 }
 
@@ -133,7 +133,12 @@ func (r *MCPRegistry) RegisterServerTools(serverID string, tools []Tool, builtin
 // RegisterServerToolsWithOpts is the extended form of RegisterServerTools.
 // Use this when transport metadata (for rename detection) or per-tool
 // RequiresAdminAsk overrides (FR-064) are available.
-func (r *MCPRegistry) RegisterServerToolsWithOpts(serverID string, toolList []Tool, builtins *BuiltinRegistry, opts MCPServerOpts) []MCPCollision {
+func (r *MCPRegistry) RegisterServerToolsWithOpts(
+	serverID string,
+	toolList []Tool,
+	builtins *BuiltinRegistry,
+	opts MCPServerOpts,
+) []MCPCollision {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

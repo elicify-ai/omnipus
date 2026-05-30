@@ -15,7 +15,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
-import { useChatStore } from './chat'
+import { useChatStore, getMessages } from './chat'
 import { useSessionStore } from './session'
 
 const SID = 'reconnect-test-session'
@@ -82,9 +82,9 @@ describe('chat.reconnect — T1.9: reconnect_replay_does_not_double_bucket', () 
       })
     })
 
-    const afterFirstReplay = useChatStore.getState().sessionsById[SID]
+    const afterFirstReplayBucket = useChatStore.getState().sessionsById[SID]
     expect(
-      afterFirstReplay?.messages,
+      afterFirstReplayBucket ? getMessages(afterFirstReplayBucket) : [],
       'After first replay, bucket should have exactly N messages',
     ).toHaveLength(N)
 
@@ -94,13 +94,13 @@ describe('chat.reconnect — T1.9: reconnect_replay_does_not_double_bucket', () 
     })
 
     // After reset, bucket should be empty (wiped for fresh replay)
-    const afterReset = useChatStore.getState().sessionsById[SID]
+    const afterResetBucket = useChatStore.getState().sessionsById[SID]
     expect(
-      afterReset?.messages,
+      afterResetBucket ? getMessages(afterResetBucket) : [],
       'After resetSessionForReplay, bucket must be wiped to empty',
     ).toHaveLength(0)
     expect(
-      afterReset?.isReplaying,
+      afterResetBucket?.isReplaying,
       'After resetSessionForReplay, isReplaying must be true',
     ).toBe(true)
 
@@ -120,18 +120,19 @@ describe('chat.reconnect — T1.9: reconnect_replay_does_not_double_bucket', () 
       })
     })
 
-    const afterSecondReplay = useChatStore.getState().sessionsById[SID]
+    const afterSecondReplayBucket = useChatStore.getState().sessionsById[SID]
+    const afterSecondReplayMsgs = afterSecondReplayBucket ? getMessages(afterSecondReplayBucket) : []
 
     // Core assertion: exactly N messages, not 2N
     expect(
-      afterSecondReplay?.messages,
+      afterSecondReplayMsgs,
       `After reconnect replay, bucket must have exactly ${N} messages, not ${N * 2}. ` +
-        `Got: ${afterSecondReplay?.messages.length}. ` +
+        `Got: ${afterSecondReplayMsgs.length}. ` +
         'This means resetSessionForReplay did NOT wipe the bucket before the second replay.',
     ).toHaveLength(N)
 
     // Verify message content is correct (not corrupted by merging)
-    const messages = afterSecondReplay?.messages ?? []
+    const messages = afterSecondReplayMsgs
     for (let i = 0; i < N; i++) {
       expect(messages[i].content).toBe(`Message number ${i}`)
     }
@@ -145,7 +146,7 @@ describe('chat.reconnect — T1.9: reconnect_replay_does_not_double_bucket', () 
 
     const bucket = useChatStore.getState().sessionsById[freshSid]
     expect(bucket, 'resetSessionForReplay must create the bucket even if it did not exist').toBeDefined()
-    expect(bucket?.messages).toHaveLength(0)
+    expect(bucket ? getMessages(bucket) : []).toHaveLength(0)
     expect(bucket?.isReplaying).toBe(true)
   })
 })

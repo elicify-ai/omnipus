@@ -29,7 +29,7 @@ import (
 //
 // Instead of dropping the orphan (which silently loses data), we look the id
 // up in the transcript — which always has the tool name + arguments — and
-// synthesise the missing side of the pair. For missing tool_results the
+// synthesize the missing side of the pair. For missing tool_results the
 // transcript only carries metadata, not the actual result text; we re-invoke
 // idempotent tools to regenerate the real result, and emit a short error
 // stub for anything non-idempotent to unstick the conversation.
@@ -130,7 +130,7 @@ func collectToolIDs(messages []providers.Message) (declared, resolved map[string
 	return declared, resolved
 }
 
-// injectSyntheticToolUses patches assistant messages with synthesised tool_use
+// injectSyntheticToolUses patches assistant messages with synthesized tool_use
 // blocks for every orphan tool_result found between this assistant and the
 // next one. Anthropic's invariant is "each tool_result's tool_use must be in
 // the preceding assistant", so that's exactly the scope we patch. The
@@ -235,7 +235,7 @@ func injectSyntheticToolResults(
 
 	// Walk the input with a plain index so we can fast-forward past the
 	// tool_result block that follows an owner assistant. Each message is
-	// copied exactly once into the output; synthesised tool_results are
+	// copied exactly once into the output; synthesized tool_results are
 	// appended at the end of each owner's tool_result block.
 	out := make([]providers.Message, 0, len(messages)+len(orphanUses))
 	i := 0
@@ -253,7 +253,7 @@ func injectSyntheticToolResults(
 			out = append(out, messages[j])
 			j++
 		}
-		// Append one synthesised result per unresolved tool_use.
+		// Append one synthesized result per unresolved tool_use.
 		for _, id := range ids {
 			entry := transcriptIndex[id]
 			content, handled := tryReinvokeIdempotent(ctx, id, entry, toolRegistry, agentID, toolPolicy, stats)

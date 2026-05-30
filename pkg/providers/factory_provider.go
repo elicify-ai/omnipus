@@ -168,7 +168,37 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		}
 		return provider, modelID, nil
 
-	case "litellm", "openrouter", "groq", "zhipu", "gemini", "google", "nvidia",
+	case "openrouter":
+		// OpenRouter: inject temperature=0 and seed=42 for deterministic responses
+		// unless the caller has explicitly overridden them in ExtraBody.
+		if cfg.APIKey() == "" && cfg.APIBase == "" {
+			return nil, "", fmt.Errorf("api_key or api_base is required for HTTP-based protocol %q", protocol)
+		}
+		apiBase := cfg.APIBase
+		if apiBase == "" {
+			apiBase = GetDefaultAPIBase(protocol)
+		}
+		extraBody := map[string]any{
+			"temperature": float64(0),
+			"seed":        42,
+		}
+		for k, v := range cfg.ExtraBody {
+			extraBody[k] = v
+		}
+		p, err := NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
+			cfg.APIKey(),
+			apiBase,
+			cfg.Proxy,
+			cfg.MaxTokensField,
+			cfg.RequestTimeout,
+			extraBody,
+		)
+		if err != nil {
+			return nil, "", err
+		}
+		return p, modelID, nil
+
+	case "litellm", "groq", "zhipu", "gemini", "google", "nvidia",
 		"ollama", "moonshot", "shengsuanyun", "deepseek", "cerebras",
 		"vivgrid", "volcengine", "vllm", "qwen", "qwen-intl", "qwen-international", "dashscope-intl",
 		"qwen-us", "dashscope-us", "mistral", "avian", "longcat", "modelscope", "novita",

@@ -13,6 +13,7 @@
 // failure is logged via slog but never bubbled up to the caller, except
 // the boot-abort path (FR-063) which uses a stderr fallback before exit
 // (see boot_abort.go).
+
 package audit
 
 import (
@@ -104,6 +105,29 @@ const (
 	// would flood the audit log if a misconfigured deployment kept calling
 	// ask-policy tools. Closes V2.B silent-failure-hunter BE CRIT-1.
 	EventApproverFallback = "approver.fallback"
+
+	// EventTurnCancelAttempt — INFO. A cancel request arrived for a session.
+	// Emitted for every attempt including duplicates and no-op cancels (FR-10,
+	// FR-11). The was_fired field indicates whether this attempt triggered an
+	// actual interrupt or was a no-op (e.g. turn already finished).
+	EventTurnCancelAttempt = "turn.cancel.attempt"
+
+	// EventTurnCancelled — INFO. A canceled turn has fully exited and the
+	// transcript has been marked. Contains the cancel_method ("graceful" or
+	// "hard") and the list of descendant turn IDs that were also canceled
+	// (FR-15, FR-17, FR-18).
+	EventTurnCancelled = "turn.cancelled"
+
+	// EventTurnCancelStuck — WARN. The turn goroutine did not exit within
+	// 5 seconds after the hard-abort signal was sent. The turn has been
+	// detached (abandoned=true) and the gateway will stop waiting for it
+	// (FR-19, FR-20, FR-21).
+	EventTurnCancelStuck = "turn.cancel.stuck"
+
+	// EventCancelAbusePattern — WARN. A single canceller (user + channel)
+	// sent >= 10 cancel requests within 60 seconds, suggesting runaway client
+	// logic or intentional abuse (FR-25a).
+	EventCancelAbusePattern = "cancel.abuse_pattern"
 )
 
 // ---------------------------------------------------------------------------
@@ -160,7 +184,7 @@ const (
 	AskDenyReasonSaturated AskDenyReason = "saturated"
 
 	// AskDenyReasonBatchShortCircuit — a prior call in the same sequential
-	// ask batch was denied or cancelled, so this and every subsequent
+	// ask batch was denied or canceled, so this and every subsequent
 	// sibling call is auto-denied. FR-065.
 	AskDenyReasonBatchShortCircuit AskDenyReason = "batch_short_circuit"
 )
@@ -217,7 +241,7 @@ const (
 // substantially different field sets from the existing tool_call/exec
 // schema, and forcing them through `Parameters`/`Details` would discard
 // type information that downstream consumers need (e.g. `args_hash`,
-// `cancelled_tool_call_ids`, `latency_ms`).
+// `canceled_tool_call_ids`, `latency_ms`).
 //
 // Best-effort contract: emission failure logs to slog and returns nil.
 // The audit subsystem MUST NOT block tool execution. Boot-abort paths
@@ -308,7 +332,11 @@ func cloneFields(m map[string]any) map[string]any {
 //
 // `note` is optional; the spec mandates the literal string "mid_turn_policy_change"
 // when the re-check (FR-079) observes a flip from the filter snapshot.
-func EmitToolPolicyDenyAttempted(ctx context.Context, logger *Logger, agentID, toolName, source, sessionID, turnID, toolCallID, note string) {
+func EmitToolPolicyDenyAttempted(
+	ctx context.Context,
+	logger *Logger,
+	agentID, toolName, source, sessionID, turnID, toolCallID, note string,
+) {
 	fields := map[string]any{
 		"agent_id":     agentID,
 		"tool_name":    toolName,
@@ -327,7 +355,12 @@ func EmitToolPolicyDenyAttempted(ctx context.Context, logger *Logger, agentID, t
 //
 // `args` is hashed via ArgsHash and previewed via ArgsPreview before
 // emission so callers do not have to remember to redact.
-func EmitToolPolicyAskRequested(ctx context.Context, logger *Logger, approvalID, toolCallID, toolName, agentID, sessionID, turnID string, args map[string]any) {
+func EmitToolPolicyAskRequested(
+	ctx context.Context,
+	logger *Logger,
+	approvalID, toolCallID, toolName, agentID, sessionID, turnID string,
+	args map[string]any,
+) {
 	hash, _ := ArgsHash(args)
 	fields := map[string]any{
 		"approval_id":  approvalID,
@@ -343,7 +376,13 @@ func EmitToolPolicyAskRequested(ctx context.Context, logger *Logger, approvalID,
 }
 
 // EmitToolPolicyAskGranted — INFO. FR-054, FR-074.
-func EmitToolPolicyAskGranted(ctx context.Context, logger *Logger, approvalID, approverUserID, toolName, agentID, sessionID, turnID string, latencyMS int64, argsHash string) {
+func EmitToolPolicyAskGranted(
+	ctx context.Context,
+	logger *Logger,
+	approvalID, approverUserID, toolName, agentID, sessionID, turnID string,
+	latencyMS int64,
+	argsHash string,
+) {
 	fields := map[string]any{
 		"approval_id":      approvalID,
 		"approver_user_id": approverUserID,
@@ -360,10 +399,17 @@ func EmitToolPolicyAskGranted(ctx context.Context, logger *Logger, approvalID, a
 // EmitToolPolicyAskDenied — INFO. FR-047, FR-054, FR-074, FR-065.
 //
 // For batch short-circuit denies (FR-065) the caller passes the list of
-// cancelled tool_call_ids in `cancelledToolCallIDs`; pass nil for non-batch
+// canceled tool_call_ids in `cancelledToolCallIDs`; pass nil for non-batch
 // denies. `approverUserID` is "" for system-deny paths (timeout, restart,
 // saturated, batch_short_circuit).
-func EmitToolPolicyAskDenied(ctx context.Context, logger *Logger, approvalID, approverUserID, toolName, agentID, sessionID, turnID string, reason AskDenyReason, argsHash string, cancelledToolCallIDs []string) {
+func EmitToolPolicyAskDenied(
+	ctx context.Context,
+	logger *Logger,
+	approvalID, approverUserID, toolName, agentID, sessionID, turnID string,
+	reason AskDenyReason,
+	argsHash string,
+	cancelledToolCallIDs []string,
+) {
 	if !IsValidAskDenyReason(reason) {
 		slog.Error("audit: invalid AskDenyReason, refusing to emit",
 			"approval_id", approvalID, "reason", string(reason))
@@ -380,7 +426,7 @@ func EmitToolPolicyAskDenied(ctx context.Context, logger *Logger, approvalID, ap
 		"args_hash":        argsHash,
 	}
 	if len(cancelledToolCallIDs) > 0 {
-		fields["cancelled_tool_call_ids"] = cancelledToolCallIDs
+		fields["canceled_tool_call_ids"] = cancelledToolCallIDs
 	}
 	Emit(ctx, logger, EventToolPolicyAskDenied, SeverityInfo, fields)
 }
@@ -420,13 +466,18 @@ func EmitAgentConfigCorrupt(ctx context.Context, logger *Logger, agentID, agentT
 // `entries` lists each invalid entry (e.g. `default_policy="banana"`);
 // the slice form is preserved so multiple invalid values in one config
 // emit one event, not N.
-func EmitAgentConfigInvalidPolicyValue(ctx context.Context, logger *Logger, agentID, agentType, path string, entries []InvalidPolicyEntry) {
+func EmitAgentConfigInvalidPolicyValue(
+	ctx context.Context,
+	logger *Logger,
+	agentID, agentType, path string,
+	entries []InvalidPolicyEntry,
+) {
 	out := make([]map[string]any, 0, len(entries))
 	for _, e := range entries {
 		out = append(out, map[string]any{
-			"field":   e.Field,
-			"value":   e.Value,
-			"reason":  e.Reason,
+			"field":  e.Field,
+			"value":  e.Value,
+			"reason": e.Reason,
 		})
 	}
 	Emit(ctx, logger, EventAgentConfigInvalidPolicyValue, SeverityHigh, map[string]any{
@@ -461,7 +512,13 @@ func EmitAgentConfigUnknownToolInPolicy(ctx context.Context, logger *Logger, age
 // `sources` is the ordered list of sources observed for the colliding name,
 // e.g. ["builtin", "mcp:srv-A"]. `kept` is the source whose entry survived
 // the dedup pass per FR-034 precedence (builtin > first-MCP).
-func EmitToolAssemblyDuplicateName(ctx context.Context, logger *Logger, toolName string, sources []string, kept string) {
+func EmitToolAssemblyDuplicateName(
+	ctx context.Context,
+	logger *Logger,
+	toolName string,
+	sources []string,
+	kept string,
+) {
 	Emit(ctx, logger, EventToolAssemblyDuplicateName, SeverityHigh, map[string]any{
 		"tool_name": toolName,
 		"sources":   sources,
@@ -503,7 +560,12 @@ func EmitGatewayConfigInvalidValue(ctx context.Context, logger *Logger, configKe
 }
 
 // EmitTurnAbortedSyntheticLoop — WARN. FR-084.
-func EmitTurnAbortedSyntheticLoop(ctx context.Context, logger *Logger, agentID, sessionID, turnID string, syntheticErrorCount int) {
+func EmitTurnAbortedSyntheticLoop(
+	ctx context.Context,
+	logger *Logger,
+	agentID, sessionID, turnID string,
+	syntheticErrorCount int,
+) {
 	Emit(ctx, logger, EventTurnAbortedSyntheticLoop, SeverityWarn, map[string]any{
 		"agent_id":              agentID,
 		"session_id":            sessionID,

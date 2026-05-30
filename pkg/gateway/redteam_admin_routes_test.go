@@ -56,7 +56,9 @@ import (
 //
 // Documents threat C6 from the insider-pentest report.
 func TestRedteam_AdminRoutes_BypassCoverage_RealMux(t *testing.T) {
-	t.Logf("documents C6 (admin-route bypass coverage) from insider-pentest report; current control is RequireNotBypass on each admin route")
+	t.Logf(
+		"documents C6 (admin-route bypass coverage) from insider-pentest report; current control is RequireNotBypass on each admin route",
+	)
 
 	api := newTestRestAPIWithHome(t)
 
@@ -120,14 +122,24 @@ func TestRedteam_AdminRoutes_BypassCoverage_RealMux(t *testing.T) {
 					route.method, route.path)
 				skipped++
 			default:
-				t.Errorf("C6 GAP CONFIRMED: %s %s returned %d under dev_mode_bypass=true; expected 503 from RequireNotBypass. Body: %s",
-					route.method, route.path, w.Code, w.Body.String())
+				t.Errorf(
+					"C6 GAP CONFIRMED: %s %s returned %d under dev_mode_bypass=true; expected 503 from RequireNotBypass. Body: %s",
+					route.method,
+					route.path,
+					w.Code,
+					w.Body.String(),
+				)
 				failed++
 			}
 		})
 	}
-	t.Logf("TestRedteam_AdminRoutes_BypassCoverage_RealMux: %d passed, %d skipped (404 — handled elsewhere), %d failed (gap), out of %d total",
-		passed, skipped, failed, len(allAdminRoutes))
+	t.Logf(
+		"TestRedteam_AdminRoutes_BypassCoverage_RealMux: %d passed, %d skipped (404 — handled elsewhere), %d failed (gap), out of %d total",
+		passed,
+		skipped,
+		failed,
+		len(allAdminRoutes),
+	)
 }
 
 // TestRedteam_AdminRoutes_BypassExempt_Documented documents which routes
@@ -148,7 +160,10 @@ func TestRedteam_AdminRoutes_BypassExempt_Documented(t *testing.T) {
 	// the documented expectation.
 	expectedExemptions := []string{}
 	if len(expectedExemptions) != 0 {
-		t.Errorf("documented bypass exemptions should be empty by default; got %v — review and shrink", expectedExemptions)
+		t.Errorf(
+			"documented bypass exemptions should be empty by default; got %v — review and shrink",
+			expectedExemptions,
+		)
 	}
 	assert.Empty(t, expectedExemptions, "admin-route bypass-exempt set must stay empty")
 }

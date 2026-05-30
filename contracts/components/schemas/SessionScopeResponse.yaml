@@ -1,0 +1,16 @@
+type: object
+description: Response from GET /security/session-scope.
+required:
+  - dm_scope
+properties:
+  dm_scope:
+    type: string
+    enum:
+      - main
+      - per-peer
+      - per-channel-peer
+      - per-account-channel-peer
+    description: >
+      Current DM session scoping strategy. Controls how incoming direct messages
+      are routed to session threads. Changes require a gateway restart to take effect.
+    example: "per-channel-peer"

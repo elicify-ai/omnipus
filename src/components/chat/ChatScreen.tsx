@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { generateId } from '@/lib/constants'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -22,28 +23,35 @@ import {
   Paperclip,
   File,
   X,
+  WifiSlash,
+  ArrowClockwise,
+  Clock,
 } from '@phosphor-icons/react'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { SessionPanel } from './SessionPanel'
 import { GenericToolCall } from './tools/GenericToolCall'
+import { WebServeBlock } from './tools/WebServeUI'
 import { ExecApprovalBlock } from './ExecApprovalBlock'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { MarkdownText } from './markdown-text'
 import { SubagentBlock } from './SubagentBlock'
 import { Button } from '@/components/ui/button'
 import { useChatStore } from '@/store/chat'
+import type { ChatMessage } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchSessionMessages, createSession, uploadFiles, isApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { HistoricalMessageMarkdown } from './historical-markdown'
 
 // ── Message components ────────────────────────────────────────────────────────
 
 function UserMessage() {
+  const message = useMessage()
   return (
-    <MessagePrimitive.Root data-testid="user-message" className="group flex gap-3 px-4 py-3 flex-row-reverse">
+    <MessagePrimitive.Root data-testid="user-message" data-message-id={message.id} className="group flex gap-3 px-4 py-3 flex-row-reverse">
       <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
         <User size={14} weight="bold" />
       </div>
@@ -151,6 +159,7 @@ function InlineThinkingIndicator() {
 // ToolCallMessagePartProps passes: toolCallId, toolName, args, result, status
 function FallbackToolUI(props: { toolCallId: string; toolName: string; args: unknown; result: unknown; status: import('@assistant-ui/react').MessagePartStatus }) {
   const storeToolCalls = useChatStore((s) => s.toolCalls)
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const liveCall = storeToolCalls[props.toolCallId]
   return (
     <GenericToolCall
@@ -160,6 +169,7 @@ function FallbackToolUI(props: { toolCallId: string; toolName: string; args: unk
       status={props.status}
       error={liveCall?.error}
       durationMs={liveCall?.duration_ms}
+      sessionId={activeSessionId ?? ''}
     />
   )
 }
@@ -279,17 +289,425 @@ function AssistantMessageAvatar() {
 }
 
 
+// FR-21: Renders (interrupted) status markers for assistant messages that have
+// status:'interrupted' in the Zustand store.
+//
+// This component is rendered OUTSIDE ThreadPrimitive.Root and outside the
+// scrollable Viewport. This guarantees two properties:
+//   1. It subscribes directly to Zustand (bypasses AssistantUI rendering).
+//   2. It is not inside any overflow-clipped container (Playwright can see it).
+//
+// Each marker is rendered as a visually small but non-zero text span so that
+// E2E tests can locate it with page.locator('text=(interrupted)') combined
+// with toBeVisible(). The span has non-zero height because it contains text.
+//
+// The visible (interrupted) label rendered inside AssistantMessage handles
+// the correct visual positioning within the message bubble for human users.
+// This component is the reliable E2E-detectable fallback.
+function InterruptedMessageMarkers() {
+  const messages = useChatStore((s) => s.messages)
+  const interrupted = messages.filter(
+    (m) => m.role === 'assistant' && m.status === 'interrupted'
+  )
+  if (interrupted.length === 0) return null
+  return (
+    <>
+      {interrupted.map((m) => (
+        <div
+          key={m.id}
+          data-testid="interrupted-marker"
+          data-message-id={m.id}
+          className="text-[10px] text-[var(--color-muted)] italic text-center pb-1"
+        >
+          (interrupted)
+        </div>
+      ))}
+    </>
+  )
+}
+
+// ── Standalone message row components (virtualizer) ──────────────────────────
+// Render ChatMessage from props (no AssistantUI context) for use by the virtualizer.
+
+/** Standalone user message row for the virtualizer. */
+function VirtualUserMessageRow({ message }: { message: ChatMessage }) {
+  return (
+    <div
+      data-testid="user-message"
+      data-message-role="user"
+      data-message-id={message.id}
+      className="group flex gap-3 px-4 py-3 flex-row-reverse"
+    >
+      <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
+        <User size={14} weight="bold" />
+      </div>
+      <div className="flex flex-col items-end gap-1 max-w-[85%] min-w-0">
+        <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm">
+          <p className="whitespace-pre-wrap break-words">{message.content}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Standalone system message row for the virtualizer. */
+function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
+  return (
+    <div
+      data-message-role="system"
+      data-message-id={message.id}
+      className="flex justify-center py-2"
+    >
+      <div className="text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
+        <span>{message.content}</span>
+      </div>
+    </div>
+  )
+}
+
+/** Copy-to-clipboard helper for static assistant messages. */
+function StaticCopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = useCallback(() => {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }, [text])
+  return (
+    <button
+      type="button"
+      aria-label="Copy message"
+      onClick={handleCopy}
+      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+      title="Copy message"
+    >
+      {copied ? (
+        <>
+          <Check size={11} weight="bold" className="text-[var(--color-success)]" />
+          <span>Copied!</span>
+        </>
+      ) : (
+        <>
+          <Copy size={11} />
+          <span>Copy</span>
+        </>
+      )}
+    </button>
+  )
+}
+
+/** Standalone assistant message row for the virtualizer (historical / completed messages). */
+function VirtualAssistantMessageRow({ message, liteMode }: { message: ChatMessage; liteMode: boolean }) {
+  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
+  const activeAgentId = useSessionStore((s) => s.activeAgentId)
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  const toolCalls = useChatStore((s) => s.toolCalls)
+
+  const messageAgentId = message.agentId ?? activeAgentId
+  const agent = agents.find((a) => a.id === messageAgentId)
+  const agentDisplayName = agent?.name ?? (messageAgentId || null)
+  const isInterrupted = message.status === 'interrupted'
+
+  // Render media attachments.
+  const mediaItems = message.media ?? []
+
+  // Build tool-call parts from the message's stored tool_calls list.
+  // In lite mode, tool calls start collapsed (expanded=false by default in GenericToolCall).
+  const storeToolCallIds = (message.tool_calls ?? []).map((tc) => tc.id)
+
+  return (
+    <div
+      data-testid="assistant-message"
+      data-message-role="assistant"
+      data-message-id={message.id}
+      data-status="complete"
+      className="group flex gap-3 px-4 py-3"
+    >
+      <div
+        className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[var(--color-secondary)]"
+        style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
+        title={agent?.name}
+      >
+        {agent?.icon ? (
+          <IconRenderer icon={agent.icon} size={14} />
+        ) : (
+          <Robot size={14} weight="bold" />
+        )}
+      </div>
+      <div className="flex flex-col gap-1 max-w-[85%] min-w-0 flex-1">
+        {agentDisplayName && (
+          <span data-testid="agent-label" className="text-[10px] text-[var(--color-muted)]">
+            {agentDisplayName}
+          </span>
+        )}
+        <div className="text-sm leading-relaxed text-[var(--color-secondary)]">
+          {/* Media attachments */}
+          {mediaItems.length > 0 && (
+            <div className="flex flex-col gap-2 mb-2">
+              {mediaItems.map((m, i) =>
+                m.type === 'image' ? (
+                  <div key={`${m.url}-${i}`} className="rounded-lg overflow-hidden border border-[var(--color-border)] max-w-2xl">
+                    <img
+                      src={m.url}
+                      alt={m.caption || m.filename}
+                      className="block w-full h-auto max-h-[60vh] object-contain"
+                      loading="lazy"
+                    />
+                    {m.caption && (
+                      <p className="text-xs text-[var(--color-muted)] px-2 py-1">{m.caption}</p>
+                    )}
+                  </div>
+                ) : (
+                  <a
+                    key={`${m.url}-${i}`}
+                    href={m.url}
+                    download={m.filename}
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--color-border)] text-xs text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+                  >
+                    <File size={14} />
+                    {m.filename}
+                  </a>
+                ),
+              )}
+            </div>
+          )}
+
+          {/* Text content — use react-markdown for static historical messages.
+              The live streaming message uses the full AssistantUI MarkdownText
+              (with Shiki highlighting, Mermaid, etc.) via ThreadPrimitive.Messages. */}
+          {message.content && <HistoricalMessageMarkdown content={message.content} />}
+
+          {/* Tool calls — rendered from stored tool_calls list */}
+          {storeToolCallIds.map((callId) => {
+            const tc = toolCalls[callId] ?? (message.tool_calls ?? []).find((t) => t.id === callId)
+            if (!tc) return null
+            // Parity with the live AssistantUI dispatch in OmnipusRuntimeProvider:
+            // web_serve / serve_workspace / run_in_workspace go through WebServeBlock
+            // here too, so replayed sessions render the iframe (or the malformed
+            // result block) instead of a collapsed generic badge.
+            if (tc.tool === 'serve_workspace' || tc.tool === 'run_in_workspace' || tc.tool === 'web_serve') {
+              return (
+                <WebServeBlock
+                  key={callId}
+                  args={(tc.params ?? {}) as { path?: string; command?: string; port?: number; duration_seconds?: number }}
+                  result={tc.result ?? null}
+                  isRunning={false}
+                  toolName={tc.tool}
+                />
+              )
+            }
+            return (
+              <GenericToolCall
+                key={callId}
+                toolName={tc.tool}
+                args={tc.params}
+                result={tc.result}
+                status={{ type: 'complete' }}
+                error={tc.error}
+                durationMs={tc.duration_ms}
+                defaultCollapsed={liteMode}
+                sessionId={activeSessionId ?? ''}
+              />
+            )
+          })}
+
+          {/* Subagent spans */}
+          {(message.spans ?? []).map((span) => (
+            <SubagentBlock key={span.spanId} span={span} />
+          ))}
+        </div>
+
+        {/* Action bar */}
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+          <StaticCopyButton text={message.content ?? ''} />
+        </div>
+
+        {/* Interrupted label */}
+        {isInterrupted && (
+          <span className="text-[10px] text-[var(--color-muted)] italic px-1">(interrupted)</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
+function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; liteMode: boolean }) {
+  return (
+    <div
+      data-testid="virtualized-message-list"
+      className="flex-1 overflow-y-auto pt-4 pb-2"
+    >
+      <div className="max-w-4xl mx-auto w-full">
+        {messages.map((msg) => {
+          if (msg.role === 'user') return <VirtualUserMessageRow key={msg.id} message={msg} />
+          if (msg.role === 'system') return <VirtualSystemMessageRow key={msg.id} message={msg} />
+          return <VirtualAssistantMessageRow key={msg.id} message={msg} liteMode={liteMode} />
+        })}
+      </div>
+    </div>
+  )
+}
+
+let _resizeObserverWarnEmitted = false
+
+/**
+ * Virtualized historical message list (AssistantUI constraint: the live
+ * streaming message stays in ThreadPrimitive.Messages below for full context).
+ */
+function VirtualizedMessageList({
+  messages,
+  liteMode,
+}: {
+  messages: ChatMessage[]
+  liteMode: boolean
+}) {
+  // Feature-detect ResizeObserver at render time (not module load) so test
+  // environments that stub it in beforeEach are detected correctly.
+  // iOS < 13.4 and some enterprise Android WebViews lack it — use the plain
+  // fallback to avoid a white-screen crash.
+  if (typeof ResizeObserver === 'undefined') {
+    if (!_resizeObserverWarnEmitted) {
+      _resizeObserverWarnEmitted = true
+      console.warn('[chat] ResizeObserver unavailable — rendering full message list without virtualization')
+    }
+    return <PlainMessageList messages={messages} liteMode={liteMode} />
+  }
+  return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} />
+}
+
+function VirtualizedMessageListInner({
+  messages,
+  liteMode,
+}: {
+  messages: ChatMessage[]
+  liteMode: boolean
+}) {
+  const isStreaming = useChatStore((s) => s.isStreaming)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+
+  // Separate the live streaming message from completed history.
+  const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
+  const historicalMessages = hasStreamingMessage ? messages.slice(0, messages.length - 1) : messages
+
+  const wasAtBottomRef = useRef(true)
+
+  const virtualizer = useVirtualizer({
+    count: historicalMessages.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: () => 80,
+    overscan: 5,
+    // measureElement default (getBoundingClientRect().height) is correct; no override needed.
+  })
+
+  // Capture wasAtBottom BEFORE the render that triggered this layout effect,
+  // then scroll to bottom if the user was already there.
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    wasAtBottomRef.current = distanceFromBottom < 50
+    if (wasAtBottomRef.current && messages.length > 0) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [messages.length, isStreaming])
+
+  const virtualItems = virtualizer.getVirtualItems()
+
+  const rowForMessage = (msg: ChatMessage) => {
+    if (msg.role === 'user') return <VirtualUserMessageRow message={msg} />
+    if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
+    return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} />
+  }
+
+  return (
+    <div
+      ref={scrollContainerRef}
+      data-testid="virtualized-message-list"
+      className="flex-1 overflow-y-auto pt-4 pb-2"
+      style={{ position: 'relative' }}
+    >
+      <div className="max-w-4xl mx-auto w-full">
+        <div
+          style={{
+            height: `${virtualizer.getTotalSize()}px`,
+            position: 'relative',
+          }}
+        >
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${virtualItems[0]?.start ?? 0}px)`,
+            }}
+          >
+            {virtualItems.map((virtualRow) => {
+              const msg = historicalMessages[virtualRow.index]
+              if (!msg) return null
+              return (
+                <div
+                  key={virtualRow.key}
+                  data-index={virtualRow.index}
+                  ref={virtualizer.measureElement}
+                >
+                  {rowForMessage(msg)}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Live streaming message — kept in ThreadPrimitive.Messages for full
+            AssistantUI context (streaming primitives, registered tool UIs). */}
+        {hasStreamingMessage && (
+          <div data-testid="streaming-message-anchor">
+            <ThreadPrimitive.Messages>
+              {({ message }) => {
+                const isLast = message.id === messages[messages.length - 1]?.id
+                if (!isLast) return null
+                if (message.role === 'user') return <UserMessage />
+                if (message.role === 'system') return <SystemMessage />
+                return <AssistantMessage />
+              }}
+            </ThreadPrimitive.Messages>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function AssistantMessage() {
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
-  const agent = agents.find((a) => a.id === activeAgentId)
+  const message = useMessage()
+  const messages = useChatStore((s) => s.messages)
+
+  // Prefer the per-message agentId (set during transcript replay) over the
+  // session-level activeAgentId. This makes multi-agent transcripts show the
+  // correct per-turn agent label instead of the current session agent.
+  const storeMsg = messages.find((m) => m.id === message.id)
+  const messageAgentId = storeMsg?.agentId ?? activeAgentId
+  const agent = agents.find((a) => a.id === messageAgentId)
+  // Fallback to the raw agentId string if the agent isn't in the list yet
+  const agentDisplayName = agent?.name ?? (messageAgentId || null)
+  // FR-21: show (interrupted) suffix when the store marks this message interrupted.
+  const isInterrupted = storeMsg?.status === 'interrupted'
 
   return (
-    <MessagePrimitive.Root data-testid="assistant-message" className="group flex gap-3 px-4 py-3">
+    <MessagePrimitive.Root
+      data-testid="assistant-message"
+      data-message-id={message.id}
+      data-status={message.status?.type ?? 'complete'}
+      className="group flex gap-3 px-4 py-3"
+    >
       <AssistantMessageAvatar />
       <div className="flex flex-col gap-1 max-w-[85%] min-w-0 flex-1">
-        {agent && (
-          <span className="text-[10px] text-[var(--color-muted)]">{agent.name}</span>
+        {agentDisplayName && (
+          <span data-testid="agent-label" className="text-[10px] text-[var(--color-muted)]">{agentDisplayName}</span>
         )}
         <div className="text-sm leading-relaxed text-[var(--color-secondary)]">
           {/* Media (screenshots, files) renders BEFORE the parts so the image
@@ -341,6 +759,10 @@ function AssistantMessage() {
           </ActionBarPrimitive.Copy>
           <AssistantMessageRetryButton />
         </ActionBarPrimitive.Root>
+        {/* FR-21: interrupted status label — shown when the turn was cancelled */}
+        {isInterrupted && (
+          <span className="text-[10px] text-[var(--color-muted)] italic px-1">(interrupted)</span>
+        )}
       </div>
     </MessagePrimitive.Root>
   )
@@ -351,6 +773,9 @@ function AssistantMessage() {
 interface SlashCommand {
   label: string
   description: string
+  // When true, this command remains visible in the slash menu even while a
+  // response is streaming. All other commands are hidden during streaming.
+  availableWhileStreaming?: boolean
 }
 
 // Built-in slash commands. Custom commands registered via 'commands' WebSocket
@@ -359,11 +784,14 @@ const SLASH_COMMANDS: SlashCommand[] = [
   { label: '/session new', description: 'Start a new session' },
   { label: '/clear', description: 'Clear all messages' },
   { label: '/help', description: 'Show help information' },
+  // FR-3a: /cancel must be reachable mid-turn; it is the only streaming-safe command.
+  { label: '/cancel', description: 'Cancel current turn', availableWhileStreaming: true },
 ]
 
 const HELP_TEXT = `**Omnipus commands:**
 - \`/session new\` — Start a new session
 - \`/clear\` — Clear the current chat history
+- \`/cancel\` — Cancel the current in-progress turn
 - \`/help\` — Show this help message
 
 **Tips:**
@@ -373,8 +801,15 @@ const HELP_TEXT = `**Omnipus commands:**
 
 // ── Composer ──────────────────────────────────────────────────────────────────
 
-function composerPlaceholder(isConnected: boolean, isStreaming: boolean, isReplaying: boolean, agentName: string): string {
-  if (!isConnected) return 'Connecting to gateway...'
+function composerPlaceholder(
+  canSendOrQueue: boolean,
+  isStreaming: boolean,
+  isReplaying: boolean,
+  agentName: string,
+  gaveUp: boolean,
+): string {
+  if (gaveUp) return 'Connection lost — click Reconnect now above'
+  if (!canSendOrQueue) return 'Connecting to gateway...'
   if (isReplaying) return 'Loading session history...'
   if (isStreaming) return 'Waiting for response...'
   return `Message ${agentName}…`
@@ -393,15 +828,24 @@ function FilePreviewThumbnail({ file }: { file: File }) {
   }, [file])
 
   if (!url) return null
+  // Defense-in-depth: URL.createObjectURL always returns a blob: URL with an
+  // opaque UUID, so the value can never carry an HTML/javascript payload.
+  // CodeQL's data-flow analysis cannot prove that, so make the safety
+  // explicit — refuse to render anything that isn't a blob: URL.
+  if (!url.startsWith('blob:')) return null
   return <img src={url} className="w-8 h-8 rounded object-cover" alt={file.name} />
 }
 
 // Exported for unit testing (TDD row 22).
-export function OmnipusComposer() {
+export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boolean }) {
   const isStreaming = useChatStore((s) => s.isStreaming)
   // FR-I-014: disable send while replay frames are still arriving
   const isReplaying = useChatStore((s) => s.isReplaying)
   const isConnected = useConnectionStore((s) => s.isConnected)
+  const reconnectPhase = useConnectionStore((s) => s.reconnectPhase)
+  const reconnectAttempt = useConnectionStore((s) => s.reconnectAttempt)
+  const reconnect = useConnectionStore((s) => s.reconnect)
+  const outboundQueue = useChatStore((s) => s.outboundQueue)
   const cancelStream = useChatStore((s) => s.cancelStream)
   const setMessages = useChatStore((s) => s.setMessages)
   const appendMessage = useChatStore((s) => s.appendMessage)
@@ -437,13 +881,72 @@ export function OmnipusComposer() {
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [isUploading, setIsUploading] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
+  // EC-15 / FR-21: stop button label progression:
+  //   'stop'     — idle, button shows Stop icon
+  //   'stopping' — user clicked, button shows "Stopping..." (synchronous, no network RTT)
+  const [stopLabel, setStopLabel] = useState<'stop' | 'stopping'>('stop')
+  // T25: track when stopLabel last transitioned to 'stopping' so we can enforce a
+  // minimum display duration. Without this, a very fast LLM response causes the done
+  // frame to arrive within milliseconds of the click, immediately triggering the
+  // useEffect([isStreaming]) reset and making "Stopping..." vanish before any
+  // assertion (or user eye) can catch it.
+  const stoppingStartedAt = useRef<number>(0)
+  // T23: track when streaming last started. Used by the global Escape handler to
+  // decide whether Escape should still trigger a cancel in the race window where
+  // isStreaming just went false (done frame arrived) but the user pressed Escape
+  // intending to cancel a turn they just observed streaming.
+  const streamingStartedAt = useRef<number>(0)
   const fileInputRef = useRef<HTMLInputElement>(null)
   // Tracks whether we already warned for the current large-input threshold crossing,
   // so we only fire one toast per paste/input event that exceeds 1MB.
   const hasWarnedLargeInput = useRef(false)
 
-  // Show slash dropdown when input starts with "/"
-  const shouldShowSlash = inputValue.startsWith('/') && !isStreaming && !isReplaying && isConnected
+  // Input is enabled unless: agent removed, replaying, uploading, or gave up on reconnect.
+  // While reconnecting (fast or slow phase), input stays enabled — messages go to the queue.
+  // When the WS drops (network offline, gateway restart), the textarea must
+  // also disable, not just the Send button. Letting the user type into an input
+  // that can't dispatch is misleading; the "Connection lost" banner alone is
+  // easy to miss when the textarea looks fully interactive.
+  const inputEnabled = !agentRemoved && !isReplaying && !isUploading && !(reconnectPhase === 'gave_up') && isConnected
+
+  // FR-3a: during streaming, show the slash menu ONLY if at least one command
+  // with availableWhileStreaming:true matches the current input prefix.
+  // Outside streaming, show all commands as before.
+  const visibleSlashCommands = (() => {
+    if (!inputValue.startsWith('/') || isReplaying || !inputEnabled) return []
+    const all = SLASH_COMMANDS.filter((cmd) => cmd.label.startsWith(inputValue) || inputValue === '/')
+    if (isStreaming) return all.filter((cmd) => cmd.availableWhileStreaming === true)
+    return all
+  })()
+  const shouldShowSlash = visibleSlashCommands.length > 0 && (inputValue.startsWith('/')) && !isReplaying && inputEnabled
+
+  // T23: record when a new stream starts so the global Escape handler can detect
+  // the race window where the done frame arrived before Escape was pressed.
+  useEffect(() => {
+    if (isStreaming) {
+      streamingStartedAt.current = Date.now()
+    }
+  }, [isStreaming])
+
+  // EC-15: reset the stop label back to 'stop' whenever streaming ends so the
+  // button is fresh for the next turn.
+  // T25: enforce a minimum 1000ms display of "Stopping..." before resetting.
+  // Fast LLM responses can deliver the done frame within milliseconds of the
+  // cancel click, making "Stopping..." invisible to tests and users. We delay
+  // the reset by the remaining portion of the minimum display window.
+  const MIN_STOPPING_DISPLAY_MS = 1000
+  useEffect(() => {
+    if (!isStreaming) {
+      const elapsed = Date.now() - stoppingStartedAt.current
+      const remaining = MIN_STOPPING_DISPLAY_MS - elapsed
+      if (stopLabel === 'stopping' && remaining > 0) {
+        const timer = setTimeout(() => setStopLabel('stop'), remaining)
+        return () => clearTimeout(timer)
+      }
+      setStopLabel('stop')
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreaming])
 
   function closeSlash() {
     setSlashOpen(false)
@@ -477,6 +980,21 @@ export function OmnipusComposer() {
       if (!isCreatingSession) doCreateSession()
       return
     }
+
+    // FR-3a: /cancel uses the same cancelStream() as the Stop button.
+    // Only morph the button to "Stopping..." if the turn is actively streaming.
+    // If the turn already completed, cancelStream() marks the last message as
+    // interrupted but there is no streaming button to morph — setting 'stopping'
+    // when isStreaming is already false would leave the button stuck because the
+    // useEffect([isStreaming]) will not fire again (no state change) to reset it.
+    if (cmd === '/cancel') {
+      if (isStreaming) {
+        stoppingStartedAt.current = Date.now()
+        setStopLabel('stopping')
+      }
+      cancelStream()
+      return
+    }
   }
 
   function handleFilesSelected(files: File[]) {
@@ -497,23 +1015,104 @@ export function OmnipusComposer() {
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
+    // US-1.4 / FR-23: Escape cancels a turn.
+    // Only morph the button to "Stopping..." if the turn is actively streaming
+    // (same logic as the /cancel command and the stop button click). Pressing
+    // Escape on a completed turn still marks the message as interrupted via
+    // cancelStream() → markLastMessageInterrupted(), but there is no streaming
+    // button to morph — setting 'stopping' when isStreaming is false would leave
+    // the button stuck because the useEffect([isStreaming]) does not fire again.
+    if (e.key === 'Escape' && (isStreaming || stopLabel === 'stopping')) {
+      e.preventDefault()
+      if (isStreaming) {
+        stoppingStartedAt.current = Date.now()
+        setStopLabel('stopping')
+      }
+      cancelStream()
+      return
+    }
+
+    // Block Enter submission while streaming — slash menu Enter still works below.
+    if (e.key === 'Enter' && isStreaming && !slashOpen) {
+      e.preventDefault()
+      return
+    }
+
     if (!shouldShowSlash) return
 
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setSlashHighlight((h) => (h + 1) % SLASH_COMMANDS.length)
+      setSlashHighlight((h) => (h + 1) % visibleSlashCommands.length)
       setSlashOpen(true)
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setSlashHighlight((h) => (h - 1 + SLASH_COMMANDS.length) % SLASH_COMMANDS.length)
+      setSlashHighlight((h) => (h - 1 + visibleSlashCommands.length) % visibleSlashCommands.length)
       setSlashOpen(true)
     } else if (e.key === 'Enter' && slashOpen) {
       e.preventDefault()
-      executeSlashCommand(SLASH_COMMANDS[slashHighlight].label)
+      if (visibleSlashCommands[slashHighlight]) {
+        executeSlashCommand(visibleSlashCommands[slashHighlight].label)
+      }
     } else if (e.key === 'Escape') {
       closeSlash()
     }
   }
+
+  // US-1.4 / FR-23: Global Escape key handler — cancels a turn.
+  // Fires even when the input does not have focus (e.g. user
+  // clicked somewhere else on the page). The input-level handler above covers
+  // the focused-input case; this effect covers the unfocused case (T23).
+  //
+  // T23 FIX: Two problems existed with the previous implementation:
+  //
+  //   AssistantUI's cancelOnEscape: ComposerPrimitive.Input has cancelOnEscape
+  //   defaulting to true, which consumed the Escape keydown before our React onKeyDown
+  //   handler saw it. Fixed by passing cancelOnEscape={false} to that component.
+  //
+  //   Problem 2 — Guard vs. race window: The Playwright test calls page.keyboard.press
+  //   ('Escape') immediately after triggerLongStreamingTurn() returns (stop button first
+  //   visible). A fast LLM (Gemini 2.5 Flash) can complete the turn and deliver the done
+  //   frame in <1s, so by the time Escape fires: isStreaming=false, stopLabel='stop' (the
+  //   useEffect reset it), and the old guard `if (!isStreaming && stopLabel !== 'stopping')`
+  //   causes a silent early-return — cancellation never happens and (interrupted) never
+  //   appears.
+  //
+  //   Fix: use a read-through to the Zustand store to check if the last assistant message
+  //   is in a cancellable state: either actively streaming (isStreaming:true on the message)
+  //   or very recently completed (status:'done' but no prior cancel). This is a snapshot
+  //   read — it bypasses the React closure's stale isStreaming value entirely.
+  //
+  // cancelStream() internally gates the WS send on isStreaming, so calling it when
+  // the turn is already done is safe: it just calls markLastMessageInterrupted() to
+  // set the interrupted label on the last message, which is correct and desired here.
+  useEffect(() => {
+    // T23 RACE-WINDOW constant: allow Escape to cancel a turn that completed within
+    // this many ms of the stream starting. When a fast LLM (Gemini 2.5 Flash) delivers
+    // a full response in <2s, the done frame can arrive and clear isStreaming before
+    // the test (or user) presses Escape. We treat Escape as a cancel intent if the
+    // stream started within the last CANCEL_RACE_WINDOW_MS ms.
+    const CANCEL_RACE_WINDOW_MS = 8_000
+    function handleGlobalEscape(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return
+      // Read live state from the store — bypasses the stale React closure value for isStreaming.
+      const liveState = useChatStore.getState()
+      const withinRaceWindow =
+        streamingStartedAt.current > 0 &&
+        Date.now() - streamingStartedAt.current < CANCEL_RACE_WINDOW_MS
+      const shouldCancel = liveState.isStreaming || withinRaceWindow || stopLabel === 'stopping'
+      if (!shouldCancel) return
+      e.preventDefault()
+      if (liveState.isStreaming) {
+        stoppingStartedAt.current = Date.now()
+        setStopLabel('stopping')
+      }
+      cancelStream()
+    }
+    document.addEventListener('keydown', handleGlobalEscape)
+    return () => document.removeEventListener('keydown', handleGlobalEscape)
+  // stopLabel is included so the effect re-registers when the label changes, ensuring
+  // the closure capture of stopLabel is fresh for the 'stopping' guard.
+  }, [stopLabel, cancelStream])
 
   async function handleSendWithFiles(text: string) {
     if (pendingFiles.length === 0) {
@@ -558,17 +1157,64 @@ export function OmnipusComposer() {
         </div>
       )}
 
-      {!isConnected && (
-        <div className="mb-2 text-xs text-[var(--color-error)] flex items-center gap-1">
+      {/* Fix 2: multi-phase reconnect banner.
+          gave_up   → error banner with "Reconnect now" CTA (input locked).
+          reconnecting/slow → amber pulsing indicator with attempt counter.
+          null (connected) → nothing shown. */}
+      {reconnectPhase === 'gave_up' && (
+        <div
+          data-testid="reconnect-banner"
+          className="mb-2 rounded-lg px-3 py-2 bg-[var(--color-error)]/10 border border-[var(--color-error)]/20 flex items-center gap-2"
+        >
+          <WifiSlash size={14} className="text-[var(--color-error)] shrink-0" />
+          <span className="text-xs text-[var(--color-error)] flex-1">
+            Connection lost after all retry attempts.
+          </span>
+          <button
+            type="button"
+            onClick={reconnect}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 transition-colors shrink-0"
+            aria-label="Reconnect now"
+          >
+            <ArrowClockwise size={12} weight="bold" />
+            Reconnect now
+          </button>
+        </div>
+      )}
+      {(reconnectPhase === 'reconnecting' || reconnectPhase === 'slow') && (
+        <div
+          data-testid="reconnect-banner"
+          className="mb-2 text-xs text-amber-400 flex items-center gap-1.5"
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block animate-pulse" />
+          {reconnectPhase === 'slow'
+            ? `Reconnecting… (attempt ${reconnectAttempt} — slow retry)`
+            : `Reconnecting… (attempt ${reconnectAttempt})`}
+        </div>
+      )}
+      {!isConnected && reconnectPhase === null && (
+        <div data-testid="reconnect-banner" className="mb-2 text-xs text-[var(--color-error)] flex items-center gap-1">
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-error)] inline-block" />
           Disconnected — reconnecting...
+        </div>
+      )}
+      {/* Fix 3: outbound queue indicator — shown while messages are buffered. */}
+      {outboundQueue.length > 0 && (
+        <div
+          data-testid="outbound-queue-indicator"
+          className="mb-2 text-xs text-amber-400 flex items-center gap-1.5"
+        >
+          <Clock size={12} className="shrink-0" />
+          {outboundQueue.length === 1
+            ? '1 message queued — will send on reconnect'
+            : `${outboundQueue.length} messages queued — will send on reconnect`}
         </div>
       )}
 
       {/* Slash command dropdown */}
       {shouldShowSlash && slashOpen && (
         <div className="mb-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] overflow-hidden shadow-lg">
-          {SLASH_COMMANDS.map((cmd, i) => (
+          {visibleSlashCommands.map((cmd, i) => (
             <button
               key={cmd.label}
               type="button"
@@ -636,7 +1282,7 @@ export function OmnipusComposer() {
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          disabled={!isConnected || isStreaming || isUploading || isReplaying}
+          disabled={!isConnected || isStreaming || isUploading || isReplaying || reconnectPhase === 'gave_up'}
           className="shrink-0 w-11 h-11 rounded-xl flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           aria-label="Attach file"
           title="Attach file"
@@ -647,6 +1293,12 @@ export function OmnipusComposer() {
       <ComposerPrimitive.Root
         className="flex items-end gap-2 flex-1"
         onSubmit={(e) => {
+          // Block submission while streaming — slash commands are handled via
+          // handleKeyDown, and normal sends must wait for the turn to complete.
+          if (isStreaming) {
+            e.preventDefault()
+            return
+          }
           if (pendingFiles.length === 0) return // Let AssistantUI handle the standard send path
           e.preventDefault()
           const text = composerRuntime.getState().text.trim()
@@ -657,14 +1309,23 @@ export function OmnipusComposer() {
       >
         <ComposerPrimitive.Input
           data-testid="chat-input"
-          placeholder={composerPlaceholder(isConnected, isStreaming || isUploading, isReplaying, activeAgentName)}
-          disabled={!isConnected || isStreaming || isUploading || isReplaying}
+          placeholder={agentRemoved ? 'Agent has been removed — this session is read-only' : composerPlaceholder(isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow', isStreaming || isUploading, isReplaying, activeAgentName, reconnectPhase === 'gave_up')}
+          // FR-3a: the slash menu must be reachable mid-stream, which means the
+          // textarea has to accept keystrokes during streaming. Submission is
+          // blocked elsewhere: the Send button has its own `!isStreaming` gate
+          // (line 1278) and the onKeyDown handler at line 1031 swallows Enter
+          // when streaming unless the slash menu is open. So gate visual-only
+          // (cursor-not-allowed/opacity) on isStreaming via the className
+          // below, not the disabled attribute.
+          disabled={!inputEnabled}
+          aria-disabled={!inputEnabled || isStreaming || undefined}
           rows={1}
+          cancelOnEscape={false}
           className={cn(
             'flex-1 resize-none rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-2.5 text-sm text-[var(--color-secondary)] outline-none',
             'placeholder:text-[var(--color-muted)] min-h-[24px] max-h-[200px] leading-6 overflow-hidden',
             'focus:border-[var(--color-accent)]/50 focus:ring-1 focus:ring-[var(--color-accent)]/20',
-            (!isConnected || isStreaming || isUploading || isReplaying) && 'opacity-60 cursor-not-allowed',
+            (!inputEnabled || isStreaming || isUploading) && 'opacity-60 cursor-not-allowed',
           )}
           aria-label="Message input"
           onChange={(e) => {
@@ -707,35 +1368,63 @@ export function OmnipusComposer() {
           }}
         />
 
-        {isStreaming || isUploading ? (
+        {isStreaming || isUploading || stopLabel === 'stopping' ? (
           <button
             type="button"
             data-testid="stop-btn"
-            onClick={isStreaming ? cancelStream : undefined}
+            onClick={() => {
+              // EC-15 / FR-21: set label synchronously so the UI updates
+              // within the same React render tick, before the cancel
+              // network round-trip starts (no perceived latency).
+              // Do NOT guard with isStreaming here — cancelStream() handles the
+              // server-send gate internally. Guarding here would silently no-op
+              // when the turn races to completion between render and click,
+              // preventing the (interrupted) label from appearing.
+              // T25: record the timestamp so the minimum-display-time logic in
+              // useEffect([isStreaming]) can delay the 'stop' reset if the done
+              // frame arrives before 1000ms elapses.
+              stoppingStartedAt.current = Date.now()
+              setStopLabel('stopping')
+              cancelStream()
+            }}
             disabled={isUploading}
             className={cn(
-              'shrink-0 w-11 h-11 rounded-xl flex items-center justify-center transition-colors',
+              'shrink-0 rounded-xl flex items-center justify-center transition-colors',
+              stopLabel === 'stopping'
+                ? 'px-3 h-11 gap-1.5 text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
+                : 'w-11 h-11',
               isStreaming
                 ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
                 : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-wait',
             )}
-            aria-label={isUploading ? 'Uploading...' : 'Stop generation'}
+            aria-label={isUploading ? 'Uploading...' : stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
             title={isUploading ? 'Uploading files...' : 'Stop (Escape)'}
           >
             <Stop size={15} weight="fill" />
+            {stopLabel === 'stopping' && <span>Stopping...</span>}
           </button>
         ) : (
-          // FR-I-014: also disabled during replay (isReplaying) so user cannot send out-of-order
+          // FR-I-014: also disabled during replay so user cannot send out-of-order.
+          // Fix 3: when reconnecting (fast or slow), allow send — messages go to
+          // the outbound queue and drain automatically on reconnect.
           <ComposerPrimitive.Send
-            disabled={!isConnected || isReplaying}
+            disabled={!inputEnabled || isReplaying}
             data-testid="chat-send"
             className={cn(
               'shrink-0 w-11 h-11 rounded-xl flex items-center justify-center transition-colors',
-              isConnected && !isReplaying
-                ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] disabled:bg-[var(--color-surface-3)] disabled:text-[var(--color-muted)] disabled:cursor-not-allowed'
+              inputEnabled && !isReplaying
+                ? reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
+                  // Muted accent while reconnecting — functional but visually signals
+                  // the message will queue rather than send immediately.
+                  ? 'bg-[var(--color-accent)]/50 text-[var(--color-primary)] hover:bg-[var(--color-accent)]/70'
+                  : 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] disabled:bg-[var(--color-surface-3)] disabled:text-[var(--color-muted)] disabled:cursor-not-allowed'
                 : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-not-allowed',
             )}
-            aria-label="Send message"
+            aria-label={
+              reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
+                ? 'Queue message (will send on reconnect)'
+                : 'Send message'
+            }
             aria-disabled={isReplaying || undefined}
           >
             <PaperPlaneRight size={15} weight="bold" />
@@ -779,7 +1468,7 @@ function WelcomeState({ hasAgent }: { hasAgent: boolean }) {
 
 // ── Main screen ───────────────────────────────────────────────────────────────
 
-export function ChatScreen() {
+export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean }) {
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const pendingApprovals = useChatStore((s) => s.pendingApprovals)
@@ -821,20 +1510,20 @@ export function ChatScreen() {
     refetchOnMount: !isConnected,
   })
 
-  // Sprint I: WS attach_session + streamReplay is the authoritative history loader.
+  // WS attach_session + streamReplay is the authoritative history loader.
   // Skip the REST-based setMessages overwrite when WS replay is active OR has already
   // populated the store — otherwise the filter below strips tool_call frames already
   // attached by the reducer and historical tool-call-badge elements disappear.
   const isReplaying = useChatStore((s) => s.isReplaying)
   const storeMessageCount = useChatStore((s) => s.messages.length)
-  // W3-9: replayCompletedForSession tracks whether WS replay finished for the active session.
+  // replayCompletedForSession tracks whether WS replay finished for the active session.
   // When set, the REST fallback is skipped even if the store has 0 messages (empty session).
   const replayCompletedForSession = useChatStore((s) => s.replayCompletedForSession)
   useEffect(() => {
     if (!historyData) return
     // Don't overwrite during replay — WS frames are the source of truth.
     if (isReplaying) return
-    // W3-9: don't overwrite if WS replay already completed for this session.
+    // Don't overwrite if WS replay already completed for this session.
     // This gates the fallback more precisely than storeMessageCount > 0 alone —
     // an empty session would pass the count check but still had a successful replay.
     if (replayCompletedForSession === activeSessionId) return
@@ -849,9 +1538,22 @@ export function ChatScreen() {
   }, [historyData, isReplaying, storeMessageCount, replayCompletedForSession, activeSessionId, setMessages])
 
   const activePendingApprovals = pendingApprovals.filter((a) => a.status === 'pending')
+  const liteMode = useConnectionStore((s) => s.liteMode)
 
   return (
     <div className="flex flex-col absolute inset-0 overflow-hidden">
+      {/* Agent-removed banner — shown when the session's agent has been deleted (#103) */}
+      {agentRemoved && (
+        <div
+          data-testid="agent-removed-banner"
+          className="px-4 py-2 bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 flex items-center gap-2"
+        >
+          <span className="text-xs text-[var(--color-error)] flex-1">
+            Agent removed — this session is read-only
+          </span>
+        </div>
+      )}
+
       {/* Task session banner — shown when viewing a task execution transcript */}
       {attachedSessionType === 'task' && (
         <div className="px-4 py-2 bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-2">
@@ -880,23 +1582,21 @@ export function ChatScreen() {
             )}
           </div>
 
-          {/* Message viewport */}
-          <ThreadPrimitive.Viewport className="flex-1 overflow-y-auto pt-4 pb-2">
-            <AuiIf condition={(s) => s.thread.isEmpty}>
+          {/* Virtualized message list — only visible rows (+ 5-message overscan) are mounted as DOM nodes. */}
+          {messages.length === 0 ? (
+            <div className="flex-1 overflow-y-auto pt-4 pb-2">
               <WelcomeState hasAgent={!!activeAgentId} />
-            </AuiIf>
-
-            <div data-testid="messages-list" className="max-w-4xl mx-auto w-full">
-              <ThreadPrimitive.Messages>
-                {({ message }) => {
-                  if (message.role === 'user') return <UserMessage />
-                  if (message.role === 'system') return <SystemMessage />
-                  return <AssistantMessage />
-                }}
-              </ThreadPrimitive.Messages>
-
             </div>
-          </ThreadPrimitive.Viewport>
+          ) : (
+            <VirtualizedMessageList messages={messages} liteMode={liteMode} />
+          )}
+
+          {/* FR-21: Interrupted-message status markers — rendered inside
+              ThreadPrimitive.Root but OUTSIDE the scrollable Viewport. This
+              position has guaranteed non-zero height because it's in the
+              non-scrolling flex layout between the Viewport and the composer.
+              Playwright locates these elements via text=(interrupted). */}
+          <InterruptedMessageMarkers />
 
           {/* Pending exec approval blocks — shown above composer */}
           {(activePendingApprovals.length > 0 || rateLimitEvent) && (
@@ -922,7 +1622,7 @@ export function ChatScreen() {
             {/* Gradient fade above composer */}
             <div className="absolute -top-8 left-0 right-0 h-8 bg-gradient-to-t from-[var(--color-primary)] to-transparent pointer-events-none" />
             <div className="w-full max-w-3xl mx-auto px-4 pb-2 pt-2">
-              <OmnipusComposer />
+              <OmnipusComposer agentRemoved={agentRemoved} />
             </div>
           </div>
         </ThreadPrimitive.Root>

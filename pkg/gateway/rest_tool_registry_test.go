@@ -58,7 +58,12 @@ func newTestRestAPIWithApprovalReg(t *testing.T) (*restAPI, *approvalRegistryV2)
 }
 
 // postToolApproval sends a POST to HandleToolApprovals and returns the recorder.
-func postToolApproval(t *testing.T, api *restAPI, approvalID, action string, adminRole bool) *httptest.ResponseRecorder {
+func postToolApproval(
+	t *testing.T,
+	api *restAPI,
+	approvalID, action string,
+	adminRole bool,
+) *httptest.ResponseRecorder {
 	t.Helper()
 	body := `{"action":"` + action + `"}`
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/tool-approvals/"+approvalID, strings.NewReader(body))
@@ -148,14 +153,14 @@ func TestREST_GetAgentTools_FilteredView(t *testing.T) {
 	// Top-level shape (FR-028).
 	assert.Contains(t, resp, "agent_type", "response must include agent_type")
 	assert.Contains(t, resp, "config", "response must include config")
-	assert.Contains(t, resp, "effective_tools", "response must include effective_tools")
+	assert.Contains(t, resp, "tools", "response must include tools")
 
-	tools, ok := resp["effective_tools"].([]any)
-	require.True(t, ok, "effective_tools must be an array")
+	tools, ok := resp["tools"].([]any)
+	require.True(t, ok, "tools must be an array")
 
 	for i, raw := range tools {
 		entry, ok := raw.(map[string]any)
-		require.True(t, ok, "effective_tools[%d] must be an object", i)
+		require.True(t, ok, "tools[%d] must be an object", i)
 		assert.Contains(t, entry, "name", "entry %d missing 'name'", i)
 		assert.Contains(t, entry, "configured_policy", "entry %d missing 'configured_policy'", i)
 		assert.Contains(t, entry, "effective_policy", "entry %d missing 'effective_policy'", i)
@@ -259,7 +264,6 @@ func TestREST_ApproveDenyCancel_StateTransitions(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.action, func(t *testing.T) {
 			api, reg := newTestRestAPIWithApprovalReg(t)
 
@@ -536,8 +540,8 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 		e1, _ := reg.requestApproval("tc-dr-1", "exec", map[string]any{}, "a", "s", "t", false)
 		e2, _ := reg.requestApproval("tc-dr-2", "read_file", map[string]any{}, "a", "s", "t", false)
 
-		cancelled := reg.cancelAllPendingForRestart()
-		require.Len(t, cancelled, 2)
+		canceled := reg.cancelAllPendingForRestart()
+		require.Len(t, canceled, 2)
 
 		// Both entries must have pre-delivered denied_restart outcomes.
 		for _, e := range []*approvalEntry{e1, e2} {
@@ -618,6 +622,7 @@ func TestApprovalRegistry_AllTransitions(t *testing.T) {
 // Traces to: tool-registry-redesign-spec.md FR-052, FR-081
 func TestWS_SessionStatePayloadSchema(t *testing.T) {
 	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
 	// Attach an approval registry so emitSessionState has a valid registry.
 	handler.approvalRegV2 = newApprovalRegistryV2(64, 300*time.Second)
 
@@ -698,6 +703,7 @@ func TestWS_SessionState_PerUserScoping(t *testing.T) {
 	collectSessionState := func(t *testing.T, role config.UserRole) map[string]any {
 		t.Helper()
 		handler, _, _ := newTestWSHandler(t)
+		t.Cleanup(handler.Wait)
 		handler.approvalRegV2 = reg
 
 		srv := httptest.NewServer(handler)
@@ -770,6 +776,7 @@ func TestWS_ToolApprovalRequired_ExpiresInMs(t *testing.T) {
 	})
 
 	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
 	handler.approvalRegV2 = reg
 
 	// Inject a fake wsConn into handler.sessions directly.
@@ -818,6 +825,61 @@ func TestWS_ToolApprovalRequired_ExpiresInMs(t *testing.T) {
 	assert.Equal(t, entry.TurnID, frame["turn_id"])
 }
 
+// TestWS_ToolApprovalRequired_NilArgsBecomesEmptyObject locks the invariant that a
+// tool invocation with no arguments serializes to "args": {}, never "args": null.
+// Regression: the SPA's ToolApprovalModal calls Object.keys(args) directly; null
+// would crash with "null is not an object (evaluating 'Object.keys(r)')".
+// cloneStringAnyMap in pkg/agent/hooks.go returns nil for empty input, so the
+// broadcast site must defensively coerce nil to an empty map before marshaling.
+func TestWS_ToolApprovalRequired_NilArgsBecomesEmptyObject(t *testing.T) {
+	reg := newApprovalRegistryV2(64, 300*time.Second)
+
+	// Request approval with nil args — mirrors what cloneStringAnyMap produces
+	// when the LLM invokes a tool with no parameters (e.g. system.agent.list).
+	entry, accepted := reg.requestApproval(
+		"tc-nil-args", "system.agent.list",
+		nil, // <-- nil args
+		"agent-na", "sess-na", "turn-na",
+		false,
+	)
+	require.True(t, accepted)
+	t.Cleanup(func() {
+		go func() { reg.resolve(entry.ApprovalID, ApprovalActionCancel) }()
+	})
+
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+	handler.approvalRegV2 = reg
+
+	wc := &wsConn{
+		sendCh: make(chan []byte, 16),
+		doneCh: make(chan struct{}),
+		role:   config.UserRoleAdmin,
+		userID: "nil-args-test",
+	}
+	handler.mu.Lock()
+	if handler.sessions == nil {
+		handler.sessions = make(map[string]*wsConn)
+	}
+	handler.sessions["nil-args-test"] = wc
+	handler.mu.Unlock()
+
+	handler.broadcastToolApprovalRequired(entry)
+
+	var raw []byte
+	select {
+	case raw = <-wc.sendCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("broadcastToolApprovalRequired never put frame into sendCh")
+	}
+
+	// The raw JSON must contain "args":{}, never "args":null.
+	assert.Contains(t, string(raw), `"args":{}`,
+		"args field must serialize as empty object, not null, when the tool has no parameters")
+	assert.NotContains(t, string(raw), `"args":null`,
+		"args field must never be null on the wire — SPA's Object.keys(args) would crash")
+}
+
 // --- registry unit: timeout fires denied_timeout ---
 
 // TestApprovalRegistry_TimeoutTransition verifies that the timeout timer fires and
@@ -854,7 +916,7 @@ func TestApprovalRegistry_TimeoutTransition(t *testing.T) {
 func TestApprovalRegistry_CancelAllPendingForRestart(t *testing.T) {
 	reg := newApprovalRegistryV2(64, 300*time.Second)
 
-	var entries []*approvalEntry
+	entries := make([]*approvalEntry, 0, 3)
 	for i := range 3 {
 		e, accepted := reg.requestApproval(
 			"tc-restart-"+string(rune('0'+i)), "exec",
@@ -866,8 +928,8 @@ func TestApprovalRegistry_CancelAllPendingForRestart(t *testing.T) {
 		entries = append(entries, e)
 	}
 
-	cancelled := reg.cancelAllPendingForRestart()
-	assert.Len(t, cancelled, 3, "must have cancelled all 3 entries")
+	canceled := reg.cancelAllPendingForRestart()
+	assert.Len(t, canceled, 3, "must have canceled all 3 entries")
 
 	for i, e := range entries {
 		select {
@@ -948,6 +1010,7 @@ func TestREST_HandleToolApprovals_NotFound404(t *testing.T) {
 // TestWS_BroadcastToolApprovalRequired_NilEntry verifies nil entry is handled safely.
 func TestWS_BroadcastToolApprovalRequired_NilEntry(t *testing.T) {
 	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
 	// Should not panic.
 	handler.broadcastToolApprovalRequired(nil)
 }

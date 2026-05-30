@@ -1,10 +1,10 @@
 // memory_tools_test.go — Tool-level tests for RememberTool, RecallMemoryTool,
 // and RetrospectiveTool. Traces to: env-awareness-and-memory-spec.md (spec v7).
+
 package tools_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -125,45 +125,6 @@ func (s *simpleMemStore) SearchEntries(query string, limit int) ([]tools.MemoryE
 		}
 	}
 	return results, nil
-}
-
-// ---------------------------------------------------------------------------
-// auditSpy captures audit entries for assertion.
-// ---------------------------------------------------------------------------
-
-type auditEntry struct {
-	Event     string
-	Tool      string
-	SessionID string
-}
-
-type auditSpy struct {
-	entries []auditEntry
-}
-
-func (a *auditSpy) Log(entry interface{}) error {
-	// We use a duck-typed approach since we cannot import pkg/audit in a
-	// black-box test without introducing a cycle. Instead we marshal/unmarshal.
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return err
-	}
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
-		return err
-	}
-	ae := auditEntry{}
-	if v, ok := m["event"].(string); ok {
-		ae.Event = v
-	}
-	if v, ok := m["tool"].(string); ok {
-		ae.Tool = v
-	}
-	if v, ok := m["session_id"].(string); ok {
-		ae.SessionID = v
-	}
-	a.entries = append(a.entries, ae)
-	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -296,7 +257,7 @@ func TestRecallMemoryTool_NoAuditEntryForReads(t *testing.T) {
 		t.Fatal("RecallMemoryTool now implements SetAuditLogger; reads would be audited, violating FR-014")
 	}
 
-	// Behavioural check: run the tool through an audit-wired path and assert
+	// Behavioral check: run the tool through an audit-wired path and assert
 	// the spy logger was never called. We use a real *audit.Logger and count
 	// writes by observing the file it produces.
 	auditDir := t.TempDir()
@@ -472,44 +433,10 @@ func newAuditLogger(t *testing.T, dir string) *AuditLoggerForTest {
 // directly so we need the import.
 //
 // NOTE: Because of how tool tests work, we pass nil to RememberTool/RetrospectiveTool
-// for the audit logger and verify audit behaviour separately. The test just confirms
+// for the audit logger and verify audit behavior separately. The test just confirms
 // the file was created and no errors occurred on tool execution. For the audit
 // entry presence check we verify that the audit logger was called by checking
 // the audit directory for written entries.
 type AuditLoggerForTest struct {
 	dir string
-}
-
-// assertAuditEntryExists scans the audit log directory for a JSONL file containing
-// the given event and tool. Uses raw file scanning to avoid importing pkg/audit.
-func assertAuditEntryExists(t *testing.T, auditDir, event, tool string) {
-	t.Helper()
-	// Audit directory check: if no logger was wired (nil), just skip.
-	entries, err := os.ReadDir(auditDir)
-	if err != nil || len(entries) == 0 {
-		// No audit file written — tools were called with nil audit logger.
-		// This is acceptable; the test notes it.
-		t.Logf("no audit entries in %s (nil logger); audit-path assertion skipped", auditDir)
-		return
-	}
-	found := false
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join(auditDir, entry.Name()))
-		if err != nil {
-			continue
-		}
-		for _, line := range strings.Split(string(raw), "\n") {
-			if strings.Contains(line, `"event":"`+event+`"`) &&
-				strings.Contains(line, `"tool":"`+tool+`"`) {
-				found = true
-				break
-			}
-		}
-	}
-	if !found {
-		t.Logf("audit entry with event=%q tool=%q not found in %s (nil logger is OK)", event, tool, auditDir)
-	}
 }

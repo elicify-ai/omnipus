@@ -35,13 +35,13 @@ beforeEach(() => {
   vi.clearAllMocks()
   // Seed all 5 providers in disconnected state so tests can find them by name
   vi.mocked(fetchProviders).mockResolvedValue([
-    { id: 'openai', display_name: 'OpenAI', status: 'disconnected', models: [] },
-    { id: 'anthropic', display_name: 'Anthropic', status: 'disconnected', models: [] },
-    { id: 'google', display_name: 'Google Gemini', status: 'disconnected', models: [] },
-    { id: 'groq', display_name: 'Groq', status: 'disconnected', models: [] },
-    { id: 'openrouter', display_name: 'OpenRouter', status: 'disconnected', models: [] },
+    { id: 'openai', name: 'OpenAI', display_name: 'OpenAI', status: 'disconnected', models: [] },
+    { id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'disconnected', models: [] },
+    { id: 'google', name: 'Google Gemini', display_name: 'Google Gemini', status: 'disconnected', models: [] },
+    { id: 'groq', name: 'Groq', display_name: 'Groq', status: 'disconnected', models: [] },
+    { id: 'openrouter', name: 'OpenRouter', display_name: 'OpenRouter', status: 'disconnected', models: [] },
   ])
-  vi.mocked(configureProvider).mockResolvedValue({ id: 'openai', status: 'connected', models: [] })
+  vi.mocked(configureProvider).mockResolvedValue({ id: 'openai', name: 'OpenAI', status: 'connected', models: [] })
   vi.mocked(testProvider).mockResolvedValue({ success: true })
 })
 
@@ -89,13 +89,13 @@ describe('provider save & connect integration (test #27)', () => {
     // Initial fetch returns all providers disconnected; after save, anthropic shows connected.
     vi.mocked(fetchProviders)
       .mockResolvedValueOnce([
-        { id: 'openai', display_name: 'OpenAI', status: 'disconnected', models: [] },
-        { id: 'anthropic', display_name: 'Anthropic', status: 'disconnected', models: [] },
-        { id: 'google', display_name: 'Google Gemini', status: 'disconnected', models: [] },
-        { id: 'groq', display_name: 'Groq', status: 'disconnected', models: [] },
-        { id: 'openrouter', display_name: 'OpenRouter', status: 'disconnected', models: [] },
+        { id: 'openai', name: 'OpenAI', display_name: 'OpenAI', status: 'disconnected', models: [] },
+        { id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'disconnected', models: [] },
+        { id: 'google', name: 'Google Gemini', display_name: 'Google Gemini', status: 'disconnected', models: [] },
+        { id: 'groq', name: 'Groq', display_name: 'Groq', status: 'disconnected', models: [] },
+        { id: 'openrouter', name: 'OpenRouter', display_name: 'OpenRouter', status: 'disconnected', models: [] },
       ])
-      .mockResolvedValue([{ id: 'anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-6'] }])
+      .mockResolvedValue([{ id: 'anthropic', name: 'Anthropic', display_name: 'Anthropic', status: 'connected', models: ['claude-sonnet-4-6'] }])
 
     render(<ProvidersSection />, { wrapper })
     await screen.findByText('Anthropic')

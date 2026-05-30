@@ -8,6 +8,8 @@ package gateway
 
 import (
 	"net/http"
+
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 )
 
 // rest_security_wave3.go — Wave 3 operator-facing REST endpoints.
@@ -45,16 +47,17 @@ func (a *restAPI) HandleExecProxyStatus(w http.ResponseWriter, r *http.Request) 
 	if proxy == nil {
 		// Proxy disabled OR failed to bind at startup. The enabled flag
 		// distinguishes the two cases for the UI.
-		jsonOK(w, map[string]any{
-			"enabled": enabled,
-			"running": false,
+		jsonOK(w, gen.ExecProxyStatus{
+			Enabled: enabled,
+			Running: false,
 		})
 		return
 	}
 
-	jsonOK(w, map[string]any{
-		"enabled": enabled,
-		"running": true,
-		"address": proxy.Addr(),
+	addr := proxy.Addr()
+	jsonOK(w, gen.ExecProxyStatus{
+		Enabled: enabled,
+		Running: true,
+		Address: &addr,
 	})
 }

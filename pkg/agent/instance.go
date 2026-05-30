@@ -249,7 +249,7 @@ func NewAgentInstance(
 
 	// Derive agent type and policy snapshot for LLM-call-time tool filtering (FR-003, FR-041).
 	// agentType uses the config-stored Type when present; falls back to "custom" for
-	// unrecognised types. The registry may upgrade this to "core" via SetAgentType()
+	// unrecognized types. The registry may upgrade this to "core" via SetAgentType()
 	// for runtime-seeded agents (FR-045).
 	resolvedAgentType := "custom"
 	if agentCfg != nil {
@@ -480,7 +480,7 @@ func expandHome(path string) string {
 		// When OMNIPUS_HOME is set, expand ~ to the parent of OMNIPUS_HOME so
 		// that paths like ~/.omnipus/sessions resolve under OMNIPUS_HOME.
 		// When OMNIPUS_HOME is not set, use os.UserHomeDir() for byte-identical
-		// behaviour to the pre-OMNIPUS_HOME code.
+		// behavior to the pre-OMNIPUS_HOME code.
 		var home string
 		if h := os.Getenv("OMNIPUS_HOME"); h != "" {
 			// OMNIPUS_HOME is already the .omnipus directory; its parent is the

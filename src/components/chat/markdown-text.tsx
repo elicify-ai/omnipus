@@ -22,7 +22,7 @@ import {
 import { SyntaxHighlighter, CopyCodeHeader } from './shiki-highlighter'
 import { ImageLightbox } from './image-lightbox'
 import { rehypePhosphorEmoji } from '@/lib/rehype-phosphor-emoji'
-import { rewriteLegacyURL } from '@/lib/preview-url'
+import { rewriteLegacyURL, resolveEffectivePreview } from '@/lib/preview-url'
 import { isSafeHref } from '@/lib/url-safe'
 import { fetchAboutInfo } from '@/lib/api'
 import * as PhosphorIcons from '@phosphor-icons/react'
@@ -171,17 +171,20 @@ function MarkdownTextImpl() {
     staleTime: 5 * 60 * 1000,
   })
 
-  // previewPort is null until aboutInfo resolves. When it is falsy (0, null,
-  // undefined) we skip the rewrite entirely and pass the original href through
-  // unchanged — substituting port 0 would produce ERR_UNSAFE_PORT (F-16).
-  // Once aboutInfo loads and re-renders the component, the correct port is used.
-  const previewPort = aboutInfo?.preview_port ?? null
+  // resolveEffectivePreview returns null when neither preview_origin nor
+  // preview_port are usable; in that case we pass href through unchanged.
+  // Substituting port 0 would produce ERR_UNSAFE_PORT (F-16); the helper
+  // guards against that and against the preview_origin-yields-zero-port case.
+  const effectivePreview = resolveEffectivePreview(
+    aboutInfo ?? null,
+    typeof window !== 'undefined' ? window.location.hostname : '',
+  )
 
   const markdownComponents = {
     ...staticMarkdownComponents,
     a: ({ href, children, ...props }: ComponentPropsWithoutRef<'a'>) => {
-      const rewritten = previewPort
-        ? rewriteLegacyURL(href ?? '', window.location.hostname, previewPort)
+      const rewritten = effectivePreview
+        ? rewriteLegacyURL(href ?? '', effectivePreview.hostname, effectivePreview.port)
         : (href ?? '')
       // Scheme allow-list: reject javascript:, data:, vbscript:, etc. — V2.C / FE H1.
       // Sanitized links render as plain text with a subtle visual cue; no href is set.

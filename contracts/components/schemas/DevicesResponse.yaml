@@ -1,0 +1,22 @@
+title: DevicesResponse
+description: >
+  Response from GET /api/v1/devices. Lists both pending pairing requests and
+  already-paired devices.
+type: object
+required:
+  - pending
+  - paired
+additionalProperties: false
+properties:
+  pending:
+    type: array
+    items:
+      $ref: './DevicePending.yaml'
+    maxItems: 100
+    description: Pairing requests awaiting approval. Capped at 100.
+  paired:
+    type: array
+    items:
+      $ref: './DevicePaired.yaml'
+    maxItems: 100
+    description: Devices that have been successfully paired. Capped at 100.

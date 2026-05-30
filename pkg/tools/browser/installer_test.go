@@ -24,12 +24,12 @@ func TestEnsureChromium_PrefersInstalledBinary(t *testing.T) {
 		t.Skipf("unsupported platform: %v", err)
 	}
 	versionDir := filepath.Join(root, "131.0.6778.108", cftDownloadID+"-"+platform)
-	if err := os.MkdirAll(versionDir, 0o755); err != nil {
-		t.Fatal(err)
+	if mkdirErr := os.MkdirAll(versionDir, 0o755); mkdirErr != nil {
+		t.Fatal(mkdirErr)
 	}
 	binPath := filepath.Join(versionDir, headlessShellBinaryName())
-	if err := os.WriteFile(binPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(binPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
 	got, err := EnsureChromium(context.Background(), root)
@@ -60,11 +60,11 @@ func TestEnsureChromium_DownloadsAndExtracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.Write([]byte("#!/bin/sh\nexit 0\n")); err != nil {
-		t.Fatal(err)
+	if _, writeErr := w.Write([]byte("#!/bin/sh\nexit 0\n")); writeErr != nil {
+		t.Fatal(writeErr)
 	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := zw.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	zipBytes := zipBuf.Bytes()
 

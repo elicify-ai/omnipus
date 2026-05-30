@@ -15,11 +15,11 @@
 package gateway
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
@@ -44,11 +44,9 @@ func (a *restAPI) patchAgentOwnership(w http.ResponseWriter, r *http.Request, ag
 	}
 
 	// Decode body.
-	var body struct {
-		OwnerUsername string `json:"owner_username"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+	var body gen.AgentOwnershipUpdateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "AgentOwnershipUpdateRequest", &body, validateEnabled) {
 		return
 	}
 
@@ -74,7 +72,10 @@ func (a *restAPI) patchAgentOwnership(w http.ResponseWriter, r *http.Request, ag
 		return
 	}
 
-	newOwner := body.OwnerUsername
+	newOwner := ""
+	if body.OwnerUsername != nil {
+		newOwner = *body.OwnerUsername
+	}
 
 	// Clearing the owner requires explicit confirmation header to prevent accidents.
 	if newOwner == "" {
@@ -127,11 +128,9 @@ func (a *restAPI) patchAgentOwnership(w http.ResponseWriter, r *http.Request, ag
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"success":        true,
-		"agent_id":       agentID,
-		"owner_username": newOwner,
+	jsonOK(w, gen.AgentOwnerUpdateResponse{
+		Success:       true,
+		AgentId:       agentID,
+		OwnerUsername: newOwner,
 	})
 }

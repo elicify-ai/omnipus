@@ -65,7 +65,9 @@ func render(p Provider, workspaceOverride string) string {
 	var sb strings.Builder
 
 	sb.WriteString("## Environment\n\n")
-	sb.WriteString("You are running inside the Omnipus agent harness. Read this once; it tells you where you can work and where you cannot.\n\n")
+	sb.WriteString(
+		"You are running inside the Omnipus agent harness. Read this once; it tells you where you can work and where you cannot.\n\n",
+	)
 
 	sb.WriteString("### Paths you can use\n")
 	fmt.Fprintf(&sb, "- Workspace (your working directory): %s\n", workspace)

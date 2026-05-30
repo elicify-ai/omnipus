@@ -1,0 +1,37 @@
+title: MediaPart
+description: >
+  One media attachment within a MediaFrame. Each part maps to a single file
+  stored in the media registry and accessible via /api/v1/media/{ref}.
+type: object
+required:
+  - type
+  - url
+  - filename
+  - content_type
+additionalProperties: false
+properties:
+  type:
+    type: string
+    enum:
+      - image
+      - audio
+      - video
+      - file
+    description: Media category.
+  url:
+    type: string
+    minLength: 1
+    description: >
+      Relative URL of the form /api/v1/media/{ref}. The SPA prefixes this with
+      the gateway origin to construct the full URL for <img>, <video>, etc.
+  filename:
+    type: string
+    minLength: 1
+    description: Original filename as stored in the media registry.
+  content_type:
+    type: string
+    minLength: 1
+    description: MIME type of the file (e.g., "image/png").
+  caption:
+    type: string
+    description: Optional human-readable caption for display below the media.

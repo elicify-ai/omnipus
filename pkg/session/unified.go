@@ -337,6 +337,127 @@ func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry
 	return nil
 }
 
+// MarkLastEntryTruncated finds the last assistant transcript entry for the
+// given session in transcript.jsonl that belongs to turnID and rewrites it
+// with truncated=true.
+//
+// H2: The turnID parameter scopes the backward-walk to entries whose
+// turn_id matches. This prevents a cancel on turn T2 from mutating the
+// clean final assistant entry of a previously-completed turn T1 when both
+// share the same sessionID.
+//
+// If turnID is empty, the function falls back to the pre-H2 behavior (match
+// the last assistant entry regardless of turn_id) and logs a warning. This
+// preserves backward compatibility with any call sites that cannot supply
+// a turn ID.
+//
+// Acquires the same in-process mutex as AppendTranscript. Does NOT touch
+// context.jsonl (LLM history) — per FR-14a, the partial content there remains
+// untouched so the next turn's LLM context sees natural truncation.
+//
+// Returns nil if no matching assistant entry is found (e.g., cancel arrived
+// before any assistant content was written). Returns an error only on I/O
+// failure.
+func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID string) error {
+	if err := validateSessionID(sessionID); err != nil {
+		return err
+	}
+	if turnID == "" {
+		slog.Warn(
+			"unified_store: MarkLastEntryTruncated called with empty turnID — falling back to last-assistant-entry behavior",
+			"session_id",
+			sessionID,
+		)
+	}
+
+	us.mu.Lock()
+	defer us.mu.Unlock()
+
+	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
+	data, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// No transcript at all — nothing to mark; treat as no-op.
+			return nil
+		}
+		return fmt.Errorf("unified_store: mark truncated: read transcript: %w", err)
+	}
+
+	// Split into non-empty lines and parse.
+	rawLines := bytes.Split(data, []byte{'\n'})
+	entries := make([]json.RawMessage, 0, len(rawLines))
+	for _, line := range rawLines {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		entries = append(entries, json.RawMessage(line))
+	}
+
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// Walk backward to find the last assistant entry matching turnID.
+	// When turnID is empty (backward-compat path) any assistant entry matches.
+	targetIdx := -1
+	for i := len(entries) - 1; i >= 0; i-- {
+		var e TranscriptEntry
+		if jsonErr := json.Unmarshal(entries[i], &e); jsonErr != nil {
+			// Skip malformed lines.
+			slog.Warn(
+				"unified_store: mark truncated: skipping malformed line",
+				"session_id",
+				sessionID,
+				"index",
+				i,
+				"error",
+				jsonErr,
+			)
+			continue
+		}
+		if e.Role != "assistant" {
+			continue
+		}
+		if turnID != "" && e.TurnID != turnID {
+			continue
+		}
+		targetIdx = i
+		break
+	}
+
+	if targetIdx == -1 {
+		// No matching assistant entry found — no-op, not an error.
+		return nil
+	}
+
+	// Unmarshal the target entry, set Truncated, re-marshal into the slot.
+	var target TranscriptEntry
+	if jsonErr := json.Unmarshal(entries[targetIdx], &target); jsonErr != nil {
+		return fmt.Errorf("unified_store: mark truncated: unmarshal target entry: %w", jsonErr)
+	}
+	target.Truncated = true
+	rewritten, jsonErr := json.Marshal(target)
+	if jsonErr != nil {
+		return fmt.Errorf("unified_store: mark truncated: marshal updated entry: %w", jsonErr)
+	}
+	entries[targetIdx] = json.RawMessage(rewritten)
+
+	// Rebuild the file contents (one JSON object per line, no trailing newline on last).
+	var buf bytes.Buffer
+	for i, line := range entries {
+		buf.Write(line)
+		if i < len(entries)-1 {
+			buf.WriteByte('\n')
+		}
+	}
+
+	if writeErr := fileutil.WriteFileAtomic(transcriptPath, buf.Bytes(), 0o600); writeErr != nil {
+		return fmt.Errorf("unified_store: mark truncated: write transcript: %w", writeErr)
+	}
+	return nil
+}
+
 // ReadTranscript returns all entries from {session-id}/transcript.jsonl.
 func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, error) {
 	if err := validateSessionID(sessionID); err != nil {

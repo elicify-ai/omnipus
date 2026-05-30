@@ -1097,7 +1097,7 @@ Boundary conditions:
 | # | Input | Boundary Type | Expected Output | Traces to | Notes |
 |---|-------|---------------|-----------------|-----------|-------|
 | 1 | `{id:"general-assistant", type:"core", icon:"robot", color:"green", status:"active"}` | Happy path | Green Robot icon on green circle, "core" badge | Scenario: Agent cards render | Standard core agent |
-| 2 | `{id:"omnipus-system", type:"system", icon:"custom-lobster", status:"active"}` | Happy path | Custom SVG, "system" badge | Scenario: Agent cards render | System agent |
+| 2 | `{id:"omnipus-system", type:"system", icon:"custom-octopus", status:"active"}` | Happy path | Custom SVG, "system" badge | Scenario: Agent cards render | System agent |
 | 3 | `{id:"custom-1", type:"custom", icon:"unknown-icon", color:"blue"}` | Boundary | Fallback Robot icon on blue circle | Edge case | Unrecognized icon name |
 | 4 | `{id:"custom-2", type:"custom", icon:"robot", color:null}` | Boundary | Robot icon on default (gray) circle | Edge case | Missing color |
 | 5 | `{id:"", name:""}` | Error | Should not render (filtered out) | Edge case | Empty agent data |

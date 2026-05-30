@@ -1,0 +1,49 @@
+# Omnipus CODEOWNERS
+#
+# Defines default reviewers for paths in this repository. Auto-applied by GitHub
+# when a PR touches a matching path. Combined with branch protection that
+# requires a code-owner review, this gives elicify.ai Pte. Ltd. control over
+# what merges into `main`.
+#
+# Syntax reference: https://docs.github.com/en/repositories/managing-your-repositories-settings-and-customization/customizing-your-repository/about-code-owners
+
+# Default owner — anything not matched below
+*                                       @daniel-piatkowski-ai
+
+# Governance & legal — require explicit review
+LICENSE                                 @daniel-piatkowski-ai
+CLA.md                                  @daniel-piatkowski-ai
+TRADEMARKS.md                           @daniel-piatkowski-ai
+SECURITY.md                             @daniel-piatkowski-ai
+CODE_OF_CONDUCT.md                      @daniel-piatkowski-ai
+.github/CODEOWNERS                      @daniel-piatkowski-ai
+.github/FUNDING.yml                     @daniel-piatkowski-ai
+
+# Roadmap & release planning
+ROADMAP.md                              @daniel-piatkowski-ai
+CHANGELOG.md                            @daniel-piatkowski-ai
+docs/BRD/                               @daniel-piatkowski-ai
+docs/design/                            @daniel-piatkowski-ai
+docs/architecture/ADR-*.md              @daniel-piatkowski-ai
+
+# Contracts (wire-format source of truth)
+contracts/                              @daniel-piatkowski-ai
+scripts/gen-contracts.sh                @daniel-piatkowski-ai
+pkg/api/generated/                      @daniel-piatkowski-ai
+src/lib/api/generated/                  @daniel-piatkowski-ai
+
+# Release pipeline + CI
+.github/workflows/                      @daniel-piatkowski-ai
+.goreleaser.yaml                        @daniel-piatkowski-ai
+Makefile                                @daniel-piatkowski-ai
+docker/                                 @daniel-piatkowski-ai
+scripts/install.sh                      @daniel-piatkowski-ai
+
+# Sandbox + security-critical code paths
+pkg/sandbox/                            @daniel-piatkowski-ai
+pkg/security/                           @daniel-piatkowski-ai
+pkg/credentials/                        @daniel-piatkowski-ai
+pkg/audit/                              @daniel-piatkowski-ai
+pkg/gateway/sandbox_*.go                @daniel-piatkowski-ai
+pkg/gateway/auth.go                     @daniel-piatkowski-ai
+pkg/gateway/middleware/                 @daniel-piatkowski-ai

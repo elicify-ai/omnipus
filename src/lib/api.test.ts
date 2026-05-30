@@ -23,6 +23,7 @@ import type {
   UserRole,
   DMScope,
 } from './api'
+import { ApiSchemaError, getApiSchemaErrorCount, resetApiSchemaErrorCount } from './api'
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -304,7 +305,8 @@ describe('Security API helpers', () => {
 
   describe('fetchPromptGuardLevel', () => {
     it('GET /api/v1/security/prompt-guard — returns level', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ level: 'medium' as PromptInjectionLevel }))
+      // PromptGuardResponse requires {level, requires_restart} per contracts/openapi.yaml
+      fetchSpy.mockResolvedValueOnce(makeOkResponse({ level: 'medium' as PromptInjectionLevel, requires_restart: false }))
 
       const { fetchPromptGuardLevel } = await import('./api')
       const result = await fetchPromptGuardLevel()
@@ -342,21 +344,29 @@ describe('Security API helpers', () => {
 
   describe('fetchRateLimits', () => {
     it('GET /api/v1/security/rate-limits — returns current limits', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ daily_cost_cap_usd: 5, max_agent_llm_calls_per_hour: 100 }))
+      // GET returns daily_cost_cap (not _usd) per contracts/components/schemas/RateLimitsResponse.yaml
+      fetchSpy.mockResolvedValueOnce(makeOkResponse({
+        enabled: true,
+        daily_cost_usd: 0.42,
+        daily_cost_cap: 5,
+        max_agent_llm_calls_per_hour: 100,
+        max_agent_tool_calls_per_minute: 60,
+      }))
 
       const { fetchRateLimits } = await import('./api')
       const result = await fetchRateLimits()
 
       const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
       expect(url).toContain('/api/v1/security/rate-limits')
-      expect(result.daily_cost_cap_usd).toBe(5)
+      expect(result.daily_cost_cap).toBe(5)
     })
   })
 
   describe('updateRateLimits', () => {
     it('PUT /api/v1/security/rate-limits — sends CSRF and body', async () => {
       const body = { daily_cost_cap_usd: 10, max_agent_llm_calls_per_hour: 50 }
-      fetchSpy.mockResolvedValueOnce(makeOkResponse(body))
+      // PUT returns RateLimitsUpdateResponse per contracts/components/schemas/RateLimitsUpdateResponse.yaml
+      fetchSpy.mockResolvedValueOnce(makeOkResponse({ saved: true, requires_restart: false }))
 
       const { updateRateLimits } = await import('./api')
       await updateRateLimits(body)
@@ -381,20 +391,22 @@ describe('Security API helpers', () => {
 
   describe('fetchSandboxConfig', () => {
     it('GET /api/v1/security/sandbox-config — returns config', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ mode: 'strict', allowed_paths: ['/tmp'] }))
+      // 'enforce' is a valid SandboxMode per contracts/openapi.yaml (off|permissive|enforce)
+      fetchSpy.mockResolvedValueOnce(makeOkResponse({ mode: 'enforce', allowed_paths: ['/tmp'] }))
 
       const { fetchSandboxConfig } = await import('./api')
       const result = await fetchSandboxConfig()
 
       const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
       expect(url).toContain('/api/v1/security/sandbox-config')
-      expect(result.mode).toBe('strict')
+      expect(result.mode).toBe('enforce')
     })
   })
 
   describe('updateSandboxConfig', () => {
     it('PUT /api/v1/security/sandbox-config — sends CSRF and body', async () => {
-      const body = { mode: 'strict', allowed_paths: ['/tmp'], ssrf: { enabled: true, allow_internal: ['127.0.0.1'] } }
+      // 'permissive' is a valid SandboxMode per contracts/openapi.yaml (off|permissive|enforce)
+      const body = { mode: 'permissive' as const, allowed_paths: ['/tmp'], ssrf: { enabled: true, allow_internal: ['127.0.0.1'] } }
       fetchSpy.mockResolvedValueOnce(makeOkResponse(body))
 
       const { updateSandboxConfig } = await import('./api')
@@ -412,6 +424,7 @@ describe('Security API helpers', () => {
       fetchSpy.mockResolvedValueOnce(make400Response('invalid config'))
 
       const { updateSandboxConfig } = await import('./api')
+      // @ts-expect-error — deliberately pass an invalid mode to verify error handling
       await expect(updateSandboxConfig({ mode: 'bad' })).rejects.toThrow('400')
     })
   })
@@ -473,8 +486,10 @@ describe('Security API helpers', () => {
 
   describe('updateRetention', () => {
     it('PUT /api/v1/security/retention — sends CSRF and body', async () => {
+      // The real handler returns flat {saved, requires_restart, session_days, disabled}
+      // (not nested applied: {...}).  The schema requires all four fields.
       fetchSpy.mockResolvedValueOnce(
-        makeOkResponse({ saved: true, requires_restart: false, applied: { session_days: 30 } }),
+        makeOkResponse({ saved: true, requires_restart: false, session_days: 30, disabled: false }),
       )
 
       const { updateRetention } = await import('./api')
@@ -576,7 +591,8 @@ describe('Security API helpers', () => {
 
   describe('deleteUser', () => {
     it('DELETE /api/v1/users/{username} — sends CSRF', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ deleted: true }))
+      // UserDeleteResponse requires {username, deleted} per contracts/openapi.yaml
+      fetchSpy.mockResolvedValueOnce(makeOkResponse({ username: 'alice', deleted: true }))
 
       const { deleteUser } = await import('./api')
       await deleteUser('alice')
@@ -724,5 +740,834 @@ describe('isPreviewListenerEnabled', () => {
     expect(whenEnabled).toBe(true)
     expect(whenDisabled).toBe(false)
     expect(whenEnabled).not.toBe(whenDisabled)
+  })
+})
+
+// ── ApiSchemaError ─────────────────────────────────────────────────────────────
+//
+// Traces to: CLAUDE.md hard-constraint #8 — every API response that is
+// schema-validated must surface mismatches as ApiSchemaError (not silently
+// discard data). Tests cover constructor fields, instanceof check, and the
+// module-level error counter.
+
+describe('ApiSchemaError', () => {
+  beforeEach(() => {
+    resetApiSchemaErrorCount()
+  })
+
+  it('is an instance of Error', () => {
+    const err = new ApiSchemaError(
+      '/api/v1/agents',
+      [{ path: ['name'], message: 'Required' }],
+      { id: 1 }
+    )
+    expect(err).toBeInstanceOf(Error)
+    expect(err).toBeInstanceOf(ApiSchemaError)
+  })
+
+  it('sets name to ApiSchemaError', () => {
+    const err = new ApiSchemaError('/api/v1/agents', [], {})
+    expect(err.name).toBe('ApiSchemaError')
+  })
+
+  it('stores endpoint, zodIssues, and rawBody', () => {
+    const issues = [{ path: ['role'], message: 'Invalid enum value' }]
+    const raw = { id: 'abc', role: 'superadmin' }
+    const err = new ApiSchemaError('/api/v1/users', issues, raw)
+
+    expect(err.endpoint).toBe('/api/v1/users')
+    expect(err.zodIssues).toEqual(issues)
+    expect(err.rawBody).toBe(raw)
+  })
+
+  it('message includes the endpoint and first issue message', () => {
+    const err = new ApiSchemaError(
+      '/api/v1/sessions',
+      [{ path: ['id'], message: 'Expected string, received number' }],
+      { id: 42 }
+    )
+    expect(err.message).toContain('/api/v1/sessions')
+    expect(err.message).toContain('Expected string, received number')
+  })
+
+  it('message handles empty zodIssues gracefully', () => {
+    const err = new ApiSchemaError('/api/v1/agents', [], null)
+    expect(err.message).toContain('/api/v1/agents')
+    expect(err.message).toContain('unknown')
+  })
+
+  it('rawBody can be null', () => {
+    const err = new ApiSchemaError('/test', [{ path: [], message: 'bad' }], null)
+    expect(err.rawBody).toBeNull()
+  })
+
+  it('rawBody can be a primitive', () => {
+    const err = new ApiSchemaError('/test', [{ path: [], message: 'bad' }], 'not-an-object')
+    expect(err.rawBody).toBe('not-an-object')
+  })
+})
+
+// ── getApiSchemaErrorCount / resetApiSchemaErrorCount ─────────────────────────
+//
+// The counter is module-level state. Because Vitest re-imports the module once
+// per test file (not once per test), we reset it explicitly in beforeEach.
+// Direct counter manipulation is not possible from tests, so we exercise the
+// counter via the real request() path with a Zod schema that fails.
+
+describe('getApiSchemaErrorCount / resetApiSchemaErrorCount', () => {
+  beforeEach(() => {
+    resetApiSchemaErrorCount()
+  })
+
+  it('starts at 0 after reset', () => {
+    expect(getApiSchemaErrorCount()).toBe(0)
+  })
+
+  it('reset after multiple calls still returns 0', () => {
+    resetApiSchemaErrorCount()
+    resetApiSchemaErrorCount()
+    expect(getApiSchemaErrorCount()).toBe(0)
+  })
+})
+
+// ── Schema validation through real request() call ───────────────────────────────
+//
+// These tests verify that request() with an explicit Zod schema:
+// 1. Throws ApiSchemaError when the response body fails validation
+// 2. Increments _apiSchemaErrorCount on failure
+// 3. Throws ApiSchemaError when the response body is not valid JSON
+//
+// Tests use the generated LoginResponse schema (a simple well-understood shape)
+// and the live fetchAgents/fetchExecAllowlist functions which now pass schemas.
+
+describe('request() with Zod schema — validation errors', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  function stubCookie2(value: string) {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => value,
+    })
+  }
+
+  function restoreCookie2() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (document as any).cookie
+  }
+
+  beforeEach(() => {
+    resetApiSchemaErrorCount()
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    stubCookie2('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookie2()
+    vi.resetModules()
+  })
+
+  it('fetchAgents: throws ApiSchemaError when body fails Agent schema validation', async () => {
+    // Return a valid JSON body that fails Agent schema (missing required fields)
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify([{ id: 'a', name: 'bad' }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
+
+    const { fetchAgents, ApiSchemaError: ApiSchemaErrorClass, getApiSchemaErrorCount: count } = await import('./api')
+    await expect(fetchAgents()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+    expect(count()).toBe(1)
+  })
+
+  it('fetchAgents: increments _apiSchemaErrorCount on validation failure', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify([{ invalid: true }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
+
+    const { fetchAgents, getApiSchemaErrorCount: count } = await import('./api')
+    try {
+      await fetchAgents()
+    } catch {
+      // expected
+    }
+    expect(count()).toBe(1)
+  })
+
+  it('login: throws ApiSchemaError when body fails LoginResponse schema', async () => {
+    // Return a body missing the required `token` field
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ role: 'admin', username: 'alice' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
+
+    const { login, ApiSchemaError: ApiSchemaErrorClass } = await import('./api')
+    await expect(login('alice', 'pass')).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+  })
+
+  it('login: returns valid data when schema passes', async () => {
+    // LoginResponse.token enforces exact-72-char `omnipus_<hex64>` format.
+    const validToken = 'omnipus_' + 'a'.repeat(64)
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ token: validToken, role: 'admin', username: 'alice' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
+
+    const { login, getApiSchemaErrorCount: count } = await import('./api')
+    const result = await login('alice', 'pass')
+    expect(result.token).toBe(validToken)
+    expect(count()).toBe(0)
+  })
+
+  it('request() with schema throws ApiSchemaError when body is not JSON (HTML 200)', async () => {
+    // Simulate a server returning an HTML error page with HTTP 200 (misconfigured reverse proxy)
+    fetchSpy.mockResolvedValueOnce(
+      new Response('<!DOCTYPE html><html><body>502 Bad Gateway</body></html>', {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      })
+    )
+
+    const { fetchExecAllowlist, ApiSchemaError: ApiSchemaErrorClass, getApiSchemaErrorCount: count } = await import('./api')
+    await expect(fetchExecAllowlist()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+    expect(count()).toBe(1)
+  })
+})
+
+// ── fetchSessionMessages renames parameters → params ─────────────────────────────
+//
+// Regression test for Problem 1. The wire ToolCall schema emits `parameters`
+// (matching Go json tag `json:"parameters,omitempty"`). The SPA ToolCall type
+// uses `params`. Without the rawToToolCall() transform, params was `undefined`
+// and ToolCallBadge rendered `JSON.stringify(undefined, null, 2)` = "undefined".
+//
+// This test stubs fetch to return the wire shape (with `parameters`) and
+// asserts that the returned Message[].tool_calls[].params is correctly populated.
+
+describe('fetchSessionMessages: wire parameters → SPA params transform', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  function stubCookieLocal(value: string) {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => value,
+    })
+  }
+
+  function restoreCookieLocal() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (document as any).cookie
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    // fetchSessionMessages is a GET, no CSRF needed — but setting the cookie
+    // avoids CSRF guard triggering on any incidental state-changing helpers.
+    stubCookieLocal('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookieLocal()
+    vi.resetModules()
+  })
+
+  it('renames tool_calls[].parameters to tool_calls[].params', async () => {
+    // Wire payload: ToolCall uses `parameters`, not `params`.
+    const wirePayload = [
+      {
+        id: 'msg-1',
+        agent_id: 'agent-1',
+        role: 'assistant',
+        content: 'here is the result',
+        timestamp: '2026-05-18T10:00:00Z',
+        status: 'ok',
+        tool_calls: [
+          {
+            id: 'tc-1',
+            tool: 'foo_tool',
+            status: 'success',
+            parameters: { x: 1, y: 'hello' },
+          },
+        ],
+      },
+    ]
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-abc')
+
+    // The returned message should have the transformed tool call.
+    expect(messages).toHaveLength(1)
+    expect(messages[0].tool_calls).toHaveLength(1)
+    // params must equal the wire `parameters` value — NOT undefined.
+    expect(messages[0].tool_calls![0].params).toEqual({ x: 1, y: 'hello' })
+    // The raw `parameters` key must NOT appear on the SPA type.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((messages[0].tool_calls![0] as any).parameters).toBeUndefined()
+  })
+
+  it('returns empty params ({}) when wire parameters field is absent', async () => {
+    // Wire ToolCall with no parameters field — params should default to {}.
+    const wirePayload = [
+      {
+        id: 'msg-2',
+        agent_id: 'agent-1',
+        role: 'assistant',
+        content: 'done',
+        timestamp: '2026-05-18T10:01:00Z',
+        tool_calls: [
+          {
+            id: 'tc-2',
+            tool: 'bar_tool',
+            status: 'success',
+          },
+        ],
+      },
+    ]
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-xyz')
+
+    expect(messages[0].tool_calls![0].params).toEqual({})
+  })
+
+  it('maps wire status "ok" → SPA status "done"', async () => {
+    const wirePayload = [
+      {
+        id: 'msg-3',
+        agent_id: 'agent-1',
+        role: 'assistant',
+        content: 'test',
+        timestamp: '2026-05-18T10:02:00Z',
+        status: 'ok',
+      },
+    ]
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-status')
+
+    expect(messages[0].status).toBe('done')
+  })
+
+  it('maps wire tool_call status "denied" → SPA status "cancelled"', async () => {
+    const wirePayload = [
+      {
+        id: 'msg-4',
+        agent_id: 'agent-1',
+        role: 'assistant',
+        content: '',
+        timestamp: '2026-05-18T10:03:00Z',
+        tool_calls: [
+          { id: 'tc-denied', tool: 'restricted_tool', status: 'denied' },
+        ],
+      },
+    ]
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-denied')
+
+    expect(messages[0].tool_calls![0].status).toBe('cancelled')
+  })
+
+  // Regression guards for the 2026-05-21 production bug: Message.yaml's
+  // `type` enum was missing "tool_call" and "turn_canceled". A jim session
+  // with 44 tool_call entries failed the SPA's Zod validation with
+  // "Backend response failed validation". After the schema fix these
+  // shapes must round-trip without ApiSchemaError.
+
+  it('accepts type:"tool_call" entries (regression for 2026-05-21 bug)', async () => {
+    const wirePayload = [
+      {
+        id: 'call_abc',
+        type: 'tool_call',
+        agent_id: 'jim',
+        timestamp: '2026-05-21T04:20:00Z',
+        tool_calls: [
+          {
+            id: 'call_abc',
+            tool: 'write_file',
+            status: 'success',
+            parameters: { path: '/tmp/x.txt' },
+          },
+        ],
+      },
+    ]
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-toolcall')
+    expect(messages).toHaveLength(1)
+    expect(messages[0].id).toBe('call_abc')
+  })
+
+  it('accepts type:"turn_canceled" entries with cancel-specific fields', async () => {
+    // Includes the cancel-specific fields added to Message.yaml in this
+    // branch (turn_id, canceled_by_user, canceled_by_channel, cancel_method,
+    // descendants_canceled). These were silently stripped by Zod's non-strict
+    // object default; now they're modelled in the schema.
+    const wirePayload = [
+      {
+        id: 'cancel_xyz',
+        type: 'turn_canceled',
+        agent_id: 'mia',
+        timestamp: '2026-05-21T04:25:00Z',
+        turn_id: 'turn-T3',
+        canceled_by_user: 'admin',
+        canceled_by_channel: 'webchat',
+        cancel_method: 'graceful',
+        descendants_canceled: ['turn-T3-sub-1'],
+      },
+    ]
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-cancel')
+    expect(messages).toHaveLength(1)
+    expect(messages[0].id).toBe('cancel_xyz')
+  })
+
+  it('rejects unknown entry type with ApiSchemaError', async () => {
+    // Negative direction: a type value outside the enum must fail validation
+    // so a future code change emitting a new EntryType without updating the
+    // schema is caught loudly rather than silently.
+    const wirePayload = [
+      {
+        id: 'msg_x',
+        type: 'wholly_unknown_entry_kind',
+        agent_id: 'jim',
+        timestamp: '2026-05-21T10:00:00Z',
+      },
+    ]
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionMessages, ApiSchemaError } = await import('./api')
+    await expect(fetchSessionMessages('sid-unknown')).rejects.toBeInstanceOf(ApiSchemaError)
+  })
+})
+
+// ── updateConfig sends wire shape with gateway.host (not bind_address) ──────────
+//
+// Regression test for Problem 2. Before the fix, updateConfig serialised the
+// SPA-flat Config shape directly. The backend expected `gateway.host` but
+// received `gateway.bind_address`. This caused silent data loss.
+//
+// This test asserts that updateConfig translates the SPA-shaped request body
+// to the wire-shaped JSON before sending.
+
+describe('updateConfig: sends wire shape to backend', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  function stubCookieLocal2(value: string) {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => value,
+    })
+  }
+
+  function restoreCookieLocal2() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (document as any).cookie
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    stubCookieLocal2('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookieLocal2()
+    vi.resetModules()
+  })
+
+  it('translates gateway.bind_address → gateway.host in the PUT request body', async () => {
+    // Stub fetch to return a minimal valid raw config response (the server
+    // echoes back the full config after applying the change).
+    const rawConfigResponse = {
+      gateway: { host: '0.0.0.0', port: 8080, auth_mode: 'none' },
+      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      storage: { retention: { session_days: 90 } },
+    }
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(rawConfigResponse), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { updateConfig } = await import('./api')
+    await updateConfig({ gateway: { bind_address: '0.0.0.0', port: 8080, auth_mode: 'none' } })
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(init.body as string) as Record<string, unknown>
+
+    // The body must contain gateway.host, NOT gateway.bind_address.
+    const gw = body.gateway as Record<string, unknown>
+    expect(gw.host).toBe('0.0.0.0')
+    expect(gw.bind_address).toBeUndefined()
+  })
+
+  it('translates data.session_retention_days → storage.retention.session_days', async () => {
+    const rawConfigResponse = {
+      gateway: { host: '127.0.0.1', port: 8080, auth_mode: 'none' },
+      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      storage: { retention: { session_days: 30 } },
+    }
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(rawConfigResponse), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { updateConfig } = await import('./api')
+    await updateConfig({ data: { session_retention_days: 30 } })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(init.body as string) as Record<string, unknown>
+
+    // storage.retention.session_days must be present; data.session_retention_days must not.
+    const storage = body.storage as Record<string, unknown>
+    const retention = storage.retention as Record<string, unknown>
+    expect(retention.session_days).toBe(30)
+    expect(body.data).toBeUndefined()
+  })
+
+  it('does not include dev_mode_bypass in the PUT body (blocked server-side)', async () => {
+    const rawConfigResponse = {
+      gateway: { host: '127.0.0.1', port: 8080, auth_mode: 'none' },
+      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      storage: { retention: { session_days: 90 } },
+    }
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(rawConfigResponse), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { updateConfig } = await import('./api')
+    await updateConfig({
+      gateway: { bind_address: '127.0.0.1', port: 8080, auth_mode: 'none', dev_mode_bypass: true },
+    })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const body = JSON.parse(init.body as string) as Record<string, unknown>
+    const gw = body.gateway as Record<string, unknown>
+    // dev_mode_bypass must never appear in the wire request body.
+    expect(gw.dev_mode_bypass).toBeUndefined()
+  })
+})
+
+// ── BUG 2 regression — fetchCredentials string[]→{key}[] transform ─────────────
+//
+// The backend returns string[] (key names only). fetchCredentials must transform
+// each string into a CredentialKey object so SecuritySection.tsx can render cred.key.
+// Before fix-T, no transform existed and cred.key was undefined at runtime.
+
+describe('fetchCredentials: string[] → CredentialKey[] transform (fix-T BUG 2)', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    stubCookie('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookie()
+    vi.resetModules()
+  })
+
+  it('transforms string[] wire response to CredentialKey[] with .key property', async () => {
+    const wireResponse = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GITHUB_TOKEN']
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireResponse), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchCredentials } = await import('./api')
+    const result = await fetchCredentials()
+
+    expect(result).toEqual([
+      { key: 'ANTHROPIC_API_KEY' },
+      { key: 'OPENAI_API_KEY' },
+      { key: 'GITHUB_TOKEN' },
+    ])
+    // Each entry must have a .key so SecuritySection.tsx renders correctly.
+    for (const entry of result) {
+      expect(typeof entry.key).toBe('string')
+      expect(entry.key.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('returns an empty array when wire response is []', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchCredentials } = await import('./api')
+    const result = await fetchCredentials()
+
+    expect(result).toEqual([])
+  })
+
+  it('throws ApiSchemaError when wire response is not an array', async () => {
+    // The Zod schema validates string[]; any non-array response must fail.
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ keys: ['foo'] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchCredentials, getApiSchemaErrorCount, resetApiSchemaErrorCount } = await import('./api')
+    resetApiSchemaErrorCount()
+    await expect(fetchCredentials()).rejects.toThrow()
+    expect(getApiSchemaErrorCount()).toBe(1)
+  })
+})
+
+// ── BUG 3 regression — enableChannel/disableChannel ChannelEnabledResponse ────
+//
+// The backend returns {id, enabled} (ChannelEnabledResponse), not a full ChannelEntry.
+// Before fix-T, the SPA Zod schema expected ChannelEntry (name, transport, description)
+// and threw ApiSchemaError on every channel toggle.
+
+describe('enableChannel / disableChannel: ChannelEnabledResponse validation (fix-T BUG 3)', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    stubCookie('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookie()
+    vi.resetModules()
+  })
+
+  it('enableChannel accepts {id, enabled} response and returns ChannelEnabledResponse', async () => {
+    const wire = { id: 'telegram', enabled: true }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wire), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { enableChannel } = await import('./api')
+    const result = await enableChannel('telegram')
+
+    expect(result.id).toBe('telegram')
+    expect(result.enabled).toBe(true)
+    // Ensure the request was PUT
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/channels/telegram/enable')
+    expect((init.method ?? '').toUpperCase()).toBe('PUT')
+  })
+
+  it('disableChannel accepts {id, enabled:false} response and returns ChannelEnabledResponse', async () => {
+    const wire = { id: 'discord', enabled: false }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wire), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { disableChannel } = await import('./api')
+    const result = await disableChannel('discord')
+
+    expect(result.id).toBe('discord')
+    expect(result.enabled).toBe(false)
+    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/channels/discord/disable')
+  })
+
+  it('enableChannel throws ApiSchemaError when backend returns a full ChannelEntry (old bug)', async () => {
+    // Simulate the old incorrect backend response — a full ChannelEntry without
+    // the required `enabled` field as a top-level field matching ChannelEnabledResponse.
+    // ChannelEnabledResponse requires {id: string, enabled: boolean}; a ChannelEntry
+    // response that happens to have those fields should still pass, but a response
+    // missing `id` must fail.
+    const badWire = { name: 'Telegram', transport: 'telegram', description: 'Telegram channel', enabled: true }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(badWire), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { enableChannel, getApiSchemaErrorCount, resetApiSchemaErrorCount } = await import('./api')
+    resetApiSchemaErrorCount()
+    // ChannelEnabledResponse requires `id` (string) — a response without it fails Zod.
+    await expect(enableChannel('telegram')).rejects.toThrow()
+    expect(getApiSchemaErrorCount()).toBe(1)
+  })
+})
+
+// ── validEnum / _configCoercionCount integration tests ────────────────────────
+//
+// Verifies that rawToFrontendConfig calls validEnum which increments _configCoercionCount
+// when the backend returns an invalid enum value for security.policy_mode.
+// Also verifies that valid enum values do NOT increment the counter.
+
+describe('validEnum / _configCoercionCount', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+  })
+
+  it('increments counter when backend returns invalid enum value for security.policy_mode', async () => {
+    // Simulate backend returning "garbage" for security.policy_mode —
+    // not one of the valid values: allow | deny.
+    const wireConfig = {
+      gateway: { host: '127.0.0.1', port: 8080 },
+      security: { policy_mode: 'garbage' },
+    }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireConfig), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchConfig, getConfigCoercionCount, resetConfigCoercionCount } = await import('./api')
+    resetConfigCoercionCount()
+
+    const config = await fetchConfig()
+
+    // The coercion counter must have been incremented by at least 1 (for policy_mode).
+    expect(getConfigCoercionCount()).toBeGreaterThan(0)
+    // The invalid value must be replaced by the fallback ("deny").
+    expect(config.security.policy_mode).toBe('deny')
+  })
+
+  it('does NOT increment counter when backend returns a valid enum value for security.policy_mode', async () => {
+    // "allow" is a valid value — no coercion should occur.
+    const wireConfig = {
+      gateway: { host: '127.0.0.1', port: 8080 },
+      security: { policy_mode: 'allow' },
+    }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireConfig), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchConfig, getConfigCoercionCount, resetConfigCoercionCount } = await import('./api')
+    resetConfigCoercionCount()
+
+    const config = await fetchConfig()
+
+    // No coercion should have occurred.
+    expect(getConfigCoercionCount()).toBe(0)
+    // The valid value must be preserved.
+    expect(config.security.policy_mode).toBe('allow')
+  })
+
+  it('increments counter once per invalid enum field — differentiation test', async () => {
+    // Two different invalid enum values — counter should increment twice (once per field).
+    const wireConfig = {
+      gateway: { host: '127.0.0.1', port: 8080, auth_mode: 'invalid_mode' },
+      security: { policy_mode: 'invalid_policy', exec_approval: 'invalid_exec' },
+    }
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireConfig), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchConfig, getConfigCoercionCount, resetConfigCoercionCount } = await import('./api')
+    resetConfigCoercionCount()
+
+    await fetchConfig()
+
+    // Three invalid enum values should produce count ≥ 3.
+    expect(getConfigCoercionCount()).toBeGreaterThanOrEqual(3)
   })
 })

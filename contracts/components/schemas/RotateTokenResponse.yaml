@@ -1,0 +1,13 @@
+title: RotateTokenResponse
+description: >
+  Response from POST /api/v1/config/gateway/rotate-token.
+  Returns the newly generated bearer token. The caller must immediately
+  update any stored token references — the previous token is no longer valid
+  once the gateway processes the next request with the new token active.
+type: object
+required:
+  - token
+additionalProperties: false
+properties:
+  token:
+    $ref: './BearerToken.yaml'

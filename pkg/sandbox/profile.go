@@ -27,18 +27,18 @@ import (
 // Profile semantics:
 //   - "":            treated as "workspace" (safe default).
 //   - "workspace":       WorkspaceDir set; EgressProxyAddr empty (network
-//                        isolated); RLIMIT_AS/CPU governed by timeoutSec.
+//     isolated); RLIMIT_AS/CPU governed by timeoutSec.
 //   - "workspace+net":   WorkspaceDir set; EgressProxyAddr set to the
-//                        running proxy's address (operator allow-list applies).
+//     running proxy's address (operator allow-list applies).
 //   - "host":            WorkspaceDir set for npm cache; EgressProxyAddr set
-//                        (broader network access via proxy allow-list).
-//                        Filesystem access is wider (host paths) — controlled
-//                        by Landlock at the gateway process level.
+//     (broader network access via proxy allow-list).
+//     Filesystem access is wider (host paths) — controlled
+//     by Landlock at the gateway process level.
 //   - "off":             Returns zero-value Limits AND IsGodMode returns true.
-//                        Callers MUST check IsGodMode before calling
-//                        ApplyChildHardening — passing zero Limits to
-//                        ApplyChildHardening is a no-op on most platforms but
-//                        the intent check is important for auditability.
+//     Callers MUST check IsGodMode before calling
+//     ApplyChildHardening — passing zero Limits to
+//     ApplyChildHardening is a no-op on most platforms but
+//     the intent check is important for auditability.
 //
 // Note on seccomp: the strict 15-syscall filter is installed at gateway-process
 // level and inherited by all children via TSYNC. Profile-scoped seccomp

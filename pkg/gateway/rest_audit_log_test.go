@@ -164,11 +164,18 @@ func TestHandleSandboxAuditLog_InvalidBody(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	t.Run("missing enabled field", func(t *testing.T) {
+		// Regression: gen.AuditLogToggleRequest.Enabled is bool (not *bool), so an
+		// absent "enabled" key would decode as false and silently disable audit
+		// logging. The pre-check in HandleSandboxAuditLog now rejects {} with 400
+		// before decoding, preventing the silent-disable regression.
 		r := httptest.NewRequest(http.MethodPut, "/api/v1/security/audit-log", strings.NewReader(`{}`))
 		r = r.WithContext(adminCtx())
 		w := httptest.NewRecorder()
 		api.HandleSandboxAuditLog(w, r)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
+		var resp map[string]string
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Contains(t, resp["error"], "enabled")
 	})
 
 	t.Run("malformed JSON", func(t *testing.T) {

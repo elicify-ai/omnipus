@@ -2,9 +2,11 @@
 
 # Google Chat
 
-Omnipus supports Google Chat via two modes: **webhook** (outbound only, simple setup) and **bot** (full interactive, receives and sends messages).
+Omnipus supports Google Chat via two modes: **webhook** (outbound only, simple setup) and **bot** (full interactive — receives and sends messages).
 
 ## Configuration
+
+### Webhook mode
 
 ```json
 {
@@ -12,15 +14,14 @@ Omnipus supports Google Chat via two modes: **webhook** (outbound only, simple s
     "google-chat": {
       "enabled": true,
       "mode": "webhook",
-      "webhook_url": "https://chat.googleapis.com/webhook/123456",
-      "space": "spaces/abc123",
+      "webhook_url": "https://chat.googleapis.com/v1/spaces/SPACE_ID/messages?key=...",
       "allow_from": []
     }
   }
 }
 ```
 
-### Bot Mode
+### Bot mode
 
 ```json
 {
@@ -28,47 +29,65 @@ Omnipus supports Google Chat via two modes: **webhook** (outbound only, simple s
     "google-chat": {
       "enabled": true,
       "mode": "bot",
-      "service_account_json": "-----BEGIN SERVICE_ACCOUNT JSON-----\n{...}\n-----END SERVICE_ACCOUNT JSON-----",
+      "service_account_json": "{...}",
       "space": "spaces/abc123",
-      "allow_from": []
+      "bot_user": "bot@your-project.iam.gserviceaccount.com",
+      "allow_from": [],
+      "group_trigger": {
+        "mention_only": false,
+        "prefixes": ["/ask"]
+      },
+      "typing": {},
+      "placeholder": {
+        "enabled": false,
+        "text": "Thinking..."
+      },
+      "reasoning_channel_id": ""
     }
   }
 }
 ```
 
 | Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| enabled | bool | Yes | Whether to enable the Google Chat channel |
-| mode | string | Yes | `"webhook"` (outbound only) or `"bot"` (full interactive) |
-| webhook_url | string | Yes (webhook) | Incoming webhook URL from Google Chat |
-| service_account_json | string | Yes (bot) | Inline service account JSON (encrypted) |
-| service_account_file | string | Yes (bot) | Path to service account JSON file |
-| space | string | No | Google Chat space name for display |
-| bot_user | string | No | Bot user email for identification |
-| allow_from | array | No | User email whitelist; empty means all users are allowed |
-| group_trigger | object | No | Group chat trigger configuration |
-| reasoning_channel_id | string | No | Channel ID for reasoning responses |
+|---|---|---|---|
+| `enabled` | bool | Yes | Enable the Google Chat channel. |
+| `mode` | string | Yes | `"webhook"` (outbound only) or `"bot"` (full interactive). If omitted, defaults to `"webhook"` when `webhook_url` is set, otherwise `"bot"`. |
+| `webhook_url` | string | Yes (webhook) | Incoming webhook URL from the Google Chat space. |
+| `service_account_file` | string | Yes (bot, if no JSON) | Path to the service account JSON key file on disk. |
+| `service_account_json` | string | Yes (bot, if no file) | Inline service account JSON. When both are provided, the file takes precedence. |
+| `space` | string | No | Google Chat space name (e.g. `spaces/abc123`) for display purposes. |
+| `bot_user` | string | No | Service account email address. Used for mention detection in group spaces. |
+| `allow_from` | []string | No | Sender allowlist (user `name` fields from Google Chat events). Empty means all senders are allowed. |
+| `group_trigger` | object | No | Group-chat trigger rules — `mention_only` (bool) and/or `prefixes` ([]string). |
+| `typing` | object | No | Typing indicator configuration (bot mode only). |
+| `placeholder` | object | No | Placeholder message configuration — `enabled` (bool) and `text` (string or []string). |
+| `reasoning_channel_id` | string | No | Space name to route reasoning/thinking output to a separate conversation. |
 
 ## Setup
 
-### Webhook Mode
+### Webhook mode
 
-1. Go to the Google Chat space where you want to post messages
-2. Click **...** > **Configure webhooks**
-3. Give the webhook a name and copy the webhook URL
-4. Set `webhook_url` in your Omnipus configuration
+1. Go to the Google Chat space where you want to post messages.
+2. Click **...** > **Manage webhooks** (or **Configure webhooks** on older clients).
+3. Give the webhook a name and copy the webhook URL.
+4. Set `webhook_url` in `config.json` and set `mode: "webhook"`.
 
-### Bot Mode
+Webhook mode is outbound only — Omnipus can post messages, but cannot receive them.
 
-1. Create a Google Cloud project and enable the Google Chat API
-2. Create a service account and download the JSON key file
-3. Configure the Chat API:
-   - Set the bot name and avatar
-   - Add the service account email to the Google Chat space
-   - Enable bot interactions
-4. Set `service_account_json` (or `service_account_file`) in your Omnipus configuration
+### Bot mode
 
-## Group Trigger
+1. Create a Google Cloud project and enable the **Google Chat API**.
+2. Create a service account under **IAM & Admin** > **Service Accounts** and download the JSON key file.
+3. In the Google Chat API settings:
+   - Set the bot name and avatar.
+   - Configure the connection settings to point at the Omnipus webhook endpoint:
+     `https://<your-host>/webhook/google-chat`
+   - Enable bot interactions.
+4. Add the service account email to the Google Chat space.
+5. Set either `service_account_file` (path to the JSON key file) or `service_account_json` (inline JSON) in `config.json`.
+6. Set `mode: "bot"` and optionally set `bot_user` to the service account email for mention detection.
+
+## Group trigger
 
 The `group_trigger` section controls when the bot responds in group spaces:
 
@@ -82,18 +101,25 @@ The `group_trigger` section controls when the bot responds in group spaces:
 ```
 
 | Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| mention_only | bool | false | Only respond when @mentioned |
-| prefixes | array | [] | Commands that trigger response (e.g., `/ask`) |
+|---|---|---|---|
+| `mention_only` | bool | `false` | Only respond when @mentioned (by `bot_user` name or the string `"OmnipusBot"`). |
+| `prefixes` | []string | `[]` | Respond to messages starting with any of these prefixes. |
 
-When `mention_only` is `true`, the bot only responds when directly @mentioned.
-When `prefixes` are set, the bot responds to messages starting with any prefix.
-If neither is set, the bot responds to all messages (permissive default for DMs).
+When neither is set, the bot responds to all messages in group spaces (permissive default).
 
-## Features
+## Capabilities
 
-- **Webhook mode**: Post messages to Google Chat spaces via incoming webhooks
-- **Bot mode**: Full bidirectional messaging with JWT authentication
-- **Signature verification**: Bot mode verifies inbound webhook signatures using RSA keys from Google's JWKS endpoint
-- **Typing indicators**: Bot mode sends typing indicators while composing responses
-- **Thread support**: Replies are sent as thread responses when a thread key is present
+- **Webhook mode**: Post messages to Google Chat spaces via incoming webhooks (send only).
+- **Bot mode**: Full bidirectional messaging with JWT authentication via service account.
+- **Signature verification**: Bot mode verifies inbound request signatures using RSA keys fetched from Google's JWKS endpoint (`https://www.googleapis.com/service_accounts/jwks`). Requests without a valid `Google-Signature` header are rejected.
+- **Typing indicators**: Bot mode sends typing indicators while composing responses (`TypingCapable`).
+- **Thread support**: Replies use the thread key from the inbound message when present.
+- **Retry with backoff**: API calls retry up to 3 times on transient errors (5xx, 429) with exponential backoff and `Retry-After` header support.
+- **Health endpoint**: `GET /webhook/google-chat/health` returns 200 when the channel is running.
+
+## Webhook security and secrets
+
+- **Webhook-mode `webhook_url` is a bearer secret.** The URL contains a `?key=…` query parameter that grants posting rights to the space. Do not commit it to `config.json` in plain text — store the URL itself in the credential store and reference it via `_ref` patterns (the field name follows the convention used elsewhere; see your config for the exact key).
+- **Bot-mode signature verification runs inside the channel**, not in the shared gateway mux. The implementation parses the `Google-Signature` header, fetches Google's JWKS (with caching), verifies RSA-SHA256 over the request body, and rejects on mismatch. If you front the bot endpoint with a reverse proxy, **do not strip the `Google-Signature` header** — that breaks verification. The shared gateway mux does no HMAC/signature enforcement of its own; see `pkg/channels/README.md` §12.4.
+
+For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../../pkg/channels/README.md).

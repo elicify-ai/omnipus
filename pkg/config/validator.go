@@ -27,10 +27,11 @@ const fr001RemovedKeysMsg = "config error: agents.defaults.restrict_to_workspace
 // tag renaming.
 func validateRemovedKeys(data []byte) error {
 	// Navigate agents.defaults to check for the removed keys.
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(data, &top); err != nil {
-		// If the top-level can't be parsed as an object, a later step will
-		// catch the malformed JSON; no removed-key check needed.
+	// Parse failures at each level are intentionally ignored: the main JSON
+	// unmarshal step surfaces malformed input; this pre-check only inspects
+	// specific keys when the structure is parseable.
+	top := unmarshalMapSilent(data)
+	if top == nil {
 		return nil
 	}
 
@@ -39,8 +40,8 @@ func validateRemovedKeys(data []byte) error {
 		return nil
 	}
 
-	var agents map[string]json.RawMessage
-	if err := json.Unmarshal(agentsRaw, &agents); err != nil {
+	agents := unmarshalMapSilent(agentsRaw)
+	if agents == nil {
 		return nil
 	}
 
@@ -49,8 +50,8 @@ func validateRemovedKeys(data []byte) error {
 		return nil
 	}
 
-	var defaults map[string]json.RawMessage
-	if err := json.Unmarshal(defaultsRaw, &defaults); err != nil {
+	defaults := unmarshalMapSilent(defaultsRaw)
+	if defaults == nil {
 		return nil
 	}
 
@@ -62,6 +63,18 @@ func validateRemovedKeys(data []byte) error {
 	}
 
 	return nil
+}
+
+// unmarshalMapSilent attempts to unmarshal JSON bytes into a
+// map[string]json.RawMessage. Returns nil on any parse failure; callers
+// use nil to skip optional key checks (the main unmarshal step surfaces
+// malformed JSON).
+func unmarshalMapSilent(data []byte) map[string]json.RawMessage {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil
+	}
+	return m
 }
 
 // inlineGroupRe matches inline flag groups such as (?i), (?s), (?m), (?-i).
@@ -76,7 +89,7 @@ var inlineGroupRe = regexp.MustCompile(`\(\?[^:]`)
 // sibling README.md for schema and extension guidance.
 //
 // The fixture is the source of truth in checked-out source trees. The hardcoded
-// fallback below is a defense-in-depth safety net for build artefacts that do
+// fallback below is a defense-in-depth safety net for build artifacts that do
 // not include the tests/ directory (e.g. published binaries running tests in
 // embedded mode); it MUST stay in sync with the fixture's invariants:
 //
@@ -103,7 +116,7 @@ func knownBadPaths() []string {
 		}
 	}
 	// Fallback: identical invariants to the fixture, kept for missing-tests-dir
-	// build artefacts. Any new entry in known_bad_paths.json that exercises a
+	// build artifacts. Any new entry in known_bad_paths.json that exercises a
 	// new threat class SHOULD also appear here.
 	return []string{
 		"",
@@ -151,13 +164,23 @@ func validateAllowPaths(patterns []string, fieldName string) error {
 
 		// Rule 2: no inline flag groups.
 		if inlineGroupRe.MatchString(pat) {
-			return fmt.Errorf("config error: %s entry %q must not contain inline flag groups (e.g. (?i))", fieldName, pat)
+			return fmt.Errorf(
+				"config error: %s entry %q must not contain inline flag groups (e.g. (?i))",
+				fieldName,
+				pat,
+			)
 		}
 
 		// Rule 3: ASCII-only printable chars.
 		for i, ch := range pat {
 			if ch < 0x20 || ch > 0x7E {
-				return fmt.Errorf("config error: %s entry %q contains non-ASCII-printable character at index %d (0x%02x)", fieldName, pat, i, ch)
+				return fmt.Errorf(
+					"config error: %s entry %q contains non-ASCII-printable character at index %d (0x%02x)",
+					fieldName,
+					pat,
+					i,
+					ch,
+				)
 			}
 		}
 
@@ -233,7 +256,7 @@ func validateBootConfig(cfg *Config) error {
 	if cfg.Tools.BuildStatic.MemoryLimitBytes == 0 {
 		cfg.Tools.BuildStatic.MemoryLimitBytes = 536870912 // 512 MiB
 	}
-	const memMin uint64 = 67108864  // 64 MiB
+	const memMin uint64 = 67108864   // 64 MiB
 	const memMax uint64 = 4294967295 // ~4 GiB
 	if cfg.Tools.BuildStatic.MemoryLimitBytes < memMin || cfg.Tools.BuildStatic.MemoryLimitBytes > memMax {
 		return fmt.Errorf(

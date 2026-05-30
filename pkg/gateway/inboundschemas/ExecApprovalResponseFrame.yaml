@@ -1,0 +1,29 @@
+title: ExecApprovalResponseFrame
+description: >
+  Client → server. The admin's decision on a pending exec_approval_request.
+  The server matches this to the outstanding approval by `id` and resolves
+  the agent turn with the corresponding verdict.
+type: object
+required:
+  - type
+  - id
+  - decision
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: exec_approval_response
+  id:
+    type: string
+    minLength: 1
+    description: The approval request UUID from the exec_approval_request frame.
+  decision:
+    type: string
+    enum:
+      - allow
+      - deny
+      - always
+    description: >
+      allow   — approve this single invocation.
+      deny    — reject this single invocation.
+      always  — approve all future invocations matching this policy rule.

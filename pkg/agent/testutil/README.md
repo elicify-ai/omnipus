@@ -21,37 +21,33 @@ to an ephemeral `127.0.0.1` port allocated by the OS. It:
 
 1. Creates a `t.TempDir()` as `OMNIPUS_HOME`.
 2. Injects a fixed `OMNIPUS_MASTER_KEY` so credentials unlock without a TTY.
-3. Writes a minimal `config.json` (host, port, model name = "scripted-model").
-4. Installs a `ScenarioProvider` via `SetTestProviderOverride` so the agent loop
-   returns scripted responses instead of calling a real LLM.
+3. Writes a minimal `config.json` seeded with a real OpenRouter+glm provider entry.
+4. Seeds `OPENROUTER_API_KEY` from env into `credentials.json` so boot succeeds.
 5. Polls `GET /health` until 200 (max 5 s) before returning to the caller.
 6. Registers `t.Cleanup(gw.Close)` — cancels the context and waits up to 10 s
    for `RunContext` to return. Reports `t.Errorf` if it times out (goroutine leak)
    or if `RunContext` exits with an error after becoming ready (boot error surfaced).
 
-The gateway runs the full stack: HTTP/WebSocket server, agent loop, cron, heartbeat,
-media store, and channel manager. Tests interact with it over `http://127.0.0.1:<port>`.
+The gateway runs the full stack against the **real** OpenRouter LLM. The
+`test_harness` build tag and its `SetTestProviderOverride` hook were removed
+2026-05-10 — there is no scripted-scenario fallback for gateway-mediated tests.
+Tests that exercise LLM behaviour require `OPENROUTER_API_KEY` in the environment.
+
+`ScenarioProvider` (in `scenario_provider.go`) remains as a pure-Go test utility
+for unit tests of the agent loop that bypass the gateway entirely
+(see `pkg/agent/scenario_test.go`).
 
 ## Quick usage
 
 ```go
 func TestMain(m *testing.M) {
     testutil.RegisterGatewayRunner(gateway.RunContext)
-    testutil.RegisterProviderOverrideFuncs(
-        gateway.SetTestProviderOverride,
-        gateway.ClearTestProviderOverride,
-    )
     os.Exit(m.Run())
 }
 
 func TestMyFeature(t *testing.T) {
-    p := testutil.NewScenario().
-        WithText("Hello!").
-        WithToolCall("bash", `{"cmd":"ls"}`).
-        WithText("All done.")
-
-    gw := testutil.StartTestGateway(t, testutil.WithScenario(p))
-    // gw.URL, gw.HTTPClient, gw.Provider are ready; cleanup is automatic.
+    gw := testutil.StartTestGateway(t)
+    // gw.URL, gw.HTTPClient are ready; cleanup is automatic.
 
     req, _ := gw.NewRequest(http.MethodGet, "/health", nil)
     resp, _ := gw.Do(req)

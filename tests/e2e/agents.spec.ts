@@ -69,22 +69,37 @@ test('(c) "New Agent" button on roster opens the create-agent modal', async ({ p
   await expect(modal).toBeVisible({ timeout: 10_000 });
 });
 
-test.skip(
-  '(d) locked fields render read-only on core agents',
-  // blocked on #101: AgentProfile hides the Identity accordion for locked (core) agents
-  // (canEdit guard at AgentProfile.tsx:353) — the name input is never rendered, so
-  // there is nothing to assert as readOnly. Needs data-testid="agent-name-input" and
-  // a visible (disabled) input for locked agents. See tests/e2e/SPA-GAPS.md.
-  async ({ page }) => {},
-);
+test('(d) locked fields render read-only on core agents', async ({ page }) => {
+  // Navigate to the Jim agent profile (locked core agent)
+  await page.goto('/#/agents');
+  const jimCard = page.locator('[aria-label*="Jim" i]').or(page.getByText('Jim', { exact: true })).first();
+  await expect(jimCard).toBeVisible({ timeout: 15_000 });
+  await jimCard.click();
 
-test.skip(
-  '(e) deleted agent URL returns branded 404 with "Back to Agents" link',
-  // blocked on #102: /agents/:nonexistent-slug renders a generic error state without
-  // a "Back to Agents" link. Needs a branded 404 component with that exact link text.
-  // See tests/e2e/SPA-GAPS.md — "Deleted-agent branded 404".
-  async ({ page }) => {},
-);
+  // Wait for the profile to load
+  await expect(page).toHaveURL(/\/agents\//, { timeout: 10_000 });
+
+  // The identity accordion should exist and be open (defaultValue includes 'identity')
+  const nameInput = page.getByTestId('agent-name-input');
+  await expect(nameInput).toBeVisible({ timeout: 10_000 });
+
+  // For a locked agent, the input must be disabled
+  await expect(nameInput).toBeDisabled();
+});
+
+test('(e) deleted agent URL returns branded 404 with "Back to Agents" link', async ({ page }) => {
+  await page.goto('/#/agents/this-agent-does-not-exist-xyz');
+
+  // Should see a "not found" message, not crash the app
+  const notFoundMsg = page.locator('text=not found').or(page.locator('text=Not Found')).or(page.locator('text=Agent not found')).first();
+  await expect(notFoundMsg).toBeVisible({ timeout: 10_000 });
+
+  // Must have "Back to Agents" link (exact text per SKIP_ALLOWLIST note)
+  const backLink = page.getByRole('link', { name: 'Back to Agents' });
+  await expect(backLink).toBeVisible({ timeout: 5_000 });
+  await backLink.click();
+  await expect(page).toHaveURL(/agents/, { timeout: 5_000 });
+});
 
 test('(f) name collision on Create Agent surfaces server 409 error in UI', async ({ page }) => {
   // Open the create-agent modal
@@ -120,19 +135,63 @@ test('(f) name collision on Create Agent surfaces server 409 error in UI', async
   await submitBtn.click();
 
   // Error appears as a toast (ToastContainer in AppShell — no role="alert").
-  // The api.ts request() helper throws new Error(`${status}: ${body}`) so the message is
-  // "409: {\"error\": \"agent name already exists\"}". Match on the 409 status prefix.
-  const errorToast = page.locator('text=409').first();
+  // CreateAgentModal uses isApiError(err) ? err.userMessage which for a 409 response
+  // is defaultUserMessage(409) = "This conflicts with the current state. Please refresh and try again."
+  // (see src/lib/api-error.ts and src/components/agents/CreateAgentModal.tsx).
+  const errorToast = page.locator('text=conflicts with the current state').first();
   await expect(errorToast).toBeVisible({ timeout: 10_000 });
 });
 
-test.skip(
-  '(g) session with deleted agent shows read-only transcript and "Agent removed" banner',
-  // blocked on #103: ChatScreen does not check agent_removed in the session response.
-  // Needs data-testid="agent-removed-banner" and a disabled composer for ghost sessions.
-  // See tests/e2e/SPA-GAPS.md — "Agent-removed banner".
-  async ({ page }) => {},
-);
+test('(g) session with deleted agent shows read-only transcript and "Agent removed" banner', async ({ page }) => {
+  // Read the Bearer token from localStorage so page.request calls can include
+  // it as an Authorization header. The CSRF middleware exempts Bearer-token
+  // requests (double-submit cookie only defends ambient cookie credentials),
+  // so this is both correct and necessary — page.request does NOT auto-add
+  // the X-Csrf-Token header that the double-submit pattern requires.
+  const bearerToken = await page.evaluate(() =>
+    localStorage.getItem('omnipus_auth_token') ?? ''
+  );
+  const authHeaders = { Authorization: `Bearer ${bearerToken}` };
+
+  // Step 1: Create a temporary agent via API
+  const resp = await page.request.post('/api/v1/agents', {
+    headers: authHeaders,
+    data: {
+      name: `TempAgent-${Date.now()}`,
+      type: 'custom',
+      model: 'openrouter/google/gemini-2.0-flash-001',
+    },
+  });
+  const agent = await resp.json() as { id: string };
+  const agentId = agent.id;
+
+  // Step 2: Create a session for this agent
+  const sessionResp = await page.request.post('/api/v1/sessions', {
+    headers: authHeaders,
+    data: { agent_id: agentId },
+  });
+  const session = await sessionResp.json() as { id?: string; session?: { id: string } };
+  const sessionId = session.id ?? session.session?.id;
+
+  // Step 3: Delete the agent
+  await page.request.delete(`/api/v1/agents/${agentId}`, { headers: authHeaders });
+
+  // Step 4: Navigate to the session
+  await page.goto(`/#/sessions/${sessionId}`);
+  // Wait for the route to settle (URL must contain "sessions")
+  await expect(page).toHaveURL(/sessions/, { timeout: 10_000 });
+  // Wait for the app shell to render (banner landmark = auth OK)
+  await expect(page.getByRole('banner')).toBeVisible({ timeout: 10_000 });
+
+  // Step 5: The banner must appear
+  const banner = page.getByTestId('agent-removed-banner');
+  await expect(banner).toBeVisible({ timeout: 15_000 });
+  await expect(banner).toContainText(/agent.*removed/i);
+
+  // Step 6: Composer must be disabled
+  const input = page.locator('textarea[placeholder*="message" i], [data-testid="chat-input"]').first();
+  await expect(input).toBeDisabled({ timeout: 5_000 });
+});
 
 test.afterAll(async ({ request }) => {
   // Clean up any PennyTest agents created by test (c) across all runs

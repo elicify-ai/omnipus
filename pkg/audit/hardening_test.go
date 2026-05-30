@@ -65,7 +65,7 @@ func TestCRIT2_NewLogger_AuditRequested_FailClosed(t *testing.T) {
 
 // TestCRIT2_NewLogger_AuditNotRequested_DegradedMode verifies the inverse: when
 // AuditLogRequested=false (operator did not enable audit), open failure keeps
-// the legacy "log-and-continue" behaviour — NewLogger returns a degraded
+// the legacy "log-and-continue" behavior — NewLogger returns a degraded
 // logger and a nil error. This guards against spurious boot aborts on
 // audit-disabled deployments.
 func TestCRIT2_NewLogger_AuditNotRequested_DegradedMode(t *testing.T) {
@@ -330,7 +330,7 @@ func TestCRIT5_FsyncOnBootAbortAndPolicyDeny(t *testing.T) {
 		"tool.policy.deny.attempted entry must be present on disk")
 }
 
-// TestEmptyEvent_RejectedWithIncSkipped verifies the spec item 7 behaviour:
+// TestEmptyEvent_RejectedWithIncSkipped verifies the spec item 7 behavior:
 // when entry.Event == "", Log() bumps IncSkipped("empty_event", decision),
 // emits an slog.Error, and returns nil (does not block the caller, but loud
 // enough that an operator sees the gap in /health).
@@ -428,12 +428,12 @@ func TestUnknownDecisionWarn_FiresOnce(t *testing.T) {
 	// Three entries with unknown Decision values — all should still be written
 	// (Log doesn't reject; only warn-once).
 	for i := 0; i < 3; i++ {
-		err := logger.Log(&audit.Entry{
+		logErr := logger.Log(&audit.Entry{
 			Event:    audit.EventToolCall,
 			Decision: "allowed", // unknown — typo for "allow"
 			AgentID:  "ray",
 		})
-		require.NoError(t, err, "unknown Decision must not reject the entry")
+		require.NoError(t, logErr, "unknown Decision must not reject the entry")
 	}
 
 	logPath := filepath.Join(dir, "audit.jsonl")
@@ -485,7 +485,7 @@ func TestEmitEntry_LogFailure_BumpsIncSkipped(t *testing.T) {
 	require.NoError(t, logger.Close())
 	// Force degraded-mode reject by closing the underlying file twice or
 	// using the post-close state. The simplest path: use the logger's
-	// post-Close behaviour — Log will see file=nil/closed and reject.
+	// post-Close behavior — Log will see file=nil/closed and reject.
 	//
 	// Some Logger implementations may still return nil after Close (file
 	// pointer not cleared). To be deterministic we use an alternate path:

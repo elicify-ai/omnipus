@@ -70,7 +70,10 @@ func sendAndMeasure(conn *websocket.Conn, content string) (perTurnLatencies, err
 		return perTurnLatencies{}, fmt.Errorf("marshal message frame: %w", err)
 	}
 
-	conn.SetWriteDeadline(time.Now().Add(30 * time.Second)) //nolint:errcheck
+	// 300 s per-turn deadline: full-suite concurrent load causes goroutine scheduling
+	// starvation that can push individual turns well past 30 s.
+	const perTurnDeadline = 300 * time.Second
+	conn.SetWriteDeadline(time.Now().Add(perTurnDeadline)) //nolint:errcheck
 	sendAt := time.Now()
 	if err := conn.WriteMessage(websocket.TextMessage, msgData); err != nil {
 		return perTurnLatencies{}, fmt.Errorf("write message frame: %w", err)
@@ -80,7 +83,7 @@ func sendAndMeasure(conn *websocket.Conn, content string) (perTurnLatencies, err
 	firstSeen := false
 
 	for {
-		conn.SetReadDeadline(time.Now().Add(30 * time.Second)) //nolint:errcheck
+		conn.SetReadDeadline(time.Now().Add(perTurnDeadline)) //nolint:errcheck
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			return perTurnLatencies{}, fmt.Errorf("read frame: %w", err)

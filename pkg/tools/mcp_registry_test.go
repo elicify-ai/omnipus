@@ -258,15 +258,20 @@ func TestMCPRegistry_RenameDetection(t *testing.T) {
 
 		// Register "beta" at the same fingerprint → rename alpha→beta.
 		renameCalled := false
-		collisions := reg.RegisterServerToolsWithOpts("beta", []Tool{&mcpTestTool{name: "c.tool"}}, builtins, MCPServerOpts{
-			TransportType: "http",
-			Endpoint:      "https://renamed.example/mcp",
-			PolicyUpdater: func(oldID, newID string) {
-				renameCalled = true
-				assert.Equal(t, "alpha", oldID)
-				assert.Equal(t, "beta", newID)
+		collisions := reg.RegisterServerToolsWithOpts(
+			"beta",
+			[]Tool{&mcpTestTool{name: "c.tool"}},
+			builtins,
+			MCPServerOpts{
+				TransportType: "http",
+				Endpoint:      "https://renamed.example/mcp",
+				PolicyUpdater: func(oldID, newID string) {
+					renameCalled = true
+					assert.Equal(t, "alpha", oldID)
+					assert.Equal(t, "beta", newID)
+				},
 			},
-		})
+		)
 		require.Empty(t, collisions, "after eviction of old, tool name is free")
 		assert.True(t, renameCalled, "PolicyUpdater must be called on rename")
 
@@ -287,10 +292,15 @@ func TestMCPRegistry_RenameDetection(t *testing.T) {
 			Endpoint:      "https://endpoint-a.example/mcp",
 		})
 		// Register "server-2" at a DIFFERENT fingerprint, same tool name → first-wins collision.
-		collisions := reg.RegisterServerToolsWithOpts("server-2", []Tool{&mcpTestTool{name: "shared.tool"}}, builtins, MCPServerOpts{
-			TransportType: "sse",
-			Endpoint:      "https://endpoint-b.example/mcp",
-		})
+		collisions := reg.RegisterServerToolsWithOpts(
+			"server-2",
+			[]Tool{&mcpTestTool{name: "shared.tool"}},
+			builtins,
+			MCPServerOpts{
+				TransportType: "sse",
+				Endpoint:      "https://endpoint-b.example/mcp",
+			},
+		)
 		require.Len(t, collisions, 1, "different-fingerprint collision must be recorded")
 		assert.Equal(t, "server-1", collisions[0].ConflictWith, "first server must win")
 

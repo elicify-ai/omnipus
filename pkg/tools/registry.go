@@ -23,11 +23,12 @@ type ToolEntry struct {
 }
 
 type ToolRegistry struct {
-	tools       map[string]*ToolEntry
-	mu          sync.RWMutex
-	version     atomic.Uint64 // incremented on Register/RegisterHidden for cache invalidation
-	mediaStore  media.MediaStore
-	auditLogger *audit.Logger // SEC-15: structured audit logging for tool executions
+	tools             map[string]*ToolEntry
+	mu                sync.RWMutex
+	version           atomic.Uint64 // incremented on Register/RegisterHidden for cache invalidation
+	mediaStore        media.MediaStore
+	auditLogger       *audit.Logger      // SEC-15: structured audit logging for tool executions
+	memoryRateLimiter *MemoryRateLimiter // v0.2 #155 item 6: rate-limit memory writes
 }
 
 type mediaStoreAware interface {
@@ -42,47 +43,30 @@ type auditLoggerAware interface {
 	SetAuditLogger(logger *audit.Logger)
 }
 
+// memoryRateLimiterAware is implemented by tools that participate in the
+// memory-write rate-limit gate (v0.2 #155 item 6). The registry propagates a
+// shared limiter on SetMemoryRateLimiter; tools that do not implement this
+// interface are unaffected.
+type memoryRateLimiterAware interface {
+	SetMemoryRateLimiter(limiter *MemoryRateLimiter)
+}
+
 func NewToolRegistry() *ToolRegistry {
 	return &ToolRegistry{
 		tools: make(map[string]*ToolEntry),
 	}
 }
 
-func (r *ToolRegistry) Register(tool Tool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// registerToolLocked saves a tool entry into the registry. Must be called with r.mu held.
+func (r *ToolRegistry) registerToolLocked(tool Tool, isCore bool, warnPrefix, debugLabel string) {
 	name := tool.Name()
 	if _, exists := r.tools[name]; exists {
-		logger.WarnCF("tools", "Tool registration overwrites existing tool",
+		logger.WarnCF("tools", warnPrefix+" overwrites existing tool",
 			map[string]any{"name": name})
 	}
 	r.tools[name] = &ToolEntry{
 		Tool:   tool,
-		IsCore: true,
-		TTL:    0, // Core tools do not use TTL
-	}
-	if aware, ok := tool.(mediaStoreAware); ok && r.mediaStore != nil {
-		aware.SetMediaStore(r.mediaStore)
-	}
-	if aware, ok := tool.(auditLoggerAware); ok && r.auditLogger != nil {
-		aware.SetAuditLogger(r.auditLogger)
-	}
-	r.version.Add(1)
-	logger.DebugCF("tools", "Registered core tool", map[string]any{"name": name})
-}
-
-// RegisterHidden saves hidden tools (visible only via TTL)
-func (r *ToolRegistry) RegisterHidden(tool Tool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	name := tool.Name()
-	if _, exists := r.tools[name]; exists {
-		logger.WarnCF("tools", "Hidden tool registration overwrites existing tool",
-			map[string]any{"name": name})
-	}
-	r.tools[name] = &ToolEntry{
-		Tool:   tool,
-		IsCore: false,
+		IsCore: isCore,
 		TTL:    0,
 	}
 	if aware, ok := tool.(mediaStoreAware); ok && r.mediaStore != nil {
@@ -91,8 +75,24 @@ func (r *ToolRegistry) RegisterHidden(tool Tool) {
 	if aware, ok := tool.(auditLoggerAware); ok && r.auditLogger != nil {
 		aware.SetAuditLogger(r.auditLogger)
 	}
+	if aware, ok := tool.(memoryRateLimiterAware); ok && r.memoryRateLimiter != nil {
+		aware.SetMemoryRateLimiter(r.memoryRateLimiter)
+	}
 	r.version.Add(1)
-	logger.DebugCF("tools", "Registered hidden tool", map[string]any{"name": name})
+	logger.DebugCF("tools", debugLabel, map[string]any{"name": name})
+}
+
+func (r *ToolRegistry) Register(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.registerToolLocked(tool, true, "Tool registration", "Registered core tool")
+}
+
+// RegisterHidden saves hidden tools (visible only via TTL)
+func (r *ToolRegistry) RegisterHidden(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.registerToolLocked(tool, false, "Hidden tool registration", "Registered hidden tool")
 }
 
 // SetMediaStore injects a MediaStore into all registered tools that can
@@ -120,6 +120,28 @@ func (r *ToolRegistry) SetAuditLogger(logger *audit.Logger) {
 	for _, entry := range r.tools {
 		if aware, ok := entry.Tool.(auditLoggerAware); ok {
 			aware.SetAuditLogger(logger)
+		}
+	}
+}
+
+// SetMemoryRateLimiter injects a MemoryRateLimiter (v0.2 #155 item 6) into
+// the registry. The limiter is propagated to any registered tools that
+// implement memoryRateLimiterAware (currently RememberTool and
+// RetrospectiveTool) so their writes are gated.
+//
+// Pass nil to clear (used by tests and by environments that explicitly
+// disable rate limiting). A nil limiter at the tool boundary becomes a
+// no-op: Allow returns true unconditionally.
+//
+// Following the SetMediaStore / SetAuditLogger pattern for dependency
+// injection across the registry.
+func (r *ToolRegistry) SetMemoryRateLimiter(limiter *MemoryRateLimiter) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.memoryRateLimiter = limiter
+	for _, entry := range r.tools {
+		if aware, ok := entry.Tool.(memoryRateLimiterAware); ok {
+			aware.SetMemoryRateLimiter(limiter)
 		}
 	}
 }
@@ -510,7 +532,7 @@ func (r *ToolRegistry) List() []string {
 }
 
 // cloneEntry returns a shallow copy of a ToolEntry.
-// W3-13: shared by Clone and CloneExcept so the field list cannot drift between
+// Shared by Clone and CloneExcept so the field list cannot drift between
 // the two methods. When a new field is added to ToolEntry, update ONLY this
 // function and both Clone + CloneExcept pick up the change automatically.
 //

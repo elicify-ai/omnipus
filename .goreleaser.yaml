@@ -1,5 +1,14 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 # vim: set ts=2 sw=2 tw=0 fo=cnqoj
+#
+# v0.1 release matrix — Tier 1 platforms only:
+#   - linux/amd64, linux/arm64, darwin/arm64
+# Deferred (planned, not in v0.1): darwin/amd64 (Intel), windows/amd64 (#113),
+# linux/{riscv64,loong64,arm,mipsle}, freebsd/*, netbsd/*.
+#
+# Module path is still github.com/dapicom-ai/omnipus (go.mod). Renaming to
+# elicify-ai is a separate refactor — until then, LDFLAGS must target the
+# dapicom-ai path that the binary actually carries.
 version: 2
 
 git:
@@ -11,9 +20,21 @@ before:
   hooks:
     - go mod tidy
     - go generate ./...
-    - sh -c 'cd web/frontend && pnpm install && pnpm build:backend'
-    - go install github.com/tc-hib/go-winres@latest
-    - go-winres make --in web/backend/winres/winres.json --out web/backend/rsrc --product-version={{ .Version }} --file-version={{ .Version }}
+    # Embed SPA into pkg/gateway/spa/ before any go build runs.
+    # pkg/gateway/embed.go has //go:embed all:spa and pkg/gateway/spa/ is
+    # gitignored. Vite builds into dist/spa; we mirror it into the embed target.
+    # Mirrors .github/workflows/cross-platform.yml:50-58 — the proven pattern.
+    # npm install (not npm ci): CI's npm is strict about transitive lock
+    # entries; redoc's core-js@3.49.0 subdep doesn't appear in our top-level
+    # lock and breaks `npm ci` even though `npm install` resolves cleanly.
+    # The release pipeline doesn't need lock-strict installs — deterministic
+    # JS output comes from `npm run build` + Vite's content-hashed asset names.
+    - npm install --no-audit --no-fund
+    - npm run build
+    # Vite outputs to dist/; goreleaser also uses dist/ as its artifact dir.
+    # After mirroring the SPA into the embed target, wipe dist/ so goreleaser
+    # can write its own artifacts there (or it errors "dist is not empty").
+    - sh -c 'rm -rf pkg/gateway/spa && cp -r dist/spa pkg/gateway/spa && rm -rf dist'
 
 builds:
   - id: omnipus
@@ -24,117 +45,23 @@ builds:
       - stdjson
     ldflags:
       - -s -w
-      - -X github.com/sipeed/omnipus/pkg/config.Version={{ .Version }}
-      - -X github.com/sipeed/omnipus/pkg/config.GitCommit={{ .ShortCommit }}
-      - -X github.com/sipeed/omnipus/pkg/config.BuildTime={{ .Date }}
-      - -X github.com/sipeed/omnipus/pkg/config.GoVersion={{ .Env.GOVERSION }}
+      - -X github.com/dapicom-ai/omnipus/pkg/config.Version={{ .Version }}
+      - -X github.com/dapicom-ai/omnipus/pkg/config.GitCommit={{ .ShortCommit }}
+      - -X github.com/dapicom-ai/omnipus/pkg/config.BuildTime={{ .Date }}
+      - -X github.com/dapicom-ai/omnipus/pkg/config.GoVersion={{ .Env.GOVERSION }}
     goos:
       - linux
-      - windows
       - darwin
-      - freebsd
-      - netbsd
     goarch:
       - amd64
       - arm64
-      - riscv64
-      - loong64
-      - arm
-      - s390x
-      - mipsle
-    goarm:
-      - "6"
-      - "7"
-    gomips:
-      - softfloat
     main: ./cmd/omnipus
     ignore:
-      - goos: windows
-        goarch: arm
-      - goos: netbsd
-        goarch: s390x
-      - goos: netbsd
-        goarch: mips64
-      - goos: netbsd
-        goarch: arm
-
-  - id: omnipus-launcher
-    binary: omnipus-launcher
-    env:
-      - CGO_ENABLED=0
-    tags:
-      - goolm
-      - stdjson
-    ldflags:
-      - -s -w
-    goos:
-      - linux
-      - windows
-      - darwin
-      - freebsd
-      - netbsd
-    goarch:
-      - amd64
-      - arm64
-      - riscv64
-      - loong64
-      - arm
-      - s390x
-      - mipsle
-    goarm:
-      - "6"
-      - "7"
-    gomips:
-      - softfloat
-    main: ./web/backend
-    ignore:
-      - goos: windows
-        goarch: arm
-      - goos: netbsd
-        goarch: s390x
-      - goos: netbsd
-        goarch: mips64
-      - goos: netbsd
-        goarch: arm
-
-  - id: omnipus-launcher-tui
-    binary: omnipus-launcher-tui
-    env:
-      - CGO_ENABLED=0
-    tags:
-      - goolm
-      - stdjson
-    ldflags:
-      - -s -w
-    goos:
-      - linux
-      - windows
-      - darwin
-      - freebsd
-      - netbsd
-    goarch:
-      - amd64
-      - arm64
-      - riscv64
-      - loong64
-      - arm
-      - s390x
-      - mipsle
-    goarm:
-      - "6"
-      - "7"
-    gomips:
-      - softfloat
-    main: ./cmd/omnipus-launcher-tui
-    ignore:
-      - goos: windows
-        goarch: arm
-      - goos: netbsd
-        goarch: s390x
-      - goos: netbsd
-        goarch: mips64
-      - goos: netbsd
-        goarch: arm
+      # darwin/amd64 (Intel Mac) is deferred to v0.1.1. Cross-compile target
+      # works, but we haven't smoke-tested it in CI (cross-platform.yml uses
+      # macos-latest = arm64). Adding macos-13 runner is a v0.1.1 task.
+      - goos: darwin
+        goarch: amd64
 
 dockers_v2:
   - id: omnipus
@@ -145,91 +72,44 @@ dockers_v2:
       - omnipus
     images:
       - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/omnipus"
-      - 'docker.io/{{ .Env.DOCKERHUB_IMAGE_NAME }}'
     tags:
       - '{{ if isEnvSet "NIGHTLY_BUILD" }}nightly{{ else }}{{ .Tag }}{{ end }}'
       - '{{ if isEnvSet "NIGHTLY_BUILD" }}nightly{{ else }}latest{{ end }}'
     platforms:
       - linux/amd64
       - linux/arm64
-      - linux/riscv64
-
-  - id: omnipus-launcher
-    dockerfile: docker/Dockerfile.goreleaser.launcher
-    ids:
-      - omnipus
-      - omnipus-launcher
-      - omnipus-launcher-tui
-    images:
-      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/omnipus"
-      - 'docker.io/{{ .Env.DOCKERHUB_IMAGE_NAME }}'
-    tags:
-      - '{{ if isEnvSet "NIGHTLY_BUILD" }}nightly-launcher{{ else }}{{ .Tag }}-launcher{{ end }}'
-      - '{{ if isEnvSet "NIGHTLY_BUILD" }}nightly-launcher{{ else }}launcher{{ end }}'
-    platforms:
-      - linux/amd64
-      - linux/arm64
-      - linux/riscv64
-
-notarize:
-  macos:
-    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
-      ids:
-        - omnipus
-        - omnipus-launcher
-        - omnipus-launcher-tui
-      sign:
-        certificate: "{{.Env.MACOS_SIGN_P12}}"
-        password: "{{.Env.MACOS_SIGN_PASSWORD}}"
-      notarize:
-        issuer_id: "{{.Env.MACOS_NOTARY_ISSUER_ID}}"
-        key_id: "{{.Env.MACOS_NOTARY_KEY_ID}}"
-        key: "{{.Env.MACOS_NOTARY_KEY}}"
-        wait: true
-        timeout: 20m
 
 archives:
   - formats: [tar.gz]
-    # this name template makes the OS and Arch compatible with the results of `uname`.
+    # Matches uname -s / uname -m output:
+    #   omnipus_Linux_x86_64.tar.gz, omnipus_Linux_arm64.tar.gz,
+    #   omnipus_Darwin_arm64.tar.gz.
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
       {{- if eq .Arch "amd64" }}x86_64
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
-      {{- if .Arm }}v{{ .Arm }}{{ end }}
-    # use zip for windows archives
-    format_overrides:
-      - goos: windows
-        formats: [zip]
 
 nfpms:
   - id: omnipus
     ids:
       - omnipus
-      - omnipus-launcher
-      - omnipus-launcher-tui
     package_name: omnipus
     file_name_template: >-
       {{ .PackageName }}_
       {{- if eq .Arch "amd64" }}x86_64
       {{- else if eq .Arch "arm64" }}aarch64
-      {{- else if eq .Arch "arm" }}armv{{ .Arm }}
       {{- else }}{{ .Arch }}{{ end }}
-    vendor: omnipus
-    homepage: https://github.com/{{ .Env.GITHUB_REPOSITORY_OWNER }}/omnipus
+    vendor: elicify-ai
+    homepage: https://github.com/elicify-ai/omnipus
     maintainer: omnipus contributors
-    description: omnipus - a tool for managing and running tasks
+    description: Omnipus — multi-agent orchestration, sovereign, sandboxed, single binary.
     license: MIT
     formats:
       - rpm
       - deb
     bindir: /usr/bin
-    contents:
-      - src: web/omnipus-launcher.desktop
-        dst: /usr/share/applications/omnipus-launcher.desktop
-      - src: web/omnipus-launcher.png
-        dst: /usr/share/icons/hicolor/512x512/apps/omnipus-launcher.png
 
 changelog:
   sort: asc
@@ -237,11 +117,6 @@ changelog:
     exclude:
       - "^docs:"
       - "^test:"
-
-# upx:
-#    - enabled: true
-#      compress: best
-#      lzma: true
 
 release:
   disable: '{{ isEnvSet "NIGHTLY_BUILD" }}'

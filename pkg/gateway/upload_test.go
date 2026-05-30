@@ -17,6 +17,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 )
 
 // newUploadTestAPI returns a restAPI wired to a temp directory for upload tests.
@@ -65,10 +67,10 @@ func TestHandleUpload_Success(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, rr.Code, "expected 201, body: %s", rr.Body.String())
 
-	var resp map[string][]uploadedFileInfo
+	var resp gen.UploadFilesResponse
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
 
-	files := resp["files"]
+	files := resp.Files
 	require.Len(t, files, 1)
 	assert.Equal(t, "test.txt", files[0].Name)
 	assert.Equal(t, int64(len(fileContent)), files[0].Size)
@@ -127,9 +129,9 @@ func TestHandleUpload_MultipleFiles(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, rr.Code)
 
-	var resp map[string][]uploadedFileInfo
+	var resp gen.UploadFilesResponse
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
-	assert.Len(t, resp["files"], 3)
+	assert.Len(t, resp.Files, 3)
 }
 
 // TestHandleUpload_MissingSessionID verifies a 400 is returned when session_id is absent.
@@ -211,9 +213,9 @@ func TestHandleUpload_FilenamePathTraversal(t *testing.T) {
 	// Either it returns 201 with the sanitized filename "passwd", or 400.
 	// In any case the file must NOT appear outside the uploads directory.
 	if rr.Code == http.StatusCreated {
-		var resp map[string][]uploadedFileInfo
+		var resp gen.UploadFilesResponse
 		require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
-		for _, f := range resp["files"] {
+		for _, f := range resp.Files {
 			assert.False(t, strings.Contains(f.Path, ".."), "path must not contain ..")
 			assert.True(t, strings.HasPrefix(f.Path, "uploads/"), "path must be under uploads/")
 		}
@@ -249,10 +251,10 @@ func TestHandleUpload_ContentTypePreserved(t *testing.T) {
 	api.HandleUpload(rr, req)
 
 	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
-	var resp map[string][]uploadedFileInfo
+	var resp gen.UploadFilesResponse
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
-	require.Len(t, resp["files"], 1)
-	assert.Equal(t, "image/png", resp["files"][0].ContentType)
+	require.Len(t, resp.Files, 1)
+	assert.Equal(t, "image/png", resp.Files[0].ContentType)
 }
 
 // --- HandleServeUpload tests ---

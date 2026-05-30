@@ -660,9 +660,9 @@ func (t *asyncFollowUpTool) Parameters() map[string]any {
 	}
 }
 
-func (t *asyncFollowUpTool) Scope() tools.ToolScope            { return tools.ScopeGeneral }
-func (t *asyncFollowUpTool) RequiresAdminAsk() bool             { return false }
-func (t *asyncFollowUpTool) Category() tools.ToolCategory       { return tools.CategoryCore }
+func (t *asyncFollowUpTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (t *asyncFollowUpTool) RequiresAdminAsk() bool       { return false }
+func (t *asyncFollowUpTool) Category() tools.ToolCategory { return tools.CategoryCore }
 
 func (t *asyncFollowUpTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	return tools.AsyncResult("async follow-up scheduled")
@@ -686,3 +686,88 @@ var (
 	_ tools.Tool          = (*mockCustomTool)(nil)
 	_ tools.AsyncExecutor = (*asyncFollowUpTool)(nil)
 )
+
+// TestEventBus_HookObserverBuffer_FastConsumer_NoDrops verifies the production
+// hookObserverBufferSize=64 is adequate for a consumer that drains at or
+// faster than the producer's rate. Regression guard for #165.
+//
+// A subprocess hook observer that processes events quickly (typical case)
+// should never see drops at typical agent-loop emission rates.
+func TestEventBus_HookObserverBuffer_FastConsumer_NoDrops(t *testing.T) {
+	bus := NewEventBus()
+	sub := bus.Subscribe(hookObserverBufferSize) // 64
+	defer bus.Unsubscribe(sub.ID)
+
+	// Drain in a goroutine — no sleep, immediate recv.
+	done := make(chan struct{})
+	received := 0
+	go func() {
+		defer close(done)
+		for range sub.C {
+			received++
+		}
+	}()
+
+	// Emit 200 events — burst exceeds buffer size but consumer keeps up.
+	for i := 0; i < 200; i++ {
+		bus.Emit(Event{Kind: EventKindToolExecStart})
+	}
+
+	// Close the bus to terminate the consumer goroutine.
+	bus.Unsubscribe(sub.ID)
+	<-done
+
+	if dropped := bus.Dropped(EventKindToolExecStart); dropped != 0 {
+		t.Fatalf("fast consumer must see zero drops; got %d (received %d/200)",
+			dropped, received)
+	}
+}
+
+// TestEventBus_HookObserverBuffer_SlowConsumer_BoundedDrops verifies the
+// drop-counter mechanism actually fires when a subprocess hook observer
+// lags behind the producer. This is the operational warning signal: a
+// non-zero drop count in production should prompt the operator to either
+// drain faster or raise the buffer. Regression guard for #165.
+//
+// The test simulates a sustained burst against a deliberately-slow
+// observer to make drops measurable and verifiable.
+func TestEventBus_HookObserverBuffer_SlowConsumer_BoundedDrops(t *testing.T) {
+	bus := NewEventBus()
+	sub := bus.Subscribe(hookObserverBufferSize) // 64
+
+	// Slow consumer — drain rate matched to the burst length so the buffer
+	// fills and excess drops. 200µs per event vs. instant emit means each
+	// emit lap fills the buffer before the consumer drains 1 event.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range sub.C {
+			time.Sleep(200 * time.Microsecond)
+		}
+	}()
+
+	// Burst large enough that even buffer=1024 fills before the slow consumer
+	// drains: 5000 events × 200µs drain = 1s of consumer work behind. Producer
+	// is instant, so ~4000 drops are expected.
+	const burst = 5000
+	for i := 0; i < burst; i++ {
+		bus.Emit(Event{Kind: EventKindToolExecStart})
+	}
+
+	bus.Unsubscribe(sub.ID)
+	<-done
+
+	dropped := bus.Dropped(EventKindToolExecStart)
+	if dropped == 0 {
+		t.Fatalf("slow consumer must see drops on a %d-event burst with 200µs/recv drain — "+
+			"the drop counter is the operator's only warning signal; "+
+			"if drops aren't being reported, the back-pressure path is broken", burst)
+	}
+	if dropped > int64(burst) {
+		t.Fatalf("dropped count (%d) exceeded events emitted (%d) — counter logic broken",
+			dropped, burst)
+	}
+	t.Logf("buffer=%d slow consumer dropped %d/%d events under sustained burst — "+
+		"this is the expected behavior; operators should monitor Dropped() in production",
+		hookObserverBufferSize, dropped, burst)
+}

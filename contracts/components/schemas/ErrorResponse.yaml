@@ -1,0 +1,17 @@
+type: object
+description: Standard error envelope returned by all non-2xx responses.
+required:
+  - error
+properties:
+  error:
+    type: string
+    description: Human-readable error message.
+    example: "user not found"
+  code:
+    type: string
+    description: Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited").
+    example: "csrf_missing"
+  details:
+    type: object
+    description: Optional structured details about the error.
+    additionalProperties: true

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/session"
 )
 
 // newAL is a helper for turn tests that only need the AgentLoop and cleanup.
@@ -153,4 +154,93 @@ func TestTurnState_FinalizeStreamer_Nil(t *testing.T) {
 	require.NotPanics(t, func() {
 		ts.finalizeStreamer(context.Background())
 	}, "finalizeStreamer must not panic when no streamer is set")
+}
+
+// --- Suite 5: B4 abandoned-write suppression tests ---
+
+// TestTurnState_Abandoned_SuppressesAppendToolCallTranscript verifies that
+// appendToolCallTranscript is a no-op when the turn is marked abandoned, and
+// that the global abandonedWritesSuppressed counter is incremented.
+//
+// BDD: Given a turnState with an active transcriptStore and abandoned==true,
+// When appendToolCallTranscript is called,
+// Then no entry is appended to the transcript,
+// AND AbandonedWritesSuppressed() increments by 1.
+//
+// Traces to: pkg/agent/turn.go — appendToolCallTranscript B4 guard
+func TestTurnState_Abandoned_SuppressesAppendToolCallTranscript(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.NewUnifiedStore(dir)
+	require.NoError(t, err)
+
+	meta, err := store.NewSession(session.SessionTypeChat, "", "test-agent")
+	require.NoError(t, err)
+	sid := meta.ID
+
+	ts := &turnState{
+		transcriptStore:     store,
+		transcriptSessionID: sid,
+	}
+	ts.abandoned.Store(true)
+
+	before := AbandonedWritesSuppressed()
+
+	ts.appendToolCallTranscript(session.ToolCall{
+		ID:   "tc-001",
+		Tool: "some.tool",
+	})
+
+	// Counter must have incremented.
+	assert.Equal(t, before+1, AbandonedWritesSuppressed(), "suppressed counter must increment")
+
+	// No entry must have been written.
+	entries, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "no transcript entry must be written when abandoned")
+}
+
+// TestTurnState_Abandoned_SuppressesAddTurnStats verifies that AddTurnStats
+// is a no-op when the turn is marked abandoned, and that the counter increments.
+//
+// BDD: Given a turnState with abandoned==true,
+// When AddTurnStats is called,
+// Then turnTokens and turnCostUSD remain zero,
+// AND AbandonedWritesSuppressed() increments by 1.
+//
+// Traces to: pkg/agent/turn.go — AddTurnStats B4 guard
+func TestTurnState_Abandoned_SuppressesAddTurnStats(t *testing.T) {
+	ts := &turnState{}
+	ts.abandoned.Store(true)
+
+	before := AbandonedWritesSuppressed()
+	ts.AddTurnStats(1000, 0.05)
+
+	assert.Equal(t, before+1, AbandonedWritesSuppressed(), "suppressed counter must increment")
+
+	tokens, cost := ts.GetTurnStats()
+	assert.Equal(t, int64(0), tokens, "turnTokens must remain zero when abandoned")
+	assert.Equal(t, float64(0), cost, "turnCostUSD must remain zero when abandoned")
+}
+
+// TestTurnState_Abandoned_SuppressesFinalizeStreamer verifies that finalizeStreamer
+// does not call Finalize on the streamer when the turn is marked abandoned, and
+// that the counter increments.
+//
+// BDD: Given a turnState with an active streamer and abandoned==true,
+// When finalizeStreamer is called,
+// Then the streamer's Finalize method is NOT called,
+// AND AbandonedWritesSuppressed() increments by 1.
+//
+// Traces to: pkg/agent/turn.go — finalizeStreamer B4 guard
+func TestTurnState_Abandoned_SuppressesFinalizeStreamer(t *testing.T) {
+	ts := &turnState{}
+	ms := &mockStreamer{}
+	ts.setLastStreamer(ms)
+	ts.abandoned.Store(true)
+
+	before := AbandonedWritesSuppressed()
+	ts.finalizeStreamer(context.Background())
+
+	assert.Equal(t, before+1, AbandonedWritesSuppressed(), "suppressed counter must increment")
+	assert.Equal(t, 0, ms.finalizeCalled, "Finalize must NOT be called when abandoned")
 }

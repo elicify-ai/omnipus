@@ -1,0 +1,15 @@
+title: PingFrame
+description: >
+  Client → server. Heartbeat frame sent by the SPA every 30 seconds to keep
+  the connection alive through proxies and firewalls. The server responds with
+  a PongFrame so the SPA's liveness check observes a server frame during idle.
+  The WebSocket protocol-level ping/pong cycle (gorilla/websocket) runs
+  independently as defense-in-depth NAT-keepalive.
+type: object
+required:
+  - type
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: ping

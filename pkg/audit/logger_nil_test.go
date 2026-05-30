@@ -21,7 +21,7 @@ func TestLogger_Log_NilReceiver_DoesNotPanic(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
 				// A panic is a failure — the nil-receiver guard must prevent it.
-				done <- &nilReceiverPanic{val: r}
+				done <- &nilReceiverPanicError{val: r}
 				return
 			}
 			entry := &Entry{
@@ -37,7 +37,7 @@ func TestLogger_Log_NilReceiver_DoesNotPanic(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if panicked, ok := err.(*nilReceiverPanic); ok {
+		if panicked, ok := err.(*nilReceiverPanicError); ok {
 			t.Fatalf("nil *Logger.Log panicked: %v", panicked.val)
 		}
 		if err != nil {
@@ -77,10 +77,10 @@ func TestLogger_Log_NilEntry_DoesNotPanic(t *testing.T) {
 	}
 }
 
-// nilReceiverPanic is a sentinel error type so the goroutine can signal
+// nilReceiverPanicError is a sentinel error type so the goroutine can signal
 // a panic to the parent test goroutine without calling runtime.Goexit().
-type nilReceiverPanic struct{ val any }
+type nilReceiverPanicError struct{ val any }
 
-func (p *nilReceiverPanic) Error() string {
+func (p *nilReceiverPanicError) Error() string {
 	return "panic in nil Logger.Log"
 }

@@ -1,10 +1,6 @@
 /**
  * skip-tracking.ts — Runtime skip governance for the Playwright E2E suite.
  *
- * T0.2: Flipped from record-and-continue to record-and-FAIL.
- * T4.3: Extended with JSON manifest writer, baseline comparison gate, and
- *       SKIP_ALLOWLIST entry validation.
- *
  * ## Skip manifest
  *
  * After every test run, this module writes a JSON manifest to
@@ -12,7 +8,7 @@
  * The manifest captures every `softSkip()` call made during the run, whether
  * authorized (in SKIP_ALLOWLIST) or unauthorized. Direct `test.skip(...)` /
  * `test.fixme(...)` calls bypass this gate today — capture of those is
- * tracked for v0.2 (V2.G) and is the reason the SKIP_ALLOWLIST should also
+ * tracked for v0.2 (#155) and is the reason the SKIP_ALLOWLIST should also
  * cover any test that uses them.
  *
  * ## Baseline comparison gate
@@ -92,86 +88,35 @@ import { execSync } from 'child_process';
 //
 // Empty by default. Add entries only for genuinely tracked issues with a deadline.
 
-// ── V2.G stage 3 — Formally tracked skips ──────────────────────────────────────
+// ── Formally tracked skips ──────────────────────────────────────────────────────
 //
 // These entries document all raw test.skip() and test.fixme() calls in the
-// E2E suite. They are listed here so that when skip-tracking is extended to
-// capture raw test.skip calls (planned for v0.2 / #155 phase V2.G), the gate
-// already has corresponding allow-list entries and will not immediately fail CI.
-//
-// Each entry references the GitHub issue that blocks the underlying feature.
-// The `until` date is the v0.2 target (2026-06-30). Update the date when the
-// issue is resolved or the deadline is formally extended.
-//
-// Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, items 10–11
+// E2E suite. Each entry references the GitHub issue that blocks the underlying
+// feature. Update the `until` date when the issue is resolved or the deadline
+// is formally extended.
 export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?: string }[] = [
-  // agents.spec.ts
+  // chat.spec.ts — W1.6 user-approved permanent skip: #105 offline send queue
   {
-    test: '(d) locked fields render read-only on core agents',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/101',
-    until: '2026-06-30',
-    note: 'AgentProfile hides the Identity accordion for locked (core) agents; canEdit guard at AgentProfile.tsx:353.',
+    test: '(f) queue-on-disconnect: messages sent during WS disconnect send in order after reconnect',
+    issue: 'https://github.com/dapicom-ai/omnipus/issues/105',
+    until: '2026-09-30',
+    note: 'useChatStore has no offline send queue; messages sent during WS disconnect are dropped.',
   },
+  // media.spec.ts — W1.6 user-approved permanent skip: #107 mock-media tool
   {
-    test: '(e) deleted agent URL returns branded 404 with "Back to Agents" link',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/102',
-    until: '2026-06-30',
-    note: '/agents/:nonexistent-slug renders a generic error state without a "Back to Agents" link.',
+    test: '(b) file-download fallback: large binary request triggers browser download dialog',
+    issue: 'https://github.com/dapicom-ai/omnipus/issues/107',
+    until: '2026-09-30',
+    note: 'InlineMedia <a download> path requires a mock non-image media frame; no scenario provider yet.',
   },
+  // contract-counters.spec.ts — production binary does not expose window.__omnipus_test_hooks
   {
-    test: '(g) session with deleted agent shows read-only transcript and "Agent removed" banner',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/103',
-    until: '2026-06-30',
-    note: 'ChatScreen does not check agent_removed in session response; needs data-testid="agent-removed-banner".',
-  },
-  // auth.spec.ts
-  {
-    test: '(c) dev_mode_bypass = true shows red persistent banner on every route',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/104',
-    until: '2026-06-30',
-    note: 'SPA does not render a persistent red banner when dev_mode_bypass is true.',
-  },
-  // command-center.spec.ts
-  {
-    test: '(b) approval-queue: policy=ask tool call triggers approval modal and Approve routes it through',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/106',
-    until: '2026-06-30',
-    note: 'ExecApprovalBlock has no data-testid="approval-modal".',
-  },
-  // handoff.spec.ts
-  {
-    test: '(a) Ray→Max→Jim chain: transcript shows all three agent labels',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/111',
-    until: '2026-06-30',
-    note: 'AssistantMessage does not annotate messages with per-agent attribution.',
-  },
-  // skills.spec.ts
-  {
-    test: '(b) skill install with hash mismatch shows block dialog',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/109',
-    until: '2026-06-30',
-    note: 'SkillBrowser does not expose a file input on the /skills route.',
-  },
-  // settings.spec.ts
-  {
-    test: '(e) tool-policy "Always Allow" toggle persists across page reload',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/108',
-    until: '2026-06-30',
-    note: 'SecuritySection does not render an "Always Allow" toggle with a testid.',
-  },
-  // replay-fidelity.spec.ts
-  {
-    test: '(c) attach-during-active-turn: second browser context receives all events without loss',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/133',
-    until: '2026-06-30',
-    note: 'Covered by Go-level TestAttach_RegistersLiveEventsBeforeReplay; E2E requires a second browser context.',
-  },
-  // version-drift.spec.ts
-  {
-    test: 'mock stale build hash triggers "New version available" toast',
-    issue: 'https://github.com/dapicom-ai/omnipus/issues/110',
-    until: '2026-06-30',
-    note: 'SPA does not poll /api/v1/version and does not show a "New version available" toast.',
+    test: 'no schema-validation errors during authenticated page load + navigation',
+    issue: 'https://github.com/dapicom-ai/omnipus/issues/155',
+    until: '2026-12-31',
+    note: 'window.__omnipus_test_hooks counters are only present in dev builds (import.meta.env.DEV). ' +
+      'CI runs against the embedded production binary where MODE=production. ' +
+      'Run against a Vite dev server to exercise the full assertion.',
   },
 ];
 
@@ -268,7 +213,7 @@ export interface SkipManifest {
     test: string;
     reason: string;
     // Only `softSkip()` calls are captured today. `test.skip()` /
-    // `test.fixme()` capture is planned for v0.2 (#155 phase V2.G).
+    // `test.fixme()` capture is planned for v0.2 (#155).
     // When that lands, the corresponding entries must already be in SKIP_ALLOWLIST.
     // The union is intentionally narrow: 'softSkip' only. Do not widen it here
     // until the teardown suite-walk for raw skips is implemented.

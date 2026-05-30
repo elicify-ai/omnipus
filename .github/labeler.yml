@@ -1,0 +1,105 @@
+# PR path-based auto-labeler.
+# Triggered by actions/labeler in .github/workflows/labeler.yml — adds `area:*`
+# labels to PRs based on which paths changed. Helps with triage and routing.
+
+"area:gateway":
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'pkg/gateway/**'
+
+"area:agent-loop":
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'pkg/agent/**'
+          - 'pkg/coreagent/**'
+
+"area:channels":
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'pkg/channels/**'
+
+"area:tools":
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'pkg/tools/**'
+          - 'pkg/sysagent/**'
+
+"area:sandbox":
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'pkg/sandbox/**'
+          - 'pkg/security/**'
+
+"area:credentials":
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'pkg/credentials/**'
+
+"area:audit":
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'pkg/audit/**'
+
+"area:memory":
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'pkg/memory/**'
+          - 'pkg/session/**'
+
+"area:spa":
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/**'
+          - 'public/**'
+          - 'package.json'
+          - 'package-lock.json'
+          - 'vite.config.*'
+          - 'tsconfig*.json'
+
+"area:contracts":
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'contracts/**'
+          - 'pkg/api/generated/**'
+          - 'src/lib/api/generated/**'
+          - 'scripts/gen-contracts.sh'
+          - 'scripts/_gen-*.sh'
+          - 'scripts/_gen-*.mjs'
+
+"area:ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**'
+
+"area:docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/*.md'
+          - 'docs/**'
+
+"type:breaking-change":
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'contracts/**'
+
+"dependencies":
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'go.mod'
+          - 'go.sum'
+          - 'package.json'
+          - 'package-lock.json'
+
+"github_actions":
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/workflows/**'
+
+"security":
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'pkg/sandbox/**'
+          - 'pkg/security/**'
+          - 'pkg/credentials/**'
+          - 'pkg/audit/**'
+          - 'SECURITY.md'

@@ -1,0 +1,31 @@
+type: object
+description: >
+  Minimal session summary as returned by GET /agents/{id}/sessions.
+  Maps to the AgentSession interface in src/lib/api.ts.
+  This is the same underlying session.UnifiedMeta object, but the SPA
+  consumes it through the AgentSession interface which reads id, title,
+  created_at, and updated_at directly.
+required:
+  - id
+  - title
+  - created_at
+  - updated_at
+properties:
+  id:
+    type: string
+    description: Session identifier.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  title:
+    type: string
+    description: Session title.
+    example: "My chat session"
+  created_at:
+    type: string
+    format: date-time
+    description: RFC3339 creation timestamp.
+    example: "2026-05-16T10:00:00Z"
+  updated_at:
+    type: string
+    format: date-time
+    description: RFC3339 last-update timestamp.
+    example: "2026-05-16T10:05:30Z"

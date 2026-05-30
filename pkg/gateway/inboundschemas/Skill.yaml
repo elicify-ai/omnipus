@@ -1,0 +1,59 @@
+type: object
+description: >
+  A single installed skill as returned by GET /skills.
+  Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend
+  agent capabilities. Each skill has an ID, version, and human-readable metadata.
+required:
+  - id
+  - name
+  - version
+  - verified
+  - status
+additionalProperties: false
+properties:
+  id:
+    type: string
+    description: Unique skill identifier (typically the skill directory name or npm package name).
+    example: "web-research"
+  name:
+    type: string
+    description: Human-readable skill name.
+    example: "Web Research"
+  version:
+    type: string
+    pattern: '^\d+\.\d+\.\d+(?:[-+].*)?$'
+    description: Semantic version string (e.g. "1.2.3"). Must follow semver format.
+    example: "1.2.3"
+  description:
+    type: string
+    description: Short description of what the skill does.
+    example: "Gives the agent web search and page extraction capabilities."
+  author:
+    type: string
+    description: Skill author or publisher name.
+    example: "Omnipus Community"
+  verified:
+    type: boolean
+    description: >
+      True when the skill has been verified by the Omnipus team.
+      Unverified skills require explicit trust grant before use.
+    example: true
+  status:
+    type: string
+    enum:
+      - active
+      - disabled
+      - inactive
+      - error
+    description: >
+      "active" when the skill is loaded and its tools are available to agents.
+      "disabled" when the skill has been installed but deactivated.
+      "inactive" when the skill is installed but not currently activated.
+      "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
+    example: "active"
+  agent_assignment:
+    type: string
+    description: >
+      ID of the agent this skill is assigned to, when the skill is bound to a
+      specific agent rather than globally available. Absent for globally assigned skills.
+    example: "jim"

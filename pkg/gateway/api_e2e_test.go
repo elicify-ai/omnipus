@@ -124,9 +124,10 @@ func TestRateLimitHeadersExposed(t *testing.T) {
 // retroactively deletes sessions older than the new limit.
 //
 // BDD: Given sessions from 2 days ago exist,
-//       When retention is set to 1 day and a sweep is triggered via
-//       POST /api/v1/security/retention/sweep,
-//       Then the old session files are deleted.
+//
+//	When retention is set to 1 day and a sweep is triggered via
+//	POST /api/v1/security/retention/sweep,
+//	Then the old session files are deleted.
 //
 // This test was formerly t.Skip("pending implementation") because the
 // /api/v1/admin/retention-sweep endpoint had not yet been built. The endpoint
@@ -215,9 +216,10 @@ func TestRetentionRetroactiveSweep(t *testing.T) {
 //   - POST (new message) returns an error since the agent no longer exists.
 //
 // BDD: Given agent "alpha" has a session with 1 turn in transcript,
-//       When agent "alpha" is removed from config,
-//       Then GET session returns 200 with transcript data,
-//       And POST new message to the session returns an error response.
+//
+//	When agent "alpha" is removed from config,
+//	Then GET session returns 200 with transcript data,
+//	And POST new message to the session returns an error response.
 //
 // Gap note: the "agent_removed" field and the strict 422 on POST for deleted-
 // agent sessions are not yet implemented as of v0.1. The transcript read path

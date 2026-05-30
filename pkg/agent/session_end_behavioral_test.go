@@ -1,4 +1,4 @@
-// session_end_behavioral_test.go — end-to-end behavioural coverage for
+// session_end_behavioral_test.go — end-to-end behavioral coverage for
 // Fix C's session-end pipeline. Complements session_end_smoke_test.go with
 // spec-mandated #35 (happy path), #43 (bootstrap pass), and boot-gate coverage
 // for FR-029a (cheap-model allow-list).
@@ -28,13 +28,13 @@ import (
 // LLM. Records the last request so tests can assert recap-option hygiene
 // (max_tokens=250, extended_thinking=false, extra_body.reasoning.exclude=true).
 type scriptedProvider struct {
-	mu            sync.Mutex
-	responseBody  string
-	responseErr   error
-	callCount     int
-	lastOpts      map[string]any
-	lastModel     string
-	lastMessages  []providers.Message
+	mu           sync.Mutex
+	responseBody string
+	responseErr  error
+	callCount    int
+	lastOpts     map[string]any
+	lastModel    string
+	lastMessages []providers.Message
 }
 
 func (s *scriptedProvider) Chat(
@@ -110,13 +110,13 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	sessionID := meta.ID
-	if err := store.AppendTranscript(sessionID, session.TranscriptEntry{
+	if appendErr := store.AppendTranscript(sessionID, session.TranscriptEntry{
 		Role:      "user",
-		Content:   "please summarise what we did today",
+		Content:   "please summarize what we did today",
 		Timestamp: time.Now().UTC(),
 		AgentID:   "recap-agent",
-	}); err != nil {
-		t.Fatalf("AppendTranscript: %v", err)
+	}); appendErr != nil {
+		t.Fatalf("AppendTranscript: %v", appendErr)
 	}
 
 	// Kick the recap and wait for it.
@@ -125,8 +125,8 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
 	for time.Now().Before(deadline) {
-		data, err := os.ReadFile(filepath.Join(ag.Workspace, "memory", "sessions", "LAST_SESSION.md"))
-		if err == nil {
+		data, readErr := os.ReadFile(filepath.Join(ag.Workspace, "memory", "sessions", "LAST_SESSION.md"))
+		if readErr == nil {
 			lastSessionBytes = data
 			break
 		}
@@ -165,32 +165,47 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	}
 
 	// A retro file must exist too — date-directory under memory/sessions.
+	// WriteLastSession and AppendRetro run sequentially in the recap
+	// goroutine (pkg/agent/session_end.go:215-231), but the LAST_SESSION.md
+	// poll above can see the first write before the goroutine completes
+	// the second one under heavy CI load. Poll the retro the same way.
 	sessionsDir := filepath.Join(ag.Workspace, "memory", "sessions")
-	dateDirs, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		t.Fatalf("read sessions dir: %v", err)
-	}
-	foundRetro := false
-	for _, d := range dateDirs {
-		if !d.IsDir() {
-			continue
+	var foundRetro bool
+	var retroBytes []byte
+	retroDeadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(retroDeadline) && !foundRetro {
+		dateDirs, err := os.ReadDir(sessionsDir)
+		if err != nil {
+			t.Fatalf("read sessions dir: %v", err)
 		}
-		files, _ := os.ReadDir(filepath.Join(sessionsDir, d.Name()))
-		for _, f := range files {
-			if strings.HasSuffix(f.Name(), "_retro.md") {
-				foundRetro = true
-				retroBytes, _ := os.ReadFile(filepath.Join(sessionsDir, d.Name(), f.Name()))
-				if !strings.Contains(string(retroBytes), "trigger=explicit") {
-					t.Errorf("retro missing trigger=explicit; got:\n%s", retroBytes)
-				}
-				if !strings.Contains(string(retroBytes), "fallback=false") {
-					t.Errorf("happy-path retro should be fallback=false; got:\n%s", retroBytes)
+		for _, d := range dateDirs {
+			if !d.IsDir() {
+				continue
+			}
+			files, _ := os.ReadDir(filepath.Join(sessionsDir, d.Name()))
+			for _, f := range files {
+				if strings.HasSuffix(f.Name(), "_retro.md") {
+					foundRetro = true
+					retroBytes, _ = os.ReadFile(filepath.Join(sessionsDir, d.Name(), f.Name()))
+					break
 				}
 			}
+			if foundRetro {
+				break
+			}
+		}
+		if !foundRetro {
+			time.Sleep(20 * time.Millisecond)
 		}
 	}
 	if !foundRetro {
-		t.Error("no _retro.md file was produced in the happy path")
+		t.Fatal("no _retro.md file was produced in the happy path within 5s")
+	}
+	if !strings.Contains(string(retroBytes), "trigger=explicit") {
+		t.Errorf("retro missing trigger=explicit; got:\n%s", retroBytes)
+	}
+	if !strings.Contains(string(retroBytes), "fallback=false") {
+		t.Errorf("happy-path retro should be fallback=false; got:\n%s", retroBytes)
 	}
 }
 
@@ -481,15 +496,6 @@ func TestBootstrapRecapPass_OneIterationPerSession(t *testing.T) {
 	if gotCalls != 1 {
 		t.Errorf("scripted Chat calls = %d, want 1 (once per unique session, regardless of agent count)", gotCalls)
 	}
-}
-
-func syncMapLenLocal(m *sync.Map) int {
-	n := 0
-	m.Range(func(_, _ any) bool {
-		n++
-		return true
-	})
-	return n
 }
 
 func countRetrosFor(t *testing.T, workspace, sessionID string) int {

@@ -187,15 +187,16 @@ test(
     // timeout. This verifies that the SPA's ApiError(0, 'Network unavailable...')
     // path is wired to a typed error UI rather than a generic crash.
 
-    // Intercept /api/v1/config to delay the response by 60 s.
-    // The SPA's fetch has no AbortController timeout itself, so we rely on
-    // Playwright aborting the request to simulate a timeout. We abort the
-    // request (network error) which maps to ApiError status=0.
-    let abortRequest: (() => void) | null = null
+    // Navigate first so the SPA's initial /api/v1/config fetch (during shell
+    // bootstrap) completes normally; only THEN install the abort route, so
+    // the next config fetch (from settings navigation) is the one we
+    // intercept. Registering the route before page.goto deadlocks the
+    // initial app shell render.
+    await page.goto('/')
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
 
+    let abortRequest: (() => void) | null = null
     await page.route(`${BASE_URL}/api/v1/config`, async (route) => {
-      // Hold the request for 2 s then abort it (simulate timeout / network drop).
-      // We use a Promise that is resolved by the outer test code.
       const abortPromise = new Promise<void>((resolve) => {
         abortRequest = resolve
       })
@@ -203,14 +204,12 @@ test(
       await route.abort('timedout')
     })
 
-    await page.goto('/')
-    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
-
-    // Navigate to a settings page that triggers a fetch to /api/v1/config.
-    // We click a nav item that loads settings (Settings tab).
-    await page.getByRole('link', { name: /settings/i }).first().click().catch(() => {
-      // Settings nav may have a different selector.
-    })
+    // Navigate to the settings page directly via the HashRouter route. The
+    // sidebar (where the Settings link lives) is an overlay drawer and not
+    // present in the default layout — getByRole('link', {settings}) returns
+    // zero matches and the timeout-after-click pattern hangs waiting on a
+    // non-existent fetch, so drive the route directly.
+    await page.goto('/#/settings').catch(() => { /* may abort the in-flight config GET */ })
 
     // Wait briefly for the fetch to be intercepted
     await page.waitForTimeout(500)
@@ -266,6 +265,12 @@ test(
     // A 500 response must trigger a typed error UI with a retry action,
     // not a generic crash or silent failure.
 
+    // Navigate first, then install the route so the initial /api/v1/config
+    // GET (from app shell bootstrap) is not interfered with. The route
+    // intercepts the PUT issued by Save.
+    await page.goto('/')
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+
     await page.route(`${BASE_URL}/api/v1/config`, async (route) => {
       if (route.request().method() === 'PUT') {
         await route.fulfill({
@@ -280,14 +285,9 @@ test(
       }
     })
 
-    await page.goto('/')
-    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
-
-    // Navigate to settings and attempt to save
-    await page.getByRole('link', { name: /settings/i }).first().click().catch(() => {
-      // Alternative nav
-      page.getByRole('button', { name: /settings/i }).first().click().catch(() => {})
-    })
+    // Navigate to settings directly via HashRouter. The Settings link lives
+    // in an overlay drawer that the default layout does not render.
+    await page.goto('/#/settings').catch(() => { /* fine */ })
 
     // Wait for settings to load
     await page.waitForTimeout(1000)

@@ -1,0 +1,27 @@
+title: AuditLogUpdateResponse
+description: >
+  Response from PUT /api/v1/security/audit-log.
+  Returns save status and the previously active state (restart required to apply).
+type: object
+required:
+  - saved
+  - requires_restart
+  - applied_enabled
+additionalProperties: false
+properties:
+  saved:
+    type: boolean
+    description: True when the configuration was successfully persisted to disk.
+    example: true
+  requires_restart:
+    type: boolean
+    description: >
+      Always true — changing the audit log enabled state requires a restart
+      to swap file handles.
+    example: true
+  applied_enabled:
+    type: boolean
+    description: >
+      The audit log enabled state currently active (before restart takes effect).
+      This is the old value — the new value will take effect after restart.
+    example: true

@@ -7,10 +7,12 @@
 package gateway
 
 import (
-	"encoding/json"
+	"bytes"
+	"io"
 	"log/slog"
 	"net/http"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 )
 
@@ -35,25 +37,36 @@ func (a *restAPI) HandleSandboxAuditLog(w http.ResponseWriter, r *http.Request) 
 	switch r.Method {
 	case http.MethodGet:
 		cfg := a.agentLoop.GetConfig()
-		jsonOK(w, map[string]any{
-			"enabled": cfg.Sandbox.AuditLog,
+		jsonOK(w, gen.AuditLogToggle{
+			Enabled: cfg.Sandbox.AuditLog,
 		})
 
 	case http.MethodPut:
-		var body struct {
-			Enabled *bool `json:"enabled"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+		// Pre-check: gen.AuditLogToggleRequest.Enabled is bool (not *bool), so
+		// an empty {} body decodes as Enabled:false and would silently disable
+		// audit logging. Guard against this by requiring the "enabled" key to be
+		// present in the raw body before decode. This is safe because the body is
+		// always small (< 100 bytes) and we reset it via bytes.NewReader below.
+		rawBody, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			jsonErr(w, http.StatusBadRequest, "could not read request body")
 			return
 		}
-		if body.Enabled == nil {
-			jsonErr(w, http.StatusBadRequest, "enabled field is required")
+		if !bytes.Contains(rawBody, []byte(`"enabled"`)) {
+			jsonErr(w, http.StatusBadRequest, `request body must contain "enabled" field`)
+			return
+		}
+		// Replace the consumed body so decodeAndValidate can re-read it.
+		r.Body = io.NopCloser(bytes.NewReader(rawBody))
+
+		var body gen.AuditLogToggleRequest
+		validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+		if !decodeAndValidate(w, r, "AuditLogToggleRequest", &body, validateEnabled) {
 			return
 		}
 
 		oldEnabled := a.agentLoop.GetConfig().Sandbox.AuditLog
-		newEnabled := *body.Enabled
+		newEnabled := body.Enabled
 
 		if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 			ensureMap(m, "sandbox")["audit_log"] = newEnabled
@@ -77,10 +90,10 @@ func (a *restAPI) HandleSandboxAuditLog(w http.ResponseWriter, r *http.Request) 
 		// audit_log is in RestartGatedKeys — changing it requires a restart to
 		// swap file handles. Do not call awaitReload here; the requires_restart
 		// response field informs the admin.
-		jsonOK(w, map[string]any{
-			"saved":            true,
-			"requires_restart": true,
-			"applied_enabled":  oldEnabled,
+		jsonOK(w, gen.AuditLogUpdateResponse{
+			Saved:           true,
+			RequiresRestart: true,
+			AppliedEnabled:  oldEnabled,
 		})
 
 	default:

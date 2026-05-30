@@ -1,0 +1,8 @@
+title: ReplayWarningStats
+description: Optional diagnostic counters included in a ReplayWarningFrame.
+type: object
+additionalProperties: true
+properties:
+  duplicate_tool_call_id_count:
+    type: integer
+    description: Number of tool_call_ids that appeared more than once in the transcript.

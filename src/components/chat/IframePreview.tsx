@@ -32,11 +32,14 @@
  *   .warmup_timeout_seconds in config.json, or aboutInfo.warmup_timeout_seconds
  *   from /api/v1/about).
  *
- * 5xx probe (B1.3b):
- *   After an iframe onload fires, the component issues a HEAD probe at the same
- *   URL. A 5xx response surfaces a "Dev server returned a server error" block
- *   with the status code and a Retry button instead of silently rendering the
- *   browser's error page.
+ * 5xx handling:
+ *   When a dev server returns a 5xx, the iframe simply renders whatever the
+ *   server sent (typically the browser's or the dev server's own error page).
+ *   The SPA does not probe or replace that content — keeping the SPA-side
+ *   contract minimal and letting the dev server's diagnostic UI show through.
+ *   On a true network/load error (iframe `onerror`) we still surface the
+ *   "Preview failed to load" block, since the browser gives us no other
+ *   visible signal there.
  */
 
 import { useCallback, useEffect, useRef, useState, type SyntheticEvent } from 'react'
@@ -68,9 +71,6 @@ export type IframePreviewProps =
 
 // Internal warmup state machine phases.
 type WarmupPhase = 'starting' | 'probing' | 'ready' | 'error'
-
-// B1.3b: 5xx probe result after iframe onload.
-type ProbeStatus = 'idle' | 'pending' | 'ok' | 'server_error'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -384,12 +384,6 @@ export function IframePreview(props: IframePreviewProps) {
   // F-7: visible iframe load error state
   const [iframeFailed, setIframeFailed] = useState(false)
 
-  // B1.3b: 5xx probe state — tracks the result of the HEAD probe issued after
-  // iframe onload. When server_error, the error block with status code is shown
-  // instead of the iframe (which would render the browser's generic error page).
-  const [probeStatus, setProbeStatus] = useState<ProbeStatus>('idle')
-  const [probeHttpStatus, setProbeHttpStatus] = useState<number | null>(null)
-
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const probeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const probeCountRef = useRef(0)
@@ -448,6 +442,10 @@ export function IframePreview(props: IframePreviewProps) {
       clearTimeout(probeTimeoutRef.current)
       probeTimeoutRef.current = null
     }
+    // Invalidate any in-flight probe callbacks so stale onload/fetch
+    // completions cannot overwrite a terminal warmup phase (error or ready
+    // set by a later path). See F-6 / B1.3b stale-probe guard.
+    currentProbeIdRef.current += 1
   }, [])
 
   const startPolling = useCallback(() => {
@@ -501,12 +499,60 @@ export function IframePreview(props: IframePreviewProps) {
     if (!mountedRef.current) return
     const probeId = Number((e.currentTarget as HTMLIFrameElement).dataset.probeId ?? -1)
     if (probeId !== currentProbeIdRef.current) return // stale event — ignore
-    // F-37: successful probe resets the consecutive error counter.
-    consecutiveErrorsRef.current = 0
-    if (warmupPhase === 'probing' || warmupPhase === 'starting') {
-      stopPolling()
-      setWarmupPhase('ready')
-    }
+
+    // B1.3b / MN-02: The iframe's onload fires even when the server returns
+    // a 4xx or 5xx response (the browser received an HTTP response and
+    // rendered it). We must verify the actual HTTP status via a HEAD fetch
+    // before marking the dev server as ready, otherwise a gateway 503 ("dev
+    // server not started yet") would prematurely complete the warmup.
+    //
+    // mode: 'cors' allows reading the response status. Playwright route
+    // intercepts bypass CORS in tests; the preview server must emit
+    // Access-Control-Allow-Origin on actual responses for production.
+    // On CORS / network error we treat the probe as failed and let the
+    // interval continue counting.
+    const capturedProbeId = probeId
+    const probeUrl = absoluteUrl
+    if (!probeUrl) return
+    fetch(probeUrl, { method: 'HEAD', mode: 'cors' })
+      .then((res) => {
+        if (!mountedRef.current) return
+        if (capturedProbeId !== currentProbeIdRef.current) return // stale
+        if (res.status >= 200 && res.status < 400) {
+          // F-37: successful probe resets the consecutive error counter.
+          consecutiveErrorsRef.current = 0
+          stopPolling()
+          setWarmupPhase('ready')
+        } else {
+          // Non-2xx / non-3xx: dev server is not ready (e.g. gateway 503).
+          consecutiveErrorsRef.current += 1
+          if (consecutiveErrorsRef.current >= 3) {
+            stopPolling()
+            setWarmupPhase('error')
+            console.warn('preview.warmup_fast_fail', {
+              errors: consecutiveErrorsRef.current,
+              status: res.status,
+              tool: toolName,
+              path,
+            })
+          }
+        }
+      })
+      .catch(() => {
+        if (!mountedRef.current) return
+        if (capturedProbeId !== currentProbeIdRef.current) return // stale
+        // CORS / network error — probe failed, let the interval continue.
+        consecutiveErrorsRef.current += 1
+        if (consecutiveErrorsRef.current >= 3) {
+          stopPolling()
+          setWarmupPhase('error')
+          console.warn('preview.warmup_fast_fail', {
+            errors: consecutiveErrorsRef.current,
+            tool: toolName,
+            path,
+          })
+        }
+      })
   }
 
   function handleProbeError(e: SyntheticEvent<HTMLIFrameElement>) {
@@ -554,8 +600,6 @@ export function IframePreview(props: IframePreviewProps) {
       forceFetchRef.current = true
       cacheBusterRef.current = Date.now()
       setIframeFailed(false) // F-7: clear any previous visible-iframe error
-      setProbeStatus('idle')  // B1.3b: reset probe state on reload
-      setProbeHttpStatus(null)
       setIframeKey((k) => k + 1)
     } else {
       // Retry: reset warmup state machine.
@@ -582,55 +626,10 @@ export function IframePreview(props: IframePreviewProps) {
   function handleIframeLoad() {
     // F-7: A successful load clears any previous error state (dev server recovered).
     if (iframeFailed) setIframeFailed(false)
-
-    // B1.3b: Issue a HEAD probe to detect 5xx responses. The iframe's onload
-    // fires even when the server returns a 500 page (the browser renders the HTML
-    // successfully). Without this probe, the user sees a generic error page in the
-    // chat instead of an actionable message.
-    //
-    // We probe the base URL (without the cache-buster) to match the iframe content.
-    //
-    // CRIT-FE-1: Do NOT include an Authorization header here. The preview
-    // listener uses URL-path token authentication (the token is embedded in
-    // the path: /preview/<agent>/<token>/...), so Bearer auth is never needed.
-    // Including it would make this a "non-simple" CORS request, triggering an
-    // OPTIONS preflight that the preview listener's CORS config does not permit
-    // (Authorization is not listed in Access-Control-Allow-Headers). The failed
-    // preflight silently falls into .catch → setProbeStatus('ok'), masking the
-    // 5xx detection entirely in correctly-deployed two-port setups.
-    if (!absoluteUrl) return
-    const probeUrl = absoluteUrl
-    setProbeStatus('pending')
-    fetch(probeUrl, { method: 'HEAD', mode: 'no-cors' })
-      .then((res) => {
-        if (!mountedRef.current) return
-        if (res.status >= 500) {
-          setProbeStatus('server_error')
-          setProbeHttpStatus(res.status)
-        } else {
-          setProbeStatus('ok')
-          setProbeHttpStatus(null)
-        }
-      })
-      .catch((err: unknown) => {
-        // Network or CORS error — keep probe status as 'idle' so the iframe is
-        // not blocked, but do NOT downgrade to 'ok'. This preserves 5xx detection
-        // for correctly-deployed two-port setups where a later successful probe
-        // could still fire. Log enough context for operators to diagnose.
-        // Strip preview tokens from logged URL to avoid leaking them to devtools.
-        const redactedUrl = probeUrl.replace(
-          /(\/preview\/[^/]+\/)([^/]+)(\/)/,
-          '$1<redacted>$3',
-        )
-        console.error('preview.head_probe_unreachable', {
-          url: redactedUrl,
-          message: err instanceof Error ? err.message : String(err),
-        })
-        if (mountedRef.current) {
-          setProbeStatus('idle')
-          setProbeHttpStatus(null)
-        }
-      })
+    // 5xx responses from the dev server are passed through verbatim — the
+    // iframe shows whatever the server returned. We do NOT probe the URL
+    // server-side from the SPA: the dev server's own error UI (or the
+    // browser's default) is the right thing to surface.
   }
 
   // ── Render guards ─────────────────────────────────────────────────────────
@@ -807,8 +806,9 @@ export function IframePreview(props: IframePreviewProps) {
         </div>
       )}
 
-      {/* Visible iframe — F-7: replaced by error block if load fails */}
-      {/* B1.3b: also replaced by error block when 5xx probe fires after onload */}
+      {/* Visible iframe — F-7: replaced by error block if onerror fires (true
+          network/load failure). 5xx responses with a body are passed through
+          verbatim by the browser; the dev server's own error UI shows. */}
       {(!isWarmupRequired || warmupPhase === 'ready') && (
         iframeFailed ? (
           <div className="bg-[var(--color-surface-1)] min-h-[120px] flex items-center justify-center p-4">
@@ -817,20 +817,6 @@ export function IframePreview(props: IframePreviewProps) {
               href={absoluteUrl}
               onRetry={() => {
                 setIframeFailed(false)
-                setProbeStatus('idle')
-                setProbeHttpStatus(null)
-                handleReloadOrRetry()
-              }}
-            />
-          </div>
-        ) : probeStatus === 'server_error' ? (
-          <div data-testid="preview-error-block" className="bg-[var(--color-surface-1)] min-h-[120px] flex items-center justify-center p-4">
-            <ErrorBlock
-              message={`Dev server returned a server error (HTTP ${probeHttpStatus ?? '5xx'}). The server may have crashed or encountered an error.`}
-              href={absoluteUrl}
-              onRetry={() => {
-                setProbeStatus('idle')
-                setProbeHttpStatus(null)
                 handleReloadOrRetry()
               }}
             />

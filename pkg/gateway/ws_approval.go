@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
+	generated "github.com/dapicom-ai/omnipus/pkg/api/generated"
 )
 
 // wsApprovalEntry holds the in-flight decision channel and the session that made the request.
@@ -96,9 +97,6 @@ func (r *wsApprovalRegistry) resolve(id string, decision agent.ApprovalDecision)
 		return false
 	}
 }
-
-
-
 
 // wsApprovalHook implements agent.ToolApprover for a single WebSocket connection.
 // When ApproveTool is called by the agent loop, it:
@@ -182,15 +180,26 @@ func (h *wsApprovalHook) ApproveTool(
 	ch := h.registry.register(id, req.SessionID)
 	defer h.registry.unregister(id)
 
-	// Send the approval-request frame to the browser.
-	sendConnFrame(h.conn, wsServerFrame{
-		Type:      "exec_approval_request",
-		ID:        id,
-		SessionID: req.SessionID,
-		Tool:      req.Tool,
-		Params:    req.Arguments,
-		Message:   fmt.Sprintf("Agent wants to call tool %q. Allow?", req.Tool),
-	})
+	// Send the approval-request frame to the browser using the generated type.
+	// Decision: Option B — the spec requires `command` (what the SPA reads); we set it
+	// to req.Tool (the tool name). The optional `tool` and `params` fields carry
+	// the structured data for richer programmatic consumers.
+	msg := fmt.Sprintf("Agent wants to call tool %q. Allow?", req.Tool)
+	approvalFrame := generated.ExecApprovalRequestFrame{
+		Type:      string(generated.WsFrameTypeExecApprovalRequest),
+		Id:        id,
+		SessionId: req.SessionID,
+		Command:   req.Tool,
+		Message:   &msg,
+	}
+	if req.Tool != "" {
+		toolCopy := req.Tool
+		approvalFrame.Tool = &toolCopy
+	}
+	if len(req.Arguments) > 0 {
+		approvalFrame.Params = req.Arguments
+	}
+	sendConnGenFrame(h.conn, string(generated.WsFrameTypeExecApprovalRequest), approvalFrame)
 
 	slog.Info("ws: sent exec_approval_request to browser", "id", id, "tool", req.Tool)
 
@@ -216,17 +225,19 @@ func (h *wsApprovalHook) ApproveTool(
 		return decision, nil
 	case <-timer.C:
 		slog.Warn("ws: exec_approval_request timed out — denying tool execution", "id", id, "tool", req.Tool)
-		// Inform the browser the request expired.
-		sendConnFrame(h.conn, wsServerFrame{
-			Type:      "exec_approval_expired",
-			ID:        id,
-			SessionID: req.SessionID,
-			Message: fmt.Sprintf(
-				"Approval request for %q timed out after %s — tool execution denied.",
-				req.Tool,
-				timeout,
-			),
-		})
+		// Inform the browser the request expired using the generated type.
+		expiredMsg := fmt.Sprintf(
+			"Approval request for %q timed out after %s — tool execution denied.",
+			req.Tool,
+			timeout,
+		)
+		expiredFrame := generated.ExecApprovalExpiredFrame{
+			Type:      string(generated.WsFrameTypeExecApprovalExpired),
+			Id:        id,
+			SessionId: req.SessionID,
+			Message:   &expiredMsg,
+		}
+		sendConnGenFrame(h.conn, string(generated.WsFrameTypeExecApprovalExpired), expiredFrame)
 		return agent.Deny("approval timed out"), nil
 	case <-h.conn.doneCh:
 		slog.Warn(

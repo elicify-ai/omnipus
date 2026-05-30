@@ -1,0 +1,95 @@
+title: Task
+description: >
+  A task record as returned by GET /tasks, GET /tasks/{id}/subtasks, and
+  POST /tasks. Maps to the task.Task struct on the Go side.
+type: object
+required:
+  - id
+  - title
+  - prompt
+  - priority
+  - status
+  - trigger_type
+properties:
+  id:
+    type: string
+    description: Unique task identifier (UUID).
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  title:
+    type: string
+    description: Human-readable task title.
+    example: "Analyze logs"
+  prompt:
+    type: string
+    description: Full task description / prompt given to the agent.
+    example: "Summarize the last 7 days of gateway logs."
+  agent_id:
+    type: string
+    description: ID of the agent assigned to this task. Absent when unassigned.
+    example: "jim"
+  agent_name:
+    type: string
+    description: Display name of the assigned agent. Absent when unassigned.
+    example: "Jim"
+  created_by:
+    type: string
+    description: Username of the user who created the task.
+    example: "admin"
+  parent_task_id:
+    type: string
+    description: ID of the parent task (for subtasks). Absent on top-level tasks.
+    example: "parent-task-uuid"
+  priority:
+    type: integer
+    description: Task priority (higher = more urgent). Default is 0.
+    minimum: 0
+    maximum: 100
+    example: 5
+  status:
+    type: string
+    enum:
+      - queued
+      - assigned
+      - running
+      - completed
+      - failed
+    description: Current lifecycle status of the task.
+    example: "queued"
+  result:
+    type: string
+    description: Text result produced by the agent on completion. Absent while running.
+    example: "Found 3 anomalies in the log."
+  artifacts:
+    type: array
+    items:
+      type: string
+    description: Paths to output files or artifact references produced by the task.
+    example:
+      - "/workspace/report.pdf"
+  session_id:
+    type: string
+    description: Session ID created when the task was started.
+    example: "session-uuid"
+  trigger_type:
+    type: string
+    enum:
+      - manual
+      - time
+      - event
+    description: How the task was triggered.
+    example: "manual"
+  created_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp when the task was created.
+    example: "2026-05-16T10:00:00Z"
+  started_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp when the task was started. Absent until started.
+    example: "2026-05-16T10:01:00Z"
+  completed_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp when the task completed or failed. Absent while running.
+    example: "2026-05-16T10:05:30Z"

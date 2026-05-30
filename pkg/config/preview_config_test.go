@@ -29,10 +29,10 @@ func boolPtr(v bool) *bool { return &v }
 // Traces to: chat-served-iframe-preview-spec.md FR-001
 func TestGatewayConfig_PreviewPort_DefaultDerivation(t *testing.T) {
 	tests := []struct {
-		name          string
-		mainPort      int
-		wantPreview   int32
-		wantErr       bool
+		name        string
+		mainPort    int
+		wantPreview int32
+		wantErr     bool
 	}{
 		{
 			name:        "port 5000 → preview 5001",
@@ -383,7 +383,7 @@ func TestGatewayConfig_DisabledPreview_SkipsPortChecks(t *testing.T) {
 // u.Scheme == "" → reject. url.Parse("://broken") returns a parse error →
 // reject. url.Parse("http://") sets scheme="http" host="" → currently accepted
 // (the code only checks Scheme, not Host). Cases marked accept/reject reflect
-// the actual production behaviour, not the ideal.
+// the actual production behavior, not the ideal.
 //
 // Traces to: chat-served-iframe-preview-spec.md F-40 / gateway.public_url
 func TestGatewayConfig_PublicURL_RequiresScheme(t *testing.T) {
@@ -459,10 +459,14 @@ func TestGatewayConfig_PublicURL_RequiresScheme(t *testing.T) {
 
 	// Differentiation: two different valid URLs produce two different configs
 	// that both pass validation — proves the validator is not a no-op.
-	g1 := &GatewayConfig{Host: "127.0.0.1", Port: 5000, PreviewPort: 5001,
-		PublicURL: "http://first.example.com", PreviewListenerEnabled: boolPtr(true)}
-	g2 := &GatewayConfig{Host: "127.0.0.1", Port: 5000, PreviewPort: 5001,
-		PublicURL: "https://second.example.com", PreviewListenerEnabled: boolPtr(true)}
+	g1 := &GatewayConfig{
+		Host: "127.0.0.1", Port: 5000, PreviewPort: 5001,
+		PublicURL: "http://first.example.com", PreviewListenerEnabled: boolPtr(true),
+	}
+	g2 := &GatewayConfig{
+		Host: "127.0.0.1", Port: 5000, PreviewPort: 5001,
+		PublicURL: "https://second.example.com", PreviewListenerEnabled: boolPtr(true),
+	}
 	require.NoError(t, g1.ValidateAndApplyPreviewDefaults())
 	require.NoError(t, g2.ValidateAndApplyPreviewDefaults())
 	assert.NotEqual(t, g1.PublicURL, g2.PublicURL,

@@ -55,7 +55,7 @@ func newTestShellBgTool(
 // TestWorkspaceShellBgTool_NonLinuxReturnsError verifies the Linux gate.
 func TestWorkspaceShellBgTool_NonLinuxReturnsError(t *testing.T) {
 	if runtime.GOOS == "linux" {
-		t.Skip("Linux: this test verifies non-Linux behaviour only")
+		t.Skip("Linux: this test verifies non-Linux behavior only")
 	}
 	t.Parallel()
 
@@ -75,7 +75,7 @@ func TestWorkspaceShellBgTool_NonLinuxReturnsError(t *testing.T) {
 	}
 }
 
-// TestWorkspaceShellBgTool_NilRegistryReturnsError verifies defence-in-depth
+// TestWorkspaceShellBgTool_NilRegistryReturnsError verifies defense-in-depth
 // when the registry is not wired.
 func TestWorkspaceShellBgTool_NilRegistryReturnsError(t *testing.T) {
 	if runtime.GOOS != "linux" {
@@ -187,12 +187,12 @@ func TestWorkspaceShellBgTool_DenyPatternBlocks(t *testing.T) {
 	defer reg.Close()
 
 	tool := tools.NewWorkspaceShellBgTool(tools.WorkspaceShellBgDeps{
-		WorkspaceDir:    t.TempDir(),
-		Profile:         config.SandboxProfileOff,
-		Registry:        reg,
-		MaxConcurrent:   2,
-		PortRange:       [2]int32{18000, 18999},
-		AuditFailClosed: false,
+		WorkspaceDir:            t.TempDir(),
+		Profile:                 config.SandboxProfileOff,
+		Registry:                reg,
+		MaxConcurrent:           2,
+		PortRange:               [2]int32{18000, 18999},
+		AuditFailClosed:         false,
 		GlobalShellDenyPatterns: []string{`\bsudo\b`},
 		AgentShellPolicy: &config.AgentShellPolicy{
 			EnableDenyPatterns: true,
@@ -226,12 +226,12 @@ func TestWorkspaceShellBgTool_DenyPatternInertWhenDisabled(t *testing.T) {
 
 	dir := t.TempDir()
 	tool := tools.NewWorkspaceShellBgTool(tools.WorkspaceShellBgDeps{
-		WorkspaceDir:    dir,
-		Profile:         config.SandboxProfileOff,
-		Registry:        reg,
-		MaxConcurrent:   2,
-		PortRange:       [2]int32{18000, 18999},
-		AuditFailClosed: false,
+		WorkspaceDir:            dir,
+		Profile:                 config.SandboxProfileOff,
+		Registry:                reg,
+		MaxConcurrent:           2,
+		PortRange:               [2]int32{18000, 18999},
+		AuditFailClosed:         false,
 		GlobalShellDenyPatterns: []string{`\bsudo\b`},
 		AgentShellPolicy: &config.AgentShellPolicy{
 			EnableDenyPatterns: false, // inert
@@ -252,7 +252,8 @@ func TestWorkspaceShellBgTool_DenyPatternInertWhenDisabled(t *testing.T) {
 	// The command itself won't be blocked; it may succeed or fail at the OS
 	// level for other reasons (e.g. missing binary on test host), but it MUST
 	// NOT fail with a deny-pattern message.
-	if result.IsError && (strings.Contains(result.ForLLM, "blocked") || strings.Contains(result.ForLLM, "safety guard")) {
+	if result.IsError &&
+		(strings.Contains(result.ForLLM, "blocked") || strings.Contains(result.ForLLM, "safety guard")) {
 		t.Errorf("deny patterns should be inert; got block message: %q", result.ForLLM)
 	}
 
@@ -525,13 +526,13 @@ func TestWorkspaceShellBgTool_AuditEmittedOnDeny(t *testing.T) {
 	defer reg.Close()
 
 	tool := tools.NewWorkspaceShellBgTool(tools.WorkspaceShellBgDeps{
-		WorkspaceDir:    t.TempDir(),
-		Profile:         config.SandboxProfileOff,
-		Registry:        reg,
-		MaxConcurrent:   2,
-		PortRange:       [2]int32{18000, 18999},
-		AuditLogger:     logger,
-		AuditFailClosed: false,
+		WorkspaceDir:            t.TempDir(),
+		Profile:                 config.SandboxProfileOff,
+		Registry:                reg,
+		MaxConcurrent:           2,
+		PortRange:               [2]int32{18000, 18999},
+		AuditLogger:             logger,
+		AuditFailClosed:         false,
 		GlobalShellDenyPatterns: []string{`\bsudo\b`},
 		AgentShellPolicy: &config.AgentShellPolicy{
 			EnableDenyPatterns: true,
@@ -645,7 +646,10 @@ func TestWorkspaceShellBgTool_AuditFailClosedReturnsDeny(t *testing.T) {
 
 	// Must return an error result.
 	if !result.IsError {
-		t.Errorf("expected IsError=true when audit_fail_closed=true and logger degraded; got false; ForLLM=%q", result.ForLLM)
+		t.Errorf(
+			"expected IsError=true when audit_fail_closed=true and logger degraded; got false; ForLLM=%q",
+			result.ForLLM,
+		)
 	}
 
 	// DevServerRegistry must have zero entries — no spawn occurred.

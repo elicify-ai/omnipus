@@ -1,0 +1,21 @@
+type: object
+description: Returned on successful DELETE /users/{username}.
+required:
+  - username
+  - deleted
+properties:
+  username:
+    type: string
+    description: The deleted user's login name.
+    example: "alice"
+  deleted:
+    type: boolean
+    description: Always true on success.
+    example: true
+  requires_restart:
+    type: boolean
+    description: Present and true when hot-reload failed after the deletion.
+    example: false
+  warning:
+    type: string
+    description: Human-readable explanation when requires_restart is true.

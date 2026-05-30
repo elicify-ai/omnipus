@@ -14,7 +14,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 
+	generated "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/media"
 	"github.com/dapicom-ai/omnipus/pkg/session"
 )
@@ -32,7 +34,7 @@ const replayResultPreviewBytes = 10 * 1024
 // that unit tests can drive it with a slice-backed sink without a real
 // WebSocket connection.
 //
-// Contract (per Sprint I spec):
+// Contract:
 //   - Compaction entries are skipped (FR-I-006).
 //   - For user/system entries: emit replay_message{role, content, agent_id}.
 //   - For assistant entries: emit replay_message if content is non-empty, then
@@ -47,20 +49,26 @@ const replayResultPreviewBytes = 10 * 1024
 //   - Context cancellation is honored between every frame (FR-I-005).
 //   - Returns after emitting exactly one done frame (FR-I-004).
 //
-// W3-3: rs is the pre-computed replayStats from computeReplayStats. Passing it
+// rs is the pre-computed replayStats from computeReplayStats. Passing it
 // in avoids recomputing spawnIDsWithChildren a second time inside this function.
 // The done frame's Stats map is populated from rs so operators see counts in the
 // WS trace.
 //
 // The returned error is non-nil only when emit itself returns an error (e.g.
 // context canceled or send-channel full).
+//
+// emit accepts any generated frame type. Production callers pass the gateway
+// WebSocket writer; tests pass a slice-backed sink — both honor the ServerFrame
+// contract because the Go contract test and SPA Zod schemas independently
+// validate the emitted frames at runtime.
 func streamReplay(
 	ctx context.Context,
 	sessionID string,
 	entries []session.TranscriptEntry,
 	rs replayStats,
-	emit func(wsServerFrame) error,
+	emit func(any) error,
 	mediaStore media.MediaStore,
+	toolStore *toolResultStore,
 ) (framesEmitted int, err error) {
 	// Track underlying file paths already emitted so the SPA never receives
 	// two media frames for the same file. Older transcripts can carry
@@ -74,7 +82,7 @@ func streamReplay(
 	// spawnIDsPresent: set of ToolCall.IDs where tool == "spawn" AND at least
 	// one other tool call in the transcript has ParentToolCallID == that ID.
 	// This is the signal that the parent span has live children to bracket.
-	// W3-3: reuse the map from the pre-computed stats rather than recomputing.
+	// Reuse the map from the pre-computed stats rather than recomputing.
 	spawnIDsWithChildren := buildSpawnIDsWithChildren(entries)
 
 	// deduped: for each ToolCall.ID keep only the index of the last occurrence
@@ -86,10 +94,10 @@ func streamReplay(
 				continue
 			}
 			if prev, dup := latestByID[string(tc.ID)]; dup {
-				// Warn only once (on the first detected duplicate). Subsequent
-				// occurrences silently overwrite — the last one wins.
-				_ = prev
+				// Duplicate detected — log the previous address for diagnostics; last occurrence wins.
 				slog.Warn("replay: duplicate tool_call_id detected — only latest will emit",
+					"previous_entry_index", prev.entryIdx,
+					"previous_tool_index", prev.tcIdx,
 					"event", "replay_duplicate_tool_call_id",
 					"session_id", sessionID,
 					"tool_call_id", string(tc.ID),
@@ -101,7 +109,7 @@ func streamReplay(
 
 	// ── Pass 2: emit frames ──────────────────────────────────────────────────
 
-	emitFrame := func(f wsServerFrame) error {
+	emitFrame := func(f any) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -112,50 +120,54 @@ func streamReplay(
 		return nil
 	}
 
-	// buildStart returns a tool_call_start frame for tc, setting AgentID and
-	// optionally ParentCallID.  Extracted to avoid duplicating the same 6-field
-	// construction in the spawn-parent branch and the flat-emission branch.
-	buildStart := func(tc session.ToolCall, agentID, parentCallID string) wsServerFrame {
-		f := wsServerFrame{
-			Type:      "tool_call_start",
-			SessionID: sessionID,
-			CallID:    string(tc.ID),
+	// buildStart returns a generated.ToolCallStartFrame for tc.
+	// Nil params are coerced to an empty map to satisfy the schema contract
+	// (ToolCallStartFrame.yaml: params is required and must be an object, never null).
+	buildStart := func(tc session.ToolCall, agentID, parentCallID string) generated.ToolCallStartFrame {
+		params := tc.Parameters
+		if params == nil {
+			params = map[string]any{}
+		}
+		f := generated.ToolCallStartFrame{
+			Type:      string(generated.WsFrameTypeToolCallStart),
+			SessionId: sessionID,
+			CallId:    string(tc.ID),
 			Tool:      tc.Tool,
-			Params:    tc.Parameters,
+			Params:    params,
 		}
 		if agentID != "" {
-			f.AgentID = agentID
+			f.AgentId = &agentID
 		}
 		if parentCallID != "" {
-			f.ParentCallID = parentCallID
+			f.ParentCallId = &parentCallID
 		}
 		return f
 	}
 
-	// buildResult returns a tool_call_result frame for tc, setting AgentID and
-	// optionally ParentCallID.
-	buildResult := func(tc session.ToolCall, agentID, parentCallID string) wsServerFrame {
-		resultPayload := truncateResult(sessionID, tc)
-		f := wsServerFrame{
-			Type:       "tool_call_result",
-			SessionID:  sessionID,
-			CallID:     string(tc.ID),
+	// buildResult returns a generated.ToolCallResultFrame for tc.
+	buildResult := func(tc session.ToolCall, agentID, parentCallID string) generated.ToolCallResultFrame {
+		resultPayload := truncateResult(sessionID, tc, toolStore)
+		durationMs := int(tc.DurationMS)
+		f := generated.ToolCallResultFrame{
+			Type:       string(generated.WsFrameTypeToolCallResult),
+			SessionId:  sessionID,
+			CallId:     string(tc.ID),
 			Tool:       tc.Tool,
 			Result:     resultPayload,
 			Status:     resolveStatus(tc.Status),
-			DurationMs: tc.DurationMS,
+			DurationMs: &durationMs,
 		}
 		if agentID != "" {
-			f.AgentID = agentID
+			f.AgentId = &agentID
 		}
 		if parentCallID != "" {
-			f.ParentCallID = parentCallID
+			f.ParentCallId = &parentCallID
 		}
 		return f
 	}
 
 	// lastSeenAgentID tracks the most recent non-empty AgentID across entries.
-	// Used as fallback when a spawn entry has an empty AgentID (W5-17).
+	// Used as fallback when a spawn entry has an empty AgentID.
 	lastSeenAgentID := ""
 
 	for ei, entry := range entries {
@@ -171,17 +183,38 @@ func streamReplay(
 
 		// FR-I-002: emit replay_message for non-empty content.
 		if entry.Content != "" {
-			f := wsServerFrame{
-				Type:      "replay_message",
-				SessionID: sessionID,
+			msgFrame := generated.ReplayMessageFrame{
+				Type:      string(generated.WsFrameTypeReplayMessage),
+				SessionId: sessionID,
 				Role:      entry.Role,
 				Content:   entry.Content,
 			}
 			if entry.AgentID != "" {
-				f.AgentID = entry.AgentID
+				agentIDCopy := entry.AgentID
+				msgFrame.AgentId = &agentIDCopy
 			}
-			if err2 := emitFrame(f); err2 != nil {
+			if err2 := emitFrame(msgFrame); err2 != nil {
 				return framesEmitted, err2
+			}
+
+			// Bug 2 fix: for handoff and return_to_default system entries, emit
+			// a typed agent_switched frame so the SPA can render the agent
+			// transition visually rather than treating it as plain chat text.
+			// HandoffTool writes AgentID = target; ReturnToDefaultTool writes
+			// AgentID = returning agent (not target), so we only emit the switch
+			// frame for entries whose content starts with "Handoff:" and where
+			// the entry carries the target agent ID.
+			if entry.Type == session.EntryTypeSystem && entry.AgentID != "" &&
+				strings.HasPrefix(entry.Content, "Handoff:") {
+				switchF := generated.AgentSwitchedFrame{
+					Type:      string(generated.WsFrameTypeAgentSwitched),
+					SessionId: sessionID,
+				}
+				agentIDCopy := entry.AgentID
+				switchF.AgentId = &agentIDCopy
+				if err2 := emitFrame(switchF); err2 != nil {
+					return framesEmitted, err2
+				}
 			}
 		}
 
@@ -214,16 +247,15 @@ func streamReplay(
 					"session_id", sessionID,
 					"parent_tool_call_id", tcParentID,
 				)
-				// W3-1: the orphan is emitted as a flat tool call (no ParentCallID on
-				// the wire). This causes the client to take the non-nested rendering
-				// path immediately rather than waiting 10 s for the orphan TTL to expire.
+				// The orphan is emitted as a flat tool call (no ParentCallID on the wire).
+				// This causes the client to take the non-nested rendering path immediately
+				// rather than waiting 10 s for the orphan TTL to expire.
 				// The slog.Warn above records the full context for operator debugging.
 			}
 
 			// Resolve the effective agent ID for this tool call's frames.
-			// W5-17: if the spawn entry has an empty AgentID, fall back to the most
-			// recently seen agent ID in the transcript so the span is never emitted
-			// with a blank agent_id.
+			// If the spawn entry has an empty AgentID, fall back to the most recently
+			// seen agent ID in the transcript so the span is never emitted with a blank agent_id.
 			effectiveAgentID := entry.AgentID
 			if effectiveAgentID == "" {
 				effectiveAgentID = lastSeenAgentID
@@ -243,15 +275,16 @@ func streamReplay(
 				// Emit subagent_start to bracket nested frames.
 				spanID := "span_" + tcID
 				taskLabel := resolveTaskLabel(tc)
-				subStart := wsServerFrame{
-					Type:         "subagent_start",
-					SessionID:    sessionID,
-					SpanID:       spanID,
-					ParentCallID: tcID,
+				subStart := generated.SubagentStartFrame{
+					Type:         string(generated.WsFrameTypeSubagentStart),
+					SessionId:    sessionID,
+					SpanId:       spanID,
+					ParentCallId: tcID,
 					TaskLabel:    taskLabel,
 				}
 				if effectiveAgentID != "" {
-					subStart.AgentID = effectiveAgentID
+					agentIDCopy := effectiveAgentID
+					subStart.AgentId = &agentIDCopy
 				}
 				if err2 := emitFrame(subStart); err2 != nil {
 					return framesEmitted, err2
@@ -259,22 +292,24 @@ func streamReplay(
 
 				// Emit all nested tool calls (children with ParentToolCallID == tc.ID).
 				nestedDurationMS, nestedStatus, nestedErr := emitNestedToolCalls(
-					ctx, sessionID, tcID, entries, latestByID, effectiveAgentID, emitFrame,
+					ctx, sessionID, tcID, entries, latestByID, effectiveAgentID, emitFrame, toolStore,
 				)
 				if nestedErr != nil {
 					return framesEmitted, nestedErr
 				}
 
 				// Emit subagent_end.
-				subEnd := wsServerFrame{
-					Type:       "subagent_end",
-					SessionID:  sessionID,
-					SpanID:     spanID,
-					DurationMs: nestedDurationMS,
+				nestedDurMS := int(nestedDurationMS)
+				subEnd := generated.SubagentEndFrame{
+					Type:       string(generated.WsFrameTypeSubagentEnd),
+					SessionId:  sessionID,
+					SpanId:     spanID,
+					DurationMs: &nestedDurMS,
 					Status:     nestedStatus,
 				}
 				if effectiveAgentID != "" {
-					subEnd.AgentID = effectiveAgentID
+					agentIDCopy := effectiveAgentID
+					subEnd.AgentId = &agentIDCopy
 				}
 				if err2 := emitFrame(subEnd); err2 != nil {
 					return framesEmitted, err2
@@ -293,7 +328,7 @@ func streamReplay(
 			}
 
 			// Regular (non-spawn, or nested) tool call: flat emission.
-			// W3-1: orphan tool calls are emitted WITHOUT ParentCallID so the
+			// Orphan tool calls are emitted WITHOUT ParentCallID so the
 			// client takes the flat non-nested path immediately (not after 10s TTL).
 			parentForFlat := ""
 			if isNested && !isOrphan {
@@ -313,48 +348,54 @@ func streamReplay(
 		}
 	}
 
-	// V1.B: when the transcript contained duplicate tool_call_ids, surface a
-	// one-shot replay_warning frame before the done frame so the SPA can toast
-	// the operator. The full counts still live in done.Stats for diagnostics;
-	// this frame is just the visible UX hook. Server-only `slog.Warn` was
-	// invisible to operators because the counter was buried in done.Stats.
+	// When the transcript contained duplicate tool_call_ids, surface a one-shot
+	// replay_warning frame before the done frame so the SPA can toast the operator.
+	// The full counts still live in done.Stats for diagnostics; this frame is the
+	// visible UX hook.
 	if rs.duplicateToolCallIDCount > 0 {
 		if ctx.Err() != nil {
 			return framesEmitted, ctx.Err()
 		}
-		if err2 := emit(wsServerFrame{
-			Type:      "replay_warning",
-			SessionID: sessionID,
+		dupCount := rs.duplicateToolCallIDCount
+		if err2 := emit(generated.ReplayWarningFrame{
+			Type:      string(generated.WsFrameTypeReplayWarning),
+			SessionId: sessionID,
 			Message:   "transcript contained duplicate tool calls — older copies omitted",
-			Stats: map[string]any{
-				"duplicate_tool_call_id_count": rs.duplicateToolCallIDCount,
+			Stats: &generated.ReplayWarningStats{
+				DuplicateToolCallIdCount: &dupCount,
 			},
 		}); err2 != nil {
 			return framesEmitted, err2
 		}
 	}
 
-	// FR-I-004: exactly one done frame at the end.
-	// W3-2: populate Stats with the pre-computed counters so operators reading
-	// the WS trace can see orphan / duplicate / truncated counts inline.
-	// W3-2: emit the done frame OUTSIDE emitFrame so it is NOT counted in
-	// framesEmitted — that counter represents content frames only.
-	doneStats := map[string]any{
-		"frames_emitted":               framesEmitted,
-		"orphan_count":                 rs.orphanCount,
-		"duplicate_tool_call_id_count": rs.duplicateToolCallIDCount,
-		"truncated_result_count":       rs.truncatedResultCount,
-	}
+	// FR-I-004: exactly one done frame at the end. Populate Stats with the
+	// pre-computed counters so operators reading the WS trace can see orphan /
+	// duplicate / truncated counts inline. Emitted OUTSIDE emitFrame so it is
+	// NOT counted in framesEmitted — that counter represents content frames only.
+	framesEmittedF := float64(framesEmitted)
+	orphanCountF := float64(rs.orphanCount)
+	dupCountF := float64(rs.duplicateToolCallIDCount)
+	truncCountF := float64(rs.truncatedResultCount)
 	if ctx.Err() != nil {
 		return framesEmitted, ctx.Err()
 	}
-	if err2 := emit(wsServerFrame{Type: "done", SessionID: sessionID, Stats: doneStats}); err2 != nil {
+	if err2 := emit(generated.DoneFrame{
+		Type:      string(generated.WsFrameTypeDone),
+		SessionId: sessionID,
+		Stats: &generated.DoneStats{
+			FramesEmitted:            &framesEmittedF,
+			OrphanCount:              &orphanCountF,
+			DuplicateToolCallIdCount: &dupCountF,
+			TruncatedResultCount:     &truncCountF,
+		},
+	}); err2 != nil {
 		return framesEmitted, err2
 	}
 	return framesEmitted, nil
 }
 
-// buildMediaFrame returns a `media` wsServerFrame reconstructed from a
+// buildMediaFrame returns a generated.MediaFrame reconstructed from a
 // transcript ToolCall, or ok=false when the call has no persisted media
 // descriptors. The agent loop persists media as
 // tc.Result["media"] = []map[string]any{{"ref","filename","content_type","type"}}
@@ -364,16 +405,16 @@ func buildMediaFrame(
 	tc session.ToolCall,
 	mediaStore media.MediaStore,
 	seenPaths map[string]struct{},
-) (wsServerFrame, bool) {
+) (generated.MediaFrame, bool) {
 	raw, ok := tc.Result["media"]
 	if !ok {
-		return wsServerFrame{}, false
+		return generated.MediaFrame{}, false
 	}
 	list, ok := raw.([]any)
 	if !ok {
-		return wsServerFrame{}, false
+		return generated.MediaFrame{}, false
 	}
-	parts := make([]wsMediaPart, 0, len(list))
+	parts := make([]generated.MediaPart, 0, len(list))
 	for _, item := range list {
 		m, ok := item.(map[string]any)
 		if !ok {
@@ -404,17 +445,21 @@ func buildMediaFrame(
 				seenPaths[path] = struct{}{}
 			}
 		}
-		parts = append(parts, wsMediaPart{
+		parts = append(parts, generated.MediaPart{
 			Type:        mediaType,
-			URL:         "/api/v1/media/" + refStr[len(refPrefix):],
+			Url:         "/api/v1/media/" + refStr[len(refPrefix):],
 			Filename:    filename,
 			ContentType: contentType,
 		})
 	}
 	if len(parts) == 0 {
-		return wsServerFrame{}, false
+		return generated.MediaFrame{}, false
 	}
-	return wsServerFrame{Type: "media", SessionID: sessionID, Parts: parts}, true
+	return generated.MediaFrame{
+		Type:      string(generated.WsFrameTypeMedia),
+		SessionId: sessionID,
+		Parts:     parts,
+	}, true
 }
 
 // buildSpawnIDsWithChildren scans all entries and returns the set of spawn
@@ -462,7 +507,8 @@ func emitNestedToolCalls(
 	entries []session.TranscriptEntry,
 	latestByID map[string]tcAddr,
 	agentID string,
-	emitFrame func(wsServerFrame) error,
+	emitFrame func(any) error,
+	toolStore *toolResultStore,
 ) (totalDurationMS int64, aggregateStatus string, err error) {
 	aggregateStatus = "success"
 
@@ -484,39 +530,47 @@ func emitNestedToolCalls(
 				return totalDurationMS, aggregateStatus, ctx.Err()
 			}
 
-			startFrame := wsServerFrame{
-				Type:         "tool_call_start",
-				SessionID:    sessionID,
-				CallID:       tcID,
-				Tool:         tc.Tool,
-				Params:       tc.Parameters,
-				ParentCallID: parentID,
+			// Coerce nil params to empty map (schema: params required, must be object).
+			params := tc.Parameters
+			if params == nil {
+				params = map[string]any{}
+			}
+			startFrame := generated.ToolCallStartFrame{
+				Type:      string(generated.WsFrameTypeToolCallStart),
+				SessionId: sessionID,
+				CallId:    tcID,
+				Tool:      tc.Tool,
+				Params:    params,
 			}
 			effectiveAgentID := entry.AgentID
 			if effectiveAgentID == "" {
 				effectiveAgentID = agentID
 			}
 			if effectiveAgentID != "" {
-				startFrame.AgentID = effectiveAgentID
+				agentIDCopy := effectiveAgentID
+				startFrame.AgentId = &agentIDCopy
 			}
+			startFrame.ParentCallId = &parentID
 			if err2 := emitFrame(startFrame); err2 != nil {
 				return totalDurationMS, aggregateStatus, err2
 			}
 
-			resultPayload := truncateResult(sessionID, tc)
+			resultPayload := truncateResult(sessionID, tc, toolStore)
 			status := resolveStatus(tc.Status)
-			resultFrame := wsServerFrame{
-				Type:         "tool_call_result",
-				SessionID:    sessionID,
-				CallID:       tcID,
+			durationMs := int(tc.DurationMS)
+			resultFrame := generated.ToolCallResultFrame{
+				Type:         string(generated.WsFrameTypeToolCallResult),
+				SessionId:    sessionID,
+				CallId:       tcID,
 				Tool:         tc.Tool,
 				Result:       resultPayload,
 				Status:       status,
-				DurationMs:   tc.DurationMS,
-				ParentCallID: parentID,
+				DurationMs:   &durationMs,
+				ParentCallId: &parentID,
 			}
 			if effectiveAgentID != "" {
-				resultFrame.AgentID = effectiveAgentID
+				agentIDCopy := effectiveAgentID
+				resultFrame.AgentId = &agentIDCopy
 			}
 			if err2 := emitFrame(resultFrame); err2 != nil {
 				return totalDurationMS, aggregateStatus, err2
@@ -531,10 +585,18 @@ func emitNestedToolCalls(
 	return totalDurationMS, aggregateStatus, nil
 }
 
-// truncateResult JSON-encodes tc.Result and, if it exceeds replayMaxResultBytes,
-// replaces it with a truncation marker per FR-I-011.
-// Returns the value to place in wsServerFrame.Result.
-func truncateResult(sessionID string, tc session.ToolCall) any {
+// truncateResult JSON-encodes tc.Result and applies the two-tier size policy:
+//
+//  1. <= InlineToolResultMaxBytes (50 KiB): inline — return tc.Result unchanged.
+//  2. > InlineToolResultMaxBytes and <= replayMaxResultBytes (1 MiB): offload to
+//     toolStore if available, emit generated.ToolResultRef sentinel.  When
+//     toolStore is nil or the write fails, fall through to inline (which is then
+//     capped at 1 MiB by the next check).
+//  3. > replayMaxResultBytes (1 MiB): truncate — emit TruncatedResult sentinel
+//     (FR-I-011).
+//
+// Returns the value to place in the ToolCallResultFrame's result field.
+func truncateResult(sessionID string, tc session.ToolCall, toolStore *toolResultStore) any {
 	if tc.Result == nil {
 		return tc.Result
 	}
@@ -551,10 +613,18 @@ func truncateResult(sessionID string, tc session.ToolCall) any {
 		)
 		return map[string]any{"_marshal_error": err.Error()}
 	}
+
+	// Tier 2: offload to disk when size is in (50 KiB, 1 MiB].
+	if sentinel, offloaded := maybeOffloadResult(toolStore, sessionID, encoded); offloaded {
+		return sentinel
+	}
+
+	// Tier 1 or store unavailable/disabled: inline (< 50 KiB, or store write failed).
 	if len(encoded) <= replayMaxResultBytes {
 		return tc.Result
 	}
-	// Truncate: emit marker with preview.
+
+	// Tier 3: hard cap exceeded — truncate (FR-I-011).
 	originalSize := len(encoded)
 	preview := encoded
 	if len(preview) > replayResultPreviewBytes {
@@ -601,20 +671,17 @@ func resolveTaskLabel(tc session.ToolCall) string {
 }
 
 // replayStats aggregates metrics from a set of transcript entries for slog.Info.
-// W3-2: extended with three additional counters to improve operator observability.
 type replayStats struct {
-	toolCallCount int
-	spanCount     int
-	// W3-2 additions
+	toolCallCount            int
+	spanCount                int
 	orphanCount              int // tool calls whose ParentToolCallID has no matching spawn-with-children
 	duplicateToolCallIDCount int // tool_call_ids that appear more than once across entries
 	truncatedResultCount     int // tool call results that exceeded replayMaxResultBytes
 }
 
-// computeReplayStats scans entries for logging purposes.
-// W3-3: this function is the single point of computation. streamReplay accepts
-// the pre-computed stats via its signature so the spawnIDsWithChildren map is
-// not rebuilt redundantly on every call.
+// computeReplayStats scans entries and returns aggregate metrics.
+// streamReplay accepts the pre-computed stats via its signature so the
+// spawnIDsWithChildren map is not rebuilt redundantly on every call.
 func computeReplayStats(entries []session.TranscriptEntry) replayStats {
 	var rs replayStats
 	spawnIDsWithChildren := buildSpawnIDsWithChildren(entries)
@@ -648,10 +715,10 @@ func computeReplayStats(entries []session.TranscriptEntry) replayStats {
 	return rs
 }
 
-// wsEmitFunc returns an emit function that writes frames to a wsConn's sendCh,
-// respecting context cancellation.
-func wsEmitFunc(ctx context.Context, wc *wsConn) func(wsServerFrame) error {
-	return func(f wsServerFrame) error {
+// wsEmitFunc returns an emit function that marshals any generated frame type
+// and writes it to a wsConn's sendCh, respecting context cancellation.
+func wsEmitFunc(ctx context.Context, wc *wsConn) func(any) error {
+	return func(f any) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

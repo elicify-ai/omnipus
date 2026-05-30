@@ -1,0 +1,19 @@
+title: ChannelId
+description: Stable identifier for a built-in channel.
+type: string
+enum:
+  - webchat
+  - telegram
+  - discord
+  - slack
+  - whatsapp
+  - feishu
+  - dingtalk
+  - wecom
+  - weixin
+  - line
+  - qq
+  - onebot
+  - irc
+  - matrix
+  - maixcam

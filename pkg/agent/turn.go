@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,18 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/session"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
+
+// abandonedWritesSuppressed is incremented each time a write (transcript
+// append, frame emit, or cost accumulation) is skipped because the turn has
+// been marked abandoned. Exposed via AbandonedWritesSuppressed() for tests
+// and operator tooling (omnipus_abandoned_writes_suppressed_total).
+var abandonedWritesSuppressed atomic.Int64
+
+// AbandonedWritesSuppressed returns the current value of the
+// omnipus_abandoned_writes_suppressed_total counter.
+func AbandonedWritesSuppressed() int64 {
+	return abandonedWritesSuppressed.Load()
+}
 
 type TurnPhase string
 
@@ -76,6 +89,13 @@ type turnState struct {
 	providerCancel        context.CancelFunc
 	turnCancel            context.CancelFunc
 
+	// Cancel dedup / callback fields (FR-10, FR-11, FR-15).
+	// cancelMu guards cancelFired to make the first-cancel-wins check atomic.
+	cancelMu       sync.Mutex
+	cancelFired    atomic.Bool               // true once handleCancel has claimed this turn
+	abandoned      atomic.Bool               // true once the stuck-watchdog gives up on the goroutine
+	onCancelFinish func(cancelMethod string) // called exactly once by Finish when cancelFired
+
 	restorePointHistory []providers.Message
 	restorePointSummary string
 	persistedMessages   []providers.Message
@@ -125,11 +145,20 @@ type turnState struct {
 	transcriptSessionID string
 	transcriptStore     *session.UnifiedStore
 
+	// activeAgentResolver, when non-nil, returns the runtime-current active
+	// agent for this session's transcript. It is set at turn construction for
+	// webchat turns (where sessionActiveAgent tracks post-handoff overrides).
+	// appendToolCallTranscript calls it to tag each entry with the agent that
+	// is currently active rather than the one that started the turn — so
+	// tool_call entries produced after a handoff (same turn, new active agent)
+	// carry the correct agent_id in the transcript.
+	activeAgentResolver func() string
+
 	// syntheticErrorCount tracks consecutive synthetic-deny tool results within
 	// this turn. When it reaches the configured floor (FR-084,
 	// gateway.turn_synthetic_error_floor, default 8), the turn is aborted with
 	// a system message {type: "turn_aborted", reason: "synthetic_error_loop"}.
-	// The counter resets per turn (initialised to zero here).
+	// The counter resets per turn (initialized to zero here).
 	syntheticErrorCount int
 }
 
@@ -224,6 +253,84 @@ func (al *AgentLoop) GetActiveAgentIDs() []string {
 	return ids
 }
 
+// TurnCancelHook is the exported interface that the gateway's cancel handler
+// uses to interact with an active turn. It exposes only the methods needed
+// for the two-stage cancel timer, preventing gateway code from touching
+// unexported turnState fields.
+type TurnCancelHook interface {
+	// IsAlive returns true while the turn has not yet finished.
+	IsAlive() bool
+	// TurnID returns the turn's unique identifier.
+	TurnID() string
+	// SetOnCancelFinish registers a callback invoked by Finish() when the turn
+	// exits after a cancel. Receives "graceful" or "hard".
+	SetOnCancelFinish(fn func(cancelMethod string))
+	// ClaimCancel performs the atomic first-cancel-wins check. Returns true
+	// if this call is the first to claim the cancel (i.e. cancelFired was false
+	// and has now been set to true). Returns false if already canceled.
+	ClaimCancel() bool
+	// MarkAbandoned sets the abandoned flag so the gateway can stop tracking
+	// a stuck goroutine (FR-19, FR-20, FR-21).
+	MarkAbandoned()
+}
+
+// Compile-time check: *turnState implements TurnCancelHook.
+var _ TurnCancelHook = (*turnState)(nil)
+
+// ClaimCancel performs the atomic first-cancel-wins check under cancelMu.
+// Returns true if this call successfully set cancelFired from false→true.
+func (ts *turnState) ClaimCancel() bool {
+	ts.cancelMu.Lock()
+	defer ts.cancelMu.Unlock()
+	if ts.cancelFired.Load() {
+		return false
+	}
+	ts.cancelFired.Store(true)
+	return true
+}
+
+// MarkAbandoned sets the abandoned flag. Called by the stuck-watchdog timer
+// when the turn goroutine has not exited 5s after the hard-abort signal (FR-21).
+func (ts *turnState) MarkAbandoned() {
+	ts.abandoned.Store(true)
+}
+
+// GetActiveTurnHookForSession returns a TurnCancelHook for the active turn
+// belonging to the given transcript session ID, or nil if none is active.
+// Used by handleCancel to atomically claim the turn and register the
+// post-cancel callback (FR-10, FR-11, FR-15).
+//
+// H1: When multiple turns share the same transcriptSessionID (a root turn
+// plus one or more sub-turns), the root turn (depth==0 / parentTurnID=="")
+// is preferred so the cancel handler targets the outermost scope. The first
+// match in the sync.Map iteration is returned only as a last-resort fallback
+// (defensive; should not occur in normal operation).
+func (al *AgentLoop) GetActiveTurnHookForSession(sessionID string) TurnCancelHook {
+	var rootMatch *turnState
+	var anyMatch *turnState
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts := value.(*turnState)
+		if ts.transcriptSessionID != sessionID {
+			return true
+		}
+		if anyMatch == nil {
+			anyMatch = ts
+		}
+		if ts.depth == 0 || ts.parentTurnID == "" {
+			rootMatch = ts
+			return false // stop — root found
+		}
+		return true
+	})
+	if rootMatch != nil {
+		return rootMatch
+	}
+	if anyMatch != nil {
+		return anyMatch
+	}
+	return nil
+}
+
 func (al *AgentLoop) GetActiveTurnBySession(sessionKey string) *ActiveTurnInfo {
 	ts := al.getActiveTurnState(sessionKey)
 	if ts == nil {
@@ -309,19 +416,42 @@ type streamerStatsSetter interface {
 	SetTurnStats(tokens int64, costUSD float64, duration time.Duration)
 }
 
+// SetFinalContent records the final assistant response on the turnState so
+// finalizeStreamer can pass it through to the streamer's Finalize call.
+func (ts *turnState) SetFinalContent(content string) {
+	ts.mu.Lock()
+	ts.finalContent = content
+	ts.mu.Unlock()
+}
+
 func (ts *turnState) finalizeStreamer(ctx context.Context) {
+	// B4: if the turn has been abandoned, suppress the final "done" frame so
+	// a stuck goroutine cannot send a spurious done signal to the frontend.
+	if ts.abandoned.Load() {
+		abandonedWritesSuppressed.Add(1)
+		ts.mu.Lock()
+		ts.lastStreamer = nil
+		ts.mu.Unlock()
+		return
+	}
 	ts.mu.Lock()
 	s := ts.lastStreamer
 	tokens := ts.turnTokens
 	cost := ts.turnCostUSD
 	duration := time.Since(ts.startedAt)
+	finalContent := ts.finalContent
 	ts.lastStreamer = nil
 	ts.mu.Unlock()
 	if s != nil {
 		if setter, ok := s.(streamerStatsSetter); ok {
 			setter.SetTurnStats(tokens, cost, duration)
 		}
-		if err := s.Finalize(ctx, ""); err != nil {
+		// Pass finalContent so the streamer can persist the assistant message
+		// even when its own accumulated-from-token buffer is empty — happens
+		// when the WS client disconnects mid-stream and every Update() call
+		// silently failed against a closed sendCh, leaving the streamer
+		// without any tokens to record.
+		if err := s.Finalize(ctx, finalContent); err != nil {
 			logger.WarnCF("agent", "Turn-end streaming finalize error", map[string]any{"error": err.Error()})
 		}
 	}
@@ -456,15 +586,26 @@ func (ts *turnState) interruptHintMessage() providers.Message {
 }
 
 // appendToolCallTranscript records a tool call to the session transcript.
-// It is a no-op when no transcript store or session ID is configured.
+// It is a no-op when no transcript store or session ID is configured, or when
+// the turn has been marked abandoned (B4: suppresses writes from stuck goroutines).
+//
+// Bug 1 fix: the AgentID on the entry reflects the runtime-current active agent
+// (via activeAgentResolver) rather than the turn's starting agent. This ensures
+// that tool_call entries produced after a handoff carry the correct agent_id —
+// the new active agent — instead of the one that initiated the turn.
 func (ts *turnState) appendToolCallTranscript(tc session.ToolCall) {
+	if ts.abandoned.Load() {
+		abandonedWritesSuppressed.Add(1)
+		return
+	}
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
 		return
 	}
+	agentID := ts.resolveActiveAgentID()
 	entry := session.TranscriptEntry{
 		ID:        string(tc.ID),
 		Type:      session.EntryTypeToolCall,
-		AgentID:   ts.agentID,
+		AgentID:   agentID,
 		Timestamp: time.Now().UTC(),
 		ToolCalls: []session.ToolCall{tc},
 	}
@@ -474,9 +615,60 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall) {
 	}
 }
 
+// resolveActiveAgentID returns the runtime-current active agent ID for this
+// turn's session. When activeAgentResolver is set (webchat sessions), it
+// reflects post-handoff switches that may have occurred during the turn.
+// Falls back to the turn's starting agent ID for all other sessions.
+//
+// Use this — not ts.agentID — in any event payload or log field that should
+// attribute work to the agent that is currently active in the session.
+func (ts *turnState) resolveActiveAgentID() string {
+	if ts.activeAgentResolver != nil {
+		if id := ts.activeAgentResolver(); id != "" {
+			return id
+		}
+	}
+	return ts.agentID
+}
+
+// appendAssistantTranscript persists a completed assistant text response to the
+// session transcript. It is called on the non-streaming path (no wsStreamer) so
+// that replay can reconstruct the full conversation even after a WS disconnect.
+//
+// Bug 3 fix: the wsStreamer.Finalize path already handles streaming responses.
+// For non-streaming turns (WS disconnected or channel that never streams), this
+// ensures the assistant content reaches transcript.jsonl.
+func (ts *turnState) appendAssistantTranscript(content string) {
+	if ts.abandoned.Load() {
+		abandonedWritesSuppressed.Add(1)
+		return
+	}
+	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || content == "" {
+		return
+	}
+	agentID := ts.resolveActiveAgentID()
+	entry := session.TranscriptEntry{
+		ID:        fmt.Sprintf("assistant-%d", time.Now().UnixNano()),
+		Role:      "assistant",
+		AgentID:   agentID,
+		Content:   content,
+		Timestamp: time.Now().UTC(),
+	}
+	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
+		logger.WarnCF("agent", "could not record assistant message to transcript",
+			map[string]any{"session_id": ts.transcriptSessionID, "error": err.Error()})
+	}
+}
+
 // SubTurn-related methods
 
-// Finish marks the turn as finished and closes the pendingResults channel
+// Finish marks the turn as finished and closes the pendingResults channel.
+//
+// When cancelFired is true (i.e. handleCancel claimed this turn), Finish
+// invokes the onCancelFinish callback exactly once with the cancel method
+// ("hard" when isHardAbort, "graceful" otherwise). The callback is called
+// from within the goroutine that finishes the turn, so it must not block or
+// call back into the agent loop with any locks held.
 func (ts *turnState) Finish(isHardAbort bool) {
 	ts.isFinished.Store(true)
 
@@ -487,11 +679,18 @@ func (ts *turnState) Finish(isHardAbort bool) {
 	// used to create a second channel that Finished() would never return.
 	ch := ts.Finished()
 
-	// Close pendingResults channel exactly once
+	// Signal completion exactly once.
+	//
+	// pendingResults is intentionally NOT closed here. Closing it while
+	// deliverSubTurnResult may hold a local copy of the channel reference and be
+	// mid-select-send creates an unavoidable runtime-level race between
+	// closechan() and chansend() that the race detector flags even when the
+	// channel field itself is zeroed under a mutex. Instead we rely on the
+	// finishedChan close as the sole stop signal; all consumers of pendingResults
+	// use non-blocking select+default (loop.go) or select+Finished() (subturn.go)
+	// so they never block waiting for a close. The channel is garbage-collected
+	// once all references drop after the turn is finished.
 	ts.closeOnce.Do(func() {
-		if ts.pendingResults != nil {
-			close(ts.pendingResults)
-		}
 		if ch != nil {
 			close(ch)
 		}
@@ -519,6 +718,24 @@ func (ts *turnState) Finish(isHardAbort bool) {
 			}
 		}
 	}
+
+	// If handleCancel claimed this turn, fire the post-cancel callback exactly
+	// once. Swap the callback to nil under the write-lock so that concurrent or
+	// repeated Finish calls (e.g. the defer Finish(false) after a hard-abort
+	// Finish(true)) cannot invoke it a second time (FR-15).
+	if ts.cancelFired.Load() {
+		ts.mu.Lock()
+		cb := ts.onCancelFinish
+		ts.onCancelFinish = nil
+		ts.mu.Unlock()
+		if cb != nil {
+			method := "graceful"
+			if isHardAbort {
+				method = "hard"
+			}
+			cb(method)
+		}
+	}
 }
 
 // Finished returns a channel that is closed when the turn finishes.
@@ -543,6 +760,29 @@ func (ts *turnState) IsParentEnded() bool {
 		return false
 	}
 	return ts.parentTurnState.isFinished.Load()
+}
+
+// IsAlive returns true when the turn has not yet finished. This is the
+// complement of isFinished and is used by the cancel watchdog timers in
+// handleCancel to decide whether to escalate to the next stage.
+func (ts *turnState) IsAlive() bool {
+	return !ts.isFinished.Load()
+}
+
+// TurnID returns the turn's ID string for use outside the agent package.
+func (ts *turnState) TurnID() string {
+	return ts.turnID
+}
+
+// SetOnCancelFinish registers a callback that Finish() will invoke exactly
+// once when cancelFired==true and the turn exits. The callback receives the
+// cancel method ("graceful" or "hard"). Calling this more than once replaces
+// the previous callback; it must be called before handleCancel calls Finish
+// (i.e. before the timers fire).
+func (ts *turnState) SetOnCancelFinish(fn func(cancelMethod string)) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.onCancelFinish = fn
 }
 
 // GetLastFinishReason returns the last LLM finish_reason
@@ -576,7 +816,13 @@ func (ts *turnState) SetLastUsage(usage *providers.UsageInfo) {
 // AddTurnStats accumulates per-iteration token counts and cost so the
 // turn-end "done" frame can surface the full cost of the turn to the UI.
 // Safe to call multiple times per turn (once per LLM iteration).
+// B4: suppressed when the turn is marked abandoned so stuck goroutines cannot
+// inflate cost counters after the operator-visible 5s detach point.
 func (ts *turnState) AddTurnStats(tokens int64, costUSD float64) {
+	if ts.abandoned.Load() {
+		abandonedWritesSuppressed.Add(1)
+		return
+	}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.turnTokens += tokens

@@ -1,0 +1,16 @@
+title: MeInfo
+description: >
+  Response from GET /api/v1/me. Returns the authenticated user's role,
+  used for RBAC gating in the SPA.
+type: object
+required:
+  - role
+additionalProperties: false
+properties:
+  role:
+    type: string
+    enum:
+      - admin
+      - user
+    description: RBAC role of the current authenticated user.
+    example: "admin"

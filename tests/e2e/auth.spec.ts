@@ -5,10 +5,17 @@ import { expectA11yClean } from './fixtures/a11y';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const AUTH_FILE = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  'fixtures/.auth/admin.json',
-);
+// Mirror playwright.config.ts:storageState and global-setup.ts:AUTH_FILE —
+// honor OMNIPUS_AUTH_FILE so the afterAll refreshed-token write lands in the
+// same file that storageState reads. Hardcoding the path caused every
+// post-auth.spec test to start with the stale (rotated-out) token from the
+// pre-auth-spec global-setup write.
+const AUTH_FILE = process.env.OMNIPUS_AUTH_FILE
+  ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
+  : path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      'fixtures/.auth/admin.json',
+    );
 
 // auth.spec.ts manages its own login flows — it tests the login paths themselves.
 // Each test explicitly controls its session state; do not use global storageState here.
@@ -48,13 +55,34 @@ test('(b) wrong password shows inline error and stays on /login', async ({ page 
   expect(page.url()).toMatch(/login/);
 });
 
-test.skip(
-  '(c) dev_mode_bypass = true shows red persistent banner on every route',
-  // blocked on #104: The SPA does not render a persistent red banner when
-  // gateway.dev_mode_bypass is true. AppShell only shows a connectionError banner.
-  // Needs data-testid="dev-mode-banner". See tests/e2e/SPA-GAPS.md.
-  async ({ page }) => {},
-);
+test('(c) dev_mode_bypass = true shows red persistent banner on every route', async ({ page }) => {
+  // This test verifies the AppShell renders a persistent red banner when dev_mode_bypass=true.
+  // We need to be authenticated for AppShell to render. The route mock must be set BEFORE
+  // navigation so all fetchAppState() calls (including beforeLoad and React Query) get mocked.
+  await page.route('**/api/v1/state', async (route) => {
+    const resp = await route.fetch();
+    const body = await resp.json();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ...body, dev_mode_bypass: true }),
+    });
+  });
+
+  // Log in — this also navigates to the app shell where the banner should appear.
+  await loginAs(page, 'admin', 'admin123');
+
+  // Wait for the AppShell to render with the mocked dev_mode_bypass state.
+  const banner = page.getByTestId('dev-mode-banner');
+  await expect(banner).toBeVisible({ timeout: 15_000 });
+
+  // Banner must persist when navigating to another route
+  await page.goto('/#/agents');
+  await expect(banner).toBeVisible({ timeout: 5_000 });
+
+  // Unregister routes to avoid "route in flight" errors during cleanup
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
 
 /**
  * Token rotation recovery: auth tests do fresh logins which generate a new token

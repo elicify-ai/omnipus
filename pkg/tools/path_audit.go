@@ -17,6 +17,7 @@
 // audit logging disabled via cfg.Sandbox.AuditLog=false). In either case we
 // must NOT panic and MUST NOT change enforcement — the deny still propagates
 // to the LLM as an ErrorResult.
+
 package tools
 
 import (
@@ -24,15 +25,13 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
 
 // PathAccessDeniedEvent is the canonical event name used by every
-// path-guard rejection emitted from a tool's Execute path. Centralised here
+// path-guard rejection emitted from a tool's Execute path. Centralized here
 // so audit-grep tooling and downstream consumers have a single literal to
 // match.
 const PathAccessDeniedEvent = "path.access_denied"
@@ -90,30 +89,6 @@ func canonicalDeniedPath(path string) string {
 	return filepath.Clean(path)
 }
 
-// auditLoggerNilOnceMu/auditLoggerNilOnceLogged guard the
-// "audit logger nil at construction time" debug message so it fires at
-// most once per tool name across the lifetime of the process. Tools with a
-// nil logger are common in test setups; spamming the debug log on every
-// rejection would drown out signal.
-var (
-	auditLoggerNilOnceMu     sync.Mutex
-	auditLoggerNilOnceLogged = map[string]struct{}{}
-)
-
-// noteAuditLoggerNotWired logs a single debug line per tool name to flag
-// that the audit logger was never wired in. Subsequent calls for the same
-// tool name are no-ops. Threadsafe.
-func noteAuditLoggerNotWired(toolName string) {
-	auditLoggerNilOnceMu.Lock()
-	defer auditLoggerNilOnceMu.Unlock()
-	if _, seen := auditLoggerNilOnceLogged[toolName]; seen {
-		return
-	}
-	auditLoggerNilOnceLogged[toolName] = struct{}{}
-	logger.DebugCF("tool", "Audit logger not wired; path.access_denied entries will be skipped",
-		map[string]any{"tool": toolName})
-}
-
 // emitPathAccessDenied writes one path.access_denied audit entry on a
 // path-guard rejection. The entry shape follows :
 //
@@ -127,9 +102,7 @@ func noteAuditLoggerNotWired(toolName string) {
 //	 reason: outside_workspace | not_in_allow_list | symlink_escape
 //
 // `auditLog` is the *audit.Logger handed to the tool via SetAuditLogger;
-// pass nil to skip emission silently (the noteAuditLoggerNotWired debug
-// line is emitted at construction time, not here, so this hot path stays
-// quiet).
+// pass nil to skip emission silently.
 //
 // `validatorErr` is the original error from validatePathWithAllowPaths
 // (or shell guardCommand). Must be non-nil — callers gate on this.

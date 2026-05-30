@@ -9,6 +9,7 @@ package middleware
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
@@ -17,11 +18,13 @@ import (
 
 // writeJSONErr writes {"error": msg} with the given HTTP status. A post-header
 // encode failure is unactionable (the status is already on the wire) and is
-// logged by the transport layer; the caller still sees the correct status.
+// logged at debug level; the caller still sees the correct status.
 func writeJSONErr(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
+		slog.Debug("writeJSONErr: encode failed", "error", err)
+	}
 }
 
 // RequireAdmin returns a middleware that enforces admin-only access.

@@ -12,7 +12,7 @@
 //
 // Recovery:
 //  1. A synthetic entry {role: "system", content: "..."} is appended to the
-//     session transcript as a turn_cancelled_restart record (FR-069).
+//     session transcript as a turn_canceled_restart record (FR-069).
 //  2. The history presented to the LLM on resume is rebuilt WITHOUT the orphaned
 //     assistant tool_call message (FR-088), preventing hallucinated results.
 //  3. An audit event tool.policy.ask.denied with reason="restart" is emitted
@@ -57,7 +57,7 @@ type orphanedToolCall struct {
 // turn). If no orphaned calls are found, returns the original history unchanged.
 //
 // Safe to call on every session load — it is idempotent: orphans that already
-// have a synthetic turn_cancelled_restart system message are skipped.
+// have a synthetic turn_canceled_restart system message are skipped.
 func RecoverOrphanedToolCalls(
 	store session.SessionStore,
 	sessionKey string,
@@ -74,7 +74,7 @@ func RecoverOrphanedToolCalls(
 	}
 
 	// Build a set of tool_call_ids that already have a synthetic
-	// turn_cancelled_restart entry in the history (idempotency guard).
+	// turn_canceled_restart entry in the history (idempotency guard).
 	alreadyCancelled := existingCancelledToolCallIDs(history)
 
 	// Append a synthetic system message to the transcript for audit/replay.
@@ -89,12 +89,12 @@ func RecoverOrphanedToolCalls(
 			continue
 		}
 		syntheticContent := fmt.Sprintf(
-			`{"type":"turn_cancelled_restart","tool_call_id":%q,"reason":"ungraceful_shutdown_recovery"}`,
+			`{"type":"turn_canceled_restart","tool_call_id":%q,"reason":"ungraceful_shutdown_recovery"}`,
 			o.ToolCallID,
 		)
 		store.AddMessage(sessionKey, "system", syntheticContent)
 		if err := store.Save(sessionKey); err != nil {
-			slog.Error("agent: failed to persist turn_cancelled_restart entry",
+			slog.Error("agent: failed to persist turn_canceled_restart entry",
 				"session_key", sessionKey, "tool_call_id", o.ToolCallID, "error", err)
 		}
 
@@ -128,7 +128,7 @@ func RecoverOrphanedToolCalls(
 }
 
 // existingCancelledToolCallIDs builds a set of tool_call_id values for which a
-// turn_cancelled_restart system message already exists in history (idempotency
+// turn_canceled_restart system message already exists in history (idempotency
 // guard for recoverOrphanedToolCalls). Uses strings.Contains rather than a full
 // JSON parse to avoid allocations in the hot path.
 func existingCancelledToolCallIDs(history []providers.Message) map[string]bool {
@@ -136,10 +136,10 @@ func existingCancelledToolCallIDs(history []providers.Message) map[string]bool {
 	for _, msg := range history {
 		if msg.Role == "system" &&
 			len(msg.Content) > 0 &&
-			strings.Contains(msg.Content, "turn_cancelled_restart") &&
+			strings.Contains(msg.Content, "turn_canceled_restart") &&
 			strings.Contains(msg.Content, "tool_call_id") {
 			// Extract tool_call_id from the content string via simple scan.
-			// Format: {"type":"turn_cancelled_restart","tool_call_id":"<id>",...}
+			// Format: {"type":"turn_canceled_restart","tool_call_id":"<id>",...}
 			if id := extractJSONStringField(msg.Content, "tool_call_id"); id != "" {
 				result[id] = true
 			}

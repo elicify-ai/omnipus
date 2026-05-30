@@ -6,8 +6,8 @@
 // unattended `allow` decision for that tool. The fence downgrades the
 // effective policy from `allow` to `ask` whenever:
 //
-//   (a) the resolved tool's `RequiresAdminAsk()` returns true, AND
-//   (b) the agent is NOT a core agent (`coreagent.GetPrompt(id) == ""`).
+//	(a) the resolved tool's `RequiresAdminAsk()` returns true, AND
+//	(b) the agent is NOT a core agent (`coreagent.GetPrompt(id) == ""`).
 //
 // The fence is applied AFTER the global × agent precedence resolution
 // (deny > ask > allow) but BEFORE the filter emits the per-tool effective
@@ -22,6 +22,7 @@
 // (`pkg/tools/` imports `pkg/policy/` for the same admin-ask predicate).
 // The caller in pkg/tools/compositor.go injects a predicate that calls
 // the Tool's RequiresAdminAsk method.
+
 package policy
 
 // AdminAskPredicate reports whether the named tool requires admin approval.
@@ -41,7 +42,7 @@ type IsCoreAgentPredicate func(agentID string) bool
 // (tool, agent) pair. `effective` is the policy already resolved through
 // `global × agent × deny>ask>allow`.
 //
-// Behaviour:
+// Behavior:
 //
 //	deny  → returned as-is (deny dominates).
 //	ask   → returned as-is (already at the fence's target).

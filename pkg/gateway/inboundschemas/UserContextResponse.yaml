@@ -1,0 +1,16 @@
+title: UserContextResponse
+description: >
+  Response from GET /api/v1/user-context and PUT /api/v1/user-context.
+  Returns the current content of USER.md in the default workspace. An empty
+  string means the file does not exist or has not been written yet.
+type: object
+required:
+  - content
+additionalProperties: false
+properties:
+  content:
+    type: string
+    description: >
+      Current content of USER.md. Empty string when the file does not exist
+      or has not been set yet.
+    example: "I am a senior Go developer focused on distributed systems."

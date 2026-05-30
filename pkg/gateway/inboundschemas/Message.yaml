@@ -1,0 +1,131 @@
+type: object
+description: >
+  A single transcript entry (session.TranscriptEntry on the Go side).
+  Maps to the Message interface in src/lib/api.ts. The SPA reads this
+  from GET /sessions/{id}/messages.
+required:
+  - id
+  - timestamp
+  - agent_id
+additionalProperties: false
+properties:
+  id:
+    type: string
+    description: Unique message identifier.
+    example: "msg_01HXYZ"
+  type:
+    type: string
+    enum:
+      - message
+      - compaction
+      - system
+      - tool_call
+      - turn_canceled
+    description: >
+      Entry classification. Absent or empty means "message" (backwards compatible).
+      "compaction" entries summarize pruned context; "system" entries are internal
+      markers; "tool_call" entries record tool invocations; "turn_canceled" entries
+      mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType
+      constant set is the source of truth (`pkg/session/daypartition.go`).
+    example: "message"
+  role:
+    type: string
+    enum:
+      - user
+      - assistant
+      - system
+    description: Author role. Absent on compaction entries.
+    example: "assistant"
+  content:
+    type: string
+    description: Raw markdown/text content of the message.
+    example: "I can help you with that!"
+  summary:
+    type: string
+    description: Compaction summary text (present only on type=compaction entries).
+    example: "Compacted 120 messages."
+  timestamp:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp when this entry was recorded.
+    example: "2026-05-16T10:01:00Z"
+  tokens:
+    type: integer
+    minimum: 0
+    description: Token count for this entry (input + output). Absent when zero.
+    example: 150
+  cost:
+    type: number
+    format: double
+    minimum: 0
+    description: USD cost for this entry. Absent when zero.
+    example: 0.00045
+  status:
+    type: string
+    enum:
+      - ok
+      - error
+      - interrupted
+    description: Completion status of this message turn.
+    example: "ok"
+  attachments:
+    type: array
+    items:
+      $ref: './Attachment.yaml'
+    description: File attachments associated with this message.
+  tool_calls:
+    type: array
+    items:
+      $ref: './ToolCall.yaml'
+    description: Tool invocations made during this message turn.
+  agent_id:
+    type: string
+    description: ID of the agent that produced this entry (FR-002). Always present.
+    example: "jim"
+  messages_compacted:
+    type: integer
+    description: Number of messages compacted (present only on compaction entries).
+    example: 120
+  truncated:
+    type: boolean
+    description: >
+      Set to true on the last assistant entry when a turn is canceled mid-stream
+      (FR-14). Only present when true. The SPA renders an "(interrupted)" suffix
+      on the bubble when this is set.
+    example: true
+  turn_id:
+    type: string
+    description: >
+      Turn identifier — present only on type="turn_canceled" entries (FR-15).
+      Identifies the turn that was canceled.
+    example: "turn-T3"
+  canceled_by_user:
+    type: string
+    description: >
+      Username of the actor who triggered the cancel — present only on
+      type="turn_canceled" entries (FR-15).
+    example: "admin"
+  canceled_by_channel:
+    type: string
+    description: >
+      Channel that originated the cancel request — present only on
+      type="turn_canceled" entries (FR-15).
+    example: "webchat"
+  cancel_method:
+    type: string
+    enum:
+      - graceful
+      - hard
+    description: >
+      How the cancel was applied — present only on type="turn_canceled" entries
+      (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts
+      immediately.
+    example: "graceful"
+  descendants_canceled:
+    type: array
+    items:
+      type: string
+    description: >
+      IDs of descendant turns that were canceled in cascade — present only on
+      type="turn_canceled" entries (FR-6a).
+    example: ["turn-T3-sub-1"]

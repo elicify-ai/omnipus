@@ -38,7 +38,7 @@ import (
 	"strings"
 )
 
-// ValidPolicy returns true if the value is a recognised ToolPolicy constant or
+// ValidPolicy returns true if the value is a recognized ToolPolicy constant or
 // the empty string (which is valid at this layer — callers apply own coercion).
 // Empty string is NOT accepted here: FR-085 makes it an error.
 func ValidPolicy(p ToolPolicy) bool {
@@ -53,7 +53,7 @@ func ValidPolicy(p ToolPolicy) bool {
 // AgentConfigOnDisk is the minimal schema of a stored agent.json used by the
 // boot validator. Only the fields relevant to policy validation are read.
 type AgentConfigOnDisk struct {
-	ID    string        `json:"id"`
+	ID    string         `json:"id"`
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
 }
 
@@ -229,7 +229,10 @@ func validatePolicyValues(
 	check := func(fieldPath string, p ToolPolicy) {
 		if p == "" {
 			// FR-085: empty string is invalid (no longer silently coerced).
-			msg := fmt.Sprintf("field %q: empty policy value is not allowed (use \"allow\", \"ask\", or \"deny\")", fieldPath)
+			msg := fmt.Sprintf(
+				"field %q: empty policy value is not allowed (use \"allow\", \"ask\", or \"deny\")",
+				fieldPath,
+			)
 			errs = append(errs, msg)
 			emitOrStderr(auditLog, "agent.config.invalid_policy_value", "HIGH", map[string]any{
 				"agent_id": agentID,
@@ -241,7 +244,11 @@ func validatePolicyValues(
 			return
 		}
 		if !ValidPolicy(p) {
-			msg := fmt.Sprintf("field %q: invalid policy value %q (must be \"allow\", \"ask\", or \"deny\")", fieldPath, p)
+			msg := fmt.Sprintf(
+				"field %q: invalid policy value %q (must be \"allow\", \"ask\", or \"deny\")",
+				fieldPath,
+				p,
+			)
 			errs = append(errs, msg)
 			emitOrStderr(auditLog, "agent.config.invalid_policy_value", "HIGH", map[string]any{
 				"agent_id": agentID,

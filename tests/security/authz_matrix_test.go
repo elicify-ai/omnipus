@@ -168,9 +168,13 @@ func authzMatrix() []matrixCase {
 			expect: matrixExpect{status: http.StatusUnauthorized},
 		},
 		{
+			// v0.2-#155 item 7 (commit 35d10df) flipped /api/v1/security/rate-limits
+			// from withAuth to adminWrap because the GET response carries the live
+			// daily-cost meter and current cap config — admin-sensitive observability.
+			// User role now correctly returns 403 admin-required.
 			name:   "user_get_rate_limits",
 			req:    matrixRequest{roleUser, http.MethodGet, "/api/v1/security/rate-limits", ""},
-			expect: matrixExpect{status: http.StatusOK},
+			expect: matrixExpect{status: http.StatusForbidden},
 		},
 		{
 			name:   "admin_get_rate_limits",

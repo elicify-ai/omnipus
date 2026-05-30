@@ -46,18 +46,21 @@ import (
 // records an audit entry with event="rate_limit".
 //
 // Setup: MaxAgentLLMCallsPerHour = 1 (the lowest non-zero budget).
-//        The agent under test is AgentType="custom" — NOT "core" — so that
-//        IsPrivilegedAgent() returns false and rate limiting applies.
+//
+//	The agent under test is AgentType="custom" — NOT "core" — so that
+//	IsPrivilegedAgent() returns false and rate limiting applies.
 //
 // Scenario:
-//   Call 1: runAgentLoop → runTurn → allowed → LLM responds "first response".
-//   Call 2: runAgentLoop → runTurn → denied before LLM is called.
+//
+//	Call 1: runAgentLoop → runTurn → allowed → LLM responds "first response".
+//	Call 2: runAgentLoop → runTurn → denied before LLM is called.
 //
 // Assertions:
-//   (a) Call 1 succeeds (proves the budget is consumed, not a no-op).
-//   (b) Call 2 returns an error containing "rate limit".
-//   (c) audit.jsonl contains an entry with event="rate_limit".
-//   (d) Call 1 and Call 2 produce DIFFERENT outcomes — catches hardcoded responses.
+//
+//	(a) Call 1 succeeds (proves the budget is consumed, not a no-op).
+//	(b) Call 2 returns an error containing "rate limit".
+//	(c) audit.jsonl contains an entry with event="rate_limit".
+//	(d) Call 1 and Call 2 produce DIFFERENT outcomes — catches hardcoded responses.
 //
 // Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 3 (Rank-9)
 func TestRunTurn_RateLimit_LLMCallsPerHour(t *testing.T) {

@@ -3,7 +3,7 @@
 //
 // What we verify here:
 //  1. ModeOff (and the empty default) → exec runs via plain sh -c, no sandbox.Run
-//     involvement, behaviour matches today's TestShellTool_Success.
+//     involvement, behavior matches today's TestShellTool_Success.
 //  2. ModeEnforce → exec routes through sandbox.Run; the Limits-derived env
 //     reaches the child (we assert via a command that prints HTTP_PROXY).
 //  3. Background (sandbox-on, non-PTY) → ApplyChildHardening is applied
@@ -46,7 +46,7 @@ func makeExecToolWithMode(t *testing.T, mode string, proxy *sandbox.EgressProxy)
 
 // TestExecTool_SandboxOff_PreservesLegacyPath verifies that with
 // SandboxMode="off" the exec tool runs the command via the legacy sh -c
-// path (no sandbox.Run involvement). The behavioural assertion is the
+// path (no sandbox.Run involvement). The behavioral assertion is the
 // same as the long-standing TestShellTool_Success: a successful echo.
 func TestExecTool_SandboxOff_PreservesLegacyPath(t *testing.T) {
 	if runtime.GOOS == "windows" {

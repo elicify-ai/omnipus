@@ -155,23 +155,26 @@ func (lb *LinuxBackend) computeRights() {
 	// on this system (6.8.0-107). Setting unknown bits causes EINVAL.
 	//
 	// Landlock ABI v4+ adds NET_BIND_TCP and NET_CONNECT_TCP. We declare
-	// only NET_BIND_TCP as handled — that closes the rogue-port hole
-	// (an agent shell can no longer bind 0.0.0.0:5173 outside the
-	// dev-server allow-list). NET_CONNECT_TCP is intentionally NOT
-	// handled because (a) the gateway itself needs outbound 443/53/80
-	// for LLM provider calls and DNS, and a kernel-level connect
-	// allow-list would break those without buying us much over the
-	// already-existing application-layer egress proxy, and (b) agent
-	// children still get egress filtering when sandbox.Run injects
-	// HTTP_PROXY/HTTPS_PROXY into their environment.
+	// BOTH as handled (v0.2 #155 item 4):
 	//
-	// ConnectPortRules were removed from SandboxPolicy in v0.1 (A1.3):
-	// the public API no longer advertises connect-port enforcement that
-	// the kernel never applied. Outbound TCP filtering is delegated to
-	// the egress proxy. On kernels < ABI v4 handledAccessNet stays 0
-	// entirely, preserving legacy unrestricted-network behaviour.
+	//   - NET_BIND_TCP closes the rogue-port hole — an agent shell can no
+	//     longer bind 0.0.0.0:5173 outside the dev-server allow-list.
+	//   - NET_CONNECT_TCP closes the raw-TCP-egress hole — a hardened-exec
+	//     child can no longer issue socket()+connect() to e.g. 127.0.0.1:1
+	//     or any other port outside the gateway's connect allow-list.
+	//
+	// The earlier rationale for excluding NET_CONNECT_TCP ("gateway needs
+	// outbound 443/53/80") is satisfied by populating ConnectPortRules with
+	// {53, 80, 443} plus the dev-server port range — the gateway's own
+	// outbound LLM/DNS calls remain permitted, but unauthorized ports
+	// (databases, SSH, custom backdoors, the redteam test target 127.0.0.1:1)
+	// are denied at the kernel layer.
+	//
+	// On kernels < ABI v4, handledAccessNet stays 0 entirely, preserving
+	// legacy unrestricted-network behavior. ConnectPortRules in the policy
+	// are computed but unused — a boot-time WARN documents the degradation.
 	if lb.abiVersion >= 4 {
-		lb.handledAccessNet = landlockAccessNetBindTcp
+		lb.handledAccessNet = landlockAccessNetBindTcp | landlockAccessNetConnectTcp
 	}
 }
 
@@ -323,21 +326,34 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 				return fmt.Errorf("landlock: add bind rule for port %d: %w", rule.Port, err)
 			}
 		}
-		// ConnectPortRules are intentionally ignored — handledAccessNet only
-		// includes NET_BIND_TCP, so the kernel does not enforce connect
-		// allow-listing. Outbound TCP filtering is delegated to the egress
-		// proxy. See computeRights for the rationale.
-	} else if len(policy.BindPortRules) > 0 {
-		// Defensive: caller passed bind rules but the kernel ABI is too
+		// v0.2 (#155 item 4): connect-port enforcement. Each entry becomes
+		// an allow-rule for NET_CONNECT_TCP; any connect(2) to a destination
+		// port not listed is denied with EACCES. We treat kernel rejection
+		// the same as bind rules — hard error so operators see partial
+		// allow-list silently shipping is impossible.
+		for _, rule := range policy.ConnectPortRules {
+			if err := addLandlockNetPortRule(int(rulesetFd), rule.Port, landlockAccessNetConnectTcp); err != nil {
+				if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOENT) {
+					return fmt.Errorf("landlock: kernel (ABI v%d) rejected net connect rule for port %d: %w"+
+						" — kernel claims net rule support but rejected the syscall; this indicates"+
+						" a kernel bug or unsupported feature flag on this build",
+						lb.abiVersion, rule.Port, err)
+				}
+				return fmt.Errorf("landlock: add connect rule for port %d: %w", rule.Port, err)
+			}
+		}
+	} else if len(policy.BindPortRules) > 0 || len(policy.ConnectPortRules) > 0 {
+		// Defensive: caller passed net rules but the kernel ABI is too
 		// low to honor them. Log once and proceed — refusing to apply
 		// here would force the operator into a no-sandbox-at-all state
 		// just because they configured net rules on an older kernel.
-		// Note: ConnectPortRules were removed in v0.1 (A1.3); outbound TCP
-		// filtering is delegated to the egress proxy.
+		// v0.2 (#155 item 4) re-introduced ConnectPortRules; on pre-ABI-v4
+		// kernels they are computed but not enforced (documented gap).
 		slog.Warn("Landlock: net port rules ignored on this kernel",
 			"abi_version", lb.abiVersion,
 			"required_abi", 4,
-			"bind_rules", len(policy.BindPortRules))
+			"bind_rules", len(policy.BindPortRules),
+			"connect_rules", len(policy.ConnectPortRules))
 	}
 
 	// Set no_new_privs unconditionally — seccomp install (which runs after
@@ -361,7 +377,8 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 			"reason", "kernel_lacks_permissive_landlock",
 			"abi_version", lb.abiVersion,
 			"rules", len(policy.FilesystemRules),
-			"bind_rules", len(policy.BindPortRules))
+			"bind_rules", len(policy.BindPortRules),
+			"connect_rules", len(policy.ConnectPortRules))
 		return nil
 	}
 
@@ -385,6 +402,7 @@ func (lb *LinuxBackend) ApplyWithMode(policy SandboxPolicy, mode Mode) error {
 		"abi_version", lb.abiVersion,
 		"rules", len(policy.FilesystemRules),
 		"bind_rules", len(policy.BindPortRules),
+		"connect_rules", len(policy.ConnectPortRules),
 		"mode", string(mode))
 	return nil
 }
@@ -645,8 +663,20 @@ func (lb *LinuxBackend) RestrictCurrentThread() error {
 				return fmt.Errorf("landlock: re-add bind port %d: %w", rule.Port, err)
 			}
 		}
-		// ConnectPortRules deliberately not re-added; matches the
-		// handledAccessNet decision in computeRights.
+		// v0.2 (#155 item 4): re-add connect-port rules so children forked
+		// from this thread inherit the outbound allow-list. Skipping these
+		// would silently drop connect enforcement on hardened-exec spawns
+		// even though the gateway thread itself was correctly restricted —
+		// the same drift the bind-rule re-add path guards against.
+		for _, rule := range lb.savedPolicy.ConnectPortRules {
+			if err := addLandlockNetPortRule(int(rulesetFd), rule.Port, landlockAccessNetConnectTcp); err != nil {
+				if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOENT) {
+					return fmt.Errorf("landlock: kernel (ABI v%d) rejected net connect rule for port %d"+
+						" during per-thread re-apply: %w", lb.abiVersion, rule.Port, err)
+				}
+				return fmt.Errorf("landlock: re-add connect port %d: %w", rule.Port, err)
+			}
+		}
 	}
 
 	// 4. restrict_self installs the Landlock domain on the calling thread.

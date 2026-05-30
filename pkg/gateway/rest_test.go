@@ -10,6 +10,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
@@ -265,11 +267,11 @@ func TestHandleAgentsCreate(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, w.Code)
 
-	var resp agentResponse
+	var resp gen.Agent
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "Scout", resp.Name)
-	assert.Equal(t, "custom", resp.Type)
-	assert.NotEmpty(t, resp.ID)
+	assert.Equal(t, gen.AgentType("custom"), resp.Type)
+	assert.NotEmpty(t, resp.Id)
 }
 
 // TestHandleAgentsCreateWithExplicitID verifies POST /api/v1/agents creates agent and ignores provided id.
@@ -287,10 +289,10 @@ func TestHandleAgentsCreateWithExplicitID(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, w.Code)
 
-	var resp agentResponse
+	var resp gen.Agent
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "Scout", resp.Name)
-	assert.NotEmpty(t, resp.ID)
+	assert.NotEmpty(t, resp.Id)
 }
 
 // --- HandleSessions tests ---
@@ -547,14 +549,14 @@ func TestAgentListStatus_CustomAgentIdle(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 
-	var agents []agentResponse
+	var agents []gen.Agent
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &agents))
 
 	for _, ag := range agents {
-		if ag.ID == "my-agent" {
+		if ag.Id == "my-agent" {
 			assert.Equal(
 				t,
-				"draft",
+				gen.AgentStatusDraft,
 				ag.Status,
 				"custom agent with no SOUL.md and no active turn must have status 'draft'",
 			)
@@ -975,18 +977,24 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	// Then: HTTP 200
 	require.Equal(t, http.StatusOK, w.Code)
 
-	// Then: response body has agent_type="custom" and policy format
-	var resp struct {
-		AgentType string         `json:"agent_type"`
-		Config    map[string]any `json:"config"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "custom", resp.AgentType,
+	// Then: response body must parse into gen.AgentToolsResponse — verifying the
+	// PUT response uses `tools` (not `effective_tools`) matching the OpenAPI spec
+	// and the SPA Zod schema (_agentToolsSchema). Regression test for fix-T BUG 1.
+	var genResp gen.AgentToolsResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &genResp),
+		"PUT response must unmarshal into gen.AgentToolsResponse (tools key required)")
+	// gen.AgentToolsResponse.Tools is a non-nullable slice — it must be present
+	// (nil means the `tools` key was absent from the JSON, which is the old bug).
+	assert.NotNil(t, genResp.Tools, "PUT response must include `tools` field (not `effective_tools`)")
+	// Config.Builtin must be present.
+	require.NotNil(t, genResp.Config.Builtin, "PUT response must include config.builtin")
+	// AgentType must be "custom".
+	require.NotNil(t, genResp.AgentType, "PUT response must include agent_type")
+	assert.Equal(t, gen.AgentToolsResponseAgentTypeCustom, *genResp.AgentType,
 		"updateAgentTools must return agent_type=custom for a custom agent")
-	builtin, ok := resp.Config["builtin"].(map[string]any)
-	require.True(t, ok, "response config must contain a builtin object")
-	// Legacy mode:"explicit" + visible is converted to policy format
-	assert.Equal(t, "deny", builtin["default_policy"],
+	// Legacy mode:"explicit" + visible is converted to policy format (default_policy=deny).
+	require.NotNil(t, genResp.Config.Builtin.DefaultPolicy, "config.builtin.default_policy must be present")
+	assert.Equal(t, gen.AgentToolsResponseConfigBuiltinDefaultPolicyDeny, *genResp.Config.Builtin.DefaultPolicy,
 		"explicit mode converts to default_policy=deny")
 
 	// Then: config.json on disk was updated with the tools config
@@ -1009,6 +1017,77 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	assert.Equal(t, "allow", policiesRaw["web_search"])
 }
 
+// TestUpdateAgentTools_ReloadFailure_Returns503 verifies that if TriggerReload fails
+// with a non-ErrReloadNotConfigured error, PUT /api/v1/agents/{id}/tools returns 503.
+//
+// BDD:
+//
+//	Given a custom agent exists in config, a config.json is on disk, AND
+//	  the agent loop's reload function is wired to always fail,
+//	When PUT /api/v1/agents/{id}/tools is called with valid tool config,
+//	Then the response is 503 Service Unavailable with a descriptive message,
+//	And the config was still written to disk (disk write succeeded before reload).
+//
+// Closes: R4 silent-failure H1 (TriggerReload failure was silently ignored — now 503).
+// Traces to: pkg/gateway/rest.go updateAgentTools — TriggerReload 503 path.
+func TestUpdateAgentTools_ReloadFailure_Returns503(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"reload-test-agent","name":"Reload Test Agent"}]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{
+				{ID: "reload-test-agent", Name: "Reload Test Agent"},
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	// Wire a reload function that always returns an error (simulates gateway
+	// restart in progress or reload pipeline failure).
+	al.SetReloadFunc(func() error {
+		return fmt.Errorf("simulated reload failure: config file locked")
+	})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	body := `{"builtin":{"mode":"inherit"}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/reload-test-agent/tools", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	// Then: HTTP 503 (reload failed).
+	require.Equal(t, http.StatusServiceUnavailable, w.Code,
+		"updateAgentTools must return 503 when TriggerReload fails with a non-ErrReloadNotConfigured error")
+
+	// Then: response must contain the human-readable reload failure message.
+	var errResp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+	assert.Contains(t, errResp["error"], "in-memory reload failed",
+		"503 response must mention in-memory reload failure")
+
+	// Then: config.json was still updated (disk write happened before reload).
+	savedCfg, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	var savedMap map[string]any
+	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
+	agentsMap, _ := savedMap["agents"].(map[string]any)
+	list, _ := agentsMap["list"].([]any)
+	require.Len(t, list, 1, "config.json must contain exactly one agent after 503")
+	agentMap, _ := list[0].(map[string]any)
+	_, hasTools := agentMap["tools"]
+	assert.True(t, hasTools, "tools config must be persisted to config.json even on 503")
+}
+
 // TestHandleMCPTools_MethodNotAllowed verifies that POST to HandleMCPTools returns 405.
 //
 // BDD: Given a running gateway,
@@ -1026,4 +1105,193 @@ func TestHandleMCPTools_MethodNotAllowed(t *testing.T) {
 	api.HandleMCPTools(w, r)
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+}
+
+// ── fix-V endpoint handler response-shape tests ────────────────────────────────
+
+// TestRotateGatewayToken_ResponseShape verifies that POST /config/gateway/rotate-token
+// returns a body that unmarshal-cleanly maps to gen.RotateTokenResponse, and that
+// the token field is non-empty.
+//
+// BDD:
+//
+//	Given a gateway with a writable config.json and a wired reload func,
+//	When POST /api/v1/config/gateway/rotate-token is called,
+//	Then the response is 200 and the body has a non-empty "token" field matching gen.RotateTokenResponse.
+//
+// Traces to: rest.go rotateGatewayToken handler — wire shape must match RotateTokenResponse.
+func TestRotateGatewayToken_ResponseShape(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	// Wire a no-op reload func so TriggerReload does not fail with
+	// "reload not configured" — the handler calls TriggerReload after saving the
+	// new token to disk; in unit tests AgentLoop.Run() is never called so the
+	// real reload trigger is absent. A no-op reload is acceptable here because
+	// the test is focused on the HTTP response shape (wire format), not reload
+	// semantics.
+	api.agentLoop.SetReloadFunc(func() error { return nil })
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/config/gateway/rotate-token", nil)
+	r = withAdminRole(r)
+
+	api.rotateGatewayToken(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"rotate-token must return 200: %s", w.Body.String())
+
+	// The response body must unmarshal into gen.RotateTokenResponse.
+	var resp gen.RotateTokenResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp),
+		"response must unmarshal into gen.RotateTokenResponse — wire shape must match contract")
+
+	// Per the BearerToken schema, the token must be exactly 72 chars: "omnipus_" + 64-hex.
+	assert.NotEmpty(t, resp.Token, "RotateTokenResponse.Token must be non-empty")
+	assert.Len(t, resp.Token, 72,
+		"RotateTokenResponse.Token must be 72 chars: omnipus_ + 64 hex chars (BearerToken schema)")
+	assert.Regexp(t, `^omnipus_[a-f0-9]{64}$`, resp.Token,
+		"RotateTokenResponse.Token must match BearerToken pattern")
+
+	// Differentiation: call twice — tokens must differ (not hardcoded).
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodPost, "/api/v1/config/gateway/rotate-token", nil)
+	r2 = withAdminRole(r2)
+	api.rotateGatewayToken(w2, r2)
+	require.Equal(t, http.StatusOK, w2.Code)
+	var resp2 gen.RotateTokenResponse
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
+	assert.NotEqual(t, resp.Token, resp2.Token,
+		"rotate-token must produce a different token on each call (not hardcoded)")
+}
+
+// TestHandleVersion_ResponseShape verifies that GET /version returns a body that
+// unmarshal-cleanly maps to gen.VersionResponse.
+//
+// BDD:
+//
+//	Given a running gateway,
+//	When GET /api/v1/version is called,
+//	Then the response is 200 and the body has "version" and "build_sha" fields.
+//
+// Traces to: rest.go HandleVersion handler — wire shape must match VersionResponse.
+func TestHandleVersion_ResponseShape(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/version", nil)
+
+	api.HandleVersion(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// The response body must unmarshal into gen.VersionResponse.
+	var resp gen.VersionResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp),
+		"response must unmarshal into gen.VersionResponse — wire shape must match contract")
+
+	// version field must be non-empty (either "dev" or a semver string).
+	assert.NotEmpty(t, resp.Version, "VersionResponse.Version must be non-empty")
+	// build_sha field must be non-empty (either "dev" or a git SHA).
+	assert.NotEmpty(t, resp.BuildSha, "VersionResponse.BuildSha must be non-empty")
+}
+
+// TestGetUserContext_HappyPath verifies that GET /user-context returns
+// gen.UserContextResponse with empty content when USER.md does not exist.
+//
+// BDD:
+//
+//	Given a workspace with no USER.md file,
+//	When GET /api/v1/user-context is called,
+//	Then 200 with {"content": ""}.
+//
+// Traces to: rest.go getUserContext — returns empty string when USER.md is absent.
+func TestGetUserContext_HappyPath(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/user-context", nil)
+	r = withAdminRole(r)
+
+	api.HandleUserContext(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp gen.UserContextResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp),
+		"response must unmarshal into gen.UserContextResponse")
+	assert.Equal(t, "", resp.Content,
+		"content must be empty string when USER.md does not exist")
+}
+
+// TestPutUserContext_HappyPath verifies that PUT /user-context writes content
+// and GET /user-context returns the same content.
+//
+// BDD:
+//
+//	Given a workspace with no USER.md,
+//	When PUT /api/v1/user-context with {"content": "Hello, world!"},
+//	Then 200 with {"content": "Hello, world!"}.
+//	And GET /api/v1/user-context returns {"content": "Hello, world!"}.
+//
+// Traces to: rest.go putUserContext — persists content to USER.md.
+func TestPutUserContext_HappyPath(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	const testContent = "Hello, world! — user context test."
+
+	// PUT with content.
+	putBody := `{"content":"` + testContent + `"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/user-context", strings.NewReader(putBody))
+	r.Header.Set("Content-Type", "application/json")
+	r = withAdminRole(r)
+
+	api.HandleUserContext(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "PUT must return 200: %s", w.Body.String())
+	var putResp gen.UserContextResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &putResp))
+	assert.Equal(t, testContent, putResp.Content,
+		"PUT response content must echo the written content")
+
+	// GET must return the same content (persistence test).
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodGet, "/api/v1/user-context", nil)
+	r2 = withAdminRole(r2)
+	api.HandleUserContext(w2, r2)
+
+	require.Equal(t, http.StatusOK, w2.Code)
+	var getResp gen.UserContextResponse
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &getResp))
+	assert.Equal(t, testContent, getResp.Content,
+		"GET must return the content written by PUT (persistence test)")
+}
+
+// TestPutUserContext_ValidateInbound_400OnMissingContent verifies that with
+// validate_inbound=true, PUT /user-context without the "content" field returns 400.
+//
+// BDD:
+//
+//	Given validate_inbound=true,
+//	When PUT /api/v1/user-context with body {},
+//	Then 400 with schema error referencing UserContextRequest.
+//
+// Traces to: rest.go putUserContext — decodeAndValidate with "UserContextRequest" schema.
+func TestPutUserContext_ValidateInbound_400OnMissingContent(t *testing.T) {
+	api := newTestRestAPIWithValidation(t)
+
+	// {} is missing the required "content" field.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/user-context", strings.NewReader("{}"))
+	r.Header.Set("Content-Type", "application/json")
+	r = withAdminRole(r)
+
+	api.HandleUserContext(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"missing required 'content' field must return 400 when validate_inbound=true")
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "UserContextRequest",
+		"error message must reference the schema name")
 }

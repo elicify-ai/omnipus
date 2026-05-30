@@ -1,9 +1,11 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { User, Robot } from '@phosphor-icons/react'
+import { useQuery } from '@tanstack/react-query'
 import { ToolCallBadge } from './ToolCallBadge'
 import type { ChatMessage } from '@/store/chat'
 import { useChatStore } from '@/store/chat'
+import { fetchAgents } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 interface MessageItemProps {
@@ -30,6 +32,17 @@ export function MessageItem({ message }: MessageItemProps) {
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
 
+  // Look up agent name for assistant messages that carry an agentId.
+  // Uses the cached ['agents'] query (prefetched by AppShell) — no extra network request.
+  const { data: agents = [] } = useQuery({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+    staleTime: 30_000,
+  })
+  const agentName = message.agentId
+    ? (agents.find((a) => a.id === message.agentId)?.name ?? message.agentId)
+    : null
+
   if (isSystem) {
     return (
       <div className="flex justify-center py-2">
@@ -44,7 +57,10 @@ export function MessageItem({ message }: MessageItemProps) {
   const messageToolCalls = message.tool_calls?.map((tc) => toolCalls[tc.id]).filter(Boolean) ?? []
 
   return (
-    <div className={cn('group flex gap-3 px-4 py-3', isUser && 'flex-row-reverse')}>
+    <div
+      data-message-id={message.id}
+      className={cn('group flex gap-3 px-4 py-3', isUser && 'flex-row-reverse')}
+    >
       {/* Avatar */}
       <div
         className={cn(
@@ -59,6 +75,15 @@ export function MessageItem({ message }: MessageItemProps) {
 
       {/* Content */}
       <div className={cn('flex flex-col gap-1 max-w-[85%] min-w-0', isUser && 'items-end')}>
+        {/* Agent label — shown above assistant messages when the agent is known */}
+        {!isUser && agentName && (
+          <span
+            data-testid="agent-label"
+            className="text-[10px] font-medium text-[var(--color-accent)] px-1 capitalize"
+          >
+            {agentName}
+          </span>
+        )}
         {/* Message bubble */}
         <div
           className={cn(
@@ -100,8 +125,18 @@ export function MessageItem({ message }: MessageItemProps) {
                         )
                       },
                       a({ href, children }) {
-                        // Block javascript: URLs to prevent XSS via markdown links
-                        if (href?.toLowerCase().startsWith('javascript:')) {
+                        // Block executable URL schemes to prevent XSS via markdown
+                        // links. javascript: runs script; data: can encode an HTML
+                        // payload with embedded <script>; vbscript: is legacy IE
+                        // but still flagged by CodeQL js/unsafe-jquery-plugin and
+                        // similar rules. Whitespace prefixes are stripped before
+                        // the comparison because browsers tolerate them in URLs.
+                        const trimmed = href?.trim().toLowerCase() ?? ''
+                        if (
+                          trimmed.startsWith('javascript:') ||
+                          trimmed.startsWith('data:') ||
+                          trimmed.startsWith('vbscript:')
+                        ) {
                           return <span>{children}</span>
                         }
                         return (

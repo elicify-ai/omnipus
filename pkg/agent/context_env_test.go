@@ -1,5 +1,6 @@
 // context_env_test.go — Fix A (env-awareness) integration tests for ContextBuilder.
 // Traces to: env-awareness-and-memory-spec.md (spec v7)
+
 package agent
 
 import (
@@ -32,8 +33,8 @@ func (m *mockEnvProvider) SandboxMode() (string, error) { return m.sandboxMode, 
 func (m *mockEnvProvider) NetworkPolicy() envcontext.NetworkPolicy {
 	return envcontext.NetworkPolicy{OutboundAllowed: m.outbound}
 }
-func (m *mockEnvProvider) WorkspacePath() string   { return m.workspacePath }
-func (m *mockEnvProvider) OmnipusHome() string     { return m.omnipusHome }
+func (m *mockEnvProvider) WorkspacePath() string    { return m.workspacePath }
+func (m *mockEnvProvider) OmnipusHome() string      { return m.omnipusHome }
 func (m *mockEnvProvider) ActiveWarnings() []string { return m.activeWarnings }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +277,7 @@ func TestSubturn_ContextBuilderPointerShared(t *testing.T) {
 	//    ContextBuilder *by reference* (not by clone). A grep on subturn.go
 	//    catches refactors that switch to CloneContextBuilder(...) or
 	//    similar — that would be a design change requiring a new FR per the
-	//    spec, so we fail closed on any variant we don't recognise.
+	//    spec, so we fail closed on any variant we don't recognize.
 	//
 	// 2. Runtime: when we do mirror the same struct-literal shape, pointer
 	//    equality holds. This guards against changes to AgentInstance that
@@ -407,7 +408,10 @@ func TestContextBuilder_GetMemoryContext_BothSections(t *testing.T) {
 		t.Errorf("prompt missing '## Last Session' from memory context;\nfirst 500 chars: %s", truncateStr(prompt, 500))
 	}
 	if !strings.Contains(prompt, "## Long-term memory") {
-		t.Errorf("prompt missing '## Long-term memory' from memory context;\nfirst 500 chars: %s", truncateStr(prompt, 500))
+		t.Errorf(
+			"prompt missing '## Long-term memory' from memory context;\nfirst 500 chars: %s",
+			truncateStr(prompt, 500),
+		)
 	}
 }
 
@@ -454,8 +458,8 @@ func TestNoLLMProviderIdentityReference(t *testing.T) {
 		if strings.HasSuffix(path, "context_env_test.go") {
 			return nil
 		}
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
+		data, _ := os.ReadFile(path)
+		if len(data) == 0 {
 			return nil
 		}
 		text := string(data)

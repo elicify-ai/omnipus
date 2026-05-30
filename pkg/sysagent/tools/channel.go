@@ -29,7 +29,6 @@ var knownChannels = []channelEntry{
 	{ID: "whatsapp", Name: "WhatsApp", Tier: "tier1", Implementation: "go"},
 	{ID: "slack", Name: "Slack", Tier: "tier2", Implementation: "go"},
 	{ID: "signal", Name: "Signal", Tier: "tier2", Implementation: "bridge"},
-	{ID: "teams", Name: "Microsoft Teams", Tier: "tier2", Implementation: "go"},
 	{ID: "irc", Name: "IRC", Tier: "tier3", Implementation: "go"},
 	{ID: "line", Name: "LINE", Tier: "tier3", Implementation: "go"},
 }

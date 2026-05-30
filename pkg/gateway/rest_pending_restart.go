@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"strings"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
@@ -43,14 +44,9 @@ var RestartGatedKeys = []config.ConfigKey{
 	config.ToolsWebServeWarmup,
 }
 
-// pendingRestartEntry is a single restart-required change: the dotted key
-// whose persisted (on-disk) value diverges from the value that was applied
-// at boot time.
-type pendingRestartEntry struct {
-	Key            string `json:"key"`
-	PersistedValue any    `json:"persisted_value"`
-	AppliedValue   any    `json:"applied_value"`
-}
+// pendingRestartEntry is an alias for the generated type — same dotted key
+// structure, same wire shape, prevents the local type from diverging.
+type pendingRestartEntry = gen.PendingRestartEntry
 
 // HandlePendingRestart handles GET /api/v1/config/pending-restart.
 //

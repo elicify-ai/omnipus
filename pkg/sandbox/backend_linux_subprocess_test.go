@@ -7,6 +7,7 @@
 // Landlock actually restricts filesystem access without permanently sandboxing
 // the parent test process (Landlock's restrict_self is a one-way ratchet that
 // cannot be removed from the calling process).
+
 package sandbox_test
 
 import (
@@ -151,6 +152,42 @@ func runLandlockChild() {
 //	1  — bind unexpectedly succeeded (test failure)
 //	2  — unexpected error type
 //
+// runLandlockBindSubprocess is a shared helper that spawns the test binary as
+// a child with the given env var and test run name, then validates the child
+// exit code. wantCode is the exit code that signals success (42 = blocked,
+// 0 = allowed); 77 always means "Landlock unavailable in child" (skip).
+func runLandlockBindSubprocess(t *testing.T, childEnvVar, testRunName, successMsg string, wantCode int) {
+	t.Helper()
+	workspace := t.TempDir()
+	//nolint:gosec // intentional test-binary self-exec
+	cmd := exec.Command(os.Args[0],
+		"-test.run="+testRunName,
+		"-test.count=1",
+		"-test.v",
+	)
+	cmd.Env = append(os.Environ(),
+		childEnvVar+"=1",
+		"OMNIPUS_LANDLOCK_SANDBOX_DIR="+workspace,
+	)
+	out, err := cmd.CombinedOutput()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			t.Fatalf("child failed to run: %v\n%s", err, out)
+		}
+	}
+	switch exitCode {
+	case wantCode:
+		t.Logf("%s (child exited %d)", successMsg, wantCode)
+	case 77:
+		t.Skipf("Landlock unavailable in child (exit 77):\n%s", out)
+	default:
+		t.Fatalf("child exit %d (expected %d):\n%s", exitCode, wantCode, out)
+	}
+}
+
 // Requires Landlock ABI v4+ for NET_BIND_TCP. Pre-v4 kernels skip via 77.
 func TestLandlock_BindBlockedSubprocess(t *testing.T) {
 	if os.Getenv("OMNIPUS_LANDLOCK_BIND_BLOCKED_CHILD") == "1" {
@@ -164,35 +201,8 @@ func TestLandlock_BindBlockedSubprocess(t *testing.T) {
 	if abi < 4 {
 		t.Skipf("Landlock ABI v4 required for NET_BIND_TCP (have v%d)", abi)
 	}
-
-	workspace := t.TempDir()
-	//nolint:gosec // intentional test-binary self-exec
-	cmd := exec.Command(os.Args[0],
-		"-test.run=TestLandlock_BindBlockedSubprocess",
-		"-test.count=1",
-		"-test.v",
-	)
-	cmd.Env = append(os.Environ(),
-		"OMNIPUS_LANDLOCK_BIND_BLOCKED_CHILD=1",
-		"OMNIPUS_LANDLOCK_SANDBOX_DIR="+workspace,
-	)
-	out, err := cmd.CombinedOutput()
-	exitCode := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			t.Fatalf("child failed to run: %v\n%s", err, out)
-		}
-	}
-	switch exitCode {
-	case 42:
-		t.Logf("Landlock bind enforcement confirmed (child exited 42)")
-	case 77:
-		t.Skipf("Landlock unavailable in child (exit 77):\n%s", out)
-	default:
-		t.Fatalf("child exit %d (expected 42):\n%s", exitCode, out)
-	}
+	runLandlockBindSubprocess(t, "OMNIPUS_LANDLOCK_BIND_BLOCKED_CHILD",
+		"TestLandlock_BindBlockedSubprocess", "Landlock bind enforcement confirmed", 42)
 }
 
 // TestLandlock_BindAllowedSubprocess is the dual of BindBlocked: the same
@@ -211,35 +221,8 @@ func TestLandlock_BindAllowedSubprocess(t *testing.T) {
 	if abi < 4 {
 		t.Skipf("Landlock ABI v4 required for NET_BIND_TCP (have v%d)", abi)
 	}
-
-	workspace := t.TempDir()
-	//nolint:gosec // intentional test-binary self-exec
-	cmd := exec.Command(os.Args[0],
-		"-test.run=TestLandlock_BindAllowedSubprocess",
-		"-test.count=1",
-		"-test.v",
-	)
-	cmd.Env = append(os.Environ(),
-		"OMNIPUS_LANDLOCK_BIND_ALLOWED_CHILD=1",
-		"OMNIPUS_LANDLOCK_SANDBOX_DIR="+workspace,
-	)
-	out, err := cmd.CombinedOutput()
-	exitCode := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			t.Fatalf("child failed to run: %v\n%s", err, out)
-		}
-	}
-	switch exitCode {
-	case 0:
-		t.Logf("Landlock bind allow-rule confirmed (child exited 0)")
-	case 77:
-		t.Skipf("Landlock unavailable in child (exit 77):\n%s", out)
-	default:
-		t.Fatalf("child exit %d (expected 0):\n%s", exitCode, out)
-	}
+	runLandlockBindSubprocess(t, "OMNIPUS_LANDLOCK_BIND_ALLOWED_CHILD",
+		"TestLandlock_BindAllowedSubprocess", "Landlock bind allow-rule confirmed", 0)
 }
 
 // rawTCPBind issues bind(2) directly on a fresh AF_INET TCP socket, bypassing

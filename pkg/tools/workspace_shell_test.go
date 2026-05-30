@@ -38,10 +38,10 @@ func newTestWorkspaceShellTool(
 // TestWorkspaceShellTool_DenyPatterns verifies that deny patterns fire when
 // EnableDenyPatterns=true and are inert when EnableDenyPatterns=false.
 func TestWorkspaceShellTool_DenyPatterns(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix-only test")
 	}
-	t.Parallel()
 
 	dir := t.TempDir()
 
@@ -64,7 +64,8 @@ func TestWorkspaceShellTool_DenyPatterns(t *testing.T) {
 		if !result.IsError {
 			t.Errorf("expected IsError=true for blocked command, got IsError=false")
 		}
-		if !strings.Contains(result.ForLLM, "blocked") && !strings.Contains(result.ForLLM, "denied") && !strings.Contains(result.ForLLM, "safety guard") {
+		if !strings.Contains(result.ForLLM, "blocked") && !strings.Contains(result.ForLLM, "denied") &&
+			!strings.Contains(result.ForLLM, "safety guard") {
 			t.Errorf("expected blocked message in ForLLM, got %q", result.ForLLM)
 		}
 	})
@@ -116,10 +117,10 @@ func TestWorkspaceShellTool_DenyPatterns(t *testing.T) {
 
 // TestWorkspaceShellTool_CWDResolution verifies cwd path handling.
 func TestWorkspaceShellTool_CWDResolution(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix-only test")
 	}
-	t.Parallel()
 
 	dir := t.TempDir()
 
@@ -169,7 +170,8 @@ func TestWorkspaceShellTool_CWDResolution(t *testing.T) {
 		if !result.IsError {
 			t.Errorf("expected error for cwd that escapes workspace, got success")
 		}
-		if !strings.Contains(result.ForLLM, "escapes workspace") && !strings.Contains(result.ForLLM, "outside") && !strings.Contains(result.ForLLM, "denied") {
+		if !strings.Contains(result.ForLLM, "escapes workspace") && !strings.Contains(result.ForLLM, "outside") &&
+			!strings.Contains(result.ForLLM, "denied") {
 			t.Errorf("expected escape error in ForLLM, got %q", result.ForLLM)
 		}
 	})
@@ -457,7 +459,10 @@ func TestWorkspaceShellTool_AuditFailClosed_DeniesExecution(t *testing.T) {
 
 	// (a) Must return an error result.
 	if !result.IsError {
-		t.Errorf("expected IsError=true when audit_fail_closed=true and logger degraded; got IsError=false; ForLLM=%q", result.ForLLM)
+		t.Errorf(
+			"expected IsError=true when audit_fail_closed=true and logger degraded; got IsError=false; ForLLM=%q",
+			result.ForLLM,
+		)
 	}
 
 	// (a) ForLLM must mention fail-closed.
@@ -477,7 +482,7 @@ func TestWorkspaceShellTool_AuditFailClosed_DeniesExecution(t *testing.T) {
 // BDD: Given AuditFailClosed=false and a degraded (closed) audit logger,
 //
 //	When Execute is called,
-//	Then the command executes successfully (warn-and-continue behaviour).
+//	Then the command executes successfully (warn-and-continue behavior).
 //
 // Traces to: quizzical-marinating-frog.md Fix-1 — AuditFailClosed=false path.
 func TestWorkspaceShellTool_AuditBestEffort(t *testing.T) {

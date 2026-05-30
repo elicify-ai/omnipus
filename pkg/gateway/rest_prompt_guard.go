@@ -7,10 +7,10 @@
 package gateway
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 )
 
@@ -33,9 +33,9 @@ func (a *restAPI) HandlePromptGuard(w http.ResponseWriter, r *http.Request) {
 		if level == "" {
 			level = "medium"
 		}
-		jsonOK(w, map[string]any{
-			"level":            level,
-			"requires_restart": false,
+		jsonOK(w, gen.PromptGuardResponse{
+			Level:           gen.PromptGuardResponseLevel(level),
+			RequiresRestart: false,
 		})
 
 	case http.MethodPut:
@@ -50,14 +50,12 @@ func (a *restAPI) HandlePromptGuard(w http.ResponseWriter, r *http.Request) {
 // Admin enforcement is handled by adminWrap at route registration in rest.go.
 func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	var body struct {
-		Level string `json:"level"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var body gen.PromptGuardUpdateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "PromptGuardUpdateRequest", &body, validateEnabled) {
 		return
 	}
-	switch body.Level {
+	switch string(body.Level) {
 	case "low", "medium", "high":
 	default:
 		jsonErr(w, http.StatusBadRequest, `level must be one of: "low", "medium", "high"`)
@@ -70,7 +68,7 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		ensureMap(m, "sandbox")["prompt_injection_level"] = body.Level
+		ensureMap(m, "sandbox")["prompt_injection_level"] = string(body.Level)
 		return nil
 	}); err != nil {
 		slog.Error("rest: update prompt_injection_level", "error", err)
@@ -79,26 +77,27 @@ func (a *restAPI) putPromptGuard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if auditErr := audit.EmitSecuritySettingChange(r.Context(), a.agentLoop.AuditLogger(),
-		"sandbox.prompt_injection_level", oldLevel, body.Level); auditErr != nil {
+		"sandbox.prompt_injection_level", oldLevel, string(body.Level)); auditErr != nil {
 		slog.Error("rest: audit emit prompt guard change", "error", auditErr)
 	}
 
 	if reloadErr := a.awaitReload(); reloadErr != nil {
-		slog.Info("rest: prompt guard level updated (restart required)", "level", body.Level)
-		jsonOK(w, map[string]any{
-			"saved":            true,
-			"requires_restart": true,
-			"applied_level":    body.Level,
-			"warning":          "config saved to disk but hot-reload failed; restart the gateway to apply",
+		slog.Info("rest: prompt guard level updated (restart required)", "level", string(body.Level))
+		warnMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
+		jsonOK(w, gen.PromptGuardUpdateResponse{
+			Saved:           true,
+			RequiresRestart: true,
+			AppliedLevel:    gen.PromptGuardUpdateResponseAppliedLevel(body.Level),
+			Warning:         &warnMsg,
 		})
 		return
 	}
 
-	slog.Info("rest: prompt guard level updated", "level", body.Level)
+	slog.Info("rest: prompt guard level updated", "level", string(body.Level))
 
-	jsonOK(w, map[string]any{
-		"saved":            true,
-		"requires_restart": false,
-		"applied_level":    body.Level,
+	jsonOK(w, gen.PromptGuardUpdateResponse{
+		Saved:           true,
+		RequiresRestart: false,
+		AppliedLevel:    gen.PromptGuardUpdateResponseAppliedLevel(body.Level),
 	})
 }

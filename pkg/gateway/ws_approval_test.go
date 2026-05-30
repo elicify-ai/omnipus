@@ -25,7 +25,7 @@ import (
 // --- test helpers ---
 
 // makeTestConn creates a minimal wsConn with a buffered sendCh and an open doneCh.
-// The sendCh must be buffered so sendConnFrame does not block in tests.
+// The sendCh must be buffered so sendConnGenFrame does not block in tests.
 func makeTestConn() *wsConn {
 	return &wsConn{
 		sendCh: make(chan []byte, 16),
@@ -43,13 +43,13 @@ func makeTestHook(conn *wsConn, timeout time.Duration) (*wsApprovalHook, *wsAppr
 	}, reg
 }
 
-// unmarshalWSServerFrame decodes raw websocket message bytes into a wsServerFrame.
-func unmarshalWSServerFrame(b []byte, f *wsServerFrame) error {
+// unmarshalWSServerFrame decodes raw websocket message bytes into a replayFrameDecoder.
+func unmarshalWSServerFrame(b []byte, f *replayFrameDecoder) error {
 	return json.Unmarshal(b, f)
 }
 
-// writeWSClientFrame marshals and sends a wsClientFrame over the WebSocket connection.
-func writeWSClientFrame(t *testing.T, conn *websocket.Conn, frame wsClientFrame) {
+// writeWSClientFrame marshals and sends a wsClientFrameTestHelper over the WebSocket connection.
+func writeWSClientFrame(t *testing.T, conn *websocket.Conn, frame wsClientFrameTestHelper) {
 	t.Helper()
 	data, err := json.Marshal(frame)
 	require.NoError(t, err, "marshal client frame")
@@ -57,7 +57,7 @@ func writeWSClientFrame(t *testing.T, conn *websocket.Conn, frame wsClientFrame)
 }
 
 // writeWSClientFrameNoFail is like writeWSClientFrame but returns the error instead of failing.
-func writeWSClientFrameNoFail(conn *websocket.Conn, frame wsClientFrame) error {
+func writeWSClientFrameNoFail(conn *websocket.Conn, frame wsClientFrameTestHelper) error {
 	data, err := json.Marshal(frame)
 	if err != nil {
 		return err
@@ -204,7 +204,7 @@ func TestApprovalHook_HappyPath(t *testing.T) {
 	go func() {
 		select {
 		case frameBytes := <-conn.sendCh:
-			var frame wsServerFrame
+			var frame replayFrameDecoder
 			if err := unmarshalWSServerFrame(frameBytes, &frame); err != nil {
 				return
 			}
@@ -235,7 +235,7 @@ func TestApprovalHook_Denial(t *testing.T) {
 	go func() {
 		select {
 		case frameBytes := <-conn.sendCh:
-			var frame wsServerFrame
+			var frame replayFrameDecoder
 			if err := unmarshalWSServerFrame(frameBytes, &frame); err != nil {
 				return
 			}
@@ -261,10 +261,12 @@ func TestApprovalHook_Denial(t *testing.T) {
 func TestApprovalHook_Timeout(t *testing.T) {
 	conn := makeTestConn()
 	hook, _ := makeTestHook(conn, 100*time.Millisecond)
+	t.Cleanup(func() { close(conn.sendCh) })
 
 	req := &agent.ToolApprovalRequest{Tool: "slow_tool", Arguments: map[string]any{}}
 
 	// Drain sendCh so the expiry frame does not block the select in ApproveTool.
+	// The drainer exits when sendCh is closed in t.Cleanup.
 	go func() {
 		for range conn.sendCh {
 		}
@@ -289,6 +291,7 @@ func TestApprovalHook_Timeout(t *testing.T) {
 func TestApprovalHook_ContextCancelled(t *testing.T) {
 	conn := makeTestConn()
 	hook, _ := makeTestHook(conn, 5*time.Second)
+	t.Cleanup(func() { close(conn.sendCh) })
 
 	req := &agent.ToolApprovalRequest{Tool: "long_tool", Arguments: map[string]any{}}
 
@@ -299,6 +302,7 @@ func TestApprovalHook_ContextCancelled(t *testing.T) {
 	}()
 
 	// Drain sendCh so the approval-request frame does not block.
+	// The drainer exits when sendCh is closed in t.Cleanup.
 	go func() {
 		for range conn.sendCh {
 		}
@@ -339,8 +343,10 @@ func TestApprovalHook_NilConn(t *testing.T) {
 func TestApprovalHook_ConnectionClosed(t *testing.T) {
 	conn := makeTestConn()
 	hook, _ := makeTestHook(conn, 5*time.Second)
+	t.Cleanup(func() { close(conn.sendCh) })
 
 	// Drain sendCh to avoid blocking on the approval-request send.
+	// The drainer exits when sendCh is closed in t.Cleanup.
 	go func() {
 		for range conn.sendCh {
 		}
@@ -365,34 +371,46 @@ func TestApprovalHook_ConnectionClosed(t *testing.T) {
 // When the browser sends exec_approval_response with decision="allow",
 // Then the registry channel receives VerdictAllow.
 // Traces to: vivid-roaming-planet.md line 152
-func TestHandleApprovalResponse_Allow(t *testing.T) {
+// runApprovalResponseRoundTrip drives one exec_approval_response round-trip
+// for the three TestHandleApprovalResponse_* tests below. Centralizing this
+// keeps the per-decision tests focused on their single assertion.
+func runApprovalResponseRoundTrip(
+	t *testing.T,
+	pendingID, decision string,
+	want agent.ApprovalVerdict,
+	wantApproved bool,
+) {
+	t.Helper()
 	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
 	conn := dialTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	// Authenticate first — required by authenticateWS before any other frames.
 	sendWSAuthFrameDevMode(t, conn)
 
-	pendingID := "test-allow-request-id"
 	ch := handler.approvalRegistry.register(pendingID, "")
 	defer handler.approvalRegistry.unregister(pendingID)
 
-	writeWSClientFrame(t, conn, wsClientFrame{
+	writeWSClientFrame(t, conn, wsClientFrameTestHelper{
 		Type:     "exec_approval_response",
 		ID:       pendingID,
-		Decision: "allow",
+		Decision: decision,
 	})
 
 	select {
-	case decision := <-ch:
-		assert.True(t, decision.IsApproved(), "allow decision must be approved")
-		assert.Equal(t, agent.VerdictAllow, decision.Verdict)
+	case got := <-ch:
+		assert.Equal(t, wantApproved, got.IsApproved(), "decision=%s must yield IsApproved=%v", decision, wantApproved)
+		assert.Equal(t, want, got.Verdict)
 	case <-time.After(2 * time.Second):
-		t.Fatal("registry was not resolved after exec_approval_response with allow")
+		t.Fatalf("registry was not resolved after exec_approval_response with %s", decision)
 	}
+}
+
+func TestHandleApprovalResponse_Allow(t *testing.T) {
+	runApprovalResponseRoundTrip(t, "test-allow-request-id", "allow", agent.VerdictAllow, true)
 }
 
 // TestHandleApprovalResponse_Deny verifies that decision "deny" resolves as VerdictDeny.
@@ -401,33 +419,7 @@ func TestHandleApprovalResponse_Allow(t *testing.T) {
 // Then the registry resolves with VerdictDeny and IsApproved() is false.
 // Traces to: vivid-roaming-planet.md line 153
 func TestHandleApprovalResponse_Deny(t *testing.T) {
-	handler, _, _ := newTestWSHandler(t)
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-
-	conn := dialTestWS(t, srv)
-	t.Cleanup(func() { _ = conn.Close() })
-
-	// Authenticate first — required by authenticateWS before any other frames.
-	sendWSAuthFrameDevMode(t, conn)
-
-	pendingID := "test-deny-request-id"
-	ch := handler.approvalRegistry.register(pendingID, "")
-	defer handler.approvalRegistry.unregister(pendingID)
-
-	writeWSClientFrame(t, conn, wsClientFrame{
-		Type:     "exec_approval_response",
-		ID:       pendingID,
-		Decision: "deny",
-	})
-
-	select {
-	case decision := <-ch:
-		assert.False(t, decision.IsApproved(), "deny must not be approved")
-		assert.Equal(t, agent.VerdictDeny, decision.Verdict)
-	case <-time.After(2 * time.Second):
-		t.Fatal("registry was not resolved after exec_approval_response with deny")
-	}
+	runApprovalResponseRoundTrip(t, "test-deny-request-id", "deny", agent.VerdictDeny, false)
 }
 
 // TestHandleApprovalResponse_Always verifies that decision "always" resolves as VerdictAlways.
@@ -436,33 +428,7 @@ func TestHandleApprovalResponse_Deny(t *testing.T) {
 // Then the registry resolves with VerdictAlways and IsApproved() is true.
 // Traces to: vivid-roaming-planet.md line 154
 func TestHandleApprovalResponse_Always(t *testing.T) {
-	handler, _, _ := newTestWSHandler(t)
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-
-	conn := dialTestWS(t, srv)
-	t.Cleanup(func() { _ = conn.Close() })
-
-	// Authenticate first — required by authenticateWS before any other frames.
-	sendWSAuthFrameDevMode(t, conn)
-
-	pendingID := "test-always-request-id"
-	ch := handler.approvalRegistry.register(pendingID, "")
-	defer handler.approvalRegistry.unregister(pendingID)
-
-	writeWSClientFrame(t, conn, wsClientFrame{
-		Type:     "exec_approval_response",
-		ID:       pendingID,
-		Decision: "always",
-	})
-
-	select {
-	case decision := <-ch:
-		assert.True(t, decision.IsApproved(), "always verdict must be approved")
-		assert.Equal(t, agent.VerdictAlways, decision.Verdict)
-	case <-time.After(2 * time.Second):
-		t.Fatal("registry was not resolved after exec_approval_response with always")
-	}
+	runApprovalResponseRoundTrip(t, "test-always-request-id", "always", agent.VerdictAlways, true)
 }
 
 // --- autoApproveSafeTool unit tests (Test Suite 2) ---
@@ -546,7 +512,7 @@ func TestApprovalHook_HappyPath_ExecTool(t *testing.T) {
 	go func() {
 		select {
 		case frameBytes := <-conn.sendCh:
-			var frame wsServerFrame
+			var frame replayFrameDecoder
 			if err := unmarshalWSServerFrame(frameBytes, &frame); err != nil {
 				return
 			}
@@ -570,13 +536,14 @@ func TestApprovalHook_HappyPath_ExecTool(t *testing.T) {
 // Traces to: vivid-roaming-planet.md line 155
 func TestHandleApprovalResponse_EmptyID(t *testing.T) {
 	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
 	conn := dialTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	writeWSClientFrame(t, conn, wsClientFrame{
+	writeWSClientFrame(t, conn, wsClientFrameTestHelper{
 		Type:     "exec_approval_response",
 		ID:       "", // empty — server must not crash
 		Decision: "allow",
@@ -586,7 +553,7 @@ func TestHandleApprovalResponse_EmptyID(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Connection must remain open — a subsequent write must succeed.
-	err := writeWSClientFrameNoFail(conn, wsClientFrame{Type: "message", Content: "still alive"})
+	err := writeWSClientFrameNoFail(conn, wsClientFrameTestHelper{Type: "message", Content: "still alive"})
 	assert.NoError(t, err, "connection must remain open after empty-ID approval response")
 }
 
@@ -607,7 +574,7 @@ func TestWS_ApprovalResponse_RejectsMismatchedSessionID(t *testing.T) {
 	ch := registry.register(approvalID, sessionA)
 
 	// Build a minimal wsConn to capture outbound frames.
-	// The sendCh is buffered (16 slots) so sendConnFrame will not block.
+	// The sendCh is buffered (16 slots) so sendConnGenFrame will not block.
 	wc := makeTestConn()
 
 	// Build a WSHandler to call handleApprovalResponse with a mismatched session.
@@ -628,7 +595,7 @@ func TestWS_ApprovalResponse_RejectsMismatchedSessionID(t *testing.T) {
 	// An error frame must have been sent.
 	select {
 	case raw := <-wc.sendCh:
-		var frame wsServerFrame
+		var frame replayFrameDecoder
 		if err := json.Unmarshal(raw, &frame); err != nil {
 			t.Fatalf("could not unmarshal frame: %v", err)
 		}

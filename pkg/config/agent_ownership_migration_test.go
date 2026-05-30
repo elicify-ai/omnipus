@@ -1,19 +1,20 @@
 //go:build !cgo
 
-// Package config — agent ownership migration tests ( / / ).
+// agent_ownership_migration_test.go — migration tests ( / / ).
 //
 // Covers migrateAgentOwnership scenarios from the spec dataset.
 // BDD test IDs: #77b, #78, #78b
 // Traces to: path-sandbox-and-capability-tiers-spec.md /
+
 package config
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -49,7 +50,7 @@ func captureSlogHandler(t *testing.T) *captureHandler {
 
 func containsMessage(records []slog.Record, substr string) bool {
 	for _, r := range records {
-		if bytes.Contains([]byte(r.Message), []byte(substr)) {
+		if strings.Contains(r.Message, substr) {
 			return true
 		}
 	}

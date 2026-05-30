@@ -529,8 +529,8 @@ func TestAuditDevStart_FailClosedOnNilLogger(t *testing.T) {
 			MaxConcurrent:   2,
 			AuditFailClosed: true, // operator demands fail-closed
 		},
-		nil,  // egressProxy
-		nil,  // auditLogger = nil — CRIT-BK-1 scenario
+		nil, // egressProxy
+		nil, // auditLogger = nil — CRIT-BK-1 scenario
 		60,
 		86400,
 	)
@@ -545,7 +545,7 @@ func TestAuditDevStart_FailClosedOnNilLogger(t *testing.T) {
 	require.NotNil(t, result, "executeDev must return a non-nil result when fail-closed and no logger")
 	require.True(t, result.IsError, "result must have IsError=true")
 	assert.Contains(t, result.ForLLM, "failing closed",
-		"error message must mention fail-closed behaviour")
+		"error message must mention fail-closed behavior")
 }
 
 // TestAuditDevDeny_NoIncSkippedOnNilLogger verifies H4-BK: when the audit
@@ -588,9 +588,6 @@ func TestAuditDevDeny_NoIncSkippedOnNilLogger(t *testing.T) {
 func TestWebServeTool_StaticDurationClamp(t *testing.T) {
 	// Use a stub that records the duration passed to Register.
 	var gotDuration time.Duration
-	type capturingStub struct {
-		stubServedSubdirs
-	}
 	cs := &struct {
 		stubServedSubdirs
 		captured time.Duration

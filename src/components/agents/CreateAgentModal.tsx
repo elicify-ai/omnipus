@@ -23,7 +23,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useQuery } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
 import { createAgent, fetchProviders, isApiError } from '@/lib/api'
-import type { Agent, AgentToolsCfg } from '@/lib/api'
+import type { Agent, AgentCreateRequest, AgentToolsCfg } from '@/lib/api'
 import { AVATAR_COLORS } from '@/lib/constants'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 
@@ -54,7 +54,7 @@ interface CreateAgentModalProps {
   /** Override close handler (optional — defaults to Zustand store) */
   onClose?: () => void
   /** Override create handler (optional — defaults to REST API) */
-  onCreate?: (data: Partial<Agent>) => Promise<void>
+  onCreate?: (data: AgentCreateRequest) => Promise<void>
 }
 
 export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreate: onCreateProp }: CreateAgentModalProps) {
@@ -70,8 +70,11 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
     enabled: isOpen,
   })
   const providers = Array.isArray(providersData) ? providersData : []
-  const connectedModels = providers.filter((p) => p.status === 'connected').flatMap((p) => p.models ?? [])
-  const availableModels = connectedModels
+  const connectedProviders = providers.filter((p) => p.status === 'connected')
+  const availableModels = connectedProviders.flatMap((p) => p.models ?? [])
+  const providerGroups = connectedProviders
+    .filter((p) => (p.models ?? []).length > 0)
+    .map((p) => ({ providerName: p.display_name ?? p.name ?? p.id, models: p.models ?? [] }))
 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -109,7 +112,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
   const AvatarIcon = getIconComponent(icon)
 
   const { mutate: doCreate, isPending } = useMutation({
-    mutationFn: async (data: Partial<Agent>) => {
+    mutationFn: async (data: AgentCreateRequest) => {
       if (onCreateProp) {
         await onCreateProp(data)
         return data as Agent
@@ -133,14 +136,13 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
     }
     doCreate({
       name: name.trim(),
-      description,
+      description: description || undefined,
       model: model || undefined,
       color,
       icon,
-      type: 'custom',
       model_params: { temperature },
       tools_cfg: toolsState,
-    } as Partial<Agent> & { tools_cfg?: AgentToolsCfg })
+    })
   }
 
   return (
@@ -268,6 +270,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                     value={model}
                     onChange={setModel}
                     placeholder="Use provider default"
+                    providerGroups={providerGroups}
                   />
                 </div>
 

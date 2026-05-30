@@ -4,13 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Omnipus is an agentic core built on Omnipus's foundation, shipping as three product variants:
-
-1. **Omnipus Open Source** (primary, ships first) — Single Go binary with embedded web UI, similar to Omnipus/OpenClaw. Community-facing, builds adoption.
-2. **Omnipus Desktop** (ships second) — Free polished Electron desktop app. Premium UX, auto-updates, native menus.
-3. **Omnipus Cloud/SaaS** (ships third) — Scalable hosted version with team features and managed infrastructure.
-
-All variants share a common Go agentic core with kernel-level sandboxing, RBAC, audit logging, credential management, compiled-in Go channels, and a shared `@omnipus/ui` React component library.
+Omnipus is an agentic core: a single Go binary with the SPA embedded via `go:embed`, kernel-level sandboxing (Landlock + seccomp on Linux 5.13+), RBAC, audit logging, encrypted credential management, and compiled-in Go channels. Community-facing, MIT-licensed, no telemetry.
 
 **Domain:** omnipus.ai
 
@@ -58,18 +52,20 @@ Three-phase plan locked 2026-05-03 to resolve the dilemma of an unstable WIP bra
 
 These are non-negotiable and apply to every decision:
 
-1. **Single Go binary (agentic core)** — all backend features compile into one binary. No new runtime dependencies. Desktop wraps this in Electron. Open source embeds web UI via go:embed.
+1. **Single Go binary (agentic core)** — all backend features compile into one binary. No new runtime dependencies. The SPA is embedded via `go:embed`.
 2. **Pure Go** — no CGo, no external C libraries, no shelling out for security-critical paths. Use `golang.org/x/sys/unix` for kernel interfaces.
 3. **Minimal footprint** — total RAM overhead for all security features must stay under 10MB beyond baseline.
 4. **Graceful degradation** — features requiring Linux 5.13+ (Landlock, seccomp) must fall back to application-level enforcement on older kernels, non-Linux platforms, and Android/Termux.
 5. **Ecosystem compatibility** — follows Omnipus/OpenClaw conventions (SKILL.md, HEARTBEAT.md, SOUL.md, AGENTS.md, JSON config patterns) for skill ecosystem and community compatibility. Omnipus has its own config format but adopts the same concepts.
 6. **Deny-by-default for security, opt-in for features** — security policies default to most restrictive; functional features default to disabled. **Documented exception:** when a sandbox mode (`enforce` or `permissive`) is active, the workspace shell tools (`workspace.shell`, `workspace.shell_bg`) are enabled by default for Jim. Rationale: the kernel sandbox itself is the protective layer, and Jim's seed forces `experimental.workspace_shell_enabled = true` at config-creation time anyway — making the helper-default `false` only creates a test-vs-production behavioral gap, not real safety. Operators who want shell tools fully off must set `experimental.workspace_shell_enabled = false` explicitly. With sandbox `off` (god-mode), no implicit defaults apply — operator opt-in is required.
+7. **Release responsibility — fix everything, no excuses.** Every branch must be fully green before it ships. Pre-existing failures (lint, vuln, Go test, race, vitest, tsc, Playwright, anything CI runs) are our responsibility to fix regardless of who introduced them. "Pre-existing", "not introduced by my work", "broken on main too" are NEVER acceptable closure paths for an observed failure. Either fix it now, or get explicit user approval to defer with a tracked issue + target date. The release contract is full functionality; we do not ship around known failures.
+8. **Contract-first wire formats — single source of truth, runtime-validated.** Every byte that crosses the gateway/SPA boundary (REST request/response, WS frame, persisted JSON consumed by the SPA) MUST be defined in `contracts/openapi.yaml` or `contracts/asyncapi.yaml` **before** any Go or TypeScript code is written. Generated types in `pkg/api/generated/` and `src/lib/api/generated/` are the only legal cross-boundary types — they are committed to the repo, regenerated via `scripts/gen-contracts.sh`, and verified in CI by `make verify-contracts` (fails on drift). **Hand-written wire-format types are FORBIDDEN and actively caught by lint:** (a) any package-level struct in `pkg/gateway/*.go` (non-test, non-generated) that has ≥2 `json:` tags is flagged — opt-out with `// not-wire-format` for internal structs that are not wire types; (b) any `export interface` or `export type = { }` (object-literal) in `src/lib/api.ts` or `src/lib/ws.ts` is flagged — opt-out with `// not-wire-format` for internal callback/helper interfaces. AsyncAPI Zod schemas are generated (not hand-written): `scripts/_gen-asyncapi-types.mjs` emits `src/lib/api/generated/_asyncapi-zod-schemas.generated.ts`, which `scripts/_gen-ts.sh` concatenates into `src/lib/api/generated/schemas.ts`; the hand-written `scripts/_asyncapi-zod-schemas.ts` is deprecated and no longer used. SPA edge validates every incoming payload through the matching zod schema (drop + dropped-frame counter + dev-mode toast on failure; no production crash, no error UI clutter). Backend `pkg/api/generated/contract_test.go` fails on any Go struct that produces schema-invalid JSON. Adding a new wire type means: (a) add schema to `contracts/components/schemas/`, (b) reference it from `openapi.yaml` or `asyncapi.yaml`, (c) run `scripts/gen-contracts.sh`, (d) commit the generated diff, (e) write the handler/consumer using the generated type. Steps in any other order are an error.
 
 ## Tech Stack
 
-**Backend:** Go (targeting Go 1.21+ for `slog`). Key packages: `golang.org/x/sys/unix` (Landlock, seccomp), `chromedp` (browser automation), `whatsmeow` (WhatsApp), `discordgo` (Discord), `telebot` (Telegram), `slack-go` (Slack), `go-nostr` (Nostr), `modernc.org/sqlite` (pure Go SQLite for whatsmeow — no CGo). All channels currently in the codebase are compiled into the single binary as in-process Go implementations. Channels that depend on a non-Go runtime (e.g. Signal, which requires `signal-cli`/JRE) wrap the dependency by spawning a sidecar binary from inside their own `Start()` and communicating with it over local HTTP (Signal) or WebSocket (WhatsApp bridge). There is no generic stdio "bridge protocol"; HTTP-localhost is the de facto pattern.
+**Backend:** Go (targeting Go 1.22+ — go.mod requires go 1.26.3; `//go:build go1.22` tags in generated files; `slog` added in 1.21). Key packages: `golang.org/x/sys/unix` (Landlock, seccomp), `chromedp` (browser automation), `whatsmeow` (WhatsApp), `discordgo` (Discord), `telebot` (Telegram), `slack-go` (Slack), `go-nostr` (Nostr), `modernc.org/sqlite` (pure Go SQLite for whatsmeow — no CGo). All channels currently in the codebase are compiled into the single binary as in-process Go implementations. Channels that depend on a non-Go runtime (e.g. Signal, which requires `signal-cli`/JRE) wrap the dependency by spawning a sidecar binary from inside their own `Start()` and communicating with it over local HTTP (Signal) or WebSocket (WhatsApp bridge). There is no generic stdio "bridge protocol"; HTTP-localhost is the de facto pattern.
 
-**Frontend:** TypeScript, React 19, Vite 6, shadcn/ui (Radix + Tailwind CSS v4), AssistantUI (chat), Phosphor Icons (`@phosphor-icons/react`), Zustand (UI state), TanStack Query (server state), TanStack Router, Framer Motion. Shared `@omnipus/ui` component library across three variants: web (go:embed in binary for open source, ships first), Electron desktop (ships second), npm package (for SaaS/embedded, ships third).
+**Frontend:** TypeScript, React 19, Vite 6, shadcn/ui (Radix + Tailwind CSS v4), AssistantUI (chat), Phosphor Icons (`@phosphor-icons/react`), Zustand (UI state), TanStack Query (server state), TanStack Router, Framer Motion. The SPA is built by Vite into `dist/spa/`, copied into `pkg/gateway/spa/`, and embedded into the Go binary via `go:embed`.
 
 **Storage:** File-based only (JSON/JSONL) for all Omnipus data. No PostgreSQL or Redis. Exception: WhatsApp session uses SQLite via whatsmeow with `modernc.org/sqlite` (pure Go, no CGo). SQLite is isolated to WhatsApp session storage only — never used for Omnipus's own data. Data directory: `~/.omnipus/`. Atomic writes (temp file + rename). Credentials in `credentials.json` (AES-256-GCM encrypted, Argon2id KDF), never in `config.json`. **Sessions:** Day-partitioned JSONL transcripts (`sessions/<id>/<YYYY-MM-DD>.jsonl`) with configurable retention (default 90 days). **Context compression** is single-layer: when the token budget is exceeded, `forceCompression` (`pkg/agent/loop.go:4473-4550`) drops ~50% of the oldest turns and writes a summary note via `SetHistory` + `Save`. The historical claim of a second "tool result pruning" pass is not implemented today. **Concurrency:** per-entity files for high-contention data (tasks, pins). Sessions and memory use a 64-shard mutex pool keyed by FNV hash of session ID (`pkg/memory/jsonl.go:21-77`), not a single-writer goroutine. Atomic writes via temp-file + rename (`fileutil.WriteFileAtomic`). Advisory `unix.Flock` on Linux/macOS (`pkg/fileutil/flock_unix.go:18-22`); on Windows, `LockFileEx` is **not** used — the code relies on the single-writer goroutine pattern instead (see `pkg/fileutil/flock_windows.go:15`).
 
@@ -93,7 +89,7 @@ chmod 600 /var/lib/omnipus/master.key
 export OMNIPUS_KEY_FILE=/var/lib/omnipus/master.key
 ```
 
-**Key rotation:** Generate a new key, then re-encrypt using `omnipus credentials rotate` (checks `--old-key-file` and `--new-key-file`). The rotate command decrypts with the old key and re-encrypts every credential with the new key atomically. Update `OMNIPUS_KEY_FILE` to point at the new key (or replace `$OMNIPUS_HOME/master.key`) before restarting the gateway. There is no zero-downtime rotation path in the current CLI — a brief restart is required.
+**Key rotation:** Run `omnipus credentials rotate` — the command takes no arguments (`cobra.NoArgs` per `cmd/omnipus/internal/credentials/command.go::newRotateCommand`) and is **passphrase-based**: it unlocks the store via the current mode (env var / key file / interactive prompt), then prompts twice for the new passphrase, then calls `store.RotateWithPassphrase` which atomically re-encrypts every credential under the new key. A `--key-file` flag was never wired up; the rotation path is passphrase-only today. For headless key-file deployments the operational workflow is: stop the gateway, replace `$OMNIPUS_HOME/master.key` with a freshly minted hex key, restart, and re-onboard any agent secrets via `omnipus credentials set` (or the Settings → Security → Credential Vault UI). There is no zero-downtime rotation path in the current CLI — a brief restart is required.
 
 **Boot order:** `NewStore → Unlock → LoadConfigWithStore → InjectFromConfig → ResolveBundle → RegisterSensitiveValues → NewManager → Start` — any failure aborts boot. Channel secrets are passed directly as a `credentials.SecretBundle` to channel constructors; they do not require environment injection.
 
@@ -173,6 +169,29 @@ The lead (you) orchestrates all work by spawning specialized subagents via the A
 - Re-run failed reviews after fixes
 - Only create PR when all reviews pass
 
+## Quality Gates
+
+Before reporting any work done, subagents and the lead must verify all applicable gates pass:
+
+```bash
+# Backend
+export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH
+gofmt -l . | wc -l                                          # must be 0
+golangci-lint run --build-tags=goolm,stdjson                # exit 0
+CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 ./...    # exit 0
+CGO_ENABLED=1 go build -tags goolm,stdjson ./...            # exit 0
+govulncheck ./...                                           # 0 vulnerabilities
+
+# Frontend
+npm run typecheck     # tsc -b --noEmit — exits 0 (see WARNING below)
+npx vitest run        # exit 0
+
+# Contracts
+make verify-contracts  # exit 0
+```
+
+**WARNING — TypeScript typecheck trap.** `tsconfig.json` is a project-references root with no `include`/`files` entries. Running `tsc --noEmit` (without `-b`) is a **silent no-op** — it always exits 0 even when referenced sub-projects have type errors. The correct command is `tsc -b --noEmit`. Use `npm run typecheck` which is wired to the correct command.
+
 ## Build & E2E Testing
 
 ### SPA Embed Pipeline
@@ -218,7 +237,7 @@ OMNIPUS_BEARER_TOKEN="" ./omnipus gateway --allow-empty &
    **When to set `dev_mode_bypass: true`:**
    - Driving a `withAuth`-protected endpoint (e.g., `curl /api/v1/agents`, `/api/v1/sessions`, `/api/v1/config`) before onboarding has minted a real admin user.
    - Go test scaffolding — `pkg/gateway/routes_admin_test.go`, `websocket_m4_test.go`, etc. flip the flag so admin-route tests don't have to register users + log in just to authenticate.
-   - Electron / local-dev shells where you intentionally don't want a login step.
+   - Local-dev shells where you intentionally don't want a login step.
 
    **Defense-in-depth contract:** the paired `RequireNotBypass` middleware (see `TestSandboxConfigPUT_RealMux_DevModeBypass503`) explicitly returns **503** when `dev_mode_bypass=true` is set, on a hand-picked allow-list of high-blast-radius admin routes (e.g., sandbox-config PUT). The flag is loud and self-limiting by design — never set it in production, never remove the `RequireNotBypass` guard without an ADR.
 
@@ -249,3 +268,48 @@ The gateway opens two listeners by default. `gateway.port` (default `5000`) serv
 Reverse-proxy operators who terminate TLS at nginx or Caddy should set `gateway.public_url` and `gateway.preview_origin` to the fully-qualified HTTPS URLs that the browser reaches (e.g. `https://omnipus.example.com` and `https://preview.omnipus.example.com`). The gateway uses these values to build correct `Content-Security-Policy` and `frame-ancestors` headers. See `docs/operations/reverse-proxy.md` for complete nginx and Caddy configuration examples.
 
 On Android/Termux, `gateway.preview_listener_enabled` defaults to `false` because Termux processes typically cannot bind a second network port without additional permissions — iframe previews are unavailable in that environment. The gateway detects the Termux environment at boot and applies this default automatically.
+
+## Contract regeneration
+
+All wire-format types that cross the gateway/SPA boundary are generated from two spec files:
+
+- `contracts/openapi.yaml` — REST endpoints
+- `contracts/asyncapi.yaml` — WebSocket frames
+- `contracts/components/schemas/` — shared JSON Schema component definitions
+
+Generated artifacts (committed to the repo — never hand-edit):
+
+- `pkg/api/generated/` — Go types (generated by `oapi-codegen`)
+- `src/lib/api/generated/` — TypeScript types + Zod schemas (generated by `openapi-typescript` and `openapi-zod-client`)
+
+### Running codegen locally
+
+```bash
+make gen-contracts
+```
+
+This runs `scripts/gen-contracts.sh`, which lints both specs and regenerates all artifacts. Running it twice in a clean tree produces no git diff (idempotent).
+
+### Adding a new wire type (hard-constraint #8 — 5-step process)
+
+1. Add the schema to `contracts/components/schemas/<TypeName>.yaml`
+2. Reference it from `contracts/openapi.yaml` (REST) or `contracts/asyncapi.yaml` (WS), or both
+3. Run `scripts/gen-contracts.sh` to regenerate all artifacts
+4. Commit the generated diff alongside the spec change (one atomic commit)
+5. Write the handler (Go) or consumer (TypeScript) using the **generated type only** — never hand-write a parallel struct or interface
+
+Steps in any other order violate hard-constraint #8 and will fail the `verify-contracts` CI gate.
+
+### Handling a verify-contracts CI failure
+
+If the `verify-contracts` CI job fails, it means the committed generated files are stale relative to the spec. Fix:
+
+```bash
+make gen-contracts          # regenerate from spec
+git diff                    # review the changes
+git add pkg/api/generated/ src/lib/api/generated/
+git commit -m "chore(contracts): regenerate from spec"
+git push
+```
+
+Never commit a spec change without also committing the regenerated artifacts. Never edit generated files directly — they will be overwritten on the next `make gen-contracts` run.

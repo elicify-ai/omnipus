@@ -381,7 +381,7 @@ describe('UsersSection — delete own account when another admin exists', () => 
   it('Delete is enabled for own row when another admin exists', async () => {
     const user = userEvent.setup()
     vi.mocked(fetchUsers).mockResolvedValue([ADMIN_USER, SECOND_ADMIN])
-    vi.mocked(deleteUser).mockResolvedValue({ deleted: true })
+    vi.mocked(deleteUser).mockResolvedValue({ username: 'admin', deleted: true })
 
     renderSection()
 

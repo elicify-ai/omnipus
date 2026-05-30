@@ -3,6 +3,7 @@ package utils
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,6 +16,22 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/media"
 )
+
+// IsPrivateLiteralHost returns true when the host is a literal IP that maps
+// to an internal range (loopback, private, link-local, unspecified). It does
+// NOT resolve hostnames — channels that download media from arbitrary
+// caller-supplied URLs must perform their own resolution-and-recheck if they
+// need full SSRF coverage. This helper exists to give DownloadFile a cheap
+// "obvious mistake" guard so that a URL like http://127.0.0.1/secret is
+// rejected before NewRequest gets a chance to dial it.
+func IsPrivateLiteralHost(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
 
 var audioExtensions = []string{".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".wma"}
 
@@ -92,6 +109,23 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 	// Generate unique filename with UUID prefix to prevent conflicts
 	safeName := SanitizeFilename(filename)
 	localPath := filepath.Join(mediaDir, uuid.New().String()[:8]+"_"+safeName)
+
+	// Validate URL scheme + host before issuing the request. This is the
+	// generic helper used by every channel; SSRF-sensitive callers should
+	// supply an explicit allow-list via a pre-validated urlStr, but reject
+	// the obvious internal-target cases here regardless. Only http/https
+	// schemes are permitted, and literal IPs that are loopback / private /
+	// link-local are refused. Hostnames that DNS-resolve to internal IPs
+	// are NOT caught here — channels that handle untrusted source URLs
+	// must do their own resolved-IP check.
+	if parsedReqURL, parseURLErr := url.Parse(urlStr); parseURLErr != nil ||
+		(parsedReqURL.Scheme != "http" && parsedReqURL.Scheme != "https") ||
+		IsPrivateLiteralHost(parsedReqURL.Hostname()) {
+		logger.ErrorCF(opts.LoggerPrefix, "Refused download URL — invalid scheme or internal host", map[string]any{
+			"url": urlStr,
+		})
+		return ""
+	}
 
 	// Create HTTP request
 	req, err := http.NewRequest("GET", urlStr, nil)

@@ -340,7 +340,12 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 	}
 }
 
-func TestDrainBusToSteering_RequeuesDifferentScopeMessage(t *testing.T) {
+// TestSessionWorker_DifferentScopesGetIndependentWorkers verifies that two
+// messages for different scopes resolve to different scope keys (which is the
+// pre-condition for the dispatcher to create independent workers).
+// With per-session workers, messages for different scopes are routed into
+// separate workers — there is no requeue path.
+func TestSessionWorker_DifferentScopesGetIndependentWorkers(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -364,79 +369,46 @@ func TestDrainBusToSteering_RequeuesDifferentScopeMessage(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
 
-	activeMsg := bus.InboundMessage{
+	msg1 := bus.InboundMessage{
 		Channel:  "telegram",
 		SenderID: "user1",
 		ChatID:   "chat1",
-		Content:  "active turn",
+		Content:  "session one",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
 		},
 	}
-	activeScope, activeAgentID, ok := al.resolveSteeringTarget(activeMsg)
-	if !ok {
-		t.Fatal("expected active message to resolve to a steering scope")
-	}
-
-	otherMsg := bus.InboundMessage{
+	msg2 := bus.InboundMessage{
 		Channel:  "telegram",
 		SenderID: "user2",
 		ChatID:   "chat2",
-		Content:  "other session",
+		Content:  "session two",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user2",
 		},
 	}
-	otherScope, _, ok := al.resolveSteeringTarget(otherMsg)
-	if !ok {
-		t.Fatal("expected other message to resolve to a steering scope")
-	}
-	if otherScope == activeScope {
-		t.Fatalf("expected different steering scopes, got same scope %q", activeScope)
-	}
 
-	if err := msgBus.PublishInbound(context.Background(), otherMsg); err != nil {
-		t.Fatalf("PublishInbound failed: %v", err)
+	scope1, _, ok1 := al.resolveSteeringTarget(msg1)
+	scope2, _, ok2 := al.resolveSteeringTarget(msg2)
+	if !ok1 || !ok2 {
+		t.Fatal("expected both messages to resolve to steering scopes")
+	}
+	if scope1 == scope2 {
+		t.Fatalf("expected different scopes, both resolved to %q", scope1)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	done := make(chan struct{})
-	go func() {
-		al.drainBusToSteering(ctx, activeScope, activeAgentID)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for drainBusToSteering to stop")
+	// Spawn workers for both scopes — they must be distinct.
+	w1 := newSessionWorker(scope1, al, func() {})
+	w2 := newSessionWorker(scope2, al, func() {})
+	if w1.scope == w2.scope {
+		t.Fatalf("worker scopes must differ: %q == %q", w1.scope, w2.scope)
 	}
 
-	if msgs := al.dequeueSteeringMessagesForScope(activeScope); len(msgs) != 0 {
-		t.Fatalf("expected no steering messages for active scope, got %v", msgs)
-	}
-
-	// After the drain goroutine exits, out-of-scope messages must have been
-	// re-published to the inbound bus (not the outbound bus) so that
-	// runAgentLoop can process them as new turns.
-	requeueCtx, requeueCancel := context.WithTimeout(context.Background(), time.Second)
-	defer requeueCancel()
-	select {
-	case <-requeueCtx.Done():
-		t.Fatal("timeout waiting for requeued message on inbound bus")
-	case requeued, ok := <-msgBus.InboundChan():
-		if !ok {
-			t.Fatal("inbound channel was closed unexpectedly")
-		}
-		if requeued.Channel != otherMsg.Channel || requeued.ChatID != otherMsg.ChatID ||
-			requeued.Content != otherMsg.Content {
-			t.Fatalf("requeued message mismatch: got %+v want %+v", requeued, otherMsg)
-		}
-	}
+	// Cancel workers immediately (we only needed the scope check).
+	w1.cancel()
+	w2.cancel()
 }
 
 // slowTool simulates a tool that takes some time to execute.
@@ -446,11 +418,11 @@ type slowTool struct {
 	execCh   chan struct{} // closed when Execute starts
 }
 
-func (t *slowTool) Name() string                        { return t.name }
-func (t *slowTool) Description() string                 { return "slow tool for testing" }
-func (t *slowTool) Scope() tools.ToolScope              { return tools.ScopeGeneral }
-func (t *slowTool) RequiresAdminAsk() bool              { return false }
-func (t *slowTool) Category() tools.ToolCategory        { return tools.CategoryCore }
+func (t *slowTool) Name() string                 { return t.name }
+func (t *slowTool) Description() string          { return "slow tool for testing" }
+func (t *slowTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (t *slowTool) RequiresAdminAsk() bool       { return false }
+func (t *slowTool) Category() tools.ToolCategory { return tools.CategoryCore }
 func (t *slowTool) Parameters() map[string]any {
 	return map[string]any{
 		"type":       "object",
@@ -629,11 +601,11 @@ type interruptibleTool struct {
 	once    sync.Once
 }
 
-func (t *interruptibleTool) Name() string                      { return t.name }
-func (t *interruptibleTool) Description() string               { return "interruptible tool for testing" }
-func (t *interruptibleTool) Scope() tools.ToolScope            { return tools.ScopeGeneral }
-func (t *interruptibleTool) RequiresAdminAsk() bool            { return false }
-func (t *interruptibleTool) Category() tools.ToolCategory      { return tools.CategoryCore }
+func (t *interruptibleTool) Name() string                 { return t.name }
+func (t *interruptibleTool) Description() string          { return "interruptible tool for testing" }
+func (t *interruptibleTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (t *interruptibleTool) RequiresAdminAsk() bool       { return false }
+func (t *interruptibleTool) Category() tools.ToolCategory { return tools.CategoryCore }
 func (t *interruptibleTool) Parameters() map[string]any {
 	return map[string]any{
 		"type":       "object",
@@ -964,9 +936,11 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 	}
 
 	sessionKey := routing.BuildAgentMainSessionKey(routing.DefaultAgentID)
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
 	provider := &blockingDirectProvider{
-		firstStarted: make(chan struct{}),
-		releaseFirst: make(chan struct{}),
+		firstStarted: firstStarted,
+		releaseFirst: releaseFirst,
 		firstResp:    "stale direct response",
 		finalResp:    "fresh response after steering",
 	}
@@ -992,8 +966,10 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 		}{resp: resp, err: err}
 	}()
 
+	// Use the local channel snapshot to avoid a race with Chat() setting
+	// provider.firstStarted = nil under its mutex.
 	select {
-	case <-provider.firstStarted:
+	case <-firstStarted:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for first LLM call to start")
 	}
@@ -1001,7 +977,7 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 	if err := al.Steer(providers.Message{Role: "user", Content: "follow-up instruction"}); err != nil {
 		t.Fatalf("Steer failed: %v", err)
 	}
-	close(provider.releaseFirst)
+	close(releaseFirst)
 
 	select {
 	case result := <-resultCh:
@@ -1602,4 +1578,273 @@ func init() {
 	// This is a no-op init; we just need the tool call tests to work
 	// with the proper argument serialization.
 	_ = json.Marshal
+}
+
+// --------------------------------------------------------------------------
+// Cancel-cascade tests (TDD Plan T1, T2, T4)
+// Refs: docs/specs/cancel-cross-channel-spec.md FR-6, FR-10, FR-11, FR-12a
+// --------------------------------------------------------------------------
+
+// stubTurnState builds a minimal turnState wired with a stub providerCancel.
+// interruptedCh is closed when requestGracefulInterrupt fires.
+// hardAbortedCh is closed when requestHardAbort fires.
+// providerCancelledCh is closed when providerCancel is called.
+//
+// We store the channels in the turnState's providerCancel func so the cascade
+// code exercises the real mutex-protected path rather than a side channel.
+func stubTurnStateForCancel(t *testing.T, al *AgentLoop, sessionKey, transcriptSID string) (
+	ts *turnState,
+	providerCancelledCh chan struct{},
+) {
+	t.Helper()
+	providerCancelledCh = make(chan struct{}, 1)
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	opts := processOptions{
+		SessionKey:          sessionKey,
+		Channel:             "test",
+		ChatID:              "chat1",
+		TranscriptSessionID: transcriptSID,
+	}
+	scope := al.newTurnEventScope(agent.ID, sessionKey)
+	ts = newTurnState(agent, opts, scope)
+
+	// Wire a stub providerCancel that signals the channel.
+	doneCh := providerCancelledCh
+	ts.mu.Lock()
+	ts.providerCancel = func() {
+		select {
+		case doneCh <- struct{}{}:
+		default:
+		}
+	}
+	ts.mu.Unlock()
+
+	al.activeTurnStates.Store(sessionKey, ts)
+	t.Cleanup(func() { al.activeTurnStates.Delete(sessionKey) })
+	return ts, providerCancelledCh
+}
+
+// TestInterruptSession_CascadeToSubTurns is T1.
+//
+// BDD: Given a parent turn and 2 sub-turns all sharing transcriptSessionID "S"
+// registered in activeTurnStates,
+// When InterruptSession("S", "hint") is called,
+// Then all 3 turnStates receive requestGracefulInterrupt (gracefulInterrupt=true)
+// AND all 3 providerCancel stubs fire within 200ms.
+//
+// Refs: FR-6, FR-10, FR-12a, TDD Plan T1.
+func TestInterruptSession_CascadeToSubTurns(t *testing.T) {
+	al, cleanup := newAL(t)
+	defer cleanup()
+
+	const sid = "test-session-cascade"
+
+	_, pc1 := stubTurnStateForCancel(t, al, "parent", sid)
+	ts2, pc2 := stubTurnStateForCancel(t, al, "sub1", sid)
+	ts3, pc3 := stubTurnStateForCancel(t, al, "sub2", sid)
+	_ = ts2
+	_ = ts3
+
+	if _, err := al.InterruptSession(sid, "wrap up"); err != nil {
+		t.Fatalf("InterruptSession returned unexpected error: %v", err)
+	}
+
+	// All three providerCancel stubs must have fired (FR-12a).
+	timeout := time.After(200 * time.Millisecond)
+	for i, ch := range []chan struct{}{pc1, pc2, pc3} {
+		select {
+		case <-ch:
+		case <-timeout:
+			t.Fatalf("providerCancel[%d] was not called within 200ms (FR-12a)", i)
+		}
+	}
+
+	// All three turnStates must have gracefulInterrupt set (FR-6, FR-10).
+	for i, key := range []string{"parent", "sub1", "sub2"} {
+		raw, ok := al.activeTurnStates.Load(key)
+		if !ok {
+			t.Fatalf("turn %d (%s) not found in activeTurnStates", i, key)
+		}
+		ts := raw.(*turnState)
+		interrupted, _ := ts.gracefulInterruptRequested()
+		if !interrupted {
+			t.Errorf("turn %d (%s): gracefulInterrupt not set after cascade", i, key)
+		}
+	}
+}
+
+// TestInterruptSession_NoActiveTurnIsAttemptOnly is T2.
+//
+// BDD: Given activeTurnStates is empty (no active turns),
+// When InterruptSession is called with a valid sessionID,
+// Then it returns nil (not an error) and does not panic.
+//
+// The cancel handler (websocket.go, next wave) is responsible for emitting
+// turn_cancel_attempt{was_fired:false} in this case. This test only verifies
+// the backend function signature contract.
+//
+// Refs: FR-6, TDD Plan T2.
+func TestInterruptSession_NoActiveTurnIsAttemptOnly(t *testing.T) {
+	al, cleanup := newAL(t)
+	defer cleanup()
+
+	// activeTurnStates is empty by construction.
+	_, err := al.InterruptSession("nonexistent-session", "hint")
+	if err != nil {
+		t.Fatalf("InterruptSession on empty activeTurnStates returned error: %v (want nil)", err)
+	}
+}
+
+// TestInterruptByChannelChat_CascadesToSubTurns verifies that a Tier B cancel
+// originating from a channel+chatID match propagates to sub-turns that share
+// the same transcriptSessionID even though sub-turns have empty channel/chatID.
+//
+// BDD: Given a root turn (depth=0, channel="telegram", chatID="123", transcriptSessionID="S")
+// and a sub-turn (depth=1, channel="", chatID="", transcriptSessionID="S"),
+// When InterruptByChannelChat("telegram", "123", "hint") is called,
+// Then BOTH turns receive requestGracefulInterrupt (gracefulInterrupt=true).
+//
+// Refs: FR-6, FR-10.
+func TestInterruptByChannelChat_CascadesToSubTurns(t *testing.T) {
+	al, cleanup := newAL(t)
+	defer cleanup()
+
+	const sid = "channel-chat-cascade-session"
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	// Helper to build a turnState stub with explicit channel/chatID/depth.
+	makeTurn := func(sessionKey, channel, chatID string, depth int, transcriptSID string) (*turnState, chan struct{}) {
+		t.Helper()
+		provCh := make(chan struct{}, 1)
+		opts := processOptions{
+			SessionKey:          sessionKey,
+			Channel:             channel,
+			ChatID:              chatID,
+			TranscriptSessionID: transcriptSID,
+		}
+		scope := al.newTurnEventScope(agent.ID, sessionKey)
+		ts := newTurnState(agent, opts, scope)
+		ts.depth = depth
+		ts.mu.Lock()
+		ts.providerCancel = func() {
+			select {
+			case provCh <- struct{}{}:
+			default:
+			}
+		}
+		ts.mu.Unlock()
+		al.activeTurnStates.Store(sessionKey, ts)
+		t.Cleanup(func() { al.activeTurnStates.Delete(sessionKey) })
+		return ts, provCh
+	}
+
+	// Root turn: has channel/chatID populated.
+	parentTS, parentPC := makeTurn("parent-key", "telegram", "123", 0, sid)
+	// Sub-turn: inherits transcriptSessionID but has no channel/chatID (depth=1).
+	subTS, subPC := makeTurn("sub-key", "", "", 1, sid)
+
+	if err := al.InterruptByChannelChat("telegram", "123", "test"); err != nil {
+		t.Fatalf("InterruptByChannelChat returned unexpected error: %v", err)
+	}
+
+	// Both providerCancel stubs must fire within 200ms (FR-12a).
+	timeout := time.After(200 * time.Millisecond)
+	for i, ch := range []chan struct{}{parentPC, subPC} {
+		select {
+		case <-ch:
+		case <-timeout:
+			t.Fatalf("providerCancel[%d] was not called within 200ms", i)
+		}
+	}
+
+	// Both turns must have gracefulInterrupt set.
+	for i, ts := range []*turnState{parentTS, subTS} {
+		interrupted, _ := ts.gracefulInterruptRequested()
+		if !interrupted {
+			t.Errorf("turn %d: gracefulInterrupt not set after Tier B cascade", i)
+		}
+	}
+}
+
+// TestInterruptByChannelChat_NoMatchIsNoop verifies that calling
+// InterruptByChannelChat when no root turn matches is a silent no-op.
+func TestInterruptByChannelChat_NoMatchIsNoop(t *testing.T) {
+	al, cleanup := newAL(t)
+	defer cleanup()
+
+	// No turns registered — must return nil, not error.
+	if err := al.InterruptByChannelChat("telegram", "999", "hint"); err != nil {
+		t.Fatalf("expected nil for no-match, got: %v", err)
+	}
+}
+
+// TestInterruptByChannelChat_EmptyArgsError verifies that empty channel or
+// chatID returns a non-nil error.
+func TestInterruptByChannelChat_EmptyArgsError(t *testing.T) {
+	al, cleanup := newAL(t)
+	defer cleanup()
+
+	if err := al.InterruptByChannelChat("", "123", "hint"); err == nil {
+		t.Fatal("expected error for empty channel")
+	}
+	if err := al.InterruptByChannelChat("telegram", "", "hint"); err == nil {
+		t.Fatal("expected error for empty chatID")
+	}
+}
+
+// TestInterruptSessionHard_CascadesAcrossSession is T4.
+//
+// BDD: Given a parent turn and 2 sub-turns all sharing transcriptSessionID "S"
+// registered in activeTurnStates,
+// When InterruptSessionHard("S", "hard abort") is called,
+// Then all 3 turnStates receive requestHardAbort (hardAbort=true)
+// AND all 3 providerCancel stubs fire within 200ms.
+//
+// Refs: FR-11, TDD Plan T4.
+func TestInterruptSessionHard_CascadesAcrossSession(t *testing.T) {
+	al, cleanup := newAL(t)
+	defer cleanup()
+
+	const sid = "test-session-hard"
+
+	_, pc1 := stubTurnStateForCancel(t, al, "hard-parent", sid)
+	_, pc2 := stubTurnStateForCancel(t, al, "hard-sub1", sid)
+	_, pc3 := stubTurnStateForCancel(t, al, "hard-sub2", sid)
+
+	if _, err := al.InterruptSessionHard(sid, "hard abort"); err != nil {
+		t.Fatalf("InterruptSessionHard returned unexpected error: %v", err)
+	}
+
+	// All three providerCancel stubs must have fired (FR-11 + requestHardAbort path).
+	timeout := time.After(200 * time.Millisecond)
+	for i, ch := range []chan struct{}{pc1, pc2, pc3} {
+		select {
+		case <-ch:
+		case <-timeout:
+			t.Fatalf("providerCancel[%d] was not called within 200ms for hard cascade", i)
+		}
+	}
+
+	// All three turnStates must have hardAbort set.
+	for i, key := range []string{"hard-parent", "hard-sub1", "hard-sub2"} {
+		raw, ok := al.activeTurnStates.Load(key)
+		if !ok {
+			t.Fatalf("turn %d (%s) not found in activeTurnStates", i, key)
+		}
+		ts := raw.(*turnState)
+		ts.mu.RLock()
+		ha := ts.hardAbort
+		ts.mu.RUnlock()
+		if !ha {
+			t.Errorf("turn %d (%s): hardAbort not set after InterruptSessionHard", i, key)
+		}
+	}
 }

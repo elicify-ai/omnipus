@@ -45,7 +45,10 @@ func TestRegistry_AllSysagentToolsRequireAdminAsk(t *testing.T) {
 				t.Errorf("tool %q: RequiresAdminAsk() must return true (FR-061 admin-ask fence)", name)
 			}
 		} else {
-			t.Errorf("tool %q: does not implement RequiresAdminAsk() — must embed BaseTool or implement it directly", name)
+			t.Errorf(
+				"tool %q: does not implement RequiresAdminAsk() — must embed BaseTool or implement it directly",
+				name,
+			)
 		}
 
 		// Category contract (FR-059): system tools use CategorySystem.
@@ -59,7 +62,11 @@ func TestRegistry_AllSysagentToolsRequireAdminAsk(t *testing.T) {
 
 		// Scope contract (FR-045): system tools use ScopeCore (ScopeSystem retired).
 		if tool.Scope() != tools.ScopeCore {
-			t.Errorf("tool %q: Scope() must return ScopeCore (ScopeSystem is retired per FR-045), got %q", name, tool.Scope())
+			t.Errorf(
+				"tool %q: Scope() must return ScopeCore (ScopeSystem is retired per FR-045), got %q",
+				name,
+				tool.Scope(),
+			)
 		}
 
 		// Naming convention: all system tools must use the "system." prefix.
@@ -148,7 +155,11 @@ func TestRegistry_AllSysagentToolsRequireAdminAsk_CentralRegistry(t *testing.T) 
 		// Category must be CategorySystem (FR-059).
 		if cat, ok := tool.(interface{ Category() tools.ToolCategory }); ok {
 			if cat.Category() != tools.CategorySystem {
-				t.Errorf("central registry tool %q: Category() must be CategorySystem, got %q (FR-059)", name, cat.Category())
+				t.Errorf(
+					"central registry tool %q: Category() must be CategorySystem, got %q (FR-059)",
+					name,
+					cat.Category(),
+				)
 			}
 		} else {
 			t.Errorf("central registry tool %q: does not implement Category()", name)

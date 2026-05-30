@@ -57,27 +57,27 @@ beforeEach(() => {
 
 describe('PromptGuardSection — radio rendering', () => {
   it('renders three radios', async () => {
-    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium' })
+    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium', requires_restart: false })
     renderSection()
     await waitFor(() => expect(screen.getAllByRole('radio')).toHaveLength(3))
   })
 
   it('renders low level with its subtitle', async () => {
-    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium' })
+    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium', requires_restart: false })
     renderSection()
     await waitFor(() => screen.getByText(/minimal sanitization/i))
     expect(screen.getByText(/minimal sanitization/i)).toBeInTheDocument()
   })
 
   it('renders medium level with its subtitle', async () => {
-    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium' })
+    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium', requires_restart: false })
     renderSection()
     await waitFor(() => screen.getByText(/balanced sanitization/i))
     expect(screen.getByText(/balanced sanitization/i)).toBeInTheDocument()
   })
 
   it('renders high level with its subtitle', async () => {
-    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium' })
+    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium', requires_restart: false })
     renderSection()
     await waitFor(() => screen.getByText(/aggressive sanitization/i))
     expect(screen.getByText(/aggressive sanitization/i)).toBeInTheDocument()
@@ -90,7 +90,7 @@ describe('PromptGuardSection — radio rendering', () => {
 
 describe('PromptGuardSection — autosave', () => {
   it('clicking high radio fires updatePromptGuardLevel immediately (no Save button)', async () => {
-    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium' })
+    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium', requires_restart: false })
     vi.mocked(updatePromptGuardLevel).mockResolvedValue({
       saved: true,
       requires_restart: false,
@@ -109,7 +109,7 @@ describe('PromptGuardSection — autosave', () => {
   })
 
   it('no Save button is rendered', async () => {
-    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium' })
+    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium', requires_restart: false })
     renderSection()
 
     await waitFor(() => screen.getAllByRole('radio'))
@@ -117,7 +117,7 @@ describe('PromptGuardSection — autosave', () => {
   })
 
   it('shows SaveStatus "Saving…" while mutation is in flight', async () => {
-    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium' })
+    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium', requires_restart: false })
     vi.mocked(updatePromptGuardLevel).mockImplementation(
       () => new Promise((resolve) => setTimeout(() => resolve({ saved: true, requires_restart: false, applied_level: 'high' }), 50))
     )
@@ -133,7 +133,7 @@ describe('PromptGuardSection — autosave', () => {
   })
 
   it('shows SaveStatus "Saved" after successful mutation', async () => {
-    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'low' })
+    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'low', requires_restart: false })
     vi.mocked(updatePromptGuardLevel).mockResolvedValue({
       saved: true,
       requires_restart: false,
@@ -151,7 +151,7 @@ describe('PromptGuardSection — autosave', () => {
   })
 
   it('no restart badge when response has requires_restart: false', async () => {
-    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium' })
+    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium', requires_restart: false })
     vi.mocked(updatePromptGuardLevel).mockResolvedValue({
       saved: true,
       requires_restart: false,
@@ -170,7 +170,7 @@ describe('PromptGuardSection — autosave', () => {
   })
 
   it('shows error toast on save failure', async () => {
-    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'low' })
+    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'low', requires_restart: false })
     vi.mocked(updatePromptGuardLevel).mockRejectedValue(new Error('network error'))
 
     renderSection()
@@ -196,7 +196,7 @@ describe('PromptGuardSection — non-admin', () => {
       ((selector: (s: { role?: string; user?: { username: string } }) => unknown) =>
         selector({ role: 'user', user: { username: 'testuser' } })) as never,
     )
-    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium' })
+    vi.mocked(fetchPromptGuardLevel).mockResolvedValue({ level: 'medium', requires_restart: false })
 
     renderSection()
 

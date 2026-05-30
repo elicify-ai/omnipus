@@ -288,9 +288,7 @@ function SkillsScreen() {
               {channels.map((channel) => {
                 const connectionStatus = channel.enabled
                   ? 'enabled'
-                  : channel.configured
-                    ? 'configured'
-                    : 'unconfigured'
+                  : 'unconfigured'
                 return (
                   <div
                     key={channel.id}
@@ -301,20 +299,10 @@ function SkillsScreen() {
                         <span className="font-medium text-sm text-[var(--color-secondary)]">{channel.name}</span>
                         <Badge variant="outline" className="text-[10px] font-mono">{channel.transport}</Badge>
                         <Badge
-                          variant={
-                            connectionStatus === 'enabled'
-                              ? 'success'
-                              : connectionStatus === 'configured'
-                                ? 'warning'
-                                : 'muted'
-                          }
+                          variant={connectionStatus === 'enabled' ? 'success' : 'muted'}
                           className="text-[10px]"
                         >
-                          {connectionStatus === 'enabled'
-                            ? 'Enabled'
-                            : connectionStatus === 'configured'
-                              ? 'Configured'
-                              : 'Not configured'}
+                          {connectionStatus === 'enabled' ? 'Enabled' : 'Not configured'}
                         </Badge>
                       </div>
                     </div>
@@ -453,7 +441,11 @@ function SkillsScreen() {
         <ChannelConfigPanel
           channelId={configuringChannel.id}
           channelName={configuringChannel.name}
-          open={configuringChannel !== null}
+          // `open` is always true here — the {configuringChannel && ...}
+          // guard above means we only render when configuringChannel is
+          // truthy. CodeQL js/useless-comparison flagged the redundant
+          // `!== null` check.
+          open={true}
           onOpenChange={(open) => {
             if (!open) setConfiguringChannel(null)
           }}

@@ -64,6 +64,15 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       locked: true,
       model: 'claude-opus-4-6',
       status: 'active' as const,
+      soul: '',
+      heartbeat: '',
+      instructions: '',
+      timeout_seconds: 60,
+      max_tool_iterations: 20,
+      steering_mode: 'loop',
+      tool_feedback: true,
+      heartbeat_enabled: false,
+      heartbeat_interval: 300,
     } satisfies Agent
 
     expect(mock.id).toBe('mia')
@@ -78,8 +87,18 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
       name: 'My Agent',
       description: '',
       type: 'custom' as const,
+      locked: false,
       model: 'claude-sonnet-4-6',
       status: 'idle' as const,
+      soul: '',
+      heartbeat: '',
+      instructions: '',
+      timeout_seconds: 60,
+      max_tool_iterations: 20,
+      steering_mode: 'loop',
+      tool_feedback: true,
+      heartbeat_enabled: false,
+      heartbeat_interval: 300,
     } satisfies Agent
 
     expect(mock.type).toBe('custom')
@@ -130,7 +149,9 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
   it('Provider disconnected mock satisfies interface', () => {
     const mock = {
       id: 'default',
+      name: 'Default',
       status: 'disconnected' as const,
+      models: [],
     } satisfies Provider
 
     expect(mock.status).toBe('disconnected')
@@ -158,8 +179,10 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
   it('Tool mock shape satisfies interface', () => {
     const mock = {
       name: 'system.read_file',
+      scope: 'system' as const,
       category: 'system',
       description: 'Read a file',
+      source: 'builtin' as const,
     } satisfies Tool
 
     expect(mock.category).toBe('system')
@@ -169,10 +192,11 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
 
   it('Channel mock shape satisfies interface', () => {
     const mock = {
-      id: 'webchat',
+      id: 'webchat' as const,
       name: 'Web Chat',
-      transport: 'websocket',
+      transport: 'websocket' as const,
       enabled: true,
+      description: 'Built-in browser chat',
     } satisfies Channel
 
     expect(mock.enabled).toBe(true)

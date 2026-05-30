@@ -30,14 +30,12 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/channels"
-	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/dingtalk"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/discord"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/feishu"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/googlechat"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/irc"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/line"
-	_ "github.com/dapicom-ai/omnipus/pkg/channels/maixcam"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/onebot"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/qq"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/slack"
@@ -58,11 +56,12 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/media"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/policy"
+	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 	"github.com/dapicom-ai/omnipus/pkg/state"
-	"github.com/dapicom-ai/omnipus/pkg/tools"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
+	"github.com/dapicom-ai/omnipus/pkg/tools"
 	"github.com/dapicom-ai/omnipus/pkg/voice"
 )
 
@@ -90,6 +89,9 @@ type services struct {
 	manualReloadChan chan struct{}
 	reloading        atomic.Bool
 	credStore        *credentials.Store
+	// toolStore owns the on-disk tool-result offload directory. Exposed here
+	// so RunContext can wire its retentionSweep into the nightly sweep loop.
+	toolStore *toolResultStore
 	// sandboxResult is the Apply/Install outcome from boot. Populated by
 	// applySandbox before services start (and before any HTTP listener
 	// binds). Read-only after initialization — sandbox config has no
@@ -390,6 +392,24 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		return err
 	}
 
+	// v0.2 #155: derive the audit-chain HMAC key from the master key and
+	// install it process-wide BEFORE constructing the agent loop. The
+	// agent loop's audit.NewLogger picks this up via the package-level
+	// fallback when LoggerConfig.HMACKey is nil. The master key never
+	// crosses the credentials package boundary — DeriveSubkey runs HKDF
+	// internally and returns 32 bytes of independent key material.
+	//
+	// Failure here is logged and not fatal: audit.NewLogger will fall
+	// back to its dev-only deterministic key with a sticky slog.Warn.
+	// Operators running with audit_log=true should treat this warning as
+	// a configuration bug.
+	if chainKey, derrErr := credStore.DeriveSubkey(audit.AuditChainKeyInfo); derrErr == nil {
+		audit.SetProcessChainKey(chainKey)
+	} else {
+		slog.Warn("audit: could not derive HMAC chain key from master key — audit chain will use dev-only fallback",
+			"error", derrErr)
+	}
+
 	logger.SetLevelFromString(cfg.Gateway.LogLevel)
 
 	if debug {
@@ -411,24 +431,17 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		slog.Warn("gateway started with --allow-god-mode — agents may have sandbox disabled")
 	}
 
-	// Check for a test provider override BEFORE calling createStartupProvider.
-	// If one is installed, bypass the real provider creation entirely — the
-	// override factory supplies the provider directly. This hook is always nil
-	// in production. See pkg/gateway/testhook.go / testhook_stub.go.
-	var provider providers.LLMProvider
-	var modelID string
-	if overridePtr := testProviderOverride.Load(); overridePtr != nil {
-		provider = (*overridePtr)()
-	} else {
-		provider, modelID, err = createStartupProvider(cfg, allowEmptyStartup)
-		if err != nil {
-			return fmt.Errorf("error creating provider: %w", err)
-		}
+	// Build the real LLM provider. The test_harness override hook + scripted-
+	// scenario fallback was removed 2026-05-10; tests now run against real
+	// OpenRouter via the configured provider entry.
+	provider, modelID, err := createStartupProvider(cfg, allowEmptyStartup)
+	if err != nil {
+		return fmt.Errorf("error creating provider: %w", err)
 	}
 
 	// Only override ModelName if it was empty (first boot / migration).
 	// Don't overwrite an alias (e.g. "openrouter-auto") with the raw model slug
-	// (e.g. "z-ai/glm-5-turbo") — the alias is what GetModelConfig looks up by.
+	// (e.g. "z-ai/glm-5v-turbo") — the alias is what GetModelConfig looks up by.
 	if modelID != "" && cfg.Agents.Defaults.ModelName == "" {
 		cfg.Agents.Defaults.ModelName = modelID
 	}
@@ -488,9 +501,9 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 				return
 			}
 			// B1.2(a): logger.Log is nil-safe; no further guard needed.
-			if err := logger.Log(entry); err != nil {
+			if logErr := logger.Log(entry); logErr != nil {
 				slog.Error("sandbox: restrict-failure audit write failed",
-					"event", entry.Event, "error", err)
+					"event", entry.Event, "error", logErr)
 			}
 		})
 	}
@@ -559,11 +572,6 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// deps use the true runtime enforcement level (not the config file value).
 	agentLoop.SetAppliedSandboxMode(sandboxResult.Mode)
 
-	// Arm the permissive / production-off nag banner BEFORE the listener
-	// binds so operators see the warning even during a fast crash-loop.
-	stopNag := StartNagBanner(sandboxResult.NagReason, nil)
-
-
 	fmt.Println("\n📦 Agent Status:")
 	startupInfo := agentLoop.GetStartupInfo()
 	toolsInfo, _ := startupInfo["tools"].(map[string]any)
@@ -584,20 +592,44 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			"skills_available": skillsInfo["available"],
 		})
 
+	// Pre-compile all embedded inbound validation schemas before the HTTP listener
+	// starts. Any schema-compile failure aborts boot immediately with a clear error
+	// rather than silently degrading to no-validation at first request.
+	if compileErr := PreCompileAllInboundSchemas(); compileErr != nil {
+		return fmt.Errorf("gateway: inbound schema pre-compile failed: %w", compileErr)
+	}
+
+	// Arm the permissive / production-off nag banner AFTER pre-compile so that a
+	// pre-compile failure does not leak the nag goroutine (StartNagBanner allocates
+	// a goroutine that must be stopped via stopNag()).
+	stopNag := StartNagBanner(sandboxResult.NagReason, nil)
+	slog.Info("gateway: inbound schemas pre-compiled successfully")
+
 	// M16 (FR-001/FR-002): pre-instantiate central registries.
 	// BuiltinRegistry is populated here with nil deps (for name/description metadata only).
 	// After sysAgentDeps is wired (below), the registry is re-populated with live deps.
 	// MCPRegistry starts empty; MCP servers populate it at connection time.
 	centralBuiltinReg := tools.NewBuiltinRegistry()
 	for _, t := range systools.AllTools(nil, nil) {
-		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
+		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
 			slog.Warn("gateway: central builtin registry pre-population skipped duplicate",
-				"tool", t.Name(), "error", err)
+				"tool", t.Name(), "error", regErr)
 		}
 	}
 	centralMCPReg := tools.NewMCPRegistry()
 
-	runningServices, err := setupAndStartServices(cfg, bundle, agentLoop, msgBus, homePath, credStore, sandboxResult, centralBuiltinReg, centralMCPReg, allowGodMode)
+	runningServices, err := setupAndStartServices(
+		cfg,
+		bundle,
+		agentLoop,
+		msgBus,
+		homePath,
+		credStore,
+		sandboxResult,
+		centralBuiltinReg,
+		centralMCPReg,
+		allowGodMode,
+	)
 	if err != nil {
 		stopNag() // don't leak the nag goroutine if service setup fails.
 		return err
@@ -636,9 +668,9 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// WireSysagentDeps immediately registers all 35 system.* tools on every agent
 	// in the current registry and stashes deps for re-application on hot-reload.
 	sysAgentDeps := &systools.Deps{
-		Home:       homePath,
-		ConfigPath: configPath,
-		GetCfg:     agentLoop.GetConfig,
+		Home:         homePath,
+		ConfigPath:   configPath,
+		GetCfg:       agentLoop.GetConfig,
 		MutateConfig: agentLoop.MutateConfig,
 		SaveConfigLocked: func(c *config.Config) error {
 			return config.SaveConfig(configPath, c)
@@ -702,6 +734,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	if sharedStore := agentLoop.GetSessionStore(); sharedStore != nil {
 		startRetentionSweepLoop(ctx, sharedStore, agentLoop.GetConfig, 24*time.Hour)
 	}
+	// Tool-result file sweep runs alongside the transcript sweep on the same
+	// retention window. setupAndStartServices already constructed the store.
+	if runningServices.toolStore != nil {
+		retentionToolResultSweepFn = runningServices.toolStore.retentionSweep
+	}
 
 	// FR-031: Launch the nightly retro sweep goroutine alongside the session sweep.
 	// Iterates all agents and calls SweepRetros per MemoryStore.
@@ -729,6 +766,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// can flag "audit_logger: unavailable" without exposing the pointer.
 	runningServices.HealthServer.SetAuditLoggerAvailableFunc(func() bool {
 		return agentLoop.AuditLogger() != nil
+	})
+	// audit_degraded should only fire when the operator asked for audit AND
+	// it isn't working. cfg.Sandbox.AuditLog=false is a deliberate off-state.
+	runningServices.HealthServer.SetAuditLoggerConfiguredFunc(func() bool {
+		return agentLoop.GetConfig().Sandbox.AuditLog
 	})
 
 	var configReloadChan <-chan *config.Config
@@ -917,7 +959,7 @@ func setupAndStartServices(
 	credStore *credentials.Store,
 	sandboxResult *SandboxApplyResult,
 	builtinReg *tools.BuiltinRegistry, // M16: central builtin registry (FR-001)
-	mcpReg *tools.MCPRegistry,          // M16: central MCP registry (FR-001)
+	mcpReg *tools.MCPRegistry, // M16: central MCP registry (FR-001)
 	allowGodMode bool,
 ) (*services, error) {
 	runningServices := &services{credStore: credStore, bundle: bundle, sandboxResult: sandboxResult}
@@ -964,8 +1006,8 @@ func setupAndStartServices(
 		// Reload refs persisted by a previous gateway instance so
 		// /api/v1/media/<ref> URLs in old session transcripts still resolve.
 		// Best-effort — a load failure should not block boot.
-		if err := fms.LoadRegistry(); err != nil {
-			slog.Warn("media: failed to load persisted registry", "error", err)
+		if loadErr := fms.LoadRegistry(); loadErr != nil {
+			slog.Warn("media: failed to load persisted registry", "error", loadErr)
 		}
 		fms.Start()
 	}
@@ -985,6 +1027,10 @@ func setupAndStartServices(
 
 	agentLoop.SetChannelManager(runningServices.ChannelManager)
 	agentLoop.SetMediaStore(runningServices.MediaStore)
+	// Wire the agent loop as the CancelInterceptor so Tier B channels can fire
+	// /cancel via text-parsing (FR-2). Must happen after SetChannelManager so
+	// the Manager already has its channels map populated.
+	runningServices.ChannelManager.SetCancelInterceptor(agentLoop)
 
 	if transcriber := voice.DetectTranscriber(cfg, runningServices.bundle); transcriber != nil {
 		agentLoop.SetTranscriber(transcriber)
@@ -1074,9 +1120,11 @@ func setupAndStartServices(
 			}
 		}
 		if wsEnabled {
-			fmt.Fprintf(os.Stderr,
+			fmt.Fprintf(
+				os.Stderr,
 				"WARN: kernel sandbox unavailable on %s; workspace.shell runs with application-level path checks only — do not enable on multi-tenant systems\n",
-				runtime.GOOS)
+				runtime.GOOS,
+			)
 		}
 	}
 
@@ -1131,9 +1179,9 @@ func setupAndStartServices(
 			return
 		}
 		// B1.2(a): logger.Log is nil-safe by contract; no extra guard.
-		if err := logger.Log(entry); err != nil {
+		if logErr := logger.Log(entry); logErr != nil {
 			slog.Error("egress_proxy: audit write failed",
-				"event", entry.Event, "error", err)
+				"event", entry.Event, "error", logErr)
 		}
 	}
 
@@ -1161,6 +1209,9 @@ func setupAndStartServices(
 
 	// WebSocket chat endpoint — primary transport for bi-directional chat streaming.
 	wsHandler := newWSHandler(msgBus, agentLoop, allowedOrigin)
+	toolStore := newToolResultStore(homePath)
+	wsHandler.toolStore = toolStore
+	runningServices.toolStore = toolStore
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/chat/ws", wsHandler)
 	// Register WebSocket handler as stream fallback so streaming tokens route back for webchat.
 	runningServices.ChannelManager.SetStreamFallback(wsHandler)
@@ -1178,7 +1229,10 @@ func setupAndStartServices(
 	approvalMaxPending := cfg.Gateway.ToolApprovalMaxPending
 	effectiveCap, capOK := policy.ValidateSaturationCap(context.Background(), nil, approvalMaxPending)
 	if !capOK {
-		return nil, fmt.Errorf("gateway: invalid tool_approval_max_pending=%d — boot aborted (FR-016)", approvalMaxPending)
+		return nil, fmt.Errorf(
+			"gateway: invalid tool_approval_max_pending=%d — boot aborted (FR-016)",
+			approvalMaxPending,
+		)
 	}
 	approvalTimeout := cfg.Gateway.ToolApprovalTimeout
 	var approvalTimeoutDur time.Duration
@@ -1226,6 +1280,8 @@ func setupAndStartServices(
 		allowGodMode:    allowGodMode,                    // god-mode latch (2)
 	}
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/sessions", api.withAuth(api.HandleSessions))
+	// /api/v1/sessions/ handles: sessions CRUD AND the tool-results sub-resource
+	// GET /api/v1/sessions/{session_id}/tool-results/{ref} (dispatched inside HandleSessions).
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/sessions/", api.withAuth(api.HandleSessions))
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/agents", api.withAuth(api.HandleAgents))
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/agents/", api.withAuth(api.HandleAgents))
@@ -1258,7 +1314,10 @@ func setupAndStartServices(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]string{"error": "endpoint not found"})
+			if encodeErr := json.NewEncoder(w).
+				Encode(map[string]string{"error": "endpoint not found"}); encodeErr != nil {
+				slog.Debug("404 handler: encode failed", "error", encodeErr)
+			}
 		}),
 	)
 
@@ -1350,8 +1409,8 @@ func setupAndStartServices(
 	// Write port file so external callers (e.g. eval-runner) can discover the bound port.
 	portFile := filepath.Join(cfg.WorkspacePath(), "gateway.port")
 	portData := strconv.Itoa(cfg.Gateway.Port)
-	if err := os.WriteFile(portFile, []byte(portData+"\n"), 0600); err != nil {
-		return nil, fmt.Errorf("write gateway.port: %w", err)
+	if writeErr := os.WriteFile(portFile, []byte(portData+"\n"), 0o600); writeErr != nil {
+		return nil, fmt.Errorf("write gateway.port: %w", writeErr)
 	}
 
 	fmt.Printf(
@@ -1430,6 +1489,9 @@ func handleConfigReload(
 	logger.Info("  Stopping all services...")
 	stopAndCleanupServices(runningServices, serviceShutdownTimeout, true)
 
+	// Build the real LLM provider on reload. The test_harness override hook
+	// was removed 2026-05-10; reload always recreates the real provider from
+	// the new config's `providers` entry.
 	newProvider, newModelID, err := createStartupProvider(newCfg, allowEmptyStartup)
 	if err != nil {
 		logger.Errorf("  ⚠ Error creating new provider: %v", err)
@@ -1520,14 +1582,15 @@ func restartServices(
 		// Reload refs persisted by a previous gateway instance so
 		// /api/v1/media/<ref> URLs in old session transcripts still resolve.
 		// Best-effort — a load failure should not block boot.
-		if err := fms.LoadRegistry(); err != nil {
-			slog.Warn("media: failed to load persisted registry", "error", err)
+		if loadErr := fms.LoadRegistry(); loadErr != nil {
+			slog.Warn("media: failed to load persisted registry", "error", loadErr)
 		}
 		fms.Start()
 	}
 	al.SetMediaStore(runningServices.MediaStore)
 
 	al.SetChannelManager(runningServices.ChannelManager)
+	runningServices.ChannelManager.SetCancelInterceptor(al)
 
 	if err = runningServices.ChannelManager.Reload(context.Background(), cfg, runningServices.bundle); err != nil {
 		return fmt.Errorf("error reload channels: %w", err)
@@ -1723,14 +1786,6 @@ func createHeartbeatHandler(agentLoop *agent.AgentLoop) func(prompt, channel, ch
 	}
 }
 
-// remoteChannelNames is the set of channel identifiers that route messages from
-// external networks. Used by emitGHSARemovalWarn to detect agents that face
-// remote traffic.
-var remoteChannelNames = []string{
-	"telegram", "discord", "slack", "matrix", "irc", "teams", "google-chat",
-	"whatsapp", "signal",
-}
-
 // emitGHSARemovalWarn logs a WARN when any agent that has a remote channel
 // mapping does NOT explicitly deny the exec tool. The GHSA-pv8c-p6jf-3fpp
 // per-channel exec block was removed; exec access is now governed entirely by
@@ -1753,9 +1808,6 @@ func emitGHSARemovalWarn(cfg *config.Config) {
 	}
 	if cfg.Channels.IRC.Enabled {
 		enabledRemoteChannels["irc"] = true
-	}
-	if cfg.Channels.Teams.Enabled {
-		enabledRemoteChannels["teams"] = true
 	}
 	if cfg.Channels.GoogleChat.Enabled {
 		enabledRemoteChannels["google-chat"] = true

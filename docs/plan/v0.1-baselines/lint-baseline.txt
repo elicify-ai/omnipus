@@ -1,0 +1,500 @@
+pkg/sandbox/backend_linux_subprocess_test.go:155: 155-196 lines are duplicate of `pkg/sandbox/backend_linux_subprocess_test.go:202-243` (dupl)
+func TestLandlock_BindBlockedSubprocess(t *testing.T) {
+	if os.Getenv("OMNIPUS_LANDLOCK_BIND_BLOCKED_CHILD") == "1" {
+		runLandlockBindBlockedChild()
+		return
+	}
+	if os.Getuid() == 0 {
+		t.Skip("Landlock tests must run as non-root (root bypasses Landlock restrictions)")
+	}
+	abi := sandbox.ProbeLandlockABI()
+	if abi < 4 {
+		t.Skipf("Landlock ABI v4 required for NET_BIND_TCP (have v%d)", abi)
+	}
+
+	workspace := t.TempDir()
+	//nolint:gosec // intentional test-binary self-exec
+	cmd := exec.Command(os.Args[0],
+		"-test.run=TestLandlock_BindBlockedSubprocess",
+		"-test.count=1",
+		"-test.v",
+	)
+	cmd.Env = append(os.Environ(),
+		"OMNIPUS_LANDLOCK_BIND_BLOCKED_CHILD=1",
+		"OMNIPUS_LANDLOCK_SANDBOX_DIR="+workspace,
+	)
+	out, err := cmd.CombinedOutput()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			t.Fatalf("child failed to run: %v\n%s", err, out)
+		}
+	}
+	switch exitCode {
+	case 42:
+		t.Logf("Landlock bind enforcement confirmed (child exited 42)")
+	case 77:
+		t.Skipf("Landlock unavailable in child (exit 77):\n%s", out)
+	default:
+		t.Fatalf("child exit %d (expected 42):\n%s", exitCode, out)
+	}
+}
+pkg/sandbox/backend_linux_subprocess_test.go:202: 202-243 lines are duplicate of `pkg/sandbox/backend_linux_subprocess_test.go:155-196` (dupl)
+func TestLandlock_BindAllowedSubprocess(t *testing.T) {
+	if os.Getenv("OMNIPUS_LANDLOCK_BIND_ALLOWED_CHILD") == "1" {
+		runLandlockBindAllowedChild()
+		return
+	}
+	if os.Getuid() == 0 {
+		t.Skip("Landlock tests must run as non-root (root bypasses Landlock restrictions)")
+	}
+	abi := sandbox.ProbeLandlockABI()
+	if abi < 4 {
+		t.Skipf("Landlock ABI v4 required for NET_BIND_TCP (have v%d)", abi)
+	}
+
+	workspace := t.TempDir()
+	//nolint:gosec // intentional test-binary self-exec
+	cmd := exec.Command(os.Args[0],
+		"-test.run=TestLandlock_BindAllowedSubprocess",
+		"-test.count=1",
+		"-test.v",
+	)
+	cmd.Env = append(os.Environ(),
+		"OMNIPUS_LANDLOCK_BIND_ALLOWED_CHILD=1",
+		"OMNIPUS_LANDLOCK_SANDBOX_DIR="+workspace,
+	)
+	out, err := cmd.CombinedOutput()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			t.Fatalf("child failed to run: %v\n%s", err, out)
+		}
+	}
+	switch exitCode {
+	case 0:
+		t.Logf("Landlock bind allow-rule confirmed (child exited 0)")
+	case 77:
+		t.Skipf("Landlock unavailable in child (exit 77):\n%s", out)
+	default:
+		t.Fatalf("child exit %d (expected 0):\n%s", exitCode, out)
+	}
+}
+pkg/tools/registry.go:60: 60-84 lines are duplicate of `pkg/tools/registry.go:87-111` (dupl)
+func (r *ToolRegistry) Register(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	name := tool.Name()
+	if _, exists := r.tools[name]; exists {
+		logger.WarnCF("tools", "Tool registration overwrites existing tool",
+			map[string]any{"name": name})
+	}
+	r.tools[name] = &ToolEntry{
+		Tool:   tool,
+		IsCore: true,
+		TTL:    0, // Core tools do not use TTL
+	}
+	if aware, ok := tool.(mediaStoreAware); ok && r.mediaStore != nil {
+		aware.SetMediaStore(r.mediaStore)
+	}
+	if aware, ok := tool.(auditLoggerAware); ok && r.auditLogger != nil {
+		aware.SetAuditLogger(r.auditLogger)
+	}
+	if aware, ok := tool.(memoryRateLimiterAware); ok && r.memoryRateLimiter != nil {
+		aware.SetMemoryRateLimiter(r.memoryRateLimiter)
+	}
+	r.version.Add(1)
+	logger.DebugCF("tools", "Registered core tool", map[string]any{"name": name})
+}
+pkg/tools/registry.go:87: 87-111 lines are duplicate of `pkg/tools/registry.go:60-84` (dupl)
+func (r *ToolRegistry) RegisterHidden(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	name := tool.Name()
+	if _, exists := r.tools[name]; exists {
+		logger.WarnCF("tools", "Hidden tool registration overwrites existing tool",
+			map[string]any{"name": name})
+	}
+	r.tools[name] = &ToolEntry{
+		Tool:   tool,
+		IsCore: false,
+		TTL:    0,
+	}
+	if aware, ok := tool.(mediaStoreAware); ok && r.mediaStore != nil {
+		aware.SetMediaStore(r.mediaStore)
+	}
+	if aware, ok := tool.(auditLoggerAware); ok && r.auditLogger != nil {
+		aware.SetAuditLogger(r.auditLogger)
+	}
+	if aware, ok := tool.(memoryRateLimiterAware); ok && r.memoryRateLimiter != nil {
+		aware.SetMemoryRateLimiter(r.memoryRateLimiter)
+	}
+	r.version.Add(1)
+	logger.DebugCF("tools", "Registered hidden tool", map[string]any{"name": name})
+}
+pkg/agent/envcontext/default_provider.go:50:2: the sentinel error name `cachedKernelErr` should conform to the `errXxx` format (errname)
+	cachedKernelErr error
+	^
+pkg/audit/logger_nil_test.go:82:6: the error type name `nilReceiverPanic` should conform to the `xxxError` format (errname)
+type nilReceiverPanic struct{ val any }
+     ^
+pkg/sandbox/dev_servers.go:89:6: the error type name `ErrGatewayCap` should conform to the `XxxError` format (errname)
+type ErrGatewayCap struct {
+     ^
+pkg/agent/context_env_test.go:1:1: package has more than one godoc ("agent") (godoclint)
+// context_env_test.go — Fix A (env-awareness) integration tests for ContextBuilder.
+^
+pkg/agent/memory_behavioral_test.go:1:1: package has more than one godoc ("agent") (godoclint)
+// memory_behavioral_test.go — Fix C (memory) behavioral tests.
+^
+pkg/audit/argshash.go:1:1: package has more than one godoc ("audit") (godoclint)
+// Package audit — args_hash and args_preview helpers (FR-080).
+^
+pkg/audit/argshash_test.go:1:1: package has more than one godoc ("audit") (godoclint)
+// Tests for args_hash and args_preview (FR-080).
+^
+pkg/audit/audit.go:1:1: package has more than one godoc ("audit") (godoclint)
+// Package audit implements structured security audit logging for Omnipus.
+^
+pkg/audit/boot_abort.go:1:1: package has more than one godoc ("audit") (godoclint)
+// Package audit — boot-abort stderr fallback (FR-063).
+^
+pkg/audit/events.go:1:1: package has more than one godoc ("audit") (godoclint)
+// Package audit — Tool Registry Redesign (Wave A2) audit event types.
+^
+pkg/audit/events_test.go:1:1: package has more than one godoc ("audit") (godoclint)
+// Tests for the Tool Registry redesign (Wave A2) audit event emitters.
+^
+pkg/audit/skipped_counter_test.go:1:1: package has more than one godoc ("audit") (godoclint)
+// Package audit — tests for the IncSkipped / SnapshotSkipped counter pair.
+^
+pkg/config/agent_ownership.go:1:1: package has more than one godoc ("config") (godoclint)
+// Package config provides the Omnipus configuration data model.
+^
+pkg/config/agent_ownership_migration_test.go:3:1: package has more than one godoc ("config") (godoclint)
+// Package config — agent ownership migration tests ( / / ).
+^
+pkg/config/config_b1_test.go:5:1: package has more than one godoc ("config") (godoclint)
+// Package config — B1 unit tests for validators.
+^
+pkg/config/keys.go:22:2: godoc should start with symbol name ("GatewayPreviewPort") (godoclint)
+	// Preview listener restart-gated keys (FR-027b).
+	^
+pkg/gateway/approvals.go:44:2: godoc should start with symbol name ("ApprovalStateApproved") (godoclint)
+	// Terminal states — any action on these returns HTTP 410 Gone.
+	^
+pkg/policy/admin.go:1:1: package has more than one godoc ("policy") (godoclint)
+// Package policy — admin role predicate (FR-015).
+^
+pkg/policy/admin_ask_fence.go:1:1: package has more than one godoc ("policy") (godoclint)
+// Package policy — admin-ask fence (FR-061).
+^
+pkg/policy/admin_ask_fence_test.go:1:1: package has more than one godoc ("policy") (godoclint)
+// Tests for the admin-ask fence (FR-061) and the IsAdmin predicate (FR-015).
+^
+pkg/policy/policy.go:1:1: package has more than one godoc ("policy") (godoclint)
+// Package policy implements the declarative security policy engine for Omnipus.
+^
+pkg/policy/saturation.go:1:1: package has more than one godoc ("policy") (godoclint)
+// Package policy — saturation-guard mechanics for the approval registry
+^
+pkg/policy/saturation_test.go:1:1: package has more than one godoc ("policy") (godoclint)
+// Tests for the saturation cap validation + evaluation (FR-016).
+^
+pkg/sandbox/backend_linux_subprocess_test.go:3:1: package has more than one godoc ("sandbox_test") (godoclint)
+// Package sandbox_test — subprocess-level Apply coverage for the Landlock backend.
+^
+pkg/sandbox/redteam_egress_test.go:3:1: package has more than one godoc ("sandbox_test") (godoclint)
+// Package sandbox_test — insider-LLM red-team coverage for raw TCP egress.
+^
+pkg/sandbox/redteam_forkbomb_test.go:3:1: package has more than one godoc ("sandbox_test") (godoclint)
+// Package sandbox_test — insider-LLM red-team coverage for fork-bomb threats.
+^
+pkg/sandbox/redteam_master_key_test.go:3:1: package has more than one godoc ("sandbox_test") (godoclint)
+// Package sandbox_test — insider-LLM red-team coverage for credential exfil.
+^
+pkg/sysagent/tools/admin_ask.go:1:1: package has more than one godoc ("systools") (godoclint)
+// Package systools — RequiresAdminAsk overrides for all system tools.
+^
+pkg/sysagent/tools/category.go:1:1: package has more than one godoc ("systools") (godoclint)
+// Package systools — Category overrides for all system tools.
+^
+pkg/sysagent/tools/deps.go:5:1: package has more than one godoc ("systools") (godoclint)
+// Package systools implements the 35 exclusive system.* tools for the
+^
+pkg/tools/admin_ask_fence_test.go:1:1: package has more than one godoc ("tools") (godoclint)
+// Privilege-escalation invariant tests for the Tool Registry redesign
+^
+pkg/tools/compositor.go:1:1: package has more than one godoc ("tools") (godoclint)
+// Package tools — per-agent tool policy filter (central tool registry redesign).
+^
+pkg/tools/memory_rate_limit_race_test.go:1:1: package has more than one godoc ("tools_test") (godoclint)
+// Concurrent-load test for MemoryRateLimiter. Run with `go test -race`.
+^
+pkg/tools/memory_tools_test.go:1:1: package has more than one godoc ("tools_test") (godoclint)
+// memory_tools_test.go — Tool-level tests for RememberTool, RecallMemoryTool,
+^
+pkg/tools/path_audit.go:1:1: package has more than one godoc ("tools") (godoclint)
+// Package tools — path-guard audit emission helpers ( / ).
+^
+pkg/tools/redteam_audit_per_tool_test.go:5:1: package has more than one godoc ("tools") (godoclint)
+// Package tools — insider-LLM red-team coverage for per-tool audit emission.
+^
+pkg/tools/redteam_cross_agent_test.go:5:1: package has more than one godoc ("tools") (godoclint)
+// Package tools — insider-LLM red-team coverage for cross-agent reads.
+^
+pkg/agent/loop.go:3907:11: nilness: tautological condition: non-nil != nil (govet)
+			if err != nil && strings.Contains(err.Error(), "image input") {
+			       ^
+pkg/agent/memory_behavioral_test.go:193:5: shadow: declaration of "err" shadows declaration at line 169 (govet)
+	if err := ms.AppendLongTerm("second fact", "key_decision"); err != nil {
+	   ^
+pkg/agent/memory_smoke_test.go:182:5: shadow: declaration of "err" shadows declaration at line 172 (govet)
+	if err := ms.WriteLastSession(payload); err != nil {
+	   ^
+pkg/agent/repair_test.go:40:9: shadow: declaration of "err" shadows declaration at line 30 (govet)
+		data, err := json.Marshal(entry)
+		      ^
+pkg/agent/session_end_behavioral_test.go:113:5: shadow: declaration of "err" shadows declaration at line 86 (govet)
+	if err := store.AppendTranscript(sessionID, session.TranscriptEntry{
+	   ^
+pkg/agent/session_end_behavioral_test.go:128:9: shadow: declaration of "err" shadows declaration at line 86 (govet)
+		data, err := os.ReadFile(filepath.Join(ag.Workspace, "memory", "sessions", "LAST_SESSION.md"))
+		      ^
+pkg/audit/argshash_test.go:145:7: shadow: declaration of "got" shadows declaration at line 134 (govet)
+			if got := bb.String(); got != tc.canonical {
+			   ^
+pkg/audit/hardening_test.go:431:3: shadow: declaration of "err" shadows declaration at line 421 (govet)
+		err := logger.Log(&audit.Entry{
+		^
+pkg/audit/hmac.go:304:5: shadow: declaration of "err" shadows declaration at line 289 (govet)
+	if err := dec.Decode(&m); err != nil {
+	   ^
+pkg/audit/hmac_test.go:291:6: shadow: declaration of "err" shadows declaration at line 249 (govet)
+		b, err := os.ReadFile(f)
+		   ^
+pkg/audit/hmac_test.go:556:5: shadow: declaration of "err" shadows declaration at line 547 (govet)
+	if err := json.Unmarshal([]byte(lines[lineIdx]), &entry); err != nil {
+	   ^
+pkg/audit/redteam_tamper_test.go:258:5: shadow: declaration of "err" shadows declaration at line 247 (govet)
+	if err := json.Unmarshal(lines[lineIdx], &entry); err != nil {
+	   ^
+pkg/config/agent_ownership_migration.go:91:5: shadow: declaration of "err" shadows declaration at line 85 (govet)
+	if err := json.Unmarshal(raw, &m); err != nil {
+	   ^
+pkg/config/config.go:1629:6: shadow: declaration of "err" shadows declaration at line 1608 (govet)
+		if err := validateRemovedKeys(data); err != nil {
+		   ^
+pkg/gateway/gateway.go:509:7: shadow: declaration of "err" shadows declaration at line 374 (govet)
+			if err := logger.Log(entry); err != nil {
+			   ^
+pkg/gateway/gateway.go:610:6: shadow: declaration of "err" shadows declaration at line 374 (govet)
+		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
+		   ^
+pkg/gateway/gateway.go:995:6: shadow: declaration of "err" shadows declaration at line 954 (govet)
+		if err := fms.LoadRegistry(); err != nil {
+		   ^
+pkg/gateway/gateway.go:1164:6: shadow: declaration of "err" shadows declaration at line 954 (govet)
+		if err := logger.Log(entry); err != nil {
+		   ^
+pkg/gateway/gateway.go:1386:5: shadow: declaration of "err" shadows declaration at line 954 (govet)
+	if err := os.WriteFile(portFile, []byte(portData+"\n"), 0o600); err != nil {
+	   ^
+pkg/gateway/gateway.go:1556:6: shadow: declaration of "err" shadows declaration at line 1515 (govet)
+		if err := fms.LoadRegistry(); err != nil {
+		   ^
+pkg/gateway/rest_preview_audit.go:263:14: nilness: tautological condition: non-nil != nil (govet)
+	} else if a != nil && a.agentLoop != nil {
+	            ^
+pkg/gateway/websocket_multisession_test.go:205:11: shadow: declaration of "err" shadows declaration at line 171 (govet)
+		_, raw, err := conn.ReadMessage()
+		        ^
+pkg/sandbox/hardened_exec_linux.go:96:10: shadow: declaration of "err" shadows declaration at line 91 (govet)
+			if _, err := strconv.Atoi(name); err != nil {
+			      ^
+pkg/sandbox/hardened_exec_linux.go:100:7: shadow: declaration of "err" shadows declaration at line 91 (govet)
+			if err := unix.Stat("/proc/"+name, &st); err != nil {
+			   ^
+pkg/sandbox/spawn_bg_test.go:203:5: shadow: declaration of "err" shadows declaration at line 195 (govet)
+	if err := cmd1.Wait(); err != nil {
+	   ^
+pkg/tools/browser/installer.go:100:5: shadow: declaration of "err" shadows declaration at line 56 (govet)
+	if err := os.MkdirAll(versionDir, 0o700); err != nil {
+	   ^
+pkg/tools/browser/installer.go:105:5: shadow: declaration of "err" shadows declaration at line 56 (govet)
+	if err := downloadFile(ctx, zipURL, zipPath); err != nil {
+	   ^
+pkg/tools/browser/installer.go:110:5: shadow: declaration of "err" shadows declaration at line 56 (govet)
+	if err := extractZip(zipPath, versionDir); err != nil {
+	   ^
+pkg/tools/browser/installer_test.go:27:5: shadow: declaration of "err" shadows declaration at line 22 (govet)
+	if err := os.MkdirAll(versionDir, 0o755); err != nil {
+	   ^
+pkg/tools/browser/installer_test.go:31:5: shadow: declaration of "err" shadows declaration at line 22 (govet)
+	if err := os.WriteFile(binPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	   ^
+pkg/tools/browser/installer_test.go:63:8: shadow: declaration of "err" shadows declaration at line 48 (govet)
+	if _, err := w.Write([]byte("#!/bin/sh\nexit 0\n")); err != nil {
+	      ^
+pkg/tools/browser/installer_test.go:66:5: shadow: declaration of "err" shadows declaration at line 48 (govet)
+	if err := zw.Close(); err != nil {
+	   ^
+pkg/tools/provider_defs_shape_test.go:80:6: shadow: declaration of "err" shadows declaration at line 71 (govet)
+		if err := os.WriteFile(goldenPath, got, 0o644); err != nil {
+		   ^
+pkg/agent/memory_behavioral_test.go:149:5: avoid allocations with bytes.ContainsRune (mirror)
+	if strings.ContainsRune(string(raw), 0) {
+	   ^
+pkg/config/agent_ownership_migration_test.go:52:6: avoid allocations with strings.Contains (mirror)
+		if bytes.Contains([]byte(r.Message), []byte(substr)) {
+		   ^
+pkg/agent/context_env_test.go:462:4: error is not nil (line 460) but it returns nil (nilerr)
+			return nil
+			^
+pkg/agent/memory_integration_test.go:194:4: error is not nil (line 192) but it returns nil (nilerr)
+			return nil
+			^
+pkg/config/validator.go:34:3: error is not nil (line 31) but it returns nil (nilerr)
+		return nil
+		^
+pkg/config/validator.go:44:3: error is not nil (line 43) but it returns nil (nilerr)
+		return nil
+		^
+pkg/config/validator.go:54:3: error is not nil (line 53) but it returns nil (nilerr)
+		return nil
+		^
+pkg/agent/repair_test.go:100:2: Consider preallocating ids (prealloc)
+	ids := []string{}
+	^
+pkg/gateway/rest_patch_ownership_test.go:99:2: Consider preallocating gwUsers with capacity 1 + len(extraUsers) (prealloc)
+	gwUsers := []any{
+	^
+pkg/gateway/rest_tool_registry_test.go:861:6: Consider preallocating entries with capacity 3 (prealloc)
+	var entries []*approvalEntry
+	    ^
+pkg/audit/argshash.go:328:25: param max has same name as predeclared identifier (predeclared)
+func truncate(s string, max int) string {
+                        ^
+pkg/gateway/approvals.go:149:28: param cap has same name as predeclared identifier (predeclared)
+func newApprovalRegistryV2(cap int, timeout time.Duration) *approvalRegistryV2 {
+                           ^
+pkg/gateway/approvals.go:206:2: variable cap has same name as predeclared identifier (predeclared)
+	cap := r.maxPending
+	^
+pkg/policy/saturation.go:67:71: param cap has same name as predeclared identifier (predeclared)
+func ValidateSaturationCap(ctx context.Context, logger *audit.Logger, cap int) (effective int, ok bool) {
+                                                                      ^
+pkg/policy/saturation.go:102:21: param cap has same name as predeclared identifier (predeclared)
+func ShouldSaturate(cap, currentPending int) bool {
+                    ^
+pkg/config/sandbox.go:83:6: the methods of "SandboxProfile" use pointer receiver and non-pointer receiver. (recvcheck)
+type SandboxProfile string
+     ^
+pkg/audit/argshash_test.go:65:6: TestAuditArgsHash_RFC8785_Compliance's subtests should call t.Parallel (tparallel)
+func TestAuditArgsHash_RFC8785_Compliance(t *testing.T) {
+     ^
+pkg/policy/admin_ask_fence_test.go:17:6: TestIsAdmin's subtests should call t.Parallel (tparallel)
+func TestIsAdmin(t *testing.T) {
+     ^
+pkg/tools/admin_ask_fence_test.go:90:6: TestFilterToolsByPolicy_AdminAskFenceOnCustomAgents's subtests should call t.Parallel (tparallel)
+func TestFilterToolsByPolicy_AdminAskFenceOnCustomAgents(t *testing.T) {
+     ^
+pkg/tools/workspace_shell_test.go:40:6: TestWorkspaceShellTool_DenyPatterns should call t.Parallel on the top level as well as its subtests (tparallel)
+func TestWorkspaceShellTool_DenyPatterns(t *testing.T) {
+     ^
+pkg/tools/workspace_shell_test.go:119:6: TestWorkspaceShellTool_CWDResolution should call t.Parallel on the top level as well as its subtests (tparallel)
+func TestWorkspaceShellTool_CWDResolution(t *testing.T) {
+     ^
+pkg/gateway/proxy_dev_request_error_test.go:73:51: unnecessary conversion (unconvert)
+	reg, err := dr.Register("error-body-agent", int32(stubPort), 99999, "stub-closed", 10)
+	                                                 ^
+pkg/gateway/proxy_dev_request_error_test.go:151:51: unnecessary conversion (unconvert)
+	reg, err := dr.Register("error-json-agent", int32(stubPort), 99999, "stub-closed-2", 10)
+	                                                 ^
+pkg/tools/compositor_wildcard_test.go:420:22: unnecessary conversion (unconvert)
+			scope := ToolScope(ScopeGeneral)
+			                  ^
+cmd/omnipus/internal/audit/command.go:150:6: type exitCodeError is unused (unused)
+type exitCodeError struct {
+     ^
+cmd/omnipus/internal/audit/command.go:157:25: func (*exitCodeError).Error is unused (unused)
+func (e *exitCodeError) Error() string {
+                        ^
+cmd/omnipus/internal/audit/command.go:165:25: func (*exitCodeError).Unwrap is unused (unused)
+func (e *exitCodeError) Unwrap() error {
+                        ^
+cmd/omnipus/internal/audit/command.go:173:25: func (*exitCodeError).ExitCode is unused (unused)
+func (e *exitCodeError) ExitCode() int {
+                        ^
+pkg/agent/session_end_behavioral_test.go:486:6: func syncMapLenLocal is unused (unused)
+func syncMapLenLocal(m *sync.Map) int {
+     ^
+pkg/gateway/gateway.go:1762:5: var remoteChannelNames is unused (unused)
+var remoteChannelNames = []string{
+    ^
+pkg/gateway/rest_workspace.go:340:6: func workspaceAuthMiddleware is unused (unused)
+func workspaceAuthMiddleware(getCfg func() *config.Config, h http.HandlerFunc) http.Handler {
+     ^
+pkg/gateway/test_harness_cases_stub_test.go:20:6: func resetProcessHarnessQueueForTest is unused (unused)
+func resetProcessHarnessQueueForTest() {}
+     ^
+pkg/sandbox/hardened_exec.go:303:7: const proxyGracePeriod is unused (unused)
+const proxyGracePeriod = 5 * time.Second
+      ^
+pkg/tools/memory_tools_test.go:134:6: type auditEntry is unused (unused)
+type auditEntry struct {
+     ^
+pkg/tools/memory_tools_test.go:140:6: type auditSpy is unused (unused)
+type auditSpy struct {
+     ^
+pkg/tools/memory_tools_test.go:144:20: func (*auditSpy).Log is unused (unused)
+func (a *auditSpy) Log(entry any) error {
+                   ^
+pkg/tools/memory_tools_test.go:485:6: func assertAuditEntryExists is unused (unused)
+func assertAuditEntryExists(t *testing.T, auditDir, event, tool string) {
+     ^
+pkg/tools/path_audit.go:99:2: var auditLoggerNilOnceMu is unused (unused)
+	auditLoggerNilOnceMu     sync.Mutex
+	^
+pkg/tools/path_audit.go:100:2: var auditLoggerNilOnceLogged is unused (unused)
+	auditLoggerNilOnceLogged = map[string]struct{}{}
+	^
+pkg/tools/path_audit.go:106:6: func noteAuditLoggerNotWired is unused (unused)
+func noteAuditLoggerNotWired(toolName string) {
+     ^
+pkg/tools/web_serve.go:96:7: const webServeDefaultStaticDuration is unused (unused)
+const webServeDefaultStaticDuration = time.Hour
+      ^
+pkg/tools/web_serve_test.go:591:7: type capturingStub is unused (unused)
+	type capturingStub struct {
+	     ^
+pkg/agent/loop.go:3424:3: assigned to history, but reassigned without using the value (wastedassign)
+		history = ts.agent.Sessions.GetHistory(ts.sessionKey)
+		^
+pkg/agent/loop.go:3698:5: assigned to messages, but never used afterwards (wastedassign)
+				messages = append(messages, providers.Message{Role: "system", Content: abortMsg})
+				^
+pkg/agent/loop.go:4542:6: assigned to messages, but never used afterwards (wastedassign)
+					messages = append(messages, providers.Message{Role: "system", Content: abortMsg})
+					^
+pkg/agent/loop.go:4582:7: assigned to messages, but never used afterwards (wastedassign)
+						messages = append(messages, providers.Message{Role: "system", Content: abortMsg})
+						^
+120 issues:
+* dupl: 4
+* errname: 3
+* godoclint: 34
+* govet: 33
+* mirror: 2
+* nilerr: 5
+* prealloc: 3
+* predeclared: 5
+* recvcheck: 1
+* tparallel: 5
+* unconvert: 3
+* unused: 18
+* wastedassign: 4

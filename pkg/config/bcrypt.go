@@ -16,7 +16,7 @@ import (
 // calls scattered through callers.
 //
 // The defined string type allows zero-cost conversion to/from string for
-// JSON marshalling and existing callsites that need the raw bytes (e.g.
+// JSON marshaling and existing callsites that need the raw bytes (e.g.
 // []byte(hash) for one-off compares), while making typed function
 // signatures self-documenting.
 type BcryptHash string

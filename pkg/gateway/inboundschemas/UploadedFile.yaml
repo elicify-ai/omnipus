@@ -1,0 +1,32 @@
+type: object
+description: >
+  Metadata for a single successfully uploaded file, as returned in the
+  POST /upload response body's "files" array. Callers use the path field
+  to construct the /api/v1/uploads/{session_id}/{filename} download URL.
+required:
+  - name
+  - path
+  - size
+  - content_type
+additionalProperties: false
+properties:
+  name:
+    type: string
+    description: Sanitised filename as stored on disk.
+    example: "screenshot.png"
+  path:
+    type: string
+    description: >
+      Relative path within the uploads directory for constructing a download URL.
+      Format: "uploads/{session_id}/{filename}".
+    example: "uploads/550e8400-e29b-41d4-a716-446655440000/screenshot.png"
+  size:
+    type: integer
+    format: int64
+    description: File size in bytes.
+    minimum: 0
+    example: 204800
+  content_type:
+    type: string
+    description: Detected MIME type of the uploaded file.
+    example: "image/png"

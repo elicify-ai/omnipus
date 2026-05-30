@@ -19,9 +19,9 @@ func (m *mockSearchableTool) Parameters() map[string]any {
 	return map[string]any{"type": "object"}
 }
 
-func (m *mockSearchableTool) Scope() ToolScope           { return ScopeGeneral }
-func (m *mockSearchableTool) RequiresAdminAsk() bool     { return false }
-func (m *mockSearchableTool) Category() ToolCategory     { return CategoryCore }
+func (m *mockSearchableTool) Scope() ToolScope       { return ScopeGeneral }
+func (m *mockSearchableTool) RequiresAdminAsk() bool { return false }
+func (m *mockSearchableTool) Category() ToolCategory { return CategoryCore }
 func (m *mockSearchableTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	return SilentResult("mock executed: " + m.name)
 }

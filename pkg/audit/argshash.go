@@ -15,9 +15,9 @@
 //   - nil             → "null"
 //   - json.Number     → emitted verbatim (caller's canonical form preserved)
 //   - float64         → strconv.FormatFloat(v, 'g', -1, 64), with
-//                       fast-path integer-valued floats rendered without a
-//                       trailing ".0" — this matches the RFC 8785 case for
-//                       integers that fit in float64.
+//     fast-path integer-valued floats rendered without a
+//     trailing ".0" — this matches the RFC 8785 case for
+//     integers that fit in float64.
 //   - int*, uint*     → strconv.FormatInt / FormatUint
 //
 // Determinism guarantee: for inputs that survive a json.Marshal+Unmarshal
@@ -29,6 +29,7 @@
 // `args_preview` is a redacted, length-capped projection used to give
 // operators a sense of what an approval was for without leaking secrets.
 // The algorithm is documented in the `ArgsPreview` doc-comment.
+
 package audit
 
 import (
@@ -264,12 +265,12 @@ const previewMaxLen = 32
 //   - If args is not a map (e.g. a scalar), the whole value is rendered as
 //     a single string and length-capped.
 //   - For each top-level (key, value) pair:
-//     * If `key` matches secretKeyPattern → value becomes "<redacted>".
-//     * Otherwise the value is JSON-encoded, and if the resulting string
-//       matches bearerTokenValuePattern → "<redacted>".
-//     * Otherwise the value is truncated to 32 chars (UTF-8 safe) with
-//       a trailing `…` marker if truncation occurred.
-//   - Nested maps/arrays are summarised as `<object:N keys>` /
+//   - If `key` matches secretKeyPattern → value becomes "<redacted>".
+//   - Otherwise the value is JSON-encoded, and if the resulting string
+//     matches bearerTokenValuePattern → "<redacted>".
+//   - Otherwise the value is truncated to 32 chars (UTF-8 safe) with
+//     a trailing `…` marker if truncation occurred.
+//   - Nested maps/arrays are summarized as `<object:N keys>` /
 //     `<array:N elems>` rather than recursed; the goal is operator-readable
 //     posture, not a full dump (the full args lives in `args_hash`'s
 //     pre-image, which is hashed not stored, so deep recursion would blow
@@ -323,14 +324,14 @@ func redactPreviewValue(key string, v any) any {
 	return truncate(string(data), previewMaxLen)
 }
 
-// truncate clamps s to at most max bytes on a UTF-8 rune boundary, appending
+// truncate clamps s to at most maxLen bytes on a UTF-8 rune boundary, appending
 // the unicode-aware ellipsis "…" when truncation occurred.
-func truncate(s string, max int) string {
-	if len(s) <= max {
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
 		return s
 	}
-	// Find the last rune boundary <= max.
-	cut := max
+	// Find the last rune boundary <= maxLen.
+	cut := maxLen
 	for cut > 0 && !utf8.RuneStart(s[cut]) {
 		cut--
 	}

@@ -5,6 +5,7 @@
 // scope — they exercise the fence as a pure post-resolution operation, so
 // regardless of how the resolver evolves, the fence's downgrade logic is
 // proven independently.
+
 package policy
 
 import (
@@ -25,11 +26,14 @@ func TestIsAdmin(t *testing.T) {
 		{"admin_role", &config.UserConfig{Role: config.UserRoleAdmin}, true},
 		{"user_role_is_not_admin", &config.UserConfig{Role: config.UserRoleUser}, false},
 		{"empty_role_is_not_admin", &config.UserConfig{Role: ""}, false},
-		{"username_does_not_imply_admin",
-			&config.UserConfig{Username: "admin", Role: config.UserRoleUser}, false},
+		{
+			"username_does_not_imply_admin",
+			&config.UserConfig{Username: "admin", Role: config.UserRoleUser}, false,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			if got := IsAdmin(c.u); got != c.want {
 				t.Fatalf("IsAdmin = %v, want %v", got, c.want)
 			}

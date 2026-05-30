@@ -1,0 +1,42 @@
+title: StorageStats
+description: >
+  Storage statistics returned by GET /api/v1/storage/stats. Reports session
+  count, workspace disk usage, memory entry count, and any non-fatal warnings
+  encountered while collecting the stats.
+type: object
+required:
+  - workspace_size_bytes
+  - session_count
+  - memory_entry_count
+properties:
+  workspace_size_bytes:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Total size in bytes of all agent workspace directories.
+    example: 52428800
+  session_count:
+    type: integer
+    minimum: 0
+    description: Total number of sessions across all agent stores.
+    example: 42
+  memory_entry_count:
+    type: integer
+    minimum: 0
+    description: Total number of memory entries across all agent stores.
+    example: 0
+  oldest_session_date:
+    type: string
+    format: date-time
+    description: >
+      RFC3339 timestamp of the oldest session. Absent when no sessions exist.
+    example: "2026-01-01T00:00:00Z"
+  warnings:
+    type: array
+    items:
+      type: string
+    description: >
+      Non-fatal errors encountered while collecting stats (e.g. unreadable
+      agent stores). The response is still returned when warnings are present.
+    example:
+      - "workspace size unavailable: permission denied"

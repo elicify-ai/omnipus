@@ -141,6 +141,10 @@ func (p *Provider) buildRequestBody(
 		}
 	}
 
+	if seed, ok := common.AsInt(options["seed"]); ok {
+		requestBody["seed"] = seed
+	}
+
 	// Prompt caching: pass a stable cache key so OpenAI can bucket requests
 	// with the same key and reuse prefix KV cache across calls.
 	// Prompt caching is only supported by OpenAI-native endpoints.

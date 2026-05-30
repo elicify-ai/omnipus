@@ -57,6 +57,9 @@ func (a *restAPI) HandlePreview(w http.ResponseWriter, r *http.Request) {
 		a.handleServePreviewPreflight(w, r)
 		return
 	}
+	// B1.3b: emit CORS headers on actual GET/HEAD responses so the SPA's
+	// cors-mode HEAD probe can read the status code.
+	a.addPreviewCORSHeaders(w, r)
 	startedAt := time.Now()
 
 	remainder := strings.TrimPrefix(r.URL.Path, "/preview/")
@@ -89,7 +92,15 @@ func (a *restAPI) HandlePreview(w http.ResponseWriter, r *http.Request) {
 		reg := a.devServers.Lookup(token)
 		if reg != nil {
 			if reg.AgentID != agentID {
-				a.auditServeFailure(r, "preview.token_agent_mismatch", "deny", agentID, token, http.StatusForbidden, startedAt)
+				a.auditServeFailure(
+					r,
+					"preview.token_agent_mismatch",
+					"deny",
+					agentID,
+					token,
+					http.StatusForbidden,
+					startedAt,
+				)
 				writeDevProxyError(w, http.StatusForbidden, "token does not match agent")
 				return
 			}
@@ -103,7 +114,15 @@ func (a *restAPI) HandlePreview(w http.ResponseWriter, r *http.Request) {
 		entry := a.servedSubdirs.Lookup(token)
 		if entry != nil {
 			if entry.AgentID != agentID {
-				a.auditServeFailure(r, "preview.token_agent_mismatch", "deny", agentID, token, http.StatusForbidden, startedAt)
+				a.auditServeFailure(
+					r,
+					"preview.token_agent_mismatch",
+					"deny",
+					agentID,
+					token,
+					http.StatusForbidden,
+					startedAt,
+				)
 				jsonErr(w, http.StatusForbidden, "token does not belong to this agent")
 				return
 			}
@@ -129,6 +148,8 @@ func (a *restAPI) HandleServeWorkspace(w http.ResponseWriter, r *http.Request) {
 		a.handleServePreviewPreflight(w, r)
 		return
 	}
+	// B1.3b: emit CORS headers on actual GET/HEAD responses.
+	a.addPreviewCORSHeaders(w, r)
 	startedAt := time.Now()
 
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -161,7 +182,7 @@ func (a *restAPI) HandleServeWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.servedSubdirs == nil {
-		jsonErr(w, http.StatusInternalServerError, "serve registry not initialised")
+		jsonErr(w, http.StatusInternalServerError, "serve registry not initialized")
 		return
 	}
 	entry := a.servedSubdirs.Lookup(token)
@@ -187,6 +208,8 @@ func (a *restAPI) HandleDevProxy(w http.ResponseWriter, r *http.Request) {
 		a.handleServePreviewPreflight(w, r)
 		return
 	}
+	// B1.3b: emit CORS headers on actual GET/HEAD responses.
+	a.addPreviewCORSHeaders(w, r)
 	startedAt := time.Now()
 
 	if runtime.GOOS != "linux" {
@@ -263,6 +286,27 @@ func (a *restAPI) handleServePreviewPreflight(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// addPreviewCORSHeaders adds Access-Control-Allow-Origin to GET/HEAD
+// responses on the preview listener so the SPA's cors-mode HEAD probe
+// (B1.3b) can read the HTTP status code and detect 5xx errors.
+// Only emitted when the request carries an Origin header that matches the
+// configured main origin (same same-origin check as the preflight handler).
+func (a *restAPI) addPreviewCORSHeaders(w http.ResponseWriter, r *http.Request) {
+	cfg := configFromContext(r.Context())
+	if cfg == nil {
+		cfg = a.agentLoop.GetConfig()
+	}
+	mainOrigin := resolveMainOrigin(cfg)
+	requestOrigin := r.Header.Get("Origin")
+	if mainOrigin != "" && requestOrigin != "" && strings.EqualFold(
+		strings.TrimRight(requestOrigin, "/"),
+		strings.TrimRight(mainOrigin, "/"),
+	) {
+		w.Header().Set("Access-Control-Allow-Origin", mainOrigin)
+		w.Header().Set("Vary", "Origin")
+	}
+}
+
 // serveStaticFile serves the file at absDir/relPath with path-traversal guards,
 // symlink resolution, MIME detection, and buffered/streaming delivery.
 // Shared between HandlePreview (static mode) and HandleServeWorkspace.
@@ -296,7 +340,23 @@ func (a *restAPI) serveStaticFile(
 			return
 		}
 		if resolved, evalErr := filepath.EvalSymlinks(cleaned); evalErr == nil {
-			if resolved != absDir && !strings.HasPrefix(resolved, dirWithSep) {
+			// Resolve the registered base too — on macOS, /var/folders/... resolves
+			// to /private/var/folders/..., and on Linux/Termux /tmp can be a symlink
+			// to a real path under /private or /data. Without resolving the base,
+			// a symlink-equivalent ancestor (not an attacker's symlink-escape)
+			// causes the safety check to mis-fire and reject legitimate requests.
+			resolvedBase := absDir
+			resolvedBaseWithSep := dirWithSep
+			if rb, baseErr := filepath.EvalSymlinks(absDir); baseErr == nil {
+				resolvedBase = rb
+				resolvedBaseWithSep = rb
+				if !strings.HasSuffix(resolvedBaseWithSep, string(filepath.Separator)) {
+					resolvedBaseWithSep += string(filepath.Separator)
+				}
+			}
+			if resolved != absDir && resolved != resolvedBase &&
+				!strings.HasPrefix(resolved, dirWithSep) &&
+				!strings.HasPrefix(resolved, resolvedBaseWithSep) {
 				a.auditServeFailure(r, "serve.path_invalid", "error", agentID, token, http.StatusForbidden, startedAt)
 				jsonErr(w, http.StatusForbidden, "access denied: path is outside the registered directory")
 				return
@@ -542,6 +602,6 @@ type responseHeaderWriter struct {
 	h http.Header
 }
 
-func (rhw responseHeaderWriter) Header() http.Header         { return rhw.h }
-func (rhw responseHeaderWriter) Write([]byte) (int, error)  { return 0, nil }
-func (rhw responseHeaderWriter) WriteHeader(int)             {}
+func (rhw responseHeaderWriter) Header() http.Header       { return rhw.h }
+func (rhw responseHeaderWriter) Write([]byte) (int, error) { return 0, nil }
+func (rhw responseHeaderWriter) WriteHeader(int)           {}

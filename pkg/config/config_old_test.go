@@ -57,7 +57,7 @@ func TestHasLegacySecrets_CoversAllSecretFields(t *testing.T) {
 
 	var walk func(rt reflect.Type, prefix string, visited map[reflect.Type]bool)
 	walk = func(rt reflect.Type, prefix string, visited map[reflect.Type]bool) {
-		for rt.Kind() == reflect.Ptr {
+		for rt.Kind() == reflect.Pointer {
 			rt = rt.Elem()
 		}
 		if rt.Kind() != reflect.Struct {
@@ -75,7 +75,7 @@ func TestHasLegacySecrets_CoversAllSecretFields(t *testing.T) {
 				continue
 			}
 			ft := f.Type
-			for ft.Kind() == reflect.Ptr {
+			for ft.Kind() == reflect.Pointer {
 				ft = ft.Elem()
 			}
 			tag := strings.Split(f.Tag.Get("json"), ",")[0]
@@ -94,7 +94,7 @@ func TestHasLegacySecrets_CoversAllSecretFields(t *testing.T) {
 				et := ft
 				if et.Kind() == reflect.Slice {
 					et = et.Elem()
-					for et.Kind() == reflect.Ptr {
+					for et.Kind() == reflect.Pointer {
 						et = et.Elem()
 					}
 				}

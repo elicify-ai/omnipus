@@ -1,11 +1,15 @@
 import { type APIRequestContext, request } from '@playwright/test';
 
 const DEFAULT_PROVIDER_ID = 'openrouter';
-// Opus 4.7 — chosen for reliability in tool-use and multi-step subagent tests.
-// Cheaper models (Haiku, Sonnet) were too flaky at the "call spawn exactly twice"
-// and "subagent executes ≥3 tools in sequence" assertions the E2E suite makes.
-// Cost: higher per-run, but deterministic CI > $0.50 saved per run.
-const DEFAULT_MODEL = 'anthropic/claude-opus-4.7';
+// z-ai/glm-5v-turbo — operator-locked model for all e2e tests (user request,
+// 2026-05-09). Tool-capable on OpenRouter (verified via direct chat-completion
+// probe with a tool definition, returned tool_calls finish_reason). Selected
+// for fast TTFT and low contention compared to Anthropic Opus, which was
+// returning frequent empty_response retries under suite load. Determinism
+// for "exactly N tool calls" subagent assertions (the original reason Opus
+// was chosen) is enforced via the temperature=0 + seed=42 plumbing the
+// suite already passes through to OpenRouter, not by the model alone.
+const DEFAULT_MODEL = 'z-ai/glm-5v-turbo';
 const DEFAULT_USERNAME = 'admin';
 const DEFAULT_PASSWORD = 'admin123';
 
@@ -76,7 +80,7 @@ export async function onboardViaAPI(opts: OnboardingOptions): Promise<void> {
     // 409 = already complete on this $OMNIPUS_HOME (e.g. second test shard
     // hitting the same instance). Accept ONLY when the body confirms the known
     // sentinel — any other 409 is an unexpected error and must be surfaced.
-    // W3-10: parse the body to distinguish expected "already complete" from
+    // Parse the body to distinguish expected "already complete" from
     // an unexpected 409 (e.g., partial state, schema mismatch).
     if (res.status() === 409) {
       let body: string;

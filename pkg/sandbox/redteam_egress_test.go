@@ -5,16 +5,24 @@
 // Threat C4 (raw TCP egress) from the insider-pentest report: the egress
 // proxy only intercepts HTTP/HTTPS through HTTP_PROXY env vars. A raw
 // socket() + connect() syscall sequence — easily crafted from any
-// scripting language with sockets — bypasses the proxy entirely. Landlock
-// ABI v4 ships NET_CONNECT_TCP, but `pkg/sandbox/sandbox_linux.go::computeRights`
-// intentionally excludes NET_CONNECT_TCP from the handled-access-net set
-// (see sandbox.go:53 — outbound TCP filtering is delegated to the egress
-// proxy layer). The result: a hardened-exec child can connect to
-// arbitrary IPs over arbitrary ports without the kernel intervening.
+// scripting language with sockets — would bypass the proxy entirely
+// unless the kernel intervenes.
 //
-// Closing fix: v0.2 (#155) — raw TCP filtering. Likely shape:
-// add NET_CONNECT_TCP to handledAccessNet and an allow-list of permitted
-// connect ports (or full deny).
+// Status: CLOSED in v0.2 (#155 item 4). pkg/sandbox/sandbox_linux.go
+// computeRights now declares NET_CONNECT_TCP in handledAccessNet on
+// Landlock ABI v4+, and DefaultPolicy seeds ConnectPortRules with
+// {53, 80, 443} (DefaultConnectPorts). The gateway boot path additionally
+// extends the allow-list with cfg.Sandbox.DevServerPortRange. Any
+// connect(2) from the gateway or any of its forked children to a port
+// outside that union — e.g. the redteam target 127.0.0.1:1 — returns
+// EACCES at the kernel layer.
+//
+// Limitation acknowledged: this is port-level filtering. A child can
+// still dial RFC1918 IPs on allowed ports (192.168.1.1:443 etc.). CIDR-
+// level filtering for compiled binaries would require eBPF cgroup, which
+// is deferred. cfg.Sandbox.EgressAllowCIDRs is the operator escape hatch
+// for the Go-side SSRFChecker layer that filters by IP/CIDR for the HTTP
+// clients the gateway controls (web_search, MCP, skills installer).
 //
 // Test mechanics:
 //
@@ -29,6 +37,7 @@
 //     remote port refused; that's the "no enforcement" outcome.
 //   - EACCES/EPERM indicates the kernel blocked the syscall; that's the
 //     "enforcement present" outcome.
+
 package sandbox_test
 
 import (
@@ -124,13 +133,13 @@ func runEgressChild() {
 // TestRedteam_RawTCP_Egress_Blocked documents C4. The child applies the
 // production sandbox policy and tries a raw TCP connect to 127.0.0.1:1
 // (closed loopback port). With NET_CONNECT_TCP enforcement, the kernel
-// would return EACCES BEFORE the syscall reaches the network stack.
-// Without it, the kernel forwards the syscall and the closed port
-// returns ECONNREFUSED.
+// returns EACCES BEFORE the syscall reaches the network stack. Without it,
+// the kernel forwards the syscall and the closed port returns ECONNREFUSED.
 //
-// Today: NET_CONNECT_TCP is intentionally NOT in handledAccessNet (see
-// pkg/sandbox/sandbox.go:53 and sandbox_linux.go:160). The test FAILS by
-// design until v0.2 (#155) closes this gap.
+// Status: closed by v0.2 (#155 item 4). NET_CONNECT_TCP is now declared in
+// handledAccessNet on ABI v4+ (sandbox_linux.go::computeRights), and
+// DefaultPolicy seeds ConnectPortRules with {53, 80, 443}. Port 1 is not
+// in the allow-list, so the kernel returns EACCES — the test exits 42.
 //
 // Loopback target rationale: we deliberately do NOT attempt to connect
 // to a public IP. (1) The test must not generate external network
@@ -139,7 +148,9 @@ func runEgressChild() {
 // works. Loopback to a closed port gives us ECONNREFUSED quickly with
 // zero external impact.
 func TestRedteam_RawTCP_Egress_Blocked(t *testing.T) {
-	t.Logf("documents C4 (raw TCP egress) from insider-pentest report; closes when v0.2 #155 adds NET_CONNECT_TCP enforcement")
+	t.Logf(
+		"documents C4 (raw TCP egress) from insider-pentest report; closes when v0.2 #155 adds NET_CONNECT_TCP enforcement",
+	)
 
 	if os.Getenv("OMNIPUS_REDTEAM_EGRESS_CHILD") == "1" {
 		runEgressChild()
@@ -189,8 +200,10 @@ func TestRedteam_RawTCP_Egress_Blocked(t *testing.T) {
 	case 77:
 		t.Skipf("Landlock unavailable in child (exit 77):\n%s", out)
 	case 1:
-		t.Errorf("C4 GAP CONFIRMED: sandboxed child completed raw TCP connect — NET_CONNECT_TCP enforcement is intentionally disabled (sandbox_linux.go:160). Fix in v0.2 (#155).\nchild stderr:\n%s",
-			out)
+		t.Errorf(
+			"C4 GAP CONFIRMED: sandboxed child completed raw TCP connect — NET_CONNECT_TCP enforcement is intentionally disabled (sandbox_linux.go:160). Fix in v0.2 (#155).\nchild stderr:\n%s",
+			out,
+		)
 	default:
 		t.Fatalf("child exit %d (unexpected — expected 1=gap, 42=fixed, 77=skip):\n%s", exitCode, out)
 	}

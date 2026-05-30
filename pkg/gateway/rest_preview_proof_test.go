@@ -6,7 +6,7 @@
 
 // Package gateway — proof tests for Track B's chat-served-iframe-preview
 // changes (chat-served-iframe-preview-spec.md). These prove the new
-// behaviour works end-to-end. Comprehensive coverage (replay, malformed
+// behavior works end-to-end. Comprehensive coverage (replay, malformed
 // path, scheme mismatch) belongs to qa-lead.
 
 package gateway
@@ -92,8 +92,15 @@ func TestSanitisePreviewPath_RedactsToken(t *testing.T) {
 // per-token serve.served / dev.proxied audit emission cap.
 func TestMarkFirstServed_OnlyTrueOnce(t *testing.T) {
 	a := &restAPI{}
-	// Use a unique token so this test is independent of others.
+	// markFirstServed records into a process-global set; under -count=N the
+	// same t.Name() runs N times and would see the prior iteration's entry.
+	// Drop the entry on cleanup so each iteration starts fresh.
 	token := "test-token-mark-first-served-" + t.Name()
+	t.Cleanup(func() {
+		firstServedMu.Lock()
+		delete(firstServedTokens, token)
+		firstServedMu.Unlock()
+	})
 
 	first := a.markFirstServed(token)
 	second := a.markFirstServed(token)
@@ -124,13 +131,37 @@ func TestCanonicalRemoteIP_PrefersForwardedFor(t *testing.T) {
 		want     string
 	}{
 		// trustXFF=true: XFF header is used.
-		{name: "trustXFF=true single XFF", xff: "203.0.113.1", ra: "10.0.0.1:1234", trustXFF: true, want: "203.0.113.1"},
-		{name: "trustXFF=true multi-hop XFF first", xff: "203.0.113.1, 10.0.0.5", ra: "10.0.0.1:1234", trustXFF: true, want: "203.0.113.1"},
+		{
+			name:     "trustXFF=true single XFF",
+			xff:      "203.0.113.1",
+			ra:       "10.0.0.1:1234",
+			trustXFF: true,
+			want:     "203.0.113.1",
+		},
+		{
+			name:     "trustXFF=true multi-hop XFF first",
+			xff:      "203.0.113.1, 10.0.0.5",
+			ra:       "10.0.0.1:1234",
+			trustXFF: true,
+			want:     "203.0.113.1",
+		},
 		{name: "trustXFF=true no XFF strips port", xff: "", ra: "10.0.0.1:1234", trustXFF: true, want: "10.0.0.1"},
 		{name: "trustXFF=true no XFF no port", xff: "", ra: "10.0.0.1", trustXFF: true, want: "10.0.0.1"},
-		{name: "trustXFF=true XFF whitespace trimmed", xff: " 203.0.113.1 ", ra: "10.0.0.1:1234", trustXFF: true, want: "203.0.113.1"},
+		{
+			name:     "trustXFF=true XFF whitespace trimmed",
+			xff:      " 203.0.113.1 ",
+			ra:       "10.0.0.1:1234",
+			trustXFF: true,
+			want:     "203.0.113.1",
+		},
 		// trustXFF=false (default): XFF header is ignored — protects bare-IP deployments.
-		{name: "trustXFF=false ignores XFF", xff: "203.0.113.1", ra: "10.0.0.1:1234", trustXFF: false, want: "10.0.0.1"},
+		{
+			name:     "trustXFF=false ignores XFF",
+			xff:      "203.0.113.1",
+			ra:       "10.0.0.1:1234",
+			trustXFF: false,
+			want:     "10.0.0.1",
+		},
 		{name: "trustXFF=false strips port", xff: "", ra: "10.0.0.2:5678", trustXFF: false, want: "10.0.0.2"},
 	}
 	for _, tc := range cases {

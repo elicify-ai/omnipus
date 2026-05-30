@@ -1,33 +1,201 @@
-import { expect } from '@playwright/test';
+import * as fs from 'fs'
+import * as path from 'path'
+import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import { chatInput, agentPicker, assistantMessages } from './fixtures/selectors';
-import { softSkip } from './fixtures/skip-tracking';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
-// ARCHITECTURE NOTE: The sprint-h-subagent-block-spec.md (TDD row 20) calls for using a
-// "scenario-provider path" for determinism. The Go-level scenario provider (pkg/agent/testutil)
-// is only injectable into the gateway via the test_harness build tag — it is NOT available as
-// an HTTP endpoint when running a live Playwright-targeted gateway. These tests therefore use
-// a real LLM (requires OPENROUTER_API_KEY_CI) and prompts that strongly suggest spawning.
-// If no spawn occurs (LLM discretion), the test exits cleanly rather than failing on a
-// condition the LLM chose not to produce. When the scenario-provider HTTP interface is added
-// to the live gateway, these tests should be updated to use it.
+// ARCHITECTURE NOTE: The sprint-h-subagent-block-spec.md (TDD row 20) called for using a
+// "scenario-provider path" for determinism via a Go-level scenario provider gated behind the
+// `test_harness` build tag. That mechanism was removed 2026-05-10 — both Go and Playwright
+// suites now drive a real LLM (requires OPENROUTER_API_KEY_CI) and rely on tightened prompts +
+// structural assertions for determinism.
 // Traces to: sprint-h-subagent-block-spec.md line 380 (TDD row 20, BDD Scenarios 1, 4)
+
+// ── Transcript helpers (mirrored from replay-fidelity.spec.ts) ─────────────────
+
+const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
+
+const OMNIPUS_HOME =
+  process.env.OMNIPUS_HOME ||
+  (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '/tmp/omnipus-e2e-test')
+
+interface TranscriptEntry {
+  id: string
+  type?: string
+  role: string
+  content?: string
+  timestamp: string
+  agent_id?: string
+}
+
+function seedTranscript(sessionId: string, entries: TranscriptEntry[]): void {
+  const sessionDir = path.join(OMNIPUS_HOME, 'sessions', sessionId)
+  if (!fs.existsSync(sessionDir)) {
+    throw new Error(
+      `Session directory does not exist: ${sessionDir}. ` +
+        'Create the session via REST API before seeding the transcript.',
+    )
+  }
+  const transcriptPath = path.join(sessionDir, 'transcript.jsonl')
+  const lines = entries.map((e) => JSON.stringify(e)).join('\n') + '\n'
+  fs.writeFileSync(transcriptPath, lines, { encoding: 'utf-8' })
+}
+
+function getStoredAuthToken(): string | null {
+  // Respect OMNIPUS_AUTH_FILE env var set by isolated test runs (e.g. port 6062)
+  // to avoid using a token minted for a different gateway instance.
+  const authFile = process.env.OMNIPUS_AUTH_FILE
+    ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
+    : path.join(
+        path.dirname(new URL(import.meta.url).pathname),
+        'fixtures/.auth/admin.json',
+      )
+  if (!fs.existsSync(authFile)) return null
+  try {
+    const raw = fs.readFileSync(authFile, 'utf-8')
+    const state = JSON.parse(raw) as {
+      origins?: Array<{
+        origin: string
+        localStorage?: Array<{ name: string; value: string }>
+      }>
+    }
+    for (const origin of state.origins ?? []) {
+      for (const item of origin.localStorage ?? []) {
+        if (item.name === 'omnipus_auth_token') return item.value
+      }
+    }
+  } catch {
+    // Auth file may not exist in first run
+  }
+  return null
+}
+
+async function getCsrfToken(page: Page): Promise<string | null> {
+  const cookies = await page.context().cookies()
+  const csrfCookie = cookies.find((c) => c.name === '__Host-csrf')
+  return csrfCookie?.value ?? null
+}
+
+async function apiHeaders(page: Page): Promise<Record<string, string>> {
+  const authToken = getStoredAuthToken()
+  const csrfToken = await getCsrfToken(page)
+  return {
+    'Content-Type': 'application/json',
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+  }
+}
+
+async function createSession(page: Page): Promise<string> {
+  const resp = await page.request.post(`${BASE_URL}/api/v1/sessions`, {
+    headers: await apiHeaders(page),
+    data: { agent_id: 'main', type: 'chat' },
+  })
+  if (!resp.ok()) {
+    const body = await resp.text()
+    throw new Error(`POST /api/v1/sessions failed: ${resp.status()} ${resp.statusText()} — ${body}`)
+  }
+  const meta = (await resp.json()) as { id: string }
+  if (!meta.id) throw new Error('POST /api/v1/sessions returned no id')
+  return meta.id
+}
+
+async function renameSession(page: Page, sessionId: string, title: string): Promise<void> {
+  const resp = await page.request.put(`${BASE_URL}/api/v1/sessions/${sessionId}`, {
+    headers: await apiHeaders(page),
+    data: { title },
+  })
+  if (!resp.ok()) {
+    const body = await resp.text()
+    throw new Error(
+      `PUT /api/v1/sessions/${sessionId} failed: ${resp.status()} ${resp.statusText()} — ${body}`,
+    )
+  }
+}
+
+async function openSession(page: Page, sessionTitle: string): Promise<void> {
+  await page.getByRole('button', { name: 'Open sessions panel' }).click()
+  const sessionBtn = page
+    .getByRole('button', { name: new RegExp(`Open session: ${sessionTitle}`, 'i') })
+    .first()
+  await expect(sessionBtn).toBeVisible({ timeout: 10_000 })
+  await sessionBtn.click()
+}
+
+async function waitForReplayDone(page: Page): Promise<void> {
+  await expect(chatInput(page)).toBeEnabled({ timeout: 30_000 })
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────────
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
 });
 
-test.skip(
+test(
   '(a) Ray→Max→Jim chain: transcript shows all three agent labels',
-  // blocked on #111: AssistantMessage does not annotate messages with per-agent attribution
-  // in the DOM. No data-testid="messages-list" and no per-message agent label element.
-  // A deterministic handoff also requires a mock tool trigger, not a real LLM call.
-  // See tests/e2e/SPA-GAPS.md — "Agent handoff transcript labels not surfaced in DOM".
-  // ALLOW-LISTED: { issue: "https://github.com/dapicom-ai/omnipus/issues/111", until: "2026-07-01" }
-  async ({ page }) => {},
+  // Implements #111: assistant messages from different agents show a visible label.
+  // Uses transcript-seeding (same approach as replay-fidelity.spec.ts) for determinism —
+  // no real LLM needed. Seeds three assistant messages with agent_ids 'ray', 'max', 'jim'
+  // then asserts that [data-testid="agent-label"] elements appear for each.
+  async ({ page }) => {
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+    await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
+
+    // Create a session and seed a transcript with messages from three agents.
+    const sessionId = await createSession(page)
+    const sessionTitle = `handoff-a-labels-${Date.now()}`
+    await renameSession(page, sessionId, sessionTitle)
+
+    seedTranscript(sessionId, [
+      {
+        id: 'entry-user-1',
+        role: 'user',
+        content: 'Start a handoff chain.',
+        timestamp: new Date(Date.now() - 6000).toISOString(),
+        agent_id: '',
+      },
+      {
+        id: 'entry-ray-1',
+        role: 'assistant',
+        content: 'Ray here. Handing off to Max.',
+        timestamp: new Date(Date.now() - 5000).toISOString(),
+        agent_id: 'ray',
+      },
+      {
+        id: 'entry-max-1',
+        role: 'assistant',
+        content: 'Max here. Handing off to Jim.',
+        timestamp: new Date(Date.now() - 4000).toISOString(),
+        agent_id: 'max',
+      },
+      {
+        id: 'entry-jim-1',
+        role: 'assistant',
+        content: 'Jim here. Handoff chain complete.',
+        timestamp: new Date(Date.now() - 3000).toISOString(),
+        agent_id: 'jim',
+      },
+    ])
+
+    // Navigate to the session via the sessions panel.
+    await openSession(page, sessionTitle)
+    await waitForReplayDone(page)
+
+    // Assert: three agent-label elements appear — one per assistant message.
+    const agentLabels = page.locator('[data-testid="agent-label"]')
+    await expect(agentLabels).toHaveCount(3, { timeout: 15_000 })
+
+    // Assert: each agent's id/name appears in at least one label.
+    // The label shows the agent name if known, or falls back to agent_id.
+    // Ray, Max, Jim are core agents whose IDs may equal their names.
+    await expect(agentLabels.filter({ hasText: /ray/i })).toBeVisible()
+    await expect(agentLabels.filter({ hasText: /max/i })).toBeVisible()
+    await expect(agentLabels.filter({ hasText: /jim/i })).toBeVisible()
+  },
 );
 
 // BDD Scenario 1 (sprint-h-subagent-block-spec.md line 207):
@@ -53,45 +221,41 @@ test(
     // If OPENROUTER_API_KEY_CI is unset, the LLM call below will fail and the
     // test will fail honestly — which is the correct behavior.
 
+    // test.slow() triples the global 90s test timeout to 270s. Real-LLM
+    // spawn under suite load occasionally takes 40-60s; the test passes
+    // in 5-15s alone.
+    test.slow();
+
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
 
-    // Prompt engineered to elicit BOTH a spawn AND at least one nested tool call.
-    // The subagent's workspace-scoped filesystem tools may refuse paths — so we
-    // use `shell` with `echo` which always succeeds in any sandbox. This pattern
-    // matches subagent.spec.ts (c) and reliably produces ≥1 nested tool-call-badge
-    // inside the expanded SubagentBlock (otherwise the assertion at ~L116 fails).
+    // Deterministic prompt: explicit tool name, exact arguments, no prose allowed.
+    // temperature=0 + seed=42 are plumbed into OpenRouter requests for determinism.
+    // Use `exec` (not `shell`) — the spawned subagent inherits the parent's
+    // toolset and Mia's policy excludes the workspace shell tools, so a
+    // `shell`-named call gets refused with "tool not available". `exec` is on
+    // Mia by default and produces the tool_call_badge the test asserts.
     await input.fill(
       [
         'Call the `spawn` tool exactly once, right now, with these arguments:',
         '  label: "handoff-b test"',
-        '  task: "You are the subagent. Call the `shell` tool ONCE with cmd=\\"echo hello\\". Then reply with the single word \\"done\\". Do not use any other tool."',
+        '  task: "You are the subagent. Call the `exec` tool ONCE with action=\\"run\\" and command=\\"echo hello\\". Then reply with the single word \\"done\\". Do not use any other tool."',
         'Do not reply in prose. Do not call any other tool. Call spawn now.',
       ].join('\n'),
     );
     await input.press('Enter');
 
-    // Wait up to 30s for a subagent-collapsed block to appear.
-    // If no spawn occurred (LLM discretion), the locator count is 0 and we skip gracefully.
+    // Wait up to 150s for a subagent-collapsed block to appear under
+    // real-LLM determinism — spawn requires two LLM round-trips (parent
+    // tool call + subagent execution). z-ai/glm-5v-turbo enters extended
+    // thinking mode before tool dispatch; combined latency can exceed 90s
+    // under OpenRouter load. test.slow() gives 270s total; 150s here leaves
+    // 120s for the click + expand assertions below.
+    // Structural assertion: if no spawn occurred the test fails honestly.
     const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]');
-
-    try {
-      await expect(collapsedBlock).toBeVisible({ timeout: 30_000 });
-    } catch {
-      // The LLM did not issue a spawn. This is a real-LLM non-determinism issue, not a
-      // product bug. Document and exit cleanly — re-run will likely succeed.
-      console.warn(
-        'WARNING: LLM did not issue a spawn tool call. ' +
-        'No [data-testid="subagent-collapsed"] appeared within 30s. ' +
-        'This is a real-LLM non-determinism issue. ' +
-        'Re-run this test or use the scenario-provider HTTP interface once available.',
-      );
-      softSkip(test, 'LLM did not issue a spawn tool call within 30s — non-determinism');
-      return;
-    }
+    await expect(collapsedBlock).toBeVisible({ timeout: 150_000 });
 
     // Assert: at least one collapsed block is present with correct structure.
-    // Differentiation test: we sent a specific prompt; the block must render.
     const blockCount = await collapsedBlock.count();
     expect(blockCount).toBeGreaterThanOrEqual(1, 'at least one SubagentBlock must be rendered');
 
@@ -101,28 +265,13 @@ test(
     const expandedBlock = page.locator('[data-testid="subagent-expanded"]');
     await expect(expandedBlock).toBeVisible({ timeout: 10_000 });
 
-    // W2-8 + CI retry: [data-testid="tool-call-badge"] IS present in the DOM
-    // (commit aaa9de7), so zero badges here means the LLM *spawned a subagent
-    // but had the subagent emit zero tool calls* — pure real-LLM non-determinism.
-    // The product code is fine; the subagent prompt asked for `shell cmd="echo hello"`
-    // and the LLM chose not to follow it. Differentiate from a true product bug
-    // (no testid rendered at all) with a soft skip: we reached the correct
-    // collapsed+expanded UI, so the SubagentBlock component works — we simply
-    // can't verify badge rendering without a deterministic nested call.
-    // Traces to: temporal-puzzling-melody.md W2-8 + real-LLM flake on 2026-04-20 run.
+    // Assert: expanded block has at least one tool-call-badge (the subagent called shell).
+    // Structural assertion: checks [data-testid="tool-call-badge"] presence.
+    // 60s budget: the subagent's first LLM round-trip (extended-thinking + tool-call
+    // emission) can take 10-50s under suite load on z-ai/glm-5v-turbo; the previous
+    // 10s budget was tighter than the LLM's documented latency floor.
     const toolCallBadges = expandedBlock.locator('[data-testid="tool-call-badge"]');
-    const badgeCount = await toolCallBadges.count();
-    if (badgeCount === 0) {
-      console.warn(
-        'WARNING: Subagent spawned but emitted zero nested tool calls. ' +
-        'The collapsed→expanded UI rendered correctly; only the LLM-discretion ' +
-        'path (nested call emission) was not exercised this run.',
-      );
-      softSkip(test, 'LLM spawned subagent but emitted no nested tool calls — non-determinism');
-      return;
-    }
-    expect(badgeCount).toBeGreaterThan(0,
-      'expanded SubagentBlock must contain at least one [data-testid="tool-call-badge"]');
+    await expect(toolCallBadges.first()).toBeVisible({ timeout: 60_000 });
 
     // a11y baseline check on subagent elements (BDD Scenario 11, FR-H-008).
     // Traces to: sprint-h-subagent-block-spec.md line 316 (Scenario 11)

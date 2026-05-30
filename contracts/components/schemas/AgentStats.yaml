@@ -1,0 +1,31 @@
+title: AgentStats
+description: >
+  Aggregate runtime statistics for an agent.
+  Absent on the Agent object when no sessions have been run.
+type: object
+required:
+  - total_sessions
+  - total_tokens
+  - total_cost
+properties:
+  total_sessions:
+    type: integer
+    minimum: 0
+    description: Lifetime count of sessions created for this agent.
+    example: 42
+  total_tokens:
+    type: integer
+    minimum: 0
+    description: Lifetime token count across all sessions.
+    example: 1500000
+  total_cost:
+    type: number
+    format: double
+    minimum: 0
+    description: Lifetime USD cost across all sessions.
+    example: 3.14
+  last_active:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp of the last turn completed by this agent.
+    example: "2026-05-17T14:23:00Z"

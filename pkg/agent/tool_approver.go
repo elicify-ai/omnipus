@@ -74,13 +74,13 @@ const nopApproverDenialReason = "no_approver_configured"
 var nopApproverFallbackOnce sync.Once
 
 // nopPolicyApprover is returned by loadToolApprover when no PolicyApprover has
-// been set. Default-build behaviour (V2.B): deny every approval request with
+// been set. Default-build behavior (V2.B): deny every approval request with
 // reason "no_approver_configured" and emit one `approver.fallback` audit row
 // per process. Fail-closed: an ask-policy tool reaching the loop without an
 // approver wired must NOT execute.
 //
 // The previous implementation returned (true, "") with the rationale
-// "safe fallback for unit tests and CLI mode" — exactly the rationalisation
+// "safe fallback for unit tests and CLI mode" — exactly the rationalization
 // that lets a fail-open into production. Per the user decision recorded in
 // the V2.B ticket: there is one production build today (Electron is not yet
 // started), so the default build IS production, and the test-only

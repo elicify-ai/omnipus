@@ -7,11 +7,11 @@
 package gateway
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/routing"
 )
@@ -49,8 +49,8 @@ func (a *restAPI) HandleSessionScope(w http.ResponseWriter, r *http.Request) {
 		if scope == "" {
 			scope = string(routing.DMScopePerChannelPeer)
 		}
-		jsonOK(w, map[string]any{
-			"dm_scope": scope,
+		jsonOK(w, gen.SessionScopeResponse{
+			DmScope: gen.SessionScopeResponseDmScope(scope),
 		})
 
 	case http.MethodPut:
@@ -65,22 +65,20 @@ func (a *restAPI) HandleSessionScope(w http.ResponseWriter, r *http.Request) {
 func (a *restAPI) putSessionScope(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	var body struct {
-		DMScope string `json:"dm_scope"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var body gen.SessionScopeRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "SessionScopeRequest", &body, validateEnabled) {
 		return
 	}
 
-	if body.DMScope == "" {
+	if string(body.DmScope) == "" {
 		jsonErr(w, http.StatusBadRequest, dmScopeInvalidMsg)
 		return
 	}
 
 	valid := false
 	for _, v := range canonicalDMScopes {
-		if body.DMScope == string(v) {
+		if string(body.DmScope) == string(v) {
 			valid = true
 			break
 		}
@@ -97,7 +95,7 @@ func (a *restAPI) putSessionScope(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
-		ensureMap(m, "session")["dm_scope"] = body.DMScope
+		ensureMap(m, "session")["dm_scope"] = string(body.DmScope)
 		return nil
 	}); err != nil {
 		slog.Error("rest: update session dm_scope", "error", err)
@@ -110,18 +108,19 @@ func (a *restAPI) putSessionScope(w http.ResponseWriter, r *http.Request) {
 			if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
 				if err := audit.EmitSecuritySettingChange(
 					r.Context(), auditLogger,
-					"session.dm_scope", oldScope, body.DMScope,
+					"session.dm_scope", oldScope, string(body.DmScope),
 				); err != nil {
 					slog.Error("rest: audit emit session dm_scope change", "error", err)
 				}
 			}
 		}
-		slog.Info("rest: session dm_scope updated (restart required)", "dm_scope", body.DMScope)
-		jsonOK(w, map[string]any{
-			"saved":            true,
-			"requires_restart": true,
-			"applied_dm_scope": oldScope,
-			"warning":          "config saved to disk but hot-reload failed; restart the gateway to apply",
+		slog.Info("rest: session dm_scope updated (restart required)", "dm_scope", string(body.DmScope))
+		warnMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
+		jsonOK(w, gen.SessionScopeUpdateResponse{
+			Saved:           true,
+			RequiresRestart: true,
+			AppliedDmScope:  oldScope,
+			Warning:         &warnMsg,
 		})
 		return
 	}
@@ -133,18 +132,18 @@ func (a *restAPI) putSessionScope(w http.ResponseWriter, r *http.Request) {
 				auditLogger,
 				"session.dm_scope",
 				oldScope,
-				body.DMScope,
+				string(body.DmScope),
 			); err != nil {
 				slog.Error("rest: audit emit session dm_scope change", "error", err)
 			}
 		}
 	}
 
-	slog.Info("rest: session dm_scope updated", "dm_scope", body.DMScope)
+	slog.Info("rest: session dm_scope updated", "dm_scope", string(body.DmScope))
 
-	jsonOK(w, map[string]any{
-		"saved":            true,
-		"requires_restart": true,
-		"applied_dm_scope": oldScope,
+	jsonOK(w, gen.SessionScopeUpdateResponse{
+		Saved:           true,
+		RequiresRestart: true,
+		AppliedDmScope:  oldScope,
 	})
 }

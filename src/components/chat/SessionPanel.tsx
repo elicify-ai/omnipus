@@ -310,7 +310,7 @@ export function SessionPanel() {
   })
 
   const handleSelectSession = (session: Session) => {
-    // Always trigger the WS attach_session flow so Sprint I's replay pipeline
+    // Always trigger the WS attach_session flow so the replay pipeline
     // emits tool_call_start / tool_call_result / subagent_start / subagent_end
     // frames. Without this, chat sessions render only the filtered REST payload
     // (user/assistant text) and tool-call history is silently dropped
@@ -326,7 +326,7 @@ export function SessionPanel() {
       // Set directly via the store — no reset, no double-attach.
       const agent = agents.find((a) => a.id === agentId)
       if (agent?.type) {
-        // W3-8: use the dedicated store action instead of direct setState bypass.
+        // Use the dedicated store action instead of direct setState bypass.
         setActiveAgentType(agent.type)
       }
     }

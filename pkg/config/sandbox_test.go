@@ -37,6 +37,64 @@ func TestOmnipusSandboxConfig_ResolvedMode_Precedence(t *testing.T) {
 	}
 }
 
+// TestOmnipusSandboxConfig_EgressAllowCIDRs_RoundTrip pins the v0.2
+// (#155 item 4) field shape: cfg.Sandbox.EgressAllowCIDRs is a []string
+// of CIDR ranges marshaled under "egress_allow_cidrs". The field is the
+// operator's escape hatch for the default-deny outbound posture — entries
+// here are merged into the SSRFChecker's allow-list at boot so internal
+// services on RFC1918 addresses can be reached by the gateway-controlled
+// HTTP clients.
+//
+// We assert two things:
+//  1. The JSON tag matches what operators write in config.json.
+//  2. Empty/missing values round-trip to a nil slice (not a non-nil
+//     empty slice), so the strict-block default is preserved.
+func TestOmnipusSandboxConfig_EgressAllowCIDRs_RoundTrip(t *testing.T) {
+	// JSON tag check — operators write "egress_allow_cidrs" in config.json.
+	rt := reflect.TypeOf((*OmnipusSandboxConfig)(nil)).Elem()
+	field, ok := rt.FieldByName("EgressAllowCIDRs")
+	if !ok {
+		t.Fatalf("OmnipusSandboxConfig.EgressAllowCIDRs field missing — v0.2 #155 regression")
+	}
+	if got := field.Type.String(); got != "[]string" {
+		t.Fatalf("EgressAllowCIDRs type = %q, want %q", got, "[]string")
+	}
+	if got, want := field.Tag.Get("json"), "egress_allow_cidrs,omitempty"; got != want {
+		t.Fatalf("EgressAllowCIDRs json tag = %q, want %q", got, want)
+	}
+
+	// Round-trip a populated config.
+	original := OmnipusSandboxConfig{
+		EgressAllowCIDRs: []string{"10.0.0.0/8", "192.168.1.0/24"},
+	}
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"egress_allow_cidrs":["10.0.0.0/8","192.168.1.0/24"]`) {
+		t.Errorf("Marshal output missing egress_allow_cidrs: %s", encoded)
+	}
+
+	var decoded OmnipusSandboxConfig
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got, want := len(decoded.EgressAllowCIDRs), 2; got != want {
+		t.Fatalf("Decoded EgressAllowCIDRs len = %d, want %d", got, want)
+	}
+	if got, want := decoded.EgressAllowCIDRs[0], "10.0.0.0/8"; got != want {
+		t.Errorf("Decoded[0] = %q, want %q", got, want)
+	}
+
+	// Empty config defaults: omitempty + nil slice = no key in JSON, and
+	// decoding back gives a nil slice (strict-block posture preserved).
+	empty := OmnipusSandboxConfig{}
+	encodedEmpty, _ := json.Marshal(empty)
+	if strings.Contains(string(encodedEmpty), "egress_allow_cidrs") {
+		t.Errorf("Empty config should omit egress_allow_cidrs key; got: %s", encodedEmpty)
+	}
+}
+
 // TestSSRFConfig_AllowInternalRemainsStringList pins the invariant that
 // OmnipusSSRFConfig.AllowInternal must stay []string (heterogeneous:
 // hostnames, IPs, CIDRs all in one list). Any refactor that introduces
@@ -306,7 +364,7 @@ func TestAllowedPaths_ReadOnlySemanticDocumented(t *testing.T) {
 }
 
 // TestTier3Commands_LoadFromJSON verifies that OmnipusSandboxConfig.Tier3Commands
-// round-trips through JSON serialisation so operators can extend the baseline
+// round-trips through JSON serialization so operators can extend the baseline
 // Tier 3 allow-list via config.json under "sandbox.tier3_commands".
 func TestTier3Commands_LoadFromJSON(t *testing.T) {
 	raw := `{
@@ -353,7 +411,7 @@ func TestTier3Commands_MarshalRoundTrip(t *testing.T) {
 	}
 	jsonStr := string(b)
 	if !strings.Contains(jsonStr, `"tier3_commands"`) {
-		t.Errorf("marshalled JSON missing tier3_commands key: %s", jsonStr)
+		t.Errorf("marshaled JSON missing tier3_commands key: %s", jsonStr)
 	}
 
 	var cfg2 OmnipusSandboxConfig

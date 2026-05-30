@@ -7,7 +7,7 @@
 // returned (true, "") in the default build, auto-approving every ask-policy
 // tool — including admin-flagged tools — with zero log and zero audit when
 // SetToolApprover hadn't been called. The tests below pin the new
-// fail-closed behaviour:
+// fail-closed behavior:
 //
 //  1. Default-build nop denies and emits one approver.fallback audit row.
 //  2. Repeated nop hits emit at most one audit row per process (sync.Once).

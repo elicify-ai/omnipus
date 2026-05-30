@@ -33,16 +33,31 @@ export default defineConfig({
     css: false,
     pool: 'forks',
     testTimeout: 15000,
+    // beforeAll in onboarding.test.tsx dynamically imports the route module which
+    // triggers TanStack router plugin transform across all route files — this can
+    // take 20–30s on a cold run. Raise hookTimeout to prevent spurious timeouts.
+    hookTimeout: 60000,
   },
   build: {
     outDir: 'dist/spa',
     rollupOptions: {
       output: {
-        manualChunks: {
-          react: ['react', 'react-dom'],
-          router: ['@tanstack/react-router'],
-          motion: ['framer-motion'],
-          icons: ['@phosphor-icons/react'],
+        // Vite 8 dropped the object form of manualChunks. The function form
+        // takes a module-id string and returns a chunk name. Keep the same
+        // 4 vendor splits as before (react / router / motion / icons).
+        manualChunks(id) {
+          if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) {
+            return 'react'
+          }
+          if (id.includes('node_modules/@tanstack/react-router')) {
+            return 'router'
+          }
+          if (id.includes('node_modules/framer-motion')) {
+            return 'motion'
+          }
+          if (id.includes('node_modules/@phosphor-icons/react')) {
+            return 'icons'
+          }
         },
       },
     },

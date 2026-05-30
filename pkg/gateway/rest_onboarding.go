@@ -7,7 +7,6 @@
 package gateway
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,6 +14,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
@@ -59,34 +59,24 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	var body struct {
-		Provider struct {
-			ID     string `json:"id"`
-			APIKey string `json:"api_key"`
-			Model  string `json:"model"`
-		} `json:"provider"`
-		Admin struct {
-			Username string `json:"username"`
-			Password string `json:"password"`
-		} `json:"admin"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var body gen.OnboardingCompleteRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "OnboardingCompleteRequest", &body, validateEnabled) {
 		return
 	}
 
 	// Validate provider.
-	if body.Provider.ID == "" {
+	if body.Provider.Id == "" {
 		jsonErr(w, http.StatusBadRequest, "provider.id is required")
 		return
 	}
 	// Reject unknown protocols at the boundary so the gateway does not persist
 	// a config that will fail the post-save rewire and flip to degraded.
-	if !providers.IsKnownProtocol(body.Provider.ID) {
-		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("provider.id %q is not a known protocol", body.Provider.ID))
+	if !providers.IsKnownProtocol(body.Provider.Id) {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("provider.id %q is not a known protocol", body.Provider.Id))
 		return
 	}
-	if body.Provider.APIKey == "" {
+	if body.Provider.ApiKey == "" {
 		jsonErr(w, http.StatusBadRequest, "provider.api_key is required")
 		return
 	}
@@ -107,7 +97,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 
 	// Store the API key in the encrypted credentials store (AES-256-GCM).
 	// Refuses the operation if the store is locked (SEC-23: no plaintext fallback).
-	credRefName, credErr := a.storeCredential(body.Provider.ID+"_API_KEY", body.Provider.APIKey)
+	credRefName, credErr := a.storeCredential(body.Provider.Id+"_API_KEY", body.Provider.ApiKey)
 	if credErr != nil {
 		a.onboardingMgr.ReleaseReservation()
 		slog.Error("rest: credential store unavailable during onboarding", "error", credErr)
@@ -121,9 +111,12 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 
 	// Build the provider entry as a JSON object to inject into providers array.
 	// model defaults per provider when not specified in the onboarding request.
-	providerModel := body.Provider.Model
+	providerModel := ""
+	if body.Provider.Model != nil {
+		providerModel = *body.Provider.Model
+	}
 	if providerModel == "" {
-		switch body.Provider.ID {
+		switch body.Provider.Id {
 		case "anthropic":
 			providerModel = "claude-sonnet-4-6"
 		case "gemini", "google":
@@ -142,7 +135,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// Use the actual model string so the alias matches what the user picked.
 	newProviderEntry := map[string]any{
 		"model_name":  providerModel,
-		"provider":    body.Provider.ID,
+		"provider":    body.Provider.Id,
 		"model":       providerModel,
 		"api_key_ref": credRefName,
 	}
@@ -197,18 +190,18 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 			if !isMap {
 				continue
 			}
-			if entryMap["provider"] == body.Provider.ID && entryMap["model"] == providerModel {
+			if entryMap["provider"] == body.Provider.Id && entryMap["model"] == providerModel {
 				// Update existing entry.
 				if credRefName != "" {
 					entryMap["api_key_ref"] = credRefName
 					delete(entryMap, "api_key")
 					delete(entryMap, "api_keys")
 				} else {
-					entryMap["api_key"] = body.Provider.APIKey
+					entryMap["api_key"] = body.Provider.ApiKey
 				}
 				entryMap["model"] = providerModel
 				entryMap["model_name"] = providerModel
-				entryMap["provider"] = body.Provider.ID
+				entryMap["provider"] = body.Provider.Id
 				providerList[i] = entryMap
 				found = true
 				break
@@ -320,13 +313,14 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	}
 
 	slog.Info("onboarding: completed", "username", body.Admin.Username)
-	resp := map[string]any{
-		"token":    token,
-		"role":     config.UserRoleAdmin,
-		"username": body.Admin.Username,
+	resp := gen.OnboardingCompleteResponse{
+		Token:    token,
+		Role:     gen.OnboardingCompleteResponseRole(config.UserRoleAdmin),
+		Username: body.Admin.Username,
 	}
 	if credRefName == "" {
-		resp["warning"] = "API key stored in plaintext — set OMNIPUS_MASTER_KEY for encrypted storage"
+		warningMsg := "API key stored in plaintext — set OMNIPUS_MASTER_KEY for encrypted storage"
+		resp.Warning = &warningMsg
 	}
 	jsonOK(w, resp)
 }
@@ -374,44 +368,47 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	var body struct {
-		ID       string `json:"id"`
-		APIKey   string `json:"api_key"`
-		Endpoint string `json:"endpoint"`
+	var body gen.ProbeProviderRequest
+	var validateEnabled bool
+	if a.agentLoop != nil {
+		validateEnabled = a.agentLoop.GetConfig().Gateway.ValidateInbound
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeAndValidate(w, r, "ProbeProviderRequest", &body, validateEnabled) {
 		return
 	}
-	if body.ID == "" {
+	if body.Id == "" {
 		jsonErr(w, http.StatusBadRequest, "id is required")
 		return
 	}
-	if body.APIKey == "" {
+	if body.ApiKey == "" {
 		jsonErr(w, http.StatusBadRequest, "api_key is required")
 		return
 	}
 
-	baseURL := body.Endpoint
+	baseURL := ""
+	if body.Endpoint != nil {
+		baseURL = *body.Endpoint
+	}
 	if baseURL == "" {
-		baseURL = providers.GetDefaultAPIBase(body.ID)
+		baseURL = providers.GetDefaultAPIBase(string(body.Id))
 	}
 	if baseURL == "" {
 		// Unknown provider and caller didn't supply an endpoint — the probe
 		// cannot proceed without one.
 		jsonErr(w, http.StatusBadRequest,
-			fmt.Sprintf("unknown provider %q and no endpoint override supplied", body.ID))
+			fmt.Sprintf("unknown provider %q and no endpoint override supplied", body.Id))
 		return
 	}
 
-	models, fetchErr := fetchUpstreamModels(baseURL, body.APIKey)
+	models, fetchErr := fetchUpstreamModels(baseURL, body.ApiKey)
 	if fetchErr != nil {
 		// Upstream probe failure is a 200 with success=false — symmetrical
 		// with POST /providers/{id}/test, so the SPA's error-handling branch
 		// is identical for both flows.
-		jsonOK(w, map[string]any{"success": false, "error": fetchErr.Error()})
+		errMsg := fetchErr.Error()
+		jsonOK(w, gen.ProbeProviderResponse{Success: false, Error: &errMsg})
 		return
 	}
 
-	jsonOK(w, map[string]any{"success": true, "models": models})
+	jsonOK(w, gen.ProbeProviderResponse{Success: true, Models: &models})
 }

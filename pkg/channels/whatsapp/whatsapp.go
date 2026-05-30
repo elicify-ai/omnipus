@@ -306,5 +306,16 @@ func (c *WhatsAppChannel) handleIncomingMessage(msg map[string]any) {
 		return
 	}
 
+	if channels.DispatchCancelIfRecognized(
+		c.ctx,
+		content,
+		"whatsapp",
+		chatID,
+		senderID,
+		c.GetCancelInterceptor(),
+		channels.CancelSendFn(c),
+	) {
+		return
+	}
 	c.HandleMessage(c.ctx, peer, messageID, senderID, chatID, content, mediaPaths, metadata, sender)
 }

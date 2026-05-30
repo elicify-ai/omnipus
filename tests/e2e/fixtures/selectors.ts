@@ -27,16 +27,19 @@ export const agentPicker = (page: Page) =>
   page.getByRole('banner').locator('button').filter({ hasText: '—' }).first();
 
 /**
- * Assistant messages — ChatScreen renders each message as a row with
- * data-message-id, using `flex-row-reverse` only for user messages. Assistant
- * messages are `[data-message-id]:not(.flex-row-reverse)`.
+ * Completed assistant messages — only counts messages whose data-status is not
+ * "running". AssistantUI creates a placeholder element with data-message-id as
+ * soon as the user sends a message (before the LLM responds). Excluding
+ * data-status="running" ensures tests wait for the LLM to actually complete
+ * its response rather than matching the in-progress placeholder.
  *
- * Ground truth: ChatScreen wraps MessagePrimitive.Root in a custom <div>
- * that exposes data-message-id but not data-message-role, so we key off
- * the row-reversal class the UI uses to right-align user bubbles.
+ * Ground truth: ChatScreen sets data-status={message.status?.type ?? 'complete'}
+ * on AssistantMessage's MessagePrimitive.Root, and data-message-id on all
+ * message roots. User messages have flex-row-reverse (right-aligned bubbles);
+ * assistant messages do not.
  */
 export const assistantMessages = (page: Page) =>
-  page.locator('[data-message-id]:not(.flex-row-reverse)');
+  page.locator('[data-message-id]:not(.flex-row-reverse):not([data-status="running"])');
 
 /**
  * User messages — complement of assistantMessages; row uses `flex-row-reverse`.

@@ -174,7 +174,7 @@ function ToolApprovalCard({
             </p>
           </div>
 
-          {Object.keys(args).length > 0 && (
+          {args && Object.keys(args).length > 0 && (
             <div>
               <p className="text-xs text-[var(--color-muted)] mb-1">Arguments</p>
               <pre className="text-xs font-mono bg-[var(--color-surface-2)] rounded-lg px-3 py-2 overflow-auto max-h-40 whitespace-pre-wrap break-all text-[var(--color-secondary)]">

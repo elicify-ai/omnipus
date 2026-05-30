@@ -106,8 +106,11 @@ test(
 
     // Step 1: Verify the warmup placeholder is visible (warmup state machine started).
     // This also confirms the component rendered at all (not blank/crashed).
+    // Scope to the preview-warmup testid — the page can render multiple
+    // aria-live=polite regions (sr-only announcer, status text, span) which
+    // would trip strict-mode if the bare text/role selector were used.
     await expect(
-      page.locator('text=Starting dev server').or(page.locator('[aria-live="polite"]')),
+      page.getByTestId('preview-warmup').first(),
     ).toBeVisible({ timeout: 15_000 })
 
     // Step 2: Use Playwright clock to advance time past the full 60 s warmup window.
@@ -126,9 +129,10 @@ test(
       page.locator('text=Dev server did not respond in time'),
     ).toBeVisible({ timeout: 10_000 })
 
-    // Step 4: The Retry button must be visible (error block includes onRetry).
+    // Step 4: The Retry warmup button must be visible. There is also a generic
+    // "Retry" icon button in the iframe chrome — disambiguate explicitly.
     await expect(
-      page.getByRole('button', { name: 'Retry' }),
+      page.getByRole('button', { name: 'Retry warmup' }),
     ).toBeVisible({ timeout: 5_000 })
 
     // Step 5: Verify the probe count is consistent with maxProbes=30.

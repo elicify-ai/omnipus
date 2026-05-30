@@ -15,7 +15,12 @@ import (
 // mustNewAgentLoop is a test helper that calls NewAgentLoop and fatals on error.
 // Use this in all _test.go files within this package to avoid repeating the
 // error-handling boilerplate after the return-type change (FR-029a / Architect #7).
-func mustNewAgentLoop(t *testing.T, cfg *config.Config, msgBus *bus.MessageBus, provider providers.LLMProvider) *AgentLoop {
+func mustNewAgentLoop(
+	t *testing.T,
+	cfg *config.Config,
+	msgBus *bus.MessageBus,
+	provider providers.LLMProvider,
+) *AgentLoop {
 	t.Helper()
 	al, err := NewAgentLoop(cfg, msgBus, provider)
 	if err != nil {

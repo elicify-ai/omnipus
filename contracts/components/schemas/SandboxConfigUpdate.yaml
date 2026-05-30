@@ -1,0 +1,82 @@
+type: object
+description: >
+  Partial-update body for PUT /security/sandbox-config.
+  All fields are optional — only fields present in the request are updated.
+  At least one field must be supplied (the server returns 400 otherwise).
+  Flat fields take precedence over nested equivalents when both are present
+  in the same request body.
+  mode, allowed_paths, and default_profile are restart-gated
+  (the response includes requires_restart=true when any of these change).
+  ssrf.allow_internal and shell_deny_patterns are hot-reloaded.
+properties:
+  mode:
+    type: string
+    enum:
+      - 'off'
+      - permissive
+      - enforce
+    description: >
+      Kernel sandbox enforcement mode.
+      "off" = no kernel enforcement (god-mode). "permissive" = log violations but
+      allow. "enforce" = block violations. Restart-gated.
+    example: "enforce"
+  allow_network_outbound:
+    type: boolean
+    description: Allow agent tool calls to make outbound network connections.
+    example: true
+  allowed_paths:
+    type: array
+    items:
+      type: string
+    description: >
+      List of host filesystem paths the agent is allowed to read/write.
+      Restart-gated. Must be absolute paths; empty list clears all exceptions.
+    example:
+      - "/home/user/workspace"
+  ssrf_enabled:
+    type: boolean
+    description: Enable SSRF (server-side request forgery) protection for HTTP tool calls.
+    example: true
+  ssrf_allow_internal:
+    type: array
+    items:
+      type: string
+    description: >
+      Flat version of ssrf.allow_internal. Takes precedence when both are present.
+      CIDR ranges or IP addresses the agent may reach despite SSRF blocking.
+    example:
+      - "10.0.0.1/32"
+  ssrf:
+    type: object
+    description: Nested SSRF configuration sub-object. Flat fields take precedence.
+    properties:
+      allow_internal:
+        type: array
+        items:
+          type: string
+        description: CIDR ranges or IP addresses the agent may reach despite SSRF blocking.
+        example:
+          - "10.0.0.1/32"
+  default_profile:
+    type: string
+    enum:
+      - ''
+      - none
+      - workspace
+      - workspace+net
+      - host
+      - 'off'
+    description: >
+      Default sandbox profile applied to new custom agents that do not pick their
+      own profile. Restart-gated. Empty string means "inherit global default".
+    example: "workspace"
+  shell_deny_patterns:
+    type: array
+    items:
+      type: string
+    description: >
+      Global fallback list of Go regexp patterns to block in shell commands.
+      Per-agent custom_deny_patterns extend this list. Hot-reloaded.
+    example:
+      - "rm -rf /"
+      - "curl.*169\\.254"

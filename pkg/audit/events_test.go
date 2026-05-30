@@ -1,4 +1,5 @@
 // Tests for the Tool Registry redesign (Wave A2) audit event emitters.
+
 package audit
 
 import (
@@ -111,7 +112,7 @@ func TestPolicyEngine_AuditEmissions(t *testing.T) {
 		{EventToolPolicyAskRequested, SeverityInfo, "args_hash"},
 		{EventToolPolicyAskGranted, SeverityInfo, "approver_user_id"},
 		{EventToolPolicyAskDenied, SeverityInfo, "reason"},
-		{EventToolPolicyAskDenied, SeverityInfo, "cancelled_tool_call_ids"},
+		{EventToolPolicyAskDenied, SeverityInfo, "canceled_tool_call_ids"},
 		{EventToolCollisionMCPRejected, SeverityWarn, "conflict_with"},
 		{EventToolCollisionMCPRejected, SeverityWarn, "conflict_with"},
 		{EventToolCollisionMCPRejected, SeverityWarn, "conflict_with"},
@@ -154,7 +155,7 @@ func TestEmit_NilLoggerIsNoOp(t *testing.T) {
 }
 
 // TestEmit_InvalidAskDenyReason — emitter MUST refuse to write a record
-// with an unknown reason; this is the boundary defence on FR-047's enum.
+// with an unknown reason; this is the boundary defense on FR-047's enum.
 func TestEmit_InvalidAskDenyReason(t *testing.T) {
 	t.Parallel()
 	lg, path := newTestLogger(t)

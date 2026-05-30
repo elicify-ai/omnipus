@@ -224,7 +224,25 @@ var (
 			`>\s*/dev/(sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|loop\d|dm-\d|md\d|sr\d|nbd\d)`,
 		),
 		regexp.MustCompile(`\b(shutdown|reboot|poweroff)\b`),
-		regexp.MustCompile(`:\(\)\s*\{.*\};\s*:`),
+		// Fork-bomb guard. Widened in v0.2 #155 item 5 to match every
+		// documented bypass shape:
+		//   `: ( ) { :|:& };:`        (whitespace anywhere)
+		//   `b(){b|b};b`              (disguised with arbitrary identifier)
+		//   `:(){ :|:& \n };:`        (newline inside braces)
+		// Three changes from the original `:\(\)\s*\{.*\};\s*:`:
+		//   1. `(?s)` lets `.` cross `\n` so the body can span lines
+		//   2. The function name accepts any shell identifier
+		//      (`[A-Za-z_]\w*`) OR the literal `:`. Without backreferences
+		//      in RE2 we cannot enforce that the head-name and tail-name
+		//      match, so we accept any identifier in both positions. False
+		//      positives are acceptable since they just deny commands that
+		//      LOOK like fork bombs.
+		//   3. `[|&]` constraint inside the body keeps the false-positive
+		//      surface tight: the recursive call must contain a pipe or
+		//      ampersand, which is what makes a bomb a bomb.
+		// RLIMIT_NPROC in hardened_exec_linux.go is the kernel-layer
+		// backstop for any shape that still slips through.
+		regexp.MustCompile(`(?s)([A-Za-z_]\w*|:)\s*\(\s*\)\s*\{[^{}]*[|&][^{}]*\}\s*;\s*([A-Za-z_]\w*|:)`),
 		regexp.MustCompile(`\$\([^)]+\)`),
 		regexp.MustCompile(`\$\{[^}]+\}`),
 		regexp.MustCompile("`[^`]+`"),
@@ -260,6 +278,9 @@ var (
 		regexp.MustCompile(`\bsource\s+.*\.sh\b`),
 		regexp.MustCompile(`<\([^)]*\)`),
 		regexp.MustCompile(`>\([^)]*\)`),
+		// v0.2 #155 item 8 — secrets-subtree path-guard (option B backstop).
+		regexp.MustCompile(`\bmaster\.key\b`),
+		regexp.MustCompile(`\bcredentials\.json\b`),
 	}
 
 	// absolutePathPattern matches absolute file paths in commands (Unix and Windows).
@@ -310,7 +331,7 @@ func NewExecToolWithDeps(
 // sandboxOn reports whether the exec tool should route children through the
 // hardened-exec path (sandbox.Run / ApplyChildHardening). The decision is
 // explicit-opt-in: only "enforce" and "permissive" turn it on. Any other
-// value — including "off" and the empty string — preserves today's behaviour
+// value — including "off" and the empty string — preserves today's behavior
 // (`sh -c <cmd>`, no proxy, no workspace cwd unless the caller passes one).
 //
 // Empty string explicitly maps to OFF so the many test paths that construct
@@ -861,10 +882,11 @@ func (t *ExecTool) runSyncHardened(ctx context.Context, command, cwd string) *To
 }
 
 // sandboxLimitsEnv builds the environment for background sessions on the
-// sandbox-on path. It starts from sandbox.ScrubGatewayEnv() (which strips
-// OMNIPUS_MASTER_KEY / OMNIPUS_KEY_FILE / OMNIPUS_BEARER_TOKEN) and then
-// layers the Limits-derived injections (HTTP_PROXY, npm_config_cache) on top
-// so they take precedence on duplicate keys (POSIX exec(3) semantics).
+// sandbox-on path. It starts from sandbox.ScrubGatewayEnv() (which under
+// v0.2 #155 item 3 enforces a closed allowlist of PATH/HOME/LANG/LC_*/XDG_*/
+// OMNIPUS_CHILD_*) and then layers the Limits-derived injections
+// (HTTP_PROXY, npm_config_cache) on top so they take precedence on duplicate
+// keys (POSIX exec(3) semantics).
 func sandboxLimitsEnv(lim sandbox.Limits) []string {
 	scrubbed := sandbox.ScrubGatewayEnv()
 	if lim.EgressProxyAddr != "" {

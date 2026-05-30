@@ -1,0 +1,31 @@
+type: object
+description: File attachment associated with a transcript entry.
+required:
+  - type
+  - path
+  - size
+  - mime_type
+additionalProperties: false
+properties:
+  type:
+    type: string
+    enum:
+      - image
+      - audio
+      - video
+      - file
+    description: Attachment category. Aligned with MediaPart.type enum.
+    example: "file"
+  path:
+    type: string
+    description: Relative path within the session workspace.
+    example: "output/result.txt"
+  size:
+    type: integer
+    format: int64
+    description: File size in bytes.
+    example: 1024
+  mime_type:
+    type: string
+    description: MIME type of the attachment.
+    example: "text/plain"

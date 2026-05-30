@@ -12,6 +12,7 @@ export function ToastContainer() {
       {toasts.map((toast) => (
         <div
           key={toast.id}
+          data-testid={toast.testId}
           className={cn(
             'flex items-start gap-3 rounded-lg border px-4 py-3 shadow-lg pointer-events-auto',
             'animate-in slide-in-from-bottom-2 fade-in',

@@ -1,0 +1,26 @@
+type: object
+description: >
+  Full session detail as returned by GET /sessions/{id}.
+  Contains the session metadata plus the complete ordered transcript.
+required:
+  - session
+  - messages
+additionalProperties: false
+properties:
+  session:
+    $ref: './Session.yaml'
+  messages:
+    type: array
+    items:
+      $ref: './Message.yaml'
+    maxItems: 100000
+    description: >
+      Ordered list of transcript entries for this session.
+      Capped at 100000 messages to bound response payload size.
+  agent_removed:
+    type: boolean
+    description: >
+      True when the agent that owned this session has been deleted from the config.
+      Used by the SPA to display a banner informing the user that the original agent
+      no longer exists. Absent (or false) in the common case.
+    example: false

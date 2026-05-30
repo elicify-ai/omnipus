@@ -146,7 +146,10 @@ func (r *BuiltinRegistry) Count() int {
 //     (`conflict_with: "builtin"`) per FR-034.
 func (r *BuiltinRegistry) ValidateMCPName(name string) error {
 	if strings.HasPrefix(name, "system.") {
-		return fmt.Errorf("tools.BuiltinRegistry: MCP tool %q rejected: name begins with reserved prefix \"system.\"", name)
+		return fmt.Errorf(
+			"tools.BuiltinRegistry: MCP tool %q rejected: name begins with reserved prefix \"system.\"",
+			name,
+		)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()

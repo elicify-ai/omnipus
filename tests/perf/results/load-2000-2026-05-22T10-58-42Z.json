@@ -1,0 +1,15 @@
+{
+  "run_at": "2026-05-22T10:58:42Z",
+  "sessions_opened": 2000,
+  "messages_sent": 5300,
+  "messages_recv": 10314,
+  "dropped_frames": 1670,
+  "p50_first_token_ms": 1694,
+  "p95_first_token_ms": 1695,
+  "p99_first_token_ms": 1695,
+  "peak_rss_mb": 141.27895832061768,
+  "goroutines_before": 20,
+  "goroutines_after": 7,
+  "goroutine_leak": -13,
+  "duration_seconds": 344.848506696
+}

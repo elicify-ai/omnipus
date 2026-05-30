@@ -24,6 +24,12 @@ import (
 //	Then the returned slice contains the valid agent's session,
 //	And the error slice contains exactly one error for the broken agent.
 func TestListAllSessions_PartialErrors(t *testing.T) {
+	if os.Getuid() == 0 {
+		// Root bypasses DAC (Discretionary Access Control), so chmod 0o000 on
+		// a directory does not prevent os.ReadDir from root. The failure-injection
+		// this test relies on only works for non-privileged users.
+		t.Skip("permission-based failure injection is ineffective under root; run as non-root")
+	}
 	tmpDir := t.TempDir()
 
 	cfg := &config.Config{

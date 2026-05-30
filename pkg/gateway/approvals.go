@@ -19,7 +19,7 @@
 //	pending → denied_timeout      (timer fires, configurable, default 300 s)
 //	pending → denied_restart      (gateway shutdown)
 //	pending → denied_saturated    (skip-pending path when cap exceeded)
-//	pending → denied_batch_short_circuit (sibling in same batch denied/cancelled)
+//	pending → denied_batch_short_circuit (sibling in same batch denied/canceled)
 //
 // Any action on a terminal state returns HTTP 410 Gone (FR-018).
 
@@ -41,13 +41,13 @@ const (
 	// ApprovalStatePending is the sole active state.  The agent loop is paused.
 	ApprovalStatePending ApprovalState = "pending"
 
-	// Terminal states — any action on these returns HTTP 410 Gone.
-	ApprovalStateApproved              ApprovalState = "approved"
-	ApprovalStateDeniedUser            ApprovalState = "denied_user"
-	ApprovalStateDeniedTimeout         ApprovalState = "denied_timeout"
-	ApprovalStateDeniedCancel          ApprovalState = "denied_cancel"
-	ApprovalStateDeniedRestart         ApprovalState = "denied_restart"
-	ApprovalStateDeniedSaturated       ApprovalState = "denied_saturated"
+	// ApprovalStateApproved and the other terminal states return HTTP 410 Gone on any action.
+	ApprovalStateApproved                ApprovalState = "approved"
+	ApprovalStateDeniedUser              ApprovalState = "denied_user"
+	ApprovalStateDeniedTimeout           ApprovalState = "denied_timeout"
+	ApprovalStateDeniedCancel            ApprovalState = "denied_cancel"
+	ApprovalStateDeniedRestart           ApprovalState = "denied_restart"
+	ApprovalStateDeniedSaturated         ApprovalState = "denied_saturated"
 	ApprovalStateDeniedBatchShortCircuit ApprovalState = "denied_batch_short_circuit"
 )
 
@@ -79,16 +79,16 @@ const (
 // The loop blocks on resultCh until the entry resolves.
 type approvalEntry struct {
 	// Immutable fields set at creation.
-	ApprovalID      string
-	ToolCallID      string
-	ToolName        string
-	Args            map[string]any
-	AgentID         string
-	SessionID       string
-	TurnID          string
-	RequiresAdmin   bool      // true when tool.RequiresAdminAsk() == true
-	CreatedAt       time.Time
-	ExpiresAt       time.Time
+	ApprovalID    string
+	ToolCallID    string
+	ToolName      string
+	Args          map[string]any
+	AgentID       string
+	SessionID     string
+	TurnID        string
+	RequiresAdmin bool // true when tool.RequiresAdminAsk() == true
+	CreatedAt     time.Time
+	ExpiresAt     time.Time
 
 	// Mutable — protected by the registry's mu.
 	state ApprovalState
@@ -142,21 +142,21 @@ type approvalRegistryV2 struct {
 const defaultTerminalRetention = 60 * time.Second
 
 // newApprovalRegistryV2 creates a registry with the given saturation cap and timeout.
-// cap == 0 means unlimited (ShouldSaturate always returns false per FR-016).
-// cap > 0 is the saturation limit. Negative cap must not reach here (caller
+// maxCap == 0 means unlimited (ShouldSaturate always returns false per FR-016).
+// maxCap > 0 is the saturation limit. Negative maxCap must not reach here (caller
 // must validate via policy.ValidateSaturationCap before constructing).
 // timeout <= 0 selects the spec default (300 s).
-func newApprovalRegistryV2(cap int, timeout time.Duration) *approvalRegistryV2 {
+func newApprovalRegistryV2(maxCap int, timeout time.Duration) *approvalRegistryV2 {
 	if timeout <= 0 {
 		timeout = 300 * time.Second
 	}
 	r := &approvalRegistryV2{
 		entries:           make(map[string]*approvalEntry),
-		maxPending:        cap,
+		maxPending:        maxCap,
 		timeout:           timeout,
 		terminalRetention: defaultTerminalRetention,
 	}
-	r.maxPendingAtomic.Store(int64(cap))
+	r.maxPendingAtomic.Store(int64(maxCap))
 	return r
 }
 
@@ -203,8 +203,8 @@ func (r *approvalRegistryV2) requestApproval(
 			pendingCount++
 		}
 	}
-	cap := r.maxPending
-	if cap > 0 && pendingCount >= cap {
+	maxCap := r.maxPending
+	if maxCap > 0 && pendingCount >= maxCap {
 		// Return a synthetic saturated entry — caller must NOT emit WS event.
 		synthetic := &approvalEntry{
 			ApprovalID:    uuid.New().String(),
@@ -325,7 +325,7 @@ func (r *approvalRegistryV2) resolve(
 }
 
 // cancelBatchShortCircuit transitions a pending entry to denied_batch_short_circuit.
-// Used when a prior call in the same batch was denied/cancelled (FR-065).
+// Used when a prior call in the same batch was denied/canceled (FR-065).
 // Returns false if the entry is already terminal or not found.
 func (r *approvalRegistryV2) cancelBatchShortCircuit(approvalID string) bool {
 	r.mu.Lock()
@@ -372,16 +372,16 @@ func (r *approvalRegistryV2) pendingApprovals() []*approvalEntry {
 
 // cancelAllPendingForRestart transitions every pending approval to denied_restart.
 // Called during graceful shutdown (FR-013, FR-048).
-// Returns the IDs and tool names of cancelled approvals for audit logging.
+// Returns the IDs and tool names of canceled approvals for audit logging.
 //
-// On shutdown the gateway is going down anyway, so each cancelled entry is
+// On shutdown the gateway is going down anyway, so each canceled entry is
 // scheduled for deletion via the same retention path as resolve/fireTimeout.
 // This keeps the contract uniform across all terminal-state transitions and
 // prevents the entries from leaking if the process happens to live longer
 // than expected (e.g. a slow shutdown sequence).
 func (r *approvalRegistryV2) cancelAllPendingForRestart() []approvalEntry {
 	r.mu.Lock()
-	var cancelled []approvalEntry
+	var canceled []approvalEntry
 	cancelledIDs := make([]string, 0)
 	for _, e := range r.entries {
 		if e.state == ApprovalStatePending {
@@ -390,7 +390,7 @@ func (r *approvalRegistryV2) cancelAllPendingForRestart() []approvalEntry {
 				e.timer.Stop()
 				e.timer = nil
 			}
-			cancelled = append(cancelled, *e)
+			canceled = append(canceled, *e)
 			cancelledIDs = append(cancelledIDs, e.ApprovalID)
 			r.pendingCount.Add(-1)
 		}
@@ -400,11 +400,52 @@ func (r *approvalRegistryV2) cancelAllPendingForRestart() []approvalEntry {
 	}
 	r.mu.Unlock()
 
-	for _, snap := range cancelled {
-		snap := snap // capture loop variable
+	for _, snap := range canceled {
+		// capture loop variable
 		snap.resultCh <- ApprovalOutcome{Approved: false, Reason: "restart"}
 	}
-	return cancelled
+	return canceled
+}
+
+// cancelAllPendingForSession auto-denies every pending approval whose SessionID
+// matches the given sessionID, using ApprovalStateDeniedCancel as the terminal
+// state. Called by the cancel handler after InterruptSession so that any agent
+// loop goroutine blocked on a resultCh select is unblocked immediately (FR-7).
+//
+// reason is the human-readable explanation delivered in ApprovalOutcome.Reason;
+// callers SHOULD pass "session canceled" (per FR-7 / EC-8).
+//
+// Returns the count of approvals auto-denied (for audit / observability).
+// Approvals that are already terminal when this function runs are unaffected
+// (FR-8 contract: tools whose execution has already started are not killed here).
+func (r *approvalRegistryV2) cancelAllPendingForSession(sessionID, reason string) int {
+	r.mu.Lock()
+	var toDeliver []*approvalEntry
+	cancelledIDs := make([]string, 0)
+	for _, e := range r.entries {
+		if e.state != ApprovalStatePending || e.SessionID != sessionID {
+			continue
+		}
+		e.state = ApprovalStateDeniedCancel
+		if e.timer != nil {
+			e.timer.Stop()
+			e.timer = nil
+		}
+		toDeliver = append(toDeliver, e)
+		cancelledIDs = append(cancelledIDs, e.ApprovalID)
+		r.pendingCount.Add(-1)
+	}
+	for _, id := range cancelledIDs {
+		r.scheduleTerminalDelete(id)
+	}
+	r.mu.Unlock()
+
+	for _, e := range toDeliver {
+		e.resultCh <- ApprovalOutcome{Approved: false, Reason: reason}
+	}
+	slog.Info("approval: auto-denied pending approvals on session cancel",
+		"session_id", sessionID, "count", len(toDeliver), "reason", reason)
+	return len(toDeliver)
 }
 
 // pendingCount returns a current count of pending approvals for the Prometheus gauge.

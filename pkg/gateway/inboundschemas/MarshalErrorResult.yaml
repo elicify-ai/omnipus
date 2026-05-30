@@ -1,0 +1,14 @@
+title: MarshalErrorResult
+description: >
+  Sentinel emitted in the result field of a tool_call_result when json.Marshal
+  fails on the raw tool result. Prevents a second marshal failure at the WS
+  send site by substituting a stable known-good object.
+type: object
+required:
+  - _marshal_error
+additionalProperties: false
+properties:
+  _marshal_error:
+    type: string
+    minLength: 1
+    description: The error message from the failed json.Marshal call.

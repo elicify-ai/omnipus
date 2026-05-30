@@ -1,0 +1,19 @@
+# Funding configuration for the GitHub Sponsors button.
+#
+# Each top-level key activates a Sponsor link in the repo header. Uncomment the
+# entries you want to surface as elicify.ai Pte. Ltd. enables them. Until at
+# least one is uncommented, no Sponsor button is shown — which is fine: better
+# to ship nothing than to ship a broken link.
+#
+# Reference: https://docs.github.com/en/repositories/managing-your-repositories-settings-and-customization/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+
+# github_sponsors: elicify-ai          # enable once the org is approved for Sponsors
+# patreon:        ""
+# open_collective: ""
+# ko_fi:          ""
+# tidelift:       ""
+# community_bridge: ""
+# liberapay:      ""
+# issuehunt:      ""
+# otechie:        ""
+custom: ["https://omnipus.ai"]

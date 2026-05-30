@@ -1,0 +1,59 @@
+title: TaskUpdateRequest
+description: >
+  Request body for PUT /api/v1/tasks/{id}. Updates fields on an existing task.
+  All fields are optional — only provided fields are updated.
+  The fields name/description are backward-compat aliases for title/result.
+type: object
+additionalProperties: false
+minProperties: 1
+properties:
+  status:
+    type: string
+    enum:
+      - queued
+      - assigned
+      - running
+      - completed
+      - failed
+    description: New task status.
+    example: "completed"
+  result:
+    type: string
+    description: Task result or output summary.
+    example: "Logs analyzed successfully."
+  artifacts:
+    type: array
+    items:
+      type: string
+    description: List of artifact paths produced by the task.
+    example: ["output.txt"]
+  title:
+    type: string
+    description: New task title.
+    example: "Updated task title"
+  agent_id:
+    type: string
+    description: Agent to re-assign the task to.
+    example: "jim"
+  priority:
+    type: integer
+    description: New task priority.
+    example: 3
+  started_at:
+    type: string
+    format: date-time
+    description: When the task started execution.
+    example: "2026-05-16T10:00:00Z"
+  completed_at:
+    type: string
+    format: date-time
+    description: When the task completed execution.
+    example: "2026-05-16T10:05:00Z"
+  name:
+    type: string
+    description: Backward-compat alias for title.
+    example: "Updated task title"
+  description:
+    type: string
+    description: Backward-compat alias for result.
+    example: "Logs analyzed successfully."

@@ -808,7 +808,7 @@ func TestServePreview_PathTraversal_Returns403(t *testing.T) {
 				w.Code == http.StatusForbidden || w.Code == http.StatusNotFound,
 				"path traversal %q must return 403 or 404, got %d", tc.path, w.Code)
 			// 403 is the ideal (explicit traversal block); 404 is acceptable when
-			// the traversed path does not exist outside the sandbox (defence-in-depth).
+			// the traversed path does not exist outside the sandbox (defense-in-depth).
 		})
 	}
 }
@@ -1044,11 +1044,11 @@ func TestServePreview_NilAuditLogger_NoPanic(t *testing.T) {
 // 200 (not 500). The audit failure must not fail-close the served request.
 //
 // Two sub-tests:
-// 1. Confirm a degraded audit.Logger.Log() returns an error (proves the test harness).
-// 2. Confirm HandleServeWorkspace returns 200 with a nil logger (the nil-logger path
-//    is the observable proxy for "Log() fails silently" since we cannot inject the
-//    unexported field; the nil-check and error-return path share the same not-fail-closed
-//    contract in emitPreviewAuditEntry).
+//  1. Confirm a degraded audit.Logger.Log() returns an error (proves the test harness).
+//  2. Confirm HandleServeWorkspace returns 200 with a nil logger (the nil-logger path
+//     is the observable proxy for "Log() fails silently" since we cannot inject the
+//     unexported field; the nil-check and error-return path share the same not-fail-closed
+//     contract in emitPreviewAuditEntry).
 //
 // Traces to: chat-served-iframe-preview-spec.md FR-024 (best-effort audit)
 func TestServePreview_AuditLogError_NotFailClosed(t *testing.T) {
@@ -1194,7 +1194,7 @@ func TestDevPreview_FrameAncestorsHeader_ViaRealHandler(t *testing.T) {
 
 // TestServePreview_SymlinkEscape_Returns403 verifies that HandleServeWorkspace
 // returns 403 when a symlink inside the served directory points to a path
-// outside the registered directory. This tests the F-28 symlink-escape defence
+// outside the registered directory. This tests the F-28 symlink-escape defense
 // added to rest_preview.go.
 //
 // Skipped on Windows (os.Symlink requires elevated privileges on Windows).

@@ -30,33 +30,49 @@ import (
 // Test helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-// sliceSink accumulates emitted frames in a slice; safe for single-goroutine use.
+// sliceSink accumulates emitted frames as JSON bytes; safe for single-goroutine use.
+// It stores raw JSON so that tests are not coupled to the internal Go frame type —
+// any generated type emitted through streamReplay can be decoded here.
 type sliceSink struct {
 	mu     sync.Mutex
-	frames []wsServerFrame
+	frames [][]byte
 }
 
-func (s *sliceSink) emit(f wsServerFrame) error {
+// emit accepts any generated frame value, marshals it to JSON, and stores it.
+// This implements the func(any) error signature required by streamReplay.
+func (s *sliceSink) emit(f any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.frames = append(s.frames, f)
+	data, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	s.frames = append(s.frames, data)
 	return nil
 }
 
-func (s *sliceSink) all() []wsServerFrame {
+// all decodes all accumulated JSON frames into replayFrameDecoder for test assertions.
+// replayFrameDecoder is kept as a decode-only test helper — it is never constructed
+// as a wire value; only json.Unmarshal populates it.
+func (s *sliceSink) all() []replayFrameDecoder {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]wsServerFrame, len(s.frames))
-	copy(out, s.frames)
+	out := make([]replayFrameDecoder, 0, len(s.frames))
+	for _, raw := range s.frames {
+		var f replayFrameDecoder
+		if err := json.Unmarshal(raw, &f); err == nil {
+			out = append(out, f)
+		}
+	}
 	return out
 }
 
 // runReplay is a convenience wrapper for streamReplay with a sliceSink.
-func runReplay(t *testing.T, entries []session.TranscriptEntry) ([]wsServerFrame, int) {
+func runReplay(t *testing.T, entries []session.TranscriptEntry) ([]replayFrameDecoder, int) {
 	t.Helper()
 	sink := &sliceSink{}
 	rs := computeReplayStats(entries)
-	n, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil)
+	n, err := streamReplay(context.Background(), "session_test", entries, rs, sink.emit, nil, nil)
 	require.NoError(t, err, "streamReplay must not return an error for valid input")
 	return sink.all(), n
 }
@@ -103,11 +119,11 @@ func toolCall(id, tool, status string, durationMS int64, params, result map[stri
 // Traces to: TDD row 1
 func TestStreamReplay_Extracted_TestableSignature(t *testing.T) {
 	sink := &sliceSink{}
-	// W3-3: pass pre-computed stats; nil entries produce an empty stats struct.
+	// Pass pre-computed stats; nil entries produce an empty stats struct.
 	rs := computeReplayStats(nil)
-	n, err := streamReplay(context.Background(), "s1", nil, rs, sink.emit, nil)
+	n, err := streamReplay(context.Background(), "s1", nil, rs, sink.emit, nil, nil)
 	require.NoError(t, err, "streamReplay must accept a nil entry slice")
-	// W3-2: done frame is NOT counted in framesEmitted (content frames only).
+	// Done frame is NOT counted in framesEmitted (content frames only).
 	assert.Equal(t, 0, n, "empty transcript must emit 0 content frames (done frame excluded from count)")
 	frames := sink.all()
 	require.Len(t, frames, 1)
@@ -499,7 +515,7 @@ func TestReplay_CompactionEntry_Skipped(t *testing.T) {
 
 	require.Equal(t, []string{"done"}, frameTypes(frames),
 		"compaction entry must produce zero frames before done")
-	// W3-2: done frame is excluded from framesEmitted (content frames only).
+	// Done frame is excluded from framesEmitted (content frames only).
 	assert.Equal(t, 0, n, "compaction-only transcript produces 0 content frames")
 }
 
@@ -514,7 +530,7 @@ func TestReplay_CompactionEntry_Skipped(t *testing.T) {
 func TestReplay_EmptyTranscript_JustDone(t *testing.T) {
 	frames, n := runReplay(t, nil)
 	require.Equal(t, []string{"done"}, frameTypes(frames))
-	// W3-2: done frame excluded from framesEmitted.
+	// Done frame excluded from framesEmitted.
 	assert.Equal(t, 0, n)
 }
 
@@ -636,7 +652,7 @@ func TestReplay_CtxCancelled_StopsCleanly(t *testing.T) {
 	defer cancel() // ensure context is canceled even on test failure
 
 	var emitCount int
-	emitFn := func(f wsServerFrame) error {
+	emitFn := func(_ any) error {
 		emitCount++
 		if emitCount == 3 {
 			cancel() // cancel mid-replay
@@ -647,7 +663,7 @@ func TestReplay_CtxCancelled_StopsCleanly(t *testing.T) {
 		return nil
 	}
 
-	_, err := streamReplay(ctx, "session_cancel", entries, computeReplayStats(entries), emitFn, nil)
+	_, err := streamReplay(ctx, "session_cancel", entries, computeReplayStats(entries), emitFn, nil, nil)
 	assert.ErrorIs(t, err, context.Canceled, "streamReplay must return context.Canceled on ctx cancellation")
 	// goleak.VerifyNone (deferred) will fail the test if any goroutine was leaked.
 }
@@ -665,6 +681,7 @@ func TestReplay_CtxCancelled_StopsCleanly(t *testing.T) {
 // Traces to: TDD row 16, FR-I-009, BDD Scenario 9
 func TestAttach_RegistersLiveEventsBeforeReplay(t *testing.T) {
 	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
 
 	// Create a session with one user entry.
 	store := handler.agentLoop.GetSessionStore()
@@ -689,13 +706,13 @@ func TestAttach_RegistersLiveEventsBeforeReplay(t *testing.T) {
 	chatID := "test-chat-live-before-replay"
 
 	ctx := context.Background()
-	handler.handleAttachSession(ctx, chatID, meta.ID, wc)
+	handler.handleAttachSession(ctx, chatID, meta.ID, nil, wc)
 
 	// Must have received at least: replay_message{user,"hello"} + done.
 	close(wc.sendCh)
-	var got []wsServerFrame
+	var got []replayFrameDecoder
 	for raw := range wc.sendCh {
-		var f wsServerFrame
+		var f replayFrameDecoder
 		if json.Unmarshal(raw, &f) == nil {
 			got = append(got, f)
 		}
@@ -730,6 +747,7 @@ func TestAttach_StartLogged(t *testing.T) {
 	defer slog.SetDefault(slog.New(slog.Default().Handler()))
 
 	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
 
 	store := handler.agentLoop.GetSessionStore()
 	require.NotNil(t, store)
@@ -741,7 +759,7 @@ func TestAttach_StartLogged(t *testing.T) {
 		sendCh: make(chan []byte, 512),
 		doneCh: make(chan struct{}),
 	}
-	handler.handleAttachSession(context.Background(), "chat-log-test", meta.ID, wc)
+	handler.handleAttachSession(context.Background(), "chat-log-test", meta.ID, nil, wc)
 
 	logOutput := logBuf.String()
 	assert.Contains(t, logOutput, "replay_start", "slog.Info must include event:replay_start")
@@ -761,6 +779,7 @@ func TestAttach_EndLogged(t *testing.T) {
 	defer slog.SetDefault(slog.New(slog.Default().Handler()))
 
 	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
 
 	store := handler.agentLoop.GetSessionStore()
 	require.NotNil(t, store)
@@ -772,7 +791,7 @@ func TestAttach_EndLogged(t *testing.T) {
 		sendCh: make(chan []byte, 512),
 		doneCh: make(chan struct{}),
 	}
-	handler.handleAttachSession(context.Background(), "chat-end-log-test", meta.ID, wc)
+	handler.handleAttachSession(context.Background(), "chat-end-log-test", meta.ID, nil, wc)
 
 	logOutput := logBuf.String()
 	assert.Contains(t, logOutput, "replay_end", "slog.Info must include event:replay_end")
@@ -909,13 +928,13 @@ func TestReplay_LiveEventBuffer_OrderPreserved(t *testing.T) {
 
 	fn := wsEmitFunc(ctx, wc)
 
-	// Normal emit must succeed.
-	err := fn(wsServerFrame{Type: "replay_message", Role: "user", Content: "hi"})
+	// Normal emit must succeed (use a generated type to verify marshaling works).
+	err := fn(map[string]any{"type": "replay_message", "session_id": "s1", "role": "user", "content": "hi"})
 	require.NoError(t, err)
 
 	// After cancellation, emit must return context error.
 	cancel()
-	err = fn(wsServerFrame{Type: "done"})
+	err = fn(map[string]any{"type": "done", "session_id": "s1"})
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -923,7 +942,7 @@ func TestReplay_LiveEventBuffer_OrderPreserved(t *testing.T) {
 // Test helpers for frame inspection
 // ─────────────────────────────────────────────────────────────────────────────
 
-func frameTypes(frames []wsServerFrame) []string {
+func frameTypes(frames []replayFrameDecoder) []string {
 	out := make([]string, len(frames))
 	for i, f := range frames {
 		out[i] = f.Type
@@ -931,7 +950,7 @@ func frameTypes(frames []wsServerFrame) []string {
 	return out
 }
 
-func findFrame(frames []wsServerFrame, typ string) *wsServerFrame {
+func findFrame(frames []replayFrameDecoder, typ string) *replayFrameDecoder {
 	for i := range frames {
 		if frames[i].Type == typ {
 			return &frames[i]
@@ -940,8 +959,8 @@ func findFrame(frames []wsServerFrame, typ string) *wsServerFrame {
 	return nil
 }
 
-func filterByType(frames []wsServerFrame, typ string) []wsServerFrame {
-	var out []wsServerFrame
+func filterByType(frames []replayFrameDecoder, typ string) []replayFrameDecoder {
+	var out []replayFrameDecoder
 	for _, f := range frames {
 		if f.Type == typ {
 			out = append(out, f)
@@ -968,6 +987,7 @@ func filterByType(frames []wsServerFrame, typ string) []wsServerFrame {
 // We verify that the existing H1 frames carry the field via the event payload.
 func TestLiveEventForwarder_ToolCallStart_CarriesAgentID(t *testing.T) {
 	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
 
 	wc := makeTestConn()
 	chatID := "chat-agentid-parity"
@@ -991,7 +1011,7 @@ func TestLiveEventForwarder_ToolCallStart_CarriesAgentID(t *testing.T) {
 
 	select {
 	case raw := <-wc.sendCh:
-		var f wsServerFrame
+		var f replayFrameDecoder
 		require.NoError(t, json.Unmarshal(raw, &f))
 		assert.Equal(t, "tool_call_start", f.Type)
 		// agent_id on live tool_call_start: the event payload doesn't carry AgentID

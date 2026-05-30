@@ -23,8 +23,18 @@ import (
 // Traces to: pkg/tools/registry.go — ToolsToProviderDefs (FR-003, FR-041).
 func TestToolsToProviderDefs_PreservesNamesAndDescriptions(t *testing.T) {
 	tools := []Tool{
-		&mockRegistryTool{name: "my.tool", desc: "first tool", params: map[string]any{"type": "object"}, result: SilentResult("ok")},
-		&mockRegistryTool{name: "other_tool", desc: "second tool", params: map[string]any{"type": "object"}, result: SilentResult("ok")},
+		&mockRegistryTool{
+			name:   "my.tool",
+			desc:   "first tool",
+			params: map[string]any{"type": "object"},
+			result: SilentResult("ok"),
+		},
+		&mockRegistryTool{
+			name:   "other_tool",
+			desc:   "second tool",
+			params: map[string]any{"type": "object"},
+			result: SilentResult("ok"),
+		},
 	}
 
 	defs := ToolsToProviderDefs(tools)

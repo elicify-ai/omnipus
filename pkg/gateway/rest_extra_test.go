@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
@@ -114,7 +115,7 @@ func TestHandleStatusGET(t *testing.T) {
 	api.HandleStatus(w, r)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	var resp gatewayStatusResponse
+	var resp gen.GatewayStatus
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.True(t, resp.Online, "online must be true")
 	assert.GreaterOrEqual(t, resp.AgentCount, 1, "agent_count must be ≥1 (system agent)")
@@ -552,13 +553,13 @@ func TestListSkillsTypedResponse(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, w.Code)
 
-	var skills []skillResponse
+	var skills []gen.Skill
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &skills),
-		"skills response must unmarshal into []skillResponse")
+		"skills response must unmarshal into []gen.Skill")
 
 	// All returned skills must have required fields.
 	for i, s := range skills {
-		assert.NotEmpty(t, s.ID, "skills[%d].id must not be empty", i)
+		assert.NotEmpty(t, s.Id, "skills[%d].id must not be empty", i)
 		assert.NotEmpty(t, s.Name, "skills[%d].name must not be empty", i)
 		assert.NotEmpty(t, s.Version, "skills[%d].version must not be empty", i)
 		assert.NotEmpty(t, s.Status, "skills[%d].status must not be empty", i)

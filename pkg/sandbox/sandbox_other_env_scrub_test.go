@@ -2,12 +2,20 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Env-scrub test for the ScrubGatewayEnv / scrubGatewayEnv path on all platforms.
+// Env-scrub test for the ScrubGatewayEnv / filterChildEnv path on all platforms.
 //
 // CLAUDE.md hard constraint #4: graceful degradation is required on non-Linux.
 // The existing hardened_exec_env_test.go covers Linux env-scrubbing on the
 // hardened-exec path. This test covers the ScrubGatewayEnv exported function
-// that is the cross-platform scrub primitive.
+// that is the cross-platform allowlist primitive.
+//
+// v0.2 #155 item 3 inverted the model from a 3-key denylist to a closed
+// allowlist. As a result, any env var not on the allowlist is stripped — not
+// just the three previously-named sensitive keys. The historical assertions
+// "OMNIPUS_MASTER_KEY is absent" and "OMNIPUS_TEST_SAFE_KEY is preserved" no
+// longer both hold simultaneously: under the allowlist, OMNIPUS_TEST_SAFE_KEY
+// is stripped too unless it uses the OMNIPUS_CHILD_* opt-in pass-through.
+// The tests below have been updated to reflect that semantic.
 //
 // BDD Scenario: "ScrubGatewayEnv strips OMNIPUS_MASTER_KEY, OMNIPUS_BEARER_TOKEN,
 //               OMNIPUS_KEY_FILE from the child environment and preserves PATH"
@@ -29,22 +37,23 @@ import (
 )
 
 // TestScrubGatewayEnv_StripsSensitiveKeys verifies that ScrubGatewayEnv
-// strips the three sensitive gateway env keys and preserves other env vars.
-//
-// This test exercises the cross-platform scrub primitive (scrubGatewayEnv)
-// which underlies both the Linux hardened-exec path and the fallback path.
+// strips the three sensitive gateway env keys (and now, under v0.2 #155
+// item 3, every other key not on the allowlist).
 //
 // Differentiation: three distinct sensitive keys are set and all three must
-// be absent; an unrelated key (OMNIPUS_TEST_SAFE_KEY) must be preserved.
+// be absent; a key using the OMNIPUS_CHILD_* opt-in prefix must be preserved.
 //
 // Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 6 (Rank-8)
+// Updated: v0.2 #155 item 3 — denylist → allowlist switch.
 func TestScrubGatewayEnv_StripsSensitiveKeys(t *testing.T) {
-	// Set all three sensitive keys in the parent env.
+	// Set all three previously-sensitive keys in the parent env.
 	t.Setenv("OMNIPUS_MASTER_KEY", "secret123")
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "tok-deadbeef")
 	t.Setenv("OMNIPUS_KEY_FILE", "/etc/omnipus/master.key")
-	// Set a safe key that must survive the scrub.
-	t.Setenv("OMNIPUS_TEST_SAFE_KEY", "safe-value-preserved")
+	// Set a safe key using the OMNIPUS_CHILD_* opt-in pass-through prefix —
+	// the only way operators can deliberately forward a non-allowlisted env
+	// var to children under the new allowlist model.
+	t.Setenv("OMNIPUS_CHILD_TEST_SAFE_KEY", "safe-value-preserved")
 
 	scrubbed := ScrubGatewayEnv()
 
@@ -67,16 +76,16 @@ func TestScrubGatewayEnv_StripsSensitiveKeys(t *testing.T) {
 		}
 	}
 
-	// Assert: safe key must be preserved (scrub must not wipe non-sensitive keys).
+	// Assert: opt-in key must survive (allowlist must include OMNIPUS_CHILD_*).
 	var safeFound bool
 	for _, kv := range scrubbed {
-		if strings.HasPrefix(kv, "OMNIPUS_TEST_SAFE_KEY=") {
+		if strings.HasPrefix(kv, "OMNIPUS_CHILD_TEST_SAFE_KEY=") {
 			safeFound = true
 			break
 		}
 	}
 	if !safeFound {
-		t.Error("ScrubGatewayEnv: non-sensitive key OMNIPUS_TEST_SAFE_KEY must be preserved, but was not found")
+		t.Error("ScrubGatewayEnv: opt-in key OMNIPUS_CHILD_TEST_SAFE_KEY must be preserved, but was not found")
 	}
 }
 
@@ -165,14 +174,16 @@ func TestScrubGatewayEnv_SensitiveKeysAbsentWhenUnset(t *testing.T) {
 }
 
 // TestScrubGatewayEnv_Differentiation verifies that two calls with different
-// sensitive key values produce different scrubbed outputs (not hardcoded).
+// values produce different filtered outputs (not hardcoded).
 //
-// Specifically: a non-sensitive key added between calls must appear in the
-// second output but not the first — proving the scrub reflects live env state.
+// Specifically: an allowlisted key added between calls must appear in the
+// second output but not the first — proving the filter reflects live env state.
+// We use the OMNIPUS_CHILD_* opt-in prefix so the allowlist permits the key.
 //
 // Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 6 (Rank-8)
+// Updated: v0.2 #155 item 3 — denylist → allowlist switch.
 func TestScrubGatewayEnv_Differentiation(t *testing.T) {
-	const uniqueKey = "OMNIPUS_SCRUB_DIFFERENTIATION_KEY_XYZ"
+	const uniqueKey = "OMNIPUS_CHILD_SCRUB_DIFFERENTIATION_XYZ"
 	t.Setenv(uniqueKey, "")
 	os.Unsetenv(uniqueKey)
 

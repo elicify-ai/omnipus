@@ -271,6 +271,12 @@ func TestAuthWeComCmdWithScanner_SaveConfigFailureRollsBackStore(t *testing.T) {
 		// relies on only works on Unix-like systems.
 		t.Skip("read-only directory injection is POSIX-only; see #108")
 	}
+	if os.Getuid() == 0 {
+		// Root bypasses DAC (Discretionary Access Control), so chmod 0555 on
+		// a directory does not prevent writes from root. The failure-injection
+		// this test relies on only works for non-privileged users.
+		t.Skip("read-only directory injection is ineffective under root; run as non-root")
+	}
 	tmpDir := t.TempDir()
 
 	// Create a nested directory that we will make read-only so that

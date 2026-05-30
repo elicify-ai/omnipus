@@ -19,6 +19,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/commands"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/constants"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
@@ -67,7 +68,6 @@ var channelRateConfig = map[string]float64{
 	"line":     10,
 	"qq":       5,
 	"irc":      2,
-	"teams":    1,
 }
 
 type channelWorker struct {
@@ -92,28 +92,29 @@ func (e *ChannelInitError) Error() string {
 func (e *ChannelInitError) Unwrap() error { return e.Err }
 
 type Manager struct {
-	channels       map[string]Channel
-	workers        map[string]*channelWorker
-	bus            *bus.MessageBus
-	config         *config.Config
-	secrets        credentials.SecretBundle // resolved plaintext secrets; never written to env
-	mediaStore     media.MediaStore
-	dispatchTask   *asyncTask
-	dispatchCtx    context.Context // stored so RegisterChannel can spin up workers after Start
-	mux            *dynamicServeMux
-	httpServer     *http.Server
+	channels     map[string]Channel
+	workers      map[string]*channelWorker
+	bus          *bus.MessageBus
+	config       *config.Config
+	secrets      credentials.SecretBundle // resolved plaintext secrets; never written to env
+	mediaStore   media.MediaStore
+	dispatchTask *asyncTask
+	dispatchCtx  context.Context // stored so RegisterChannel can spin up workers after Start
+	mux          *dynamicServeMux
+	httpServer   *http.Server
 	// previewMux and previewServer serve only /serve/ and /dev/ routes on the
 	// preview listener (FR-001, FR-005). Nil when preview is disabled.
-	previewMux    *dynamicServeMux
-	previewServer *http.Server
-	mu             sync.RWMutex
-	placeholders   sync.Map           // "channel:chatID" → placeholderID (string)
-	typingStops    sync.Map           // "channel:chatID" → func()
-	reactionUndos  sync.Map           // "channel:chatID" → reactionEntry
-	streamActive   sync.Map           // "channel:chatID" → true (set when streamer.Finalize sent the message)
-	channelHashes  map[string]string  // channel name → config hash
-	streamFallback bus.StreamDelegate // optional fallback for channels not in m.channels (e.g., webchat WebSocket)
-	failedChannels []ChannelInitError // enabled channels that failed to start
+	previewMux        *dynamicServeMux
+	previewServer     *http.Server
+	mu                sync.RWMutex
+	placeholders      sync.Map           // "channel:chatID" → placeholderID (string)
+	typingStops       sync.Map           // "channel:chatID" → func()
+	reactionUndos     sync.Map           // "channel:chatID" → reactionEntry
+	streamActive      sync.Map           // "channel:chatID" → true (set when streamer.Finalize sent the message)
+	channelHashes     map[string]string  // channel name → config hash
+	streamFallback    bus.StreamDelegate // optional fallback for channels not in m.channels (e.g., webchat WebSocket)
+	failedChannels    []ChannelInitError // enabled channels that failed to start
+	cancelInterceptor CancelInterceptor  // set after construction via SetCancelInterceptor; may be nil
 }
 
 type asyncTask struct {
@@ -315,6 +316,22 @@ func (m *Manager) SetStreamFallback(d bus.StreamDelegate) {
 	m.streamFallback = d
 }
 
+// SetCancelInterceptor registers the CancelInterceptor (typically the agent
+// loop) so that Tier B text-parsing channels can fire /cancel. Must be called
+// after the Manager is constructed and before channels receive messages.
+// It is safe to call multiple times (last write wins).
+func (m *Manager) SetCancelInterceptor(ci CancelInterceptor) {
+	m.mu.Lock()
+	m.cancelInterceptor = ci
+	// Propagate to all channels already initialized.
+	for _, ch := range m.channels {
+		if setter, ok := ch.(interface{ SetCancelInterceptor(ci CancelInterceptor) }); ok {
+			setter.SetCancelInterceptor(ci)
+		}
+	}
+	m.mu.Unlock()
+}
+
 // GetStreamer implements bus.StreamDelegate.
 // It checks if the named channel supports streaming and returns a Streamer.
 // Falls back to streamFallback for channels not in the Manager (e.g., webchat).
@@ -403,6 +420,13 @@ func (m *Manager) initChannel(name, displayName string) error {
 	if setter, ok := ch.(interface{ SetOwner(ch Channel) }); ok {
 		setter.SetOwner(ch)
 	}
+	// Inject CancelInterceptor if one has been registered (may be nil at init time;
+	// SetCancelInterceptor propagates to all channels when called later).
+	if m.cancelInterceptor != nil {
+		if setter, ok := ch.(interface{ SetCancelInterceptor(ci CancelInterceptor) }); ok {
+			setter.SetCancelInterceptor(m.cancelInterceptor)
+		}
+	}
 	m.channels[name] = ch
 	logger.InfoCF("channels", "Channel enabled successfully", map[string]any{
 		"channel": displayName,
@@ -461,12 +485,6 @@ func (m *Manager) initChannels(channels *config.ChannelsConfig) error {
 	if channels.Discord.Enabled && channels.Discord.TokenRef != "" {
 		if err := m.initChannel("discord", "Discord"); err != nil {
 			m.recordChannelFailure("discord", "Discord", err)
-		}
-	}
-
-	if channels.MaixCam.Enabled {
-		if err := m.initChannel("maixcam", "MaixCam"); err != nil {
-			m.recordChannelFailure("maixcam", "MaixCam", err)
 		}
 	}
 
@@ -534,10 +552,6 @@ func (m *Manager) initChannels(channels *config.ChannelsConfig) error {
 		if err := m.initChannel("google-chat", "Google Chat"); err != nil {
 			m.recordChannelFailure("google-chat", "Google Chat", err)
 		}
-	}
-
-	if channels.Teams.Enabled && channels.Teams.AppID != "" && channels.Teams.AppPasswordRef != "" {
-		m.initChannel("teams", "Microsoft Teams")
 	}
 
 	logger.InfoCF("channels", "Channel initialization completed", map[string]any{
@@ -783,6 +797,33 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	}
 
 	logger.InfoC("channels", "All channels started")
+
+	// C1 fix: invoke RegisterCommands on every started channel that implements
+	// CommandRegistrarCapable (FR-28 fallback: failures are WARN-logged, channel
+	// startup continues). This registers /cancel and other builtins with the
+	// upstream platform (Telegram BotCommand, Slack slash commands, etc.) so they
+	// appear in the platform's command menu.
+	defs := commands.BuiltinDefinitions()
+	for name, ch := range m.channels {
+		if reg, ok := ch.(CommandRegistrarCapable); ok {
+			name, reg := name, reg // capture for goroutine
+			go func() {
+				regCtx, regCancel := context.WithTimeout(dispatchCtx, 30*time.Second)
+				defer regCancel()
+				if err := reg.RegisterCommands(regCtx, defs); err != nil {
+					logger.WarnCF("channels", "RegisterCommands failed — platform command menu not updated",
+						map[string]any{
+							"channel": name,
+							"error":   err.Error(),
+						})
+				} else {
+					logger.InfoCF("channels", "RegisterCommands succeeded",
+						map[string]any{"channel": name, "command_count": len(defs)})
+				}
+			}()
+		}
+	}
+
 	return nil
 }
 

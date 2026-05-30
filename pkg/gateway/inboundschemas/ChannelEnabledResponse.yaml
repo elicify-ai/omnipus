@@ -1,0 +1,18 @@
+title: ChannelEnabledResponse
+description: >
+  Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable.
+  Returns the channel ID and its new enabled state.
+type: object
+required:
+  - id
+  - enabled
+additionalProperties: false
+properties:
+  id:
+    $ref: './ChannelId.yaml'
+    description: Channel identifier.
+    example: telegram
+  enabled:
+    type: boolean
+    description: Whether the channel is now enabled.
+    example: true

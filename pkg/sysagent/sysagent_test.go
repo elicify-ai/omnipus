@@ -36,11 +36,11 @@ type mockSystemTool struct {
 	executed    atomic.Bool
 }
 
-func (m *mockSystemTool) Name() string               { return m.name }
-func (m *mockSystemTool) Description() string        { return m.description }
-func (m *mockSystemTool) Parameters() map[string]any { return m.params }
-func (m *mockSystemTool) Scope() tools.ToolScope     { return tools.ScopeCore }
-func (m *mockSystemTool) RequiresAdminAsk() bool     { return true }
+func (m *mockSystemTool) Name() string                 { return m.name }
+func (m *mockSystemTool) Description() string          { return m.description }
+func (m *mockSystemTool) Parameters() map[string]any   { return m.params }
+func (m *mockSystemTool) Scope() tools.ToolScope       { return tools.ScopeCore }
+func (m *mockSystemTool) RequiresAdminAsk() bool       { return true }
 func (m *mockSystemTool) Category() tools.ToolCategory { return tools.CategorySystem }
 func (m *mockSystemTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
 	m.executed.Store(true)

@@ -83,10 +83,10 @@ const devServerTokenBytes = 32
 // active dev-server registration. Tier 3 is per-agent capped to 1.
 var ErrPerAgentCap = errors.New("dev_servers: agent already has an active dev server")
 
-// ErrGatewayCap is returned by Register when the gateway-wide concurrency
+// GatewayCapError is returned by Register when the gateway-wide concurrency
 // cap (cfg.Sandbox.MaxConcurrentDevServers) is reached. The error message
 // uses the wording specified in spec v4.
-type ErrGatewayCap struct {
+type GatewayCapError struct {
 	Current int
 	Max     int
 	// EarliestExpiry is the LastActivity+IdleTimeout (or CreatedAt+
@@ -96,7 +96,7 @@ type ErrGatewayCap struct {
 	EarliestExpiry time.Time
 }
 
-func (e ErrGatewayCap) Error() string {
+func (e GatewayCapError) Error() string {
 	return fmt.Sprintf("too many concurrent dev servers (%d/%d); previous registration expires at %s",
 		e.Current, e.Max, e.EarliestExpiry.UTC().Format(time.RFC3339))
 }
@@ -152,7 +152,7 @@ func (r *DevServerRegistry) SetOnEvict(fn func(token string)) {
 // Register inserts a new dev-server registration. agentID, port, and pid
 // MUST already be validated by the caller (port-in-range, agent owned by
 // user, etc.). maxConcurrent caps the gateway-wide active count. Returns
-// the stored registration on success, or ErrPerAgentCap / ErrGatewayCap.
+// the stored registration on success, or ErrPerAgentCap / GatewayCapError.
 //
 // On success, the registration's Token field is populated with a freshly
 // generated 32-byte random token.
@@ -182,7 +182,7 @@ func (r *DevServerRegistry) Register(
 	// Per-gateway cap from config (default 2).
 	if maxConcurrent > 0 && len(r.entries) >= maxConcurrent {
 		earliest := r.earliestExpiryLocked()
-		return nil, ErrGatewayCap{
+		return nil, GatewayCapError{
 			Current:        len(r.entries),
 			Max:            maxConcurrent,
 			EarliestExpiry: earliest,
@@ -381,7 +381,7 @@ func (r *DevServerRegistry) sweepExpired() {
 
 // expiredTokens collects tokens whose registration has hit either timer,
 // taking the lock once and returning a snapshot. Performed without
-// signalling so signalling can happen outside the lock.
+// signaling so signaling can happen outside the lock.
 func (r *DevServerRegistry) expiredTokens(now time.Time) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()

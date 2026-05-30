@@ -138,12 +138,18 @@ func NewProcessHook(ctx context.Context, name string, opts ProcessHookOptions) (
 	go ph.readStderr(stderr)
 	go ph.waitLoop()
 
-	helloCtx := ctx
-	if helloCtx == nil {
-		var cancel context.CancelFunc
-		helloCtx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+	// Always apply a defensive handshake deadline. Without this, a subprocess
+	// that starts but never replies to hook.hello (crash before write, hang in
+	// startup, etc.) would block the caller's context indefinitely — which in
+	// production is often a turn-scoped context with no fixed deadline,
+	// stalling the gateway turn that triggered ensureHooksInitialized.
+	// See #163: caller-provided contexts cannot be trusted to have a deadline.
+	parent := ctx
+	if parent == nil {
+		parent = context.Background()
 	}
+	helloCtx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
 	if err := ph.hello(helloCtx); err != nil {
 		_ = ph.Close()
 		return nil, err

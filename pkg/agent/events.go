@@ -8,6 +8,13 @@ import (
 )
 
 // EventKind identifies a structured agent-loop event.
+//
+// MarshalJSON uses a value receiver and UnmarshalJSON uses a pointer receiver
+// — the standard Go JSON codec pair. recvcheck is suppressed here because
+// MarshalJSON cannot use a pointer receiver without breaking fmt.Stringer
+// for value instances (e.g. range-loop variables).
+//
+//nolint:recvcheck
 type EventKind uint8
 
 const (
@@ -101,23 +108,54 @@ func (k EventKind) String() string {
 	return eventKindNames[k]
 }
 
+// MarshalJSON emits the canonical string form of an EventKind so that
+// subprocess hooks (and any other JSON consumer) see e.g. "tool_exec_start"
+// rather than the underlying uint8 index 8. Without this, the wire payload
+// for hook.event notifications was an integer that subprocess authors had
+// to map manually — and the index would silently shift if a new EventKind
+// was added in the middle of the enum.
+//
+// Regression guard for #164.
+func (k EventKind) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + k.String() + `"`), nil
+}
+
+// UnmarshalJSON parses the canonical string form back into an EventKind.
+// Round-trips with MarshalJSON. Returns an error for unknown names so a
+// typo or stale schema gets surfaced instead of silently mapping to
+// EventKindTurnStart (the zero value).
+func (k *EventKind) UnmarshalJSON(data []byte) error {
+	// Strip surrounding quotes.
+	if len(data) < 2 || data[0] != '"' || data[len(data)-1] != '"' {
+		return fmt.Errorf("EventKind: expected JSON string, got %s", data)
+	}
+	name := string(data[1 : len(data)-1])
+	for i, n := range eventKindNames {
+		if n == name {
+			*k = EventKind(i)
+			return nil
+		}
+	}
+	return fmt.Errorf("EventKind: unknown name %q", name)
+}
+
 // Event is the structured envelope broadcast by the agent EventBus.
 type Event struct {
-	Kind    EventKind
-	Time    time.Time
-	Meta    EventMeta
-	Payload any
+	Kind    EventKind `json:"Kind"`
+	Time    time.Time `json:"Time"`
+	Meta    EventMeta `json:"Meta"`
+	Payload any       `json:"Payload"`
 }
 
 // EventMeta contains correlation fields shared by all agent-loop events.
 type EventMeta struct {
-	AgentID      string
-	TurnID       string
-	ParentTurnID string
-	SessionKey   string
-	Iteration    int
-	TracePath    string
-	Source       string
+	AgentID      string `json:"AgentID"`
+	TurnID       string `json:"TurnID"`
+	ParentTurnID string `json:"ParentTurnID"`
+	SessionKey   string `json:"SessionKey"`
+	Iteration    int    `json:"Iteration"`
+	TracePath    string `json:"TracePath"`
+	Source       string `json:"Source"`
 }
 
 // TurnEndStatus describes the terminal state of a turn.
@@ -220,8 +258,8 @@ type ToolExecStartPayload struct {
 	ChatID     string
 	// SessionID is the transcript-store session ID for this turn.
 	SessionID string
-	Tool       string
-	Arguments  map[string]any
+	Tool      string
+	Arguments map[string]any
 	// ParentSpawnCallID is non-empty when this tool call fires inside a sub-turn.
 	// It equals the parent spawn tool call's ToolCall.ID (FR-H-002).
 	// The WebSocket forwarder propagates this as parent_call_id on outbound frames (FR-H-005).
@@ -236,7 +274,7 @@ type ToolExecEndPayload struct {
 	ToolCallID session.ToolCallID
 	ChatID     string
 	// SessionID is the transcript-store session ID for this turn.
-	SessionID string
+	SessionID  string
 	Tool       string
 	Duration   time.Duration
 	ForLLMLen  int

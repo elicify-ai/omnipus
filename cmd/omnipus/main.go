@@ -14,6 +14,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal"
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/agent"
+	auditcmd "github.com/dapicom-ai/omnipus/cmd/omnipus/internal/audit"
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/auth"
 	credcmd "github.com/dapicom-ai/omnipus/cmd/omnipus/internal/credentials"
 	"github.com/dapicom-ai/omnipus/cmd/omnipus/internal/cron"
@@ -40,6 +41,7 @@ func NewOmnipusCommand() *cobra.Command {
 	cmd.AddCommand(
 		onboard.NewOnboardCommand(),
 		agent.NewAgentCommand(),
+		auditcmd.NewAuditCommand(),
 		auth.NewAuthCommand(),
 		credcmd.NewCredentialsCommand(),
 		doctor.NewDoctorCommand(),

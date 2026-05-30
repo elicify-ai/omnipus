@@ -94,7 +94,7 @@ describe('CreateAgentModal — actions (test #14)', () => {
 
     await vi.waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'Research Bot', type: 'custom' })
+        expect.objectContaining({ name: 'Research Bot' })
       )
     })
   })

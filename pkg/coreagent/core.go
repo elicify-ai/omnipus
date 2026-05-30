@@ -99,7 +99,9 @@ func GetPrompt(id string) string {
 // workspace.shell_bg, and web_serve explicitly allowed.
 //
 // The returned maps are independent allocations — callers may mutate them safely.
-func coreAgentSeed(id CoreAgentID) (defaultPolicy config.ToolPolicy, policies map[string]config.ToolPolicy, sandboxProfile config.SandboxProfile) {
+func coreAgentSeed(
+	id CoreAgentID,
+) (defaultPolicy config.ToolPolicy, policies map[string]config.ToolPolicy, sandboxProfile config.SandboxProfile) {
 	// Every core agent starts with the same rail: allow-by-default + deny system.*.
 	// Memory tools are explicitly seeded as allow (FR-016/FR-017) so they survive
 	// any future default_policy change and appear prominently in the tool picker UI.

@@ -545,7 +545,38 @@ func loadConfig(data []byte) (*Config, error) {
 	// and store them for round-trip preservation on SaveConfig.
 	detectUnknownConfigFields(data, cfg)
 
+	// Emit structured warnings for channels that have been removed from Omnipus.
+	// The JSON fields are silently dropped by the unmarshaler; we surface them
+	// as Warn entries so operators know their config has stale sections.
+	warnRemovedChannelFields(data)
+
 	return cfg, nil
+}
+
+// removedChannelKeys lists channel JSON keys that were supported in older
+// versions of Omnipus but have since been removed. A config.json that still
+// contains one of these keys will not cause a load error (the field is simply
+// ignored by the JSON unmarshaler), but we emit a structured Warn so operators
+// are aware the section is inert and can clean up their config file.
+var removedChannelKeys = []string{"maixcam", "teams"}
+
+// warnRemovedChannelFields inspects the raw "channels" object in the JSON
+// config and emits a slog.Warn for any key that belongs to a removed channel.
+func warnRemovedChannelFields(data []byte) {
+	var raw struct {
+		Channels map[string]json.RawMessage `json:"channels"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return // best-effort; parse errors already handled upstream
+	}
+	for _, key := range removedChannelKeys {
+		if _, present := raw.Channels[key]; present {
+			slog.Warn("config: legacy channel section ignored; channel has been removed",
+				"channel", key,
+				"action", "remove the section from config.json to silence this warning",
+			)
+		}
+	}
 }
 
 // detectUnknownConfigFields finds JSON keys not declared on the Config struct,

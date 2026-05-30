@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/session"
@@ -102,7 +103,7 @@ func (h *SSEHandler) GetStreamer(ctx context.Context, channel, chatID, _ string)
 func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	origin := h.allowedOrigin
 	if origin == "" {
-		origin = "http://localhost:3000"
+		origin = "http://localhost:5000"
 	}
 
 	// Handle CORS preflight before auth or body parsing.
@@ -126,11 +127,10 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Restrict CORS to the configured origin (localhost only by default).
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 
-	var body struct {
-		Message string `json:"message"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	var body gen.SseChatRequest
+	cfg := h.cfg()
+	validateEnabled := cfg != nil && cfg.Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "SseChatRequest", &body, validateEnabled) {
 		return
 	}
 	if body.Message == "" {

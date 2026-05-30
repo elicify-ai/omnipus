@@ -4,6 +4,7 @@ import { act } from 'react'
 import { ExecApprovalBlock } from './ExecApprovalBlock'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
+import type { ExecApprovalRequestFrame } from '@/lib/api/generated/asyncapi-types'
 
 // test_exec_approval_block (test #9)
 // test_exec_approval_actions (test #10)
@@ -162,3 +163,83 @@ describe('ExecApprovalBlock — user actions (test #10)', () => {
     expect(mockSend).toHaveBeenCalledWith({ type: 'exec_approval_response', id: 'appr_action_3', decision: 'always' })
   })
 })
+
+// ── Phase 5: edge-case render tests ────────────────────────────────────────────
+//
+// These tests verify that ExecApprovalBlock does not crash when a valid-shape
+// but degenerate-value ExecApprovalRequestFrame drives the component. Props are
+// mapped from the generated ExecApprovalRequestFrame type — the same wire format
+// the gateway emits. No hand-written wire types.
+//
+// The approval prop shape in ExecApprovalBlock is a subset of ExecApprovalRequestFrame:
+//   ExecApprovalRequestFrame.id       → approval.id
+//   ExecApprovalRequestFrame.command  → approval.command
+//   ExecApprovalRequestFrame.working_dir → approval.working_dir
+//   ExecApprovalRequestFrame.matched_policy → approval.matched_policy
+//
+// Each test: render ExecApprovalBlock with approval derived from wire frame → assert no throw.
+
+// Minimal valid ExecApprovalRequestFrame (required fields per AsyncAPI spec)
+const baseWireFrame: ExecApprovalRequestFrame = {
+  type: 'exec_approval_request',
+  session_id: 'sess-edge',
+  id: 'appr-edge-001',
+  command: 'git pull origin main',
+}
+
+// Edge cases: [label, partial override of ExecApprovalRequestFrame fields]
+type WireFrameOverrides = Partial<Omit<ExecApprovalRequestFrame, 'type'>>
+
+const execEdgeCases: Array<[string, WireFrameOverrides]> = [
+  // Empty command string — binaryIndex logic must not crash on empty input
+  ['empty command string', { command: '' }],
+  // Command with only env var prefix (KEY=value) — binaryIndex skips env prefix
+  ['command is only env var assignment', { command: 'FOO=bar' }],
+  // Multiple env var prefixes before binary
+  ['command has multiple env var prefixes', { command: 'A=1 B=2 git pull' }],
+  // Very long command — tests whitespace-pre-wrap overflow rendering
+  ['very long command', { command: 'echo ' + 'x'.repeat(10_000) }],
+  // Command with no spaces — single token, no args
+  ['command with no spaces (single token)', { command: 'ls' }],
+  // Command with unicode characters
+  ['unicode in command', { command: 'echo "\u{1F680} \u{1F30D}"' }],
+  // working_dir provided
+  ['working_dir provided', { working_dir: '/home/user/projects/omnipus' }],
+  // Very long working_dir
+  ['very long working_dir', { working_dir: '/home/' + 'x'.repeat(500) }],
+  // matched_policy provided
+  ['matched_policy provided', { matched_policy: 'tools.exec.approval=ask' }],
+  // Very long matched_policy
+  ['very long matched_policy', { matched_policy: 'policy.' + 'x'.repeat(300) }],
+  // Both working_dir and matched_policy — all metadata rendered
+  ['working_dir and matched_policy both provided', { working_dir: '/tmp', matched_policy: 'exec.ask' }],
+  // id is an empty string — extreme degenerate
+  ['id is empty string', { id: '' }],
+  // id with special characters
+  ['id with special characters', { id: 'appr/edge?01&x=1' }],
+]
+
+describe.each(execEdgeCases)(
+  'ExecApprovalBlock renders "%s" without throwing',
+  (_label, overrides) => {
+    it('renders without throwing', () => {
+      const frame: ExecApprovalRequestFrame = { ...baseWireFrame, ...overrides }
+      // Map wire frame fields to the approval prop shape
+      const approval = {
+        id: frame.id,
+        command: frame.command,
+        working_dir: frame.working_dir,
+        matched_policy: frame.matched_policy,
+        status: 'pending' as const,
+      }
+      expect(() =>
+        render(
+          <ExecApprovalBlock
+            approval={approval}
+            onDecision={vi.fn()}
+          />,
+        ),
+      ).not.toThrow()
+    })
+  },
+)

@@ -2,12 +2,110 @@ name: PR
 
 on:
   pull_request: { }
+  # Allow manual runs on feature branches without opening a PR.
+  workflow_dispatch:
 
 defaults:
   run:
     shell: bash
 
 jobs:
+  typecheck:
+    name: TypeScript Type Check
+    # Runs `tsc -b --noEmit` (project-references build mode) against the repo
+    # root. Note: `tsc --noEmit` (without -b) silently no-ops on a
+    # project-references root (no "include"/"files") and always exits 0. The
+    # `-b` flag is required to actually type-check the referenced sub-projects.
+    # See F6 in the Phase 7 review findings.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run TypeScript type check
+        run: npm run typecheck
+
+  wire-types-lint:
+    name: Wire-Types Lint
+    # Enforces hard-constraint #8 (CLAUDE.md contract-first rule): every wire-
+    # format type that crosses the gateway/SPA boundary must live in the contract
+    # spec and be generated — not hand-written. A hand-written struct in
+    # pkg/gateway/*.go (name ending in Frame/Response/Request/Payload, ≥2 json
+    # tags) or a hand-written `export interface …Frame|…Response` in src/lib/
+    # fails this job.
+    #
+    # The baseline (existing pre-Phase-7 findings) will fail until Phase 7 cleans
+    # them up. This job intentionally does NOT use continue-on-error — violations
+    # must be visible as red on every PR.
+    #
+    # Developer opt-out for confirmed false positives:
+    #   Go:  add `// not-wire-format` on the `type Foo struct {` line
+    #   TS:  add `// not-wire-format` on the `export interface Foo` line
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run wire-types lint
+        # No language runtimes needed beyond bash + python3 (both present on
+        # ubuntu-latest). The script exits 1 if any hand-written wire-format
+        # types are found; exit 0 means clean.
+        run: bash scripts/check-no-handwritten-wire-types.sh
+
+  verify-contracts:
+    name: Verify Contracts
+    # Ensure generated wire-format types (TS + Go) match the spec files.
+    # Failure means someone edited a spec without running gen-contracts.sh,
+    # or edited a generated file directly. Fix: run `make gen-contracts` locally
+    # and commit the regenerated diff.
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install oapi-codegen
+        # Pin to a known-good version that matches the generated file headers.
+        # The binary is placed on PATH via GOPATH/bin which Go's setup-go action
+        # adds to PATH automatically.
+        #
+        # Bumped from v2.4.1 → v2.7.0 to match the version that produced the
+        # committed pkg/api/generated/*.gen.go files (see header comment).
+        # v2.4.1 generates a subset (no Valid() enum methods, no Bearer auth
+        # context-key type, different anonymous-response numbering), so the
+        # previous pin caused make verify-contracts to fail on every PR with
+        # a phantom drift diff. The codebase has been using v2.7.0 output
+        # since commit 6acaf2b on 2026-05-18.
+        run: go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.7.0
+
+      - name: Run verify-contracts
+        # gen-contracts.sh lints both specs, regenerates all artifacts, then
+        # git diff --exit-code fails the job if any file was modified.
+        # A non-zero exit means the committed generated files are stale.
+        run: make verify-contracts
+
   lint:
     name: Linter
     runs-on: ubuntu-latest
@@ -96,6 +194,10 @@ jobs:
     env:
       # See comment on the lint job above.
       CGO_ENABLED: "0"
+      # OPENROUTER_API_KEY is required by tests that boot a real gateway via
+      # testutil.StartTestGateway (the test_harness override hook was removed
+      # 2026-05-10; tests now hit real OpenRouter for any LLM-driven path).
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY_CI }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -129,9 +231,13 @@ jobs:
         # that predate this PR. The packages below cover the full concurrency
         # contract introduced by MutateConfig, WithConfig, SaveConfigLocked,
         # and the single-user bypass.
+        # pkg/gateway is excluded: every gateway file is //go:build !cgo, so
+        # under CGO_ENABLED=1 the package compiles to nothing and the test
+        # invocation fails. Race coverage for the gateway is provided by the
+        # CGO=0 test job above.
         env:
           CGO_ENABLED: "1"
-        run: go test -race -tags goolm,stdjson -count=1 -timeout 240s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/gateway/... ./pkg/channels/...
+        run: go test -race -tags goolm,stdjson -count=1 -timeout 240s ./pkg/sysagent/... ./pkg/config/... ./pkg/credentials/... ./pkg/channels/...
 
   security:
     name: Security Tests
@@ -170,9 +276,20 @@ jobs:
         # Rationale: pre-existing dep CVEs (tracked in #95) would block
         # every PR until a cross-cutting upgrade sweep lands. PR-time
         # annotations remain visible to reviewers.
+        #
+        # Excludes mirror the weekly job (see security-weekly.yml for the
+        # per-path rationale) — keep both lists in sync with .grype.yaml.
         continue-on-error: true
         run: |
-          "$(go env GOPATH)/bin/grype" dir:. --fail-on high --only-fixed --add-cpes-if-none
+          "$(go env GOPATH)/bin/grype" dir:. --fail-on high --only-fixed --add-cpes-if-none \
+            --exclude './node_modules/**' \
+            --exclude './dist/**' \
+            --exclude './pkg/gateway/spa/**' \
+            --exclude './test-results/**' \
+            --exclude './tests/perf/results/**' \
+            --exclude './pkg/api/generated/**' \
+            --exclude './src/lib/api/generated/**' \
+            --exclude './src/routeTree.gen.ts'
       - name: Run security test suite
         run: CGO_ENABLED=0 go test -tags goolm,stdjson -v -count=1 -timeout 10m ./tests/security/...
 
@@ -293,6 +410,9 @@ jobs:
               "port": 6060,
               "dev_mode_bypass": true
             },
+            "sandbox": {
+              "audit_log": true
+            },
             "agents": {
               "defaults": {
                 "model_name": "openrouter-glm"
@@ -301,7 +421,7 @@ jobs:
             "providers": [
               {
                 "model_name": "openrouter-glm",
-                "model": "openrouter/z-ai/glm-5-turbo",
+                "model": "openrouter/z-ai/glm-5v-turbo",
                 "api_base": "https://openrouter.ai/api/v1",
                 "api_key_ref": "OPENROUTER_API_KEY"
               }
@@ -363,7 +483,7 @@ jobs:
         run: |
           set -euo pipefail
           jq -n --arg key "${OPENROUTER_API_KEY_CI}" \
-            '{provider:{id:"openrouter",api_key:$key,model:"openrouter/z-ai/glm-5-turbo"},admin:{username:"admin",password:"admin123"}}' \
+            '{provider:{id:"openrouter",api_key:$key,model:"openrouter/z-ai/glm-5v-turbo"},admin:{username:"admin",password:"admin123"}}' \
             | curl -sf -X POST http://localhost:6060/api/v1/onboarding/complete \
                 -H 'Content-Type: application/json' \
                 -d @- \

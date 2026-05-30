@@ -65,7 +65,7 @@ func TestPR5_WorkspaceShellEnabledByDefault(t *testing.T) {
 		t.Error("workspace.shell must be registered when WorkspaceShellEnabled is nil (default=true)")
 	}
 	// workspace.shell_bg requires a DevServerRegistry; with nil registry it is not wired.
-	// That is correct behaviour — the tool requires the registry to be useful.
+	// That is correct behavior — the tool requires the registry to be useful.
 }
 
 // TestPR5_WorkspaceShellDisabledWhenFlagFalse verifies that setting

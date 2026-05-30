@@ -107,27 +107,31 @@ describe('isApiError discriminator', () => {
 })
 
 describe('ApiError.fromResponse — JSON body', () => {
-  it('parses {error: "..."} into userMessage', async () => {
+  // For known status codes the user-facing message is fixed
+  // (defaultUserMessage) so the SPA cannot leak server-internal phrasing
+  // into a toast. The raw server text is still preserved on `body` for
+  // diagnostics. See comment in api-error.ts::fromResponse.
+  it('uses status-default userMessage for known 4xx, preserves parsed body', async () => {
     const res = new Response('{"error":"invalid credentials"}', {
       status: 401,
       headers: { 'Content-Type': 'application/json' },
     })
     const err = await ApiError.fromResponse(res)
     expect(err.status).toBe(401)
-    expect(err.userMessage).toBe('invalid credentials')
+    expect(err.userMessage).toMatch(/session has expired/i)
     expect(err.body).toBe('{"error":"invalid credentials"}')
   })
 
-  it('parses {code, message} into both fields', async () => {
+  it('parses {code, message} — code goes to .code, status default wins for known statuses', async () => {
     const res = new Response('{"code":"RATE_LIMITED","message":"slow down"}', {
       status: 429,
     })
     const err = await ApiError.fromResponse(res)
     expect(err.code).toBe('RATE_LIMITED')
-    expect(err.userMessage).toBe('slow down')
+    expect(err.userMessage).toMatch(/too many requests/i)
   })
 
-  it('prefers JSON.error over JSON.message when both present', async () => {
+  it('prefers JSON.error over JSON.message for unknown statuses', async () => {
     const res = new Response('{"error":"first","message":"second"}', { status: 400 })
     const err = await ApiError.fromResponse(res)
     expect(err.userMessage).toBe('first')
@@ -135,12 +139,19 @@ describe('ApiError.fromResponse — JSON body', () => {
 })
 
 describe('ApiError.fromResponse — text fallback', () => {
-  it('falls back to plain text when body is not JSON', async () => {
+  it('uses status-default for 5xx and preserves raw text in body', async () => {
     const res = new Response('something broke', { status: 500 })
     const err = await ApiError.fromResponse(res)
     expect(err.status).toBe(500)
-    expect(err.userMessage).toBe('something broke')
+    expect(err.userMessage).toMatch(/server is unavailable/i)
     expect(err.body).toBe('something broke')
+  })
+
+  it('returns plain text in userMessage for unknown status codes', async () => {
+    const res = new Response('something broke', { status: 418 })
+    const err = await ApiError.fromResponse(res)
+    expect(err.status).toBe(418)
+    expect(err.userMessage).toBe('something broke')
   })
 
   it('falls back to default message when body is empty', async () => {
@@ -234,11 +245,12 @@ describe('ApiError.fromResponse — body size cap + binary sniff (H3-FE)', () =>
     expect(err.userMessage).toMatch(/server is unavailable/i)
   })
 
-  it('accepts a text body with no Content-Type (printable ASCII)', async () => {
+  it('accepts a text body with no Content-Type (printable ASCII), uses 5xx default for known status', async () => {
     const res = new Response('Something broke in the proxy', { status: 502 })
     const err = await ApiError.fromResponse(res)
     expect(err.status).toBe(502)
-    expect(err.userMessage).toBe('Something broke in the proxy')
+    expect(err.userMessage).toMatch(/server is unavailable/i)
+    expect(err.body).toBe('Something broke in the proxy')
   })
 
   it('falls back to status default for a body that is all non-printable', async () => {

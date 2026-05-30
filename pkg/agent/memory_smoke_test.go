@@ -179,8 +179,8 @@ func TestMemoryLastSession(t *testing.T) {
 
 	// Write and read back.
 	const payload = "## Session summary\nWe built the memory store."
-	if err := ms.WriteLastSession(payload); err != nil {
-		t.Fatalf("WriteLastSession: %v", err)
+	if writeErr := ms.WriteLastSession(payload); writeErr != nil {
+		t.Fatalf("WriteLastSession: %v", writeErr)
 	}
 	got, err := ms.ReadLastSession()
 	if err != nil {

@@ -1,4 +1,5 @@
 // Tests for args_hash and args_preview (FR-080).
+
 package audit
 
 import (
@@ -37,8 +38,8 @@ func TestAuditArgsHash_Deterministic(t *testing.T) {
 	}
 
 	for i := 0; i < 100; i++ {
-		// Recreate the map fresh each iteration to maximise iteration-order
-		// variance — Go randomises map iteration, so this exercises the
+		// Recreate the map fresh each iteration to maximize iteration-order
+		// variance — Go randomizes map iteration, so this exercises the
 		// canonical-key-sort code path 100 times.
 		clone := map[string]any{
 			"path":    "/etc/passwd",
@@ -129,6 +130,7 @@ func TestAuditArgsHash_RFC8785_Compliance(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			// Re-encode with our canonical encoder and compare against the
 			// fixture. This is the RFC 8785 conformance gate.
 			got, err := ArgsHash(tc.args)
@@ -139,11 +141,11 @@ func TestAuditArgsHash_RFC8785_Compliance(t *testing.T) {
 			// pre-image too (catches future regressions in the encoder
 			// without touching the hash output).
 			var bb bytes.Buffer
-			if err := canonicalEncode(&bb, tc.args); err != nil {
-				t.Fatalf("canonicalEncode err: %v", err)
+			if encErr := canonicalEncode(&bb, tc.args); encErr != nil {
+				t.Fatalf("canonicalEncode err: %v", encErr)
 			}
-			if got := bb.String(); got != tc.canonical {
-				t.Fatalf("canonical pre-image\n  want %q\n  got  %q", tc.canonical, got)
+			if canonical := bb.String(); canonical != tc.canonical {
+				t.Fatalf("canonical pre-image\n  want %q\n  got  %q", tc.canonical, canonical)
 			}
 			if len(got) != 64 {
 				t.Fatalf("hash length: want 64, got %d", len(got))
@@ -178,20 +180,20 @@ func TestAuditArgsHash_JSONNumberCompat(t *testing.T) {
 func TestAuditArgsPreview_Redacts_Secrets(t *testing.T) {
 	t.Parallel()
 	args := map[string]any{
-		"path":          "/var/log/app.log",
-		"api_key":       "sk-1234567890abcdef",
+		"path":           "/var/log/app.log",
+		"api_key":        "sk-1234567890abcdef",
 		"OPENAI_API_KEY": "leaked-please-redact",
-		"password":      "hunter2",
-		"client_secret": "shhh",
-		"token":         "xyz",
-		"authorization": "Bearer abcdef0123456789",
+		"password":       "hunter2",
+		"client_secret":  "shhh",
+		"token":          "xyz",
+		"authorization":  "Bearer abcdef0123456789",
 		// innocent key, bearer-shaped value
 		"header": "Bearer abcdef0123456789xyz",
 		// innocent key, innocent value
 		"name": "alice",
 		// integer (passes through)
 		"depth": float64(3),
-		// nested map → summarised
+		// nested map → summarized
 		"opts": map[string]any{"a": 1, "b": 2},
 	}
 	got := ArgsPreview(args)
@@ -216,7 +218,7 @@ func TestAuditArgsPreview_Redacts_Secrets(t *testing.T) {
 		t.Errorf("benign path should be passed through: %v", got["path"])
 	}
 	if v, ok := got["opts"].(string); !ok || !strings.HasPrefix(v, "<object:") {
-		t.Errorf("nested map should summarise, got %v", got["opts"])
+		t.Errorf("nested map should summarize, got %v", got["opts"])
 	}
 }
 
@@ -246,4 +248,3 @@ func TestAuditArgsPreview_NilReturnsNil(t *testing.T) {
 		t.Fatalf("nil args should return nil, got %v", got)
 	}
 }
-

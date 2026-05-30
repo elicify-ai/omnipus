@@ -124,12 +124,12 @@ export function RoutingSection() {
                   </TableCell>
                   <TableCell>
                     <SmartSelect
-                      value={route.default_agent_id}
-                      onValueChange={(v) => updateRoute(route.id, 'default_agent_id', v)}
+                      value={route.default_agent_id || '__none__'}
+                      onValueChange={(v) => updateRoute(route.id, 'default_agent_id', v === '__none__' ? '' : v)}
                       triggerClassName="w-[160px] h-7 text-xs"
                       placeholder="(global default)"
                       items={[
-                        { value: '', label: '(global default)' },
+                        { value: '__none__', label: '(global default)' },
                         ...(agents ?? []).map((a) => ({ value: a.id, label: a.name })),
                       ]}
                     />

@@ -131,7 +131,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			},
 			"model": map[string]any{
 				"type":        "string",
-				"description": "Primary LLM model slug (e.g. 'z-ai/glm-5-turbo')",
+				"description": "Primary LLM model slug (e.g. 'z-ai/glm-5v-turbo')",
 			},
 			"color": map[string]any{"type": "string", "description": "Hex avatar color (e.g. '#22C55E')"},
 			"icon": map[string]any{

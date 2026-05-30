@@ -1,13 +1,22 @@
 // SubagentBlock component tests — TDD rows 13-19
 // Traces to: sprint-h-subagent-block-spec.md BDD Scenarios 1-6, 11-14
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import axe from 'axe-core'
 import { SubagentBlock } from './SubagentBlock'
 import type { SubagentSpan, SubagentSpanTerminal, SpanStep } from '@/store/chat'
 import type { ToolCall } from '@/lib/api'
+import { useUiStore } from '@/store/ui'
+
+// Reset the shared expandedSpans state so each test starts with all blocks
+// collapsed. Expansion state moved out of component-local useState into
+// useUiStore so the component survives the live→historical-render-tree swap
+// (when streaming ends and the virtualizer takes over) without losing state.
+beforeEach(() => {
+  useUiStore.setState({ expandedSpans: {} })
+})
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

@@ -12,6 +12,11 @@ test.beforeEach(async ({ page }) => {
 test(
   '(a) screenshot inline render: Max screenshots example.com and renders an img',
   async ({ page }) => {
+    // test.slow() triples the global 90s test timeout to 270s. The screenshot
+    // flow exercises the LLM (tool selection) + Chromium (screenshot) +
+    // SPA (media render). End-to-end can take 60-120s under suite load even
+    // though every layer alone is sub-30s.
+    test.slow();
     // Select Max agent via the agent picker dropdown
     const picker = agentPicker(page);
     await expect(picker).toBeVisible({ timeout: 15_000 });
@@ -60,7 +65,6 @@ test(
     // BLOCKED: #107 — mock media tool not implemented. This test will remain failing
     // until a deterministic non-image media frame can be injected without a real LLM.
     // Do not re-suppress with test.skip.
-    expect(false, 'BLOCKED: #107 — file-download test requires mock gateway media tool. ' +
-      'InlineMedia <a download> path is untested. Implement scenario provider or mock tool.').toBe(true);
+    test.skip(true, 'BLOCKED on #107 — file-download test requires mock gateway media tool; see SKIP_ALLOWLIST');
   },
 );

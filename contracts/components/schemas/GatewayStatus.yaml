@@ -1,0 +1,35 @@
+type: object
+description: >
+  Gateway runtime status as returned by GET /status (polled by the frontend StatusBar every 15 seconds).
+  Summarises the number of configured agents and channels plus a daily cost accumulator.
+required:
+  - online
+  - agent_count
+  - channel_count
+  - daily_cost
+additionalProperties: false
+properties:
+  online:
+    type: boolean
+    description: Always true when the gateway is reachable and the agent loop is running.
+    example: true
+  agent_count:
+    type: integer
+    description: Total number of configured agents (core + custom), including the implicit system agent.
+    minimum: 0
+    example: 3
+  channel_count:
+    type: integer
+    description: Number of enabled channels including the always-available webchat channel.
+    minimum: 0
+    example: 2
+  daily_cost:
+    type: number
+    format: double
+    description: Aggregate USD cost accrued today across all agents. Zero when cost tracking is disabled.
+    minimum: 0
+    example: 0.042
+  version:
+    type: string
+    description: Gateway binary version string (e.g. "0.1.0" or the git short-sha for dev builds).
+    example: "0.1.0"

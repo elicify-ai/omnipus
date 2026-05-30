@@ -295,7 +295,7 @@ func TestResolveUserFromCookie_EmptyCookieValue_ReturnsErrSessionNotFound(t *tes
 }
 
 // ---------------------------------------------------------------------------
-// #72 — ClearSessionCookie attributes 
+// #72 — ClearSessionCookie attributes
 // BDD: Given ClearSessionCookie is called,
 // When Set-Cookie is inspected,
 // Then MaxAge ≤ 0 (immediate expiry).
@@ -332,7 +332,7 @@ func TestClearSessionCookie_TLS_MaxAgeNegative(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// #72b — ClearCSRFCookie picks right name 
+// #72b — ClearCSRFCookie picks right name
 // BDD: Given ClearCSRFCookie on TLS, uses __Host-csrf; on plain HTTP uses csrf.
 // Traces to: path-sandbox-and-capability-tiers-spec.md
 // ---------------------------------------------------------------------------
@@ -625,7 +625,11 @@ func TestRequireSessionCookieOrBearer_AuthMismatchLogLevel_Debug(t *testing.T) {
 	bearerPlain := "bearer-bob-debug-level-00000000000001"
 	sessionHash, _ := bcrypt.GenerateFromPassword([]byte(sessionPlain), bcrypt.MinCost)
 	bearerHash, _ := bcrypt.GenerateFromPassword([]byte(bearerPlain), bcrypt.MinCost)
-	alice := config.UserConfig{Username: "alice", Role: config.UserRoleAdmin, SessionTokenHash: config.BcryptHash(sessionHash)}
+	alice := config.UserConfig{
+		Username:         "alice",
+		Role:             config.UserRoleAdmin,
+		SessionTokenHash: config.BcryptHash(sessionHash),
+	}
 	bob := config.UserConfig{Username: "bob", Role: config.UserRoleAdmin, TokenHash: config.BcryptHash(bearerHash)}
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{

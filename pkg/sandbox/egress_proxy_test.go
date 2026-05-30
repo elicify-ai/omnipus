@@ -62,7 +62,7 @@ func TestEgressWildcard_PrevailingConvention(t *testing.T) {
 
 // TestCompileEgressAllowList_Errors covers malformed entries — the
 // compiler rejects them at boot rather than producing surprising
-// allow/deny behaviour.
+// allow/deny behavior.
 func TestCompileEgressAllowList_Errors(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -236,7 +236,9 @@ func TestClose_WaitsForTunnels(t *testing.T) {
 		t.Fatalf("dial proxy: %v", err)
 	}
 	defer dial.Close()
-	if _, err := dial.Write([]byte("CONNECT " + host + ":" + port + " HTTP/1.1\r\nHost: " + host + ":" + port + "\r\n\r\n")); err != nil {
+	if _, err := dial.Write(
+		[]byte("CONNECT " + host + ":" + port + " HTTP/1.1\r\nHost: " + host + ":" + port + "\r\n\r\n"),
+	); err != nil {
 		t.Fatalf("CONNECT write: %v", err)
 	}
 	buf := make([]byte, 64)

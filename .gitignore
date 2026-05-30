@@ -87,3 +87,11 @@ tests/e2e/fixtures/.auth/
 gateway.pid
 .claude/scheduled_tasks.lock
 .claude/worktrees/
+
+# Runtime state written by the agent loop's cost tracker when a test (or
+# manual run) configures a workspace under pkg/agent/. Auto-mutates daily
+# (date rollover) and pollutes git status; not seed data.
+pkg/agent/system/cost.json
+
+# Contract codegen temp files
+*.generated.tmp.*

@@ -566,7 +566,6 @@ type AgentMCPServerBinding struct {
 	Tools []string `json:"tools,omitempty"` // empty or ["*"] = all tools from that server
 }
 
-
 // ResolveType returns the effective agent type. If the Type field is set, it is
 // returned directly. Otherwise the type is inferred: known core agent IDs →
 // AgentTypeCore; everything else → AgentTypeCustom. The caller must provide
@@ -636,9 +635,9 @@ type ToolFeedbackConfig struct {
 }
 
 type AgentDefaults struct {
-	Workspace                 string             `json:"workspace"                       env:"OMNIPUS_AGENTS_DEFAULTS_WORKSPACE"`
+	Workspace string `json:"workspace" env:"OMNIPUS_AGENTS_DEFAULTS_WORKSPACE"`
 	// RestrictToWorkspace and AllowReadOutsideWorkspace are removed from the v1
-	// schema (FR-001). Tags use json:"-" so SaveConfig never serialises them;
+	// schema (FR-001). Tags use json:"-" so SaveConfig never serializes them;
 	// validateRemovedKeys rejects any v1 config that still carries these keys.
 	RestrictToWorkspace       bool               `json:"-"                               env:"OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"`
 	AllowReadOutsideWorkspace bool               `json:"-"                               env:"OMNIPUS_AGENTS_DEFAULTS_ALLOW_READ_OUTSIDE_WORKSPACE"`
@@ -772,11 +771,11 @@ func (d *AgentDefaults) GetModelName() string {
 }
 
 type ChannelsConfig struct {
-	WhatsApp   WhatsAppConfig   `json:"whatsapp"    yaml:"-"`
-	Telegram   TelegramConfig   `json:"telegram"    yaml:"telegram,omitempty"`
-	Feishu     FeishuConfig     `json:"feishu"      yaml:"feishu,omitempty"`
-	Discord    DiscordConfig    `json:"discord"     yaml:"discord,omitempty"`
-	MaixCam    MaixCamConfig    `json:"maixcam"     yaml:"-"`
+	WhatsApp WhatsAppConfig `json:"whatsapp" yaml:"-"`
+	Telegram TelegramConfig `json:"telegram" yaml:"telegram,omitempty"`
+	Feishu   FeishuConfig   `json:"feishu"   yaml:"feishu,omitempty"`
+	Discord  DiscordConfig  `json:"discord"  yaml:"discord,omitempty"`
+
 	QQ         QQConfig         `json:"qq"          yaml:"qq,omitempty"`
 	DingTalk   DingTalkConfig   `json:"dingtalk"    yaml:"dingtalk,omitempty"`
 	Slack      SlackConfig      `json:"slack"       yaml:"slack,omitempty"`
@@ -786,7 +785,6 @@ type ChannelsConfig struct {
 	WeCom      WeComConfig      `json:"wecom"       yaml:"wecom,omitempty"       envPrefix:"OMNIPUS_CHANNELS_WECOM_"`
 	Weixin     WeixinConfig     `json:"weixin"      yaml:"weixin,omitempty"`
 	IRC        IRCConfig        `json:"irc"         yaml:"irc,omitempty"`
-	Teams      TeamsConfig      `json:"teams"       yaml:"teams,omitempty"`
 	GoogleChat GoogleChatConfig `json:"google-chat" yaml:"google-chat,omitempty"`
 }
 
@@ -873,14 +871,6 @@ type DiscordConfig struct {
 	Typing             TypingConfig        `json:"typing,omitempty"        yaml:"-"`
 	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"   yaml:"-"`
 	ReasoningChannelID string              `json:"reasoning_channel_id"    yaml:"-" env:"OMNIPUS_CHANNELS_DISCORD_REASONING_CHANNEL_ID"`
-}
-
-type MaixCamConfig struct {
-	Enabled            bool                `json:"enabled"              env:"OMNIPUS_CHANNELS_MAIXCAM_ENABLED"`
-	Host               string              `json:"host"                 env:"OMNIPUS_CHANNELS_MAIXCAM_HOST"`
-	Port               int                 `json:"port"                 env:"OMNIPUS_CHANNELS_MAIXCAM_PORT"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"           env:"OMNIPUS_CHANNELS_MAIXCAM_ALLOW_FROM"`
-	ReasoningChannelID string              `json:"reasoning_channel_id" env:"OMNIPUS_CHANNELS_MAIXCAM_REASONING_CHANNEL_ID"`
 }
 
 type QQConfig struct {
@@ -1017,19 +1007,6 @@ type IRCConfig struct {
 	ReasoningChannelID  string              `json:"reasoning_channel_id"            yaml:"-"`
 }
 
-type TeamsConfig struct {
-	Enabled            bool                `json:"enabled"                    yaml:"-" env:"OMNIPUS_CHANNELS_TEAMS_ENABLED"`
-	AppID              string              `json:"app_id"                     yaml:"-" env:"OMNIPUS_CHANNELS_TEAMS_APP_ID"`
-	AppPasswordRef     string              `json:"app_password_ref,omitempty" yaml:"-" env:"OMNIPUS_CHANNELS_TEAMS_APP_PASSWORD_REF"`
-	TenantID           string              `json:"tenant_id"                  yaml:"-" env:"OMNIPUS_CHANNELS_TEAMS_TENANT_ID"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"                 yaml:"-" env:"OMNIPUS_CHANNELS_TEAMS_ALLOW_FROM"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"    yaml:"-"`
-	Typing             TypingConfig        `json:"typing,omitempty"           yaml:"-"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"      yaml:"-"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"       yaml:"-" env:"OMNIPUS_CHANNELS_TEAMS_REASONING_CHANNEL_ID"`
-	MaxMessageLength   int                 `json:"max_message_length"         yaml:"-" env:"OMNIPUS_CHANNELS_TEAMS_MAX_MESSAGE_LENGTH"`
-}
-
 type HeartbeatConfig struct {
 	Enabled  bool `json:"enabled"  env:"OMNIPUS_HEARTBEAT_ENABLED"`
 	Interval int  `json:"interval" env:"OMNIPUS_HEARTBEAT_INTERVAL"` // minutes, min 5
@@ -1145,12 +1122,12 @@ func (r *UserRole) UnmarshalJSON(data []byte) error {
 
 // UserConfig holds per-user authentication and authorization settings.
 type UserConfig struct {
-	Username     string     `json:"username,omitempty"`
-	PasswordHash string     `json:"password_hash,omitempty"`     // bcrypt hash
-	TokenHash    BcryptHash `json:"token_hash,omitempty"`        // bcrypt hash of bearer token
+	Username         string     `json:"username,omitempty"`
+	PasswordHash     string     `json:"password_hash,omitempty"`      // bcrypt hash
+	TokenHash        BcryptHash `json:"token_hash,omitempty"`         // bcrypt hash of bearer token
 	SessionTokenHash BcryptHash `json:"session_token_hash,omitempty"` // bcrypt hash of session cookie token
-	Role         UserRole   `json:"role"`
-	Name         string     `json:"name,omitempty"`
+	Role             UserRole   `json:"role"`
+	Name             string     `json:"name,omitempty"`
 }
 
 type GatewayConfig struct {
@@ -1215,6 +1192,18 @@ type GatewayConfig struct {
 	// results in a single turn that triggers a turn abort (FR-084). Default: 8.
 	// Set to 0 to disable. Negative values are treated as the default (8).
 	TurnSyntheticErrorFloor int `json:"turn_synthetic_error_floor,omitempty" env:"OMNIPUS_TURN_SYNTHETIC_ERROR_FLOOR"`
+
+	// ValidateInbound enables server-side JSON Schema validation of REST request
+	// bodies against the OpenAPI component schemas before the body is decoded into
+	// a Go struct. Defaults to false (opt-in). When true, handlers that accept a
+	// JSON body validate it against the corresponding schema from
+	// contracts/components/schemas/ and reject schema-invalid payloads with HTTP
+	// 400 + a descriptive error message, preventing Go zero-value silently
+	// accepted from a malformed or empty {}.
+	//
+	// Set via: {"gateway": {"validate_inbound": true}} in config.json
+	// or OMNIPUS_GATEWAY_VALIDATE_INBOUND=true env var.
+	ValidateInbound bool `json:"validate_inbound,omitempty" env:"OMNIPUS_GATEWAY_VALIDATE_INBOUND"`
 }
 
 type ToolDiscoveryConfig struct {
@@ -1427,7 +1416,6 @@ type ToolsConfig struct {
 	TaskCreate      ToolConfig         `json:"task_create"       yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_TASK_CREATE_"`
 	TaskUpdate      ToolConfig         `json:"task_update"       yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_TASK_UPDATE_"`
 	FindSkills      ToolConfig         `json:"find_skills"       yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_FIND_SKILLS_"`
-	I2C             ToolConfig         `json:"i2c"               yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_I2C_"`
 	InstallSkill    ToolConfig         `json:"install_skill"     yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_INSTALL_SKILL_"`
 	ListDir         ToolConfig         `json:"list_dir"          yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_LIST_DIR_"`
 	Message         ToolConfig         `json:"message"           yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_MESSAGE_"`
@@ -1435,7 +1423,6 @@ type ToolsConfig struct {
 	SendFile        ToolConfig         `json:"send_file"         yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_SEND_FILE_"`
 	Spawn           ToolConfig         `json:"spawn"             yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_SPAWN_"`
 	SpawnStatus     ToolConfig         `json:"spawn_status"      yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_SPAWN_STATUS_"`
-	SPI             ToolConfig         `json:"spi"               yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_SPI_"`
 	Subagent        ToolConfig         `json:"subagent"          yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_SUBAGENT_"`
 	WebFetch        ToolConfig         `json:"web_fetch"         yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_WEB_FETCH_"`
 	WriteFile       ToolConfig         `json:"write_file"        yaml:"-"                                                      envPrefix:"OMNIPUS_TOOLS_WRITE_FILE_"`
@@ -1627,8 +1614,8 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	// Reject removed keys only for v1+ configs (FR-001). Legacy v0 configs may
 	// legitimately contain restrict_to_workspace; we migrate them instead.
 	if versionInfo.Version >= CurrentVersion {
-		if err := validateRemovedKeys(data); err != nil {
-			return nil, err
+		if validateErr := validateRemovedKeys(data); validateErr != nil {
+			return nil, validateErr
 		}
 	}
 	if len(data) <= 10 {
@@ -1788,6 +1775,16 @@ func SaveConfig(path string, cfg *Config) error {
 	if cfg.Version < CurrentVersion {
 		cfg.Version = CurrentVersion
 	}
+
+	// Verify the target directory already exists. SaveConfig is a "save to an
+	// existing location" operation — it does not provision new directory trees.
+	// Callers that need to create a new config path must ensure the directory
+	// exists first (e.g., the first-run gateway path via os.MkdirAll).
+	dir := filepath.Dir(path)
+	if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+		return fmt.Errorf("failed to create directory: directory does not exist: %s", dir)
+	}
+
 	// Filter out virtual models before serializing to config file
 	nonVirtualModels := make([]*ModelConfig, 0, len(cfg.Providers))
 	for _, m := range cfg.Providers {
@@ -1968,7 +1965,10 @@ func (g *GatewayConfig) ValidateAndApplyPreviewDefaults() error {
 	if g.PreviewOrigin != "" {
 		u, err := url.Parse(g.PreviewOrigin)
 		if err != nil || u.Scheme == "" {
-			return fmt.Errorf("gateway.preview_origin %q must be a URL with a scheme (e.g. https://preview.example.com)", g.PreviewOrigin)
+			return fmt.Errorf(
+				"gateway.preview_origin %q must be a URL with a scheme (e.g. https://preview.example.com)",
+				g.PreviewOrigin,
+			)
 		}
 	}
 
@@ -1976,7 +1976,10 @@ func (g *GatewayConfig) ValidateAndApplyPreviewDefaults() error {
 	if g.PublicURL != "" {
 		u, err := url.Parse(g.PublicURL)
 		if err != nil || u.Scheme == "" {
-			return fmt.Errorf("gateway.public_url %q must be a URL with a scheme (e.g. https://omnipus.example.com)", g.PublicURL)
+			return fmt.Errorf(
+				"gateway.public_url %q must be a URL with a scheme (e.g. https://omnipus.example.com)",
+				g.PublicURL,
+			)
 		}
 	}
 
@@ -2082,8 +2085,6 @@ func (t *ToolsConfig) warnDeprecatedEnableFlags() {
 		{"web", t.Web.Enabled},
 		{"web_fetch", t.WebFetch.Enabled},
 		{"browser", t.Browser.Enabled},
-		{"i2c", t.I2C.Enabled},
-		{"spi", t.SPI.Enabled},
 		{"mcp", t.MCP.Enabled},
 		{"exec", t.Exec.Enabled},
 		{"cron", t.Cron.Enabled},

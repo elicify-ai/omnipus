@@ -123,7 +123,7 @@ func TestSpawn_LogFileClosedAfterStart(t *testing.T) {
 	// Wait briefly for the child.
 	done := make(chan struct{}, 1)
 	go func() {
-		cmd.Wait()    //nolint:errcheck
+		cmd.Wait() //nolint:errcheck
 		done <- struct{}{}
 	}()
 	select {

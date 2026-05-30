@@ -1,4 +1,4 @@
-// Cross-platform tests for hardened_exec.Run. Platform-specific behaviour
+// Cross-platform tests for hardened_exec.Run. Platform-specific behavior
 // (memory cap enforcement) lives in build-tagged test files.
 
 package sandbox

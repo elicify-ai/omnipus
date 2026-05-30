@@ -193,12 +193,12 @@ export function GatewaySection() {
             <p className="text-xs text-[var(--color-muted)]">The agent that handles messages when no specific routing applies</p>
           </div>
           <SmartSelect
-            value={defaultAgentId}
-            onValueChange={(v) => { markDirty(); setDefaultAgentId(v) }}
+            value={defaultAgentId || '__none__'}
+            onValueChange={(v) => { markDirty(); setDefaultAgentId(v === '__none__' ? '' : v) }}
             triggerClassName="w-[180px] h-8 text-xs"
             placeholder="(none set)"
             items={[
-              { value: '', label: '(none set)' },
+              { value: '__none__', label: '(none set)' },
               ...(agents ?? []).map((a) => ({ value: a.id, label: a.name })),
             ]}
           />

@@ -116,7 +116,6 @@ func checkPreviewPort(cfg *config.Config) []warning {
 	}
 	knownPorts := []channelPort{
 		{"channels.line.webhook_port", cfg.Channels.LINE.WebhookPort},
-		{"channels.maixcam.port", cfg.Channels.MaixCam.Port},
 	}
 	for _, cp := range knownPorts {
 		if cp.port > 0 && cp.port == previewPort {

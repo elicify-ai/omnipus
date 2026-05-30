@@ -1,0 +1,47 @@
+name: Welcome new contributors
+
+# Posts a one-time welcome message on a contributor's first issue or first PR.
+# Keeps the tone warm but practical — points new contributors at SUPPORT.md,
+# the CLA requirement, and the SECURITY.md route for vulnerabilities.
+
+on:
+  issues:
+    types: [opened]
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  welcome:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/first-interaction@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+          issue-message: |
+            👋 Thanks for opening your first issue in Omnipus!
+
+            A few quick pointers so we can route this efficiently:
+
+            - 🐛 **Bug?** Please confirm the issue template is filled in (Omnipus version, OS, kernel, repro steps, log excerpt).
+            - 💬 **Question or how-to?** [Discussions](https://github.com/elicify-ai/omnipus/discussions) is usually a faster channel than the issue tracker.
+            - 🔐 **Security vulnerability?** Don't post details publicly — see [SECURITY.md](https://github.com/elicify-ai/omnipus/blob/main/SECURITY.md) for the private disclosure path (acknowledged within 72 hours).
+            - 🗺️ **Wondering where this fits?** [ROADMAP.md](https://github.com/elicify-ai/omnipus/blob/main/ROADMAP.md) shows the current release plan.
+
+            A maintainer will triage this within a few business days. Thanks for taking the time to file it.
+
+          pr-message: |
+            🎉 Thanks for opening your first PR in Omnipus!
+
+            Before this can be merged:
+
+            1. **CLA signature required.** Omnipus uses a [Contributor License Agreement](https://github.com/elicify-ai/omnipus/blob/main/CLA.md) — the `cla-assistant` bot will comment on this PR with a one-click sign link once it's live. Until the bot is wired up, external PRs are not being merged (see CLA.md for status).
+            2. **All CI checks must pass** — `typecheck`, `wire-types-lint`, `verify-contracts`, `lint`, `test`, `security`, `perf-smoke`, `playwright`. Run the local equivalents from [CONTRIBUTING.md](https://github.com/elicify-ai/omnipus/blob/main/CONTRIBUTING.md) before pushing if you can.
+            3. **Code-owner review** — paths under `pkg/security/`, `pkg/sandbox/`, `pkg/credentials/`, `pkg/audit/`, `contracts/`, and `.github/workflows/` route to a maintainer automatically via [CODEOWNERS](https://github.com/elicify-ai/omnipus/blob/main/.github/CODEOWNERS).
+            4. **Conventional commit titles** — use `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`, `perf:`, `ci:` prefixes so the release-drafter picks the right changelog section automatically.
+
+            Thanks for contributing 🙏

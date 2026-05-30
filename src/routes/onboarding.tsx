@@ -17,15 +17,14 @@ import {
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ModelSelector } from '@/components/ui/model-selector'
-import { probeProvider, completeOnboardingTransaction, completeOnboarding, fetchAppState, isApiError } from '@/lib/api'
+import { ModelSelector, type ModelGroup } from '@/components/ui/model-selector'
+import { probeProvider, completeOnboardingTransaction, fetchAppState, isApiError } from '@/lib/api'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 import { PROVIDER_HINTS } from '@/lib/constants'
 import { useUiStore } from '@/store/ui'
 import { useAuthStore } from '@/store/auth'
 
-// US-7: First-launch onboarding flow — full-screen, outside AppShell
-// US-8: Provider setup with API key input + test connection
+// First-launch onboarding flow — full-screen, outside AppShell
 
 type Step = 1 | 2 | 3 | 4
 type TestStatus = 'idle' | 'testing' | 'success' | 'error'
@@ -177,19 +176,6 @@ function OnboardingWizard() {
     }
   }
 
-  // US-7: Skip option for advanced users
-  const handleSkip = async () => {
-    try {
-      await completeOnboarding()
-      navigate({ to: '/' })
-    } catch (err) {
-      addToast({
-        message: `Could not save onboarding state: ${err instanceof Error ? err.message : 'Unknown error'}`,
-        variant: 'error',
-      })
-    }
-  }
-
   const handleRegisterAdmin = () => {
     if (!adminUsername.trim() || !adminPassword) {
       setAdminError('Username and password are required')
@@ -278,7 +264,7 @@ function OnboardingWizard() {
               exit="exit"
               transition={{ duration: 0.22, ease: 'easeInOut' }}
             >
-              <WelcomeStep onGetStarted={() => goTo(2)} onSkip={handleSkip} />
+              <WelcomeStep onGetStarted={() => goTo(2)} />
             </motion.div>
           )}
           {step === 2 && (
@@ -362,13 +348,7 @@ function OnboardingWizard() {
 
 // ── Step 1: Welcome ────────────────────────────────────────────────────────────
 
-function WelcomeStep({
-  onGetStarted,
-  onSkip,
-}: {
-  onGetStarted: () => void
-  onSkip: () => void
-}) {
+function WelcomeStep({ onGetStarted }: { onGetStarted: () => void }) {
   return (
     <div className="flex flex-col items-center text-center gap-8">
       {/* Mascot with Forge Gold glow halo */}
@@ -436,7 +416,7 @@ function WelcomeStep({
         initial={{ y: 14, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.38, duration: 0.38 }}
-        className="w-full flex flex-col gap-3"
+        className="w-full"
       >
         <Button
           className="w-full h-11 gap-2 font-headline font-bold text-base"
@@ -445,16 +425,6 @@ function WelcomeStep({
           Get Started
           <ArrowRight size={16} weight="bold" />
         </Button>
-        <button
-          type="button"
-          onClick={onSkip}
-          className="text-sm transition-colors underline underline-offset-2"
-          style={{ color: 'var(--color-muted)' }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--color-secondary)')}
-          onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--color-muted)')}
-        >
-          Skip — I know what I&apos;m doing
-        </button>
       </motion.div>
     </div>
   )
@@ -497,6 +467,12 @@ function ProviderStep({
   selectedModel: string
   onSelectModel: (model: string) => void
 }) {
+  // Build providerGroups for the ModelSelector — single group in onboarding (one provider at a time)
+  const providerDef = providers.find((p) => p.id === selectedProvider)
+  const providerGroups: ModelGroup[] =
+    availableModels.length > 0 && providerDef
+      ? [{ providerName: providerDef.display_name, models: availableModels }]
+      : []
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -637,6 +613,7 @@ function ProviderStep({
                         models={availableModels}
                         value={selectedModel}
                         onChange={onSelectModel}
+                        providerGroups={providerGroups}
                       />
                       <p className="text-[10px] mt-1.5" style={{ color: 'var(--color-muted)' }}>
                         {availableModels.length > 0

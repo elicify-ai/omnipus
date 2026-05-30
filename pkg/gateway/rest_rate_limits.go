@@ -13,6 +13,7 @@ import (
 	"math"
 	"net/http"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 )
@@ -53,12 +54,12 @@ func (a *restAPI) getRateLimits(w http.ResponseWriter, r *http.Request) {
 		enabled = false
 	}
 
-	jsonOK(w, map[string]any{
-		"enabled":                         enabled,
-		"daily_cost_usd":                  dailyCost,
-		"daily_cost_cap":                  rlCfg.DailyCostCapUSD,
-		"max_agent_llm_calls_per_hour":    rlCfg.MaxAgentLLMCallsPerHour,
-		"max_agent_tool_calls_per_minute": rlCfg.MaxAgentToolCallsPerMinute,
+	jsonOK(w, gen.RateLimitsResponse{
+		Enabled:                    enabled,
+		DailyCostUsd:               dailyCost,
+		DailyCostCap:               rlCfg.DailyCostCapUSD,
+		MaxAgentLlmCallsPerHour:    int64(rlCfg.MaxAgentLLMCallsPerHour),
+		MaxAgentToolCallsPerMinute: int64(rlCfg.MaxAgentToolCallsPerMinute),
 	})
 }
 
@@ -73,13 +74,14 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	// Decode to map[string]json.RawMessage so we can inspect each field's
-	// JSON token type independently and reject type mismatches strictly.
+	// decodeAndValidate validates the body against the RateLimitsUpdateRequest
+	// JSON Schema (when validate_inbound=true) before decoding. When the schema
+	// reports type:integer for LLM/tool count fields, fractional floats are
+	// rejected at the schema level; the bespoke parseInt64Field check below
+	// provides defense-in-depth regardless.
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var raw map[string]json.RawMessage
-	dec := json.NewDecoder(r.Body)
-	dec.UseNumber()
-	if err := dec.Decode(&raw); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeAndValidate(w, r, "RateLimitsUpdateRequest", &raw, validateEnabled) {
 		return
 	}
 
@@ -154,10 +156,11 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 				slog.Error("rest: audit log rate limits update", "error", err)
 			}
 		}
-		jsonOK(w, map[string]any{
-			"saved":            true,
-			"requires_restart": true,
-			"warning":          "config saved to disk but hot-reload failed; restart the gateway to apply",
+		warnMsg := "config saved to disk but hot-reload failed; restart the gateway to apply"
+		jsonOK(w, gen.RateLimitsUpdateResponse{
+			Saved:           true,
+			RequiresRestart: true,
+			Warning:         &warnMsg,
 		})
 		return
 	}
@@ -191,13 +194,19 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		"max_agent_tool_calls_per_minute", newCfg.MaxAgentToolCallsPerMinute,
 	)
 
-	jsonOK(w, map[string]any{
-		"saved":            true,
-		"requires_restart": false,
-		"applied": map[string]any{
-			"daily_cost_cap_usd":              newCfg.DailyCostCapUSD,
-			"max_agent_llm_calls_per_hour":    newCfg.MaxAgentLLMCallsPerHour,
-			"max_agent_tool_calls_per_minute": newCfg.MaxAgentToolCallsPerMinute,
+	llmCalls := int64(newCfg.MaxAgentLLMCallsPerHour)
+	toolCalls := int64(newCfg.MaxAgentToolCallsPerMinute)
+	jsonOK(w, gen.RateLimitsUpdateResponse{
+		Saved:           true,
+		RequiresRestart: false,
+		Applied: &struct {
+			DailyCostCapUsd            *float64 `json:"daily_cost_cap_usd,omitempty"`
+			MaxAgentLlmCallsPerHour    *int64   `json:"max_agent_llm_calls_per_hour,omitempty"`
+			MaxAgentToolCallsPerMinute *int64   `json:"max_agent_tool_calls_per_minute,omitempty"`
+		}{
+			DailyCostCapUsd:            &newCfg.DailyCostCapUSD,
+			MaxAgentLlmCallsPerHour:    &llmCalls,
+			MaxAgentToolCallsPerMinute: &toolCalls,
 		},
 	})
 }

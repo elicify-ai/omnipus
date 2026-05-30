@@ -8,12 +8,15 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 
+	"github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/channels"
 )
 
 // webchatChannel implements channels.Channel so the channel Manager can route
@@ -67,27 +70,77 @@ func (c *webchatChannel) Send(_ context.Context, msg bus.OutboundMessage) error 
 		return nil
 	}
 
+	// Resolve the originating chat's session_id and find every connection
+	// currently bound to that session. Cross-browser session attach (#133)
+	// requires that a second tab observing the same session receives the
+	// final token/done frames — not just the chat_id that triggered the turn.
 	c.wsHandler.mu.Lock()
-	conn, ok := c.wsHandler.sessions[msg.ChatID]
-	// Backfill session_id from the handler's chat→session map when the
-	// upstream OutboundMessage didn't carry one. The SPA drops session-
-	// scoped frames that arrive without session_id, so every token/done
-	// must be tagged.
 	sid := msg.SessionID
 	if sid == "" {
 		sid = c.wsHandler.sessionIDs[msg.ChatID]
 	}
+	conns := c.collectSessionConnsLocked(msg.ChatID, sid)
 	c.wsHandler.mu.Unlock()
 
-	if !ok {
-		return fmt.Errorf("webchat: no active connection for chat %s", msg.ChatID)
+	if len(conns) == 0 {
+		// Wrap as channels.ErrSendFailed so the Manager's sendWithRetry loop
+		// classifies the failure as PERMANENT and stops immediately. Under
+		// concurrent load (e.g. 2000 in-process WS clients all hanging up
+		// near simultaneously) the default "unknown error" classification
+		// triggered exponential-backoff retries — each blocking the worker
+		// for up to maxBackoff seconds, multiplied by 3 attempts per
+		// dead chat. There is no recovery path when a chat's only WS
+		// connection has closed; retrying just wastes the worker's time
+		// and starves live chats sharing the same goroutine.
+		return fmt.Errorf("webchat: no active connection for chat %s: %w",
+			msg.ChatID, channels.ErrSendFailed)
 	}
 
-	if msg.Content != "" {
-		sendConnFrame(conn, wsServerFrame{Type: "token", Content: msg.Content, SessionID: sid})
+	for _, conn := range conns {
+		if msg.Content != "" {
+			sendConnGenFrame(conn, string(generated.WsFrameTypeToken), generated.TokenFrame{
+				Type:      string(generated.WsFrameTypeToken),
+				Content:   msg.Content,
+				SessionId: sid,
+			})
+		}
+		sendConnGenFrame(conn, string(generated.WsFrameTypeDone), generated.DoneFrame{
+			Type:      string(generated.WsFrameTypeDone),
+			SessionId: sid,
+		})
 	}
-	sendConnFrame(conn, wsServerFrame{Type: "done", Stats: map[string]any{}, SessionID: sid})
 	return nil
+}
+
+// collectSessionConnsLocked returns every wsConn that should receive a
+// session-scoped outbound frame: the originating chatID plus any other
+// connections (from different browser tabs) attached to the same session.
+// Caller must hold c.wsHandler.mu.
+func (c *webchatChannel) collectSessionConnsLocked(originChatID, sessionID string) []*wsConn {
+	out := make([]*wsConn, 0, 2)
+	seen := make(map[*wsConn]struct{}, 2)
+	if conn, ok := c.wsHandler.sessions[originChatID]; ok {
+		out = append(out, conn)
+		seen[conn] = struct{}{}
+	}
+	if sessionID == "" {
+		return out
+	}
+	for chatID, sid := range c.wsHandler.sessionIDs {
+		if sid != sessionID || chatID == originChatID {
+			continue
+		}
+		conn, ok := c.wsHandler.sessions[chatID]
+		if !ok {
+			continue
+		}
+		if _, dup := seen[conn]; dup {
+			continue
+		}
+		out = append(out, conn)
+		seen[conn] = struct{}{}
+	}
+	return out
 }
 
 // SendMedia delivers media attachments to the WebSocket client.
@@ -104,23 +157,29 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 	c.wsHandler.mu.Unlock()
 
 	if !ok {
-		return fmt.Errorf("webchat: no active connection for chat %s", msg.ChatID)
+		// Same permanent-failure classification as Send — see comment above.
+		return fmt.Errorf("webchat: no active connection for chat %s: %w",
+			msg.ChatID, channels.ErrSendFailed)
 	}
 
-	parts := make([]wsMediaPart, 0, len(msg.Parts))
+	parts := make([]generated.MediaPart, 0, len(msg.Parts))
 	for _, p := range msg.Parts {
 		if !strings.HasPrefix(p.Ref, "media://") {
 			slog.Warn("webchat: media part has unexpected ref scheme — skipping",
 				"chat_id", msg.ChatID, "ref", p.Ref)
 			continue
 		}
-		parts = append(parts, wsMediaPart{
+		part := generated.MediaPart{
 			Type:        p.Type,
-			URL:         "/api/v1/media/" + strings.TrimPrefix(p.Ref, "media://"),
+			Url:         "/api/v1/media/" + strings.TrimPrefix(p.Ref, "media://"),
 			Filename:    p.Filename,
 			ContentType: p.ContentType,
-			Caption:     p.Caption,
-		})
+		}
+		if p.Caption != "" {
+			caption := p.Caption
+			part.Caption = &caption
+		}
+		parts = append(parts, part)
 	}
 	if len(parts) == 0 {
 		return fmt.Errorf(
@@ -131,6 +190,16 @@ func (c *webchatChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessa
 	}
 
 	slog.Debug("webchat: sending media frame", "chat_id", msg.ChatID, "parts", len(parts))
-	sendConnFrame(conn, wsServerFrame{Type: "media", SessionID: msg.SessionID, Parts: parts})
+
+	// Marshal and route through sendRawFrameBytes to get replay-divert and backpressure logic.
+	raw, err := json.Marshal(generated.MediaFrame{
+		Type:      string(generated.WsFrameTypeMedia),
+		SessionId: msg.SessionID,
+		Parts:     parts,
+	})
+	if err != nil {
+		return fmt.Errorf("webchat: marshal media frame: %w", err)
+	}
+	sendRawFrameBytes(conn, string(generated.WsFrameTypeMedia), raw)
 	return nil
 }

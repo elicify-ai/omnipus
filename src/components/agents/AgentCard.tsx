@@ -12,6 +12,7 @@ interface AgentCardProps {
 const typeBadgeVariant = {
   core: 'secondary',
   custom: 'outline',
+  system: 'default',
 } as const
 
 export function AgentCard({ agent }: AgentCardProps) {

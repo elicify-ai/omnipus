@@ -70,7 +70,7 @@ func TestProxyDevRequest_UpstreamError_GenericBody(t *testing.T) {
 		devServers:    dr,
 	}
 
-	reg, err := dr.Register("error-body-agent", int32(stubPort), 99999, "stub-closed", 10)
+	reg, err := dr.Register("error-body-agent", stubPort, 99999, "stub-closed", 10)
 	require.NoError(t, err, "Register closed stub")
 
 	path := "/preview/error-body-agent/" + reg.Token + "/sensitive.html"
@@ -148,7 +148,7 @@ func TestProxyDevRequest_UpstreamError_SuppressesUpstreamSensitiveBody(t *testin
 		devServers:    dr,
 	}
 
-	reg, err := dr.Register("error-json-agent", int32(stubPort), 99999, "stub-closed-2", 10)
+	reg, err := dr.Register("error-json-agent", stubPort, 99999, "stub-closed-2", 10)
 	require.NoError(t, err)
 
 	path := "/preview/error-json-agent/" + reg.Token + "/"

@@ -88,8 +88,8 @@ func migrateAgentOwnership(cfg *Config, cfgPath string) {
 		return
 	}
 	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		slog.Error("migrateAgentOwnership: parse config failed", "error", err)
+	if unmarshalErr := json.Unmarshal(raw, &m); unmarshalErr != nil {
+		slog.Error("migrateAgentOwnership: parse config failed", "error", unmarshalErr)
 		return
 	}
 

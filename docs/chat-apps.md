@@ -4,7 +4,7 @@
 
 ## 💬 Chat Apps
 
-Talk to your omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, LINE, WeCom, Feishu, Slack, IRC, OneBot, MaixCam, or Pico (native protocol)
+Talk to your omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, LINE, WeCom, Weixin, Feishu, Slack, IRC, OneBot, or Google Chat
 
 > **Note**: Channels that rely on HTTP callbacks share a single Gateway HTTP server (`gateway.host`:`gateway.port`, default `127.0.0.1:18790`). Socket/stream-based channels such as Feishu, DingTalk, and WeCom do not rely on the shared webhook server for inbound delivery.
 
@@ -12,7 +12,7 @@ Talk to your omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, 
 | -------------------- | ------------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | **Telegram**         | ⭐ Easy            | Recommended, voice-to-text, long polling (no public IP needed) | [Docs](channels/telegram/README.md)                                                                  |
 | **Discord**          | ⭐ Easy            | Socket Mode, group/DM support, rich bot ecosystem     | [Docs](channels/discord/README.md)                                                                           |
-| **WhatsApp**         | ⭐ Easy            | Native (QR scan) or Bridge URL                        | [Docs](#whatsapp)                                                                                                |
+| **WhatsApp**         | ⭐ Easy            | Native (QR scan) or Bridge URL                        | [Docs](channels/whatsapp/README.md) / [Native](channels/whatsapp_native/README.md)                              |
 | **Weixin**           | ⭐ Easy            | Native QR scan (Tencent iLink API)                    | [Docs](#weixin)                                                                            |
 | **Slack**            | ⭐ Easy            | **Socket Mode** (no public IP needed), enterprise     | [Docs](channels/slack/README.md)                                                                             |
 | **Matrix**           | ⭐⭐ Medium        | Federated protocol, self-hosting supported            | [Docs](channels/matrix/README.md)                                                                            |
@@ -21,10 +21,8 @@ Talk to your omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, 
 | **LINE**             | ⭐⭐⭐ Advanced    | HTTPS Webhook required                                | [Docs](channels/line/README.md)                                                                              |
 | **WeCom (企业微信)** | ⭐⭐⭐ Advanced    | Official AI Bot over WebSocket, streaming + media     | [Docs](channels/wecom/README.md) |
 | **Feishu (飞书)**    | ⭐⭐⭐ Advanced    | Enterprise collaboration, feature-rich                | [Docs](channels/feishu/README.md)                                                                            |
-| **IRC**              | ⭐⭐ Medium        | Server + TLS configuration                            | [Docs](#irc)                                                                                                     |
+| **IRC**              | ⭐⭐ Medium        | Server + TLS configuration                            | [Docs](channels/irc/README.md)                                                                                  |
 | **OneBot**           | ⭐⭐ Medium        | NapCat/Go-CQHTTP compatible, community ecosystem      | [Docs](channels/onebot/README.md)                                                                            |
-| **MaixCam**          | ⭐ Easy            | Hardware integration channel for Sipeed AI cameras    | [Docs](channels/maixcam/README.md)                                                                           |
-| **Pico**             | ⭐ Easy            | Native Omnipus protocol channel                      |                                                                                                                  |
 
 <a id="telegram"></a>
 <details>

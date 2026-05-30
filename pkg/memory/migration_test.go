@@ -391,14 +391,16 @@ func TestMigrateFromJSON_SkipsMetaJSONFiles(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	if addErr := store.AddMessage(ctx, "agent:main:pico:direct:pico:test", "user", "keep me"); addErr != nil {
+	if addErr := store.AddMessage(ctx, "agent:main:omnipus:direct:omnipus:test", "user", "keep me"); addErr != nil {
 		t.Fatalf("AddMessage: %v", addErr)
 	}
-	if summaryErr := store.SetSummary(ctx, "agent:main:pico:direct:pico:test", "keep summary"); summaryErr != nil {
+	if summaryErr := store.SetSummary(
+		ctx, "agent:main:omnipus:direct:omnipus:test", "keep summary",
+	); summaryErr != nil {
 		t.Fatalf("SetSummary: %v", summaryErr)
 	}
 
-	metaPath := filepath.Join(sessionsDir, "agent_main_pico_direct_pico_test.meta.json")
+	metaPath := filepath.Join(sessionsDir, "agent_main_omnipus_direct_omnipus_test.meta.json")
 	if _, statErr := os.Stat(metaPath); statErr != nil {
 		t.Fatalf("meta file missing before migration: %v", statErr)
 	}
@@ -411,7 +413,7 @@ func TestMigrateFromJSON_SkipsMetaJSONFiles(t *testing.T) {
 		t.Fatalf("expected 0 migrated, got %d", count)
 	}
 
-	history, err := store.GetHistory(ctx, "agent:main:pico:direct:pico:test")
+	history, err := store.GetHistory(ctx, "agent:main:omnipus:direct:omnipus:test")
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
@@ -419,7 +421,7 @@ func TestMigrateFromJSON_SkipsMetaJSONFiles(t *testing.T) {
 		t.Fatalf("history = %+v, want preserved single message", history)
 	}
 
-	summary, err := store.GetSummary(ctx, "agent:main:pico:direct:pico:test")
+	summary, err := store.GetSummary(ctx, "agent:main:omnipus:direct:omnipus:test")
 	if err != nil {
 		t.Fatalf("GetSummary: %v", err)
 	}

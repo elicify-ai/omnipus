@@ -33,9 +33,11 @@ type mockProvider struct {
 func (m *mockProvider) Platform() (envcontext.Platform, error) {
 	return m.platform, m.platformErr
 }
+
 func (m *mockProvider) SandboxMode() (string, error) {
 	return m.sandboxMode, m.sandboxErr
 }
+
 func (m *mockProvider) NetworkPolicy() envcontext.NetworkPolicy {
 	return m.networkPolicy
 }
@@ -458,8 +460,18 @@ func TestRenderSandboxMode_AllStatusShapes(t *testing.T) {
 	}
 
 	// Differentiation: two different modes produce two different preambles.
-	p1 := &mockProvider{sandboxMode: "off", networkPolicy: envcontext.NetworkPolicy{}, workspacePath: "/ws", omnipusHome: "/h"}
-	p2 := &mockProvider{sandboxMode: "fallback", networkPolicy: envcontext.NetworkPolicy{}, workspacePath: "/ws", omnipusHome: "/h"}
+	p1 := &mockProvider{
+		sandboxMode:   "off",
+		networkPolicy: envcontext.NetworkPolicy{},
+		workspacePath: "/ws",
+		omnipusHome:   "/h",
+	}
+	p2 := &mockProvider{
+		sandboxMode:   "fallback",
+		networkPolicy: envcontext.NetworkPolicy{},
+		workspacePath: "/ws",
+		omnipusHome:   "/h",
+	}
 	if envcontext.Render(p1, "") == envcontext.Render(p2, "") {
 		t.Error("Render() returns same output for 'off' and 'fallback' sandbox modes — must differ")
 	}

@@ -1,0 +1,39 @@
+title: RateLimitsResponse
+description: >
+  Response from GET /api/v1/security/rate-limits.
+  Returns the current rate-limit configuration and the live daily LLM cost.
+type: object
+required:
+  - enabled
+  - daily_cost_usd
+  - daily_cost_cap
+  - max_agent_llm_calls_per_hour
+  - max_agent_tool_calls_per_minute
+properties:
+  enabled:
+    type: boolean
+    example: true
+  daily_cost_usd:
+    type: number
+    format: double
+    minimum: 0
+    description: Live daily LLM cost accumulated so far today.
+    example: 0.42
+  daily_cost_cap:
+    type: number
+    format: double
+    minimum: 0
+    description: Configured daily cost cap in USD. 0 means unlimited.
+    example: 5.0
+  max_agent_llm_calls_per_hour:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Maximum LLM calls per hour across all agents. 0 means unlimited.
+    example: 100
+  max_agent_tool_calls_per_minute:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Maximum tool calls per minute across all agents. 0 means unlimited.
+    example: 60

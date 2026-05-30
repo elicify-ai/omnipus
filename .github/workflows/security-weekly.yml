@@ -33,8 +33,22 @@ jobs:
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b "$(go env GOPATH)/bin"
       - name: Run grype (SARIF output)
+        # --exclude flags duplicate .grype.yaml's exclude list defensively. The
+        # config file isn't reliably picked up by every Grype version and the
+        # CLI flags are documented as authoritative. node_modules in particular
+        # MUST be excluded — esbuild bundles its own Go runtime and every Go
+        # stdlib CVE then appears as a critical against a build-time tool.
         run: |
-          "$(go env GOPATH)/bin/grype" dir:. -o sarif > grype.sarif
+          "$(go env GOPATH)/bin/grype" dir:. -o sarif \
+            --exclude './node_modules/**' \
+            --exclude './dist/**' \
+            --exclude './pkg/gateway/spa/**' \
+            --exclude './test-results/**' \
+            --exclude './tests/perf/results/**' \
+            --exclude './pkg/api/generated/**' \
+            --exclude './src/lib/api/generated/**' \
+            --exclude './src/routeTree.gen.ts' \
+            > grype.sarif
       - name: Upload SARIF
         if: always()
         uses: github/codeql-action/upload-sarif@v4

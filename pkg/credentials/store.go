@@ -26,6 +26,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -38,6 +39,7 @@ import (
 	"sync"
 
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/hkdf"
 
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 )
@@ -145,6 +147,49 @@ func (s *Store) UnlockWithPassphrase(passphrase string) error {
 	defer s.mu.Unlock()
 	s.key = key
 	return nil
+}
+
+// DeriveSubkey derives a 32-byte subkey from the unlocked master key using
+// HKDF-SHA256 with the supplied info string as the domain-separation tag.
+//
+// The master key itself is NEVER returned — every subsystem that needs key
+// material (e.g. the audit-chain HMAC for v0.2 #155) must request a derived
+// subkey with its own info string. This way:
+//
+//   - An attacker with read access to a derived subkey cannot reverse it back
+//     to the master key (HKDF is one-way).
+//   - Two subsystems with different info strings get cryptographically
+//     independent keys, so a compromise of one subkey does not affect the
+//     other.
+//   - The master key never crosses a package boundary, limiting the surface
+//     where a future bug could leak it (logs, panics, error wrapping).
+//
+// info MUST be a stable, namespaced string (e.g. "omnipus-audit-chain-v1").
+// Bumping the version suffix when a subsystem rotates its key derivation is
+// the supported migration path.
+//
+// Returns ErrStoreLocked if the store has not been unlocked.
+func (s *Store) DeriveSubkey(info string) ([]byte, error) {
+	if info == "" {
+		return nil, fmt.Errorf("credentials: DeriveSubkey requires non-empty info string")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.key == nil {
+		return nil, ErrStoreLocked
+	}
+
+	// HKDF-Expand on the master key with no salt and the caller's info tag.
+	// We deliberately use the master key as the IKM (input keying material)
+	// rather than running HKDF-Extract first: the master key is already a
+	// uniform 256-bit AES key with high entropy, so the Extract step would
+	// add no security and only obscure the derivation.
+	r := hkdf.New(sha256.New, s.key, nil, []byte(info))
+	out := make([]byte, 32)
+	if _, err := io.ReadFull(r, out); err != nil {
+		return nil, fmt.Errorf("credentials: hkdf expand %q: %w", info, err)
+	}
+	return out, nil
 }
 
 // Set encrypts value and stores it under name in credentials.json.

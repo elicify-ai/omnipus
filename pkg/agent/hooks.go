@@ -21,7 +21,13 @@ const (
 	// so the WebSocket approval hook has time to send the request, wait for user input,
 	// and receive the response before the HookManager kills it.
 	defaultHookApprovalTimeout = 120 * time.Second
-	hookObserverBufferSize     = 64
+	// hookObserverBufferSize is the per-observer subscription channel depth.
+	// 1024 is empirically large enough that a no-sleep observer never sees
+	// drops under a tight 200-event producer burst (TestEventBus_HookObserverBuffer_*)
+	// even when Go's scheduler is slow to preempt the producer. The previous
+	// value of 64 was provably too small — 44% drop rate under the same load.
+	// Regression guard for #165.
+	hookObserverBufferSize = 1024
 )
 
 type HookAction string

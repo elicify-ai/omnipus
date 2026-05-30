@@ -16,9 +16,9 @@ func TestBuildDevURL(t *testing.T) {
 		agentID     string
 		token       string
 		gatewayHost string
-		wantPath    string  // must be a suffix of the result
-		wantPrefix  string  // expected scheme+host prefix (empty = path-only)
-		pathOnly    bool    // when true, expect no scheme/host
+		wantPath    string // must be a suffix of the result
+		wantPrefix  string // expected scheme+host prefix (empty = path-only)
+		pathOnly    bool   // when true, expect no scheme/host
 	}{
 		{
 			name:     "empty gatewayHost returns path only",
@@ -70,7 +70,6 @@ func TestBuildDevURL(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := sandbox.BuildDevURL(tc.agentID, tc.token, tc.gatewayHost)
@@ -138,7 +137,6 @@ func TestBuildDevURL_IPv6(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := sandbox.BuildDevURL(tc.agentID, tc.token, tc.gatewayHost)

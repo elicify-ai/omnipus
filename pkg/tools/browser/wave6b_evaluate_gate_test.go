@@ -216,7 +216,6 @@ func TestBrowserEvaluate_HardGateAndPolicy_TableDriven(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			registry := tools.NewToolRegistry()
 			cfg, err := DefaultConfig()

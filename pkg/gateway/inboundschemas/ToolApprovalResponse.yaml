@@ -1,0 +1,28 @@
+title: ToolApprovalResponse
+description: >
+  Response from POST /api/v1/tool-approvals/{approval_id}.
+  Confirms that the approval action was processed.
+type: object
+required:
+  - approval_id
+  - action
+  - status
+properties:
+  approval_id:
+    type: string
+    description: The approval ID that was resolved.
+    example: appr_abc123
+  action:
+    type: string
+    description: The action that was applied.
+    enum:
+      - approve
+      - deny
+      - cancel
+    example: approve
+  status:
+    type: string
+    description: Result status. Always "ok" when the action was accepted.
+    enum:
+      - ok
+    example: ok

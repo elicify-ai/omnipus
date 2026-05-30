@@ -8,6 +8,7 @@
 //
 // The line shape is documented in the spec and is part of the operator
 // contract; do not change it without spec amendment.
+
 package audit
 
 import (

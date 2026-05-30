@@ -43,8 +43,8 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 		expectSandboxProfile config.SandboxProfile
 	}{
 		{
-			id:               IDAva,
-			expectSystemDeny: true,
+			id:                IDAva,
+			expectSystemDeny:  true,
 			expectExtraAllows: avaAllowedTools,
 		},
 		{

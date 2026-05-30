@@ -8,7 +8,7 @@
 // returns an error, NewAgentLoop must surface a typed
 // audit.LoggerConstructionError. The gateway then maps that to a
 // SandboxBootError so cmd/omnipus exits with EX_CONFIG (78). When
-// audit_log is false the existing log-and-continue behaviour is preserved.
+// audit_log is false the existing log-and-continue behavior is preserved.
 
 package gateway
 
@@ -97,7 +97,7 @@ func TestNewAgentLoop_AuditConstructionFails_AuditLogTrue_BootAborts(t *testing.
 
 // TestNewAgentLoop_AuditConstructionFails_AuditLogFalse_Continues verifies
 // the inverse: when sandbox.audit_log is false we keep the legacy log-and-
-// continue behaviour. The audit branch is gated by cfg.Sandbox.AuditLog,
+// continue behavior. The audit branch is gated by cfg.Sandbox.AuditLog,
 // so a configuration error in the audit dir cannot fire when audit is
 // disabled — but we still test that NewAgentLoop boots without surfacing
 // any audit error path.

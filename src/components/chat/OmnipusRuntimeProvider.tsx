@@ -6,6 +6,7 @@ import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useOmnipusRuntime } from "@/lib/omnipus-runtime";
 import { useChatStore } from "@/store/chat";
 import { useConnectionStore } from "@/store/connection";
+import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
 import { useSessionStore, resetChatBucketForReplay } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
 import { TerminalOutputUI } from "./tools/TerminalOutput";
@@ -28,12 +29,41 @@ import {
   BrowserEvaluateUI, BrowserEvaluateUnderscoreUI,
 } from "./tools/BrowserTool";
 
+// Manages the memory pressure observer lifecycle.
+// Starts the polling loop on mount and wires heap-level transitions into the connection store.
+function MemoryObserverLifecycle() {
+  const setLiteMode = useConnectionStore((s) => s.setLiteMode)
+
+  useEffect(() => {
+    const observer = startMemoryObserver()
+    const unsubscribe = addMemoryObserver((snap) => {
+      // Activate lite mode at 250 MiB; deactivate if heap drops back below 200 MiB.
+      if (snap.level === 'lite_mode' || snap.level === 'critical') {
+        setLiteMode(true)
+      } else if (snap.level === 'ok') {
+        setLiteMode(false)
+      }
+      // dev_warn: no liteMode change — just the console.info already emitted
+      // by the observer itself (in memory-observer.ts).
+    })
+    return () => {
+      observer.dispose()
+      unsubscribe()
+    }
+    // setLiteMode is a stable Zustand reference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return null
+}
+
 // Manages WebSocket connection lifecycle — renders nothing, only side effects.
 function WsLifecycle() {
   const handleFrame = useChatStore((s) => s.handleFrame);
   const setConnection = useConnectionStore((s) => s.setConnection);
   const setConnected = useConnectionStore((s) => s.setConnected);
   const setConnectionError = useConnectionStore((s) => s.setConnectionError);
+  const setReconnectState = useConnectionStore((s) => s.setReconnectState);
   const connectionRef = useRef<WsConnection | null>(null);
 
   useEffect(() => {
@@ -42,6 +72,8 @@ function WsLifecycle() {
       onConnected: async () => {
         setConnected(true);
         setConnectionError(null);
+        // Drain any messages that were buffered while the connection was down.
+        useChatStore.getState().drainOutboundQueue();
         // Re-bind any in-flight session to the freshly-opened WS so the
         // gateway's per-connection sessionID is restored. Without this, a
         // browser-suspended WS that auto-reconnects on focus would cause the
@@ -56,7 +88,9 @@ function WsLifecycle() {
           // bucket BEFORE replay starts so frames rebuild it from scratch
           // rather than appending duplicates ("Browse to … / Browse to …"
           // doubled bubbles after every reconnect).
-          const sent = conn.send({ type: "attach_session", session_id: activeSessionId });
+          // Pass the since-cursor so the gateway only replays frames the SPA hasn't seen.
+          const since = useChatStore.getState().sessionsById[activeSessionId]?.lastReceivedEventTime ?? undefined
+          const sent = conn.send({ type: "attach_session", session_id: activeSessionId, since });
           if (!sent) {
             // send() returned false — socket closed between onopen and here.
             // Preserve local state (do not wipe bucket) and surface an error.
@@ -69,6 +103,9 @@ function WsLifecycle() {
       },
       onDisconnected: () => setConnected(false),
       onError: setConnectionError,
+      // Fix 2: wire reconnect phase changes into the connection store so the
+      // chat header banner can show live progress (attempt N / gave_up CTA).
+      onReconnectStateChange: (phase, attempt) => setReconnectState(phase, attempt),
     });
     conn.connect();
     connectionRef.current = conn;
@@ -157,6 +194,7 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
       <BrowserWaitUnderscoreUI />
       <BrowserEvaluateUI />
       <BrowserEvaluateUnderscoreUI />
+      <MemoryObserverLifecycle />
       <WsLifecycle />
       {children}
     </AssistantRuntimeProvider>

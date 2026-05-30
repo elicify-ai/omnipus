@@ -54,7 +54,6 @@ func TestApplySandbox_FallbackBackend_LogsDegradedWhenEnforceRequested(t *testin
 		GetEnv:   func(string) string { return "" },
 		Stderr:   nil, // nil → os.Stderr not captured
 	})
-
 	// applySandbox with a FallbackBackend must succeed (graceful degradation).
 	if err != nil {
 		t.Fatalf("applySandbox returned error for FallbackBackend (must degrade gracefully): %v", err)
@@ -78,7 +77,10 @@ func TestApplySandbox_FallbackBackend_LogsDegradedWhenEnforceRequested(t *testin
 		}
 	}
 	if !foundNote {
-		t.Errorf("ApplyState.ExtraNotes = %v; expected a note mentioning fallback/kernel degradation (B4)", result.ApplyState.ExtraNotes)
+		t.Errorf(
+			"ApplyState.ExtraNotes = %v; expected a note mentioning fallback/kernel degradation (B4)",
+			result.ApplyState.ExtraNotes,
+		)
 	}
 
 	// Suppressed stderr to avoid noisy test output.

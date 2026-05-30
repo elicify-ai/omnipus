@@ -1,0 +1,19 @@
+{
+  "run_at": "2026-05-22T01:01:54Z",
+  "sessions_opened": 0,
+  "messages_sent": 0,
+  "messages_recv": 0,
+  "dropped_frames": 2000,
+  "p50_first_token_ms": 0,
+  "p95_first_token_ms": 0,
+  "p99_first_token_ms": 0,
+  "peak_rss_mb": 23.49307632446289,
+  "goroutines_before": 21,
+  "goroutines_after": 19,
+  "goroutine_leak": -2,
+  "duration_seconds": 50.001551515,
+  "slo_breaches": {
+    "dropped_frames": "dropped=2000 \u003e SLO=0",
+    "no_latency_samples": "no first-token latencies recorded across 0 sessions — gateway or harness collapse"
+  }
+}

@@ -27,11 +27,20 @@ const mockCoreAgent: Agent = {
   id: 'general-assistant',
   name: 'General Assistant',
   type: 'core',
+  locked: false,
   status: 'active',
   model: 'claude-sonnet-4-6',
   description: 'General purpose assistant',
+  soul: '',
+  heartbeat: '',
+  instructions: '',
+  timeout_seconds: 60,
+  max_tool_iterations: 20,
+  steering_mode: 'loop',
+  tool_feedback: true,
+  heartbeat_enabled: false,
+  heartbeat_interval: 300,
   rate_limits: { use_global_defaults: true },
-  tools: ['web_search', 'exec'],
   stats: { total_sessions: 5, total_tokens: 12000, total_cost: 0.05 },
 }
 
@@ -43,6 +52,15 @@ const mockLockedCoreAgent: Agent = {
   status: 'active',
   model: 'claude-opus-4-6',
   description: 'Core agent with compiled prompt — identity is read-only',
+  soul: '',
+  heartbeat: '',
+  instructions: '',
+  timeout_seconds: 60,
+  max_tool_iterations: 20,
+  steering_mode: 'loop',
+  tool_feedback: true,
+  heartbeat_enabled: false,
+  heartbeat_interval: 300,
 }
 
 function makeClient() {
@@ -76,7 +94,7 @@ describe('AgentProfile — error state', () => {
     // Traces to: wave5a-wire-ui-spec.md — US-7: profile shows error state
     vi.mocked(fetchAgent).mockRejectedValue(new Error('Not found'))
     renderProfile('bad-id')
-    const errorMsg = await screen.findByText(/could not load agent/i)
+    const errorMsg = await screen.findByText(/agent not found/i)
     expect(errorMsg).toBeInTheDocument()
   })
 })

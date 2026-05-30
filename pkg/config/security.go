@@ -116,7 +116,7 @@ func (sec *Config) collectSensitiveValues() []string {
 
 // collectSensitive recursively traverses the value and collects SecureString/SecureStrings values.
 func collectSensitive(v reflect.Value, values *[]string) {
-	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
 		if v.IsNil() {
 			return
 		}

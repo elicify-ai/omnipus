@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Gauge } from '@phosphor-icons/react'
 import { fetchRateLimits, updateRateLimits, isApiError } from '@/lib/api'
-import type { RateLimitsUpdateBody } from '@/lib/api'
+import type { RateLimitsUpdateRequest } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useAuthStore } from '@/store/auth'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
@@ -109,7 +109,9 @@ export function RateLimitsSection(): React.ReactElement {
 
   useEffect(() => {
     if (!data) return
-    const cc = data.daily_cost_cap_usd
+    // GET /security/rate-limits returns daily_cost_cap (no _usd suffix).
+    // The cap fields are 0 when unlimited rather than undefined.
+    const cc = data.daily_cost_cap
     const lph = data.max_agent_llm_calls_per_hour
     const tpm = data.max_agent_tool_calls_per_minute
     setCostCap(cc !== undefined ? String(cc) : '')
@@ -148,8 +150,8 @@ export function RateLimitsSection(): React.ReactElement {
   }
 
   // Build partial update body — only include changed fields
-  function buildUpdateBody(cc: string, lph: string, tpm: string): RateLimitsUpdateBody {
-    const body: RateLimitsUpdateBody = {}
+  function buildUpdateBody(cc: string, lph: string, tpm: string): RateLimitsUpdateRequest {
+    const body: RateLimitsUpdateRequest = {}
     if (cc !== '' && Number(cc) !== serverCostCap) {
       body.daily_cost_cap_usd = Number(cc)
     } else if (cc !== '' && serverCostCap === undefined) {
@@ -169,17 +171,12 @@ export function RateLimitsSection(): React.ReactElement {
   }
 
   const { mutate: save } = useMutation({
-    mutationFn: (body: RateLimitsUpdateBody) => updateRateLimits(body),
+    mutationFn: (body: RateLimitsUpdateRequest) => updateRateLimits(body),
     onMutate: () => setSaveState('saving'),
-    onSuccess: (resp) => {
+    onSuccess: (_resp) => {
       setSaveState('saved')
-      queryClient.setQueryData(['rate-limits-k'], resp)
-      const cc = resp.daily_cost_cap_usd
-      const lph = resp.max_agent_llm_calls_per_hour
-      const tpm = resp.max_agent_tool_calls_per_minute
-      setServerCostCap(cc)
-      setServerLlmPerHour(lph)
-      setServerToolPerMin(tpm)
+      // Invalidate the GET query so the form reloads the applied values.
+      void queryClient.invalidateQueries({ queryKey: ['rate-limits-k'] })
     },
     onError: (err: unknown) => {
       const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Save failed'

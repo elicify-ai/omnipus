@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 )
 
@@ -45,23 +46,26 @@ func (a *restAPI) HandleRetention(w http.ResponseWriter, r *http.Request) {
 func (a *restAPI) getRetention(w http.ResponseWriter, r *http.Request) {
 	cfg := a.agentLoop.GetConfig()
 	ret := cfg.Storage.Retention
-	jsonOK(w, map[string]any{
-		"session_days": ret.SessionDays,
-		"disabled":     ret.Disabled,
+	// Use pointers so both fields are always present in the JSON response.
+	sessionDays := ret.SessionDays
+	disabled := ret.Disabled
+	jsonOK(w, gen.RetentionConfig{
+		SessionDays: &sessionDays,
+		Disabled:    &disabled,
 	})
 }
 
 func (a *restAPI) putRetention(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	// Decode to map[string]json.RawMessage so we can inspect each field's JSON
-	// token type independently — this lets us reject floats for session_days and
-	// strings for disabled before the value ever reaches the config layer.
+	// decodeAndValidate validates the body against the RetentionUpdateRequest
+	// JSON Schema (when validate_inbound=true) before decoding. The schema
+	// enforces type:integer for session_days and type:boolean for disabled;
+	// the bespoke parseRetentionSessionDays / parseRetentionDisabled checks
+	// below provide defense-in-depth regardless of the validate_inbound flag.
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var raw map[string]json.RawMessage
-	dec := json.NewDecoder(r.Body)
-	dec.UseNumber()
-	if err := dec.Decode(&raw); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeAndValidate(w, r, "RetentionUpdateRequest", &raw, validateEnabled) {
 		return
 	}
 
@@ -90,11 +94,11 @@ func (a *restAPI) putRetention(w http.ResponseWriter, r *http.Request) {
 	if newSessionDays == nil && newDisabled == nil {
 		cfg := a.agentLoop.GetConfig()
 		ret := cfg.Storage.Retention
-		jsonOK(w, map[string]any{
-			"saved":            true,
-			"requires_restart": false,
-			"session_days":     ret.SessionDays,
-			"disabled":         ret.Disabled,
+		jsonOK(w, gen.RetentionUpdateResponse{
+			Saved:           true,
+			RequiresRestart: false,
+			SessionDays:     ret.SessionDays,
+			Disabled:        ret.Disabled,
 		})
 		return
 	}
@@ -145,11 +149,11 @@ func (a *restAPI) putRetention(w http.ResponseWriter, r *http.Request) {
 		"disabled", newRet.Disabled,
 	)
 
-	jsonOK(w, map[string]any{
-		"saved":            true,
-		"requires_restart": false,
-		"session_days":     newRet.SessionDays,
-		"disabled":         newRet.Disabled,
+	jsonOK(w, gen.RetentionUpdateResponse{
+		Saved:           true,
+		RequiresRestart: false,
+		SessionDays:     newRet.SessionDays,
+		Disabled:        newRet.Disabled,
 	})
 }
 
@@ -179,9 +183,10 @@ func (a *restAPI) postRetentionSweep(w http.ResponseWriter, r *http.Request) {
 	ret := cfg.Storage.Retention
 
 	if ret.IsDisabled() {
-		jsonOK(w, map[string]any{
-			"removed":        0,
-			"skipped_reason": "disabled",
+		skippedReason := "disabled"
+		jsonOK(w, gen.RetentionSweepResult{
+			Removed:       0,
+			SkippedReason: &skippedReason,
 		})
 		return
 	}
@@ -216,8 +221,8 @@ func (a *restAPI) postRetentionSweep(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("rest: on-demand retention sweep completed", "removed", removed, "days", days)
 
-	jsonOK(w, map[string]any{
-		"removed": removed,
+	jsonOK(w, gen.RetentionSweepResult{
+		Removed: removed,
 	})
 }
 

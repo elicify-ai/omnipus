@@ -1,0 +1,20 @@
+title: SessionCloseAckFrame
+description: >
+  Server → client. Acknowledgement of a session_close client frame. The server
+  confirms the session has been closed and returns the session ID.
+type: object
+required:
+  - type
+  - session_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: session_close_ack
+  session_id:
+    type: string
+    minLength: 1
+    description: The session that was closed.
+  id:
+    type: string
+    description: Mirrors session_id for legacy compatibility.

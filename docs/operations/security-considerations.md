@@ -30,7 +30,24 @@ This means an agent calling `exec npx vite --host 0.0.0.0 --port 5173` will fail
 
 **Graceful degradation:** on kernels with Landlock ABI < 4 (no `NET_BIND_TCP`), this enforcement is silently inactive. Operators on such kernels still get tool-layer port-range validation (the `web_serve` tool refuses out-of-range ports), but a shell-spawned process can technically bind anywhere. Plan to upgrade to kernel 6.7+ for the full enforcement story.
 
-Connect-side rules (`NET_CONNECT_TCP`) are similarly enforced for the same range plus the gateway's listener ports, so the reverse proxy can still reach back into agent dev servers without leaking unrestricted outbound TCP.
+---
+
+## Kernel-enforced outbound port allow-list (raw TCP egress, v0.2 #155)
+
+On Linux kernels with Landlock ABI v4+ (kernel 6.8 and later for the gateway's tested baseline), `connect(2)` from the gateway and every forked child is restricted to the union of:
+
+- **`{53, 80, 443}`** — DNS, HTTP, HTTPS. The minimal set required by the gateway's outbound LLM/provider calls and the egress proxy's upstream connections. Defined as `sandbox.DefaultConnectPorts` in `pkg/sandbox/sandbox.go`.
+- **`cfg.Sandbox.DevServerPortRange`** — every port in the configured range (default `[18000, 18999]`). Lets children connect back to gateway-owned dev servers, the egress proxy, and other agents' running web_serve sessions.
+
+Any `connect(2)` to a destination port outside that union returns `EACCES` from the kernel. This closes the raw-TCP-egress hole documented as threat **C4** in the insider-pentest report: a child issuing `socket() + connect()` directly (bypassing `HTTP_PROXY` env vars) can no longer reach unauthorised ports — including SSH (22), MySQL (3306), Redis (6379), or arbitrary backdoor channels on uncommon ports such as the redteam test target `127.0.0.1:1`.
+
+**Limitations of this control — read carefully.** The kernel mechanism (Landlock `NET_CONNECT_TCP`) is **port-level only**. It cannot filter by destination IP or CIDR. Specifically:
+
+- A child can still `connect()` to **`192.168.1.1:443`**, **`10.0.0.5:443`**, or **`169.254.169.254:80`** (cloud metadata, on AWS/GCP) — the destination port is allowed for legitimate HTTPS traffic, and the kernel does not inspect the IP.
+- For HTTP clients the **gateway** controls (`pkg/web` search clients, MCP fetches, the skills installer), CIDR-level blocking is enforced by `pkg/security/SSRFChecker` when `cfg.Sandbox.SSRF.Enabled = true`. Operators with a legitimate internal-service requirement add CIDRs to `cfg.Sandbox.EgressAllowCIDRs` (or the SSRF allow_internal list) to bypass the deny.
+- For compiled binaries spawned via `workspace.shell` (e.g. `curl`, `wget`, custom Go programs), the SSRFChecker does not apply — only the kernel port allow-list does. CIDR-level enforcement for these binaries would require eBPF cgroup `BPF_CGROUP_INET4_CONNECT` and is deferred. Operators concerned about RFC1918 access from compiled children should keep `experimental.workspace_shell_enabled = false` on agents that handle untrusted content.
+
+**Graceful degradation:** on kernels with Landlock ABI < 4 (no `NET_CONNECT_TCP`), the connect rules are computed but ignored by the kernel. The `pkg/security/SSRFChecker` Go-side defence still runs for HTTP clients the gateway controls; raw-TCP egress is unrestricted on these older kernels. Plan to upgrade to kernel 6.7+ for full kernel enforcement.
 
 ---
 

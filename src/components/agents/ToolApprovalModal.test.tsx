@@ -15,6 +15,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { act } from 'react'
+import type { ToolApprovalRequiredFrame } from '@/lib/api/generated/asyncapi-types'
 
 // We mock postToolApproval but pass-through ApiError + isApiError so the
 // component's `isApiError(err)` branch matches errors thrown from inside the
@@ -351,3 +352,73 @@ describe('ToolApprovalModal — session_state reset handler (FR-052, FR-073, FR-
     expect(useToolApprovalStore.getState().queue).toHaveLength(0)
   })
 })
+
+// ── Phase 5: edge-case render tests ────────────────────────────────────────────
+//
+// These tests verify that ToolApprovalModal does not crash when a valid-shape
+// but degenerate-value ToolApprovalRequiredFrame reaches the component. They
+// mirror the exact failure case from the Ava-chat bug (args: {}) and extend to
+// unicode keys, very long strings, nested objects, null values, and timing edge
+// cases. Props are constructed from the generated ToolApprovalRequiredFrame
+// type — no hand-written wire types.
+//
+// Each test: enqueue the frame → render ToolApprovalModal → assert no throw.
+
+// Minimal valid ToolApprovalRequiredFrame (all required fields per AsyncAPI spec)
+const baseFrame: ToolApprovalRequiredFrame = {
+  type: 'tool_approval_required',
+  approval_id: 'appr-edge-001',
+  tool_call_id: 'call-edge-001',
+  tool_name: 'web_fetch',
+  args: { url: 'https://example.com' },
+  agent_id: 'agent-main',
+  session_id: 'sess-edge',
+  turn_id: 'turn-edge',
+  expires_in_ms: 300_000,
+}
+
+// Edge cases: [label, partial override of ToolApprovalRequiredFrame]
+const edgeCases: Array<[string, Partial<ToolApprovalRequiredFrame>]> = [
+  // Original Ava-chat crash case — args is an empty object (Object.keys(null) was the bug)
+  ['empty args object', { args: {} }],
+  // Single key-value pair
+  ['single-key args', { args: { foo: 'bar' } }],
+  // Unicode keys and values (emoji, multi-byte)
+  ['unicode args', { args: { '\u{1F680}': '\u{1F30D}' } }],
+  // Very long string value — tests truncation / overflow handling
+  ['long string arg value', { args: { x: 'x'.repeat(10_000) } }],
+  // Nested object — JSON.stringify depth test
+  ['nested object arg', { args: { obj: { a: { b: { c: 1 } } } } }],
+  // Array value — valid JSON, rendered via JSON.stringify
+  ['array arg value', { args: { list: [1, 2, 3, 4, 5] } }],
+  // null value inside args object — schema allows unknown, null is valid JSON
+  ['null value in args', { args: { x: null } }],
+  // Multiple args
+  ['multiple args', { args: { url: 'https://example.com', timeout: 5000, follow_redirects: true } }],
+  // Empty string tool name — degenerate but valid per schema (string, no minLength)
+  ['empty string tool name', { tool_name: '' }],
+  // Very long tool name — tests truncation in the UI
+  ['very long tool name', { tool_name: 'a'.repeat(500) }],
+  // Tool name with special chars
+  ['tool name with dots and underscores', { tool_name: 'workspace.shell_bg.run' }],
+  // expires_in_ms = 0 — should render in expired state immediately
+  ['expires_in_ms is 0', { expires_in_ms: 0 }],
+  // expires_in_ms is MAX_SAFE_INTEGER — huge countdown, should not overflow
+  ['expires_in_ms is MAX_SAFE_INTEGER', { expires_in_ms: Number.MAX_SAFE_INTEGER }],
+  // Very long agent_id string
+  ['very long agent_id', { agent_id: 'agent-' + 'x'.repeat(500) }],
+]
+
+describe.each(edgeCases)(
+  'ToolApprovalModal renders "%s" without throwing',
+  (_label, overrides) => {
+    it('renders without throwing', () => {
+      const frame: ToolApprovalRequiredFrame = { ...baseFrame, ...overrides }
+      act(() => {
+        useToolApprovalStore.setState({ queue: [] })
+        useToolApprovalStore.getState().enqueue(frame)
+      })
+      expect(() => render(<ToolApprovalModal />)).not.toThrow()
+    })
+  },
+)

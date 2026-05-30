@@ -8,10 +8,16 @@ import {
   CaretDown,
   CaretUp,
   Warning,
+  DownloadSimple,
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import type { TruncatedResult, MarshalErrorResult } from '@/lib/ws'
+import type { ToolResultRef } from '@/lib/api/generated/asyncapi-types'
+import { isClientTruncatedResult, isToolResultRef } from '@/store/chat'
+import type { ClientTruncatedResult } from '@/store/chat'
+import { useQuery } from '@tanstack/react-query'
+import { fetchToolResult } from '@/lib/api'
 
 interface GenericToolCallProps {
   toolName: string
@@ -22,6 +28,10 @@ interface GenericToolCallProps {
   error?: string
   /** Optional duration in milliseconds */
   durationMs?: number
+  /** Lite-mode: tool calls start collapsed so the virtualizer skips measuring large expanded content. */
+  defaultCollapsed?: boolean
+  /** Session this tool call belongs to. Required to fetch ToolResultRef bodies session-scoped. */
+  sessionId?: string
 }
 
 function formatDuration(ms?: number): string {
@@ -65,6 +75,99 @@ function humanSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
 }
 
+// Renders a server-side ToolResultRef sentinel; full body fetched lazily on click.
+function ToolResultRefDisplay({
+  sentinel,
+  sessionId,
+}: {
+  sentinel: ToolResultRef
+  sessionId: string
+}) {
+  const [fetchEnabled, setFetchEnabled] = useState(false)
+
+  const { data, isFetching, isError, error } = useQuery<unknown, Error>({
+    queryKey: ['tool-result-ref', sessionId, sentinel.ref],
+    queryFn: () => fetchToolResult(sessionId, sentinel.ref),
+    enabled: fetchEnabled && sessionId !== '',
+    // Cache the result for the lifetime of this component tree — do not re-fetch on focus.
+    staleTime: Infinity,
+    gcTime: 5 * 60 * 1000,
+    retry: 1,
+  })
+
+  return (
+    <div data-testid="result-tool-ref">
+      {/* Banner */}
+      <div className="flex items-start gap-2 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 mb-1 font-sans text-[10px] text-amber-400">
+        <Warning size={12} weight="fill" className="shrink-0 mt-0.5" />
+        <span>
+          Result stored server-side ({humanSize(sentinel.original_size_bytes)}) — preview only
+        </span>
+      </div>
+
+      {/* Preview */}
+      {!data && (
+        <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto mb-1">
+          {sentinel.preview}
+        </pre>
+      )}
+
+      {/* Full result once fetched */}
+      {data !== undefined && (
+        <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-96 overflow-auto mb-1">
+          {safeJson(data)}
+        </pre>
+      )}
+
+      {/* Fetch error */}
+      {isError && (
+        <div className="text-[var(--color-error)] text-[10px] font-sans mb-1">
+          Failed to load: {error?.message ?? 'unknown error'}
+        </div>
+      )}
+
+      {/* Fetch button — hidden once data is loaded */}
+      {!data && !isError && (
+        <button
+          type="button"
+          onClick={() => setFetchEnabled(true)}
+          disabled={isFetching}
+          className="flex items-center gap-1.5 text-[10px] font-sans text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:cursor-wait"
+        >
+          {isFetching ? (
+            <ArrowsClockwise size={11} className="animate-spin" />
+          ) : (
+            <DownloadSimple size={11} />
+          )}
+          {isFetching ? 'Loading...' : 'Show full output'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * G4: Renders a client-side truncation sentinel (ClientTruncatedResult).
+ * The full body never reached the SPA (clamped before storage), so there is
+ * no fetch button — only the preview and an explanatory hint.
+ */
+function ClientTruncatedDisplay({ sentinel }: { sentinel: ClientTruncatedResult }) {
+  return (
+    <div data-testid="result-client-truncated">
+      <div className="flex items-start gap-2 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 mb-1 font-sans text-[10px] text-amber-400">
+        <Warning size={12} weight="fill" className="shrink-0 mt-0.5" />
+        <span>
+          Truncated client-side — showing first 4 KiB of {humanSize(sentinel.original_size_bytes)}.
+          The full result is preserved in the server transcript.
+        </span>
+      </div>
+      <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
+        {sentinel.preview}
+      </pre>
+    </div>
+  )
+}
+
 export function GenericToolCall({
   toolName,
   args,
@@ -72,6 +175,9 @@ export function GenericToolCall({
   status,
   error,
   durationMs,
+  // defaultCollapsed: accepted but not used — tool calls always start collapsed.
+  defaultCollapsed: _defaultCollapsed,
+  sessionId = '',
 }: GenericToolCallProps) {
   const [expanded, setExpanded] = useState(false)
 
@@ -91,10 +197,12 @@ export function GenericToolCall({
 
   const hasDetail = !isRunning && (args !== undefined || result !== undefined || error)
 
-  // Resolve result rendering: plain, truncated, or marshal-error sentinel
+  // Resolve result rendering: determine which sentinel type (if any) applies.
   const truncated = isTruncatedResult(result) ? result : null
   const marshalErr = isMarshalErrorResult(result) ? result : null
-  const plainResult = !truncated && !marshalErr ? result : undefined
+  const clientTruncated = isClientTruncatedResult(result) ? result : null
+  const toolRef = isToolResultRef(result) ? result : null
+  const plainResult = !truncated && !marshalErr && !clientTruncated && !toolRef ? result : undefined
 
   return (
     <div
@@ -139,7 +247,7 @@ export function GenericToolCall({
             </div>
           )}
 
-          {/* Result section — three rendering paths */}
+          {/* Result section — five rendering paths */}
           {result !== undefined && (
             <div>
               <div className="text-[var(--color-muted)] mb-1 font-sans">Result</div>
@@ -155,7 +263,7 @@ export function GenericToolCall({
                 </div>
               )}
 
-              {/* Truncated sentinel: result exceeded 10 KiB */}
+              {/* Server-truncated sentinel: result exceeded 10 KiB server-side */}
               {truncated && (
                 <>
                   <div
@@ -172,6 +280,12 @@ export function GenericToolCall({
                   </pre>
                 </>
               )}
+
+              {/* G4: Client-truncated sentinel — SPA clamped before storage, no server copy */}
+              {clientTruncated && <ClientTruncatedDisplay sentinel={clientTruncated} />}
+
+              {/* G4: ToolResultRef sentinel — server stored full body, fetch on demand */}
+              {toolRef && <ToolResultRefDisplay sentinel={toolRef} sessionId={sessionId} />}
 
               {/* Plain result: normal rendering */}
               {plainResult !== undefined && (

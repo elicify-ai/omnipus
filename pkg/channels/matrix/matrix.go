@@ -1,4 +1,7 @@
-//go:build cgo
+// goolm is the pure-Go OLM implementation (replaces libolm which requires CGo).
+// Build with: -tags goolm
+// Without this tag the matrix channel is excluded so CGO_ENABLED=0 builds pass.
+//go:build goolm
 
 package matrix
 
@@ -763,6 +766,12 @@ func (c *MatrixChannel) handleMessageEvent(ctx context.Context, evt *event.Event
 	}
 	if replyTo := msgEvt.GetRelatesTo().GetReplyTo(); replyTo != "" {
 		metadata["reply_to_msg_id"] = replyTo.String()
+	}
+
+	if channels.DispatchCancelIfRecognized(
+		c.baseContext(), content, "matrix", roomID, senderID, c.GetCancelInterceptor(), channels.CancelSendFn(c),
+	) {
+		return
 	}
 
 	c.HandleMessage(

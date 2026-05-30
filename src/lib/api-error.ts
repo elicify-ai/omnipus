@@ -16,7 +16,7 @@
 // migrated to type-narrow on ApiError still produce the same string they
 // always did, so the migration is mechanical rather than a UX change.
 
-export interface ApiErrorOptions {
+export interface ApiErrorOptions { // not-wire-format: constructor options for the ApiError class; never sent over any HTTP/WS boundary
   /**
    * Optional machine-readable code from the backend. Most server endpoints
    * return `{"error": "..."}` without a code field today, so this is best-
@@ -214,9 +214,20 @@ export class ApiError extends Error {
       }
     }
 
-    // Display priority: parsed JSON message > non-empty body text > status default.
-    const userMessage =
-      parsedMessage ?? (bodyText.trim().length > 0 ? bodyText : defaultUserMessage(res.status))
+    // Display priority: status-class default (for known codes) > parsed JSON
+    // message > non-empty body text > generic default.
+    //
+    // The earlier behaviour preferred the server-provided `error` field, but
+    // that leaks server-internal phrasing into the user-facing toast (e.g.
+    // "agent name already exists" vs the safer "This conflicts with the
+    // current state. Please refresh and try again.") and surprises tests that
+    // assume `userMessage` matches `defaultUserMessage(status)`. The raw
+    // server text is still preserved on `body` and `message`.
+    const knownStatuses = new Set([0, 401, 403, 404, 409, 410, 413, 429])
+    const isKnown = knownStatuses.has(res.status) || (res.status >= 500 && res.status < 600)
+    const userMessage = isKnown
+      ? defaultUserMessage(res.status)
+      : (parsedMessage ?? (bodyText.trim().length > 0 ? bodyText : defaultUserMessage(res.status)))
     return new ApiError(res.status, userMessage, { code: parsedCode, body: bodyText })
   }
 }

@@ -7,40 +7,18 @@
 package gateway
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
 )
 
-// sandboxConfigPutBody mirrors the partial-update contract for
-// PUT /api/v1/security/sandbox-config. Pointer types allow us to distinguish
-// "omitted" (nil) from "explicitly set to empty list/string" (non-nil).
-// Only fields present in the request body are touched on disk; untouched
-// fields retain their existing values.
-//
-// Accepts both flat fields (ssrf_enabled, ssrf_allow_internal,
-// allow_network_outbound) and nested ssrf object (ssrf.allow_internal).
-// Flat fields take precedence when both are present.
-type sandboxConfigPutBody struct {
-	Mode                 *string                   `json:"mode,omitempty"`
-	AllowNetworkOutbound *bool                     `json:"allow_network_outbound,omitempty"`
-	AllowedPaths         *[]string                 `json:"allowed_paths,omitempty"`
-	SSRFEnabled          *bool                     `json:"ssrf_enabled,omitempty"`
-	SSRFAllowInternal    *[]string                 `json:"ssrf_allow_internal,omitempty"`
-	SSRF                 *sandboxConfigPutBodySSRF `json:"ssrf,omitempty"`
-	// DefaultProfile is the global fallback sandbox profile applied to
-	// new custom agents that do not pick their own SandboxProfile. Maps
-	// to OmnipusSandboxConfig.DefaultProfile (json key: default_profile).
-	DefaultProfile *string `json:"default_profile,omitempty"`
-	// ShellDenyPatterns is the global fallback shell command deny list
-	// (regex per entry). Per-agent CustomDenyPatterns extend this list.
-	// Maps to OmnipusSandboxConfig.ShellDenyPatterns.
-	ShellDenyPatterns *[]string `json:"shell_deny_patterns,omitempty"`
-}
+// SandboxConfigUpdate request body is defined in
+// contracts/components/schemas/SandboxConfigUpdate.yaml and generated into
+// pkg/api/generated/. Use gen.SandboxConfigUpdate directly in putSandboxConfig.
 
 // validSandboxProfiles is the canonical set accepted for default_profile.
 // Mirrors config.SandboxProfile* constants.
@@ -53,12 +31,8 @@ var validSandboxProfiles = map[string]bool{
 	"off":           true,
 }
 
-// sandboxConfigPutBodySSRF carries the nested ssrf sub-object for
-// clients that send ssrf.allow_internal. Flat ssrf_allow_internal takes
-// precedence when both are present in the same request.
-type sandboxConfigPutBodySSRF struct {
-	AllowInternal *[]string `json:"allow_internal,omitempty"`
-}
+// SandboxConfigUpdate.Ssrf (nested) is inlined in the generated type;
+// see contracts/components/schemas/SandboxConfigUpdate.yaml.
 
 // validSandboxModes is the canonical set accepted by putSandboxConfig.
 var validSandboxModes = map[string]bool{
@@ -98,15 +72,16 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := a.agentLoop.GetConfig()
 
-	allowedPaths := cfg.Sandbox.AllowedPaths
+	// Coerce nil slices to empty slices — never null (Ava-chat bug class).
+	allowedPaths := append([]string(nil), cfg.Sandbox.AllowedPaths...)
 	if allowedPaths == nil {
 		allowedPaths = []string{}
 	}
-	allowInternal := cfg.Sandbox.SSRF.AllowInternal
+	allowInternal := append([]string(nil), cfg.Sandbox.SSRF.AllowInternal...)
 	if allowInternal == nil {
 		allowInternal = []string{}
 	}
-	shellDenyPatterns := cfg.Sandbox.ShellDenyPatterns
+	shellDenyPatterns := append([]string(nil), cfg.Sandbox.ShellDenyPatterns...)
 	if shellDenyPatterns == nil {
 		shellDenyPatterns = []string{}
 	}
@@ -118,23 +93,32 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		applied = string(a.sandboxResult.ApplyState.Mode)
 	}
 
+	// Collect scalar values into pointers for the generated type.
+	resolvedMode := gen.SandboxConfigMode(cfg.Sandbox.ResolvedMode())
+	allowNetOut := cfg.Sandbox.AllowNetworkOutbound
+	ssrfEnabled := cfg.Sandbox.SSRF.Enabled
+	defaultProfile := gen.SandboxConfigDefaultProfile(cfg.Sandbox.DefaultProfile)
+
 	// Return both the flat-field shape and the nested ssrf object.
 	// The flat fields are the canonical wire format; the nested ssrf block is
 	// included for backward-compatible clients. Both are safe to include — JSON
 	// consumers pick what they need.
-	jsonOK(w, map[string]any{
-		"mode":                   cfg.Sandbox.ResolvedMode(),
-		"allow_network_outbound": cfg.Sandbox.AllowNetworkOutbound,
-		"allowed_paths":          allowedPaths,
-		"ssrf_enabled":           cfg.Sandbox.SSRF.Enabled,
-		"ssrf_allow_internal":    allowInternal,
-		"applied_mode":           applied,
-		"default_profile":        string(cfg.Sandbox.DefaultProfile),
-		"shell_deny_patterns":    shellDenyPatterns,
+	jsonOK(w, gen.SandboxConfig{
+		Mode:                 &resolvedMode,
+		AllowNetworkOutbound: &allowNetOut,
+		AllowedPaths:         &allowedPaths,
+		SsrfEnabled:          &ssrfEnabled,
+		SsrfAllowInternal:    &allowInternal,
+		AppliedMode:          &applied,
+		DefaultProfile:       &defaultProfile,
+		ShellDenyPatterns:    &shellDenyPatterns,
 		// Nested ssrf object for backward-compatible clients.
-		"ssrf": map[string]any{
-			"enabled":        cfg.Sandbox.SSRF.Enabled,
-			"allow_internal": allowInternal,
+		Ssrf: &struct {
+			AllowInternal *[]string `json:"allow_internal,omitempty"`
+			Enabled       *bool     `json:"enabled,omitempty"`
+		}{
+			Enabled:       &ssrfEnabled,
+			AllowInternal: &allowInternal,
 		},
 	})
 }
@@ -142,9 +126,9 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	var body sandboxConfigPutBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var body gen.SandboxConfigUpdate
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "SandboxConfigUpdate", &body, validateEnabled) {
 		return
 	}
 
@@ -153,14 +137,14 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	changedMode := body.Mode != nil
 	changedAllowNetworkOutbound := body.AllowNetworkOutbound != nil
 	changedAllowedPaths := body.AllowedPaths != nil
-	changedSSRFEnabled := body.SSRFEnabled != nil
+	changedSSRFEnabled := body.SsrfEnabled != nil
 
 	// Resolve allow_internal source: flat field takes precedence over nested.
 	var resolvedAllowInternal *[]string
-	if body.SSRFAllowInternal != nil {
-		resolvedAllowInternal = body.SSRFAllowInternal
-	} else if body.SSRF != nil && body.SSRF.AllowInternal != nil {
-		resolvedAllowInternal = body.SSRF.AllowInternal
+	if body.SsrfAllowInternal != nil {
+		resolvedAllowInternal = body.SsrfAllowInternal
+	} else if body.Ssrf != nil && body.Ssrf.AllowInternal != nil {
+		resolvedAllowInternal = body.Ssrf.AllowInternal
 	}
 	changedAllowInternal := resolvedAllowInternal != nil
 	changedDefaultProfile := body.DefaultProfile != nil
@@ -179,7 +163,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Validate mode value before any disk writes.
 	if changedMode {
-		if !validSandboxModes[*body.Mode] {
+		if !validSandboxModes[string(*body.Mode)] {
 			jsonErr(w, http.StatusBadRequest, `invalid sandbox mode — must be one of "off", "permissive", "enforce"`)
 			return
 		}
@@ -187,8 +171,12 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Validate default profile value before any disk writes.
 	if changedDefaultProfile {
-		if !validSandboxProfiles[*body.DefaultProfile] {
-			jsonErr(w, http.StatusBadRequest, `invalid default_profile — must be one of "", "none", "workspace", "workspace+net", "host", "off"`)
+		if !validSandboxProfiles[string(*body.DefaultProfile)] {
+			jsonErr(
+				w,
+				http.StatusBadRequest,
+				`invalid default_profile — must be one of "", "none", "workspace", "workspace+net", "host", "off"`,
+			)
 			return
 		}
 	}
@@ -230,7 +218,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 			if s, ok := sandbox["mode"].(string); ok {
 				oldMode = s
 			}
-			sandbox["mode"] = *body.Mode
+			sandbox["mode"] = string(*body.Mode)
 			// Strip any stale legacy "enabled" bool from older configs so
 			// the on-disk shape matches the current schema.
 			delete(sandbox, "enabled")
@@ -251,7 +239,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		if changedSSRFEnabled || changedAllowInternal {
 			ssrf := ensureMap(m, "sandbox", "ssrf")
 			if changedSSRFEnabled {
-				ssrf["enabled"] = *body.SSRFEnabled
+				ssrf["enabled"] = *body.SsrfEnabled
 			}
 			if changedAllowInternal {
 				if raw, ok := ssrf["allow_internal"].([]any); ok {
@@ -268,10 +256,10 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 			if s, ok := sandbox["default_profile"].(string); ok {
 				oldDefaultProfile = s
 			}
-			if *body.DefaultProfile == "" {
+			if string(*body.DefaultProfile) == "" {
 				delete(sandbox, "default_profile")
 			} else {
-				sandbox["default_profile"] = *body.DefaultProfile
+				sandbox["default_profile"] = string(*body.DefaultProfile)
 			}
 		}
 		if changedShellDenyPatterns {
@@ -300,7 +288,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 				if err := audit.EmitSecuritySettingChange(
 					r.Context(), auditLogger,
 					"sandbox.mode",
-					oldMode, *body.Mode,
+					oldMode, string(*body.Mode),
 				); err != nil {
 					slog.Error("rest: audit emit sandbox.mode change", "error", err)
 				}
@@ -327,7 +315,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 				if err := audit.EmitSecuritySettingChange(
 					r.Context(), auditLogger,
 					"sandbox.default_profile",
-					oldDefaultProfile, *body.DefaultProfile,
+					oldDefaultProfile, string(*body.DefaultProfile),
 				); err != nil {
 					slog.Error("rest: audit emit default_profile change", "error", err)
 				}
@@ -364,47 +352,55 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Return the updated config so the UI can cache-update without a follow-up GET.
 	// Include both flat fields and nested ssrf object for backward-compatible clients.
+	saved := true
 	if a.agentLoop != nil {
-		cfg := a.agentLoop.GetConfig()
-		allowedPaths := cfg.Sandbox.AllowedPaths
-		if allowedPaths == nil {
-			allowedPaths = []string{}
+		updatedCfg := a.agentLoop.GetConfig()
+		updatedAllowedPaths := append([]string(nil), updatedCfg.Sandbox.AllowedPaths...)
+		if updatedAllowedPaths == nil {
+			updatedAllowedPaths = []string{}
 		}
-		allowInternal := cfg.Sandbox.SSRF.AllowInternal
-		if allowInternal == nil {
-			allowInternal = []string{}
+		updatedAllowInternal := append([]string(nil), updatedCfg.Sandbox.SSRF.AllowInternal...)
+		if updatedAllowInternal == nil {
+			updatedAllowInternal = []string{}
 		}
-		applied := ""
+		updatedApplied := ""
 		if a.sandboxResult != nil {
-			applied = string(a.sandboxResult.ApplyState.Mode)
+			updatedApplied = string(a.sandboxResult.ApplyState.Mode)
 		}
-		shellDenyPatterns := cfg.Sandbox.ShellDenyPatterns
-		if shellDenyPatterns == nil {
-			shellDenyPatterns = []string{}
+		updatedShellDenyPatterns := append([]string(nil), updatedCfg.Sandbox.ShellDenyPatterns...)
+		if updatedShellDenyPatterns == nil {
+			updatedShellDenyPatterns = []string{}
 		}
-		jsonOK(w, map[string]any{
-			"saved":                  true,
-			"mode":                   cfg.Sandbox.ResolvedMode(),
-			"allow_network_outbound": cfg.Sandbox.AllowNetworkOutbound,
-			"allowed_paths":          allowedPaths,
-			"ssrf_enabled":           cfg.Sandbox.SSRF.Enabled,
-			"ssrf_allow_internal":    allowInternal,
-			"applied_mode":           applied,
-			"default_profile":        string(cfg.Sandbox.DefaultProfile),
-			"shell_deny_patterns":    shellDenyPatterns,
-			"requires_restart":       partialRestartRequired,
-			"ssrf": map[string]any{
-				"enabled":        cfg.Sandbox.SSRF.Enabled,
-				"allow_internal": allowInternal,
+		updatedMode := gen.SandboxConfigMode(updatedCfg.Sandbox.ResolvedMode())
+		updatedAllowNetOut := updatedCfg.Sandbox.AllowNetworkOutbound
+		updatedSsrfEnabled := updatedCfg.Sandbox.SSRF.Enabled
+		updatedDefaultProfile := gen.SandboxConfigDefaultProfile(updatedCfg.Sandbox.DefaultProfile)
+		jsonOK(w, gen.SandboxConfig{
+			Saved:                &saved,
+			Mode:                 &updatedMode,
+			AllowNetworkOutbound: &updatedAllowNetOut,
+			AllowedPaths:         &updatedAllowedPaths,
+			SsrfEnabled:          &updatedSsrfEnabled,
+			SsrfAllowInternal:    &updatedAllowInternal,
+			AppliedMode:          &updatedApplied,
+			DefaultProfile:       &updatedDefaultProfile,
+			ShellDenyPatterns:    &updatedShellDenyPatterns,
+			RequiresRestart:      &partialRestartRequired,
+			Ssrf: &struct {
+				AllowInternal *[]string `json:"allow_internal,omitempty"`
+				Enabled       *bool     `json:"enabled,omitempty"`
+			}{
+				Enabled:       &updatedSsrfEnabled,
+				AllowInternal: &updatedAllowInternal,
 			},
 		})
 		return
 	}
 
 	// Fallback when agentLoop is nil (test harness or startup race).
-	jsonOK(w, map[string]any{
-		"saved":            true,
-		"requires_restart": partialRestartRequired,
+	jsonOK(w, gen.SandboxConfig{
+		Saved:           &saved,
+		RequiresRestart: &partialRestartRequired,
 	})
 }
 

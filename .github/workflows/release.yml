@@ -1,10 +1,17 @@
 name: Create Tag and Release
 
+# Manually-triggered release pipeline. Tags HEAD with the given version,
+# runs goreleaser, publishes a GitHub Release with binaries + .deb/.rpm,
+# and pushes the Docker image to ghcr.io/elicify-ai/omnipus.
+#
+# Platform matrix is governed by .goreleaser.yaml (currently 3 binaries:
+# linux/amd64, linux/arm64, darwin/arm64).
+
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (required, e.g. v0.2.0)"
+        description: "Release tag (required, e.g. v0.1.0)"
         required: true
         type: string
       prerelease:
@@ -17,11 +24,6 @@ on:
         required: false
         type: boolean
         default: false
-      upload_tos:
-        description: "Upload to Volcengine TOS"
-        required: false
-        type: boolean
-        default: true
 
 jobs:
   create-tag:
@@ -68,10 +70,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 22
-
-      - name: Setup pnpm
-        run: corepack enable && corepack prepare pnpm@latest --activate
+          node-version: 24
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -86,13 +85,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v4
-        with:
-          registry: docker.io
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -102,13 +94,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-          DOCKERHUB_IMAGE_NAME: ${{ vars.DOCKERHUB_REPOSITORY }}
           GOVERSION: ${{ steps.setup-go.outputs.go-version }}
-          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
-          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
-          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
-          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
 
       - name: Apply release flags
         shell: bash
@@ -118,12 +104,3 @@ jobs:
           gh release edit "${{ inputs.tag }}" \
             --draft=${{ inputs.draft }} \
             --prerelease=${{ inputs.prerelease }}
-
-  upload-tos:
-    name: Upload to TOS
-    needs: release
-    if: ${{ inputs.upload_tos }}
-    uses: ./.github/workflows/upload-tos.yml
-    with:
-      tag: ${{ inputs.tag }}
-    secrets: inherit

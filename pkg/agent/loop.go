@@ -24,7 +24,6 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
-	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 	"github.com/dapicom-ai/omnipus/pkg/channels"
 	"github.com/dapicom-ai/omnipus/pkg/commands"
 	"github.com/dapicom-ai/omnipus/pkg/config"
@@ -39,6 +38,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/session"
 	"github.com/dapicom-ai/omnipus/pkg/skills"
 	"github.com/dapicom-ai/omnipus/pkg/state"
+	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 	"github.com/dapicom-ai/omnipus/pkg/taskstore"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 	"github.com/dapicom-ai/omnipus/pkg/tools/browser"
@@ -190,7 +190,7 @@ type AgentLoop struct {
 	// Lane S: session-end recap pipeline (FR-023..FR-030).
 
 	// idleTickers maps sessionID → context.CancelFunc for the idle timeout ticker.
-	// Populated by RegisterIdleTicker; cancelled by cancelIdleTicker.
+	// Populated by RegisterIdleTicker; canceled by cancelIdleTicker.
 	idleTickers sync.Map // sessionID (string) → context.CancelFunc
 
 	// agentCurrentSession maps agentID → sessionID (atomic CAS).
@@ -206,6 +206,23 @@ type AgentLoop struct {
 	// immediately without waiting for the next message or ticker. Stored
 	// atomically via the atomic.Pointer so Stop() can be called before Run.
 	stopCancel atomic.Pointer[context.CancelFunc]
+
+	// cancelAbuse is the shared abuse detector used by RequestCancel across all
+	// four cancel entry points (web, Tier A /cancel, Tier B text-parsing, CLI).
+	// Initialized in NewAgentLoop; always non-nil after construction.
+	cancelAbuse *cancelAbuseDetector
+
+	// sessionWorkers holds the active per-scope session workers (sync.Map).
+	// Key: scope string (e.g. "agent:jim:session:abc123").
+	// Value: *sessionWorker.
+	// Workers self-remove after workerIdleTimeout; Close() cancels all remaining.
+	sessionWorkers sync.Map
+
+	// admission is the soft-cap gate for concurrent session workers.
+	// Phase 1: gates inbound user-message dispatch only, per unique scope.
+	// Resource-aware admission (CPU load, RSS, goroutine count) is out of
+	// scope for v0.1 and filed as a follow-up.
+	admission *AdmissionController
 }
 
 // processOptions configures how a message is processed
@@ -237,14 +254,14 @@ type continuationTarget struct {
 }
 
 const (
-	defaultResponse       = "The model returned an empty response. This may indicate a provider error or token limit."
-	toolLimitResponse     = "I've reached `max_tool_iterations` without a final response. Increase `max_tool_iterations` in config.json if this task needs more tool steps."
-	sessionKeyAgentPrefix = "agent:"
-	metadataKeyAccountID       = "account_id"
-	metadataKeyGuildID         = "guild_id"
-	metadataKeyTeamID          = "team_id"
-	metadataKeyParentPeerKind  = "parent_peer_kind"
-	metadataKeyParentPeerID    = "parent_peer_id"
+	defaultResponse           = "The model returned an empty response. This may indicate a provider error or token limit."
+	toolLimitResponse         = "I've reached `max_tool_iterations` without a final response. Increase `max_tool_iterations` in config.json if this task needs more tool steps."
+	sessionKeyAgentPrefix     = "agent:"
+	metadataKeyAccountID      = "account_id"
+	metadataKeyGuildID        = "guild_id"
+	metadataKeyTeamID         = "team_id"
+	metadataKeyParentPeerKind = "parent_peer_kind"
+	metadataKeyParentPeerID   = "parent_peer_id"
 )
 
 // ErrReloadNotConfigured is returned by TriggerReload when no reload function
@@ -309,6 +326,7 @@ func NewAgentLoop(
 		cmdRegistry:            commands.NewRegistry(commands.BuiltinDefinitions()),
 		steering:               newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
 		contextBuilderRegistry: NewContextBuilderRegistry(),
+		admission:              newAdmissionController(0),
 	}
 	al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(al.hooks, cfg)
@@ -491,10 +509,27 @@ func NewAgentLoop(
 	// all outbound HTTP tool surfaces receive this checker so allow_internal is
 	// honored uniformly. When disabled the checker is nil and callers fall back
 	// to their default (proxy-aware) HTTP clients.
+	//
+	// v0.2 (#155 item 4): cfg.Sandbox.EgressAllowCIDRs is the operator escape
+	// hatch for the default-deny outbound posture. Entries here are merged
+	// into the SSRFChecker's allow-list alongside the SSRF.AllowInternal list
+	// so a single field per concern keeps semantics clear: SSRF allow-list =
+	// "this hostname/IP/CIDR is exempt from SSRF blocking". Both fields feed
+	// the same checker; the merge is order-stable so an operator who lists
+	// "10.0.0.5" in AllowInternal AND "10.0.0.0/8" in EgressAllowCIDRs gets
+	// both — the more specific exact-IP entry takes O(1) precedence in
+	// CheckIP's lookup map.
 	if cfg.Sandbox.SSRF.Enabled {
-		al.ssrfChecker = security.NewSSRFChecker(cfg.Sandbox.SSRF.AllowInternal)
+		merged := make([]string, 0,
+			len(cfg.Sandbox.SSRF.AllowInternal)+len(cfg.Sandbox.EgressAllowCIDRs))
+		merged = append(merged, cfg.Sandbox.SSRF.AllowInternal...)
+		merged = append(merged, cfg.Sandbox.EgressAllowCIDRs...)
+		al.ssrfChecker = security.NewSSRFChecker(merged)
 		logger.InfoCF("agent", "SSRF protection enabled",
-			map[string]any{"allow_internal_count": len(cfg.Sandbox.SSRF.AllowInternal)})
+			map[string]any{
+				"allow_internal_count":     len(cfg.Sandbox.SSRF.AllowInternal),
+				"egress_allow_cidrs_count": len(cfg.Sandbox.EgressAllowCIDRs),
+			})
 	}
 
 	// SEC-28: Start the loopback SSRF proxy for exec child processes when
@@ -515,6 +550,9 @@ func NewAgentLoop(
 		}
 	}
 
+	// Initialize cancel abuse detector (shared across all four cancel entry points).
+	al.cancelAbuse = newCancelAbuseDetector()
+
 	// SEC-26: Initialize rate limiter registry and persistent cost tracker.
 	// The registry always exists so per-agent windows can be created even when
 	// no cap is configured; SetDailyCostCap(0) disables cost-cap enforcement.
@@ -528,6 +566,30 @@ func NewAgentLoop(
 			"daily_cost_cap_usd":              cfg.Sandbox.RateLimits.DailyCostCapUSD,
 			"max_agent_llm_calls_per_hour":    cfg.Sandbox.RateLimits.MaxAgentLLMCallsPerHour,
 			"max_agent_tool_calls_per_minute": cfg.Sandbox.RateLimits.MaxAgentToolCallsPerMinute,
+		})
+
+	// v0.2 #155 item 6: build the shared memory-write rate limiter and
+	// propagate it to every agent's tool registry. One limiter is shared
+	// across all agents so the per-caller bucket is genuinely global —
+	// otherwise a malicious caller could route writes through different
+	// agents to dodge the per-caller ceiling. The per-agent bucket is keyed
+	// on the agent ID inside the limiter so independence is preserved.
+	//
+	// Defaults (60 per agent / minute, 600 per caller / minute) are intentional;
+	// not configurable via cfg today because no operator has expressed a need
+	// to tune them and exposing knobs invites footguns. The constructor accepts
+	// a MemoryRateLimitConfig so a future config-backed override can be wired
+	// in without a structural change.
+	memRL := tools.NewMemoryRateLimiter(tools.MemoryRateLimitConfig{})
+	for _, agentID := range registry.ListAgentIDs() {
+		if agentInst, ok := registry.GetAgent(agentID); ok {
+			agentInst.Tools.SetMemoryRateLimiter(memRL)
+		}
+	}
+	logger.InfoCF("agent", "Memory write rate limiter initialized",
+		map[string]any{
+			"per_agent_per_minute":  memRL.PerAgentLimit(),
+			"per_caller_per_minute": memRL.PerCallerLimit(),
 		})
 
 	// Register shared tools to all agents (now that al is created)
@@ -607,7 +669,7 @@ func (al *AgentLoop) SetCurrentSession(agentID, sessionID string) {
 
 // RegisterIdleTicker stores a cancel function for the idle ticker of a session.
 // Calling it again for the same session replaces the previous cancel without
-// cancelling it — use resetIdleTicker for the reset path.
+// canceling it — use resetIdleTicker for the reset path.
 func (al *AgentLoop) RegisterIdleTicker(sessionID string, cancel context.CancelFunc) {
 	al.idleTickers.Store(sessionID, cancel)
 }
@@ -793,9 +855,15 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 		// bind, and the rules are visible in tooling that introspects
 		// ExecToolDeps.
 		//
-		// ConnectPortRules were removed in v0.1 (A1.3): the kernel only
-		// handles NET_BIND_TCP in handledAccessNet. Outbound TCP filtering
-		// is delegated to the egress proxy.
+		// ConnectPortRules were re-introduced in v0.2 (#155 item 4) and
+		// are installed process-wide once at gateway boot via DefaultPolicy
+		// + sandbox_apply.go. Children inherit the connect-port allow-list
+		// through Landlock's restrict_self ratchet — no per-child re-add
+		// is required. The tool-side ExecToolDeps.SandboxPolicy struct
+		// carries an empty ConnectPortRules slice here intentionally; it
+		// exists to keep the type symmetric and to feed cooperative
+		// FallbackBackend env-var injection without duplicating the
+		// kernel-level allow-list across every spawned child.
 		var bindPorts []sandbox.NetPortRule
 		if al.sandboxBackend != nil {
 			abi := 0
@@ -945,7 +1013,7 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 				PortRange:       [2]int32{portRange[0], portRange[1]},
 				MaxConcurrent:   cfg.Sandbox.MaxConcurrentDevServers,
 				EgressAllowList: cfg.Sandbox.EgressAllowList,
-				AuditFailClosed: resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, true),
+				AuditFailClosed: resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, cfg.Sandbox.AuditLog),
 			}
 			webServeTool := tools.NewWebServeTool(
 				ag.Workspace,
@@ -1015,11 +1083,14 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 				}
 			}
 			shellTool := tools.NewWorkspaceShellTool(tools.WorkspaceShellDeps{
-				WorkspaceDir:            ag.Workspace,
-				Profile:                 agentProfile,
-				Proxy:                   deps.EgressProxy,
-				AuditLogger:             al.auditLogger,
-				AuditFailClosed:         resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, true),
+				WorkspaceDir: ag.Workspace,
+				Profile:      agentProfile,
+				Proxy:        deps.EgressProxy,
+				AuditLogger:  al.auditLogger,
+				AuditFailClosed: resolveBoolWithDefault(
+					cfg.Sandbox.PathGuardAuditFailClosed,
+					cfg.Sandbox.AuditLog,
+				),
 				GlobalShellDenyPatterns: cfg.Sandbox.ShellDenyPatterns,
 				AgentShellPolicy:        agentShellPolicy,
 			})
@@ -1031,11 +1102,14 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 			if deps.DevServerRegistry != nil {
 				portRange := cfg.Sandbox.DevServerPortRange
 				shellBgTool := tools.NewWorkspaceShellBgTool(tools.WorkspaceShellBgDeps{
-					WorkspaceDir:            ag.Workspace,
-					Profile:                 agentProfile,
-					Proxy:                   deps.EgressProxy,
-					AuditLogger:             al.auditLogger,
-					AuditFailClosed:         resolveBoolWithDefault(cfg.Sandbox.PathGuardAuditFailClosed, true),
+					WorkspaceDir: ag.Workspace,
+					Profile:      agentProfile,
+					Proxy:        deps.EgressProxy,
+					AuditLogger:  al.auditLogger,
+					AuditFailClosed: resolveBoolWithDefault(
+						cfg.Sandbox.PathGuardAuditFailClosed,
+						cfg.Sandbox.AuditLog,
+					),
 					Registry:                deps.DevServerRegistry,
 					MaxConcurrent:           cfg.Sandbox.MaxConcurrentDevServers,
 					PortRange:               [2]int32{portRange[0], portRange[1]},
@@ -1049,11 +1123,11 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 	}
 
 	logger.InfoCF("agent", "Tier 1/2/3 tools wired into agent registry", map[string]any{
-		"preview_base_url":            deps.GatewayPreviewBaseURL,
-		"served_subdirs_ready":        deps.ServedSubdirs != nil,
-		"dev_server_registry_ready":   deps.DevServerRegistry != nil,
-		"egress_proxy_ready":          deps.EgressProxy != nil,
-		"workspace_shell_enabled":     resolveBoolWithDefault(cfg.Sandbox.Experimental.WorkspaceShellEnabled, true),
+		"preview_base_url":          deps.GatewayPreviewBaseURL,
+		"served_subdirs_ready":      deps.ServedSubdirs != nil,
+		"dev_server_registry_ready": deps.DevServerRegistry != nil,
+		"egress_proxy_ready":        deps.EgressProxy != nil,
+		"workspace_shell_enabled":   resolveBoolWithDefault(cfg.Sandbox.Experimental.WorkspaceShellEnabled, true),
 	})
 }
 
@@ -1131,11 +1205,6 @@ func registerSharedTools(
 		} else {
 			agent.Tools.Register(fetchTool)
 		}
-
-		// Hardware tools (I2C, SPI) — Linux-only; their Execute methods return
-		// a clear error on non-Linux. Registered unconditionally.
-		agent.Tools.Register(tools.NewI2CTool())
-		agent.Tools.Register(tools.NewSPITool())
 
 		// Message tool — outbound inter-agent message via bus.
 		messageTool := tools.NewMessageTool()
@@ -1403,7 +1472,6 @@ func registerSharedTools(
 			}
 		}
 	}
-
 }
 
 // findAgentConfig returns the AgentConfig for the given agent ID, or nil if not found.
@@ -1440,7 +1508,7 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 	al.running.Store(true)
 
 	// Wrap the caller's context with a cancel so Stop() can unblock the
-	// select without requiring the outer context to be cancelled. This
+	// select without requiring the outer context to be canceled. This
 	// replaces the previous 100 ms idle ticker (H4: each wakeup was wasted
 	// CPU polling a bool that almost always returns true).
 	runCtx, runCancel := context.WithCancel(ctx)
@@ -1457,252 +1525,144 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-runCtx.Done():
+			al.stopSessionWorkers()
 			return nil
 		case msg, ok := <-al.bus.InboundChan():
 			if !ok {
+				al.stopSessionWorkers()
 				return nil
 			}
 
-			// Start a goroutine that drains the bus while processMessage is
-			// running. Only messages that resolve to the active turn scope are
-			// redirected into steering; other inbound messages are requeued.
-			drainCancel := func() {}
-			if activeScope, activeAgentID, ok := al.resolveSteeringTarget(msg); ok {
-				drainCtx, cancel := context.WithCancel(runCtx)
-				drainCancel = cancel
-				go al.drainBusToSteering(drainCtx, activeScope, activeAgentID)
-			}
-
-			// Process message
-			func() {
-				defer func() {
-					if al.channelManager != nil {
-						al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
-					}
-				}()
-				drainCanceled := false
-				cancelDrain := func() {
-					if drainCanceled {
-						return
-					}
-					drainCancel()
-					drainCanceled = true
-				}
-				defer cancelDrain()
-
-				// FR-004: Deferred response guard — guarantees finalResponse is
-				// published even when post-turn steering code returns early.
-				// published is set to true at each existing publishResponseIfNeeded
-				// call site so the defer does not double-publish.
-				// publishResponseIfNeeded already checks HasSentInRound() internally,
-				// so we do not need to duplicate that check here.
-				var finalResponse string
-				var activeAgent *AgentInstance
-				published := false
-				publishChannel := msg.Channel
-				publishChatID := msg.ChatID
-				defer func() {
-					// H2: recover from any panic in the deferred response guard so a
-					// programming error here doesn't silently kill the Run goroutine.
+			// System messages are handled inline in a goroutine (no scope).
+			if msg.Channel == "system" {
+				go func() {
 					defer func() {
 						if r := recover(); r != nil {
-							logger.ErrorCF("agent", "panic in deferred response guard", map[string]any{"panic": r})
+							logger.ErrorCF("agent", "Panic in system-message goroutine",
+								map[string]any{
+									"panic":   r,
+									"channel": msg.Channel,
+									"chat_id": msg.ChatID,
+								})
 						}
 					}()
-					if finalResponse != "" && !published {
-						al.publishResponseIfNeeded(runCtx, activeAgent, publishChannel, publishChatID, finalResponse)
+					if _, err := al.processSystemMessage(runCtx, msg); err != nil {
+						logger.WarnCF("agent", "processSystemMessage returned error",
+							map[string]any{
+								"channel": msg.Channel,
+								"chat_id": msg.ChatID,
+								"error":   err.Error(),
+							})
 					}
 				}()
+				continue
+			}
 
-				response, activeAgent, err := al.processMessage(runCtx, msg)
-				if err != nil {
-					response = fmt.Sprintf("Error processing message: %v", err)
-				}
-				finalResponse = response
-
-				target, targetErr := al.buildContinuationTarget(msg)
-				if targetErr != nil {
-					logger.WarnCF("agent", "Failed to build steering continuation target",
-						map[string]any{
-							"channel": msg.Channel,
-							"error":   targetErr.Error(),
-						})
-					// defer will publish finalResponse if non-empty
-					return
-				}
-				if target == nil {
-					cancelDrain()
-					if finalResponse != "" {
-						published = true
-						al.publishResponseIfNeeded(runCtx, activeAgent, msg.Channel, msg.ChatID, finalResponse)
+			scope, _, ok := al.resolveSteeringTarget(msg)
+			if !ok {
+				// Unroutable — fall through to the original single-shot path so
+				// channels with no configured agent still get an error reply.
+				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							logger.ErrorCF("agent", "Panic in unroutable-message goroutine",
+								map[string]any{
+									"panic":   r,
+									"channel": msg.Channel,
+									"chat_id": msg.ChatID,
+								})
+						}
+					}()
+					response, ag, err := al.processMessage(runCtx, msg)
+					if err != nil && response == "" {
+						response = fmt.Sprintf("Error processing message: %v", err)
 					}
-					return
-				}
-
-				// Update the defer's publish target to use the resolved continuation target.
-				publishChannel = target.Channel
-				publishChatID = target.ChatID
-
-				for al.pendingSteeringCountForScope(target.SessionKey) > 0 {
-					logger.InfoCF("agent", "Continuing queued steering after turn end",
-						map[string]any{
-							"channel":     target.Channel,
-							"chat_id":     target.ChatID,
-							"session_key": target.SessionKey,
-							"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
-						})
-
-					continued, continueErr := al.Continue(runCtx, target.SessionKey, target.Channel, target.ChatID)
-					if continueErr != nil {
-						logger.WarnCF("agent", "Failed to continue queued steering",
-							map[string]any{
-								"channel": target.Channel,
-								"chat_id": target.ChatID,
-								"error":   continueErr.Error(),
-							})
-						// defer will publish the last known finalResponse
-						return
+					if response != "" {
+						al.publishResponseIfNeeded(runCtx, ag, msg.Channel, msg.ChatID, response)
 					}
-					if continued == "" {
-						// defer will publish the last known finalResponse
-						return
-					}
+				}()
+				continue
+			}
 
-					finalResponse = continued
-					published = false // Continue returned new content; deferred publish must fire
+			// If a worker already exists for this scope AND is not in the
+			// middle of exiting, enqueue into it. The exiting check closes
+			// the silent-drop race (pass-2 silent-failure-hunter N1) where
+			// the dispatcher Load'd a worker whose idleTimer had already
+			// fired but whose deferred sessionWorkers.Delete had not yet
+			// run — enqueue into the dying worker's inbox would never be
+			// drained. When exiting=true we fall through to the spawn path
+			// below, which will create a fresh worker.
+			if existing, ok := al.sessionWorkers.Load(scope); ok {
+				if w := existing.(*sessionWorker); !w.exiting.Load() {
+					w.enqueue(msg)
+					continue
 				}
+				// Dying worker — fall through to spawn replacement.
+			}
 
-				cancelDrain()
-
-				for al.pendingSteeringCountForScope(target.SessionKey) > 0 {
-					logger.InfoCF("agent", "Draining steering queued during turn shutdown",
-						map[string]any{
-							"channel":     target.Channel,
-							"chat_id":     target.ChatID,
-							"session_key": target.SessionKey,
-							"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
-						})
-
-					continued, continueErr := al.Continue(runCtx, target.SessionKey, target.Channel, target.ChatID)
-					if continueErr != nil {
-						logger.WarnCF("agent", "Failed to continue queued steering after shutdown drain",
-							map[string]any{
-								"channel": target.Channel,
-								"chat_id": target.ChatID,
-								"error":   continueErr.Error(),
-							})
-						// defer will publish the last known finalResponse
-						return
-					}
-					if continued == "" {
-						break
-					}
-
-					finalResponse = continued
+			// No worker yet — atomically claim an admission slot for this scope.
+			// TryAdmit returns (true, release) when admitted; (false, nil) when at cap.
+			// Using TryAdmit rather than a separate ShouldAdmit+OnTurnStart pair
+			// closes the TOCTOU window where two concurrent dispatchers both pass
+			// the check and overshoot the cap.
+			admitted, release := al.admission.TryAdmit(scope)
+			if !admitted {
+				logger.WarnCF("agent", "At capacity — rejecting new session",
+					map[string]any{
+						"scope":    scope,
+						"active":   al.admission.ActiveScopes(),
+						"soft_cap": al.admission.SoftCap(),
+						"channel":  msg.Channel,
+						"chat_id":  msg.ChatID,
+					})
+				// Send user-visible capacity reply.
+				rejectCtx, rejectCancel := context.WithTimeout(runCtx, 3*time.Second)
+				if pubErr := al.bus.PublishOutbound(rejectCtx, bus.OutboundMessage{
+					Channel: msg.Channel,
+					ChatID:  msg.ChatID,
+					Content: "I'm at capacity right now — please try again in a few seconds.",
+				}); pubErr != nil {
+					logger.WarnCF("agent", "Failed to send capacity-rejection reply",
+						map[string]any{"channel": msg.Channel, "error": pubErr.Error()})
 				}
+				rejectCancel()
+				continue
+			}
 
-				if finalResponse != "" {
-					published = true
-					al.publishResponseIfNeeded(runCtx, activeAgent, target.Channel, target.ChatID, finalResponse)
-				}
-			}()
+			// Spawn a new worker for this scope. The worker holds the admission
+			// slot via release() and calls it in its deferred runLoop cleanup.
+			w := newSessionWorker(scope, al, release)
+			al.sessionWorkers.Store(scope, w)
+			go w.runLoop()
+			w.enqueue(msg)
 		}
 	}
 }
 
-// drainBusToSteering consumes inbound messages and redirects messages from the
-// active scope into the steering queue. Messages from other scopes are buffered
-// locally and re-published to the inbound bus after the drain loop exits, so
-// they are processed normally once the active turn finishes. It drains all
-// immediately available messages, blocking for the first one until ctx is done.
-func (al *AgentLoop) drainBusToSteering(ctx context.Context, activeScope, activeAgentID string) {
-	var deferred []bus.InboundMessage
+// stopSessionWorkers cancels all active session workers and waits for each
+// to drain, with a 5 s per-worker budget. Called when Run() exits.
+// Idempotent — safe even if Run() already called it.
+func (al *AgentLoop) stopSessionWorkers() {
+	const workerShutdownBudget = 5 * time.Second
 
-	// After the loop exits, re-publish buffered out-of-scope messages so the
-	// main runAgentLoop can process them once the active turn has finished.
-	defer func() {
-		for _, m := range deferred {
-			if err := al.requeueInboundMessage(m); err != nil {
-				// Message loss during shutdown is acceptable: the bus is closing and
-				// the message cannot be delivered. The error is logged for observability.
-				logger.WarnCF("agent", "Failed to requeue non-steering inbound message", map[string]any{
-					"error":     err.Error(),
-					"channel":   m.Channel,
-					"sender_id": m.SenderID,
-				})
-			}
-		}
-	}()
+	// Collect first, then cancel — avoids holding sync.Map's range lock
+	// while canceling (which could deadlock against concurrent Store calls).
+	var workers []*sessionWorker
+	al.sessionWorkers.Range(func(_, v any) bool {
+		workers = append(workers, v.(*sessionWorker))
+		return true
+	})
 
-	blocking := true
-	for {
-		var msg bus.InboundMessage
+	for _, w := range workers {
+		w.cancel()
+	}
 
-		if blocking {
-			// Block waiting for the first available message or ctx cancellation.
-			select {
-			case <-ctx.Done():
-				return
-			case m, ok := <-al.bus.InboundChan():
-				if !ok {
-					return
-				}
-				msg = m
-			}
-		} else {
-			// Non-blocking: drain any remaining queued messages, return when empty.
-			select {
-			case m, ok := <-al.bus.InboundChan():
-				if !ok {
-					return
-				}
-				msg = m
-			default:
-				return
-			}
-		}
-		blocking = false
-
-		msgScope, _, scopeOK := al.resolveSteeringTarget(msg)
-		if !scopeOK || msgScope != activeScope {
-			// Buffer for re-publishing after the drain exits, so runAgentLoop
-			// picks them up without the drain goroutine looping on them.
-			deferred = append(deferred, msg)
-			continue
-		}
-
-		// Transcribe audio if needed before steering, so the agent sees text.
-		msg, _ = al.transcribeAudioInMessage(ctx, msg) // errors handled internally with logging
-
-		logger.InfoCF("agent", "Redirecting inbound message to steering queue",
-			map[string]any{
-				"channel":     msg.Channel,
-				"sender_id":   msg.SenderID,
-				"content_len": len(msg.Content),
-				"scope":       activeScope,
-			})
-
-		if err := al.enqueueSteeringMessage(activeScope, activeAgentID, providers.Message{
-			Role:    "user",
-			Content: msg.Content,
-			Media:   append([]string(nil), msg.Media...),
-		}); err != nil {
-			logger.WarnCF("agent", "Failed to steer message, will be lost",
-				map[string]any{
-					"error":   err.Error(),
-					"channel": msg.Channel,
-				})
-			// Notify the user that their message could not be queued.
-			errCtx, errCancel := context.WithTimeout(ctx, 3*time.Second)
-			if pubErr := al.bus.PublishOutbound(errCtx, bus.OutboundMessage{
-				Channel: msg.Channel,
-				ChatID:  msg.ChatID,
-				Content: "Your message could not be queued because the agent is busy. Please try again.",
-			}); pubErr != nil {
-				logger.WarnCF("agent", "Failed to send steering-queue-full error to user",
-					map[string]any{"channel": msg.Channel, "error": pubErr.Error()})
-			}
-			errCancel()
+	for _, w := range workers {
+		select {
+		case <-w.done:
+		case <-time.After(workerShutdownBudget):
+			logger.WarnCF("agent", "Session worker did not drain within shutdown budget",
+				map[string]any{"scope": w.scope})
 		}
 	}
 }
@@ -1786,6 +1746,12 @@ func (al *AgentLoop) WaitForActiveRequests() {
 
 // Close releases resources held by agent session stores. Call after Stop.
 func (al *AgentLoop) Close() {
+	// Cancel all active session workers and wait for them to drain (5 s budget).
+	// stopSessionWorkers is idempotent — safe to call here even if Run() has
+	// already called it on context-cancellation, because workers cancel their
+	// own context; a double-cancel is a no-op.
+	al.stopSessionWorkers()
+
 	// Shutdown the browser manager (if any) to kill the Chromium subprocess.
 	al.mu.Lock()
 	if al.browserMgr != nil {
@@ -1844,7 +1810,7 @@ func (al *AgentLoop) Close() {
 		}
 	}
 
-	// FR-048: On graceful shutdown, write turn_cancelled_restart synthetic entries
+	// FR-048: On graceful shutdown, write turn_canceled_restart synthetic entries
 	// to any sessions that have active turns paused awaiting approval. This makes
 	// the restart visible to the session on next load, preventing the user from
 	// seeing a dangling tool_call with no result.
@@ -1866,11 +1832,11 @@ func (al *AgentLoop) Close() {
 	}
 }
 
-// writeTurnCancelledRestartForActiveTurns writes a synthetic turn_cancelled_restart
+// writeTurnCancelledRestartForActiveTurns writes a synthetic turn_canceled_restart
 // system message to every session that has an active (in-progress) turn at the time
 // of graceful shutdown (FR-048). This ensures the session transcript is clean on
 // next load: the SIGKILL recovery path (FR-069) will detect the synthetic entry
-// and not attempt to resume the cancelled turn.
+// and not attempt to resume the canceled turn.
 func (al *AgentLoop) writeTurnCancelledRestartForActiveTurns() {
 	al.activeTurnStates.Range(func(key, value any) bool {
 		sessionKey, _ := key.(string)
@@ -1881,15 +1847,15 @@ func (al *AgentLoop) writeTurnCancelledRestartForActiveTurns() {
 
 		// Append a synthetic system message documenting the shutdown.
 		syntheticContent := fmt.Sprintf(
-			`{"type":"turn_cancelled_restart","session_key":%q,"reason":"graceful_shutdown"}`,
+			`{"type":"turn_canceled_restart","session_key":%q,"reason":"graceful_shutdown"}`,
 			sessionKey,
 		)
 		ts.agent.Sessions.AddMessage(sessionKey, "system", syntheticContent)
 		if err := ts.agent.Sessions.Save(sessionKey); err != nil {
-			logger.WarnCF("agent", "FR-048: failed to persist turn_cancelled_restart on shutdown",
+			logger.WarnCF("agent", "FR-048: failed to persist turn_canceled_restart on shutdown",
 				map[string]any{"session_key": sessionKey, "error": err.Error()})
 		} else {
-			logger.InfoCF("agent", "FR-048: turn_cancelled_restart written on graceful shutdown",
+			logger.InfoCF("agent", "FR-048: turn_canceled_restart written on graceful shutdown",
 				map[string]any{"session_key": sessionKey})
 		}
 
@@ -3107,16 +3073,17 @@ func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (string, stri
 		return "", "", false
 	}
 
-	return resolveScopeKey(route, msg.SessionKey), agent.ID, true
-}
-
-func (al *AgentLoop) requeueInboundMessage(msg bus.InboundMessage) error {
-	if al.bus == nil {
-		return nil
+	// Per-session worker scope: when msg.SessionID is set, append it so each
+	// session for the same agent gets its OWN worker goroutine. Without this,
+	// the routing layer's SessionKey collapses to "agent:<id>:<id>" for all
+	// channels that haven't explicitly carried a session_key, and every
+	// session for a given agent ends up sharing one worker — reintroducing
+	// the serialization regression the per-session-worker design exists to fix.
+	scope := resolveScopeKey(route, msg.SessionKey)
+	if msg.SessionID != "" {
+		scope = scope + ":" + msg.SessionID
 	}
-	pubCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	return al.bus.PublishInbound(pubCtx, msg)
+	return scope, agent.ID, true
 }
 
 func (al *AgentLoop) processSystemMessage(
@@ -3204,6 +3171,21 @@ func (al *AgentLoop) runAgentLoop(
 	}
 
 	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, opts.SessionKey))
+	// Bug 1 fix: wire a resolver so appendToolCallTranscript (and event payloads)
+	// use the runtime-current active agent rather than the turn's starting agent.
+	// After a handoff, sessionActiveAgent reflects the new agent; tool_call entries
+	// produced in the same turn will carry the correct post-handoff agent_id.
+	if opts.TranscriptSessionID != "" {
+		resolverKey := "session:" + opts.TranscriptSessionID
+		ts.activeAgentResolver = func() string {
+			if v, ok := al.sessionActiveAgent.Load(resolverKey); ok {
+				if id, ok := v.(string); ok && id != "" {
+					return id
+				}
+			}
+			return ""
+		}
+	}
 	result, err := al.runTurn(ctx, ts)
 	if err != nil {
 		return "", err
@@ -3342,6 +3324,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	turnCtx = tools.WithTranscriptSessionID(turnCtx, ts.opts.TranscriptSessionID)
 
 	al.registerActiveTurn(ts)
+	// B1: Finish must run before clearActiveTurn so that IsAlive() goes false
+	// and the onCancelFinish callback fires on natural turn completion, not only
+	// on explicit cancel paths. closeOnce.Do inside Finish makes repeated calls
+	// safe — the cancel path may have already called Finish(true); the second
+	// call here is a no-op via isFinished.Store(true) being idempotent and
+	// closeOnce.Do executing at most once.
+	defer ts.Finish(false)
 	defer al.clearActiveTurn(ts)
 
 	turnStatus := TurnEndStatusCompleted
@@ -3375,11 +3364,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	var history []providers.Message
 	var summary string
 	if !ts.opts.NoHistory {
-		history = ts.agent.Sessions.GetHistory(ts.sessionKey)
 		// FR-069 / FR-088: recover orphaned tool calls left by a SIGKILL or OOM
 		// kill while the gateway was paused awaiting approval. The function is
 		// idempotent — it no-ops on clean sessions and on sessions where the
-		// synthetic turn_cancelled_restart entry already exists. The on-disk
+		// synthetic turn_canceled_restart entry already exists. The on-disk
 		// transcript is preserved; only the LLM-context slice (history) is
 		// cleaned so the LLM does not see dangling unanswered tool_call entries.
 		history = RecoverOrphanedToolCalls(ts.agent.Sessions, ts.sessionKey, al.auditLogger)
@@ -3643,13 +3631,11 @@ turnLoop:
 		if dedupErr := al.checkToolDedupInvariant(ts, policyFilteredTools); dedupErr != nil {
 			denyMsg := fmt.Sprintf(`{"error":"tool_assembly_duplicate","message":%q}`, dedupErr.Error())
 			syntheticDenyMsg := providers.Message{Role: "system", Content: denyMsg}
-			messages = append(messages, syntheticDenyMsg)
 			if !ts.opts.NoHistory {
 				ts.agent.Sessions.AddFullMessage(ts.sessionKey, syntheticDenyMsg)
 				ts.recordPersistedMessage(syntheticDenyMsg)
 			}
-			if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
-				messages = append(messages, providers.Message{Role: "system", Content: abortMsg})
+			if shouldAbort, _ := al.recordSyntheticDeny(ts); shouldAbort {
 				turnStatus = TurnEndStatusAborted
 				return al.abortTurn(ts)
 			}
@@ -3824,6 +3810,13 @@ turnLoop:
 					logger.InfoCF("agent", "Using streaming for response", map[string]any{"channel": ts.channel, "chat_id": ts.chatID})
 					var lastChunk string
 					resp, streamErr := sp.ChatStream(providerCtx, messagesForCall, toolDefsForCall, llmModel, llmOpts, func(accumulated string) {
+						// B4: if the turn has been abandoned (stuck-goroutine detach),
+						// suppress further frame emits so a zombie goroutine cannot
+						// push frames to disconnected clients.
+						if ts.abandoned.Load() {
+							abandonedWritesSuppressed.Add(1)
+							return
+						}
 						// Send only the new delta (accumulated minus what we already sent)
 						delta := accumulated[len(lastChunk):]
 						lastChunk = accumulated
@@ -3858,7 +3851,7 @@ turnLoop:
 			// inline image data URLs from tool messages and retry once. This
 			// keeps text-only models working while still giving vision-capable
 			// models the picture.
-			if err != nil && strings.Contains(err.Error(), "image input") {
+			if strings.Contains(err.Error(), "image input") {
 				stripped := false
 				for i := range callMessages {
 					if callMessages[i].Role == "tool" && len(callMessages[i].Media) > 0 {
@@ -4492,8 +4485,7 @@ turnLoop:
 						Reason: "permission_denied (mid-turn policy change)",
 					},
 				)
-				if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
-					messages = append(messages, providers.Message{Role: "system", Content: abortMsg})
+				if shouldAbort, _ := al.recordSyntheticDeny(ts); shouldAbort {
 					turnStatus = TurnEndStatusAborted
 					return al.abortTurn(ts)
 				}
@@ -4532,8 +4524,7 @@ turnLoop:
 							Reason: fmt.Sprintf("permission_denied (ask denied: %s)", denialReason),
 						},
 					)
-					if shouldAbort, abortMsg := al.recordSyntheticDeny(ts); shouldAbort {
-						messages = append(messages, providers.Message{Role: "system", Content: abortMsg})
+					if shouldAbort, _ := al.recordSyntheticDeny(ts); shouldAbort {
 						turnStatus = TurnEndStatusAborted
 						return al.abortTurn(ts)
 					}
@@ -4564,7 +4555,7 @@ turnLoop:
 					Tool:              toolName,
 					Arguments:         cloneEventArguments(toolArgs),
 					ParentSpawnCallID: session.ToolCallID(ts.parentSpawnCallID),
-					AgentID:           ts.agentID,
+					AgentID:           ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
 				},
 			)
 
@@ -4907,7 +4898,7 @@ turnLoop:
 					Async:             toolResult.Async,
 					Result:            contentForLLM,
 					ParentSpawnCallID: session.ToolCallID(ts.parentSpawnCallID),
-					AgentID:           ts.agentID,
+					AgentID:           ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
 				},
 			)
 			tcStatus := "success"
@@ -5074,6 +5065,22 @@ turnLoop:
 			)
 			return turnResult{}, err
 		}
+	}
+
+	// Bug 3 fix: persist assistant text to transcript.jsonl when no wsStreamer
+	// was active (WS disconnected, non-webchat channel, or headless run).
+	// When ts.lastStreamer != nil, the deferred ts.finalizeStreamer will call
+	// wsStreamer.Finalize which writes the accumulated streaming content to the
+	// transcript — but ONLY if the streamer's token buffer has content. When
+	// every Update() call silently failed (WS closed mid-stream) the buffer is
+	// empty and Finalize would skip the write. We hand finalContent to the
+	// streamer via SetFinalContent so it can fall back to that text.
+	ts.SetFinalContent(finalContent)
+	ts.mu.RLock()
+	hasActiveStreamer := ts.lastStreamer != nil
+	ts.mu.RUnlock()
+	if !hasActiveStreamer && finalContent != "" {
+		ts.appendAssistantTranscript(finalContent)
 	}
 
 	if ts.opts.EnableSummary {
@@ -5896,6 +5903,16 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			return agent.Sessions.Save(opts.SessionKey)
 		}
 	}
+
+	// Inject the session ID accessor so /cancel can target the current session.
+	if opts != nil {
+		sessionKey := opts.SessionKey
+		rt.SessionID = func() string { return sessionKey }
+	}
+
+	// Inject the agent loop so CancelActiveTurn can call InterruptSession.
+	rt = rt.WithAgentLoop(al)
+
 	return rt
 }
 
@@ -6184,7 +6201,11 @@ func (al *AgentLoop) checkToolDedupInvariant(ts *turnState, filtered []tools.Too
 // time we return "deny"; if it has become allow/ask we still return "deny" to be
 // conservative (the LLM was not given this tool's definition, so executing it is
 // unsound).
-func (al *AgentLoop) resolveToolPolicyAtExec(ts *turnState, toolName string, filterTimePolicyMap map[string]string) string {
+func (al *AgentLoop) resolveToolPolicyAtExec(
+	ts *turnState,
+	toolName string,
+	filterTimePolicyMap map[string]string,
+) string {
 	filterTimePolicy, wasInFilterMap := filterTimePolicyMap[toolName]
 	if !wasInFilterMap {
 		// Tool was not included at filter time — treat as deny regardless of live policy.
@@ -6233,7 +6254,7 @@ func (al *AgentLoop) resolveSingleToolPolicy(ts *turnState, toolName string) str
 //
 // The previous default returned `nopPolicyApprover{}` which auto-approved
 // every ask call — including admin-flagged tools — with zero log and zero
-// audit. Test code that needs the auto-approve behaviour now installs
+// audit. Test code that needs the auto-approve behavior now installs
 // `testAutoApproveApprover{}` explicitly via SetToolApprover (build tag
 // `test`; see `tool_approver_testonly.go`).
 func (al *AgentLoop) loadToolApprover() PolicyApprover {
@@ -6281,4 +6302,3 @@ func (al *AgentLoop) emitPolicyDenyAudit(ts *turnState, toolName, resolvedPolicy
 		},
 	})
 }
-

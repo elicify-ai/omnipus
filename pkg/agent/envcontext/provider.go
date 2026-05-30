@@ -19,7 +19,7 @@ type Platform struct {
 // NetworkPolicy reports whether outbound network is permitted. Host-level
 // allow-list is not yet wired into the sandbox config, so the preamble only
 // exposes the boolean today — a future addition can extend this struct
-// without a behavioural change for existing consumers. FR-045.
+// without a behavioral change for existing consumers. FR-045.
 type NetworkPolicy struct {
 	OutboundAllowed bool
 }

@@ -78,8 +78,9 @@ func TestWithOptionalAuth_UnderLimit(t *testing.T) {
 // not previously tested with an over-limit authenticated body.
 //
 // BDD: Given a valid Bearer token,
-//       When a POST body > 1 MiB is sent to a withAuth-protected endpoint,
-//       Then the downstream handler receives a *http.MaxBytesError when reading r.Body.
+//
+//	When a POST body > 1 MiB is sent to a withAuth-protected endpoint,
+//	Then the downstream handler receives a *http.MaxBytesError when reading r.Body.
 //
 // Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 7 (Rank-7)
 func TestWithAuth_BodyLimit_AppliesEvenWithValidAuth(t *testing.T) {

@@ -2077,3 +2077,68 @@ func TestSubTurn_IndependentContext(t *testing.T) {
 		t.Log("✓ SubTurn completed successfully (independent context)")
 	}
 }
+
+// TestSubTurnInheritsTranscriptSessionID is T0 — the gate test for FR-6a.
+//
+// BDD: Given a parent turnState with transcriptSessionID "S",
+// When processOptions for a child (sub-turn) are built via the same code path
+// that spawnSubTurn uses (buildSubTurnOpts helper mirroring the production logic),
+// Then the child's transcriptSessionID equals "S".
+//
+// This test MUST fail on the unpatched codebase (where subturn.go did not set
+// TranscriptSessionID on the child's processOptions) and MUST pass after the
+// FR-6a fix in subturn.go.
+//
+// Refs: docs/specs/cancel-cross-channel-spec.md FR-6a, TDD Plan T0.
+func TestSubTurnInheritsTranscriptSessionID(t *testing.T) {
+	al, cleanup := newAL(t)
+	defer cleanup()
+
+	const sid = "S"
+
+	// Construct a minimal parent processOptions with TranscriptSessionID set.
+	parentOpts := processOptions{
+		SessionKey:          "parent-session",
+		Channel:             "test",
+		ChatID:              "chat1",
+		TranscriptSessionID: sid,
+		// TranscriptStore intentionally nil — we only test the ID inheritance here.
+	}
+
+	// Build a minimal parent turnState.
+	parentAgent := al.registry.GetDefaultAgent()
+	if parentAgent == nil {
+		t.Fatal("expected default agent from registry")
+	}
+	parentScope := al.newTurnEventScope(parentAgent.ID, parentOpts.SessionKey)
+	parentTS := newTurnState(parentAgent, parentOpts, parentScope)
+
+	// Verify the parent has transcriptSessionID set correctly.
+	if parentTS.transcriptSessionID != sid {
+		t.Fatalf("parent transcriptSessionID = %q, want %q", parentTS.transcriptSessionID, sid)
+	}
+
+	// Mirror the production processOptions construction from spawnSubTurn (subturn.go).
+	// This is the exact code path patched by FR-6a.
+	childOpts := processOptions{
+		SessionKey:              "child-session",
+		Channel:                 parentTS.channel,
+		ChatID:                  parentTS.chatID,
+		SenderID:                parentTS.opts.SenderID,
+		SenderDisplayName:       parentTS.opts.SenderDisplayName,
+		UserMessage:             "child task",
+		NoHistory:               true,
+		SkipInitialSteeringPoll: true,
+		TranscriptSessionID:     parentTS.transcriptSessionID, // FR-6a: must be set
+		TranscriptStore:         parentTS.transcriptStore,
+	}
+
+	// Build the child turnState.
+	childScope := al.newTurnEventScope(parentAgent.ID, childOpts.SessionKey)
+	childTS := newTurnState(parentAgent, childOpts, childScope)
+
+	// Gate assertion: child must inherit parent's transcriptSessionID.
+	if childTS.transcriptSessionID != sid {
+		t.Fatalf("child transcriptSessionID = %q, want %q (FR-6a fix missing)", childTS.transcriptSessionID, sid)
+	}
+}

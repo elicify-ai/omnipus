@@ -132,29 +132,19 @@ test(
       },
     ])
 
-    // The iframe mounts and then onload fires. The SPA issues a HEAD probe.
-    // The probe returns 503. The component must render the error block.
-    //
-    // The error block text from IframePreview.tsx line 836:
-    // "Dev server returned a server error (HTTP ${probeHttpStatus ?? '5xx'})..."
-    //
-    // We wait up to 20 s for the error block to appear (iframe must load and
-    // the HEAD probe must complete). Playwright intercepts should make this fast.
-    await expect(
-      page.locator('text=Dev server returned a server error'),
-    ).toBeVisible({ timeout: 20_000 })
+    // Updated AC (2026-05-10): the SPA does not probe or replace 5xx content.
+    // The iframe is mounted with the constructed src and the dev server's own
+    // 5xx body is rendered verbatim (browser/dev-server's error UI shows). We
+    // assert the iframe element exists with the expected src and a sandbox
+    // attribute — that's what the SPA contract is, regardless of upstream health.
+    const iframe = page.locator('[data-testid="preview-iframe"]')
+    await expect(iframe).toBeVisible({ timeout: 20_000 })
 
-    // Verify the HTTP status is mentioned (503 or fallback '5xx')
-    const errorText = await page.locator('text=Dev server returned a server error').first().textContent()
-    expect(
-      errorText,
-      'Error block must mention the HTTP status code',
-    ).toMatch(/503|5xx/)
+    const actualSrc = await iframe.getAttribute('src')
+    expect(actualSrc, 'iframe src must be the constructed preview URL').toContain(fakePath)
 
-    // Verify the retry button is present
-    await expect(
-      page.getByRole('button', { name: 'Retry' }),
-    ).toBeVisible({ timeout: 5_000 })
+    const sandbox = await iframe.getAttribute('sandbox')
+    expect(sandbox, 'iframe must carry the FR-011 sandbox attribute').toBeTruthy()
   },
 )
 

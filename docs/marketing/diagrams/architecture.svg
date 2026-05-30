@@ -1,0 +1,213 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 800" role="img" aria-labelledby="omnipus-arch-title omnipus-arch-desc">
+  <title id="omnipus-arch-title">Omnipus architecture</title>
+  <desc id="omnipus-arch-desc">Layered architecture: clients on top, gateway with main and preview ports, channel-to-agent routing, agent runtime with hooks/tools/policy/event-bus, four persistence stores, all wrapped by the Linux kernel sandbox, with external LLM and MCP services below.</desc>
+
+  <!-- Brand palette:
+       #0A0A0B Deep Space Black (bg)
+       #111113 surface-2
+       #1a1a1e surface-3 (subtle grid)
+       #2d3748 border-muted
+       #4a5568 text-muted
+       #E2E8F0 Liquid Silver (text)
+       #D4AF37 Forge Gold (accent)
+       #10B981 Emerald (security/success)
+       #3b82f6 Sapphire (data flow)
+  -->
+
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1a1a1e" stroke-width="1"/>
+    </pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4a5568"/>
+    </marker>
+    <marker id="arrow-gold" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#D4AF37"/>
+    </marker>
+  </defs>
+
+  <!-- Background + grid -->
+  <rect width="980" height="800" fill="#0A0A0B"/>
+  <rect width="980" height="800" fill="url(#grid)"/>
+
+  <!-- Title -->
+  <text x="490" y="32" font-family="'Outfit', 'Helvetica Neue', Arial, sans-serif"
+        font-size="22" font-weight="700" fill="#E2E8F0" text-anchor="middle">
+    Omnipus architecture
+  </text>
+  <text x="490" y="54" font-family="'Inter', 'Helvetica Neue', Arial, sans-serif"
+        font-size="12" fill="#4a5568" text-anchor="middle">
+    one Go binary · single sandboxed process · file-based storage
+  </text>
+
+  <!-- ============ LAYER 1: Clients (external) ============ -->
+  <g font-family="'Inter', 'Helvetica Neue', Arial, sans-serif" font-size="13" fill="#E2E8F0">
+    <rect x="60"  y="80" width="380" height="56" rx="6" fill="#111113" stroke="#2d3748"/>
+    <text x="250" y="102" text-anchor="middle" font-weight="600">Web UI · SPA</text>
+    <text x="250" y="120" text-anchor="middle" font-size="11" fill="#4a5568">
+      React 19 · Vite 6 · shadcn/ui · embedded via go:embed
+    </text>
+
+    <rect x="540" y="80" width="380" height="56" rx="6" fill="#111113" stroke="#2d3748"/>
+    <text x="730" y="102" text-anchor="middle" font-weight="600">15 chat channels</text>
+    <text x="730" y="120" text-anchor="middle" font-size="11" fill="#4a5568">
+      Telegram · Slack · Discord · WhatsApp · Matrix · …
+    </text>
+  </g>
+
+  <!-- Arrows: clients → gateway -->
+  <line x1="250" y1="136" x2="320" y2="170" stroke="#4a5568" stroke-width="1" marker-end="url(#arrow)"/>
+  <text x="200" y="160" font-family="'Inter', sans-serif" font-size="10" fill="#4a5568">HTTP · WS · SSE</text>
+
+  <line x1="730" y1="136" x2="660" y2="170" stroke="#4a5568" stroke-width="1" marker-end="url(#arrow)"/>
+  <text x="770" y="160" font-family="'Inter', sans-serif" font-size="10" fill="#4a5568">inbound msg</text>
+
+  <!-- ============ SANDBOX BOUNDARY (encloses everything below) ============ -->
+  <rect x="36" y="178" width="908" height="448" rx="10"
+        fill="none" stroke="#D4AF37" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="50" y="195" font-family="'Outfit', sans-serif" font-size="11" font-weight="700"
+        fill="#D4AF37" letter-spacing="0.6">
+    LINUX SANDBOX  ·  Landlock + seccomp + bind-port allow-list + SSRF guard
+  </text>
+
+  <!-- ============ LAYER 2: Gateway ============ -->
+  <g font-family="'Inter', sans-serif" font-size="12" fill="#E2E8F0">
+    <rect x="60" y="218" width="430" height="64" rx="6" fill="#111113" stroke="#2d3748"/>
+    <text x="275" y="240" text-anchor="middle" font-weight="600" font-size="13">Gateway :5000</text>
+    <text x="275" y="258" text-anchor="middle" font-size="11" fill="#4a5568">
+      Auth · CSRF · Rate limit · CORS · WS/SSE
+    </text>
+    <text x="275" y="274" text-anchor="middle" font-size="10" fill="#4a5568">
+      contract-first wire format (OpenAPI + AsyncAPI)
+    </text>
+
+    <rect x="510" y="218" width="410" height="64" rx="6" fill="#111113" stroke="#2d3748"/>
+    <text x="715" y="240" text-anchor="middle" font-weight="600" font-size="13">Gateway :5001 (preview)</text>
+    <text x="715" y="258" text-anchor="middle" font-size="11" fill="#4a5568">
+      Isolated origin · agent-generated HTML iframes
+    </text>
+    <text x="715" y="274" text-anchor="middle" font-size="10" fill="#4a5568">
+      tier-13 sandbox · bind-port allow-list enforced
+    </text>
+  </g>
+
+  <!-- Arrow gateway → routing -->
+  <line x1="275" y1="282" x2="275" y2="305" stroke="#4a5568" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- ============ LAYER 3: Routing ============ -->
+  <g font-family="'Inter', sans-serif" font-size="12" fill="#E2E8F0">
+    <rect x="60" y="310" width="860" height="46" rx="6" fill="#111113" stroke="#2d3748"/>
+    <text x="490" y="330" text-anchor="middle" font-weight="600">Channel-to-agent routing  ·  Session router  ·  Handoff</text>
+    <text x="490" y="348" text-anchor="middle" font-size="10" fill="#4a5568">
+      bindings: peer  ·  peer.parent  ·  guild  ·  team  ·  account  ·  channel  ·  default
+    </text>
+  </g>
+
+  <!-- Arrow routing → agent runtime -->
+  <line x1="490" y1="356" x2="490" y2="378" stroke="#4a5568" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- ============ LAYER 4: Agent Runtime ============ -->
+  <g font-family="'Inter', sans-serif" font-size="12" fill="#E2E8F0">
+    <rect x="60" y="382" width="860" height="106" rx="6" fill="#111113" stroke="#D4AF37" stroke-width="1.2"/>
+    <text x="490" y="402" text-anchor="middle" font-weight="700" font-size="13" fill="#D4AF37">
+      Agent runtime
+    </text>
+
+    <!-- 4 columns inside -->
+    <rect x="80"  y="412" width="190" height="64" rx="4" fill="#0A0A0B" stroke="#2d3748"/>
+    <text x="175" y="432" text-anchor="middle" font-weight="600" font-size="12">Agents</text>
+    <text x="175" y="450" text-anchor="middle" font-size="10" fill="#4a5568">5 core + custom</text>
+    <text x="175" y="466" text-anchor="middle" font-size="10" fill="#4a5568">Mia · Jim · Ava · Ray · Max</text>
+
+    <rect x="285" y="412" width="190" height="64" rx="4" fill="#0A0A0B" stroke="#2d3748"/>
+    <text x="380" y="432" text-anchor="middle" font-weight="600" font-size="12">Tools · Hooks</text>
+    <text x="380" y="450" text-anchor="middle" font-size="10" fill="#4a5568">builtins + system.* + MCP</text>
+    <text x="380" y="466" text-anchor="middle" font-size="10" fill="#4a5568">in-proc + subprocess hooks</text>
+
+    <rect x="490" y="412" width="190" height="64" rx="4" fill="#0A0A0B" stroke="#2d3748"/>
+    <text x="585" y="432" text-anchor="middle" font-weight="600" font-size="12">Policy engine</text>
+    <text x="585" y="450" text-anchor="middle" font-size="10" fill="#4a5568">allow · ask · deny</text>
+    <text x="585" y="466" text-anchor="middle" font-size="10" fill="#4a5568">per-agent · per-tool · approval</text>
+
+    <rect x="695" y="412" width="205" height="64" rx="4" fill="#0A0A0B" stroke="#2d3748"/>
+    <text x="797" y="432" text-anchor="middle" font-weight="600" font-size="12">Event bus</text>
+    <text x="797" y="450" text-anchor="middle" font-size="10" fill="#4a5568">24 EventKind values</text>
+    <text x="797" y="466" text-anchor="middle" font-size="10" fill="#4a5568">SPA · hooks · audit log</text>
+  </g>
+
+  <!-- Arrows agent runtime → persistence -->
+  <line x1="175" y1="488" x2="175" y2="510" stroke="#4a5568" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="380" y1="488" x2="380" y2="510" stroke="#4a5568" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="585" y1="488" x2="585" y2="510" stroke="#4a5568" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="797" y1="488" x2="797" y2="510" stroke="#4a5568" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- ============ LAYER 5: Persistence (file-based) ============ -->
+  <g font-family="'Inter', sans-serif" font-size="12" fill="#E2E8F0">
+    <rect x="80"  y="514" width="190" height="92" rx="6" fill="#111113" stroke="#10B981" stroke-width="1.2"/>
+    <text x="175" y="534" text-anchor="middle" font-weight="700" font-size="12" fill="#10B981">Memory</text>
+    <text x="175" y="552" text-anchor="middle" font-size="10" fill="#4a5568">MEMORY.md</text>
+    <text x="175" y="568" text-anchor="middle" font-size="10" fill="#4a5568">LAST_SESSION.md</text>
+    <text x="175" y="584" text-anchor="middle" font-size="10" fill="#4a5568">30d retros</text>
+    <text x="175" y="600" text-anchor="middle" font-size="9" fill="#4a5568" font-style="italic">+ idle auto-retro</text>
+
+    <rect x="285" y="514" width="190" height="92" rx="6" fill="#111113" stroke="#10B981" stroke-width="1.2"/>
+    <text x="380" y="534" text-anchor="middle" font-weight="700" font-size="12" fill="#10B981">Sessions</text>
+    <text x="380" y="552" text-anchor="middle" font-size="10" fill="#4a5568">day-partitioned JSONL</text>
+    <text x="380" y="568" text-anchor="middle" font-size="10" fill="#4a5568">5 entry types</text>
+    <text x="380" y="584" text-anchor="middle" font-size="10" fill="#4a5568">full tool call fidelity</text>
+    <text x="380" y="600" text-anchor="middle" font-size="9" fill="#4a5568" font-style="italic">replayable</text>
+
+    <rect x="490" y="514" width="190" height="92" rx="6" fill="#111113" stroke="#10B981" stroke-width="1.2"/>
+    <text x="585" y="534" text-anchor="middle" font-weight="700" font-size="12" fill="#10B981">Audit log</text>
+    <text x="585" y="552" text-anchor="middle" font-size="10" fill="#4a5568">HMAC chain</text>
+    <text x="585" y="568" text-anchor="middle" font-size="10" fill="#4a5568">2-layer redaction</text>
+    <text x="585" y="584" text-anchor="middle" font-size="10" fill="#4a5568">JSONL append-only</text>
+    <text x="585" y="600" text-anchor="middle" font-size="9" fill="#4a5568" font-style="italic">tamper-evident</text>
+
+    <rect x="695" y="514" width="205" height="92" rx="6" fill="#111113" stroke="#10B981" stroke-width="1.2"/>
+    <text x="797" y="534" text-anchor="middle" font-weight="700" font-size="12" fill="#10B981">Credential vault</text>
+    <text x="797" y="552" text-anchor="middle" font-size="10" fill="#4a5568">AES-256-GCM</text>
+    <text x="797" y="568" text-anchor="middle" font-size="10" fill="#4a5568">Argon2id KDF</text>
+    <text x="797" y="584" text-anchor="middle" font-size="10" fill="#4a5568">auto-gen master.key</text>
+    <text x="797" y="600" text-anchor="middle" font-size="9" fill="#4a5568" font-style="italic">5-mode unlock</text>
+  </g>
+
+  <!-- ============ EXTERNAL services (below sandbox boundary) ============ -->
+  <g font-family="'Inter', sans-serif" font-size="12" fill="#E2E8F0">
+    <text x="490" y="660" text-anchor="middle" font-size="11" font-weight="700" fill="#4a5568" letter-spacing="0.6">
+      EXTERNAL  ·  reached via SSRF-checked outbound HTTP
+    </text>
+
+    <rect x="60"  y="680" width="270" height="84" rx="6" fill="#111113" stroke="#2d3748"/>
+    <text x="195" y="704" text-anchor="middle" font-weight="600">LLM providers</text>
+    <text x="195" y="724" text-anchor="middle" font-size="11" fill="#4a5568">20+ compiled in</text>
+    <text x="195" y="744" text-anchor="middle" font-size="10" fill="#4a5568">OpenRouter · Anthropic · OpenAI ·</text>
+    <text x="195" y="756" text-anchor="middle" font-size="10" fill="#4a5568">Gemini · Groq · Ollama · …</text>
+
+    <rect x="355" y="680" width="270" height="84" rx="6" fill="#111113" stroke="#2d3748"/>
+    <text x="490" y="704" text-anchor="middle" font-weight="600">MCP servers</text>
+    <text x="490" y="724" text-anchor="middle" font-size="11" fill="#4a5568">registered at runtime</text>
+    <text x="490" y="744" text-anchor="middle" font-size="10" fill="#4a5568">stdio · HTTP · WebSocket</text>
+    <text x="490" y="756" text-anchor="middle" font-size="10" fill="#4a5568">namespaced tool registration</text>
+
+    <rect x="650" y="680" width="270" height="84" rx="6" fill="#111113" stroke="#2d3748"/>
+    <text x="785" y="704" text-anchor="middle" font-weight="600">ClawHub registry</text>
+    <text x="785" y="724" text-anchor="middle" font-size="11" fill="#4a5568">skill installs</text>
+    <text x="785" y="744" text-anchor="middle" font-size="10" fill="#4a5568">SKILL.md format · YAML frontmatter</text>
+    <text x="785" y="756" text-anchor="middle" font-size="10" fill="#4a5568">SHA-256 hash verification</text>
+  </g>
+
+  <!-- Arrows agent runtime → external -->
+  <line x1="195" y1="606" x2="195" y2="675" stroke="#4a5568" stroke-width="1"
+        stroke-dasharray="2 3" marker-end="url(#arrow)"/>
+  <line x1="490" y1="606" x2="490" y2="675" stroke="#4a5568" stroke-width="1"
+        stroke-dasharray="2 3" marker-end="url(#arrow)"/>
+  <line x1="785" y1="606" x2="785" y2="675" stroke="#4a5568" stroke-width="1"
+        stroke-dasharray="2 3" marker-end="url(#arrow)"/>
+
+  <!-- Footer note -->
+  <text x="490" y="788" font-family="'Inter', sans-serif" font-size="10"
+        fill="#4a5568" text-anchor="middle" font-style="italic">
+    no Postgres · no Redis · no Python or Node runtime · single static binary
+  </text>
+</svg>

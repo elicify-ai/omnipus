@@ -1,116 +1,126 @@
+# Omnipus Roadmap
 
-# 🦐 Omnipus Roadmap
+A single open-source Go binary today. The long-term plan also includes an Electron desktop wrapper and a hosted Cloud / SaaS variant, both sharing the same Go core. This roadmap tracks the Open Source release plan; the Desktop and Cloud variants will fork from a stable 1.0 release of the core.
 
-> **Vision**: To build the ultimate lightweight, secure, and fully autonomous AI Agent infrastructure.automate the mundane, unleash your creativity
-
----
-
-## 🚀 1. Core Optimization: Extreme Lightweight
-
-*Our defining characteristic. We fight software bloat to ensure Omnipus runs smoothly on the smallest embedded devices.*
-
-* [**Memory Footprint Reduction**](https://github.com/sipeed/omnipus/issues/346) 
-  * **Goal**: Run smoothly on 64MB RAM embedded boards (e.g., low-end RISC-V SBCs) with the core process consuming < 20MB.
-  * **Context**: RAM is expensive and scarce on edge devices. Memory optimization takes precedence over storage size.
-  * **Action**: Analyze memory growth between releases, remove redundant dependencies, and optimize data structures.
-
-
-## 🛡️ 2. Security Hardening: Defense in Depth
-
-*Paying off early technical debt. We invite security experts to help build a "Secure-by-Default" agent.*
-
-* **Input Defense & Permission Control**
-  * **Prompt Injection Defense**: Harden JSON extraction logic to prevent LLM manipulation.
-  * **Tool Abuse Prevention**: Strict parameter validation to ensure generated commands stay within safe boundaries.
-  * **SSRF Protection**: Built-in blocklists for network tools to prevent accessing internal IPs (LAN/Metadata services).
-
-
-* **Sandboxing & Isolation**
-  * **Filesystem Sandbox**: Restrict file R/W operations to specific directories only.
-  * **Context Isolation**: Prevent data leakage between different user sessions or channels.
-  * **Privacy Redaction**: Auto-redact sensitive info (API Keys, PII) from logs and standard outputs.
-
-
-* **Authentication & Secrets**
-  * **Crypto Upgrade**: Adopt modern algorithms like `ChaCha20-Poly1305` for secret storage.
-  * **OAuth 2.0 Flow**: Deprecate hardcoded API keys in the CLI; move to secure OAuth flows.
-
-
-
-## 🔌 3. Connectivity: Protocol-First Architecture
-
-*Connect every model, reach every platform.*
-
-* **Provider**
-  * [**Architecture Upgrade**](https://github.com/sipeed/omnipus/issues/283): Refactor from "Vendor-based" to "Protocol-based" classification (e.g., OpenAI-compatible, Ollama-compatible). *(Status: In progress by @Daming, ETA 5 days)*
-  * **Local Models**: Deep integration with **Ollama**, **vLLM**, **LM Studio**, and **Mistral** (local inference).
-  * **Online Models**: Continued support for frontier closed-source models.
-
-
-* **Channel**
-  * **IM Matrix**: QQ, WeChat (Work), DingTalk, Feishu (Lark), Telegram, Discord, WhatsApp, LINE, Slack, Email, KOOK, Signal, ...
-  * **Standards**: Support for the **OneBot** protocol.
-  * [**attachment**](https://github.com/sipeed/omnipus/issues/348): Native handling of images, audio, and video attachments.
-
-
-* **Skill Marketplace**
-  * [**Discovery skills**](https://github.com/sipeed/omnipus/issues/287): Implement `find_skill` to automatically discover and install skills from the [GitHub Skills Repo] or other registries.
-
-
-
-## 🧠 4. Advanced Capabilities: From Chatbot to Agentic AI
-
-*Beyond conversation—focusing on action and collaboration.*
-
-* **Operations**
-  * [**MCP Support**](https://github.com/sipeed/omnipus/issues/290): Native support for the **Model Context Protocol (MCP)**.
-  * [**Browser Automation**](https://github.com/sipeed/omnipus/issues/293): Headless browser control via CDP (Chrome DevTools Protocol) or ActionBook.
-  * [**Mobile Operation**](https://github.com/sipeed/omnipus/issues/292): Android device control (similar to BotDrop).
-
-
-* **Multi-Agent Collaboration**
-  * [**Basic Multi-Agent**](https://github.com/sipeed/omnipus/issues/294) implement
-  * [**Model Routing**](https://github.com/sipeed/omnipus/issues/295): "Smart Routing" — dispatch simple tasks to small/local models (fast/cheap) and complex tasks to SOTA models (smart).
-  * [**Swarm Mode**](https://github.com/sipeed/omnipus/issues/284): Collaboration between multiple Omnipus instances on the same network.
-  * [**AIEOS**](https://github.com/sipeed/omnipus/issues/296): Exploring AI-Native Operating System interaction paradigms.
-
-
-
-## 📚 5. Developer Experience (DevEx) & Documentation
-
-*Lowering the barrier to entry so anyone can deploy in minutes.*
-
-* [**QuickGuide (Zero-Config Start)**](https://github.com/sipeed/omnipus/issues/350)
-  * Interactive CLI Wizard: If launched without config, automatically detect the environment and guide the user through Token/Network setup step-by-step.
-
-
-* **Comprehensive Documentation**
-  * **Platform Guides**: Dedicated guides for Windows, macOS, Linux, and Android.
-  * **Step-by-Step Tutorials**: "Babysitter-level" guides for configuring Providers and Channels.
-  * **AI-Assisted Docs**: Using AI to auto-generate API references and code comments (with human verification to prevent hallucinations).
-
-
-
-## 🤖 6. Engineering: AI-Powered Open Source
-
-*Born from Vibe Coding, we continue to use AI to accelerate development.*
-
-* **AI-Enhanced CI/CD**
-  * Integrate AI for automated Code Review, Linting, and PR Labeling.
-  * **Bot Noise Reduction**: Optimize bot interactions to keep PR timelines clean.
-  * **Issue Triage**: AI agents to analyze incoming issues and suggest preliminary fixes.
-
-
-
-## 🎨 7. Brand & Community
-
-* [**Logo Design**](https://github.com/sipeed/omnipus/issues/297): We are looking for a **Mantis Shrimp (Stomatopoda)** logo design!
-  * *Concept*: Needs to reflect "Small but Mighty" and "Lightning Fast Strikes."
-
-
+<img src="docs/marketing/diagrams/roadmap.svg" alt="Omnipus roadmap timeline: v0.1 (stabilize, complete), v0.2 (pentest hardening, complete), v0.3/1.0 (Rooms redesign, design complete + implementation pending), post-1.0 (Desktop variant + Cloud/SaaS variant)" width="960">
 
 ---
 
-### 🤝 Call for Contributions
+## Where we are today
 
-We welcome community contributions to any item on this roadmap! Please comment on the relevant Issue or submit a PR. Let's build the best Edge AI Agent together!
+| Release | Status | Headline |
+|---|---|---|
+| **v0.1** | ✅ Complete on `feature/iframe-preview-tier13` | Stabilized branch; iframe preview + kernel bind-port allow-list + sandbox-aware exec + `web_serve` unification all shipped |
+| **v0.2** | ✅ Complete ([#155](https://github.com/elicify-ai/omnipus/issues/155) closed 2026-05-04) | Pentest quick wins: HMAC-chained audit log, default-deny internal-CIDR egress, per-agent memory rate limits, shell-guard hardening, master.key path guard, env-var allowlist |
+| **v0.3 / 1.0** | 🟡 Design complete; implementation pending ([#156](https://github.com/elicify-ai/omnipus/issues/156)) | "Rooms" redesign — memory + projects + tasks + sandbox topology rebuilt around private agent rooms and shared project rooms |
+| **Post-1.0** | 📋 Planned | Desktop variant (Electron wrapper), Cloud / SaaS variant (hosted with team features) |
+
+---
+
+## v0.1 — Stabilize the gateway and ship a real binary ✅
+
+**Branch:** `feature/iframe-preview-tier13` (260+ commits ahead of `main`)
+
+Everything in v0.1 is on the branch and tested. Highlights:
+
+- **`web_serve` tool unification** — single HTTP-serve implementation across preview + Tier-1/3 workspace tools
+- **Kernel-enforced bind-port allow-list** — Landlock NET_BIND_TCP rules limit the gateway to its configured ports
+- **Sandbox-aware `exec`** — `workspace.shell` passes through the active sandbox context
+- **Iframe preview (tier-13)** — second listener on `gateway.preview_port` (default 5001) serves agent-generated HTML on an isolated origin, with `Content-Security-Policy` + `frame-ancestors` headers built from `gateway.public_url` / `gateway.preview_origin`
+- **Multi-active sessions** — ChatGPT-style multi-session model with `session_id`-keyed routing
+- **Vision support** — image media passed to LLM tool results, with retry-without-image on rejection
+- **Two-stage cancel system** — graceful → hard → detached, with `/cancel` registered across 12 channels and a CLI double-Escape shortcut
+- **Auto-Chromium install** — browser tools provision their own Chromium on first use
+- **Contract-first wire formats** — OpenAPI + AsyncAPI as source of truth, generated Go + TS types both sides, runtime Zod validation at SPA edge
+- **3-binary release pipeline** — Linux amd64 + arm64 + macOS arm64; `install.sh` + Docker (GHCR) + GitHub Releases
+- **CLI onboarding wizard** — `omnipus onboard` is now interactive (was a print-only stub)
+- **Backlog burn-down** — 12 GitHub issues closed in May 2026, including 7 with code-cited regression tests (#159–#165) and 5 verified-fixed-on-branch (#39 moot, #57, #78, #109, #122)
+
+**Quality gates on every PR:** `typecheck`, `wire-types-lint`, `verify-contracts`, `golangci-lint`, `govulncheck`, `go test ./...`, `vitest`, `playwright`, `perf-smoke`, `security`. All green.
+
+---
+
+## v0.2 — Security hardening (pentest quick wins) ✅
+
+**Issue:** [#155](https://github.com/elicify-ai/omnipus/issues/155) — closed 2026-05-04
+
+Shipped on `main` as part of `#157` (`feat(v0.1+v0.2): iframe preview, web_serve unification, sandbox hardening, audit subsystem`). Every item from the original list landed:
+
+| Item | Status | Where |
+|---|---|---|
+| Env-var allowlist switch | ✅ | `pkg/sandbox/hardened_exec.go::sensitiveEnvKeys` |
+| `master.key` permission verification (0600 + path-guard) | ✅ | secrets-subtree path-guard for `master.key` + `credentials.json` |
+| Shell-guard hardening (whitespace fork-bomb regex + RLIMIT_NPROC) | ✅ | `dc2d0f2` |
+| Internal-CIDR egress blocking | ✅ | default-deny for RFC-1918 + link-local on sandboxed children |
+| HMAC chain on audit log | ✅ | `83193e2` — tamper-evident, append-only JSONL |
+| Per-agent + per-IP rate limit on memory writes | ✅ | `a7da565` — `MemoryRateLimiter` |
+| 14-reviewer security review findings | ✅ | `ba8ec56` (CRIT-1, CRIT-2, B1, H1, H2, test gap) |
+
+Items that **required architectural change** (process isolation, capability-based RBAC) were deferred to v0.3 per the original plan and now form part of the Rooms scope.
+
+---
+
+## v0.3 / 1.0 — "Rooms" redesign 🟡
+
+**Issue:** [#156](https://github.com/elicify-ai/omnipus/issues/156) — design complete, implementation not started
+
+Fresh-build. **No backward compatibility guarantee** with v0.1/v0.2 storage layouts. The five locked design documents in `docs/design/` are the implementation spec:
+
+| Design doc | What changes |
+|---|---|
+| [`sandbox-redesign-2026-05.md`](docs/design/sandbox-redesign-2026-05.md) | Two-room workspace topology — **private agent rooms** under each agent's workspace, **shared project rooms** under `.omnipus/projects/`, each room being its own sandbox boundary |
+| [`memory-redesign-2026-05.md`](docs/design/memory-redesign-2026-05.md) | 4-tier memory (sessions / memories / learnings / last-session.md), three tools (`remember` / `recall` / `retrospective`) — **rename `recall_memory` → `recall`** — Dreamcatcher consolidation pass that promotes per-session retros to durable memories, bleve + JSONL + MinHash for similarity, no embeddings |
+| [`tasks-redesign-2026-05.md`](docs/design/tasks-redesign-2026-05.md) | Tasks scoped per-room, cascade-delete with project, reassignment audit trail, replaces today's flat task list |
+| [`projects-ui-2026-05.md`](docs/design/projects-ui-2026-05.md) | Three SPA surfaces: session creation modal (project picker), Command Center pivoted to rooms, session history with project grouping |
+| [`settings-notifications-2026-05.md`](docs/design/settings-notifications-2026-05.md) | Memory and Dreamcatcher settings tabs, tier-based retention notifications |
+
+When v0.3 ships, the version cut is **1.0** — the rooms redesign is the architectural foundation we want to commit to long-term.
+
+---
+
+## Post-1.0 — Variants and ecosystem 📋
+
+Long-term, the Go core ships as three product variants:
+
+- **Omnipus Open Source** (this repo) — single Go binary with embedded SPA. MIT, community-focused, no telemetry. Always free.
+- **Omnipus Desktop** — Electron wrapper around the same binary, with native menus, auto-update, and a polished installer for non-technical users. Free.
+- **Omnipus Cloud / SaaS** — hosted variant with team features (multi-user organisations, billing, managed infrastructure, SSO). Commercial.
+
+Variants share the Go core, the `@omnipus/ui` React components, and the same agent runtime. They differ only in distribution and the team-features layer. **None of these are in active development today** — the focus is shipping a strong 1.0 of the open-source core first.
+
+---
+
+## Continuous workstreams
+
+Some work doesn't fit a release box and runs in parallel:
+
+- **Plugin system ([#151](https://github.com/elicify-ai/omnipus/issues/151))** — unified plugin model for agents, tools, channels, and skills. Currently scoping; channel-installer prototype exists in an unpushed branch
+- **Channel parity** — `/cancel` registration on remaining channels, signature verification audit ([#162](https://github.com/elicify-ai/omnipus/issues/162) closed), ongoing per-platform polish
+- **Skills ecosystem** — ClawHub registry + progressive skill disclosure ([#152](https://github.com/elicify-ai/omnipus/issues/152) pending), `omnipus doctor` warning for `skill_trust=allow_all` ([#99](https://github.com/elicify-ai/omnipus/issues/99) pending)
+- **Web search providers** — currently 7 (Perplexity → Brave → SearXNG → Tavily → DuckDuckGo → Baidu → GLM); additional providers via [#47](https://github.com/elicify-ai/omnipus/issues/47)
+- **Documentation** — the README is marketing-first; `docs/` is operator-friendly; contributor artifacts (BRD, ADRs, specs, future designs) are grouped under [docs/README.md#for-contributors](docs/README.md#for-contributors)
+
+---
+
+## Routing new work
+
+| Work type | Target release |
+|---|---|
+| Completing the open v0.1 polish (this branch) | v0.1 release-candidate |
+| Pentest finding that needs structural change | v0.3 (Rooms scope) |
+| Pentest finding that doesn't need structural change | Hotfix line, backport to v0.1 |
+| Memory / projects / tasks / sandbox topology | v0.3 |
+| Plugin system | Continuous — track in [#151](https://github.com/elicify-ai/omnipus/issues/151) |
+| Other feature | Flag the scope question explicitly before starting |
+
+---
+
+## What is not on this roadmap
+
+The following items are **not** current priorities and were explicitly removed from upstream lineage:
+
+- Edge AI / sub-64MB embedded boards
+- Android device control
+- AI-Native OS interaction paradigms
+
+These may be reconsidered after 1.0 ships.

@@ -1,0 +1,49 @@
+title: AgentToolEntry
+description: >
+  Per-tool entry returned by GET /api/v1/agents/{id}/tools (FR-086, MAJ-008).
+  Exposes both the configured policy and the effective (post-fence) policy so
+  the SPA can display policy downgrades.
+type: object
+required:
+  - name
+  - configured_policy
+  - effective_policy
+  - fence_applied
+  - requires_admin_ask
+properties:
+  name:
+    type: string
+    description: Canonical tool name.
+    example: workspace.shell
+  configured_policy:
+    type: string
+    description: >
+      The policy as written in the agent's config (before fence application).
+    enum:
+      - allow
+      - ask
+      - deny
+    example: allow
+  effective_policy:
+    type: string
+    description: >
+      The policy actually enforced at LLM-call time after fence and global
+      policy overrides are applied.
+    enum:
+      - allow
+      - ask
+      - deny
+    example: ask
+  fence_applied:
+    type: boolean
+    description: >
+      True when the tool requires admin approval (RequiresAdminAsk=true),
+      the agent type is "custom", and the configured policy was "allow"
+      but was downgraded to "ask" by the admin-ask fence (FR-061).
+    example: true
+  requires_admin_ask:
+    type: boolean
+    description: >
+      True when the tool's RequiresAdminAsk() returns true — the tool
+      always needs an admin to approve its use.
+    example: true

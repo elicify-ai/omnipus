@@ -1,12 +1,10 @@
-//go:build !cgo
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
 // Package agent — tool-policy resolution helpers.
 //
-// resolveToolPolicy centralises the strictest-wins merge of:
+// resolveToolPolicy centralizes the strictest-wins merge of:
 //   (a) the global sandbox tool_policies + default_tool_policy from config.Config, and
 //   (b) the per-agent builtin tool policies from config.AgentConfig.Tools.
 //

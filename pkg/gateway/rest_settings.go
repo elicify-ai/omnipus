@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 )
 
@@ -124,12 +125,9 @@ func (a *restAPI) listCredentials(w http.ResponseWriter) {
 
 // setCredential adds or updates an encrypted credential.
 func (a *restAPI) setCredential(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Key   string `json:"key"`
-		Value string `json:"value"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var req gen.CredentialSetRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "CredentialSetRequest", &req, validateEnabled) {
 		return
 	}
 	if req.Key == "" {
@@ -219,10 +217,10 @@ func (a *restAPI) HandleCreateBackup(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not stat backup: %v", err))
 		return
 	}
-	jsonOK(w, map[string]any{
-		"path":       destPath,
-		"size_bytes": info.Size(),
-		"created_at": info.ModTime().UTC().Format(time.RFC3339),
+	jsonOK(w, gen.BackupCreateResponse{
+		Path:      destPath,
+		SizeBytes: info.Size(),
+		CreatedAt: info.ModTime().UTC(),
 	})
 }
 
@@ -320,7 +318,7 @@ func (a *restAPI) HandleListBackups(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list backups: %v", err))
 		return
 	}
-	type backupEntry struct {
+	type backupEntry struct { // not-wire-format: response-only local type used in jsonOK; oapi-codegen inlines the shape; no gen.BackupEntry Go type exists
 		Filename  string `json:"filename"`
 		SizeBytes int64  `json:"size_bytes"`
 		CreatedAt string `json:"created_at"`
@@ -351,11 +349,9 @@ func (a *restAPI) HandleRestore(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	var req struct {
-		Filename string `json:"filename"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var req gen.RestoreBackupRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "RestoreBackupRequest", &req, validateEnabled) {
 		return
 	}
 	if req.Filename == "" {
@@ -504,24 +500,24 @@ func (a *restAPI) HandleAbout(w http.ResponseWriter, r *http.Request) {
 	// strict embedding control (T-04) is degraded. The SPA can show a banner.
 	mainOrigin := resolveMainOrigin(cfg)
 	frameAncestorsFallback := mainOrigin == ""
-	resp := map[string]any{
-		"version":        Version,
-		"go_version":     runtime.Version(),
-		"os":             runtime.GOOS,
-		"arch":           runtime.GOARCH,
-		"uptime":         uptime.String(),
-		"uptime_seconds": int(uptime.Seconds()),
-		"pid":            os.Getpid(),
+	resp := gen.AboutResponse{
+		Version:       Version,
+		GoVersion:     runtime.Version(),
+		Os:            runtime.GOOS,
+		Arch:          runtime.GOARCH,
+		Uptime:        uptime.String(),
+		UptimeSeconds: int(uptime.Seconds()),
+		Pid:           os.Getpid(),
 		// FR-009: preview listener fields for SPA iframe URL construction.
-		"preview_port":             cfg.Gateway.PreviewPort,
-		"preview_listener_enabled": cfg.Gateway.IsPreviewListenerEnabled(),
-		"warmup_timeout_seconds":   cfg.Tools.RunInWorkspace.WarmupTimeoutSeconds,
-		// F-8: signals to the SPA that frame-ancestors is '*' (degraded T-04 defence).
-		"frame_ancestors_fallback": frameAncestorsFallback,
+		PreviewPort:            int(cfg.Gateway.PreviewPort),
+		PreviewListenerEnabled: cfg.Gateway.IsPreviewListenerEnabled(),
+		WarmupTimeoutSeconds:   int(cfg.Tools.RunInWorkspace.WarmupTimeoutSeconds),
+		// F-8: signals to the SPA that frame-ancestors is '*' (degraded T-04 defense).
+		FrameAncestorsFallback: frameAncestorsFallback,
 	}
 	// preview_origin is optional — only include when the operator set it.
 	if cfg.Gateway.PreviewOrigin != "" {
-		resp["preview_origin"] = cfg.Gateway.PreviewOrigin
+		resp.PreviewOrigin = &cfg.Gateway.PreviewOrigin
 	}
 	jsonOK(w, resp)
 }

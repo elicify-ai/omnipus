@@ -36,6 +36,14 @@ type Server struct {
 	//
 	// B1.2(f): wired by gateway boot to a closure over agentLoop.AuditLogger().
 	auditLoggerAvailableFn func() bool
+
+	// auditLoggerConfiguredFn, when non-nil, reports whether the operator
+	// asked for audit logging at all (cfg.Sandbox.AuditLog). When false,
+	// the audit logger is *deliberately* off and /health must not flag
+	// audit_degraded=true just because no logger exists. When true and the
+	// logger is unavailable, that IS degraded (operator wanted audit, it's
+	// broken).
+	auditLoggerConfiguredFn func() bool
 }
 
 type Check struct {
@@ -166,6 +174,16 @@ func (s *Server) SetAuditLoggerAvailableFunc(fn func() bool) {
 	s.auditLoggerAvailableFn = fn
 }
 
+// SetAuditLoggerConfiguredFunc sets the closure /health calls to determine
+// whether the operator asked for audit at all (cfg.Sandbox.AuditLog).
+// When this returns false, audit_degraded stays false even though the
+// logger is unavailable — that's the deliberate-off case, not a degradation.
+func (s *Server) SetAuditLoggerConfiguredFunc(fn func() bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.auditLoggerConfiguredFn = fn
+}
+
 func (s *Server) reloadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Content-Type", "application/json")
@@ -202,6 +220,7 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	degradedFn := s.degradedFn
 	sandboxInfoFn := s.sandboxInfoFn
 	auditAvailFn := s.auditLoggerAvailableFn
+	auditConfiguredFn := s.auditLoggerConfiguredFn
 	s.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -228,11 +247,19 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	skipped := audit.SnapshotSkipped()
-	// H3-BK: treat "unknown" as degraded — we cannot positively confirm
-	// audit is working, so the boolean must reflect that uncertainty.
-	// The "unknown" string survives in the response field for diagnostic
-	// clarity; only the boolean changes.
-	auditDegraded := auditLoggerStatus != "ok" || skipped.Total > 0
+	// auditDegraded distinguishes three states:
+	//   audit_logger=ok            → not degraded
+	//   audit_logger=unavailable AND operator asked for audit (cfg.Sandbox.AuditLog=true) → degraded (broken)
+	//   audit_logger=unavailable AND operator did NOT ask for audit → NOT degraded (deliberately off)
+	//   skipped.Total > 0          → degraded (writes are being dropped)
+	//   audit_logger=unknown (no configured-fn wired) → degraded (cannot confirm)
+	auditConfigured := auditConfiguredFn != nil && auditConfiguredFn()
+	auditDegraded := skipped.Total > 0
+	if auditLoggerStatus == "unknown" {
+		auditDegraded = true
+	} else if auditLoggerStatus == "unavailable" && auditConfigured {
+		auditDegraded = true
+	}
 
 	if degradedFn != nil {
 		if isDegraded, reason := degradedFn(); isDegraded {

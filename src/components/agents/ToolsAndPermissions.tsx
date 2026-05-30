@@ -38,7 +38,7 @@ import { Button } from '@/components/ui/button'
 
 interface ToolsAndPermissionsProps {
   agentId: string | null
-  agentType: 'core' | 'custom'
+  agentType: 'core' | 'custom' | 'system'
   tools: AgentToolsCfg
   onChange: (tools: AgentToolsCfg) => void
 }

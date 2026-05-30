@@ -837,7 +837,7 @@ func (ms *MemoryStore) GetMemoryContext() string {
 	return sb.String()
 }
 
-// buildFullMemoryText serialises all entries to a human-readable block (newest-first).
+// buildFullMemoryText serializes all entries to a human-readable block (newest-first).
 // Entries are separated by a blank line.
 func buildFullMemoryText(entries []LongTermEntry) string {
 	var sb strings.Builder

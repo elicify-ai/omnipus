@@ -240,9 +240,9 @@ func (t *echoTextTool) Parameters() map[string]any {
 	}
 }
 
-func (t *echoTextTool) Scope() tools.ToolScope            { return tools.ScopeGeneral }
-func (t *echoTextTool) RequiresAdminAsk() bool             { return false }
-func (t *echoTextTool) Category() tools.ToolCategory       { return tools.CategoryCore }
+func (t *echoTextTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (t *echoTextTool) RequiresAdminAsk() bool       { return false }
+func (t *echoTextTool) Category() tools.ToolCategory { return tools.CategoryCore }
 
 func (t *echoTextTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	text, _ := args["text"].(string)

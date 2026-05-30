@@ -1,0 +1,25 @@
+title: BackupEntry
+description: >
+  A single backup archive entry returned by GET /api/v1/backups.
+type: object
+required:
+  - filename
+  - size_bytes
+  - created_at
+additionalProperties: false
+properties:
+  filename:
+    type: string
+    description: Backup archive filename (e.g. "omnipus-backup-2026-05-16.tar.gz").
+    example: "omnipus-backup-2026-05-16T10-00-00Z.tar.gz"
+  size_bytes:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Archive size in bytes.
+    example: 1048576
+  created_at:
+    type: string
+    format: date-time
+    description: RFC3339 timestamp when the backup was created.
+    example: "2026-05-16T10:00:00Z"

@@ -1,0 +1,175 @@
+type: object
+description: >
+  An agent configuration object as returned by GET /agents and GET /agents/{id}.
+  Maps to the Go agentResponse struct and the TypeScript Agent interface in src/lib/api.ts.
+  Core (locked) agents suppress soul/instructions in list responses and forbid
+  identity mutations via PUT.
+required:
+  - id
+  - name
+  - type
+  - locked
+  - status
+  - soul
+  - heartbeat
+  - instructions
+  - timeout_seconds
+  - max_tool_iterations
+  - steering_mode
+  - tool_feedback
+  - heartbeat_enabled
+  - heartbeat_interval
+properties:
+  id:
+    type: string
+    description: Unique agent identifier. UUID for custom agents; well-known strings for core agents (e.g. "jim").
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  name:
+    type: string
+    minLength: 1
+    maxLength: 100
+    description: Human-readable display name.
+    example: "Jim"
+  type:
+    type: string
+    enum:
+      - core
+      - custom
+      - system
+    description: >
+      Agent classification. "core" = compiled-in identity locked agent.
+      "custom" = user-defined agent. "system" = legacy operator-supplied entry
+      (config.AgentTypeSystem survives in the API contract for backwards compatibility
+      but SeedConfig does NOT create these — they only appear if config.json contains one).
+    example: "core"
+  locked:
+    type: boolean
+    description: >
+      When true, name, description, soul, heartbeat, and instructions are immutable
+      via the PUT /agents/{id} endpoint. Core agents are always locked.
+    example: false
+  color:
+    type: string
+    pattern: '^#[0-9A-Fa-f]{6}$'
+    description: Hex color code for agent avatar display (e.g. "#D4AF37").
+    example: "#D4AF37"
+  icon:
+    type: string
+    description: Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
+    example: "Robot"
+  model:
+    type: string
+    maxLength: 256
+    description: >
+      Model name string used for LLM calls (resolved from defaults when not
+      explicitly set on the agent). May be "provider/model" format for OpenRouter.
+    example: "claude-sonnet-4-6"
+  description:
+    type: string
+    description: Short description of the agent's purpose.
+    example: "General-purpose coding assistant"
+  status:
+    type: string
+    enum:
+      - active
+      - idle
+      - draft
+      - error
+    description: >
+      Current runtime status. "active" = agent is processing a turn.
+      "idle" = ready and waiting. "draft" = SOUL.md is empty (no prompt written yet).
+      "error" is a frontend-added possibility not emitted by the backend today.
+    example: "idle"
+  soul:
+    type: string
+    description: >
+      Contents of SOUL.md — the agent's system prompt. Empty string for locked
+      core agents (prompt is compiled in, not exposed via API). Empty string for
+      draft agents (no SOUL.md written yet). Always present (never null).
+    example: "You are Jim, a senior software engineer..."
+  heartbeat:
+    type: string
+    description: >
+      Contents of HEARTBEAT.md — periodic background instructions.
+      Empty string when not set. Always present on detail responses (never null).
+    example: "Every hour, check for new tasks in the queue."
+  instructions:
+    type: string
+    description: >
+      Body of AGENT.md (everything after the closing frontmatter delimiter) —
+      additional runtime instructions. Empty string when not set.
+      Always present on detail responses (never null).
+    example: "Focus on TypeScript and Go projects only."
+  warning:
+    type: string
+    description: Non-fatal advisory (e.g. config reload failed after create/update).
+    example: "config reload failed: ..."
+  timeout_seconds:
+    type: integer
+    minimum: 0
+    description: >
+      Maximum seconds a single agent turn may run before being interrupted.
+      Inherited from agents.defaults.timeout_seconds when not overridden per-agent.
+    example: 300
+  max_tool_iterations:
+    type: integer
+    minimum: 0
+    description: >
+      Maximum number of tool calls allowed per turn.
+      Inherited from agents.defaults.max_tool_iterations when not overridden.
+    example: 50
+  steering_mode:
+    type: string
+    description: >
+      Tool execution steering strategy. "one-at-a-time" = approve each tool call
+      individually. Other values are provider-specific. Defaults to "one-at-a-time".
+    example: "one-at-a-time"
+  tool_feedback:
+    type: boolean
+    description: >
+      When true, tool results are echoed back to the LLM as user messages
+      (tool feedback loop enabled).
+    example: true
+  heartbeat_enabled:
+    type: boolean
+    description: Whether the HEARTBEAT.md periodic instruction loop is active for this agent.
+    example: false
+  heartbeat_interval:
+    type: integer
+    minimum: 0
+    description: Interval in seconds between heartbeat passes.
+    example: 3600
+  tools_cfg:
+    $ref: './AgentToolsCfg.yaml'
+  sandbox_profile:
+    type: string
+    enum:
+      - workspace
+      - workspace+net
+      - host
+      - off
+    description: >
+      Kernel sandbox profile applied to this agent's tool calls.
+      "workspace" = Landlock to workspace dir only.
+      "workspace+net" = Landlock + network access.
+      "host" = read-only host filesystem access.
+      "off" = god-mode (requires --allow-god-mode at gateway boot).
+    example: "workspace"
+  shell_policy:
+    $ref: './AgentShellPolicy.yaml'
+  fallback_models:
+    type: array
+    maxItems: 10
+    items:
+      type: string
+    description: >
+      Ordered list of fallback model IDs tried when the primary model returns an
+      error. Each entry may be a bare model name or "provider/model" format.
+    example:
+      - "anthropic/claude-3.5-haiku"
+  model_params:
+    $ref: './AgentModelParams.yaml'
+  rate_limits:
+    $ref: './AgentRateLimits.yaml'
+  stats:
+    $ref: './AgentStats.yaml'

@@ -26,6 +26,7 @@
 // ExecuteWithContext (e.g. a tool that's invoked directly, or a parallel
 // dispatcher), the corresponding test row will not be wired up and the
 // gap is documented as a missed coverage row in the registry catalog.
+
 package tools
 
 import (
@@ -63,14 +64,16 @@ type auditableToolFixture struct {
 //
 // Documents threat C7 from the insider-pentest report.
 //
-// Note: We do NOT walk every builtin in the static catalogue. Several
+// Note: We do NOT walk every builtin in the static catalog. Several
 // require external dependencies (skills.RegistryManager, taskstore.TaskStore,
 // SubagentManager, MCPManager) whose construction is out of scope here.
 // The chokepoint guarantee is at the registry level — if even one tool
 // from each construction style is covered, the chokepoint property holds.
 // New tools added to the registry inherit coverage automatically.
 func TestRedteam_PerToolAuditCoverage(t *testing.T) {
-	t.Logf("documents C7 (audit blind tool) from insider-pentest report; current control is registry chokepoint at ExecuteWithContext")
+	t.Logf(
+		"documents C7 (audit blind tool) from insider-pentest report; current control is registry chokepoint at ExecuteWithContext",
+	)
 
 	// Build a curated table of builtins whose constructors don't require
 	// external services. These are the FS-touching tools that an attacker

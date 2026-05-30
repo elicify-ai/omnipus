@@ -27,6 +27,7 @@ func TestWebchatChannel_SendSkipsWhenStreamed(t *testing.T) {
 	t.Helper()
 
 	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
 	wc := makeTestConn()
 
 	chatID := "chat-streamed"
@@ -57,4 +58,74 @@ func TestWebchatChannel_SendSkipsWhenStreamed(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		// Correct — sendCh must remain empty.
 	}
+}
+
+// TestWebchatChannel_SendBroadcastsToSecondAttachedTab verifies that an outbound
+// response is delivered to every connection bound to the same session, not just
+// the originating chatID. Underpins the attach-during-active-turn E2E test
+// (#133): when a second browser tab attaches to a session mid-turn, the final
+// token/done frames must reach it via session-id matching even though the
+// turn was triggered by the first tab's chatID.
+func TestWebchatChannel_SendBroadcastsToSecondAttachedTab(t *testing.T) {
+	t.Helper()
+
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
+	originConn := makeTestConn()
+	attachedConn := makeTestConn()
+
+	const (
+		originChat = "chat-origin"
+		secondChat = "chat-second"
+		sessionID  = "session-shared"
+	)
+
+	handler.mu.Lock()
+	handler.sessions[originChat] = originConn
+	handler.sessions[secondChat] = attachedConn
+	handler.sessionIDs[originChat] = sessionID
+	handler.sessionIDs[secondChat] = sessionID
+	handler.mu.Unlock()
+
+	ch := newWebchatChannel(handler)
+	err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  originChat,
+		Content: "shared response body",
+	})
+	assert.NoError(t, err)
+
+	// Both connections must receive token + done frames.
+	for _, conn := range []*wsConn{originConn, attachedConn} {
+		gotToken := false
+		gotDone := false
+		for i := 0; i < 2; i++ {
+			select {
+			case frame := <-conn.sendCh:
+				switch {
+				case bytesContains(frame, "\"type\":\"token\""):
+					gotToken = true
+				case bytesContains(frame, "\"type\":\"done\""):
+					gotDone = true
+				}
+			case <-time.After(100 * time.Millisecond):
+				t.Fatalf("connection did not receive expected frame %d", i)
+			}
+		}
+		assert.True(t, gotToken, "each session-attached connection must receive the token frame")
+		assert.True(t, gotDone, "each session-attached connection must receive the done frame")
+	}
+}
+
+func bytesContains(haystack []byte, needle string) bool {
+	return len(haystack) >= len(needle) && stringIndex(string(haystack), needle) >= 0
+}
+
+func stringIndex(haystack, needle string) int {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return i
+		}
+	}
+	return -1
 }

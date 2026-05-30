@@ -397,14 +397,14 @@ func TestHandleCompleteOnboarding_PersistsAdmin(t *testing.T) {
 // string as its model_name (the alias that agents.defaults.model_name
 // references), not the provider ID. Otherwise the Agent Profile UI shows
 // a generic name (e.g. "openrouter") instead of the model the user picked
-// (e.g. "z-ai/glm-5-turbo"), and subsequent onboardings with a different
+// (e.g. "z-ai/glm-5v-turbo"), and subsequent onboardings with a different
 // model from the same provider would stomp on the existing entry.
 //
 // BDD: Given a fresh install,
-// When POST /api/v1/onboarding/complete with {provider.id=openrouter, provider.model=z-ai/glm-5-turbo},
-// Then config.providers contains an entry with model_name="z-ai/glm-5-turbo"
+// When POST /api/v1/onboarding/complete with {provider.id=openrouter, provider.model=z-ai/glm-5v-turbo},
+// Then config.providers contains an entry with model_name="z-ai/glm-5v-turbo"
 //
-//	AND config.agents.defaults.model_name == "z-ai/glm-5-turbo"
+//	AND config.agents.defaults.model_name == "z-ai/glm-5v-turbo"
 //	AND the provider entry keeps provider="openrouter" for API routing.
 func TestHandleCompleteOnboarding_WritesActualModelAsAlias(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -424,7 +424,7 @@ func TestHandleCompleteOnboarding_WritesActualModelAsAlias(t *testing.T) {
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
-	body := `{"provider":{"id":"openrouter","api_key":"sk-or-v1-test","model":"z-ai/glm-5-turbo"},` +
+	body := `{"provider":{"id":"openrouter","api_key":"sk-or-v1-test","model":"z-ai/glm-5v-turbo"},` +
 		`"admin":{"username":"admin","password":"secret123"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -442,7 +442,7 @@ func TestHandleCompleteOnboarding_WritesActualModelAsAlias(t *testing.T) {
 	require.True(t, ok)
 	defaults, ok := agents["defaults"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, "z-ai/glm-5-turbo", defaults["model_name"],
+	assert.Equal(t, "z-ai/glm-5v-turbo", defaults["model_name"],
 		"agents.defaults.model_name must be the actual model the user selected, not the provider ID")
 
 	// 2. The new provider entry uses the actual model as model_name,
@@ -452,16 +452,16 @@ func TestHandleCompleteOnboarding_WritesActualModelAsAlias(t *testing.T) {
 	var match map[string]any
 	for _, p := range providers {
 		entry, _ := p.(map[string]any)
-		if entry["provider"] == "openrouter" && entry["model"] == "z-ai/glm-5-turbo" {
+		if entry["provider"] == "openrouter" && entry["model"] == "z-ai/glm-5v-turbo" {
 			match = entry
 			break
 		}
 	}
-	require.NotNil(t, match, "provider entry for (openrouter, z-ai/glm-5-turbo) must exist")
-	assert.Equal(t, "z-ai/glm-5-turbo", match["model_name"],
+	require.NotNil(t, match, "provider entry for (openrouter, z-ai/glm-5v-turbo) must exist")
+	assert.Equal(t, "z-ai/glm-5v-turbo", match["model_name"],
 		"provider.model_name must mirror the model, matching the alias convention used by seeded entries")
 	assert.Equal(t, "openrouter", match["provider"])
-	assert.Equal(t, "z-ai/glm-5-turbo", match["model"])
+	assert.Equal(t, "z-ai/glm-5v-turbo", match["model"])
 	assert.Equal(t, "openrouter_API_KEY", match["api_key_ref"])
 	// No plaintext api_key leaked to config.json
 	_, hasPlaintext := match["api_key"]
@@ -479,8 +479,8 @@ func TestHandleCompleteOnboarding_WritesActualModelAsAlias(t *testing.T) {
 func TestHandleCompleteOnboarding_SecondModelSameProviderCreatesNewEntry(t *testing.T) {
 	tmpDir := t.TempDir()
 	// Pre-populate config with one openrouter entry to simulate a prior onboarding.
-	existing := []byte(`{"version":1,"agents":{"defaults":{"model_name":"z-ai/glm-5-turbo"},"list":[]},` +
-		`"providers":[{"model_name":"z-ai/glm-5-turbo","model":"z-ai/glm-5-turbo",` +
+	existing := []byte(`{"version":1,"agents":{"defaults":{"model_name":"z-ai/glm-5v-turbo"},"list":[]},` +
+		`"providers":[{"model_name":"z-ai/glm-5v-turbo","model":"z-ai/glm-5v-turbo",` +
 		`"provider":"openrouter","api_key_ref":"openrouter_API_KEY"}]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", existing, 0o600))
 
@@ -515,7 +515,7 @@ func TestHandleCompleteOnboarding_SecondModelSameProviderCreatesNewEntry(t *test
 	var hasGLM, hasClaude bool
 	for _, p := range providers {
 		e, _ := p.(map[string]any)
-		if e["model"] == "z-ai/glm-5-turbo" && e["provider"] == "openrouter" {
+		if e["model"] == "z-ai/glm-5v-turbo" && e["provider"] == "openrouter" {
 			hasGLM = true
 		}
 		if e["model"] == "anthropic/claude-sonnet-4.6" && e["provider"] == "openrouter" {

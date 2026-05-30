@@ -8,15 +8,15 @@ import (
 
 // Default redaction patterns for SEC-16.
 var defaultPatterns = []string{
-	`sk-[a-zA-Z0-9\-]{20,}`,                            // OpenAI API keys (also matches sk-or-v1-...)
-	`key-[a-zA-Z0-9]{20,}`,                             // Generic API keys
-	`Bearer\s+[a-zA-Z0-9\-._~+/]+=*`,                   // Bearer tokens
-	`ghp_[a-zA-Z0-9]{36}`,                              // GitHub personal access tokens
-	`gho_[a-zA-Z0-9]{36}`,                              // GitHub OAuth tokens
-	`xoxb-[0-9]{10,}-[a-zA-Z0-9]+`,                     // Slack bot tokens
-	`xoxp-[0-9]{10,}-[a-zA-Z0-9]+`,                     // Slack user tokens
-	`AKIA[0-9A-Z]{16}`,                                 // AWS access-key IDs
-	`ASIA[0-9A-Z]{16}`,                                 // AWS temporary access-key IDs (STS)
+	`sk-[a-zA-Z0-9\-]{20,}`,          // OpenAI API keys (also matches sk-or-v1-...)
+	`key-[a-zA-Z0-9]{20,}`,           // Generic API keys
+	`Bearer\s+[a-zA-Z0-9\-._~+/]+=*`, // Bearer tokens
+	`ghp_[a-zA-Z0-9]{36}`,            // GitHub personal access tokens
+	`gho_[a-zA-Z0-9]{36}`,            // GitHub OAuth tokens
+	`xoxb-[0-9]{10,}-[a-zA-Z0-9]+`,   // Slack bot tokens
+	`xoxp-[0-9]{10,}-[a-zA-Z0-9]+`,   // Slack user tokens
+	`AKIA[0-9A-Z]{16}`,               // AWS access-key IDs
+	`ASIA[0-9A-Z]{16}`,               // AWS temporary access-key IDs (STS)
 	`eyJ[A-Za-z0-9_=\-]+\.eyJ[A-Za-z0-9_=\-]+\.[A-Za-z0-9_\-\+/=]*`, // JWTs (header.payload.signature)
 	`ya29\.[0-9A-Za-z_\-]+`,                            // Google OAuth access tokens
 	`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`, // Email addresses

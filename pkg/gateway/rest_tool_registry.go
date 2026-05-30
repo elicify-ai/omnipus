@@ -22,12 +22,12 @@
 package gateway
 
 import (
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
@@ -98,15 +98,7 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type toolEntry struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Scope       string `json:"scope"`
-		Category    string `json:"category"`
-		Source      string `json:"source"`
-	}
-
-	var entries []toolEntry
+	var entries []gen.ToolRegistryEntry
 	seen := make(map[string]struct{})
 
 	addTool := func(t tools.Tool, source string) {
@@ -115,12 +107,12 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 			return // dedup: first registration wins
 		}
 		seen[name] = struct{}{}
-		entries = append(entries, toolEntry{
+		entries = append(entries, gen.ToolRegistryEntry{
 			Name:        name,
 			Description: t.Description(),
-			Scope:       string(t.Scope()),
+			Scope:       gen.ToolRegistryEntryScope(t.Scope()),
 			Category:    toolCategoryFromTool(t),
-			Source:      source,
+			Source:      gen.ToolRegistryEntrySource(source),
 		})
 	}
 
@@ -159,7 +151,7 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 
 	// Return an empty array — never null.
 	if entries == nil {
-		entries = []toolEntry{}
+		entries = []gen.ToolRegistryEntry{}
 	}
 
 	jsonOK(w, entries)
@@ -168,7 +160,8 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 // HandleAgentToolsRegistry handles GET /api/v1/agents/{id}/tools.
 //
 // Returns per-tool:
-//   {name, configured_policy, effective_policy, fence_applied, requires_admin_ask}
+//
+//	{name, configured_policy, effective_policy, fence_applied, requires_admin_ask}
 //
 // FR-028, FR-086: effective_policy and fence_applied for SPA badge rendering.
 // fence_applied=true means the admin-ask structural fence downgraded allow→ask on a
@@ -210,15 +203,16 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		policyCfg.GlobalDefaultPolicy = sandboxDefault
 	}
 
-	type agentToolEntry struct {
-		Name              string `json:"name"`
-		ConfiguredPolicy  string `json:"configured_policy"`
-		EffectivePolicy   string `json:"effective_policy"`
-		FenceApplied      bool   `json:"fence_applied"`
-		RequiresAdminAsk  bool   `json:"requires_admin_ask"`
+	// Build tool entries as gen.AgentToolsResponse.Tools anonymous struct slice.
+	type toolsEntry = struct {
+		ConfiguredPolicy gen.AgentToolsResponseToolsConfiguredPolicy `json:"configured_policy"`
+		EffectivePolicy  gen.AgentToolsResponseToolsEffectivePolicy  `json:"effective_policy"`
+		FenceApplied     bool                                        `json:"fence_applied"`
+		Name             string                                      `json:"name"`
+		RequiresAdminAsk bool                                        `json:"requires_admin_ask"`
 	}
 
-	var toolEntries []agentToolEntry
+	var toolEntries []toolsEntry
 
 	if agentInstance != nil {
 		allTools := agentInstance.Tools.GetAll()
@@ -244,10 +238,10 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 			//   - effective_policy after fence is "ask"
 			fenceApplied := rak && agentType == "custom" && configuredPolicy == "allow" && effectivePolicy == "ask"
 
-			toolEntries = append(toolEntries, agentToolEntry{
+			toolEntries = append(toolEntries, toolsEntry{
 				Name:             name,
-				ConfiguredPolicy: configuredPolicy,
-				EffectivePolicy:  effectivePolicy,
+				ConfiguredPolicy: gen.AgentToolsResponseToolsConfiguredPolicy(configuredPolicy),
+				EffectivePolicy:  gen.AgentToolsResponseToolsEffectivePolicy(effectivePolicy),
 				FenceApplied:     fenceApplied,
 				RequiresAdminAsk: rak,
 			})
@@ -255,7 +249,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	}
 
 	if toolEntries == nil {
-		toolEntries = []agentToolEntry{}
+		toolEntries = []toolsEntry{}
 	}
 
 	// Build config section to match existing SPA contract.
@@ -271,16 +265,41 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		respPolicies = map[string]string{}
 	}
 
-	jsonOK(w, map[string]any{
-		"agent_type": agentType,
-		"config": map[string]any{
-			"builtin": map[string]any{
-				"default_policy": respDefaultPolicy,
-				"policies":       respPolicies,
+	// Convert map[string]string to map[string]AgentToolsResponseConfigBuiltinPolicies.
+	builtinPolicies := make(map[string]gen.AgentToolsResponseConfigBuiltinPolicies, len(respPolicies))
+	for k, v := range respPolicies {
+		builtinPolicies[k] = gen.AgentToolsResponseConfigBuiltinPolicies(v)
+	}
+	respBuiltinDefaultPolicy := gen.AgentToolsResponseConfigBuiltinDefaultPolicy(respDefaultPolicy)
+	agentTypeVal := gen.AgentToolsResponseAgentType(agentType)
+
+	// Build the AgentToolsResponse. The Tools field uses the same anonymous struct
+	// as gen.AgentToolsResponse.Tools, aliased as toolsEntry above.
+	resp := gen.AgentToolsResponse{
+		AgentType: &agentTypeVal,
+		Config: struct {
+			Builtin *struct {
+				DefaultPolicy *gen.AgentToolsResponseConfigBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]gen.AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
+			} `json:"builtin,omitempty"`
+			Mcp *struct {
+				Servers *[]struct {
+					Id    string    `json:"id"`
+					Tools *[]string `json:"tools,omitempty"`
+				} `json:"servers,omitempty"`
+			} `json:"mcp,omitempty"`
+		}{
+			Builtin: &struct {
+				DefaultPolicy *gen.AgentToolsResponseConfigBuiltinDefaultPolicy       `json:"default_policy,omitempty"`
+				Policies      *map[string]gen.AgentToolsResponseConfigBuiltinPolicies `json:"policies,omitempty"`
+			}{
+				DefaultPolicy: &respBuiltinDefaultPolicy,
+				Policies:      &builtinPolicies,
 			},
 		},
-		"effective_tools": toolEntries,
-	})
+		Tools: toolEntries,
+	}
+	jsonOK(w, resp)
 }
 
 // resolveConfiguredPolicy returns the agent-configured policy for toolName
@@ -329,29 +348,31 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse body.
-	var body struct {
-		Action string `json:"action"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
+	var body gen.ToolApprovalActionRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "ToolApprovalActionRequest", &body, validateEnabled) {
 		return
 	}
 	var action ApprovalAction
 	switch body.Action {
-	case "approve":
+	case gen.ToolApprovalActionRequestActionApprove:
 		action = ApprovalActionApprove
-	case "deny":
+	case gen.ToolApprovalActionRequestActionDeny:
 		action = ApprovalActionDeny
-	case "cancel":
+	case gen.ToolApprovalActionRequestActionCancel:
 		action = ApprovalActionCancel
 	default:
-		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("unknown action %q: must be approve, deny, or cancel", body.Action))
+		jsonErr(
+			w,
+			http.StatusBadRequest,
+			fmt.Sprintf("unknown action %q: must be approve, deny, or cancel", string(body.Action)),
+		)
 		return
 	}
 
 	// Guard: registry is nil in pre-registry test harnesses.
 	if a.approvalReg == nil {
-		jsonErr(w, http.StatusServiceUnavailable, "approval registry not initialised")
+		jsonErr(w, http.StatusServiceUnavailable, "approval registry not initialized")
 		return
 	}
 
@@ -374,7 +395,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	if gone {
 		// Entry already in terminal state — FR-018.
 		slog.Warn("tool-approval: late action on resolved approval",
-			"approval_id", approvalID, "action", body.Action)
+			"approval_id", approvalID, "action", string(body.Action))
 		jsonErr(w, http.StatusGone, "approval already resolved")
 		return
 	}
@@ -383,5 +404,26 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonOK(w, map[string]any{"approval_id": approvalID, "action": body.Action, "status": "ok"})
+	jsonOK(w, gen.ToolApprovalResponse{
+		ApprovalId: approvalID,
+		Action:     gen.ToolApprovalResponseAction(body.Action),
+		Status:     gen.Ok,
+	})
+}
+
+// toolsCfgToPolicy converts a config.AgentToolsCfg to ToolPolicyCfg.
+// Used by HandleAgentToolsRegistry to build the effective tool view.
+func toolsCfgToPolicy(cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
+	if cfg == nil {
+		return &tools.ToolPolicyCfg{DefaultPolicy: "allow"}
+	}
+	policies := make(map[string]string, len(cfg.Builtin.Policies))
+	for k, v := range cfg.Builtin.Policies {
+		policies[k] = string(v)
+	}
+	dp := string(cfg.Builtin.DefaultPolicy)
+	if dp == "" {
+		dp = "allow"
+	}
+	return &tools.ToolPolicyCfg{DefaultPolicy: dp, Policies: policies}
 }

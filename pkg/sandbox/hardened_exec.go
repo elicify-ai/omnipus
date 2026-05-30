@@ -95,27 +95,123 @@ func emitRestrictFailure(callsite string, err error) {
 	})
 }
 
-// sensitiveEnvKeys are stripped from any inherited gateway environment before
-// it reaches a child process. Includes the master key, the bearer auth token,
-// and the path to the master key file so children cannot read them.
-var sensitiveEnvKeys = map[string]struct{}{
-	"OMNIPUS_MASTER_KEY":   {},
-	"OMNIPUS_KEY_FILE":     {},
-	"OMNIPUS_BEARER_TOKEN": {},
+// allowedChildEnvKeys is the EXPLICIT ALLOWLIST of environment variable names
+// that may be inherited by a hardened-exec child process. Any key not present
+// here (and not matched by allowedChildEnvPrefixes) is stripped before the
+// child sees the environment.
+//
+// Threat model (v0.2 #155 item 3): the previous implementation maintained a
+// 3-key denylist (OMNIPUS_MASTER_KEY, OMNIPUS_KEY_FILE, OMNIPUS_BEARER_TOKEN).
+// That model fails open: any newly-introduced sensitive env var (a future
+// API key, an upstream provider token, a third-party secret loaded by a
+// dependency) leaks to children until someone remembers to add it to the
+// denylist. The allowlist inverts the default — unknown keys are stripped,
+// new sensitive keys are safe by default.
+//
+// The allowlist covers exactly what a generic build/run child needs to find
+// libraries, locate the user's home, render localized output, and write to
+// a scratch directory:
+//
+//	PATH    — required to locate executables (npm, node, python, sh, ...)
+//	HOME    — npm/pip/cargo write per-user caches under here; node uses it for
+//	          ~/.npmrc; many tools blow up if HOME is unset
+//	USER    — git, ssh, and many CLI tools query it for default user
+//	LOGNAME — equivalent to USER on systemd-managed Linux distros
+//	SHELL   — npm spawns scripts via $SHELL; subprocess shells use it
+//	TZ      — controls log timestamp rendering and date-sensitive build steps
+//	LANG    — UTF-8 locale required for non-ASCII filenames in builds
+//	TMPDIR  — Go's ioutil.TempFile and many test runners honor this
+//	TERM    — terminal capability detection; npm/yarn use it for color output
+//
+// The two prefix-allowlists cover broad families:
+//
+//	LC_*  — C locale family (LC_ALL, LC_CTYPE, LC_NUMERIC, ...) — required
+//	        for correct sorting, formatting, and case-insensitive filename
+//	        comparison in build tools.
+//	XDG_* — XDG Base Directory spec (XDG_CONFIG_HOME, XDG_CACHE_HOME, ...) —
+//	        per-user dirs that respectful CLI tools use instead of fixed
+//	        ~/.config / ~/.cache; passing through keeps user dotfile setups
+//	        working in builds.
+//
+// And one operator escape hatch:
+//
+//	OMNIPUS_CHILD_*  — narrow, namespaced pass-through for callers that
+//	                   intentionally want to forward a value to a child.
+//	                   Operators wanting to pass FOO=bar to a child must
+//	                   rename it to OMNIPUS_CHILD_FOO=bar at the gateway
+//	                   layer. The rename is the trust boundary — it's loud
+//	                   and grep-able, so a future audit can find every
+//	                   intentional pass-through with one search.
+//
+// Build with care: anything you add here is information that reaches every
+// child process for the rest of the gateway's life. If a key contains a
+// secret, do NOT add it; use the OMNIPUS_CHILD_* rename pattern instead.
+var allowedChildEnvKeys = map[string]struct{}{
+	"PATH":    {},
+	"HOME":    {},
+	"USER":    {},
+	"LOGNAME": {},
+	"SHELL":   {},
+	"TZ":      {},
+	"LANG":    {},
+	"TMPDIR":  {},
+	"TERM":    {},
+	// Standard proxy variables. Forwarded so operator-set or
+	// EgressProxy-injected proxies route child traffic correctly. Values
+	// are operator-controlled (egress proxy address) or operator-inherited
+	// from the parent, never secrets. Required by TestExecProxy_*.
+	"HTTP_PROXY":  {},
+	"HTTPS_PROXY": {},
+	"NO_PROXY":    {},
+	"http_proxy":  {},
+	"https_proxy": {},
+	"no_proxy":    {},
 }
 
-// ScrubGatewayEnv returns a copy of os.Environ() with sensitive gateway keys
-// removed. It is exported so callers outside this package (e.g. pkg/tools)
-// can apply the same scrub unconditionally, regardless of whether the kernel
-// sandbox is active. This prevents OMNIPUS_MASTER_KEY, OMNIPUS_KEY_FILE, and
-// OMNIPUS_BEARER_TOKEN from leaking to child processes even when sandbox=off.
+// allowedChildEnvPrefixes are key prefixes whose entire family is allowed.
+// See allowedChildEnvKeys for the rationale on each prefix.
+var allowedChildEnvPrefixes = []string{
+	"LC_",
+	"XDG_",
+	"OMNIPUS_CHILD_",
+}
+
+// isAllowedChildEnvKey reports whether name passes the allowlist for the
+// hardened-exec child environment. Used by filterChildEnv on every entry of
+// os.Environ() and in tests that exercise the boundary directly.
+func isAllowedChildEnvKey(name string) bool {
+	if _, ok := allowedChildEnvKeys[name]; ok {
+		return true
+	}
+	for _, prefix := range allowedChildEnvPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// ScrubGatewayEnv returns a copy of os.Environ() filtered through the child
+// process allowlist (see allowedChildEnvKeys). It is exported so callers
+// outside this package (e.g. pkg/tools workspace.shell) can apply the same
+// filter regardless of whether the kernel sandbox is active.
+//
+// Naming: the public function name is preserved across the v0.2 #155 item-3
+// rework (denylist → allowlist) so callers do not need to change. Internally
+// the implementation is filterChildEnv — that name better reflects the new
+// semantics.
+//
+// Closes pentest item 3 (#155).
 func ScrubGatewayEnv() []string {
-	return scrubGatewayEnv()
+	return filterChildEnv()
 }
 
-// scrubGatewayEnv returns a copy of os.Environ() with sensitive keys removed.
-// Used by mergeEnv so children inherit PATH/HOME/LANG without seeing secrets.
-func scrubGatewayEnv() []string {
+// filterChildEnv returns os.Environ() filtered through the child process
+// allowlist. Entries with empty values pass through (a present-but-empty
+// key like LANG="" is part of legitimate user config). Malformed entries
+// (no '=', or '=' at index 0) are dropped — those are kernel-injected
+// curiosities like `BASH_FUNC_foo%%=...` that no child needs.
+func filterChildEnv() []string {
 	parent := os.Environ()
 	out := make([]string, 0, len(parent))
 	for _, kv := range parent {
@@ -123,7 +219,7 @@ func scrubGatewayEnv() []string {
 		if eq <= 0 {
 			continue
 		}
-		if _, blocked := sensitiveEnvKeys[kv[:eq]]; blocked {
+		if !isAllowedChildEnvKey(kv[:eq]) {
 			continue
 		}
 		out = append(out, kv)
@@ -200,11 +296,6 @@ type Result struct {
 // outputCap bounds captured stdout/stderr per stream. 4 MiB is enough for
 // build logs while preventing a runaway child from exhausting gateway memory.
 const outputCap = 4 << 20
-
-// proxyGracePeriod is how long the parent waits between SIGTERM and SIGKILL
-// when a hardened child exceeds its timeout. Must be long enough for npm /
-// node to flush stdout but short enough that operators don't notice.
-const proxyGracePeriod = 5 * time.Second
 
 // ErrEmptyArgv is returned by Run when called with no command to execute.
 var ErrEmptyArgv = errors.New("hardened_exec: argv is empty")
@@ -364,12 +455,21 @@ func runOnCurrentThread(ctx context.Context, argv []string, env []string, lim Li
 		// security event that operators must see, not a silently discarded error.
 		killErr := cmd.Process.Kill()
 		if killErr != nil && !isProcessDoneError(killErr) {
-			slog.Error("hardened_exec: post-start hardening failed AND child kill failed; child PID may still be running",
-				"pid", cmd.Process.Pid,
-				"kill_err", killErr,
-				"hardening_err", hardeningErr)
+			slog.Error(
+				"hardened_exec: post-start hardening failed AND child kill failed; child PID may still be running",
+				"pid",
+				cmd.Process.Pid,
+				"kill_err",
+				killErr,
+				"hardening_err",
+				hardeningErr,
+			)
 			_, _ = cmd.Process.Wait()
-			return Result{}, fmt.Errorf("hardened_exec: post-start hardening: %w; kill also failed: %v", hardeningErr, killErr)
+			return Result{}, fmt.Errorf(
+				"hardened_exec: post-start hardening: %w; kill also failed: %v",
+				hardeningErr,
+				killErr,
+			)
 		}
 		_, _ = cmd.Process.Wait()
 		return Result{}, fmt.Errorf("hardened_exec: post-start hardening: %w", hardeningErr)
@@ -427,13 +527,24 @@ func runOnCurrentThread(ctx context.Context, argv []string, env []string, lim Li
 // arg, which silently broke commands like `npm run dev` that depend on
 // node_modules/.bin being on PATH.
 func mergeEnv(env []string, lim Limits) []string {
-	gateway := scrubGatewayEnv()
-	merged := make([]string, 0, len(gateway)+len(env)+6)
+	gateway := filterChildEnv()
+	// CodeQL go/allocation-size-overflow flags the implicit int sum
+	// len(gateway)+len(env)+6 as potentially overflowing. Per-process env
+	// count is bounded by the kernel (NCARGS = 128 KiB total on Linux), so
+	// the sum is always small in practice — but bound it explicitly so the
+	// allocation hint is safe even if filterChildEnv() ever misbehaves and
+	// hands back something pathological.
+	const maxMergedEnvHint = 1 << 16
+	capHint := len(gateway) + len(env) + 6
+	if capHint < 0 || capHint > maxMergedEnvHint {
+		capHint = maxMergedEnvHint
+	}
+	merged := make([]string, 0, capHint)
 	merged = append(merged, gateway...)
 	merged = append(merged, env...)
 
 	// Inject proxy variables. Both upper- and lower-case forms are widely
-	// honoured (npm/node use lowercase, curl uses uppercase, Go's
+	// honored (npm/node use lowercase, curl uses uppercase, Go's
 	// http.Transport uses both via httpproxy.FromEnvironment).
 	if lim.EgressProxyAddr != "" {
 		proxyURL := "http://" + lim.EgressProxyAddr

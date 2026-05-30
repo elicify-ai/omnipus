@@ -1,0 +1,54 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly scan on Sunday 02:17 UTC — odd minute to avoid the top-of-hour scheduler rush
+    - cron: '17 2 * * 0'
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [go, javascript-typescript]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # config-file pulls the queries (security-extended +
+          # security-and-quality) and the paths-ignore list from
+          # .github/codeql/codeql-config.yml. The ignore-list keeps vendored
+          # binaries (esbuild bundles its own Go runtime; ~80 Go stdlib CVEs
+          # appear on a tool we never run at runtime), Vite output, and
+          # generated code out of the analysis — see the comment block in
+          # that file for the full rationale.
+          config-file: ./.github/codeql/codeql-config.yml
+
+      # Use Go autobuild — works for the simple `go build` path that the
+      # repo uses today. If we ever need build tags (`goolm,stdjson`) for
+      # CodeQL, switch to a manual build step.
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

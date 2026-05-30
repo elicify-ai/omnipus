@@ -13,15 +13,16 @@
 // This file contains ONLY the RequiresAdminAsk overrides. All other Tool
 // interface methods (Name, Description, Parameters, Execute, Scope) live in
 // their respective source files.
+
 package systools
 
 // Agent tools
 
-func (*AgentCreateTool) RequiresAdminAsk() bool    { return true }
-func (*AgentUpdateTool) RequiresAdminAsk() bool    { return true }
-func (*AgentDeleteTool) RequiresAdminAsk() bool    { return true }
-func (*AgentListTool) RequiresAdminAsk() bool      { return true }
-func (*AgentActivateTool) RequiresAdminAsk() bool  { return true }
+func (*AgentCreateTool) RequiresAdminAsk() bool     { return true }
+func (*AgentUpdateTool) RequiresAdminAsk() bool     { return true }
+func (*AgentDeleteTool) RequiresAdminAsk() bool     { return true }
+func (*AgentListTool) RequiresAdminAsk() bool       { return true }
+func (*AgentActivateTool) RequiresAdminAsk() bool   { return true }
 func (*AgentDeactivateTool) RequiresAdminAsk() bool { return true }
 
 // Channel tools

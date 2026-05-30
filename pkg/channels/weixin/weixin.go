@@ -366,6 +366,17 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 		c.persistContextTokens()
 	}
 
+	if channels.DispatchCancelIfRecognized(
+		ctx,
+		content,
+		"weixin",
+		fromUserID,
+		fromUserID,
+		c.GetCancelInterceptor(),
+		channels.CancelSendFn(c),
+	) {
+		return
+	}
 	c.HandleMessage(ctx, peer, messageID, fromUserID, fromUserID, content, mediaRefs, metadata, sender)
 }
 

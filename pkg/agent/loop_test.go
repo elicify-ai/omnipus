@@ -767,7 +767,10 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 	}
 
 	if len(telegramChannel.sentMedia) != 2 {
-		t.Fatalf("expected 2 synchronously sent media messages (artifact tool + send_file), got %d", len(telegramChannel.sentMedia))
+		t.Fatalf(
+			"expected 2 synchronously sent media messages (artifact tool + send_file), got %d",
+			len(telegramChannel.sentMedia),
+		)
 	}
 	if telegramChannel.sentMedia[0].Channel != "telegram" || telegramChannel.sentMedia[0].ChatID != "chat1" {
 		t.Fatalf("unexpected sent media target: %+v", telegramChannel.sentMedia[0])
@@ -1099,9 +1102,9 @@ func (m *mockCustomTool) Parameters() map[string]any {
 	}
 }
 
-func (m *mockCustomTool) Scope() tools.ToolScope              { return tools.ScopeGeneral }
-func (m *mockCustomTool) RequiresAdminAsk() bool               { return false }
-func (m *mockCustomTool) Category() tools.ToolCategory         { return tools.CategoryCore }
+func (m *mockCustomTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (m *mockCustomTool) RequiresAdminAsk() bool       { return false }
+func (m *mockCustomTool) Category() tools.ToolCategory { return tools.CategoryCore }
 
 func (m *mockCustomTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	return tools.SilentResult("Custom tool executed")
@@ -1112,10 +1115,10 @@ type handledMediaTool struct {
 	path  string
 }
 
-func (m *handledMediaTool) Name() string                      { return "handled_media_tool" }
-func (m *handledMediaTool) Scope() tools.ToolScope            { return tools.ScopeGeneral }
-func (m *handledMediaTool) RequiresAdminAsk() bool            { return false }
-func (m *handledMediaTool) Category() tools.ToolCategory      { return tools.CategoryCore }
+func (m *handledMediaTool) Name() string                 { return "handled_media_tool" }
+func (m *handledMediaTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (m *handledMediaTool) RequiresAdminAsk() bool       { return false }
+func (m *handledMediaTool) Category() tools.ToolCategory { return tools.CategoryCore }
 func (m *handledMediaTool) Description() string {
 	return "Returns a media attachment and fully handles the user response"
 }
@@ -1182,10 +1185,10 @@ type handledMediaWithSteeringTool struct {
 	loop  *AgentLoop
 }
 
-func (m *handledMediaWithSteeringTool) Name() string                      { return "handled_media_with_steering_tool" }
-func (m *handledMediaWithSteeringTool) Scope() tools.ToolScope            { return tools.ScopeGeneral }
-func (m *handledMediaWithSteeringTool) RequiresAdminAsk() bool            { return false }
-func (m *handledMediaWithSteeringTool) Category() tools.ToolCategory      { return tools.CategoryCore }
+func (m *handledMediaWithSteeringTool) Name() string                 { return "handled_media_with_steering_tool" }
+func (m *handledMediaWithSteeringTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (m *handledMediaWithSteeringTool) RequiresAdminAsk() bool       { return false }
+func (m *handledMediaWithSteeringTool) Category() tools.ToolCategory { return tools.CategoryCore }
 func (m *handledMediaWithSteeringTool) Description() string {
 	return "Returns handled media and enqueues a steering message during execution"
 }
@@ -1218,10 +1221,10 @@ type mediaArtifactTool struct {
 	path  string
 }
 
-func (m *mediaArtifactTool) Name() string                    { return "media_artifact_tool" }
-func (m *mediaArtifactTool) Scope() tools.ToolScope          { return tools.ScopeGeneral }
-func (m *mediaArtifactTool) RequiresAdminAsk() bool          { return false }
-func (m *mediaArtifactTool) Category() tools.ToolCategory    { return tools.CategoryCore }
+func (m *mediaArtifactTool) Name() string                 { return "media_artifact_tool" }
+func (m *mediaArtifactTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (m *mediaArtifactTool) RequiresAdminAsk() bool       { return false }
+func (m *mediaArtifactTool) Category() tools.ToolCategory { return tools.CategoryCore }
 func (m *mediaArtifactTool) Description() string {
 	return "Returns a media artifact that the agent can forward or save later"
 }
@@ -1247,10 +1250,10 @@ func (m *mediaArtifactTool) Execute(ctx context.Context, args map[string]any) *t
 
 type toolLimitTestTool struct{}
 
-func (m *toolLimitTestTool) Name() string                   { return "tool_limit_test_tool" }
-func (m *toolLimitTestTool) Scope() tools.ToolScope         { return tools.ScopeGeneral }
-func (m *toolLimitTestTool) RequiresAdminAsk() bool         { return false }
-func (m *toolLimitTestTool) Category() tools.ToolCategory   { return tools.CategoryCore }
+func (m *toolLimitTestTool) Name() string                 { return "tool_limit_test_tool" }
+func (m *toolLimitTestTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (m *toolLimitTestTool) RequiresAdminAsk() bool       { return false }
+func (m *toolLimitTestTool) Category() tools.ToolCategory { return tools.CategoryCore }
 func (m *toolLimitTestTool) Description() string {
 	return "Tool used to exhaust the iteration budget in tests"
 }
@@ -2212,7 +2215,7 @@ func TestTargetReasoningChannelID_AllChannels(t *testing.T) {
 		"telegram": "rid-telegram",
 		"feishu":   "rid-feishu",
 		"discord":  "rid-discord",
-		"maixcam":  "rid-maixcam",
+
 		"qq":       "rid-qq",
 		"dingtalk": "rid-dingtalk",
 		"slack":    "rid-slack",
@@ -2231,7 +2234,7 @@ func TestTargetReasoningChannelID_AllChannels(t *testing.T) {
 		{channel: "telegram", wantID: "rid-telegram"},
 		{channel: "feishu", wantID: "rid-feishu"},
 		{channel: "discord", wantID: "rid-discord"},
-		{channel: "maixcam", wantID: "rid-maixcam"},
+
 		{channel: "qq", wantID: "rid-qq"},
 		{channel: "dingtalk", wantID: "rid-dingtalk"},
 		{channel: "slack", wantID: "rid-slack"},

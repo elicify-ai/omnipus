@@ -19,7 +19,7 @@ const (
 	GatewayUsers         ConfigKey = "gateway.users"
 	GatewayDevModeBypass ConfigKey = "gateway.dev_mode_bypass"
 
-	// Preview listener restart-gated keys (FR-027b).
+	// GatewayPreviewPort and related keys are preview-listener restart-gated keys (FR-027b).
 	GatewayPreviewPort            ConfigKey = "gateway.preview_port"
 	GatewayPreviewHost            ConfigKey = "gateway.preview_host"
 	GatewayPreviewOrigin          ConfigKey = "gateway.preview_origin"

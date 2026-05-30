@@ -94,6 +94,7 @@ type BaseChannel struct {
 	placeholderRecorder PlaceholderRecorder
 	owner               Channel // the concrete channel that embeds this BaseChannel
 	reasoningChannelID  string
+	cancelInterceptor   CancelInterceptor // injected by Manager; may be nil
 }
 
 func NewBaseChannel(
@@ -338,6 +339,17 @@ func (c *BaseChannel) GetPlaceholderRecorder() PlaceholderRecorder {
 // This allows HandleMessage to auto-trigger TypingCapable / ReactionCapable / PlaceholderCapable.
 func (c *BaseChannel) SetOwner(ch Channel) {
 	c.owner = ch
+}
+
+// SetCancelInterceptor injects the CancelInterceptor used by Tier B channels to
+// fire /cancel from text-parsed messages. Called by Manager.initChannel.
+func (c *BaseChannel) SetCancelInterceptor(ci CancelInterceptor) {
+	c.cancelInterceptor = ci
+}
+
+// GetCancelInterceptor returns the injected CancelInterceptor (may be nil).
+func (c *BaseChannel) GetCancelInterceptor() CancelInterceptor {
+	return c.cancelInterceptor
 }
 
 // BuildMediaScope constructs a scope key for media lifecycle tracking.

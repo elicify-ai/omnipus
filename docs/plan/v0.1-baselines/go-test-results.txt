@@ -1,0 +1,86 @@
+ok  	github.com/dapicom-ai/omnipus/cmd/omnipus	0.011s
+ok  	github.com/dapicom-ai/omnipus/cmd/omnipus/internal	0.011s
+ok  	github.com/dapicom-ai/omnipus/cmd/omnipus/internal/agent	0.016s
+ok  	github.com/dapicom-ai/omnipus/cmd/omnipus/internal/audit	0.010s
+--- FAIL: TestAuthWeComCmdWithScanner_SaveConfigFailureRollsBackStore (0.01s)
+--- FAIL: TestSaveWeixinConfig_SaveConfigFailureRollsBackStore (0.00s)
+FAIL
+FAIL	github.com/dapicom-ai/omnipus/cmd/omnipus/internal/auth	0.123s
+ok  	github.com/dapicom-ai/omnipus/cmd/omnipus/internal/cron	0.018s
+ok  	github.com/dapicom-ai/omnipus/cmd/omnipus/internal/gateway	0.015s
+ok  	github.com/dapicom-ai/omnipus/cmd/omnipus/internal/migrate	0.005s
+--- FAIL: TestSetDefaultModel_SaveConfigError (0.00s)
+FAIL	github.com/dapicom-ai/omnipus/cmd/omnipus/internal/model	0.028s
+ok  	github.com/dapicom-ai/omnipus/cmd/omnipus/internal/skills	0.012s
+ok  	github.com/dapicom-ai/omnipus/cmd/omnipus/internal/status	0.003s
+ok  	github.com/dapicom-ai/omnipus/cmd/omnipus/internal/version	0.004s
+ok  	github.com/dapicom-ai/omnipus/evals/cmd/eval-runner	0.020s
+ok  	github.com/dapicom-ai/omnipus/evals/judge	0.010s
+--- FAIL: TestListAllSessions_PartialErrors (0.01s)
+FAIL
+FAIL	github.com/dapicom-ai/omnipus/pkg/agent	13.706s
+ok  	github.com/dapicom-ai/omnipus/pkg/agent/envcontext	0.011s
+ok  	github.com/dapicom-ai/omnipus/pkg/agent/testutil	0.008s
+ok  	github.com/dapicom-ai/omnipus/pkg/audit	1.355s
+ok  	github.com/dapicom-ai/omnipus/pkg/auth	0.040s
+ok  	github.com/dapicom-ai/omnipus/pkg/bus	0.221s
+ok  	github.com/dapicom-ai/omnipus/pkg/channels	13.642s
+ok  	github.com/dapicom-ai/omnipus/pkg/channels/dingtalk	0.005s
+ok  	github.com/dapicom-ai/omnipus/pkg/channels/discord	0.006s
+ok  	github.com/dapicom-ai/omnipus/pkg/channels/feishu	0.008s
+ok  	github.com/dapicom-ai/omnipus/pkg/channels/googlechat	0.009s
+ok  	github.com/dapicom-ai/omnipus/pkg/channels/irc	0.005s
+ok  	github.com/dapicom-ai/omnipus/pkg/channels/line	0.023s
+ok  	github.com/dapicom-ai/omnipus/pkg/channels/qq	0.030s
+ok  	github.com/dapicom-ai/omnipus/pkg/channels/slack	0.006s
+ok  	github.com/dapicom-ai/omnipus/pkg/channels/teams	0.214s
+ok  	github.com/dapicom-ai/omnipus/pkg/channels/telegram	0.061s
+ok  	github.com/dapicom-ai/omnipus/pkg/channels/wecom	0.016s
+ok  	github.com/dapicom-ai/omnipus/pkg/channels/weixin	0.309s
+ok  	github.com/dapicom-ai/omnipus/pkg/channels/whatsapp	0.005s
+ok  	github.com/dapicom-ai/omnipus/pkg/commands	0.004s
+ok  	github.com/dapicom-ai/omnipus/pkg/config	1.208s
+ok  	github.com/dapicom-ai/omnipus/pkg/coreagent	0.007s
+ok  	github.com/dapicom-ai/omnipus/pkg/credentials	0.982s
+ok  	github.com/dapicom-ai/omnipus/pkg/cron	2.174s
+ok  	github.com/dapicom-ai/omnipus/pkg/datamodel	0.035s
+ok  	github.com/dapicom-ai/omnipus/pkg/fileutil	0.071s
+ok  	github.com/dapicom-ai/omnipus/pkg/gateway	24.607s
+ok  	github.com/dapicom-ai/omnipus/pkg/gateway/middleware	0.494s
+ok  	github.com/dapicom-ai/omnipus/pkg/health	0.057s
+ok  	github.com/dapicom-ai/omnipus/pkg/heartbeat	0.124s
+ok  	github.com/dapicom-ai/omnipus/pkg/identity	0.004s
+ok  	github.com/dapicom-ai/omnipus/pkg/logger	0.006s
+ok  	github.com/dapicom-ai/omnipus/pkg/mcp	0.009s
+ok  	github.com/dapicom-ai/omnipus/pkg/media	0.210s
+ok  	github.com/dapicom-ai/omnipus/pkg/memory	0.734s
+ok  	github.com/dapicom-ai/omnipus/pkg/migrate	0.012s
+ok  	github.com/dapicom-ai/omnipus/pkg/migrate/internal	0.019s
+ok  	github.com/dapicom-ai/omnipus/pkg/migrate/sources/openclaw	0.033s
+ok  	github.com/dapicom-ai/omnipus/pkg/onboarding	0.065s
+ok  	github.com/dapicom-ai/omnipus/pkg/policy	0.016s
+ok  	github.com/dapicom-ai/omnipus/pkg/providers	3.648s
+ok  	github.com/dapicom-ai/omnipus/pkg/providers/anthropic	0.010s
+ok  	github.com/dapicom-ai/omnipus/pkg/providers/anthropic_messages	0.004s
+ok  	github.com/dapicom-ai/omnipus/pkg/providers/azure	0.016s
+ok  	github.com/dapicom-ai/omnipus/pkg/providers/bedrock	0.006s
+ok  	github.com/dapicom-ai/omnipus/pkg/providers/common	0.008s
+ok  	github.com/dapicom-ai/omnipus/pkg/providers/openai_compat	0.080s
+ok  	github.com/dapicom-ai/omnipus/pkg/providers/openai_responses_common	0.004s
+ok  	github.com/dapicom-ai/omnipus/pkg/routing	0.008s
+ok  	github.com/dapicom-ai/omnipus/pkg/sandbox	1.143s
+ok  	github.com/dapicom-ai/omnipus/pkg/security	0.019s
+ok  	github.com/dapicom-ai/omnipus/pkg/session	0.141s
+ok  	github.com/dapicom-ai/omnipus/pkg/skills	5.471s
+ok  	github.com/dapicom-ai/omnipus/pkg/state	0.025s
+ok  	github.com/dapicom-ai/omnipus/pkg/sysagent	0.008s
+ok  	github.com/dapicom-ai/omnipus/pkg/sysagent/tools	5.545s
+ok  	github.com/dapicom-ai/omnipus/pkg/testutil	0.004s
+ok  	github.com/dapicom-ai/omnipus/pkg/tools	21.061s
+ok  	github.com/dapicom-ai/omnipus/pkg/tools/browser	0.046s
+ok  	github.com/dapicom-ai/omnipus/pkg/utils	0.021s
+ok  	github.com/dapicom-ai/omnipus/pkg/validation	0.004s
+ok  	github.com/dapicom-ai/omnipus/pkg/voice	0.030s
+ok  	github.com/dapicom-ai/omnipus/tests/perf	50.613s
+ok  	github.com/dapicom-ai/omnipus/tests/security	7.895s
+FAIL

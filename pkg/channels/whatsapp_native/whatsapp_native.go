@@ -437,6 +437,9 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 		"WhatsApp message received",
 		map[string]any{"sender_id": senderID, "content_preview": utils.Truncate(content, 50)},
 	)
+	if channels.DispatchCancelIfRecognized(c.runCtx, content, "whatsapp_native", chatID, senderID, c.GetCancelInterceptor(), channels.CancelSendFn(c)) {
+		return
+	}
 	c.HandleMessage(c.runCtx, peer, messageID, senderID, chatID, content, mediaPaths, metadata, sender)
 }
 

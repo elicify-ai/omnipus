@@ -1,0 +1,10 @@
+title: ToolPolicy
+description: >
+  A policy value governing whether a tool call is allowed, requires approval,
+  or is denied.
+type: string
+enum:
+  - allow
+  - ask
+  - deny
+example: allow

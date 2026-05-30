@@ -27,6 +27,8 @@ func computePercentile(sorted []float64, p float64) float64 {
 }
 
 // logLatencyDistribution prints min/p50/p95/p99/max to the test log.
+//
+
 func logLatencyDistribution(t testing.TB, label string, sorted []float64) {
 	t.Helper()
 	if len(sorted) == 0 {

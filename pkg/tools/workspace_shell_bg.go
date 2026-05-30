@@ -95,7 +95,7 @@ type WorkspaceShellBgTool struct {
 	agentDenyPatterns  []*regexp.Regexp
 	enableDenyPatterns bool
 
-	// runMu serialises the per-agent cap pre-check + spawn so two concurrent
+	// runMu serializes the per-agent cap pre-check + spawn so two concurrent
 	// invocations on the same agent cannot both pass before either registers.
 	runMu sync.Mutex
 }
@@ -351,7 +351,7 @@ func (t *WorkspaceShellBgTool) Execute(ctx context.Context, args map[string]any)
 	if regErr != nil {
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 		// Log the orphaned child outcome so operators can diagnose
-		// registration failures correlated with child behaviour.
+		// registration failures correlated with child behavior.
 		orphanPid := cmd.Process.Pid
 		go func() {
 			waitErr := cmd.Wait()
@@ -364,7 +364,7 @@ func (t *WorkspaceShellBgTool) Execute(ctx context.Context, args map[string]any)
 			slog.Info("workspace.shell_bg: orphaned child exited (registration failed)",
 				"agent_id", agentID, "pid", orphanPid, "exit_code", exitCode, "error", waitErr)
 		}()
-		var capErr sandbox.ErrGatewayCap
+		var capErr sandbox.GatewayCapError
 		if errors.As(regErr, &capErr) {
 			return ErrorResult(fmt.Sprintf(
 				"too many concurrent dev servers (%d/%d); previous registration expires at %s",
@@ -410,7 +410,9 @@ func (t *WorkspaceShellBgTool) Execute(ctx context.Context, args map[string]any)
 	deadline := reg.CreatedAt.Add(sandbox.HardTimeout).UTC().Format(time.RFC3339)
 	summary := fmt.Sprintf(
 		"workspace.shell_bg: background process started. URL: %s. Command: %s. Port: %d. Token expires after 30 min idle / 4 h hard cap.",
-		url, command, exposePort,
+		url,
+		command,
+		exposePort,
 	)
 
 	res := shellBgResult{

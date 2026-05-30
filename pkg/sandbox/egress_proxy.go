@@ -174,7 +174,7 @@ func (p *EgressProxy) Close() error {
 	return err
 }
 
-// ServeHTTP dispatches between CONNECT (HTTPS tunnelling) and plain HTTP
+// ServeHTTP dispatches between CONNECT (HTTPS tunneling) and plain HTTP
 // proxy. The two have different bodies because plain HTTP carries the
 // full URL on the request line whereas CONNECT carries only host:port.
 func (p *EgressProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -245,7 +245,7 @@ func (p *EgressProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	rp.ServeHTTP(w, r)
 }
 
-// handleConnect implements HTTP CONNECT for HTTPS tunnelling. The client
+// handleConnect implements HTTP CONNECT for HTTPS tunneling. The client
 // (npm/node) sends "CONNECT host:port HTTP/1.1"; we check the host
 // against the allow-list and, on success, hijack the connection and
 // pipe bytes between client and upstream.
@@ -313,9 +313,19 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Register the tunnel goroutines BEFORE writing the 200 response so the
+	// client never observes a connection-established without the WaitGroup
+	// having been incremented. Without this, a Close() that races between
+	// the 200 write and Add(2) reads tunnels==0, returns immediately, and
+	// orphans the goroutines that get spawned just after — exactly the
+	// regression TestClose_WaitsForTunnels guards against.
+	p.tunnels.Add(2)
+
 	// Tell the client the tunnel is open. From this point on bytes flow
 	// in both directions until either side closes.
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+		p.tunnels.Done()
+		p.tunnels.Done()
 		_ = clientConn.Close()
 		_ = upstream.Close()
 		return
@@ -324,7 +334,6 @@ func (p *EgressProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Pipe bytes in both directions. Each direction runs in its own
 	// goroutine; either side closing terminates both. The WaitGroup lets
 	// Close drain in-flight tunnels rather than leaking them.
-	p.tunnels.Add(2)
 	go func() {
 		defer p.tunnels.Done()
 		_, _ = io.Copy(upstream, clientConn)
@@ -458,11 +467,14 @@ func compileEgressAllowList(allowList []string) ([]hostPattern, error) {
 		if strings.ContainsAny(entry, " \t\n\r") {
 			return nil, fmt.Errorf("egress_proxy: allow-list entry %q contains whitespace", raw)
 		}
-		// "**" is no longer supported ( dropped it in favour of
+		// "**" is no longer supported ( dropped it in favor of
 		// the prevailing "*.x" convention). Reject any "**" early so
 		// operators don't get surprising silent matches.
 		if strings.Contains(entry, "**") {
-			return nil, fmt.Errorf("egress_proxy: allow-list entry %q uses unsupported '**' wildcard (use '*.x' for one-or-more leading labels)", raw)
+			return nil, fmt.Errorf(
+				"egress_proxy: allow-list entry %q uses unsupported '**' wildcard (use '*.x' for one-or-more leading labels)",
+				raw,
+			)
 		}
 		if strings.HasPrefix(entry, "*.") {
 			suffix := strings.TrimPrefix(entry, "*.")
@@ -473,7 +485,10 @@ func compileEgressAllowList(allowList []string) ([]hostPattern, error) {
 			continue
 		}
 		if strings.Contains(entry, "*") {
-			return nil, fmt.Errorf("egress_proxy: allow-list entry %q has '*' in non-leading position (only '*.x' is supported)", raw)
+			return nil, fmt.Errorf(
+				"egress_proxy: allow-list entry %q has '*' in non-leading position (only '*.x' is supported)",
+				raw,
+			)
 		}
 		patterns = append(patterns, hostPattern{suffix: false, host: entry})
 	}

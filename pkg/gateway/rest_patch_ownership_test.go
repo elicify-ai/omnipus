@@ -96,14 +96,13 @@ func newPatchOwnershipAPI(
 
 	// Write a minimal config.json so safeUpdateConfigJSON can read it.
 	// Include the custom agent and users so PATCH can find them.
-	gwUsers := []any{
-		map[string]any{
-			"username": "admin",
-			"role":     "admin",
-			"password_hash": "",
-			"token_hash":    "",
-		},
-	}
+	gwUsers := make([]any, 0, 1+len(extraUsers))
+	gwUsers = append(gwUsers, map[string]any{
+		"username":      "admin",
+		"role":          "admin",
+		"password_hash": "",
+		"token_hash":    "",
+	})
 	for _, u := range extraUsers {
 		gwUsers = append(gwUsers, map[string]any{
 			"username":      u.Username,
@@ -112,14 +111,14 @@ func newPatchOwnershipAPI(
 			"token_hash":    "",
 		})
 	}
-	initialOwnerField := interface{}(nil)
+	initialOwnerField := any(nil)
 	if initialOwner != "" {
 		initialOwnerField = initialOwner
 	}
 	agentEntry := map[string]any{
-		"id":    "custom-agent-1",
-		"name":  "Custom Agent One",
-		"type":  "custom",
+		"id":   "custom-agent-1",
+		"name": "Custom Agent One",
+		"type": "custom",
 	}
 	if initialOwner != "" {
 		agentEntry["owner_username"] = initialOwner
@@ -131,7 +130,7 @@ func newPatchOwnershipAPI(
 		},
 		"agents": map[string]any{
 			"defaults": map[string]any{},
-			"list": []any{agentEntry},
+			"list":     []any{agentEntry},
 		},
 		"providers": []any{},
 	}
@@ -368,8 +367,8 @@ func TestPatchOwnership_DifferentAgents_ProduceDifferentResults(t *testing.T) {
 
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{
-			Host:  "127.0.0.1",
-			Port:  8080,
+			Host: "127.0.0.1",
+			Port: 8080,
 			Users: []config.UserConfig{
 				{Username: "admin", Role: config.UserRoleAdmin},
 				bob,

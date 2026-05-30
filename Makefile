@@ -1,4 +1,4 @@
-.PHONY: all build install uninstall clean help test
+.PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types spa-embed release-snapshot release-build
 
 # Build variables
 BINARY_NAME=omnipus
@@ -11,7 +11,10 @@ VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 GIT_COMMIT=$(shell git rev-parse --short=8 HEAD 2>/dev/null || echo "dev")
 BUILD_TIME=$(shell date +%FT%T%z)
 GO_VERSION=$(shell $(GO) version | awk '{print $$3}')
-CONFIG_PKG=github.com/sipeed/omnipus/pkg/config
+# Build-time vars live at pkg/config: Version, GitCommit, BuildTime, GoVersion.
+# pkg/config/version.go documents this path explicitly. The CLI reads Version
+# via config.GetVersion(). (pkg/gateway has its own unrelated Version var.)
+CONFIG_PKG=github.com/dapicom-ai/omnipus/pkg/config
 LDFLAGS=-X $(CONFIG_PKG).Version=$(VERSION) -X $(CONFIG_PKG).GitCommit=$(GIT_COMMIT) -X $(CONFIG_PKG).BuildTime=$(BUILD_TIME) -X $(CONFIG_PKG).GoVersion=$(GO_VERSION) -s -w
 
 # Go variables
@@ -118,8 +121,19 @@ generate:
 	@$(GO) generate ./...
 	@echo "Run generate complete"
 
+## spa-embed: Build the SPA and mirror it into pkg/gateway/spa/ for //go:embed.
+## pkg/gateway/embed.go has //go:embed all:spa and pkg/gateway/spa/ is gitignored.
+## Vite outputs to dist/spa; we copy it into the embed target before any go build.
+spa-embed:
+	@echo "Building SPA and embedding into pkg/gateway/spa/..."
+	@npm ci
+	@npm run build
+	@rm -rf pkg/gateway/spa
+	@cp -r dist/spa pkg/gateway/spa
+	@echo "SPA embed complete"
+
 ## build: Build the omnipus binary for current platform
-build: generate
+build: spa-embed generate
 	@echo "Building $(BINARY_NAME) for $(PLATFORM)/$(ARCH)..."
 	@mkdir -p $(BUILD_DIR)
 	@$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./$(CMD_DIR)
@@ -191,7 +205,7 @@ build-pi-zero: build-linux-arm build-linux-arm64
 	@echo "Pi Zero 2 W builds: $(BUILD_DIR)/$(BINARY_NAME)-linux-arm (32-bit), $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 (64-bit)"
 
 ## build-all: Build omnipus for all platforms
-build-all: generate
+build-all: spa-embed generate
 	@echo "Building for multiple platforms..."
 	@mkdir -p $(BUILD_DIR)
 	GOOS=linux GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 ./$(CMD_DIR)
@@ -208,6 +222,21 @@ build-all: generate
 	GOOS=netbsd GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-netbsd-amd64 ./$(CMD_DIR)
 	GOOS=netbsd GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-netbsd-arm64 ./$(CMD_DIR)
 	@echo "All builds complete"
+
+## release-snapshot: Run goreleaser locally without publishing (produces dist/ artifacts).
+## Useful for verifying the release pipeline before tagging.
+release-snapshot:
+	@echo "Running goreleaser snapshot..."
+	@goreleaser release --snapshot --clean --skip=publish,sign
+	@echo "Snapshot artifacts in dist/"
+
+## release-build: Run goreleaser to produce a real release.
+## Requires GITHUB_TOKEN and a pushed tag matching the current HEAD.
+## Normally invoked by .github/workflows/release.yml, not manually.
+release-build:
+	@echo "Running goreleaser release..."
+	@goreleaser release --clean
+	@echo "Release complete"
 
 ## install: Install omnipus to system and copy builtin skills
 install: build
@@ -243,14 +272,11 @@ clean:
 
 ## vet: Run go vet for static analysis
 vet: generate
-	@packages="$$($(GO) list $(GOFLAGS) ./...)" && \
-		$(GO) vet $(GOFLAGS) $$(printf '%s\n' "$$packages" | grep -v '^github.com/sipeed/omnipus/web/')
-	@cd web/backend && $(WEB_GO) vet ./...
+	@$(GO) vet $(GOFLAGS) ./...
 
 ## test: Test Go code
 test: generate
-	@$(GO) test $(GOFLAGS) $$($(GO) list $(GOFLAGS) ./... | grep -v github.com/sipeed/omnipus/web/)
-	@cd web && make test
+	@$(GO) test $(GOFLAGS) ./...
 
 ## fmt: Format Go code
 fmt:
@@ -330,6 +356,23 @@ build-macos-app:
 	@cd web && $(MAKE) build && cd ..
 	@./scripts/build-macos-app.sh $(BINARY_NAME)-$(PLATFORM)-$(ARCH)
 	@echo "macOS .app bundle created: $(BUILD_DIR)/Omnipus.app"
+
+## gen-contracts: Regenerate all contract artifacts (TS types, zod schemas, Go types)
+gen-contracts:
+	./scripts/gen-contracts.sh
+
+## lint-wire-types: Fail if hand-written wire-format types exist outside generated directories
+## Enforces hard-constraint #8 (CLAUDE.md contract-first rule).
+## Add `// not-wire-format` on the struct/interface declaration line to suppress a false positive.
+lint-wire-types:
+	bash scripts/check-no-handwritten-wire-types.sh
+
+## verify-contracts: Regenerate contracts, run wire-type lint, typecheck TS, fail if anything has drifted
+# Note: `tsc --noEmit` (without -b) is a silent no-op on a project-references
+# root. Always use `tsc -b --noEmit` here and in CI. See F6 / npm run typecheck.
+verify-contracts: gen-contracts lint-wire-types
+	npx tsc -b --noEmit
+	git diff --exit-code -- contracts/ pkg/api/generated/ src/lib/api/generated/
 
 ## help: Show this help message
 help:

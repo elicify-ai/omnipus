@@ -113,7 +113,7 @@ func SpawnBackgroundChild(
 	//
 	// B1.4-e: Open with O_APPEND only (no O_TRUNC) so that successive spawns
 	// accumulate log output rather than silently discarding the previous run's
-	// lines. This matches standard daemon log behaviour and is critical for
+	// lines. This matches standard daemon log behavior and is critical for
 	// post-mortem debugging when a dev server exits and is restarted.
 	//
 	// The parent-side file handle is stored in logFile so it can be closed
@@ -190,11 +190,20 @@ func SpawnBackgroundChild(
 			// security event — log at Error so operators can investigate.
 			killErr := cmd.Process.Kill()
 			if killErr != nil && !isProcessDoneError(killErr) {
-				slog.Error("SpawnBackgroundChild: post-start hardening failed AND child kill failed; child PID may still be running",
-					"pid", cmd.Process.Pid,
-					"kill_err", killErr,
-					"hardening_err", hardeningErr)
-				return nil, fmt.Errorf("SpawnBackgroundChild: post-start hardening: %w; kill also failed: %v", hardeningErr, killErr)
+				slog.Error(
+					"SpawnBackgroundChild: post-start hardening failed AND child kill failed; child PID may still be running",
+					"pid",
+					cmd.Process.Pid,
+					"kill_err",
+					killErr,
+					"hardening_err",
+					hardeningErr,
+				)
+				return nil, fmt.Errorf(
+					"SpawnBackgroundChild: post-start hardening: %w; kill also failed: %v",
+					hardeningErr,
+					killErr,
+				)
 			}
 			return nil, fmt.Errorf("SpawnBackgroundChild: post-start hardening: %w", hardeningErr)
 		}

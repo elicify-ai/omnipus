@@ -13,7 +13,7 @@
 // And the policy pointer swaps before the loop calls Execute on the in-flight tool call,
 // Then the loop re-resolves the effective policy for "exec" immediately before execution,
 // And observes "deny",
-// And synthesises permission_denied instead of running exec,
+// And synthesizes permission_denied instead of running exec,
 // And an audit event tool.policy.deny.attempted (WARN) is emitted with tool_call_id
 //   and a note mid_turn_policy_change.
 //

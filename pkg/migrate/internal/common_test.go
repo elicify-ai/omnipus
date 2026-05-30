@@ -30,7 +30,7 @@ func TestExpandHomeWithTilde(t *testing.T) {
 	require.NoError(t, err)
 
 	result := ExpandHome("~/path")
-	assert.Equal(t, home+"/path", result)
+	assert.Equal(t, filepath.Join(home, "path"), result)
 
 	result = ExpandHome("~")
 	assert.Equal(t, home, result)

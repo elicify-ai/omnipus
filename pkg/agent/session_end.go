@@ -104,7 +104,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 
 	// Build the conversation text, truncate to 2000 tokens (~8000 runes).
 	// FR-030: "truncate oldest" — we keep the tail (most recent turns) because
-	// the recap's value is summarising what just happened, not what happened
+	// the recap's value is summarizing what just happened, not what happened
 	// 40 turns ago.
 	const tokenBudget = 2000
 	combined := strings.Join(userTurns, "\n\n")
@@ -127,7 +127,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	}
 
 	// Build recap prompt.
-	recapPrompt := `Summarise this conversation in ≤ 150 words. Then list up to 5 wins, up to 5 needs-improvement items, and up to 5 items worth remembering long-term. Respond ONLY with valid JSON: {"recap":"...", "went_well":[...], "needs_improvement":[...], "worth_remembering":[...]}`
+	recapPrompt := `Summarize this conversation in ≤ 150 words. Then list up to 5 wins, up to 5 needs-improvement items, and up to 5 items worth remembering long-term. Respond ONLY with valid JSON: {"recap":"...", "went_well":[...], "needs_improvement":[...], "worth_remembering":[...]}`
 
 	msgs := []providers.Message{
 		{Role: "user", Content: historyText + "\n\n" + recapPrompt},
@@ -156,7 +156,14 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 		// SF1: emit two distinct audit entries so operators can see both outcomes:
 		// (1) the LLM call failed, (2) the heuristic fallback was written.
 		al.auditRecap(sessionID, agentInst.ID, trigger, "llm_failed:"+classifyLLMError(llmErr))
-		al.writeHeuristicFallbackRetroWithCount(sessionID, trigger, classifyLLMError(llmErr), agentInst, len(entries), toolCallCount)
+		al.writeHeuristicFallbackRetroWithCount(
+			sessionID,
+			trigger,
+			classifyLLMError(llmErr),
+			agentInst,
+			len(entries),
+			toolCallCount,
+		)
 		return
 	}
 
@@ -180,14 +187,28 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 			"parse_error", parseErr.Error(),
 			"response_preview", utils.Truncate(responseText, 500),
 		)
-		al.writeHeuristicFallbackRetroWithCount(sessionID, trigger, "json_parse_error", agentInst, len(entries), toolCallCount)
+		al.writeHeuristicFallbackRetroWithCount(
+			sessionID,
+			trigger,
+			"json_parse_error",
+			agentInst,
+			len(entries),
+			toolCallCount,
+		)
 		return
 	}
 
 	// Persist last-session summary.
 	memory := agentInst.ContextBuilder.Memory()
 	if memory == nil {
-		al.writeHeuristicFallbackRetroWithCount(sessionID, trigger, "no_memory_store", agentInst, len(entries), toolCallCount)
+		al.writeHeuristicFallbackRetroWithCount(
+			sessionID,
+			trigger,
+			"no_memory_store",
+			agentInst,
+			len(entries),
+			toolCallCount,
+		)
 		return
 	}
 
@@ -439,7 +460,7 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 
 	for _, entry := range entries {
 		if ctx.Err() != nil {
-			slog.Info("session_end: bootstrap recap pass complete (context cancelled)",
+			slog.Info("session_end: bootstrap recap pass complete (context canceled)",
 				"processed", processed,
 				"skipped_budget", skippedBudget,
 				"errored", errored,
@@ -496,7 +517,7 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 
 		select {
 		case <-ctx.Done():
-			slog.Info("session_end: bootstrap recap pass complete (context cancelled)",
+			slog.Info("session_end: bootstrap recap pass complete (context canceled)",
 				"processed", processed,
 				"skipped_budget", skippedBudget,
 				"errored", errored,

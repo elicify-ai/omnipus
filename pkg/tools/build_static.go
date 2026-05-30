@@ -81,7 +81,7 @@ type BuildStaticConfig struct {
 	// own compiled copy.
 	EgressAllowList []string
 
-	// AuditFailClosed (HIGH-6, silent-failure-hunter) controls behaviour
+	// AuditFailClosed (HIGH-6, silent-failure-hunter) controls behavior
 	// when audit-write fails on a Tier 2 invocation. When true (default
 	// via ResolveBool(cfg.Sandbox.PathGuardAuditFailClosed, true)) the
 	// tool refuses to run without a guaranteed compliance trail —
@@ -296,7 +296,10 @@ func (t *BuildStaticTool) Execute(ctx context.Context, args map[string]any) *Too
 	if output == "" {
 		output = frameworkDefaultOutput(framework)
 	}
-	resolvedOutput, _ := resolveWorkspaceRelative(t.workspace, filepath.Join(strings.TrimPrefix(resolvedEntry, t.workspace+string(filepath.Separator)), output))
+	resolvedOutput, _ := resolveWorkspaceRelative(
+		t.workspace,
+		filepath.Join(strings.TrimPrefix(resolvedEntry, t.workspace+string(filepath.Separator)), output),
+	)
 
 	// HIGH-1: surface unsupported memory caps to the agent. Either child
 	// can flag this (currently darwin only sets it). The preamble is added
@@ -368,7 +371,7 @@ func (t *BuildStaticTool) failureResult(stage string, r sandbox.Result) *ToolRes
 // operators can see exactly what npm commands ran.
 //
 // HIGH-6 (silent-failure-hunter): build_static is a TRUSTED-PROMPT FEATURE
-//. The audit log is the ONLY after-the-fact compliance
+// . The audit log is the ONLY after-the-fact compliance
 // trail of what npm command ran with the gateway's full filesystem reach.
 // When the audit write fails AND AuditFailClosed is true (default), we
 // REFUSE to run the build — the safety contract requires a guaranteed

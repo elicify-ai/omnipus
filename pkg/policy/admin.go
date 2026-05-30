@@ -13,6 +13,7 @@
 // trivial today; the indirection is deliberate so that future RBAC
 // granularity changes (per `docs/specs/rbac-granularity-spec.md`) have one
 // chokepoint to update.
+
 package policy
 
 import "github.com/dapicom-ai/omnipus/pkg/config"

@@ -1,0 +1,18 @@
+type: object
+description: Credentials for authenticating an existing user.
+required:
+  - username
+  - password
+additionalProperties: false
+properties:
+  username:
+    type: string
+    minLength: 1
+    description: The user's login name.
+    example: "admin"
+  password:
+    type: string
+    minLength: 1
+    maxLength: 72
+    description: The user's password. Maximum 72 characters (bcrypt limit).
+    example: "s3cr3tpassword"

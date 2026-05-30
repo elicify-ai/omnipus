@@ -6,7 +6,7 @@
 // unit tests, but it means regressions in the REAL MemoryStore's flock
 // discipline, validation gates, format bytes, or retro layout never fail a
 // tool test. This file closes that gap from the agent side by wiring the
-// production adapter into the real tools and asserting full-path behaviour.
+// production adapter into the real tools and asserting full-path behavior.
 
 package agent
 
@@ -191,7 +191,7 @@ func TestRetrospectiveTool_RealAdapter_RejectsPathTraversal(t *testing.T) {
 	// Walk the workspace and assert no .md files leaked anywhere.
 	_ = filepath.Walk(workspace, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
-			return nil
+			return walkErr
 		}
 		if info.IsDir() {
 			return nil

@@ -1,0 +1,3646 @@
+openapi: 3.0.3
+info:
+  title: Omnipus REST API
+  version: 0.1.0
+  description: 'REST API surface for the Omnipus agentic gateway. All endpoints are under /api/v1. Authentication uses Bearer tokens issued by /auth/login, /auth/register-admin, or /onboarding/complete. State-changing requests must include the X-CSRF-Token header echoing the __Host-csrf cookie value (double-submit cookie, issue #97). See src/lib/api.ts for the CSRF_EXEMPT_PATHS list (endpoints that issue the cookie and cannot require it to be present yet).
+
+    '
+  contact:
+    name: Omnipus contributors
+    url: https://omnipus.ai
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+servers:
+- url: http://localhost:6060/api/v1
+  description: Local development gateway (default port 6060)
+tags:
+- name: auth
+  description: "Authentication \u2014 login, logout, token validation, password management."
+- name: onboarding
+  description: "First-run onboarding wizard \u2014 provider probe and atomic setup."
+- name: sessions
+  description: Chat/task/channel session CRUD and transcript access.
+- name: users
+  description: User account management (admin-only). Separate from self-service auth.
+- name: agents
+  description: Agent configuration CRUD and per-agent session listing.
+- name: security
+  description: Security configuration endpoints (session scope, etc.).
+- name: Health
+  description: Health check endpoint
+- name: About
+  description: Gateway metadata and version information
+- name: Tools
+  description: Tool registry, per-agent tool policies, and tool approval resolution
+- name: Security
+  description: Security configuration endpoints (exec allowlist, skill trust, prompt guard, rate limits, sandbox, retention)
+- name: Audit
+  description: Audit log entries and audit logging toggle
+- name: Channels
+  description: Communication channel configuration and management
+- name: Config
+  description: Config state introspection (pending restarts)
+- name: Workspace
+  description: Agent workspace file access
+- name: Preview
+  description: Agent-generated iframe preview content (token-authenticated)
+- name: Agents
+  description: Agent management endpoints
+- name: Settings
+  description: Credentials, backup/restore, and storage management
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: 'Bearer token issued by /auth/login, /auth/register-admin, or /onboarding/complete. Store in sessionStorage under "omnipus_auth_token".
+
+        '
+  schemas:
+    ErrorResponse:
+      $ref: ./components/schemas/ErrorResponse.yaml
+    LoginRequest:
+      $ref: ./components/schemas/LoginRequest.yaml
+    LoginResponse:
+      $ref: ./components/schemas/LoginResponse.yaml
+    RegisterAdminRequest:
+      $ref: ./components/schemas/RegisterAdminRequest.yaml
+    ChangePasswordRequest:
+      $ref: ./components/schemas/ChangePasswordRequest.yaml
+    OnboardingCompleteRequest:
+      $ref: ./components/schemas/OnboardingCompleteRequest.yaml
+    OnboardingCompleteResponse:
+      $ref: ./components/schemas/LoginResponse.yaml
+    ProbeProviderRequest:
+      $ref: ./components/schemas/ProbeProviderRequest.yaml
+    ProbeProviderResponse:
+      $ref: ./components/schemas/ProbeProviderResponse.yaml
+    User:
+      $ref: ./components/schemas/User.yaml
+    UserCreateRequest:
+      $ref: ./components/schemas/UserCreateRequest.yaml
+    UserCreateResponse:
+      $ref: ./components/schemas/UserCreateResponse.yaml
+    UserDeleteResponse:
+      $ref: ./components/schemas/UserDeleteResponse.yaml
+    UserRoleChangeRequest:
+      $ref: ./components/schemas/UserRoleChangeRequest.yaml
+    UserRoleChangeResponse:
+      $ref: ./components/schemas/UserRoleChangeResponse.yaml
+    UserResetPasswordRequest:
+      $ref: ./components/schemas/UserResetPasswordRequest.yaml
+    UserResetPasswordResponse:
+      $ref: ./components/schemas/UserResetPasswordResponse.yaml
+    Session:
+      $ref: ./components/schemas/Session.yaml
+    SessionStats:
+      $ref: ./components/schemas/SessionStats.yaml
+    SessionDetail:
+      $ref: ./components/schemas/SessionDetail.yaml
+    SessionCreateRequest:
+      $ref: ./components/schemas/SessionCreateRequest.yaml
+    SessionRenameRequest:
+      $ref: ./components/schemas/SessionRenameRequest.yaml
+    Message:
+      $ref: ./components/schemas/Message.yaml
+    ToolCall:
+      $ref: ./components/schemas/ToolCall.yaml
+    Attachment:
+      $ref: ./components/schemas/Attachment.yaml
+    Agent:
+      $ref: ./components/schemas/Agent.yaml
+    AgentModelParams:
+      $ref: ./components/schemas/AgentModelParams.yaml
+    AgentRateLimits:
+      $ref: ./components/schemas/AgentRateLimits.yaml
+    AgentStats:
+      $ref: ./components/schemas/AgentStats.yaml
+    AgentShellPolicy:
+      $ref: ./components/schemas/AgentShellPolicy.yaml
+    AgentToolsCfg:
+      $ref: ./components/schemas/AgentToolsCfg.yaml
+    AgentToolsUpdateRequest:
+      $ref: ./components/schemas/AgentToolsUpdateRequest.yaml
+    AgentCreateRequest:
+      $ref: ./components/schemas/AgentCreateRequest.yaml
+    AgentUpdateRequest:
+      $ref: ./components/schemas/AgentUpdateRequest.yaml
+    AgentSession:
+      $ref: ./components/schemas/AgentSession.yaml
+    SessionScopeRequest:
+      $ref: ./components/schemas/SessionScopeRequest.yaml
+    SessionScopeResponse:
+      $ref: ./components/schemas/SessionScopeResponse.yaml
+    ToolRegistryEntry:
+      $ref: ./components/schemas/ToolRegistryEntry.yaml
+    AgentToolEntry:
+      $ref: ./components/schemas/AgentToolEntry.yaml
+    ToolPolicy:
+      $ref: ./components/schemas/ToolPolicy.yaml
+    GlobalToolPolicies:
+      $ref: ./components/schemas/GlobalToolPolicies.yaml
+    ChannelId:
+      $ref: ./components/schemas/ChannelId.yaml
+    ChannelEntry:
+      $ref: ./components/schemas/ChannelEntry.yaml
+    RetentionConfig:
+      $ref: ./components/schemas/RetentionConfig.yaml
+    RetentionSweepResult:
+      $ref: ./components/schemas/RetentionSweepResult.yaml
+    SandboxConfig:
+      $ref: ./components/schemas/SandboxConfig.yaml
+    SandboxStatus:
+      $ref: ./components/schemas/SandboxStatus.yaml
+    AuditEntry:
+      $ref: ./components/schemas/AuditEntry.yaml
+    AuditLogToggle:
+      $ref: ./components/schemas/AuditLogToggle.yaml
+    RateLimitConfig:
+      $ref: ./components/schemas/RateLimitConfig.yaml
+    ExecAllowlist:
+      $ref: ./components/schemas/ExecAllowlist.yaml
+    ExecProxyStatus:
+      $ref: ./components/schemas/ExecProxyStatus.yaml
+    SkillTrustResponse:
+      $ref: ./components/schemas/SkillTrustResponse.yaml
+    PromptGuardResponse:
+      $ref: ./components/schemas/PromptGuardResponse.yaml
+    PendingRestartEntry:
+      $ref: ./components/schemas/PendingRestartEntry.yaml
+    AboutResponse:
+      $ref: ./components/schemas/AboutResponse.yaml
+    HealthResponse:
+      $ref: ./components/schemas/HealthResponse.yaml
+    GatewayStatus:
+      $ref: ./components/schemas/GatewayStatus.yaml
+    Provider:
+      $ref: ./components/schemas/Provider.yaml
+    Skill:
+      $ref: ./components/schemas/Skill.yaml
+    ActivityEvent:
+      $ref: ./components/schemas/ActivityEvent.yaml
+    UploadedFile:
+      $ref: ./components/schemas/UploadedFile.yaml
+    SandboxConfigUpdate:
+      $ref: ./components/schemas/SandboxConfigUpdate.yaml
+    Task:
+      $ref: ./components/schemas/Task.yaml
+    McpServer:
+      $ref: ./components/schemas/McpServer.yaml
+    McpServerCreate:
+      $ref: ./components/schemas/McpServerCreate.yaml
+    McpServerToolsResponse:
+      $ref: ./components/schemas/McpServerToolsResponse.yaml
+    AppState:
+      $ref: ./components/schemas/AppState.yaml
+    ValidateTokenResponse:
+      $ref: ./components/schemas/ValidateTokenResponse.yaml
+    DoctorIssue:
+      $ref: ./components/schemas/DoctorIssue.yaml
+    DoctorResult:
+      $ref: ./components/schemas/DoctorResult.yaml
+    DevicePending:
+      $ref: ./components/schemas/DevicePending.yaml
+    DevicePaired:
+      $ref: ./components/schemas/DevicePaired.yaml
+    DevicesResponse:
+      $ref: ./components/schemas/DevicesResponse.yaml
+    BackupEntry:
+      $ref: ./components/schemas/BackupEntry.yaml
+    StorageStats:
+      $ref: ./components/schemas/StorageStats.yaml
+    MeInfo:
+      $ref: ./components/schemas/MeInfo.yaml
+    AuditLogToggleRequest:
+      $ref: ./components/schemas/AuditLogToggleRequest.yaml
+    AuditLogUpdateResponse:
+      $ref: ./components/schemas/AuditLogUpdateResponse.yaml
+    SkillTrustUpdateRequest:
+      $ref: ./components/schemas/SkillTrustUpdateRequest.yaml
+    SkillTrustUpdateResponse:
+      $ref: ./components/schemas/SkillTrustUpdateResponse.yaml
+    PromptGuardUpdateRequest:
+      $ref: ./components/schemas/PromptGuardUpdateRequest.yaml
+    PromptGuardUpdateResponse:
+      $ref: ./components/schemas/PromptGuardUpdateResponse.yaml
+    RateLimitsResponse:
+      $ref: ./components/schemas/RateLimitsResponse.yaml
+    RateLimitsUpdateRequest:
+      $ref: ./components/schemas/RateLimitsUpdateRequest.yaml
+    RateLimitsUpdateResponse:
+      $ref: ./components/schemas/RateLimitsUpdateResponse.yaml
+    SessionScopeUpdateResponse:
+      $ref: ./components/schemas/SessionScopeUpdateResponse.yaml
+    RetentionUpdateResponse:
+      $ref: ./components/schemas/RetentionUpdateResponse.yaml
+    AgentToolsResponse:
+      $ref: ./components/schemas/AgentToolsResponse.yaml
+    ChannelEnabledResponse:
+      $ref: ./components/schemas/ChannelEnabledResponse.yaml
+    ChannelTestResponse:
+      $ref: ./components/schemas/ChannelTestResponse.yaml
+    BackupCreateResponse:
+      $ref: ./components/schemas/BackupCreateResponse.yaml
+    OnboardingStatusResponse:
+      $ref: ./components/schemas/OnboardingStatusResponse.yaml
+    OperationResult:
+      $ref: ./components/schemas/OperationResult.yaml
+    ToolApprovalResponse:
+      $ref: ./components/schemas/ToolApprovalResponse.yaml
+    UploadFilesResponse:
+      $ref: ./components/schemas/UploadFilesResponse.yaml
+    TaskAcceptedResponse:
+      $ref: ./components/schemas/TaskAcceptedResponse.yaml
+    AgentOwnerUpdateResponse:
+      $ref: ./components/schemas/AgentOwnerUpdateResponse.yaml
+    ActivityEventsResponse:
+      $ref: ./components/schemas/ActivityEventsResponse.yaml
+    RotateTokenResponse:
+      $ref: ./components/schemas/RotateTokenResponse.yaml
+    VersionResponse:
+      $ref: ./components/schemas/VersionResponse.yaml
+    UserContextRequest:
+      $ref: ./components/schemas/UserContextRequest.yaml
+    UserContextResponse:
+      $ref: ./components/schemas/UserContextResponse.yaml
+    TaskCreateRequest:
+      $ref: ./components/schemas/TaskCreateRequest.yaml
+    TaskUpdateRequest:
+      $ref: ./components/schemas/TaskUpdateRequest.yaml
+    ProviderUpdateRequest:
+      $ref: ./components/schemas/ProviderUpdateRequest.yaml
+    AppStatePatchRequest:
+      $ref: ./components/schemas/AppStatePatchRequest.yaml
+    SkillInstallRequest:
+      $ref: ./components/schemas/SkillInstallRequest.yaml
+    SseChatRequest:
+      $ref: ./components/schemas/SseChatRequest.yaml
+    ToolApprovalActionRequest:
+      $ref: ./components/schemas/ToolApprovalActionRequest.yaml
+    CredentialSetRequest:
+      $ref: ./components/schemas/CredentialSetRequest.yaml
+    RestoreBackupRequest:
+      $ref: ./components/schemas/RestoreBackupRequest.yaml
+    AgentOwnershipUpdateRequest:
+      $ref: ./components/schemas/AgentOwnershipUpdateRequest.yaml
+    BearerToken:
+      $ref: ./components/schemas/BearerToken.yaml
+    ChannelConfigureRequest:
+      $ref: ./components/schemas/ChannelConfigureRequest.yaml
+    RetentionUpdateRequest:
+      $ref: ./components/schemas/RetentionUpdateRequest.yaml
+    McpToolsListResponse:
+      $ref: ./components/schemas/McpToolsListResponse.yaml
+    McpToolCallRequest:
+      $ref: ./components/schemas/McpToolCallRequest.yaml
+    McpToolCallResponse:
+      $ref: ./components/schemas/McpToolCallResponse.yaml
+  responses:
+    400BadRequest:
+      description: "Bad request \u2014 missing or invalid field."
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    401Unauthorized:
+      description: Authentication required or credentials invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    403Forbidden:
+      description: Insufficient permissions or CSRF validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    404NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    409Conflict:
+      description: "Conflict \u2014 e.g. resource already exists, or last-admin guard triggered."
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    422UnprocessableEntity:
+      description: "Validation failed \u2014 semantically invalid input."
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    429TooManyRequests:
+      description: Rate limit exceeded.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until the rate limit window resets.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    500InternalServerError:
+      description: Internal server error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    503ServiceUnavailable:
+      description: "Service unavailable \u2014 e.g. credential store locked."
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+paths:
+  /auth/login:
+    post:
+      operationId: login
+      summary: Authenticate with username and password
+      description: "Validates credentials against the bcrypt hashes in config.json. On success, issues a bearer token, an HttpOnly session cookie (omnipus-session), and a __Host-csrf cookie. CSRF-exempt (cookie cannot pre-exist before login). Rate-limited: 5 failures per IP+username per 15 minutes \u2192 429.\n"
+      tags:
+      - auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authentication successful.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /auth/logout:
+    post:
+      operationId: logout
+      summary: Revoke the authenticated user's session
+      description: 'Clears the user''s token_hash and session_token_hash in config.json, then revokes the omnipus-session and __Host-csrf browser cookies. Requires authentication.
+
+        '
+      tags:
+      - auth
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: Session revoked successfully. No response body.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /auth/validate:
+    get:
+      operationId: validateToken
+      summary: Validate the current bearer token
+      description: 'Returns the authenticated user''s username and role when the token is valid. Rate-limited: 30 requests per IP per minute.
+
+        '
+      tags:
+      - auth
+      security: []
+      responses:
+        '200':
+          description: Token is valid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateTokenResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+  /auth/register-admin:
+    post:
+      operationId: registerAdmin
+      summary: Create the first admin account
+      description: 'Creates the first admin user. Returns 409 if any admin already exists. The check-create sequence is atomic (TOCTOU-safe via safeUpdateConfigJSON). Issues bearer token, session cookie, and CSRF cookie on success. CSRF-exempt. Rate-limited: 3 requests per IP per minute.
+
+        '
+      tags:
+      - auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterAdminRequest'
+      responses:
+        '200':
+          description: Admin user created. Token ready to use.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /auth/change-password:
+    post:
+      operationId: changePassword
+      summary: Change the authenticated user's own password
+      description: 'Self-service password change. Requires the current password for verification. Different from PUT /users/{username}/password which is the admin-reset path. Requires authentication.
+
+        '
+      tags:
+      - auth
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          description: Password changed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResult'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /onboarding/complete:
+    post:
+      operationId: completeOnboarding
+      summary: Finalize first-run onboarding
+      description: 'Two-phase commit: writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 409 when onboarding is already complete. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
+
+        '
+      tags:
+      - onboarding
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OnboardingCompleteRequest'
+      responses:
+        '200':
+          description: Onboarding completed successfully. Bearer token ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingCompleteResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
+  /onboarding/probe-provider:
+    post:
+      operationId: probeProvider
+      summary: Test a provider API key and list available models
+      description: 'Non-persistent probe: accepts an API key in the request body, tests it against the provider''s /models endpoint, and returns the model list. Nothing is written to disk. Available only during onboarding (returns 409 after onboarding completes). CSRF-exempt.
+
+        '
+      tags:
+      - onboarding
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProbeProviderRequest'
+      responses:
+        '200':
+          description: 'Always HTTP 200. Check success field to determine if the probe succeeded or failed at the provider level.
+
+            '
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProbeProviderResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+  /sessions:
+    get:
+      operationId: listSessions
+      summary: List sessions across all agents
+      description: 'Returns all sessions visible to the authenticated user. Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the response still returns HTTP 200 but includes a partial_errors array alongside the sessions array.
+
+        '
+      tags:
+      - sessions
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: agent_id
+        in: query
+        description: Filter by agent ID.
+        schema:
+          type: string
+        example: jim
+      - name: type
+        in: query
+        description: Filter by session type.
+        schema:
+          type: string
+          enum:
+          - chat
+          - task
+          - channel
+        example: chat
+      responses:
+        '200':
+          description: 'List of sessions. When partial errors occur, the response body is {"sessions": [...], "partial_errors": ["agent=X: session_list_failed"]}. When no errors, the response body is a plain JSON array of Session objects.
+
+            '
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - type: array
+                  items:
+                    $ref: '#/components/schemas/Session'
+                - type: object
+                  required:
+                  - sessions
+                  - partial_errors
+                  properties:
+                    sessions:
+                      type: array
+                      items:
+                        $ref: '#/components/schemas/Session'
+                    partial_errors:
+                      type: array
+                      items:
+                        type: string
+                      description: Opaque error tokens (agent ID + sanitized reason).
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    post:
+      operationId: createSession
+      summary: Create a new session
+      description: 'Creates a new session for the specified agent. Returns HTTP 201 on success. The agent must exist (400 if not found).
+
+        '
+      tags:
+      - sessions
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionCreateRequest'
+      responses:
+        '201':
+          description: Session created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /sessions/{id}:
+    get:
+      operationId: getSession
+      summary: Get session detail including full transcript
+      description: 'Returns the session metadata and complete ordered transcript. Used by the SPA to render the chat history.
+
+        '
+      tags:
+      - sessions
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Session ID.
+        example: 550e8400-e29b-41d4-a716-446655440000
+      responses:
+        '200':
+          description: Session detail with transcript.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetail'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    put:
+      operationId: renameSession
+      summary: Rename a session
+      description: Updates the session title. Returns the updated session metadata.
+      tags:
+      - sessions
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Session ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionRenameRequest'
+      responses:
+        '200':
+          description: Session renamed. Returns updated session metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    delete:
+      operationId: deleteSession
+      summary: Delete a session and all its data
+      description: 'Permanently removes the session directory including transcript and context. Returns {"success": true} on success.
+
+        '
+      tags:
+      - sessions
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Session ID.
+      responses:
+        '200':
+          description: Session deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - success
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /sessions/{id}/messages:
+    get:
+      operationId: getSessionMessages
+      summary: Get session transcript messages
+      description: 'Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed.
+
+        '
+      tags:
+      - sessions
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Session ID.
+      responses:
+        '200':
+          description: Ordered list of transcript entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Message'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /sessions/{session_id}/tool-results/{ref}:
+    get:
+      operationId: getToolResult
+      summary: Fetch a previously-stored tool result body
+      description: >
+        Returns the full JSON body of a tool result that was emitted as a
+        ToolResultRef sentinel on the WebSocket. The result is scoped to the
+        session that produced it — a ref from session A cannot be fetched under
+        session B's path. The SPA fetches this lazily when the user expands a
+        clamped tool call, keeping main-thread memory bounded during
+        high-volume agent activity.
+      tags:
+      - tools
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+        description: Session ID that produced the tool result.
+      - name: ref
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 64
+        description: Opaque ref id from the matching ToolResultRef sentinel.
+      responses:
+        '200':
+          description: The original tool result body.
+          content:
+            application/json:
+              schema:
+                description: Original tool return value of any JSON type.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /users:
+    get:
+      operationId: listUsers
+      summary: List all user accounts
+      description: "Returns all registered gateway users. Admin-only. Password and token hashes are never included \u2014 only boolean presence flags. dev_mode_bypass=true disables this endpoint (503).\n"
+      tags:
+      - users
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Array of user accounts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
+    post:
+      operationId: createUser
+      summary: Create a new user account
+      description: "Creates a new user with hashed password. No bearer token is issued at creation time \u2014 the user must log in via POST /auth/login to obtain one. Admin-only. dev_mode_bypass=true disables this endpoint (503).\n"
+      tags:
+      - users
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreateRequest'
+      responses:
+        '201':
+          description: User created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserCreateResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
+  /users/{username}:
+    delete:
+      operationId: deleteUser
+      summary: Delete a user account
+      description: 'Permanently removes the user from config.json. The last-admin guard prevents deleting the final admin account (409). Admin-only. dev_mode_bypass=true disables this endpoint (503).
+
+        '
+      tags:
+      - users
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: username
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$
+        description: Username to delete.
+        example: alice
+      responses:
+        '200':
+          description: User deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDeleteResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
+  /users/{username}/role:
+    patch:
+      operationId: changeUserRole
+      summary: Change a user's RBAC role
+      description: 'Changes the role of the target user. The last-admin guard prevents demoting the final admin (409). Admin-only. dev_mode_bypass=true disables this endpoint (503).
+
+        '
+      tags:
+      - users
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: username
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$
+        description: Username whose role will change.
+        example: alice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRoleChangeRequest'
+      responses:
+        '200':
+          description: Role changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRoleChangeResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
+  /users/{username}/password:
+    put:
+      operationId: resetUserPassword
+      summary: Admin-reset a user's password
+      description: "Resets the target user's password and invalidates their current bearer token. The user must log in again with the new password. This is the admin-reset path \u2014 the self-change path is POST /auth/change-password. Admin-only. dev_mode_bypass=true disables this endpoint (503).\n"
+      tags:
+      - users
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: username
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$
+        description: Username whose password will be reset.
+        example: alice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserResetPasswordRequest'
+      responses:
+        '200':
+          description: Password reset successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResetPasswordResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
+  /agents:
+    get:
+      operationId: listAgents
+      summary: List all configured agents
+      description: 'Returns all agents from config.json (core + custom). Core agents return empty soul/heartbeat/instructions (compiled-in prompts are not exposed). Custom agents return SOUL.md content only (not heartbeat/instructions) for efficient list rendering.
+
+        '
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Array of agent configurations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Agent'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    post:
+      operationId: createAgent
+      summary: Create a new custom agent
+      description: 'Creates a new custom agent with a server-assigned UUID. Returns HTTP 201. The agent starts in "draft" status (no SOUL.md written yet). Triggers a config reload after successful persistence.
+
+        '
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentCreateRequest'
+      responses:
+        '201':
+          description: Agent created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '422':
+          $ref: '#/components/responses/422UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /agents/{id}:
+    get:
+      operationId: getAgent
+      summary: Get a single agent configuration
+      description: 'Returns the full agent configuration including soul, heartbeat, and instructions. Core (locked) agents return empty soul (compiled-in prompt not exposed).
+
+        '
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Agent ID.
+        example: jim
+      responses:
+        '200':
+          description: Agent configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    put:
+      operationId: updateAgent
+      summary: Update agent configuration
+      description: 'Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat, instructions (403). Writing soul/heartbeat/instructions triggers a config reload. Model, timeout, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+
+        '
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Agent ID.
+        example: 550e8400-e29b-41d4-a716-446655440000
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentUpdateRequest'
+      responses:
+        '200':
+          description: Agent updated. Returns the complete updated agent object.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    patch:
+      operationId: patchAgentOwnership
+      summary: Update agent ownership (admin only)
+      description: >
+        Updates the owner_username field on a custom agent.
+        Only admins may call this endpoint.
+        System and core agents cannot have an owner assigned (400).
+        Clearing the owner (empty string) requires the X-Confirm-Demote: 1 header.
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Agent ID.
+        example: 550e8400-e29b-41d4-a716-446655440000
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentOwnershipUpdateRequest'
+      responses:
+        '200':
+          description: Ownership updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentOwnerUpdateResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /agents/{id}/sessions:
+    get:
+      operationId: listAgentSessions
+      summary: List sessions for a specific agent
+      description: 'Returns all sessions owned by the specified agent. Returns an empty array when the agent has no session store.
+
+        '
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Agent ID.
+        example: jim
+      responses:
+        '200':
+          description: Array of session summaries for this agent.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Session'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /agents/{id}/tools:
+    get:
+      operationId: getAgentTools
+      summary: Get per-agent tool registry view and effective policies
+      description: 'Returns the agent''s current tool policy configuration (AgentToolsCfg) plus the effective per-tool policy after fence application. Used by the Tools & Permissions panel in the Agent Profile UI.
+
+        '
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Agent ID.
+        example: jim
+      responses:
+        '200':
+          description: Agent tool configuration and effective policy list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolsResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    put:
+      operationId: updateAgentTools
+      summary: Replace per-agent tool policy configuration
+      description: 'Replaces the agent''s tools_cfg in config.json. Locked (core/system) agents cannot have their tool policy overwritten via this endpoint (403). Triggers a config reload on success.
+
+        '
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Agent ID.
+        example: 550e8400-e29b-41d4-a716-446655440000
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentToolsUpdateRequest'
+      responses:
+        '200':
+          description: Tools configuration updated. Returns the effective tool list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentToolsResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /security/session-scope:
+    get:
+      operationId: getSessionScope
+      summary: Get the current DM session scoping strategy
+      description: 'Returns the dm_scope configuration value. Controls how incoming direct messages from channels are routed to session threads. Defaults to "per-channel-peer" when not explicitly configured.
+
+        '
+      tags:
+      - security
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Current session scope configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionScopeResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    put:
+      operationId: updateSessionScope
+      summary: Update the DM session scoping strategy
+      description: 'Persists the new dm_scope to config.json. Session routing is cached at boot so all changes require a gateway restart. The response always includes requires_restart=true. Admin-only. Emits a security audit log entry.
+
+        '
+      tags:
+      - security
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionScopeRequest'
+      responses:
+        '200':
+          description: Session scope saved. Restart required to apply.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionScopeUpdateResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /health:
+    get:
+      operationId: getHealth
+      summary: Health check
+      description: 'Returns HTTP 200 when the gateway is running. No authentication required.
+
+        '
+      security: []
+      tags:
+      - Health
+      responses:
+        '200':
+          description: Gateway is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '404':
+          description: "Not used \u2014 gateway is always healthy or not reachable."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /about:
+    get:
+      operationId: getAbout
+      summary: Gateway metadata
+      description: 'Returns version, runtime, uptime, PID, and preview listener fields. Used by the SPA to construct iframe preview URLs (FR-009).
+
+        '
+      tags:
+      - About
+      responses:
+        '200':
+          description: Gateway metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AboutResponse'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security: []
+  /version:
+    get:
+      operationId: getVersion
+      summary: Build version and VCS revision
+      description: >
+        Returns the gateway's version string and embedded VCS revision SHA.
+        Used by the frontend to detect version drift and prompt "New version
+        available" (#110). No authentication required.
+      tags:
+      - About
+      security: []
+      responses:
+        '200':
+          description: Version information.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionResponse'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /tools:
+    get:
+      operationId: getToolRegistry
+      summary: Central tool registry snapshot (FR-027)
+      description: "Returns all registered tools with name, description, scope, category, and source discriminator (builtin | mcp). Always returns an array \u2014 never null even when empty.\n"
+      tags:
+      - Tools
+      responses:
+        '200':
+          description: Array of tool registry entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ToolRegistryEntry'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /tools/builtin:
+    get:
+      operationId: getBuiltinToolsDeprecated
+      summary: Deprecated builtin tool catalog (FR-029)
+      description: 'This endpoint was removed in the central tool registry redesign. Always returns HTTP 404. Use GET /api/v1/tools instead.
+
+        '
+      tags:
+      - Tools
+      responses:
+        '200':
+          description: "Not returned \u2014 this endpoint always returns 404."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: "Endpoint removed \u2014 use GET /api/v1/tools instead.\n"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /tool-approvals/{approval_id}:
+    post:
+      operationId: postToolApproval
+      summary: Resolve a pending tool approval (FR-011, FR-082)
+      description: 'Approve, deny, or cancel a pending tool call approval. For tools with RequiresAdminAsk=true, the caller must hold the admin role (FR-015).
+
+        '
+      tags:
+      - Tools
+      parameters:
+      - name: approval_id
+        in: path
+        required: true
+        description: The approval ID from the WS tool_approval_request frame.
+        schema:
+          type: string
+        example: appr_abc123
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolApprovalActionRequest'
+      responses:
+        '200':
+          description: Action processed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolApprovalResponse'
+        '400':
+          description: Malformed body or unknown action.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Admin role required (RequiresAdminAsk tool).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Approval ID not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '410':
+          description: Approval already resolved (FR-018).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /security/tool-policies:
+    get:
+      operationId: getGlobalToolPolicies
+      summary: Get global tool policies
+      description: 'Returns the current global tool policy configuration from sandbox.tool_policies and sandbox.default_tool_policy.
+
+        '
+      tags:
+      - Security
+      responses:
+        '200':
+          description: Current global tool policies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalToolPolicies'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: updateGlobalToolPolicies
+      summary: Update global tool policies (admin only)
+      description: 'Persists new global tool policies to config.json under the sandbox key. Changes are audit-logged (SEC-15). Admin-only; non-admin returns 403.
+
+        '
+      tags:
+      - Security
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GlobalToolPolicies'
+      responses:
+        '200':
+          description: Updated global tool policies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GlobalToolPolicies'
+        '400':
+          description: Invalid policy values.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /security/exec-allowlist:
+    get:
+      operationId: getExecAllowlist
+      summary: Get exec binary allowlist (SEC-05)
+      description: 'Returns the current exec allowlist and approval mode.
+
+        '
+      tags:
+      - Security
+      responses:
+        '200':
+          description: Current exec allowlist.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecAllowlist'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: updateExecAllowlist
+      summary: Update exec binary allowlist (SEC-05)
+      description: 'Atomically updates the exec binary allowlist. Patterns are trimmed, validated, and deduplicated. Changes are audit-logged (SEC-15). Note: requires_restart=true in the response because the in-memory agent loop uses the previous allowlist until the gateway restarts (SEC-12).
+
+        '
+      tags:
+      - Security
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - allowed_binaries
+              properties:
+                allowed_binaries:
+                  type: array
+                  items:
+                    type: string
+                  description: List of allowed binary name patterns.
+      responses:
+        '200':
+          description: Updated allowlist (restart required).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecAllowlist'
+        '400':
+          description: Invalid pattern (empty, too long, or too many entries).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /security/exec-proxy-status:
+    get:
+      operationId: getExecProxyStatus
+      summary: Get exec SSRF proxy runtime state (SEC-28)
+      description: 'Returns whether the exec proxy is configured and currently bound. Operators use this to distinguish "disabled by config" from "failed to bind" from "running normally".
+
+        '
+      tags:
+      - Security
+      responses:
+        '200':
+          description: Exec proxy runtime state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecProxyStatus'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /security/skill-trust:
+    get:
+      operationId: getSkillTrust
+      summary: Get skill trust level
+      description: 'Returns the current skill trust level from sandbox.skill_trust. Default is "warn_unverified" when not set.
+
+        '
+      tags:
+      - Security
+      responses:
+        '200':
+          description: Current skill trust level.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillTrustResponse'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: updateSkillTrust
+      summary: Update skill trust level (admin only)
+      description: 'Persists the new skill trust level to config.sandbox.skill_trust. Only the three canonical values are accepted (case-sensitive). Changes are audit-logged.
+
+        '
+      tags:
+      - Security
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillTrustUpdateRequest'
+      responses:
+        '200':
+          description: Updated skill trust level.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillTrustUpdateResponse'
+        '400':
+          description: Invalid trust level value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /security/prompt-guard:
+    get:
+      operationId: getPromptGuard
+      summary: Get prompt injection guard level
+      description: 'Returns the current prompt injection detection strictness level. Default is "medium". Requires restart is always false (hot-reloaded).
+
+        '
+      tags:
+      - Security
+      responses:
+        '200':
+          description: Current prompt guard level.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptGuardResponse'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: updatePromptGuard
+      summary: Update prompt injection guard level (admin only)
+      description: "Persists the new prompt injection level to config and hot-reloads. Changes take effect immediately \u2014 requires_restart is false on successful hot-reload.\n"
+      tags:
+      - Security
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromptGuardUpdateRequest'
+      responses:
+        '200':
+          description: Updated prompt guard level.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PromptGuardUpdateResponse'
+        '400':
+          description: Invalid level value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /security/rate-limits:
+    get:
+      operationId: getRateLimits
+      summary: Get rate limit configuration and live daily cost
+      description: "Returns the current rate-limit config and the live daily LLM cost. Hot-reloaded \u2014 requires_restart is always false on PUT.\n"
+      tags:
+      - Security
+      responses:
+        '200':
+          description: Current rate limits and live cost.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitsResponse'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: updateRateLimits
+      summary: Update rate limit configuration (admin only)
+      description: "Partial update \u2014 any subset of the three cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded (requires_restart: false).\n"
+      tags:
+      - Security
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RateLimitsUpdateRequest'
+      responses:
+        '200':
+          description: Updated rate limit configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitsUpdateResponse'
+        '400':
+          description: Invalid field types or values.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /security/sandbox-config:
+    get:
+      operationId: getSandboxConfig
+      summary: Get sandbox configuration
+      description: 'Returns the full sandbox configuration including mode, network settings, SSRF controls, and agent defaults.
+
+        '
+      tags:
+      - Security
+      responses:
+        '200':
+          description: Current sandbox configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SandboxConfig'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Agent loop not initialized.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: updateSandboxConfig
+      summary: Update sandbox configuration (admin only)
+      description: "Partial update \u2014 any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, default_profile, shell_deny_patterns. At least one field required. mode, allowed_paths, and default_profile are restart-gated (requires_restart=true). SSRF and shell_deny_patterns are hot-reloaded. Admin-only; non-admin returns 403. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).\n"
+      tags:
+      - Security
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SandboxConfigUpdate'
+      responses:
+        '200':
+          description: Updated sandbox configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SandboxConfig'
+        '400':
+          description: Validation error (invalid mode, profile, or path).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: dev_mode_bypass is active (RequireNotBypass guard).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /security/sandbox-status:
+    get:
+      operationId: getSandboxStatus
+      summary: Get sandbox backend runtime status (SEC-01/02/03)
+      description: 'Returns the active sandbox backend, kernel capabilities, enforcement flags, and bind-port-rule count. Lets operators distinguish enforce from permissive from off states.
+
+        '
+      tags:
+      - Security
+      responses:
+        '200':
+          description: Sandbox backend runtime status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SandboxStatus'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Agent loop not initialized.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /audit-log:
+    get:
+      operationId: getAuditLog
+      summary: Get recent audit log entries
+      description: "Returns the last 100 audit log entries in reverse-chronological order, read from ~/.omnipus/system/audit.jsonl. Always returns an array \u2014 empty array when no entries exist.\n"
+      tags:
+      - Audit
+      responses:
+        '200':
+          description: Audit log entries (reverse-chronological, max 100).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditEntry'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /security/audit-log:
+    get:
+      operationId: getAuditLogToggle
+      summary: Get audit logging enable/disable state
+      description: 'Returns whether audit logging is currently enabled. Note: this is distinct from GET /api/v1/audit-log which returns entries. This endpoint controls the audit_log config flag.
+
+        '
+      tags:
+      - Audit
+      responses:
+        '200':
+          description: Audit log enable state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogToggle'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: updateAuditLogToggle
+      summary: Enable or disable audit logging (admin only)
+      description: "Persists sandbox.audit_log to config.json. Requires restart \u2014 the response includes applied_enabled which reflects the value before this save (currently running state). Changes are audit-logged before disabling.\n"
+      tags:
+      - Audit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuditLogToggleRequest'
+      responses:
+        '200':
+          description: Audit log state saved (restart required).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogUpdateResponse'
+        '400':
+          description: Missing or invalid enabled field.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /security/retention:
+    get:
+      operationId: getRetention
+      summary: Get session retention configuration
+      description: 'Returns session_days and disabled flag from storage.retention.
+
+        '
+      tags:
+      - Security
+      responses:
+        '200':
+          description: Current retention configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionConfig'
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: updateRetention
+      summary: Update session retention configuration (admin only)
+      description: "Partial update \u2014 any subset of session_days and disabled. session_days must be a non-negative integer (floats and strings rejected). disabled must be a JSON boolean (string \"true\"/\"false\" rejected). Empty body is accepted as a no-op. Hot-reloaded (requires_restart: false). Admin-only (non-admin returns 403).\n"
+      tags:
+      - Security
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetentionConfig'
+      responses:
+        '200':
+          description: Updated retention configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionUpdateResponse'
+        '400':
+          description: Type mismatch (float for session_days, string for disabled).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /security/retention/sweep:
+    post:
+      operationId: triggerRetentionSweep
+      summary: Trigger on-demand retention sweep (admin only)
+      description: 'Immediately purges session directories older than the configured retention window. Returns 409 if a sweep is already in progress. Returns skipped_reason="disabled" when retention is disabled. Admin-only; emits audit with resource="storage.retention.sweep".
+
+        '
+      tags:
+      - Security
+      responses:
+        '200':
+          description: Sweep result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionSweepResult'
+        '403':
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Sweep already in progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /channels:
+    get:
+      operationId: listChannels
+      summary: List all channels
+      description: 'Returns the full list of communication channels with their ID, name, transport, enabled state, and description. webchat is always enabled.
+
+        '
+      tags:
+      - Channels
+      responses:
+        '200':
+          description: Array of channel entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ChannelEntry'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /channels/{id}:
+    get:
+      operationId: getChannelConfig
+      summary: Get a channel's configuration
+      description: 'Returns the channel''s config with credential fields redacted (replaced with "[configured]" if set).
+
+        '
+      tags:
+      - Channels
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Channel ID.
+        schema:
+          type: string
+        example: telegram
+      responses:
+        '200':
+          description: Channel configuration (credentials redacted).
+          content:
+            application/json:
+              schema:
+                type: object
+                description: 'Channel-specific configuration object. Structure varies by channel type. Credential fields contain "[configured]" when set.
+
+                  '
+                additionalProperties: true
+        '404':
+          description: Channel ID not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /channels/{id}/enable:
+    put:
+      operationId: enableChannel
+      summary: Enable a channel
+      description: Sets the channel's enabled flag to true in config.
+      tags:
+      - Channels
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Channel ID.
+        schema:
+          type: string
+        example: telegram
+      responses:
+        '200':
+          description: Channel enable state updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelEnabledResponse'
+        '404':
+          description: Channel ID not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /channels/{id}/disable:
+    put:
+      operationId: disableChannel
+      summary: Disable a channel
+      description: Sets the channel's enabled flag to false in config.
+      tags:
+      - Channels
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Channel ID.
+        schema:
+          type: string
+        example: telegram
+      responses:
+        '200':
+          description: Channel disable state updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelEnabledResponse'
+        '404':
+          description: Channel ID not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /channels/{id}/configure:
+    put:
+      operationId: configureChannel
+      summary: Configure a channel
+      description: 'Merges request body fields into the channel''s config section. Fields absent from the request body are not touched (merge, not replace). The "enabled" field is reserved and ignored if sent. Returns the updated config with credential fields redacted.
+
+        '
+      tags:
+      - Channels
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Channel ID.
+        schema:
+          type: string
+        example: telegram
+      requestBody:
+        required: true
+        description: 'Channel-specific configuration fields to merge. Structure varies by channel type.
+
+          '
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              example:
+                token: your-telegram-bot-token
+      responses:
+        '200':
+          description: Updated channel configuration (credentials redacted).
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          description: Invalid JSON body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Channel ID not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /channels/{id}/test:
+    post:
+      operationId: testChannel
+      summary: Test a channel configuration
+      description: 'Verifies required credential fields are configured without starting the channel. Returns success=false with missing field list if required credentials are absent.
+
+        '
+      tags:
+      - Channels
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Channel ID.
+        schema:
+          type: string
+        example: telegram
+      responses:
+        '200':
+          description: Test result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelTestResponse'
+        '404':
+          description: Channel ID not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /config/gateway/rotate-token:
+    post:
+      operationId: rotateGatewayToken
+      summary: Rotate the gateway bearer token (admin only)
+      description: >
+        Generates a new cryptographically random 64-hex-character gateway bearer
+        token, persists it to config.json, triggers a hot reload, and returns the
+        new token. The previous token is immediately invalidated. Admin-only;
+        secured by RequireAdmin + RequireNotBypass chain. Use after security
+        incidents or on a regular rotation schedule.
+      tags:
+      - Config
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: New gateway token (valid immediately).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RotateTokenResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /config/pending-restart:
+    get:
+      operationId: getPendingRestart
+      summary: Get pending restart-gated config changes (admin only)
+      description: 'Returns an array of config keys whose persisted (disk) value differs from the boot-time applied value. Only RestartGatedKeys are checked; hot-reload keys never appear here. An empty array means no restart is needed. Admin-only; non-admin returns 403.
+
+        '
+      tags:
+      - Config
+      responses:
+        '200':
+          description: Array of pending restart entries (may be empty).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PendingRestartEntry'
+        '403':
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /workspace/{agent_id}/{path}:
+    get:
+      operationId: getWorkspaceFile
+      summary: Read a file from an agent's workspace
+      description: 'Serves the file at the given path within the agent''s workspace. Requires session-cookie-or-bearer authentication and ownership check. Returns 503 when the agent has no owner (ErrAgentOrphan). Path traversal beyond the agent workspace returns 403. Security headers: Referrer-Policy, Content-Security-Policy, X-Content-Type-Options. Files > 1MB are streamed; smaller files are buffered.
+
+        '
+      tags:
+      - Workspace
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        description: Agent ID.
+        schema:
+          type: string
+        example: jim
+      - name: path
+        in: path
+        required: true
+        description: 'File path relative to the agent''s workspace root.
+
+          '
+        schema:
+          type: string
+        example: output/report.html
+      responses:
+        '200':
+          description: File content with appropriate Content-Type header.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Invalid agent ID or missing file path.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Not authenticated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Path outside agent workspace or access denied.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Agent or file not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Agent has no owner and must be reassigned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /preview/{agent_id}/{token}/{path}:
+    get:
+      operationId: getPreview
+      summary: Serve agent-generated preview content (token-auth)
+      description: "Serves static files or proxies dev-server requests for the given agent and token. No bearer authentication required \u2014 the path token IS the credential (FR-023). Served on the separate preview listener (default port gateway.port + 1). Unknown or expired tokens return 404. Static files: path-traversal guard, MIME detection, buffered/streaming. Dev-server: reverse-proxied to loopback port with CSP injection.\n"
+      security: []
+      tags:
+      - Preview
+      parameters:
+      - name: agent_id
+        in: path
+        required: true
+        description: Agent ID.
+        schema:
+          type: string
+        example: jim
+      - name: token
+        in: path
+        required: true
+        description: 'One-time preview token minted by the web_serve tool. The token is the only credential required.
+
+          '
+        schema:
+          type: string
+        example: abc123def456ghij
+      - name: path
+        in: path
+        required: true
+        description: File path or sub-path within the preview root.
+        schema:
+          type: string
+        example: index.html
+      responses:
+        '200':
+          description: Preview file content.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Malformed URL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Token does not match the agent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Token not found or expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /credentials:
+    get:
+      operationId: listCredentials
+      summary: List credential key names
+      description: 'Lists all credential key names without values. Returns an empty array when no credentials are stored.
+
+        '
+      tags:
+      - Settings
+      responses:
+        '200':
+          description: Array of credential key names.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+                example:
+                - OPENAI_API_KEY
+                - TELEGRAM_TOKEN
+        '401':
+          description: Missing or invalid bearer token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      operationId: setCredential
+      summary: Add or update a credential
+      description: 'Stores an encrypted credential. The key must be non-empty. Returns 201 Created on success.
+
+        '
+      tags:
+      - Settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialSetRequest'
+      responses:
+        '201':
+          description: Credential stored.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - key
+                properties:
+                  key:
+                    type: string
+                    example: OPENAI_API_KEY
+        '400':
+          description: Invalid JSON body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Key field is required (empty key).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Credential store locked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /credentials/{key}:
+    delete:
+      operationId: deleteCredential
+      summary: Delete a credential
+      description: Removes a credential by key. Returns 404 if not found.
+      tags:
+      - Settings
+      parameters:
+      - name: key
+        in: path
+        required: true
+        description: Credential key name.
+        schema:
+          type: string
+        example: OPENAI_API_KEY
+      responses:
+        '200':
+          description: Credential removed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - key
+                properties:
+                  status:
+                    type: string
+                    enum:
+                    - removed
+                    example: removed
+                  key:
+                    type: string
+                    example: OPENAI_API_KEY
+        '404':
+          description: Credential key not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Credential store locked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /backup:
+    post:
+      operationId: createBackup
+      summary: Create a backup archive
+      description: 'Creates a tar.gz of ~/.omnipus/ excluding logs and backups directories. The archive is written atomically to ~/.omnipus/backups/.
+
+        '
+      tags:
+      - Settings
+      responses:
+        '200':
+          description: Backup created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackupCreateResponse'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /backups:
+    get:
+      operationId: listBackups
+      summary: List backup archives
+      description: 'Lists all .tar.gz files in ~/.omnipus/backups/ with filename, size, and creation time. Returns an empty array when no backups exist.
+
+        '
+      tags:
+      - Settings
+      responses:
+        '200':
+          description: List of backup archive entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required:
+                  - filename
+                  - size_bytes
+                  - created_at
+                  properties:
+                    filename:
+                      type: string
+                      example: backup-20260516T103000Z.tar.gz
+                    size_bytes:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                      example: 1048576
+                    created_at:
+                      type: string
+                      format: date-time
+                      example: '2026-05-16T10:30:00Z'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /restore:
+    post:
+      operationId: restoreBackup
+      summary: Restore from a backup archive
+      description: 'Extracts a backup tar.gz over ~/.omnipus/, skipping config.json to preserve current settings. The filename must not contain path separators or traversal sequences.
+
+        '
+      tags:
+      - Settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestoreBackupRequest'
+      responses:
+        '200':
+          description: Backup restored.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - filename
+                properties:
+                  status:
+                    type: string
+                    enum:
+                    - restored
+                    example: restored
+                  filename:
+                    type: string
+                    example: backup-20260516T103000Z.tar.gz
+        '400':
+          description: Invalid filename (path traversal, missing .tar.gz).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Backup file not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Filename field is required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /storage/stats:
+    get:
+      operationId: getStorageStats
+      summary: Get storage statistics
+      description: 'Returns session count, workspace size, and memory entry count. May include partial warnings if some agent stores could not be read.
+
+        '
+      tags:
+      - Settings
+      responses:
+        '200':
+          description: Storage statistics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageStats'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /sessions/all:
+    delete:
+      operationId: clearAllSessions
+      summary: Delete all sessions for all agents
+      description: 'Removes all session directories across all agent stores. Returns the count of removed sessions and any per-agent warnings.
+
+        '
+      tags:
+      - Settings
+      responses:
+        '200':
+          description: Sessions cleared.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - status
+                - count
+                properties:
+                  status:
+                    type: string
+                    enum:
+                    - cleared
+                    example: cleared
+                  count:
+                    type: integer
+                    minimum: 0
+                    example: 15
+                  warnings:
+                    type: array
+                    items:
+                      type: string
+                    description: "Per-agent errors (non-fatal \u2014 partial removal possible).\n"
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /status:
+    get:
+      operationId: getGatewayStatus
+      summary: Get gateway runtime status
+      description: "Returns online status, agent/channel counts, daily cost, and the binary version.\nPolled by the SPA StatusBar every 15 seconds.\n"
+      tags:
+      - Gateway
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Gateway runtime status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayStatus'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /providers:
+    get:
+      operationId: listProviders
+      summary: List configured LLM providers
+      description: "Returns all configured LLM providers with connection status and available model list.\nModel lists are fetched live from each provider's upstream /models endpoint when an API key is present.\n"
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Array of provider entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Provider'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /providers/{id}:
+    put:
+      operationId: updateProvider
+      summary: Add or update an LLM provider configuration
+      description: >
+        Adds or updates an LLM provider entry. On new providers, api_key is
+        required. On existing providers, api_key may be omitted to keep the
+        current key. The API key is stored encrypted (AES-256-GCM) in
+        credentials.json. Available before and after onboarding.
+      tags:
+      - Providers
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Provider identifier (e.g. "anthropic", "openai", "openrouter").
+        example: anthropic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderUpdateRequest'
+      responses:
+        '200':
+          description: Provider updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Provider'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '422':
+          description: api_key required for new providers.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Credential store locked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /providers/{id}/test:
+    get:
+      operationId: testProvider
+      summary: Test provider API key configuration
+      description: >
+        Verifies that an API key is configured for the given provider without making an
+        upstream call. Returns success=false with an error message if no key is configured.
+        Available before and after onboarding.
+      tags:
+      - Providers
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Provider identifier (e.g. "anthropic", "openai").
+        example: anthropic
+      responses:
+        '200':
+          description: Provider test result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResult'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /skills:
+    get:
+      operationId: listSkills
+      summary: List installed skills
+      description: "Returns all skills installed in ~/.omnipus/skills/. Returns an empty array when no skills are installed.\n"
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Array of installed skills.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Skill'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /skills/install:
+    post:
+      operationId: installSkill
+      summary: Install a skill from the ClawHub registry
+      description: >
+        Installs a skill by name from the ClawHub registry. Currently returns
+        501 Not Implemented while the registry integration is in progress.
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SkillInstallRequest'
+      responses:
+        '200':
+          description: Skill installed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '501':
+          description: Not yet implemented.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /chat:
+    post:
+      operationId: postChat
+      summary: Send a chat message via SSE
+      description: >
+        Sends a user message to the agent and streams the response via
+        Server-Sent Events. The connection stays open until the agent
+        finishes responding or the client disconnects.
+      tags:
+      - Chat
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SseChatRequest'
+      responses:
+        '200':
+          description: SSE stream of agent response frames.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /activity:
+    get:
+      operationId: getActivity
+      summary: Get recent activity events
+      description: "Returns up to 50 activity events from the last 24 hours, sorted reverse-chronological.\nIncludes session_start events from all agent stores and task lifecycle events.\n"
+      tags:
+      - Activity
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Activity events (reverse-chronological, max 50, last 24 hours).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ActivityEvent'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /upload:
+    post:
+      operationId: uploadFiles
+      summary: Upload files for a session
+      description: "Streams multipart file uploads to disk under ~/.omnipus/uploads/{session_id}/.\nMax file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory.\nsession_id may be supplied as a query parameter or as a form field before the file parts.\nReturns HTTP 201 on success.\n"
+      tags:
+      - Upload
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: session_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Session ID to associate the uploaded files with. May also be supplied as a multipart form field.
+        example: 550e8400-e29b-41d4-a716-446655440000
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                session_id:
+                  type: string
+                  description: Session ID (alternative to query parameter).
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: One or more files to upload.
+      responses:
+        '201':
+          description: Files uploaded successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadFilesResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /state:
+    get:
+      operationId: getAppState
+      summary: Get application state
+      description: >
+        Returns onboarding status and optional diagnostic metadata.
+        Available to all authenticated users.
+      tags:
+      - Settings
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Application state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppState'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    patch:
+      operationId: patchAppState
+      summary: Update application state
+      description: >
+        Partial update to application state. Currently only supports marking
+        onboarding complete. CSRF-protected.
+      tags:
+      - Settings
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppStatePatchRequest'
+      responses:
+        '200':
+          description: State updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppState'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /user-context:
+    get:
+      operationId: getUserContext
+      summary: Get user context (USER.md content)
+      description: >
+        Returns the current content of USER.md from the default workspace. This
+        file holds workspace-level context about the user (background, preferences,
+        etc.) that is prepended to agent prompts. Returns empty string when the
+        file does not exist. Requires authentication.
+      tags:
+      - Workspace
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Current USER.md content (may be empty string).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserContextResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    put:
+      operationId: putUserContext
+      summary: Set user context (replace USER.md content)
+      description: >
+        Replaces the entire content of USER.md in the default workspace with the
+        provided string. Passing an empty string clears the file. The new content
+        is returned in the response. Requires authentication.
+      tags:
+      - Workspace
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserContextRequest'
+      responses:
+        '200':
+          description: Updated USER.md content (echoed back).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserContextResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /me:
+    get:
+      operationId: getMe
+      summary: Get current user info
+      description: Returns the authenticated user's RBAC role. Used for SPA gating.
+      tags:
+      - auth
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Current user information.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeInfo'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /doctor:
+    get:
+      operationId: getDoctorResults
+      summary: Get health check results
+      description: >
+        Returns the most recent health check results. Returns null when no
+        health check has been run yet.
+      tags:
+      - Settings
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Health check results, or an empty object when no check has been run yet.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DoctorResult'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    post:
+      operationId: runDoctor
+      summary: Run health check
+      description: Runs a fresh health check and returns the results.
+      tags:
+      - Settings
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Health check results.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DoctorResult'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /devices:
+    get:
+      operationId: listDevices
+      summary: List devices
+      description: >
+        Returns pending pairing requests and already-paired devices.
+        Admin-only.
+      tags:
+      - Settings
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Devices response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DevicesResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+  /tasks:
+    get:
+      operationId: listTasks
+      summary: List tasks
+      description: Returns all tasks, optionally filtered by status. Admin-only.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+            - queued
+            - assigned
+            - running
+            - completed
+            - failed
+        description: Filter tasks by status.
+      responses:
+        '200':
+          description: Array of tasks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    post:
+      operationId: createTask
+      summary: Create a task
+      description: Creates a new task. Admin-only.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCreateRequest'
+      responses:
+        '200':
+          description: Created task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /tasks/{id}:
+    put:
+      operationId: updateTask
+      summary: Update a task
+      description: Updates task fields. Admin-only.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskUpdateRequest'
+      responses:
+        '200':
+          description: Updated task.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      operationId: deleteTask
+      summary: Delete a task
+      description: Deletes a task by ID. Admin-only.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '204':
+          description: Task deleted.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /tasks/{id}/subtasks:
+    get:
+      operationId: listSubtasks
+      summary: List subtasks
+      description: Returns all subtasks for a given parent task. Admin-only.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Parent task ID.
+      responses:
+        '200':
+          description: Array of subtasks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /tasks/{id}/start:
+    post:
+      operationId: startTask
+      summary: Start a task
+      description: Assigns and starts a queued task. Admin-only.
+      tags:
+      - Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Task ID.
+      responses:
+        '202':
+          description: Task accepted and queued for execution.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskAcceptedResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /mcp-servers:
+    get:
+      operationId: listMcpServers
+      summary: List MCP servers
+      description: Returns all configured MCP servers and their connection status.
+      tags:
+      - Tools
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Array of MCP server entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/McpServer'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    post:
+      operationId: addMcpServer
+      summary: Add an MCP server
+      description: Adds a new MCP server to the gateway config. Admin-only.
+      tags:
+      - Tools
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpServerCreate'
+      responses:
+        '200':
+          description: Created MCP server entry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpServer'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /mcp-servers/{id}:
+    delete:
+      operationId: deleteMcpServer
+      summary: Delete an MCP server
+      description: Removes an MCP server from the gateway config. Admin-only.
+      tags:
+      - Tools
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: MCP server ID.
+      responses:
+        '204':
+          description: MCP server deleted.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /mcp-servers/{id}/tools:
+    get:
+      operationId: listMcpServerTools
+      summary: List tools for an MCP server
+      description: Returns the list of tool names exposed by a specific MCP server.
+      tags:
+      - Tools
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: MCP server ID.
+      responses:
+        '200':
+          description: Tool names for the MCP server.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpServerToolsResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /tools/mcp:
+    get:
+      operationId: listMcpTools
+      summary: List all configured MCP servers
+      description: >
+        Returns all configured MCP servers with their status and tool metadata
+        for the agent tool picker UI. Requires authentication.
+      tags:
+      - Tools
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Array of MCP server entries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpToolsListResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      operationId: callMcpTool
+      summary: Invoke a tool on an MCP server
+      description: >
+        Calls a named tool on a specific MCP server and returns the result.
+        Requires authentication. The tool and server must already be configured
+        and enabled. Arguments are tool-specific.
+      tags:
+      - Tools
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/McpToolCallRequest'
+      responses:
+        '200':
+          description: Tool call result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpToolCallResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /uploads/{session_id}/{filename}:
+    get:
+      operationId: serveUpload
+      summary: Serve an uploaded file
+      description: >
+        Serves a previously uploaded file by session ID and filename.
+        Authentication is optional — browsers must be able to load image
+        URLs directly from chat messages. Returns the file content with
+        the appropriate Content-Type header.
+      tags:
+      - Upload
+      security: []
+      parameters:
+      - name: session_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Session ID the file was uploaded under.
+        example: "550e8400-e29b-41d4-a716-446655440000"
+      - name: filename
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Sanitized filename as returned by the upload endpoint.
+        example: "screenshot.png"
+      responses:
+        '200':
+          description: File content streamed with appropriate Content-Type.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /media/{ref_id}:
+    get:
+      operationId: serveMedia
+      summary: Serve a media file by ref ID
+      description: >
+        Resolves a media:// URI (e.g. media://abc123) and streams the
+        underlying file with the correct Content-Type. Used by the chat UI
+        to display screenshots and other agent-generated media. Returns 403
+        if path traversal is detected in ref_id, 404 if the ref is unknown.
+      tags:
+      - Upload
+      security: []
+      parameters:
+      - name: ref_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: The opaque media reference ID (not a path — no slashes or dots).
+        example: "a1b2c3d4e5f6"
+      responses:
+        '200':
+          description: Media file content streamed with appropriate Content-Type.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '403':
+          description: Forbidden — invalid or path-traversal ref_id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '405':
+          description: Method not allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Media store not available.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+security:
+- BearerAuth: []

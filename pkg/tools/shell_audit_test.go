@@ -44,7 +44,7 @@ func TestExecTool_AuditOnPathRejection(t *testing.T) {
 	tool.SetAuditLogger(auditLogger)
 
 	// "cli" is an internal channel — passes the remote-channel guard so we reach
-	// the path-traversal check in guardCommand (the behaviour under test).
+	// the path-traversal check in guardCommand (the behavior under test).
 	ctx := WithToolContext(context.Background(), "cli", "")
 
 	// A command with "../" triggers guardCommand's path-traversal check.

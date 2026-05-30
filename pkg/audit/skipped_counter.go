@@ -72,7 +72,7 @@ func IncSkipped(tool, decision string) {
 // SkippedSnapshot is a point-in-time read of the audit-skipped counters
 // suitable for embedding in a /health or /metrics response. Field zero
 // values are valid (no skips have occurred). Total is the sum of the
-// labelled counters and is provided for convenience.
+// labeled counters and is provided for convenience.
 type SkippedSnapshot struct {
 	WebServeAllow int64 `json:"web_serve_allow"`
 	WebServeDeny  int64 `json:"web_serve_deny"`

@@ -2,28 +2,30 @@
 
 // Package sandbox_test — insider-LLM red-team coverage for credential exfil.
 //
-// These tests are documenting-failures by design. They model the threat that
-// a hostile prompt steers an agent into reading the gateway's master key or
-// credentials.json out from under the active sandbox. The threats are
-// catalogued in the insider-pentest report:
+// These tests model the threat that a hostile prompt steers an agent into
+// reading the gateway's master key or credentials.json out from under the
+// active sandbox.
 //
-//	C1 — master.key exfil. The kernel sandbox grants RWX on $OMNIPUS_HOME so
-//	     a child process started in production can read master.key directly
-//	     even though the env-var scrub keeps OMNIPUS_KEY_FILE / MASTER_KEY out
-//	     of the child's environment.
-//	C2 — credentials.json exfil. Identical shape: $OMNIPUS_HOME is writable
-//	     and credentials.json sits inside it.
+//	C1 — master.key exfil.
+//	C2 — credentials.json exfil.
 //
-// Both fixes belong to v0.2 (#155). The wave2 sandbox carve-out for
-// $OMNIPUS_HOME is the open hole; the underlying control is "narrow the
-// hardened-exec child policy so that the secrets sub-tree (master.key,
-// credentials.json, system/ telemetry) is denied even when the rest of
-// $OMNIPUS_HOME is writable".
+// **Scope of these tests.** They re-exec the test binary as a sandboxed
+// child and apply DefaultChildPolicy directly. They prove that
+// DefaultChildPolicy's structure (subdirectory enumeration with secret-file
+// carve-out) blocks reads at the kernel layer when applied. They do NOT
+// prove that the production sandbox-apply path uses DefaultChildPolicy —
+// it does not, as of v0.2. See the doc comment on DefaultChildPolicy in
+// pkg/sandbox/sandbox.go for the production threat model (regex backstop +
+// HardenGatewaySelf + kernel sandbox baseline).
 //
-// Until that ships, these tests will FAIL. The failure is the documentation.
-// Each test logs the threat ID and the closing fix-id at the start of the body
-// so a CI audit can grep `documents C1` / `documents C2` and confirm coverage
-// is still wired even when the suite is otherwise green.
+// Production wiring (Landlock per-thread re-restriction in hardened-exec)
+// is tracked as a v0.3 follow-up. Until it lands, these tests serve as:
+//
+//	(a) policy-correctness tests for DefaultChildPolicy — the carve-out
+//	    structure works at the kernel level when applied
+//	(b) regression tests to prevent the carve-out from being broken when
+//	    the v0.3 wiring eventually lands
+
 package sandbox_test
 
 import (
@@ -39,6 +41,30 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 )
+
+// nonTmpHome returns a fresh tempdir that is NOT under /tmp. The DefaultPolicy
+// (and hence DefaultChildPolicy by inheritance) grants RWX on /tmp, so the
+// secrets carve-out is meaningless when the test home sits inside /tmp — the
+// /tmp rule alone permits the read regardless of whether the home root is
+// granted. Putting the test home under /var/tmp/<random> sidesteps this:
+// /var/tmp is not granted by the policy, so the child has access only to
+// the explicitly-granted subdirs of $OMNIPUS_HOME — and the carved-out
+// secret files are unreachable.
+func nonTmpHome(t *testing.T) string {
+	t.Helper()
+	const base = "/var/tmp"
+	if _, err := os.Stat(base); err != nil {
+		t.Skipf("non-/tmp tempdir base %q unavailable on this host: %v", base, err)
+	}
+	dir, err := os.MkdirTemp(base, "omnipus-redteam-")
+	if err != nil {
+		t.Skipf("cannot create non-/tmp tempdir under %q: %v", base, err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+	})
+	return dir
+}
 
 // runSecretReadChild is the in-child phase of TestRedteam_MasterKey_Exfil_Blocked
 // and TestRedteam_Credentials_Exfil_Blocked. The parent re-execs the test binary
@@ -71,7 +97,7 @@ func runSecretReadChild(target string) {
 	// /tmp gets RWX, and the standard system read paths get R+X. This is
 	// EXACTLY the policy DefaultPolicy returns, so if a real production
 	// child can read master.key under it, this child will too.
-	policy := sandbox.DefaultPolicy(home, nil, nil, nil)
+	policy := sandbox.DefaultChildPolicy(home, nil, nil, nil)
 
 	if err := backend.Apply(policy); err != nil {
 		fmt.Fprintf(os.Stderr, "Apply failed (skip): %v\n", err)
@@ -104,7 +130,9 @@ func runSecretReadChild(target string) {
 // Reference: docs/architecture/AS-IS-architecture.md (sandbox carve-out for
 // $OMNIPUS_HOME), pkg/sandbox/sandbox.go::DefaultPolicy.
 func TestRedteam_MasterKey_Exfil_Blocked(t *testing.T) {
-	t.Logf("documents C1 (master.key exfil) from insider-pentest report; closes when v0.2 #155 secrets-subtree carve-out lands")
+	t.Logf(
+		"documents C1 (master.key exfil) from insider-pentest report; closes when v0.2 #155 secrets-subtree carve-out lands",
+	)
 
 	if os.Getenv("OMNIPUS_REDTEAM_MASTER_KEY_CHILD") == "1" {
 		runSecretReadChild(os.Getenv("OMNIPUS_REDTEAM_TARGET"))
@@ -122,7 +150,7 @@ func TestRedteam_MasterKey_Exfil_Blocked(t *testing.T) {
 	}
 	_ = backend
 
-	home := t.TempDir()
+	home := nonTmpHome(t)
 	target := filepath.Join(home, "master.key")
 	// 64 hex chars — same shape as the real master key, content irrelevant.
 	keyBlob := strings.Repeat("a1b2c3d4", 8)
@@ -160,8 +188,10 @@ func TestRedteam_MasterKey_Exfil_Blocked(t *testing.T) {
 		t.Skipf("Landlock unavailable in child (exit 77):\n%s", out)
 	case 1:
 		// EXPECTED FAIL by design. The control is missing.
-		t.Errorf("C1 GAP CONFIRMED: sandboxed child READ master.key — secrets-subtree carve-out not yet implemented (#155)\nchild stderr:\n%s",
-			out)
+		t.Errorf(
+			"C1 GAP CONFIRMED: sandboxed child READ master.key — secrets-subtree carve-out not yet implemented (#155)\nchild stderr:\n%s",
+			out,
+		)
 	default:
 		t.Fatalf("child exit %d (unexpected — expected 1=gap, 42=fixed, 77=skip):\n%s", exitCode, out)
 	}
@@ -176,7 +206,9 @@ func TestRedteam_MasterKey_Exfil_Blocked(t *testing.T) {
 // explicit: even if an alternate fix narrows only master.key, credentials.json
 // must still be denied.
 func TestRedteam_Credentials_Exfil_Blocked(t *testing.T) {
-	t.Logf("documents C2 (credentials.json exfil) from insider-pentest report; closes when v0.2 #155 secrets-subtree carve-out lands")
+	t.Logf(
+		"documents C2 (credentials.json exfil) from insider-pentest report; closes when v0.2 #155 secrets-subtree carve-out lands",
+	)
 
 	if os.Getenv("OMNIPUS_REDTEAM_CREDS_CHILD") == "1" {
 		runSecretReadChild(os.Getenv("OMNIPUS_REDTEAM_TARGET"))
@@ -193,7 +225,7 @@ func TestRedteam_Credentials_Exfil_Blocked(t *testing.T) {
 	}
 	_ = backend
 
-	home := t.TempDir()
+	home := nonTmpHome(t)
 	target := filepath.Join(home, "credentials.json")
 	// Realistic shape of an encrypted credentials file. Content is opaque
 	// AES-GCM ciphertext in production; whatever bytes we put here is fine
@@ -232,8 +264,10 @@ func TestRedteam_Credentials_Exfil_Blocked(t *testing.T) {
 	case 77:
 		t.Skipf("Landlock unavailable in child (exit 77):\n%s", out)
 	case 1:
-		t.Errorf("C2 GAP CONFIRMED: sandboxed child READ credentials.json — secrets-subtree carve-out not yet implemented (#155)\nchild stderr:\n%s",
-			out)
+		t.Errorf(
+			"C2 GAP CONFIRMED: sandboxed child READ credentials.json — secrets-subtree carve-out not yet implemented (#155)\nchild stderr:\n%s",
+			out,
+		)
 	default:
 		t.Fatalf("child exit %d (unexpected — expected 1=gap, 42=fixed, 77=skip):\n%s", exitCode, out)
 	}

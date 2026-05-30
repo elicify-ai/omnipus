@@ -1,0 +1,23 @@
+title: DoneFrame
+description: >
+  Server → client. Terminal frame for a turn (live or replay). Exactly one done
+  frame is emitted per turn. The SPA uses it to clear the streaming spinner and
+  update session token/cost statistics.
+type: object
+required:
+  - type
+  - session_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: done
+  session_id:
+    type: string
+    minLength: 1
+    description: Session whose turn has completed.
+  stats:
+    $ref: DoneStats.yaml
+    description: >
+      Per-turn statistics. Always an object (never null). May be empty {}
+      for turns with no measurable LLM activity.

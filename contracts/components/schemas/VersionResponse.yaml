@@ -1,0 +1,24 @@
+title: VersionResponse
+description: >
+  Response from GET /api/v1/version. Returns build identity information.
+  Used by the frontend to detect version drift and show "New version available"
+  prompts (issue #110). No authentication required.
+type: object
+required:
+  - version
+  - build_sha
+additionalProperties: false
+properties:
+  version:
+    type: string
+    pattern: '^\d+\.\d+\.\d+(?:[-+].*)?$'
+    description: Omnipus gateway version string (e.g. "0.1.0"). Must follow semver format.
+    example: "0.1.0"
+  build_sha:
+    type: string
+    pattern: '^([0-9a-f]{7,40}|dev)$'
+    description: >
+      VCS revision SHA embedded at build time via debug.ReadBuildInfo().
+      Value is "dev" when built outside a version-controlled tree or when
+      vcs.revision is not set (e.g. go run). Otherwise a 7-40 character lowercase hex SHA.
+    example: "abc1234"

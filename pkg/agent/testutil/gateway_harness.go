@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,7 +16,7 @@ import (
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/providers"
+	"github.com/dapicom-ai/omnipus/pkg/credentials"
 )
 
 // testMasterKey is the fixed AES key used by all test harnesses.
@@ -32,14 +33,6 @@ const testBearerToken = "test-bearer-token-for-harness"
 // Signature: func(ctx, debug, homePath, configPath, allowEmpty) error
 var runContextFunc func(context.Context, bool, string, string, bool) error
 
-// setProviderOverrideFunc and clearProviderOverrideFunc are set by
-// RegisterProviderOverrideFuncs. They match gateway.SetTestProviderOverride
-// and gateway.ClearTestProviderOverride.
-var (
-	setProviderOverrideFunc   func(func() providers.LLMProvider)
-	clearProviderOverrideFunc func()
-)
-
 // runContextMu guards the registration variables so that tests running in
 // parallel do not race on setup (registrations happen once, at test-init time).
 var runContextMu sync.RWMutex
@@ -52,26 +45,17 @@ var runContextMu sync.RWMutex
 //
 //	func TestMain(m *testing.M) {
 //	    testutil.RegisterGatewayRunner(gateway.RunContext)
-//	    testutil.RegisterProviderOverrideFuncs(
-//	        gateway.SetTestProviderOverride,
-//	        gateway.ClearTestProviderOverride,
-//	    )
 //	    os.Exit(m.Run())
 //	}
+//
+// The provider-override hook (RegisterProviderOverrideFuncs) was removed
+// 2026-05-10 along with the test_harness build tag. The harness now boots
+// the gateway with the real provider config seeded by buildConfig +
+// seedTestCredentials; tests that exercise LLM behavior hit real OpenRouter.
 func RegisterGatewayRunner(fn func(context.Context, bool, string, string, bool) error) {
 	runContextMu.Lock()
 	defer runContextMu.Unlock()
 	runContextFunc = fn
-}
-
-// RegisterProviderOverrideFuncs installs the gateway provider-override hooks
-// so StartTestGateway can inject a ScenarioProvider without importing pkg/gateway.
-// The clearFn parameter name avoids shadowing the builtin identifier "clear".
-func RegisterProviderOverrideFuncs(set func(func() providers.LLMProvider), clearFn func()) {
-	runContextMu.Lock()
-	defer runContextMu.Unlock()
-	setProviderOverrideFunc = set
-	clearProviderOverrideFunc = clearFn
 }
 
 // TestGateway wraps a running gateway for integration tests.
@@ -129,26 +113,28 @@ func (g *TestGateway) Token() string { return g.bearerToken }
 // an ephemeral port and returns a TestGateway once the /health endpoint
 // responds 200.
 //
-// It requires RegisterGatewayRunner and RegisterProviderOverrideFuncs to have
-// been called first (typically from a TestMain in the test package that imports
-// pkg/gateway). If neither has been called, StartTestGateway fails the test.
+// It requires RegisterGatewayRunner to have been called first (typically from
+// a TestMain in the test package that imports pkg/gateway). If it has not
+// been called, StartTestGateway fails the test.
 //
 // It:
 //   - Creates a temp dir for OMNIPUS_HOME via t.TempDir().
 //   - Sets OMNIPUS_MASTER_KEY to a fixed test value via t.Setenv.
 //   - Picks a free ephemeral port using the listen/close/reuse idiom.
-//   - Writes a minimal config.json (gateway.host=127.0.0.1, gateway.port=<port>).
-//   - Installs the ScenarioProvider via the registered provider-override hook.
+//   - Writes a config.json seeded with a real OpenRouter+glm provider entry.
+//   - Seeds OPENROUTER_API_KEY (from env, or a stub if env is empty) into
+//     credentials.json so credentials.InjectFromConfig succeeds at boot.
 //   - Runs the gateway in a goroutine; captures boot errors.
 //   - Polls GET /health until 200 (max 5 s) before returning.
 //   - Registers t.Cleanup to call Close, which cancels ctx and waits up to 10 s.
+//
+// Tests that exercise LLM behavior require OPENROUTER_API_KEY in the env;
+// the scripted-scenario override hook was removed 2026-05-10.
 func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 	t.Helper()
 
 	runContextMu.RLock()
 	rcFn := runContextFunc
-	setOverride := setProviderOverrideFunc
-	clearOverride := clearProviderOverrideFunc
 	runContextMu.RUnlock()
 
 	if rcFn == nil {
@@ -201,6 +187,17 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 		t.Fatalf("testutil.StartTestGateway: write config: %v", err)
 	}
 
+	// Seed the OPENROUTER_API_KEY credential so the gateway's
+	// credentials.InjectFromConfig step (gateway.go:209) succeeds. The seeded
+	// provider entry in buildConfig references this name; without the
+	// credential, boot fails with "fatal: provider credential injection failed".
+	// The real key MUST be in env (OPENROUTER_API_KEY) — there is no longer a
+	// scripted-scenario fallback (the test_harness override hook was removed
+	// 2026-05-10). Tests that exercise LLM behavior hit real OpenRouter.
+	if err = seedTestCredentials(homeDir); err != nil {
+		t.Fatalf("testutil.StartTestGateway: seed credentials: %v", err)
+	}
+
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -222,20 +219,6 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 		gw.bearerToken = testBearerToken
 	}
 
-	// Install the ScenarioProvider as the gateway's LLM provider via the
-	// registered hook. The hook is cleared immediately after the goroutine
-	// launches — RunContext reads it synchronously during boot, before the
-	// serve loop. This strategy is safe for sequential test runs; if tests run
-	// concurrently (t.Parallel + same process), each test's goroutine must have
-	// already entered RunContext's boot sequence before the next test clears it.
-	// The 5-second /health poll window provides sufficient margin.
-	if setOverride != nil {
-		scenarioProvider := hc.scenario
-		setOverride(func() providers.LLMProvider {
-			return scenarioProvider
-		})
-	}
-
 	go func() {
 		defer close(done)
 		runErr := rcFn(ctx, false, homeDir, configPath, hc.allowEmpty)
@@ -244,8 +227,13 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 		}
 	}()
 
-	// Poll until /health returns 200 or the deadline expires.
-	deadline := time.Now().Add(5 * time.Second)
+	// Poll until /health returns 200 or the deadline expires. 15 s budget:
+	// GitHub-hosted CI runners under load can take 3-8 s to register all
+	// services + bind a port; the previous 5 s budget tripped intermittently
+	// on busy runners (TestSinceCursor_DifferentInputsDifferentOutputs in
+	// the Tests job on PR #178, while every matrix runner passed cleanly).
+	const bootDeadline = 15 * time.Second
+	deadline := time.Now().Add(bootDeadline)
 	for {
 		resp, httpErr := gw.HTTPClient.Get(baseURL + "/health")
 		if httpErr == nil {
@@ -262,17 +250,14 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 			}
 			cancel()
 			<-done
-			t.Fatalf("testutil.StartTestGateway: gateway at %s did not become ready within 5s%s", baseURL, bootErrMsg)
+			t.Fatalf(
+				"testutil.StartTestGateway: gateway at %s did not become ready within %s%s",
+				baseURL,
+				bootDeadline,
+				bootErrMsg,
+			)
 		}
 		time.Sleep(50 * time.Millisecond)
-	}
-
-	// Clear the provider override now that the gateway is live and has read it.
-	// RunContext reads testProviderOverride during boot, before the health
-	// endpoint becomes ready. By the time we reach here, the boot path has
-	// completed and the override is no longer needed.
-	if clearOverride != nil {
-		clearOverride()
 	}
 
 	t.Cleanup(func() {
@@ -312,11 +297,67 @@ func (g *TestGateway) Close() {
 		return
 	}
 
+	// Drain hold-off — RunContext returning does NOT guarantee every
+	// background goroutine that touches the session store, cost tracker, or
+	// audit logger has finished its final write/rename. On macOS APFS and
+	// some Linux runners, t.TempDir's RemoveAll fires immediately after this
+	// returns and races those writers ("directory not empty" / cost.json
+	// rename misses). Wait for the sessions/ subtree to stop changing for a
+	// short window before yielding to the caller — drain is best-effort and
+	// capped, never blocks the test on its own. A proper fix wires the
+	// session-store backend's Close into omnipusGracefulShutdown (tracked
+	// as v0.2).
+	waitForHomeDirStability(g.homeDir, 200*time.Millisecond, 3*time.Second)
+
 	// Surface any boot error that occurred after the gateway became ready.
 	if p := g.bootErr.Load(); p != nil && *p != nil {
 		if g.t != nil {
 			g.t.Errorf("testutil.TestGateway.Close: gateway exited with error: %v", *p)
 		}
+	}
+}
+
+// waitForHomeDirStability polls homeDir/sessions until two consecutive scans
+// produce the same (file-count, total-size) snapshot, or the budget elapses.
+// Caller-side hold-off for the documented gateway-shutdown drain race; see
+// TestGateway.Close. Pure read-only — never errors, never blocks beyond budget.
+func waitForHomeDirStability(homeDir string, settleWindow, budget time.Duration) {
+	if homeDir == "" {
+		return
+	}
+	sessionsDir := filepath.Join(homeDir, "sessions")
+	deadline := time.Now().Add(budget)
+	var prevCount, prevSize int64 = -1, -1
+	stableSince := time.Time{}
+	for time.Now().Before(deadline) {
+		var count, size int64
+		_ = filepath.WalkDir(sessionsDir, func(_ string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			info, infoErr := d.Info()
+			if infoErr != nil {
+				return infoErr
+			}
+			count++
+			size += info.Size()
+			return nil
+		})
+		if count == prevCount && size == prevSize {
+			if stableSince.IsZero() {
+				stableSince = time.Now()
+			}
+			if time.Since(stableSince) >= settleWindow {
+				return
+			}
+		} else {
+			stableSince = time.Time{}
+			prevCount, prevSize = count, size
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -413,18 +454,38 @@ func (g *TestGateway) SeedUser(ctx context.Context, u config.UserConfig, beforeW
 	}
 
 	// Trigger a gateway reload so the in-memory config picks up the new user.
-	reloadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.URL+"/reload", nil)
-	if err != nil {
-		return fmt.Errorf("SeedUser: build reload request: %w", err)
-	}
-	reloadReq.Header.Set("Origin", g.URL)
-	reloadResp, err := g.HTTPClient.Do(reloadReq)
-	if err != nil {
-		return fmt.Errorf("SeedUser: POST /reload: %w", err)
-	}
-	_ = reloadResp.Body.Close()
-	if reloadResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("SeedUser: POST /reload returned %d", reloadResp.StatusCode)
+	// Retry on 500 "reload already in progress" — this is a transient race when
+	// onboarding's own reload (rest_onboarding.go::awaitReload) is still in
+	// flight. The reloading flag is cleared in executeReload's defer, so
+	// re-issuing /reload after a short backoff succeeds.
+	reloadDeadline := time.Now().Add(2 * time.Second)
+	var lastStatus int
+	for {
+		reloadReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.URL+"/reload", nil)
+		if err != nil {
+			return fmt.Errorf("SeedUser: build reload request: %w", err)
+		}
+		reloadReq.Header.Set("Origin", g.URL)
+		reloadResp, err := g.HTTPClient.Do(reloadReq)
+		if err != nil {
+			return fmt.Errorf("SeedUser: POST /reload: %w", err)
+		}
+		_ = reloadResp.Body.Close()
+		lastStatus = reloadResp.StatusCode
+		if reloadResp.StatusCode == http.StatusOK {
+			break
+		}
+		if reloadResp.StatusCode != http.StatusInternalServerError || time.Now().After(reloadDeadline) {
+			return fmt.Errorf("SeedUser: POST /reload returned %d", reloadResp.StatusCode)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf(
+				"SeedUser: context canceled during reload retry (last status %d): %w",
+				lastStatus, ctx.Err(),
+			)
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 
 	// Poll with the new user's token (if non-empty) until the auth middleware
@@ -448,6 +509,13 @@ func (g *TestGateway) SeedUser(ctx context.Context, u config.UserConfig, beforeW
 }
 
 // buildConfig assembles a minimal config.Config from the harness options.
+//
+// The Providers list is seeded with a single OpenRouter+glm-5v-turbo entry that
+// matches the e2e Playwright setup in .github/workflows/pr.yml. The gateway's
+// boot path validates `len(cfg.Providers) > 0` (pkg/providers/legacy_provider.go);
+// without an entry every test using StartTestGateway fails to boot. Tests that
+// make LLM calls hit real OpenRouter (api_key_ref is resolved from the credential
+// store / env at boot via credentials.InjectFromConfig).
 func buildConfig(hc *harnessConfig, homeDir string, port int) *config.Config {
 	cfg := &config.Config{
 		Version: 1,
@@ -459,10 +527,25 @@ func buildConfig(hc *harnessConfig, homeDir string, port int) *config.Config {
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace: homeDir,
-				ModelName: "scripted-model",
+				ModelName: "openrouter-glm",
 				MaxTokens: 4096,
 			},
 		},
+		Providers: []*config.ModelConfig{
+			{
+				ModelName: "openrouter-glm",
+				Model:     "openrouter/z-ai/glm-5v-turbo",
+				Provider:  "openrouter",
+				APIBase:   "https://openrouter.ai/api/v1",
+				APIKeyRef: "OPENROUTER_API_KEY",
+			},
+		},
+	}
+
+	// Optional APIBase override (perf tests redirect LLM traffic to a local
+	// mock server — see tests/perf/mock_openrouter_test.go).
+	if hc.apiBase != "" {
+		cfg.Providers[0].APIBase = hc.apiBase
 	}
 
 	if len(hc.agents) > 0 {
@@ -492,4 +575,30 @@ func buildConfig(hc *harnessConfig, homeDir string, port int) *config.Config {
 	}
 
 	return cfg
+}
+
+// seedTestCredentials writes credentials.json into homeDir with an
+// OPENROUTER_API_KEY entry encrypted under testMasterKey. The real OpenRouter
+// key is taken from env var OPENROUTER_API_KEY when set (dev/CI exercising real
+// LLM calls); otherwise a placeholder is stored. Tests that drive an LLM path
+// will fail at the OpenRouter API boundary if env was not provided.
+func seedTestCredentials(homeDir string) error {
+	masterKey, err := hex.DecodeString(testMasterKey)
+	if err != nil {
+		return fmt.Errorf("decode testMasterKey: %w", err)
+	}
+
+	store := credentials.NewStore(filepath.Join(homeDir, "credentials.json"))
+	if err := store.UnlockWithKey(masterKey); err != nil {
+		return fmt.Errorf("unlock store: %w", err)
+	}
+
+	apiKey := os.Getenv("OPENROUTER_API_KEY")
+	if apiKey == "" {
+		apiKey = "test-stub-openrouter-key-not-for-real-calls"
+	}
+	if err := store.Set("OPENROUTER_API_KEY", apiKey); err != nil {
+		return fmt.Errorf("set OPENROUTER_API_KEY: %w", err)
+	}
+	return nil
 }

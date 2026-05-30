@@ -12,7 +12,7 @@
 //  (b) An audit event tool.policy.ask.denied with decision=deny and
 //      details.reason="restart" was emitted.
 //  (c) The on-disk transcript (via store.GetHistory) contains BOTH the original
-//      orphaned assistant entry AND a new role=system turn_cancelled_restart entry.
+//      orphaned assistant entry AND a new role=system turn_canceled_restart entry.
 //
 // This proves RecoverOrphanedToolCalls is wired from the session-load path in
 // runTurn (FR-069 / FR-088) — the protection that had zero production callers
@@ -46,12 +46,12 @@ import (
 //   - Construct an AgentLoop with a ScenarioProvider scripted to emit a plain
 //     text reply as its first (and only) step.
 //   - Seed the agent's session store with an orphaned history: one user message
-//     + one assistant message with a tool_call but no matching tool result.
+//   - one assistant message with a tool_call but no matching tool result.
 //   - Call ProcessDirect which routes through runTurn (same path as production).
 //
 // The session-load path in runTurn calls RecoverOrphanedToolCalls (V2.D wiring),
 // which strips the orphaned assistant turn from the LLM context and writes the
-// synthetic turn_cancelled_restart system message.
+// synthetic turn_canceled_restart system message.
 func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 	tmpHome := t.TempDir()
 	workspaceDir := filepath.Join(tmpHome, "workspace")
@@ -170,7 +170,7 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 
 	// -------------------------------------------------------------------
 	// Assert (c): on-disk transcript contains BOTH the original orphaned
-	// assistant entry AND the new synthetic turn_cancelled_restart system entry.
+	// assistant entry AND the new synthetic turn_canceled_restart system entry.
 	// -------------------------------------------------------------------
 	fullHistory := defaultAgent.Sessions.GetHistory(resolvedSessionKey)
 
@@ -185,7 +185,7 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 			}
 		}
 		if msg.Role == "system" &&
-			strings.Contains(msg.Content, "turn_cancelled_restart") &&
+			strings.Contains(msg.Content, "turn_canceled_restart") &&
 			strings.Contains(msg.Content, orphanToolCallID) {
 			hasSyntheticSystem = true
 		}
@@ -195,7 +195,7 @@ func TestRecoverOrphan_Wired_In_SessionLoadPath(t *testing.T) {
 		"on-disk transcript must PRESERVE the original orphaned assistant entry (audit trail, FR-069); "+
 			"full history: %v", fullHistory)
 	assert.True(t, hasSyntheticSystem,
-		"on-disk transcript must contain the synthetic turn_cancelled_restart system entry "+
+		"on-disk transcript must contain the synthetic turn_canceled_restart system entry "+
 			"(FR-069); full history: %v", fullHistory)
 
 	// -------------------------------------------------------------------
@@ -256,15 +256,15 @@ func TestRecoverOrphan_CleanSession_IsNoOp(t *testing.T) {
 	afterHistory := defaultAgent.Sessions.GetHistory(resolvedSessionKey)
 
 	// The history grew (new user + assistant messages were added by the turn),
-	// but NO synthetic turn_cancelled_restart message should have been injected.
+	// but NO synthetic turn_canceled_restart message should have been injected.
 	hasRestartMsg := false
 	for _, msg := range afterHistory {
-		if msg.Role == "system" && strings.Contains(msg.Content, "turn_cancelled_restart") {
+		if msg.Role == "system" && strings.Contains(msg.Content, "turn_canceled_restart") {
 			hasRestartMsg = true
 		}
 	}
 	assert.False(t, hasRestartMsg,
-		"clean session must NOT have a turn_cancelled_restart system entry injected "+
+		"clean session must NOT have a turn_canceled_restart system entry injected "+
 			"(RecoverOrphanedToolCalls must be a no-op on clean sessions)")
 	assert.Greater(t, len(afterHistory), priorLen,
 		"history should have grown by at least the new user and assistant messages")

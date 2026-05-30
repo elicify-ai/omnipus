@@ -58,7 +58,7 @@ func TestRun_LinuxMemoryLimitEnforced(t *testing.T) {
 	}
 	// On RLIMIT_AS hit, perl typically panics with "Out of memory!" and
 	// exits non-zero. We tolerate any non-zero exit since perl's exact
-	// behaviour varies by version.
+	// behavior varies by version.
 	if res.ExitCode == 0 {
 		t.Errorf("expected non-zero exit code under RLIMIT_AS; got 0; stdout=%s stderr=%s",
 			res.Stdout, res.Stderr)

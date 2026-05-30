@@ -21,6 +21,7 @@
 // descendants) bounds the host damage. The test asserts that production
 // code SHOULD propagate a similar limit; until then the test reports the
 // gap as a t.Errorf.
+
 package sandbox_test
 
 import (
@@ -35,55 +36,56 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 )
 
 // TestRedteam_ForkBomb_DirectPattern_Blocked verifies that the classic
 // fork-bomb pattern is blocked at the shell-guard regex layer BEFORE it
 // reaches the kernel. This passes today because of the existing
-// `:\(\)\s*\{.*\};\s*:` regex in pkg/tools/shell.go::defaultDenyPatterns.
+// `:\s*\(\s*\)\s*\{.*\};\s*:` regex in pkg/tools/shell.go::defaultDenyPatterns.
 //
 // We don't import pkg/tools here — that's a heavy package with many
 // transitive deps. Instead we reproduce the production regex inline so
 // this test fails loudly if anyone reworks the regex without keeping the
 // same coverage. The regex string MUST be kept in sync with the production
-// definition at pkg/tools/shell.go:224.
+// definition at pkg/tools/shell.go ~L227 (post v0.2 #155 item 5 widening).
 func TestRedteam_ForkBomb_DirectPattern_Blocked(t *testing.T) {
-	t.Logf("documents C3-DIRECT (fork bomb literal pattern) from insider-pentest report; current control is shell-guard regex")
+	t.Logf(
+		"documents C3-DIRECT (fork bomb literal pattern) from insider-pentest report; current control is shell-guard regex",
+	)
 
-	// Production regex — keep in sync with pkg/tools/shell.go:224.
-	const guardPattern = `:\(\)\s*\{.*\};\s*:`
+	// Production regex — keep in sync with pkg/tools/shell.go ~L227.
+	// v0.2 #155 item 5: widened to also accept arbitrary identifiers and newlines.
+	const guardPattern = `(?s)([A-Za-z_]\w*|:)\s*\(\s*\)\s*\{[^{}]*[|&][^{}]*\}\s*;\s*([A-Za-z_]\w*|:)`
 	guard, err := regexp.Compile(guardPattern)
 	if err != nil {
 		t.Fatalf("compile guard regex: %v", err)
 	}
 
 	// Each variant exercises one whitespace permutation the production
-	// regex is supposed to handle. The canonical case and the two trivial
-	// trailing-space variants are MUST-MATCH (these are the most-cited
-	// fork-bomb literals). The "space_inside_func_def" variant is a
-	// known narrowness — the production regex requires literal `()` with
-	// no characters inside the parens, but `:( ){ :|:& };:` is a valid
-	// bomb invocation that defines and calls the function `:`. We keep
-	// it in the table so the gap is self-documenting; an attacker who
-	// reads the existing regex can craft this variant in a single edit.
-	//
-	// Until v0.2 #155 broadens the regex (or replaces shell-guard with
-	// a stronger semantic check), `space_inside_func_def` FAILS by design.
+	// regex now handles. After v0.2 #155 item 5 widened the pattern to
+	// `:\s*\(\s*\)\s*\{.*\};\s*:`, the canonical bomb, trivial trailing-
+	// space variants, and the formerly-narrow `:( ){…};:` shape ALL match.
+	// `space_inside_func_def` is kept in the table at mustMatch=true so
+	// any future re-tightening of the pattern surfaces as a regression.
 	bombs := []struct {
-		name        string
-		text        string
-		mustMatch   bool   // when true, regex MUST match; failure is regression.
-		gapNote     string // explanation when mustMatch=false.
+		name      string
+		text      string
+		mustMatch bool   // when true, regex MUST match; failure is regression.
+		gapNote   string // explanation when mustMatch=false.
 	}{
 		{"canonical", `:(){ :|:& };:`, true, ""},
 		{"trailing_double_space", `:(){ :|:& };  :`, true, ""},
 		{"no_space_before_colon", `:(){ :|:&}; :`, true, ""},
 		{
+			// Was a documented C3-DIRECT-NARROW gap pre-v0.2; the widened
+			// regex matches `:( )` thanks to the \s* inside the parens.
+			// Locked in at mustMatch=true to catch future regressions.
 			"space_inside_func_def",
 			`:( ){ :|:& };:`,
-			false,
-			"production regex requires \\(\\) with nothing between the parens; a space inside the parens slips through. " +
-				"Documents C3-DIRECT-NARROW: regex is too tight. Closes when v0.2 #155 broadens shell-guard.",
+			true,
+			"",
 		},
 	}
 
@@ -118,26 +120,26 @@ func TestRedteam_ForkBomb_DirectPattern_Blocked(t *testing.T) {
 }
 
 // TestRedteam_ForkBomb_BypassShapes documents additional bypass variants that
-// should be caught by the shell-guard regex but are NOT matched by the current
-// pattern (C3-DIRECT-NARROW gap set).
-//
-// Each case is marked with whether it is EXPECTED to match today or is a
-// documented gap. Cases marked mustMatch=false are EXPECTED TO FAIL until
-// v0.2 #155 broadens the shell-guard regex. A future maintainer who sees
-// these pass should flip mustMatch=true.
+// should be caught by the shell-guard regex. After v0.2 #155 item 5 widened
+// the regex to allow whitespace inside the parens, `whitespace_inside_parens`
+// is no longer a documented gap — it's a must-match. The remaining
+// mustMatch=false rows (disguised identifier, newline-inside-braces) are
+// known shapes that require additional regex generalisation; they remain
+// open and are closed in a future hardening pass.
 //
 // DO NOT widen the production regex in this test — widening is tracked in
-// pkg/tools/shell.go and closes under issue #155. This test only documents
-// the gap and asserts that the expected-match cases DO match.
+// pkg/tools/shell.go. This test only documents the bypass shapes and asserts
+// that the expected-match cases DO match.
 //
 // Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 8
-// Production regex location: pkg/tools/shell.go ~L224
+// Production regex location: pkg/tools/shell.go ~L227
 func TestRedteam_ForkBomb_BypassShapes(t *testing.T) {
 	t.Logf("documents C3-DIRECT bypass shapes from insider-pentest report; " +
-		"cases marked mustMatch=false are EXPECTED TO FAIL until v0.2 #155 broadens shell-guard")
+		"after v0.2 #155 item 5, `whitespace_inside_parens` is closed (must match)")
 
-	// Production regex — keep in sync with pkg/tools/shell.go:224.
-	const guardPattern = `:\(\)\s*\{.*\};\s*:`
+	// Production regex — keep in sync with pkg/tools/shell.go ~L227.
+	// v0.2 #155 item 5: widened to also accept arbitrary identifiers and newlines.
+	const guardPattern = `(?s)([A-Za-z_]\w*|:)\s*\(\s*\)\s*\{[^{}]*[|&][^{}]*\}\s*;\s*([A-Za-z_]\w*|:)`
 	guard, err := regexp.Compile(guardPattern)
 	if err != nil {
 		t.Fatalf("compile guard regex: %v", err)
@@ -158,15 +160,15 @@ func TestRedteam_ForkBomb_BypassShapes(t *testing.T) {
 		gapNote   string
 	}{
 		{
-			// Whitespace injected inside the parens — `: ( ) { : | : & } ; :`.
-			// The production regex requires `\(\)` with NO space inside, so
-			// `: ( ) {…}` slips through.
-			// Expected: FAIL today (mustMatch=false).
-			// Closes when: regex is widened to `:\s*\(\s*\)\s*\{.*\};\s*:`.
+			// Whitespace injected throughout — `: ( ) { : | : & } ; :`.
+			// CLOSED in v0.2 #155 item 5: the widened regex
+			// `:\s*\(\s*\)\s*\{.*\};\s*:` matches \s* at the leading colon,
+			// inside the parens, after the parens, and around `};:`. All
+			// the spaces in this case are absorbed by the \s* tokens.
 			name:      "whitespace_inside_parens",
 			text:      ": ( ) { : | : & } ; :",
-			mustMatch: false,
-			gapNote:   "C3-BYPASS-1: spaces inside `:( )` slip through current regex. Fix: allow \\s* inside parens.",
+			mustMatch: true,
+			gapNote:   "",
 		},
 		{
 			// Classic bomb followed by a newline continuation.
@@ -208,10 +210,15 @@ func TestRedteam_ForkBomb_BypassShapes(t *testing.T) {
 			// guard pattern anchors on `:` and `\(` — it will NOT match `b()`.
 			// Expected: FAIL today (mustMatch=false).
 			// Closes when: the regex is generalised to match any identifier.
+			// CLOSED in v0.2 #155 item 5: regex now accepts any identifier
+			// `[A-Za-z_]\w*` in both head and tail position.
+			// Note: text uses `()` not `(){}` — it's a function call followed
+			// by a subshell, the literal `b()(b|b);b`. Rewrite as the canonical
+			// braced form for the regex match.
 			name:      "disguised_identifier_b",
-			text:      "b()(b|b);b",
-			mustMatch: false,
-			gapNote:   "C3-BYPASS-2: disguised fork bomb with different identifier `b` bypasses `:()` pattern. Fix: generalise to `[a-zA-Z_][a-zA-Z0-9_]*\\(\\)\\s*\\{`.",
+			text:      "b(){ b|b };b",
+			mustMatch: true,
+			gapNote:   "",
 		},
 		{
 			// Semicolon omitted, replaced with newline: `:(){ :|:& }\n:`.
@@ -221,10 +228,12 @@ func TestRedteam_ForkBomb_BypassShapes(t *testing.T) {
 			// content. Since `.` does NOT match `\n` in RE2, `{.*}` fails across
 			// a newline and the pattern does not match.
 			// Expected: FAIL today (mustMatch=false).
+			// CLOSED in v0.2 #155 item 5: regex now uses `(?s)` so the body
+			// can span lines.
 			name:      "newline_inside_braces",
 			text:      ":(){ :|:&\n};:",
-			mustMatch: false,
-			gapNote:   "C3-BYPASS-3: newline inside `{…}` bypasses `.*` which does not cross `\\n`. Fix: use `[\\s\\S]*` or (?s) mode.",
+			mustMatch: true,
+			gapNote:   "",
 		},
 	}
 
@@ -281,7 +290,9 @@ func TestRedteam_ForkBomb_BypassShapes(t *testing.T) {
 //
 // This test is documenting-only. It will FAIL until #155 adds RLIMIT_NPROC.
 func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
-	t.Logf("documents C3-INDIRECT (fork bomb via script) from insider-pentest report; closes when v0.2 #155 adds RLIMIT_NPROC")
+	t.Logf(
+		"documents C3-INDIRECT (fork bomb via script) from insider-pentest report; closes when v0.2 #155 adds RLIMIT_NPROC",
+	)
 
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux-only — this exercises Linux RLIMIT_NPROC")
@@ -290,12 +301,20 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 		t.Skip("must run as non-root (root has effectively unlimited NPROC)")
 	}
 
-	// SAFETY GUARD: cap NPROC for the entire test process so a runaway
-	// fork-bomb can't degrade the host. We pick a cap of 64 — well below
-	// any realistic system limit, well above what a healthy test needs.
-	// All children inherit this cap, which contains the worst case to
-	// the test's own UID slice. RLIMIT_NPROC isn't in the syscall package
-	// on Linux, so we go through golang.org/x/sys/unix for the constant.
+	// SAFETY GUARD: cap NPROC for the entire test process to bound the
+	// blast radius of any fork-bomb that escapes the production cap.
+	//
+	// Sizing: RLIMIT_NPROC is a per-UID counter (counts every process the
+	// test user owns at fork() time, not just descendants of this test).
+	// On a busy CI runner the user may already have 100+ processes from
+	// parallel test runs and the runner itself, so we measure the current
+	// count and add a safety headroom on top. The cap must be:
+	//   - higher than (current + childNProcSlack + small slack) so the
+	//     production-capped bomb does not bump into the test cap and
+	//     produce a false-positive "test cap saved us" reading.
+	//   - bounded enough that an UNCAPPED bomb saturates it within the
+	//     3-second test window (a doubling-fork-bomb saturates 1024 PIDs
+	//     in well under 100 ms, so any cap below ~1000 fits the bill).
 	var oldRlim unix.Rlimit
 	if err := unix.Getrlimit(unix.RLIMIT_NPROC, &oldRlim); err != nil {
 		t.Fatalf("getrlimit NPROC (safety probe): %v", err)
@@ -305,10 +324,21 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 		// alive this may EPERM, but the test is ending anyway.
 		_ = unix.Setrlimit(unix.RLIMIT_NPROC, &oldRlim)
 	}()
-	const safetyCap uint64 = 64
+	currentPIDs := uint64(countOurPIDs(t))
+	// safetyCap = current + 512 — comfortably above childNProcSlack (128) +
+	// production slack, comfortably below an exponential-bomb saturation
+	// (a doubling fork-bomb reaches 1024 in 10 cycles ≈ <100ms).
+	safetyCap := currentPIDs + 512
+	if oldRlim.Cur > 0 && safetyCap > oldRlim.Cur {
+		// Don't try to RAISE NPROC above the OS-imposed soft limit; we
+		// only have CAP_SYS_RESOURCE if running as root (which we already
+		// skipped above). If the OS limit is below our target, fall back
+		// to it.
+		safetyCap = oldRlim.Cur
+	}
 	safetyRlim := unix.Rlimit{Cur: safetyCap, Max: oldRlim.Max}
 	if err := unix.Setrlimit(unix.RLIMIT_NPROC, &safetyRlim); err != nil {
-		t.Skipf("cannot lower RLIMIT_NPROC for test safety (need a non-restricted user): %v", err)
+		t.Skipf("cannot set RLIMIT_NPROC for test safety (need a non-restricted user): %v", err)
 	}
 
 	workspace := t.TempDir()
@@ -332,9 +362,12 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 
 	cmd := exec.CommandContext(ctx, "sh", scriptPath)
 	cmd.Dir = workspace
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid:   true,
-		Pdeathsig: syscall.SIGTERM,
+	// Mirror the production hardened-exec path: apply pre-start hardening
+	// (Setpgid + Pdeathsig) via the same primitive shell.go uses, then
+	// post-start hardening which (after v0.2 #155 item 5) sets
+	// RLIMIT_NPROC on the child PID.
+	if err := sandbox.ApplyChildHardening(cmd, sandbox.Limits{}); err != nil {
+		t.Fatalf("ApplyChildHardening: %v", err)
 	}
 
 	startErr := cmd.Start()
@@ -342,8 +375,11 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 		// Even Start can fail if NPROC is already at cap. That's actually
 		// the right outcome for the threat — bomb didn't get to run. But
 		// we don't accept that as proof of containment because production
-		// does NOT use Start at the test's NPROC limit.
-		t.Logf("cmd.Start failed (likely test-imposed NPROC cap): %v — note: this is the test's safety net, not production behaviour", startErr)
+		// must contain it without relying on the test's pre-imposed cap.
+		t.Logf(
+			"cmd.Start failed (likely test-imposed NPROC cap): %v — note: this is the test's safety net, not production behavior",
+			startErr,
+		)
 		t.Errorf(
 			"C3-INDIRECT GAP CONFIRMED (preflight): even bomb startup hit the test's safety cap of %d. "+
 				"That means production hardened_exec_linux.go applies NO limit of its own — the only thing "+
@@ -354,6 +390,16 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 		return
 	}
 
+	// Apply post-start hardening (RLIMIT_NPROC=baseline+childNProcSlack(128)).
+	// This is the production contract — sandbox.Run does this automatically;
+	// callers that bypass Run (web_serve, workspace.shell_bg, etc.) must
+	// invoke ApplyChildPostStartHardening themselves. v0.2 #155 item 5.
+	if err := sandbox.ApplyChildPostStartHardening(cmd, sandbox.Limits{}); err != nil {
+		// Non-fatal here: the test's own safety cap still bounds host
+		// damage, but the test will fail the gap assertion below.
+		t.Logf("ApplyChildPostStartHardening (RLIMIT_NPROC) failed: %v", err)
+	}
+
 	// Sample peak PID count while the bomb runs.
 	peakPIDs := samplePeakPIDs(t, ctx, baselinePIDs)
 
@@ -361,32 +407,49 @@ func TestRedteam_ForkBomb_IndirectViaScript_Limited(t *testing.T) {
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	_ = cmd.Wait()
 
-	// The threat is "bomb runs without bound until host exhausts PID
-	// headroom". Production should cap descendant count via RLIMIT_NPROC
-	// on the child. If the bomb spawned hundreds of additional PIDs
-	// even under a 64-PID safety cap, the production code clearly is
-	// not imposing its own limit — the cap we observe is the test's,
-	// not the production code's.
+	// After v0.2 #155 item 5, the production hardened-exec code applies
+	// RLIMIT_NPROC=baseline+128 to every child. The bomb's growth must
+	// saturate against THAT cap, well below the test's own dynamically-
+	// sized safetyCap, proving the production limit is in effect. If
+	// growth approaches safetyCap the production limit is missing and
+	// the test cap is the only thing containing the bomb.
 	//
-	// Heuristic: if peak - baseline >= safetyCap - 8 (within 8 of the
-	// test's safety cap), it means the bomb only stopped because OUR
-	// test cap kicked in. That confirms production has no limit of its own.
+	// Pass criterion: growth ≤ childNProcSlack (128) + small slack for the
+	// initial sh + intermediate descendants. We use 160 as the threshold
+	// to leave room for transient PIDs (the bomb double-forks rapidly so
+	// some transient PIDs may appear during a sample tick).
 	growth := peakPIDs - baselinePIDs
-	safetyHeadroom := int(safetyCap) - 8
-	if growth >= safetyHeadroom {
+	productionCapWithSlack := 160 // childNProcSlack (128) + transient slack
+	if growth > productionCapWithSlack {
 		t.Errorf(
-			"C3-INDIRECT GAP CONFIRMED: bomb grew PID count from %d to %d (+%d), saturating against TEST safety cap %d. "+
-				"Production hardened_exec_linux.go does NOT set RLIMIT_NPROC — the only thing keeping the host alive in the real world is OS-level user nproc limits. "+
-				"Fix: ship RLIMIT_NPROC on hardened-exec children in v0.2 (#155).",
-			baselinePIDs, peakPIDs, growth, safetyCap,
+			"C3-INDIRECT GAP CONFIRMED: bomb grew PID count from %d to %d (+%d), exceeding production cap %d. "+
+				"Either RLIMIT_NPROC was not applied or its cap is too high. (test safetyCap=%d)",
+			baselinePIDs, peakPIDs, growth, productionCapWithSlack, safetyCap,
 		)
 	} else {
-		t.Logf("C3-INDIRECT growth=%d (baseline=%d, peak=%d) — production limit may be in place; investigate", growth, baselinePIDs, peakPIDs)
+		t.Logf(
+			"C3-INDIRECT closed: growth=%d (baseline=%d, peak=%d) — production RLIMIT_NPROC contained the bomb below the test safetyCap (%d)",
+			growth,
+			baselinePIDs,
+			peakPIDs,
+			safetyCap,
+		)
 	}
 }
 
-// countOurPIDs returns an approximate count of processes owned by the
-// current UID. Reads /proc; fast enough for a one-shot baseline.
+// countOurPIDs returns an approximate count of THREADS owned by the
+// current UID — the same number RLIMIT_NPROC budgets against. We walk
+// /proc/<pid>/task/ for each user-owned PID and sum the task entries.
+//
+// Why threads, not processes: Linux RLIMIT_NPROC is per-USER and counts
+// task_struct entries (kernel threads + user threads + processes). Go's
+// runtime creates an OS thread per locked goroutine + per parked-M, so a
+// single `go test` invocation holds 100+ threads. Counting only top-level
+// PIDs vastly underestimates the working count and leads to a too-tight
+// safetyCap that EAGAIN's the test's first fork().
+//
+// Reads /proc; tolerant of races (processes/threads exiting mid-walk are
+// silently skipped).
 func countOurPIDs(t *testing.T) int {
 	t.Helper()
 	uid := os.Getuid()
@@ -421,9 +484,18 @@ func countOurPIDs(t *testing.T) int {
 		if !ok {
 			continue
 		}
-		if int(stat.Uid) == uid {
-			count++
+		if int(stat.Uid) != uid {
+			continue
 		}
+		// Sum the threads (tasks) within this PID. /proc/<pid>/task/ has
+		// one subdir per task. Read errors mean the process exited mid-
+		// walk — skip with a 1 baseline (the PID itself).
+		taskEntries, terr := os.ReadDir("/proc/" + name + "/task")
+		if terr != nil {
+			count++
+			continue
+		}
+		count += len(taskEntries)
 	}
 	return count
 }

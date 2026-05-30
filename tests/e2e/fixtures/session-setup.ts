@@ -46,10 +46,12 @@ export interface TranscriptEntry {
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 function getStoredAuthToken(): string | null {
-  const authFile = path.join(
-    path.dirname(new URL(import.meta.url).pathname),
-    '.auth/admin.json',
-  )
+  const authFile = process.env.OMNIPUS_AUTH_FILE
+    ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
+    : path.join(
+        path.dirname(new URL(import.meta.url).pathname),
+        '.auth/admin.json',
+      )
   if (!fs.existsSync(authFile)) return null
   try {
     const raw = fs.readFileSync(authFile, 'utf-8')

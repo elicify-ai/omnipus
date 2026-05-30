@@ -219,27 +219,112 @@ func hexToKey(hexKey string) ([]byte, error) {
 	return key, nil
 }
 
-// loadKeyFile reads a hex master key from path, enforcing 0600 permissions.
+// loadKeyFile reads a hex master key from path, enforcing strict 0600 permissions.
+//
+// Threat model (v0.2 #155 item 2): a master key file with mode bits beyond
+// owner read+write (0o600) is a configuration smell — group- and world-readable
+// keys defeat the encryption-at-rest model entirely. We refuse to load such a
+// file rather than silently downgrade security. The check is symmetric across
+// modes 2 (OMNIPUS_KEY_FILE) and 3 (default $OMNIPUS_HOME/master.key); the
+// auto-generate path (mode 4) writes 0600 by construction so it never trips.
+//
+// Symlink handling: Lstat is consulted first so a symlink whose own metadata
+// claims unsafe perms cannot be used to mask a 0600 target. When the path IS a
+// symlink, we follow it via Stat and require the TARGET to be a regular file
+// at 0600. The symlink's own permission bits (typically 0o777 — Linux ignores
+// them anyway) are tolerated as long as the target is correctly locked down.
+//
+// Returns a clear error mentioning the actual mode so operators can fix it
+// with a single chmod 600.
 func loadKeyFile(path string) ([]byte, error) {
+	// Lstat first to detect symlinks. A symlink's own perms are usually 0o777
+	// on Linux and irrelevant to security; what matters is the target.
+	lInfo, lErr := os.Lstat(path)
+	if lErr != nil {
+		emitMasterKeyAudit(path, false, fmt.Sprintf("lstat: %v", lErr))
+		return nil, fmt.Errorf("key file lstat %q: %w", path, lErr)
+	}
+	isSymlink := lInfo.Mode()&os.ModeSymlink != 0
+
+	// Stat (follows symlinks) for the authoritative perm check on the target.
 	info, err := os.Stat(path)
 	if err != nil {
+		emitMasterKeyAudit(path, false, fmt.Sprintf("stat: %v", err))
 		return nil, fmt.Errorf("key file stat %q: %w", path, err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("key file %q is not a regular file", path)
+		emitMasterKeyAudit(path, false, "not a regular file (target)")
+		return nil, fmt.Errorf("key file %q target is not a regular file", path)
 	}
-	// Reject group- or world-readable files (US-4 AC3): mask 0o044 = group-read | world-read.
-	if info.Mode()&0o044 != 0 {
-		return nil, fmt.Errorf("key file %q has unsafe permissions %04o — must be 0600", path, info.Mode().Perm())
+
+	// Strict 0600: any bit outside owner-read+owner-write (0o600) is a refusal.
+	// `mode &^ 0o600 != 0` is equivalent to "are there bits set that are not in
+	// the 0o600 mask?". Catches 0o644 (world+group read), 0o640 (group read),
+	// 0o604 (world read), 0o700 (owner exec — no), 0o660 (group write), etc.
+	perm := info.Mode().Perm()
+	if perm&^0o600 != 0 {
+		emitMasterKeyAudit(path, false, fmt.Sprintf("perm %04o not 0600", perm))
+		return nil, fmt.Errorf("master key file %q must have mode 0600 (got %04o); refusing to load", path, perm)
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
+		emitMasterKeyAudit(path, false, fmt.Sprintf("read: %v", err))
 		return nil, fmt.Errorf("read key file %q: %w", path, err)
 	}
 
 	hexKey := strings.TrimRight(string(data), "\r\n")
-	return hexToKey(hexKey)
+	key, hexErr := hexToKey(hexKey)
+	if hexErr != nil {
+		emitMasterKeyAudit(path, false, fmt.Sprintf("invalid hex: %v", hexErr))
+		return nil, hexErr
+	}
+
+	// Success path. Note the symlink fact in the audit detail so an operator
+	// reviewing logs can spot a deployment that points at a managed-by-Vault
+	// symlinked key file without alarm.
+	if isSymlink {
+		emitMasterKeyAudit(path, true, fmt.Sprintf("loaded via symlink, target perm %04o", perm))
+	} else {
+		emitMasterKeyAudit(path, true, fmt.Sprintf("perm %04o", perm))
+	}
+	return key, nil
+}
+
+// emitMasterKeyAudit logs a master.key load attempt at the slog level. The
+// audit subsystem may not yet be initialized when Unlock runs — this happens
+// during boot before the audit Logger is constructed — so we use slog with
+// structured fields that downstream parsers (and operator log aggregation)
+// can reconstruct into an audit record.
+//
+// Threat note: every load attempt is recorded, success or failure. An attacker
+// who provisioned a 0644 master.key to bypass mode-0600 enforcement leaves a
+// loud audit footprint on every boot.
+func emitMasterKeyAudit(path string, success bool, detail string) {
+	event := "credentials.master_key_load"
+	decision := "deny"
+	if success {
+		decision = "allow"
+	}
+	// Use Info for success (routine boot event), Warn for denials (operator
+	// attention required). Both go through the same slog handler so the audit
+	// hook (when wired by the gateway) can pick them up.
+	if success {
+		slog.Info(event,
+			"event", event,
+			"decision", decision,
+			"path", path,
+			"detail", detail,
+		)
+		return
+	}
+	slog.Warn(event,
+		"event", event,
+		"decision", decision,
+		"path", path,
+		"detail", detail,
+		"policy_rule", "master_key_perm_0600",
+	)
 }
 
 // promptPassphrase reads a passphrase from the terminal without echo.

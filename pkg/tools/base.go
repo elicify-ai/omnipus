@@ -22,8 +22,8 @@ const (
 type ToolCategory string
 
 const (
-	CategoryCore          ToolCategory = "core"     // default for BaseTool
-	CategorySystem        ToolCategory = "system"   // sysagent tools
+	CategoryCore          ToolCategory = "core"   // default for BaseTool
+	CategorySystem        ToolCategory = "system" // sysagent tools
 	CategoryFile          ToolCategory = "file"
 	CategoryCode          ToolCategory = "code"
 	CategoryWeb           ToolCategory = "web"

@@ -1,0 +1,29 @@
+type: object
+description: >
+  Returned with HTTP 201 on successful POST /users. Contains the new user's
+  identity fields. No token is issued — the user must log in explicitly.
+required:
+  - username
+  - role
+properties:
+  username:
+    type: string
+    description: The created user's login name.
+    example: "alice"
+  role:
+    type: string
+    enum:
+      - admin
+      - user
+    description: The created user's RBAC role.
+    example: "user"
+  requires_restart:
+    type: boolean
+    description: >
+      Present and true when config was saved to disk but the in-memory hot-reload
+      failed. The gateway must be restarted for the user to be able to log in.
+    example: false
+  warning:
+    type: string
+    description: Human-readable explanation when requires_restart is true.
+    example: "config saved to disk but hot-reload failed; restart the gateway to apply"

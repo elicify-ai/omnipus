@@ -1,0 +1,47 @@
+title: McpServerCreate
+description: >
+  Request body for POST /mcp-servers. Adds a new MCP server to the gateway config.
+type: object
+required:
+  - name
+  - command
+  - transport
+additionalProperties: false
+properties:
+  name:
+    type: string
+    description: Human-readable server name.
+    example: "My MCP Server"
+  command:
+    type: string
+    description: Command to start the MCP server process (stdio transport).
+    example: "npx @modelcontextprotocol/server-everything"
+  args:
+    type: array
+    items:
+      type: string
+    description: Command-line arguments to pass to the server process.
+    example:
+      - "--port"
+      - "3000"
+  transport:
+    type: string
+    enum:
+      - stdio
+      - sse
+      - http
+    description: >
+      Transport mechanism to use for this MCP server. Use "stdio" for local
+      process-based servers, "sse" or "http" for remote HTTP-based servers
+      (both are handled identically by the gateway).
+    example: "stdio"
+  env:
+    type: object
+    additionalProperties:
+      type: string
+    description: >
+      Environment variable overrides passed to the MCP server process.
+      Only applicable for stdio transport. Each key-value pair is injected
+      into the server process environment at startup.
+    example:
+      PATH: "/usr/local/bin:/usr/bin"

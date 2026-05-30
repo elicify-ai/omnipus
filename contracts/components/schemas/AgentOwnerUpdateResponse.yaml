@@ -1,0 +1,23 @@
+title: AgentOwnerUpdateResponse
+description: >
+  Response from PATCH /api/v1/agents/{id}/ownership.
+  Confirms the ownership change.
+type: object
+required:
+  - success
+  - agent_id
+  - owner_username
+additionalProperties: false
+properties:
+  success:
+    type: boolean
+    description: True when ownership was successfully updated.
+    example: true
+  agent_id:
+    type: string
+    description: The agent whose ownership was changed.
+    example: 550e8400-e29b-41d4-a716-446655440000
+  owner_username:
+    type: string
+    description: The username of the new owner.
+    example: alice

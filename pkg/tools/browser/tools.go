@@ -24,7 +24,10 @@ const defaultSessionID = "default"
 
 // --- browser.navigate (US-5) ---
 
-type NavigateTool struct { tools.BaseTool;  mgr *BrowserManager }
+type NavigateTool struct {
+	tools.BaseTool
+	mgr *BrowserManager
+}
 
 func (t *NavigateTool) Name() string           { return "browser.navigate" }
 func (t *NavigateTool) Scope() tools.ToolScope { return tools.ScopeCore }
@@ -102,7 +105,10 @@ func (t *NavigateTool) Execute(ctx context.Context, args map[string]any) *tools.
 
 // --- browser.click (US-5) ---
 
-type ClickTool struct { tools.BaseTool;  mgr *BrowserManager }
+type ClickTool struct {
+	tools.BaseTool
+	mgr *BrowserManager
+}
 
 func (t *ClickTool) Name() string           { return "browser.click" }
 func (t *ClickTool) Scope() tools.ToolScope { return tools.ScopeCore }
@@ -144,7 +150,10 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 
 // --- browser.type (US-5) ---
 
-type TypeTool struct { tools.BaseTool;  mgr *BrowserManager }
+type TypeTool struct {
+	tools.BaseTool
+	mgr *BrowserManager
+}
 
 func (t *TypeTool) Name() string           { return "browser.type" }
 func (t *TypeTool) Scope() tools.ToolScope { return tools.ScopeCore }
@@ -268,7 +277,10 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 
 // --- browser.get_text (US-5) ---
 
-type GetTextTool struct { tools.BaseTool;  mgr *BrowserManager }
+type GetTextTool struct {
+	tools.BaseTool
+	mgr *BrowserManager
+}
 
 func (t *GetTextTool) Name() string           { return "browser.get_text" }
 func (t *GetTextTool) Scope() tools.ToolScope { return tools.ScopeCore }
@@ -318,7 +330,10 @@ func (t *GetTextTool) Execute(ctx context.Context, args map[string]any) *tools.T
 
 // --- browser.wait (US-5) ---
 
-type WaitTool struct { tools.BaseTool;  mgr *BrowserManager }
+type WaitTool struct {
+	tools.BaseTool
+	mgr *BrowserManager
+}
 
 func (t *WaitTool) Name() string           { return "browser.wait" }
 func (t *WaitTool) Scope() tools.ToolScope { return tools.ScopeCore }

@@ -83,8 +83,10 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 			warnUnauthOnce.Do(func() {
 				slog.Warn("DEV MODE: API has no authentication. Set gateway.dev_mode_bypass=false for production.")
 			})
-			// Allow all requests in dev mode, treated as admin.
-			return AuthResult{Authenticated: true, Role: config.UserRoleAdmin}
+			// Allow all requests in dev mode, treated as admin. Provide a
+			// synthetic User so handlers that read *UserConfig from context
+			// (e.g. /auth/validate) see an admin identity instead of nil.
+			return AuthResult{Authenticated: true, Role: config.UserRoleAdmin, User: &devBypassUser}
 		}
 		// No auth configured — deny by default (fail closed).
 		http.Error(w, "unauthorized: no users configured, complete onboarding first", http.StatusUnauthorized)
@@ -94,8 +96,19 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 		http.Error(w, "unauthorized: invalid Bearer token", http.StatusUnauthorized)
 		return AuthResult{Authenticated: false}
 	}
-	return AuthResult{Authenticated: true, Role: config.UserRoleAdmin}
+	// Synthetic User for the env-token path: handlers reading *UserConfig
+	// from context need a non-nil identity even when no per-user entry exists.
+	return AuthResult{Authenticated: true, Role: config.UserRoleAdmin, User: &envTokenUser}
 }
+
+// devBypassUser is the synthetic admin identity returned when the request
+// passes via gateway.dev_mode_bypass. Handlers that read *UserConfig from
+// context (HandleValidateToken etc.) see "_dev_bypass" rather than nil.
+var devBypassUser = config.UserConfig{Username: "_dev_bypass", Role: config.UserRoleAdmin}
+
+// envTokenUser is the synthetic admin identity returned when the request
+// passes via the legacy OMNIPUS_BEARER_TOKEN environment fallback.
+var envTokenUser = config.UserConfig{Username: "_env_token", Role: config.UserRoleAdmin}
 
 // MapUserRoleToPrincipal converts a config.UserRole (human user) to the equivalent
 // RBAC principal role string for agent operations. Fails closed: unknown roles

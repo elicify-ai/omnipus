@@ -110,3 +110,65 @@ func TestRetentionSweep_PartialDeleteFailureContinues(t *testing.T) {
 	// removed may be 1 (only the file that succeeded).
 	assert.Equal(t, 1, removed, "only the successfully deleted file must be counted")
 }
+
+// TestRetentionSweep_RemovesEmptySessionDir verifies that after the per-file
+// sweep deletes the only .jsonl in a session directory, the now-empty session
+// directory itself is removed even though Linux bumps the directory's mtime
+// to "now" the moment a child file is removed (which would defeat any
+// post-deletion mtime-based check).
+//
+// Regression coverage for the retention:201 e2e failure: an aged session with
+// a backdated meta.json and a backdated transcript.jsonl had its .jsonl swept
+// but the sidecar metadata stayed behind, leaving a content-less ghost session
+// in the listing.
+func TestRetentionSweep_RemovesEmptySessionDir(t *testing.T) {
+	store := newUnifiedStoreForTest(t)
+
+	// Aged transcript that the sweep will delete.
+	transcript := createSessionFile(t, store, "sess-aged", "2026-01-01.jsonl", 100*24*time.Hour)
+	sessionDir := filepath.Dir(transcript)
+
+	// Sidecar metadata in the same dir, also backdated. Mirrors what the e2e
+	// fixture in tests/e2e/fixtures/aging.ts produces (meta.json next to a
+	// backdated .jsonl).
+	metaPath := filepath.Join(sessionDir, "meta.json")
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{"id":"sess-aged"}`), 0o600))
+	mtime := time.Now().Add(-100 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(metaPath, mtime, mtime))
+
+	removed, err := store.RetentionSweep(90)
+	require.NoError(t, err)
+	assert.Equal(t, 1, removed, "the aged .jsonl must be deleted")
+
+	// The session directory itself must be gone — meta.json was the only
+	// remaining file and there are no .jsonl transcripts left, so the dir
+	// is junk by definition.
+	_, statErr := os.Stat(sessionDir)
+	assert.True(t, os.IsNotExist(statErr),
+		"session directory must be removed when no .jsonl files remain (got: %v)", statErr)
+}
+
+// TestRetentionSweep_KeepsDirWithLiveTranscript verifies that a session
+// directory with at least one fresh (not-aged) .jsonl is retained even when
+// other .jsonl files in the same dir were aged and swept.
+func TestRetentionSweep_KeepsDirWithLiveTranscript(t *testing.T) {
+	store := newUnifiedStoreForTest(t)
+
+	// One aged transcript (gets swept).
+	createSessionFile(t, store, "sess-mixed", "2026-01-01.jsonl", 100*24*time.Hour)
+	// One fresh transcript (must survive).
+	freshPath := createSessionFile(t, store, "sess-mixed", "2026-05-01.jsonl", 5*24*time.Hour)
+	sessionDir := filepath.Dir(freshPath)
+
+	removed, err := store.RetentionSweep(90)
+	require.NoError(t, err)
+	assert.Equal(t, 1, removed, "only the aged .jsonl must be deleted")
+
+	// Session directory must still exist because it has a live transcript.
+	_, statErr := os.Stat(sessionDir)
+	assert.NoError(t, statErr, "session dir must be retained when at least one .jsonl remains")
+
+	// The fresh transcript must still be there.
+	_, statErr = os.Stat(freshPath)
+	assert.NoError(t, statErr, "fresh .jsonl must not be deleted")
+}

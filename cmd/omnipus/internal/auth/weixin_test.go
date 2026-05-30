@@ -123,6 +123,12 @@ func TestSaveWeixinConfig_Overwrite(t *testing.T) {
 // SaveConfig fails after store.Set succeeds, the credential is removed so that
 // config.json is never left with a TokenRef pointing at a non-existent entry.
 func TestSaveWeixinConfig_SaveConfigFailureRollsBackStore(t *testing.T) {
+	if os.Getuid() == 0 {
+		// Root bypasses DAC (Discretionary Access Control), so chmod 0555 on
+		// a directory does not prevent writes from root. The failure-injection
+		// this test relies on only works for non-privileged users.
+		t.Skip("read-only directory injection is ineffective under root; run as non-root")
+	}
 	tmpDir := t.TempDir()
 
 	// Create a read-only directory so that SaveConfig fails with EACCES.

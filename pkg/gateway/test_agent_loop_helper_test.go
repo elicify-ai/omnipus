@@ -22,7 +22,14 @@ import (
 // dir during teardown and TempDir's RemoveAll fails with
 // "directory not empty", causing flaky failures under -count=N or parallel
 // package runs.
-func mustAgentLoop(t *testing.T, cfg *config.Config, msgBus *bus.MessageBus, provider providers.LLMProvider) *agent.AgentLoop {
+//
+
+func mustAgentLoop(
+	t *testing.T,
+	cfg *config.Config,
+	msgBus *bus.MessageBus,
+	provider providers.LLMProvider,
+) *agent.AgentLoop {
 	t.Helper()
 	al, err := agent.NewAgentLoop(cfg, msgBus, provider)
 	if err != nil {

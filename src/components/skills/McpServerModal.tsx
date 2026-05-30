@@ -26,7 +26,7 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
   const [name, setName] = useState('')
   const [command, setCommand] = useState('')
   const [args, setArgs] = useState('')
-  const [transport, setTransport] = useState<'stdio' | 'sse' | 'websocket'>('stdio')
+  const [transport, setTransport] = useState<'stdio' | 'sse' | 'http'>('stdio')
 
   const { mutate: doAdd, isPending } = useMutation({
     mutationFn: () =>
@@ -48,7 +48,7 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
     setName('')
     setCommand('')
     setArgs('')
-    setTransport('stdio')
+    setTransport('stdio' as const)
     onOpenChange(false)
   }
 
@@ -101,7 +101,7 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
               items={[
                 { value: 'stdio', label: 'stdio' },
                 { value: 'sse', label: 'SSE' },
-                { value: 'websocket', label: 'WebSocket' },
+                { value: 'http', label: 'HTTP' },
               ]}
             />
           </div>

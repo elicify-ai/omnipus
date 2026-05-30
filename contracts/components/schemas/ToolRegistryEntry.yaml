@@ -1,0 +1,43 @@
+title: ToolRegistryEntry
+description: >
+  A single entry in the central tool registry snapshot returned by
+  GET /api/v1/tools (FR-027).
+type: object
+required:
+  - name
+  - description
+  - scope
+  - category
+  - source
+properties:
+  name:
+    type: string
+    description: Canonical tool name (e.g. "workspace.shell", "browser.navigate").
+    example: workspace.shell
+  description:
+    type: string
+    description: Human-readable description of what the tool does.
+    example: Run a shell command in the agent workspace.
+  scope:
+    type: string
+    description: Tool visibility scope.
+    enum:
+      - system
+      - core
+      - general
+    example: general
+  category:
+    type: string
+    description: >
+      Tool category prefix derived from the tool name
+      (e.g. "workspace", "browser", "system") or "general".
+    example: workspace
+  source:
+    type: string
+    description: >
+      Origin of the tool registration.
+      "builtin" = compiled-in Go tool; "mcp" = MCP server tool.
+    enum:
+      - builtin
+      - mcp
+    example: builtin

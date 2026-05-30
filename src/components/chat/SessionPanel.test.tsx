@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SessionPanel } from './SessionPanel'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
-import { useChatStore } from '@/store/chat'
+import { useChatStore, makeBucketMessages } from '@/store/chat'
 
 // W2-1: SessionPanel chat-session routing regression test.
 //
@@ -234,7 +234,7 @@ describe('SessionPanel — per-session isStreaming dot (F-S11)', () => {
         sessionsById: {
           ...s.sessionsById,
           'sess-chat-1': {
-            messages: [],
+            ...makeBucketMessages([]),
             toolCalls: {},
             toolCallOrder: [],
             textAtToolCallStart: {},
@@ -245,7 +245,10 @@ describe('SessionPanel — per-session isStreaming dot (F-S11)', () => {
             sessionTokens: 0,
             sessionCost: 0,
             rateLimitEvent: null,
+            cancelStage: null,
             lastUserMessageAt: null,
+            lastReceivedEventTime: null,
+            spanByParentCallId: {},
           },
         },
       }))
@@ -270,7 +273,7 @@ describe('SessionPanel — per-session isStreaming dot (F-S11)', () => {
         sessionsById: {
           ...s.sessionsById,
           'sess-chat-1': {
-            messages: [],
+            ...makeBucketMessages([]),
             toolCalls: {},
             toolCallOrder: [],
             textAtToolCallStart: {},
@@ -281,7 +284,10 @@ describe('SessionPanel — per-session isStreaming dot (F-S11)', () => {
             sessionTokens: 0,
             sessionCost: 0,
             rateLimitEvent: null,
+            cancelStage: null,
             lastUserMessageAt: null,
+            lastReceivedEventTime: null,
+            spanByParentCallId: {},
           },
         },
       }))

@@ -1,0 +1,1771 @@
+asyncapi: 3.0.0
+
+info:
+  title: Omnipus WebSocket API
+  version: 0.1.0
+  description: >
+    Bidirectional WebSocket protocol for the Omnipus gateway.
+
+    The SPA (browser client) connects to /api/v1/chat/ws, authenticates
+    with an auth frame, then exchanges structured JSON frames for chat
+    streaming, tool call tracking, session replay, exec/tool approvals,
+    rate limiting, and cancel progress.
+
+    All frames are JSON objects with a "type" discriminator field.
+
+    Frame naming convention:
+      Client → server ("send" from SPA perspective)
+      Server → client ("receive" from SPA perspective)
+
+    Nil-safety contract (Ava-chat bug lesson):
+      Fields that the SPA reads via Object.keys(), .map(), .length, or spread
+      MUST be required and typed as object/array in this spec so the contract
+      test (Phase 4) catches any backend regression where Go emits null.
+      Specifically: args in ToolApprovalRequiredFrame, pending_approvals in
+      SessionStateFrame, parts in MediaFrame, params in ToolCallStartFrame.
+
+  contact:
+    name: Omnipus contributors
+    url: https://omnipus.ai
+  license:
+    name: MIT
+
+servers:
+  gateway:
+    host: localhost:6060
+    pathname: /api/v1/chat/ws
+    protocol: ws
+    description: >
+      Main WebSocket endpoint. Serves the SPA chat stream. The host and port
+      are governed by gateway.port in config.json (default 6060). For TLS
+      deployments behind a reverse proxy, this becomes wss:// at the public
+      hostname.
+  gateway-preview:
+    host: localhost:6061
+    pathname: /ws
+    protocol: ws
+    description: >
+      Preview-port WebSocket endpoint (gateway.preview_port, default 6061).
+      Serves the iframe-preview channel. The same frame protocol applies.
+      Only active when gateway.preview_listener_enabled is true (default).
+
+defaultContentType: application/json
+
+channels:
+  chat:
+    address: /api/v1/chat/ws
+    description: >
+      Primary bidirectional chat channel. Carries all client→server send frames
+      and all server→client receive frames. Upgraded from HTTP by the gateway
+      on GET /api/v1/chat/ws with Upgrade: websocket.
+    servers:
+      - $ref: '#/servers/gateway'
+    messages:
+      # ── Client → server ───────────────────────────────────────────────────────
+      AuthFrame:
+        $ref: '#/components/messages/AuthFrame'
+      MessageFrame:
+        $ref: '#/components/messages/MessageFrame'
+      CancelFrame:
+        $ref: '#/components/messages/CancelFrame'
+      ExecApprovalResponseFrame:
+        $ref: '#/components/messages/ExecApprovalResponseFrame'
+      PingFrame:
+        $ref: '#/components/messages/PingFrame'
+      AttachSessionFrame:
+        $ref: '#/components/messages/AttachSessionFrame'
+      DevicePairingResponseFrame:
+        $ref: '#/components/messages/DevicePairingResponseFrame'
+      SessionCloseFrame:
+        $ref: '#/components/messages/SessionCloseFrame'
+      # ── Server → client ───────────────────────────────────────────────────────
+      SessionStartedFrame:
+        $ref: '#/components/messages/SessionStartedFrame'
+      TokenFrame:
+        $ref: '#/components/messages/TokenFrame'
+      DoneFrame:
+        $ref: '#/components/messages/DoneFrame'
+      ErrorFrame:
+        $ref: '#/components/messages/ErrorFrame'
+      ToolCallStartFrame:
+        $ref: '#/components/messages/ToolCallStartFrame'
+      ToolCallResultFrame:
+        $ref: '#/components/messages/ToolCallResultFrame'
+      SubagentStartFrame:
+        $ref: '#/components/messages/SubagentStartFrame'
+      SubagentEndFrame:
+        $ref: '#/components/messages/SubagentEndFrame'
+      ExecApprovalRequestFrame:
+        $ref: '#/components/messages/ExecApprovalRequestFrame'
+      TaskStatusChangedFrame:
+        $ref: '#/components/messages/TaskStatusChangedFrame'
+      ReplayMessageFrame:
+        $ref: '#/components/messages/ReplayMessageFrame'
+      RateLimitFrame:
+        $ref: '#/components/messages/RateLimitFrame'
+      MediaFrame:
+        $ref: '#/components/messages/MediaFrame'
+      AgentSwitchedFrame:
+        $ref: '#/components/messages/AgentSwitchedFrame'
+      ToolApprovalRequiredFrame:
+        $ref: '#/components/messages/ToolApprovalRequiredFrame'
+      SessionStateFrame:
+        $ref: '#/components/messages/SessionStateFrame'
+      SystemOverloadFrame:
+        $ref: '#/components/messages/SystemOverloadFrame'
+      ReplayWarningFrame:
+        $ref: '#/components/messages/ReplayWarningFrame'
+      CancelStageFrame:
+        $ref: '#/components/messages/CancelStageFrame'
+      PongFrame:
+        $ref: '#/components/messages/PongFrame'
+      SessionCloseAckFrame:
+        $ref: '#/components/messages/SessionCloseAckFrame'
+      ExecApprovalResponseAckFrame:
+        $ref: '#/components/messages/ExecApprovalResponseAckFrame'
+      DevicePairingRequestFrame:
+        $ref: '#/components/messages/DevicePairingRequestFrame'
+      ExecApprovalExpiredFrame:
+        $ref: '#/components/messages/ExecApprovalExpiredFrame'
+
+operations:
+  # ── Client → server (action: send from SPA perspective) ─────────────────────
+
+  sendAuth:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Authenticate the WebSocket connection. Must be the first frame sent
+      after the connection opens. The server validates the token and emits a
+      session_state frame on success, or an error frame on failure.
+    messages:
+      - $ref: '#/channels/chat/messages/AuthFrame'
+
+  sendMessage:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Send a user chat message. Omit session_id to start a new session
+      (server responds with session_started); include session_id to continue
+      an existing session.
+    messages:
+      - $ref: '#/channels/chat/messages/MessageFrame'
+
+  sendCancel:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Request cancellation of the in-progress agent turn for a session. The
+      server responds with cancel_stage frames (graceful → hard → detached)
+      and eventually a done frame.
+    messages:
+      - $ref: '#/channels/chat/messages/CancelFrame'
+
+  sendExecApprovalResponse:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Respond to a pending exec_approval_request. The server resolves the
+      blocked tool call with the specified verdict (allow/deny/always).
+    messages:
+      - $ref: '#/channels/chat/messages/ExecApprovalResponseFrame'
+
+  sendPing:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Heartbeat ping sent every 30 seconds by the SPA to keep the connection
+      alive through proxies. The server responds with a PongFrame so the SPA
+      observes a server-originated frame during idle periods (without it, the
+      client liveness check would force-close after 60 s of silence). The
+      gorilla/websocket protocol-level ping/pong cycle continues to run
+      independently as defense-in-depth NAT-keepalive.
+    messages:
+      - $ref: '#/channels/chat/messages/PingFrame'
+
+  sendAttachSession:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Attach to an existing session and replay its transcript. The server
+      emits replay_message, tool_call_start, tool_call_result, subagent_start,
+      subagent_end, and media frames in order, then a done frame.
+    messages:
+      - $ref: '#/channels/chat/messages/AttachSessionFrame'
+
+  sendDevicePairingResponse:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Admin's approval or rejection of a pending device pairing request.
+      Sent in response to a device_pairing_request frame.
+    messages:
+      - $ref: '#/channels/chat/messages/DevicePairingResponseFrame'
+
+  sendSessionClose:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Explicit session close request. The server unregisters the session,
+      fires CloseSession on the agent loop, and responds with session_close_ack.
+    messages:
+      - $ref: '#/channels/chat/messages/SessionCloseFrame'
+
+  # ── Server → client (action: receive from SPA perspective) ──────────────────
+
+  receiveSessionStarted:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      New session ID minted by the server. Emitted when the SPA sent a message
+      frame without a session_id. The SPA must store this as activeSessionId.
+    messages:
+      - $ref: '#/channels/chat/messages/SessionStartedFrame'
+
+  receiveToken:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Partial LLM response text. Multiple token frames are emitted per turn.
+      The SPA appends each to the current assistant message bubble.
+    messages:
+      - $ref: '#/channels/chat/messages/TokenFrame'
+
+  receiveDone:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Terminal frame for a turn (live or replay). Exactly one done frame per
+      turn. Contains per-turn token/cost/duration statistics.
+    messages:
+      - $ref: '#/channels/chat/messages/DoneFrame'
+
+  receiveError:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Error notification. May be global (auth failure) or session-scoped. Does
+      NOT terminate the WebSocket connection.
+    messages:
+      - $ref: '#/channels/chat/messages/ErrorFrame'
+
+  receiveToolCallStart:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      A tool execution has begun. The SPA renders a "running" tool call badge
+      on the current assistant message.
+    messages:
+      - $ref: '#/channels/chat/messages/ToolCallStartFrame'
+
+  receiveToolCallResult:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      A tool execution has completed. The SPA updates the badge status to
+      success or error and records the result.
+    messages:
+      - $ref: '#/channels/chat/messages/ToolCallResultFrame'
+
+  receiveSubagentStart:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Opening bracket of a subagent span (FR-H-004). The SPA creates a
+      collapsible span container in the assistant message.
+    messages:
+      - $ref: '#/channels/chat/messages/SubagentStartFrame'
+
+  receiveSubagentEnd:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Closing bracket of a subagent span (FR-H-004). The SPA transitions the
+      span to a terminal status with duration and optional result.
+    messages:
+      - $ref: '#/channels/chat/messages/SubagentEndFrame'
+
+  receiveExecApprovalRequest:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      An agent tool call requires explicit exec approval before execution.
+      The SPA displays an approval modal and waits for user decision.
+    messages:
+      - $ref: '#/channels/chat/messages/ExecApprovalRequestFrame'
+
+  receiveTaskStatusChanged:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      A task's status changed. The SPA invalidates its tasks query cache.
+    messages:
+      - $ref: '#/channels/chat/messages/TaskStatusChangedFrame'
+
+  receiveReplayMessage:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      One replayed transcript entry during a session attach. The SPA
+      reconstructs the conversation from these frames.
+    messages:
+      - $ref: '#/channels/chat/messages/ReplayMessageFrame'
+
+  receiveRateLimit:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      A rate-limit denial was applied to an agent action (SEC-26). The SPA
+      displays an inline rate-limit indicator.
+    messages:
+      - $ref: '#/channels/chat/messages/RateLimitFrame'
+
+  receiveMedia:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      One or more media attachments generated by a tool. The SPA renders
+      them inline in the assistant message bubble.
+    messages:
+      - $ref: '#/channels/chat/messages/MediaFrame'
+
+  receiveAgentSwitched:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      The active agent for a session changed (handoff or return_to_default).
+      The SPA updates the active agent in the session store.
+    messages:
+      - $ref: '#/channels/chat/messages/AgentSwitchedFrame'
+
+  receiveToolApprovalRequired:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      A tool call is paused for ask-policy approval (FR-011, FR-082). The SPA
+      enqueues it in the tool approval store and shows a modal to the admin.
+      CRITICAL: args must never be null — see nil-safety contract in schema.
+    messages:
+      - $ref: '#/channels/chat/messages/ToolApprovalRequiredFrame'
+
+  receiveSessionState:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      One-shot approval state snapshot emitted on every WS reconnect (FR-052,
+      FR-073, FR-081). The SPA reconciles its approval store against this.
+      pending_approvals is always an array, never null.
+    messages:
+      - $ref: '#/channels/chat/messages/SessionStateFrame'
+
+  receiveSystemOverload:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      System at capacity — an agent action was blocked (FR-016, MAJ-009). The
+      SPA shows a warning toast.
+    messages:
+      - $ref: '#/channels/chat/messages/SystemOverloadFrame'
+
+  receiveReplayWarning:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Transcript contained duplicate tool_call_ids. Emitted just before
+      the terminal done frame during replay. The SPA shows a one-shot warning
+      toast.
+    messages:
+      - $ref: '#/channels/chat/messages/ReplayWarningFrame'
+
+  receiveCancelStage:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Cancel progress notification (B3). Three stages: graceful → hard →
+      detached. The SPA updates the stop-button label based on the stage.
+      CRITICAL: stage must be validated — invalid values are dropped by isValidFrame().
+    messages:
+      - $ref: '#/channels/chat/messages/CancelStageFrame'
+
+  receivePong:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Pong response to a client PingFrame. Lets the SPA's liveness check see a
+      server-originated frame during idle so it does not force-close after 60 s
+      of inactivity. Carries no payload beyond the type discriminator.
+    messages:
+      - $ref: '#/channels/chat/messages/PongFrame'
+
+  receiveSessionCloseAck:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Acknowledgement of a session_close client request. The server confirms
+      the session has been closed.
+    messages:
+      - $ref: '#/channels/chat/messages/SessionCloseAckFrame'
+
+  receiveExecApprovalResponseAck:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Acknowledgement that the server successfully resolved an
+      exec_approval_response frame.
+    messages:
+      - $ref: '#/channels/chat/messages/ExecApprovalResponseAckFrame'
+
+  receiveDevicePairingRequest:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      A remote device is requesting pairing and needs admin approval. The SPA
+      shows a pairing modal. The admin responds with device_pairing_response.
+    messages:
+      - $ref: '#/channels/chat/messages/DevicePairingRequestFrame'
+
+  receiveExecApprovalExpired:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      An exec_approval_request timed out before the admin responded (90 s
+      default). The SPA should transition the approval modal to an expired
+      state so the user is not left with active Allow/Deny buttons.
+    messages:
+      - $ref: '#/channels/chat/messages/ExecApprovalExpiredFrame'
+
+components:
+  messages:
+    # ── Client → server messages ───────────────────────────────────────────────
+
+    AuthFrame:
+      name: AuthFrame
+      title: auth
+      summary: WebSocket authentication frame (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/AuthFrame'
+
+    MessageFrame:
+      name: MessageFrame
+      title: message
+      summary: User chat message (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/MessageFrame'
+
+    CancelFrame:
+      name: CancelFrame
+      title: cancel
+      summary: Cancel in-progress turn (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/CancelFrame'
+
+    ExecApprovalResponseFrame:
+      name: ExecApprovalResponseFrame
+      title: exec_approval_response
+      summary: Admin decision on exec approval request (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ExecApprovalResponseFrame'
+
+    PingFrame:
+      name: PingFrame
+      title: ping
+      summary: Heartbeat keepalive (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/PingFrame'
+
+    AttachSessionFrame:
+      name: AttachSessionFrame
+      title: attach_session
+      summary: Request session replay (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/AttachSessionFrame'
+
+    DevicePairingResponseFrame:
+      name: DevicePairingResponseFrame
+      title: device_pairing_response
+      summary: Admin decision on device pairing request (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/DevicePairingResponseFrame'
+
+    SessionCloseFrame:
+      name: SessionCloseFrame
+      title: session_close
+      summary: Explicit session close request (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SessionCloseFrame'
+
+    # ── Server → client messages ───────────────────────────────────────────────
+
+    SessionStartedFrame:
+      name: SessionStartedFrame
+      title: session_started
+      summary: New session minted (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SessionStartedFrame'
+
+    TokenFrame:
+      name: TokenFrame
+      title: token
+      summary: Partial LLM response token (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/TokenFrame'
+
+    DoneFrame:
+      name: DoneFrame
+      title: done
+      summary: Turn complete (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/DoneFrame'
+
+    ErrorFrame:
+      name: ErrorFrame
+      title: error
+      summary: Error notification (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ErrorFrame'
+
+    ToolCallStartFrame:
+      name: ToolCallStartFrame
+      title: tool_call_start
+      summary: Tool execution started (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ToolCallStartFrame'
+
+    ToolCallResultFrame:
+      name: ToolCallResultFrame
+      title: tool_call_result
+      summary: Tool execution completed (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ToolCallResultFrame'
+
+    SubagentStartFrame:
+      name: SubagentStartFrame
+      title: subagent_start
+      summary: Subagent span opened (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SubagentStartFrame'
+
+    SubagentEndFrame:
+      name: SubagentEndFrame
+      title: subagent_end
+      summary: Subagent span closed (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SubagentEndFrame'
+
+    ExecApprovalRequestFrame:
+      name: ExecApprovalRequestFrame
+      title: exec_approval_request
+      summary: Exec approval needed (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ExecApprovalRequestFrame'
+
+    TaskStatusChangedFrame:
+      name: TaskStatusChangedFrame
+      title: task_status_changed
+      summary: Task status updated (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/TaskStatusChangedFrame'
+
+    ReplayMessageFrame:
+      name: ReplayMessageFrame
+      title: replay_message
+      summary: Replayed transcript entry (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ReplayMessageFrame'
+
+    RateLimitFrame:
+      name: RateLimitFrame
+      title: rate_limit
+      summary: Rate limit applied (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RateLimitFrame'
+
+    MediaFrame:
+      name: MediaFrame
+      title: media
+      summary: Media attachments from a tool (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/MediaFrame'
+
+    AgentSwitchedFrame:
+      name: AgentSwitchedFrame
+      title: agent_switched
+      summary: Active agent changed (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/AgentSwitchedFrame'
+
+    ToolApprovalRequiredFrame:
+      name: ToolApprovalRequiredFrame
+      title: tool_approval_required
+      summary: Tool approval needed (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ToolApprovalRequiredFrame'
+
+    SessionStateFrame:
+      name: SessionStateFrame
+      title: session_state
+      summary: Reconnect approval state snapshot (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SessionStateFrame'
+
+    SystemOverloadFrame:
+      name: SystemOverloadFrame
+      title: system_overload
+      summary: System at capacity (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SystemOverloadFrame'
+
+    ReplayWarningFrame:
+      name: ReplayWarningFrame
+      title: replay_warning
+      summary: Duplicate tool_call_ids detected in transcript (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ReplayWarningFrame'
+
+    CancelStageFrame:
+      name: CancelStageFrame
+      title: cancel_stage
+      summary: Cancel progress notification (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/CancelStageFrame'
+
+    PongFrame:
+      name: PongFrame
+      title: pong
+      summary: Heartbeat pong response to a client PingFrame (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/PongFrame'
+
+    SessionCloseAckFrame:
+      name: SessionCloseAckFrame
+      title: session_close_ack
+      summary: Session close acknowledged (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SessionCloseAckFrame'
+
+    ExecApprovalResponseAckFrame:
+      name: ExecApprovalResponseAckFrame
+      title: exec_approval_response_ack
+      summary: Exec approval response acknowledged (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ExecApprovalResponseAckFrame'
+
+    DevicePairingRequestFrame:
+      name: DevicePairingRequestFrame
+      title: device_pairing_request
+      summary: Device pairing request (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/DevicePairingRequestFrame'
+
+    ExecApprovalExpiredFrame:
+      name: ExecApprovalExpiredFrame
+      title: exec_approval_expired
+      summary: Exec approval request expired (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ExecApprovalExpiredFrame'
+
+  schemas:
+    WsFrameType:
+      title: WsFrameType
+      description: Enum of all WebSocket frame type discriminator strings.
+      type: string
+      enum:
+        - auth
+        - message
+        - cancel
+        - exec_approval_response
+        - ping
+        - attach_session
+        - device_pairing_response
+        - session_close
+        - session_started
+        - token
+        - done
+        - error
+        - tool_call_start
+        - tool_call_result
+        - subagent_start
+        - subagent_end
+        - exec_approval_request
+        - exec_approval_expired
+        - task_status_changed
+        - replay_message
+        - rate_limit
+        - media
+        - agent_switched
+        - tool_approval_required
+        - session_state
+        - system_overload
+        - replay_warning
+        - cancel_stage
+        - pong
+        - session_close_ack
+        - exec_approval_response_ack
+        - device_pairing_request
+
+    AuthFrame:
+      title: AuthFrame
+      description: Client → server authentication frame.
+      type: object
+      required:
+        - type
+        - token
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: auth
+        token:
+          type: string
+          minLength: 8
+          maxLength: 72
+          pattern: '^omnipus_[a-f0-9]{64}$'
+          description: Bearer token from /api/v1/auth/login. Format is "omnipus_" + 64 hex chars.
+
+    MessageFrame:
+      title: MessageFrame
+      description: >
+        Client → server user chat message. Omit session_id to start a new
+        session; include to continue an existing one.
+      type: object
+      required:
+        - type
+        - content
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: message
+        content:
+          type: string
+          minLength: 1
+          maxLength: 5242880
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+
+    CancelFrame:
+      title: CancelFrame
+      description: Client → server cancel in-progress turn.
+      type: object
+      required:
+        - type
+        - session_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: cancel
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+
+    ExecApprovalResponseFrame:
+      title: ExecApprovalResponseFrame
+      description: Client → server exec approval decision.
+      type: object
+      required:
+        - type
+        - id
+        - decision
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: exec_approval_response
+        id:
+          type: string
+          minLength: 1
+        decision:
+          type: string
+          enum:
+            - allow
+            - deny
+            - always
+
+    PingFrame:
+      title: PingFrame
+      description: Client → server heartbeat.
+      type: object
+      required:
+        - type
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: ping
+
+    PongFrame:
+      title: PongFrame
+      description: >
+        Server → client heartbeat acknowledgement. Emitted in response to every
+        client PingFrame so the SPA's "any frame received recently" liveness
+        check observes a server frame during idle and does not force-close after
+        60 s of silence.
+      type: object
+      required:
+        - type
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: pong
+
+    AttachSessionFrame:
+      title: AttachSessionFrame
+      description: >
+        Client → server request to attach to an existing session.
+        When `since` is provided, the server skips replay frames whose
+        timestamp <= `since`, sending only frames the SPA has not yet seen.
+        Omitting `since` requests a full replay (legacy behaviour).
+      type: object
+      required:
+        - type
+        - session_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: attach_session
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        since:
+          type: string
+          format: date-time
+          description: >
+            ISO 8601 timestamp of the most recent frame the SPA has already
+            processed. Server replays only frames with timestamp > this value.
+            Used to keep reconnect replay traffic O(missed window) instead of
+            O(full session history).
+
+    DevicePairingResponseFrame:
+      title: DevicePairingResponseFrame
+      description: Client → server device pairing decision.
+      type: object
+      required:
+        - type
+        - device_id
+        - decision
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: device_pairing_response
+        device_id:
+          type: string
+          minLength: 1
+        decision:
+          type: string
+          enum:
+            - approve
+            - reject
+
+    SessionStartedFrame:
+      title: SessionStartedFrame
+      description: Server → client new session minted.
+      type: object
+      required:
+        - type
+        - session_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: session_started
+        session_id:
+          type: string
+          minLength: 1
+        agent_id:
+          type: string
+
+    TokenFrame:
+      title: TokenFrame
+      description: Server → client partial LLM response token.
+      type: object
+      required:
+        - type
+        - session_id
+        - content
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: token
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        content:
+          type: string
+          maxLength: 65536
+
+    DoneStats:
+      title: DoneStats
+      description: >
+        Per-turn statistics in a done frame. additionalProperties are allowed
+        for replay extras (frames_emitted, orphan_count, etc.).
+      type: object
+      additionalProperties: true
+      properties:
+        tokens:
+          type: number
+          minimum: 0
+        cost:
+          type: number
+          minimum: 0
+        duration_ms:
+          type: number
+          minimum: 0
+        tokens_dropped:
+          type: number
+          minimum: 0
+        frames_emitted:
+          type: number
+          minimum: 0
+        orphan_count:
+          type: number
+          minimum: 0
+        duplicate_tool_call_id_count:
+          type: number
+          minimum: 0
+        truncated_result_count:
+          type: number
+          minimum: 0
+        replay_error:
+          type: boolean
+
+    DoneFrame:
+      title: DoneFrame
+      description: Server → client turn complete.
+      type: object
+      required:
+        - type
+        - session_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: done
+        session_id:
+          type: string
+          minLength: 1
+        stats:
+          $ref: '#/components/schemas/DoneStats'
+
+    ErrorFrame:
+      title: ErrorFrame
+      description: Server → client error notification.
+      type: object
+      required:
+        - type
+        - message
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: error
+        session_id:
+          type: string
+          maxLength: 128
+        message:
+          type: string
+          minLength: 1
+          maxLength: 4096
+
+    ToolCallStartFrame:
+      title: ToolCallStartFrame
+      description: >
+        Server → client tool execution started. params MUST be object (never null) —
+        nil-safety contract to prevent Object.keys(params) crash.
+      type: object
+      required:
+        - type
+        - session_id
+        - tool
+        - call_id
+        - params
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: tool_call_start
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        tool:
+          type: string
+          minLength: 1
+          maxLength: 128
+        call_id:
+          type: string
+          minLength: 1
+        params:
+          type: object
+          additionalProperties: true
+          description: Tool arguments. Always object, never null.
+        parent_call_id:
+          type: string
+        agent_id:
+          type: string
+
+    TruncatedResult:
+      title: TruncatedResult
+      description: Sentinel for tool results exceeding 1 MiB (FR-I-011).
+      type: object
+      required:
+        - _truncated
+        - original_size_bytes
+        - preview
+      additionalProperties: false
+      properties:
+        _truncated:
+          type: boolean
+          const: true
+        original_size_bytes:
+          type: integer
+        preview:
+          type: string
+
+    MarshalErrorResult:
+      title: MarshalErrorResult
+      description: Sentinel for tool results that failed json.Marshal.
+      type: object
+      required:
+        - _marshal_error
+      additionalProperties: false
+      properties:
+        _marshal_error:
+          type: string
+          minLength: 1
+
+    ToolResultRef:
+      title: ToolResultRef
+      description: >
+        Sentinel for tool results > 50 KiB but <= 1 MiB whose full body is
+        preserved server-side. SPA fetches via GET /api/v1/tool-results/{ref}.
+      type: object
+      required:
+        - _ref
+        - ref
+        - original_size_bytes
+        - preview
+      additionalProperties: false
+      properties:
+        _ref:
+          type: boolean
+          const: true
+        ref:
+          type: string
+          minLength: 1
+          maxLength: 128
+        original_size_bytes:
+          type: integer
+          minimum: 0
+        preview:
+          type: string
+
+    ToolCallResultFrame:
+      title: ToolCallResultFrame
+      description: Server → client tool execution completed.
+      type: object
+      required:
+        - type
+        - session_id
+        - tool
+        - call_id
+        - result
+        - status
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: tool_call_result
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        tool:
+          type: string
+          minLength: 1
+          maxLength: 128
+        call_id:
+          type: string
+          minLength: 1
+        result:
+          description: >
+            Tool return value. Any JSON type or null (null is the contract for error frames).
+            Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes.
+          oneOf:
+            - type: ["object", "array", "string", "number", "boolean", "null"]
+            - $ref: '#/components/schemas/TruncatedResult'
+            - $ref: '#/components/schemas/MarshalErrorResult'
+            - $ref: '#/components/schemas/ToolResultRef'
+        status:
+          type: string
+          enum:
+            - success
+            - error
+        duration_ms:
+          type: integer
+        error:
+          type: string
+        parent_call_id:
+          type: string
+        agent_id:
+          type: string
+
+    SubagentStartFrame:
+      title: SubagentStartFrame
+      description: Server → client subagent span opened (FR-H-004).
+      type: object
+      required:
+        - type
+        - session_id
+        - span_id
+        - parent_call_id
+        - task_label
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: subagent_start
+        session_id:
+          type: string
+          minLength: 1
+        span_id:
+          type: string
+          minLength: 1
+        parent_call_id:
+          type: string
+          minLength: 1
+        task_label:
+          type: string
+          maxLength: 100
+        agent_id:
+          type: string
+
+    SubagentEndFrame:
+      title: SubagentEndFrame
+      description: >
+        Server → client subagent span closed (FR-H-004). status MUST be one of
+        the five allowed values — the SPA drops frames with invalid status (W4-6).
+      type: object
+      required:
+        - type
+        - session_id
+        - span_id
+        - status
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: subagent_end
+        session_id:
+          type: string
+          minLength: 1
+        span_id:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum:
+            - success
+            - error
+            - cancelled
+            - interrupted
+            - timeout
+        duration_ms:
+          type: integer
+        final_result:
+          type: string
+        reason:
+          type: string
+          enum:
+            - parent_timeout
+            - parent_cancelled
+            - parent_done_early
+            - unknown
+        agent_id:
+          type: string
+        parent_call_id:
+          type: string
+        message:
+          type: string
+
+    ExecApprovalRequestFrame:
+      title: ExecApprovalRequestFrame
+      description: >
+        Server → client exec approval needed. The `command` field carries the
+        tool name for display. Optional `tool` and `params` carry structured
+        tool call information.
+      type: object
+      required:
+        - type
+        - session_id
+        - id
+        - command
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: exec_approval_request
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        id:
+          type: string
+          minLength: 1
+        command:
+          type: string
+          minLength: 1
+          maxLength: 8192
+          description: Tool name used as primary display string in the approval modal.
+        tool:
+          type: string
+          maxLength: 128
+          description: Structured tool name (same value as command).
+        params:
+          type: object
+          additionalProperties: true
+          description: Tool invocation arguments. May be absent for parameter-less tools.
+        message:
+          type: string
+          description: Human-readable approval request message.
+        working_dir:
+          type: string
+        matched_policy:
+          type: string
+
+    TaskStatusChangedFrame:
+      title: TaskStatusChangedFrame
+      description: Server → client task status updated.
+      type: object
+      required:
+        - type
+        - session_id
+        - task_id
+        - status
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: task_status_changed
+        session_id:
+          type: string
+          minLength: 1
+        task_id:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum:
+            - queued
+            - assigned
+            - running
+            - completed
+            - failed
+        agent_id:
+          type: string
+
+    ReplayMessageFrame:
+      title: ReplayMessageFrame
+      description: Server → client replayed transcript entry.
+      type: object
+      required:
+        - type
+        - session_id
+        - content
+        - role
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: replay_message
+        session_id:
+          type: string
+          minLength: 1
+        content:
+          type: string
+        role:
+          type: string
+          enum:
+            - user
+            - assistant
+            - system
+            - turn_canceled
+        id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        agent_id:
+          type: string
+
+    RateLimitFrame:
+      title: RateLimitFrame
+      description: Server → client rate limit applied (SEC-26).
+      type: object
+      required:
+        - type
+        - session_id
+        - scope
+        - resource
+        - policy_rule
+        - retry_after_seconds
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: rate_limit
+        session_id:
+          type: string
+        scope:
+          type: string
+          enum:
+            - agent
+            - channel
+            - global
+        resource:
+          type: string
+          minLength: 1
+        policy_rule:
+          type: string
+          minLength: 1
+        retry_after_seconds:
+          type: number
+          minimum: 0
+        agent_id:
+          type: string
+        tool:
+          type: string
+          maxLength: 128
+
+    MediaPart:
+      title: MediaPart
+      description: One media attachment.
+      type: object
+      required:
+        - type
+        - url
+        - filename
+        - content_type
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          enum:
+            - image
+            - audio
+            - video
+            - file
+        url:
+          type: string
+          minLength: 1
+        filename:
+          type: string
+          minLength: 1
+        content_type:
+          type: string
+          minLength: 1
+        caption:
+          type: string
+
+    MediaFrame:
+      title: MediaFrame
+      description: >
+        Server → client media attachments. parts MUST be a non-empty array (never
+        null) — nil-safety contract to prevent parts.map() crash.
+      type: object
+      required:
+        - type
+        - session_id
+        - parts
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: media
+        session_id:
+          type: string
+          minLength: 1
+        parts:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: '#/components/schemas/MediaPart'
+
+    AgentSwitchedFrame:
+      title: AgentSwitchedFrame
+      description: Server → client active agent changed.
+      type: object
+      required:
+        - type
+        - session_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: agent_switched
+        session_id:
+          type: string
+          minLength: 1
+        agent_id:
+          type: string
+        message:
+          type: string
+
+    ToolApprovalRequiredFrame:
+      title: ToolApprovalRequiredFrame
+      description: >
+        Server → client tool approval needed (FR-011, FR-082).
+        CRITICAL: args MUST be object (never null). Backend coerces nil → {}.
+        SPA calls Object.keys(args) — null crashes at render time (Ava-chat bug).
+      type: object
+      required:
+        - type
+        - approval_id
+        - tool_call_id
+        - tool_name
+        - args
+        - agent_id
+        - session_id
+        - turn_id
+        - expires_in_ms
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: tool_approval_required
+        approval_id:
+          type: string
+          minLength: 1
+        tool_call_id:
+          type: string
+          minLength: 1
+        tool_name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        args:
+          type: object
+          additionalProperties: true
+          description: >
+            Tool invocation arguments. Always object, never null. Required +
+            object type so the Phase 4 contract test catches any nil regression.
+        agent_id:
+          type: string
+          minLength: 1
+        session_id:
+          type: string
+          minLength: 1
+        turn_id:
+          type: string
+          minLength: 1
+        expires_in_ms:
+          type: integer
+          minimum: 0
+          maximum: 86400000
+
+    SessionStatePendingApproval:
+      title: SessionStatePendingApproval
+      description: One pending approval entry in a SessionStateFrame.
+      type: object
+      required:
+        - approval_id
+        - session_id
+        - tool_name
+        - agent_id
+        - expires_in_ms
+      additionalProperties: false
+      properties:
+        approval_id:
+          type: string
+          minLength: 1
+        session_id:
+          type: string
+          minLength: 1
+        tool_name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        agent_id:
+          type: string
+          minLength: 1
+        expires_in_ms:
+          type: integer
+          minimum: 0
+          maximum: 86400000
+
+    SessionStateFrame:
+      title: SessionStateFrame
+      description: >
+        Server → client reconnect approval snapshot (FR-052, FR-073, FR-081).
+        pending_approvals MUST be an array (never null). Backend coerces nil → [].
+        SPA calls pending_approvals.map() — null crashes at render time.
+      type: object
+      required:
+        - type
+        - user_id
+        - pending_approvals
+        - emitted_at
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: session_state
+        user_id:
+          type: string
+        pending_approvals:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionStatePendingApproval'
+          maxItems: 1000
+          description: Always array, never null. Capped at 1000.
+        emitted_at:
+          type: string
+          format: date-time
+
+    SystemOverloadFrame:
+      title: SystemOverloadFrame
+      description: Server → client system at capacity (FR-016, MAJ-009).
+      type: object
+      required:
+        - type
+        - session_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: system_overload
+        session_id:
+          type: string
+          minLength: 1
+        message:
+          type: string
+
+    ReplayWarningStats:
+      title: ReplayWarningStats
+      description: Diagnostic counters in a ReplayWarningFrame.
+      type: object
+      additionalProperties: true
+      properties:
+        duplicate_tool_call_id_count:
+          type: integer
+
+    ReplayWarningFrame:
+      title: ReplayWarningFrame
+      description: Server → client duplicate tool_call_ids detected.
+      type: object
+      required:
+        - type
+        - session_id
+        - message
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: replay_warning
+        session_id:
+          type: string
+          minLength: 1
+        message:
+          type: string
+          minLength: 1
+        stats:
+          $ref: '#/components/schemas/ReplayWarningStats'
+
+    CancelStageFrame:
+      title: CancelStageFrame
+      description: >
+        Server → client cancel progress notification (B3). stage MUST be one of
+        three values — SPA validates via isValidFrame() and drops invalid stages.
+      type: object
+      required:
+        - type
+        - session_id
+        - stage
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: cancel_stage
+        session_id:
+          type: string
+          minLength: 1
+        stage:
+          type: string
+          enum:
+            - graceful
+            - hard
+            - detached
+
+    SessionCloseAckFrame:
+      title: SessionCloseAckFrame
+      description: Server → client session close acknowledged.
+      type: object
+      required:
+        - type
+        - session_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: session_close_ack
+        session_id:
+          type: string
+          minLength: 1
+        id:
+          type: string
+
+    ExecApprovalResponseAckFrame:
+      title: ExecApprovalResponseAckFrame
+      description: Server → client exec approval response acknowledged.
+      type: object
+      required:
+        - type
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: exec_approval_response_ack
+        id:
+          type: string
+        session_id:
+          type: string
+
+    DevicePairingRequestFrame:
+      title: DevicePairingRequestFrame
+      description: Server → client device pairing request needs admin approval.
+      type: object
+      required:
+        - type
+        - device_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: device_pairing_request
+        device_id:
+          type: string
+          minLength: 1
+        fingerprint:
+          type: string
+        pairing_code:
+          type: string
+        device_name:
+          type: string
+        session_id:
+          type: string
+
+    SessionCloseFrame:
+      title: SessionCloseFrame
+      description: Client → server explicit session close request.
+      type: object
+      required:
+        - type
+        - session_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: session_close
+        session_id:
+          type: string
+          minLength: 1
+
+    ExecApprovalExpiredFrame:
+      title: ExecApprovalExpiredFrame
+      description: Server → client exec approval request timed out.
+      type: object
+      required:
+        - type
+        - id
+        - session_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: exec_approval_expired
+        id:
+          type: string
+          minLength: 1
+        session_id:
+          type: string
+          minLength: 1
+        message:
+          type: string

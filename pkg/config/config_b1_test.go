@@ -11,6 +11,7 @@
 // - TestValidateAuthMismatchLogLevel_* — gateway field
 // - TestResolveBool_* — *bool resolver
 // - TestBootConfigRoundTrip — new fields survive SaveConfig/LoadConfig round-trip
+
 package config
 
 import (
@@ -62,7 +63,9 @@ func TestValidateRemovedKeys_AllowReadOutsideWorkspacePresent_Rejects(t *testing
 }
 
 func TestValidateRemovedKeys_BothKeysPresent_Rejects(t *testing.T) {
-	data := []byte(`{"version":2,"agents":{"defaults":{"restrict_to_workspace":false,"allow_read_outside_workspace":false}}}`)
+	data := []byte(
+		`{"version":2,"agents":{"defaults":{"restrict_to_workspace":false,"allow_read_outside_workspace":false}}}`,
+	)
 	if err := validateRemovedKeys(data); err == nil {
 		t.Fatal("expected error when both removed keys are present")
 	}
@@ -524,7 +527,11 @@ func TestBootConfigRoundTrip_DefaultsApplied(t *testing.T) {
 	}
 	// PR 5: default egress allow-list expanded to 7 entries for npm + GitHub.
 	if len(loaded.Sandbox.EgressAllowList) != 7 {
-		t.Errorf("expected default EgressAllowList len=7, got %d: %v", len(loaded.Sandbox.EgressAllowList), loaded.Sandbox.EgressAllowList)
+		t.Errorf(
+			"expected default EgressAllowList len=7, got %d: %v",
+			len(loaded.Sandbox.EgressAllowList),
+			loaded.Sandbox.EgressAllowList,
+		)
 	}
 	// PathGuardAuditFailClosed nil → true via ResolveBool.
 	if ResolveBool(loaded.Sandbox.PathGuardAuditFailClosed, true) != true {

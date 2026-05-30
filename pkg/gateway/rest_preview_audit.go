@@ -208,7 +208,7 @@ func markFirstUpstreamFailure(token, remoteIP string) (firstInWindow bool, suppr
 //	{
 //	  "agent_id": "<string>",
 //	  "token_prefix": "<first 8 chars of token>",
-//	  "sanitised_path": "/<prefix>/<agent>/<redacted>/<remaining>",
+//	  "sanitized_path": "/<prefix>/<agent>/<redacted>/<remaining>",
 //	  "method": "<HTTP method>",
 //	  "status": <int>,
 //	  "remote_ip": "<X-Forwarded-For canonicalised, else r.RemoteAddr>",
@@ -240,7 +240,7 @@ func (a *restAPI) emitPreviewAuditEntry(
 	logger := a.agentLoop.AuditLogger()
 
 	durationMs := int64(time.Since(startedAt) / time.Millisecond)
-	// F-12: sanitise the token prefix before writing to logs. On failure paths
+	// F-12: sanitize the token prefix before writing to logs. On failure paths
 	// (serve.token_invalid, dev.token_invalid) the token value is attacker-
 	// controlled; URL-decoded bytes can carry newlines or control characters
 	// that pollute structured log output. Accept only the base64-RawURL
@@ -260,16 +260,14 @@ func (a *restAPI) emitPreviewAuditEntry(
 	var trustXFF bool
 	if auditCfg := configFromContext(r.Context()); auditCfg != nil {
 		trustXFF = auditCfg.Gateway.TrustXFF
-	} else if a != nil && a.agentLoop != nil {
-		if liveCfg := a.agentLoop.GetConfig(); liveCfg != nil {
-			trustXFF = liveCfg.Gateway.TrustXFF
-		}
+	} else if liveCfg := a.agentLoop.GetConfig(); liveCfg != nil {
+		trustXFF = liveCfg.Gateway.TrustXFF
 	}
 	remoteIP := canonicalRemoteIP(r, trustXFF)
 
 	details := map[string]any{
 		"token_prefix":   tokenPrefix,
-		"sanitised_path": sanitisedPath,
+		"sanitized_path": sanitisedPath,
 		"method":         r.Method,
 		"status":         status,
 		"remote_ip":      remoteIP,
@@ -326,7 +324,7 @@ func (a *restAPI) emitPreviewAuditEntry(
 //	/dev/agent-2/<redacted>/api/login
 //
 // Falls back to a static "<sanitisation-failed>" string if the path
-// shape is unrecognisable — never returns the raw token.
+// shape is unrecognizable — never returns the raw token.
 func sanitisePreviewPath(urlPath, token string) string {
 	if urlPath == "" {
 		return ""

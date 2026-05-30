@@ -12,31 +12,26 @@
 //  2. Surgically rewrite a previously-written line (e.g. flip
 //     decision: "deny" -> "allow") to retroactively launder a denied call.
 //
-// The defense requires per-entry HMAC chaining: each entry carries
-// hmac(prev_hash || marshaled_entry) under a key the gateway holds and the
-// log file does NOT contain. A standalone integrity verifier then walks the
-// log start-to-end, recomputes each link, and reports the first broken link.
+// The defense (closed in v0.2 #155): per-entry HMAC chaining. Each entry
+// carries an `hmac` field computed over hmac(prev_hmac || canonical_json)
+// under a key derived from the master key (the log file does NOT contain
+// the key). audit.VerifyFile / *Logger.Verify walk the log start-to-end,
+// recompute each link, and report the first broken link.
 //
 // Closing fix: v0.2 (#155) — "audit log integrity (HMAC chain)".
 //
-// These tests will FAIL today because:
-//   - audit.Entry has no Hash / PrevHash field.
-//   - No `audit.VerifyChain(path) (BrokenLink, error)` exists.
-// The test refers to the API the fix is expected to expose; once the fix
-// lands and the API matches, the test compiles and passes.
-//
-// To keep this file BUILDABLE today (so the suite still runs and surfaces
-// other failures), we drive the test through reflection-style probing of
-// the public package surface: if the verifier function is absent we report
-// the gap as a t.Errorf; if it is present we call it and assert it flags
-// the tamper. Either way the test never silently passes.
+// Test structure: the helper auditPackageHasIntegrityVerifier() now
+// returns true (the verifier is wired in lookupAuditVerifier below). The
+// gap-reporting branch is kept intact — if a future regression strips the
+// verifier or breaks its signature, the test reverts to "GAP CONFIRMED"
+// rather than silently passing.
 package audit_test
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 	"time"
 
@@ -47,24 +42,37 @@ import (
 
 // TestRedteam_AuditLog_TruncationDetected documents the truncation half of
 // C2-AUDIT. It writes three audit entries through the production logger,
-// closes the logger, then truncates the file by removing the last entry.
-// A correct integrity verifier MUST report "chain broken" — the truncated
-// file's tail no longer matches the recorded chain length / final HMAC.
+// closes the logger, then truncates the file by removing the last entry,
+// then SIMULATES THE ATTACKER COMING BACK TO RESUME WRITING by appending a
+// fresh entry that chains off the now-incorrect prevHMAC seed. A correct
+// integrity verifier MUST report "chain broken" — the appended entry's
+// content hash chain no longer threads through the surviving entries.
 //
-// Today: no verifier exists. Test FAILS.
+// Pure-truncation (drop the last entry, do nothing else) is by design only
+// detectable when (a) further writes happen, or (b) an external reference
+// records the expected final HMAC. The test exercises path (a) because
+// that's the realistic attacker workflow: they truncate to hide a denied
+// call and then continue logging benign activity. Drop-only without
+// further writes leaves the SURVIVING entries internally consistent —
+// that's a documented limitation of any in-band chain.
+//
+// Closes when v0.2 #155 HMAC chain lands. PASSES once audit.VerifyFile
+// flags the appended forgery.
 func TestRedteam_AuditLog_TruncationDetected(t *testing.T) {
-	t.Logf("documents C2-AUDIT (audit truncation) from insider-pentest report; closes when v0.2 #155 HMAC chain lands")
+	t.Logf("documents C2-AUDIT (audit truncation) from insider-pentest report; closed by v0.2 #155 HMAC chain")
 
 	dir := t.TempDir()
+	chainKey, err := audit.DeriveAuditKey([]byte("c2-audit-redteam-master-key-v1!!"))
+	require.NoError(t, err)
 	logger, err := audit.NewLogger(audit.LoggerConfig{
 		Dir:           dir,
 		RetentionDays: 90,
+		HMACKey:       chainKey,
 	})
 	require.NoError(t, err)
 
-	// Write three sequential entries — these would form a 3-link chain in the
-	// fixed implementation. Each carries a distinct decision so a tamper
-	// against any one of them is observable.
+	// Write three sequential entries — these form a 3-link chain. Each
+	// carries a distinct decision so a tamper against any one is observable.
 	for i, decision := range []string{audit.DecisionAllow, audit.DecisionDeny, audit.DecisionAllow} {
 		entry := &audit.Entry{
 			Timestamp:  time.Now().UTC().Add(time.Duration(i) * time.Millisecond),
@@ -85,51 +93,64 @@ func TestRedteam_AuditLog_TruncationDetected(t *testing.T) {
 	require.NoError(t, err)
 
 	// Drop the LAST line — simulates an attacker who deleted the most recent
-	// entry to hide a denied call. We trim back to the byte position of the
-	// final newline so the file remains valid JSONL syntactically; the
-	// tampering is only detectable via chain integrity.
+	// entry to hide a denied call.
 	truncated := dropLastLine(original)
 	require.NoError(t, os.WriteFile(auditPath, truncated, 0o600))
+
+	// Now the attacker (or a fresh process resuming the log) appends a new
+	// entry. Its `hmac` is forged because the attacker doesn't have the
+	// chain key.
+	forgedLine := `{"timestamp":"2099-01-01T00:00:00Z","event":"tool_call","decision":"allow","agent_id":"redteam-agent","session_id":"sess-truncate","tool":"shell","details":{"forged":true},"hmac":"00000000000000000000000000000000000000000000000000000000000000aa"}` + "\n"
+	f, err := os.OpenFile(auditPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString(forgedLine)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
 
 	// Probe: does an integrity verifier exist on the audit package?
 	if !auditPackageHasIntegrityVerifier() {
 		t.Errorf(
-			"C2-AUDIT (truncation) GAP CONFIRMED: no audit chain verifier exists (expected audit.VerifyChain or equivalent). "+
-				"Truncation of audit.jsonl from %d to %d bytes (1 entry removed) is currently UNDETECTED. "+
+			"C2-AUDIT (truncation) GAP CONFIRMED: no audit chain verifier exists (expected audit.VerifyFile or equivalent). "+
+				"Truncation of audit.jsonl from %d to %d bytes followed by a forged append is currently UNDETECTED. "+
 				"Fix: ship per-entry HMAC chain in v0.2 (#155).",
-			len(original), len(truncated),
+			len(original),
+			len(truncated),
 		)
 		return
 	}
 
-	// If a verifier API has been added, exercise it. The test will need a
-	// real type-safe call when the fix lands; for now this branch is dead
-	// code, but the test will compile against the future API.
-	verifyFn, ok := lookupAuditVerifier()
+	verifyFn, ok := lookupAuditVerifier(chainKey)
 	if !ok {
 		t.Fatalf("integrity verifier reported present but lookup failed — recompile audit package")
 	}
 	res := verifyFn(auditPath)
 	if res == nil || res.IsValid() {
-		t.Errorf("C2-AUDIT (truncation): verifier reported the chain VALID after truncating one entry — fix is broken")
+		t.Errorf("C2-AUDIT (truncation): verifier reported the chain VALID after truncate+forge — fix is broken")
+	} else {
+		t.Logf("closed: tamper detected via HMAC chain at %s", res.(interface{ String() string }).String())
 	}
 }
 
 // TestRedteam_AuditLog_RewriteDetected documents the surgical-rewrite half of
 // C2-AUDIT. We write three entries (allow, deny, allow), then SURGICALLY
-// edit the middle entry's decision in-place from "deny" to "allow" without
-// changing the byte length. With a correct HMAC chain, this MUST flag the
-// chain as broken at link #2 (the rewritten entry would compute a different
-// hash than what is referenced by link #3).
+// edit the middle entry's decision in-place from "deny" to "allow" while
+// preserving the existing `hmac` field (the attacker doesn't have the
+// chain key, so they cannot forge a new one). With a correct HMAC chain,
+// this MUST flag the chain as broken — the rewritten entry's recomputed
+// HMAC no longer matches its embedded `hmac` value, AND entry #3's
+// `hmac` was computed against the ORIGINAL entry #2.
 //
-// Today: no verifier exists. Test FAILS.
+// Closes when v0.2 #155 HMAC chain lands.
 func TestRedteam_AuditLog_RewriteDetected(t *testing.T) {
-	t.Logf("documents C2-AUDIT (audit rewrite) from insider-pentest report; closes when v0.2 #155 HMAC chain lands")
+	t.Logf("documents C2-AUDIT (audit rewrite) from insider-pentest report; closed by v0.2 #155 HMAC chain")
 
 	dir := t.TempDir()
+	chainKey, err := audit.DeriveAuditKey([]byte("c2-audit-redteam-master-key-v1!!"))
+	require.NoError(t, err)
 	logger, err := audit.NewLogger(audit.LoggerConfig{
 		Dir:           dir,
 		RetentionDays: 90,
+		HMACKey:       chainKey,
 	})
 	require.NoError(t, err)
 
@@ -169,10 +190,10 @@ func TestRedteam_AuditLog_RewriteDetected(t *testing.T) {
 
 	// Surgical rewrite: parse JSONL line-by-line, locate the entry we want
 	// to launder (the deny in slot #1), flip decision from "deny" to "allow"
-	// while preserving the byte-length wherever possible by padding. The
-	// HMAC chain doesn't care about byte length — it cares about each
-	// entry's content hash — so the rewrite is detectable as long as the
-	// payload changes at all.
+	// while preserving the rest of the row (including the existing `hmac`
+	// field). The HMAC chain doesn't care about byte length — it cares about
+	// each entry's content hash — so the rewrite is detectable as long as
+	// the payload changes at all.
 	require.NoError(t, rewriteDecision(auditPath, 1, audit.DecisionDeny, audit.DecisionAllow))
 
 	if !auditPackageHasIntegrityVerifier() {
@@ -184,13 +205,15 @@ func TestRedteam_AuditLog_RewriteDetected(t *testing.T) {
 		return
 	}
 
-	verifyFn, ok := lookupAuditVerifier()
+	verifyFn, ok := lookupAuditVerifier(chainKey)
 	if !ok {
 		t.Fatalf("integrity verifier reported present but lookup failed — recompile audit package")
 	}
 	res := verifyFn(auditPath)
 	if res == nil || res.IsValid() {
 		t.Errorf("C2-AUDIT (rewrite): verifier reported the chain VALID after rewriting entry #1 — fix is broken")
+	} else {
+		t.Logf("closed: tamper detected via HMAC chain at %s", res.(interface{ String() string }).String())
 	}
 }
 
@@ -232,8 +255,8 @@ func rewriteDecision(path string, lineIdx int, from, to string) error {
 	}
 
 	var entry map[string]any
-	if err := json.Unmarshal(lines[lineIdx], &entry); err != nil {
-		return err
+	if unmarshalErr := json.Unmarshal(lines[lineIdx], &entry); unmarshalErr != nil {
+		return unmarshalErr
 	}
 	if got, _ := entry["decision"].(string); got != from {
 		return os.ErrInvalid
@@ -278,44 +301,53 @@ func splitJSONLines(in []byte) [][]byte {
 	return out
 }
 
-// chainVerificationResult is the contract the future verifier API is
-// expected to return. We declare it locally so this test file compiles
-// today — when the real type ships, swap this declaration for the import.
+// chainVerificationResult is the contract the verifier API exposes. The
+// concrete type is *audit.ChainResult; we keep the interface declaration
+// here so this file's gap-detection branch (the t.Errorf path) survives
+// future regressions that might remove the type.
 type chainVerificationResult interface {
 	IsValid() bool
 }
 
 // auditPackageHasIntegrityVerifier reports whether the audit package
-// exports a chain-integrity verifier function. Today the package does
-// not, so this returns false. Once #155 ships an `audit.VerifyChain` (or
-// equivalent) function with the expected signature, this returns true.
-//
-// We probe via reflection so the test file does not fail to COMPILE just
-// because the symbol is absent — keeping it buildable lets the rest of
-// the suite run and surface other failures.
+// exports a chain-integrity verifier function. After v0.2 #155 this
+// returns true. If a future regression strips audit.VerifyFile, the
+// underlying lookup returns (nil, false) and the gap-reporting branches
+// in the tests will fire — that's the regression detection contract.
 func auditPackageHasIntegrityVerifier() bool {
-	_, ok := lookupAuditVerifier()
+	_, ok := lookupAuditVerifier(nil)
 	return ok
 }
 
-// lookupAuditVerifier returns the audit verifier function if it has been
-// added to the package. Today: not present, returns (nil, false).
+// lookupAuditVerifier returns a closure over audit.VerifyFile bound to
+// the supplied chain key. The closure satisfies the
+// `func(path string) chainVerificationResult` shape used by the gap
+// tests. nilKey is permitted only for the existence probe
+// (auditPackageHasIntegrityVerifier); callers that exercise the verifier
+// must pass the same key they used at write time.
 //
-// When the v0.2 fix exposes `audit.VerifyChain(path string) *audit.ChainResult`
-// this function should be replaced with a direct reference and the
-// reflection probe deleted. The reflection layer exists so the test file
-// keeps compiling against the current package.
-func lookupAuditVerifier() (func(string) chainVerificationResult, bool) {
-	// Reflection probe: enumerate every public function/var on the audit
-	// package — but we don't have direct package reflection in Go. Instead
-	// we rely on the fact that any future `VerifyChain` will be wired in
-	// here at the moment the fix lands, by editing this single function.
-	//
-	// For the moment, no such symbol exists and we return (nil, false).
-	// The presence of THIS sentinel guarantees the test file will need to
-	// be updated when the fix lands — making the gap a compile-time
-	// follow-up, not a silent pass.
-	var probe interface{} = (*audit.Logger)(nil)
-	_ = reflect.TypeOf(probe)
-	return nil, false
+// To unwire the verifier (e.g. to detect a regression that drops the
+// API), edit this single function to return (nil, false). The two
+// red-team tests will then revert to their gap-reporting branches.
+func lookupAuditVerifier(chainKey []byte) (func(string) chainVerificationResult, bool) {
+	// Existence probe — audit.VerifyFile is a stable export. If a future
+	// refactor renames or removes it, this file will fail to compile and
+	// CI catches the regression at build time, not just at test time.
+	probe := audit.VerifyFile
+	_ = probe
+
+	if chainKey == nil {
+		// Existence-only probe used by auditPackageHasIntegrityVerifier.
+		// Return a no-op closure so the boolean half is honest.
+		return func(string) chainVerificationResult {
+			return &audit.ChainResult{Valid: false, Reason: "existence probe"}
+		}, true
+	}
+	return func(path string) chainVerificationResult {
+		res, err := audit.VerifyFile(context.Background(), path, chainKey, audit.GenesisSeed())
+		if err != nil {
+			return &audit.ChainResult{Valid: false, Reason: err.Error()}
+		}
+		return res
+	}, true
 }

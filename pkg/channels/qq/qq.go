@@ -648,6 +648,17 @@ func (c *QQChannel) handleC2CMessage() event.C2CMessageEventHandler {
 			"account_id": senderID,
 		}
 
+		if channels.DispatchCancelIfRecognized(
+			c.ctx,
+			content,
+			"qq",
+			senderID,
+			senderID,
+			c.GetCancelInterceptor(),
+			channels.CancelSendFn(c),
+		) {
+			return nil
+		}
 		c.HandleMessage(c.ctx,
 			bus.Peer{Kind: bus.PeerDirect, ID: senderID},
 			data.ID,
@@ -726,6 +737,17 @@ func (c *QQChannel) handleGroupATMessage() event.GroupATMessageEventHandler {
 			"group_id":   data.GroupID,
 		}
 
+		if channels.DispatchCancelIfRecognized(
+			c.ctx,
+			content,
+			"qq",
+			data.GroupID,
+			senderID,
+			c.GetCancelInterceptor(),
+			channels.CancelSendFn(c),
+		) {
+			return nil
+		}
 		c.HandleMessage(c.ctx,
 			bus.Peer{Kind: bus.PeerGroup, ID: data.GroupID},
 			data.ID,

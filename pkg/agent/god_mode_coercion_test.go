@@ -20,7 +20,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
-
 // buildLoopWithOffProfile constructs a minimal AgentLoop whose config contains
 // a single agent ("shell-agent") with sandbox_profile=off and workspace_shell_enabled=true.
 // The caller sets allowGodMode before calling WireTier13Deps.

@@ -8,7 +8,7 @@ import type { ChatMessage } from "@/store/chat";
 import type { ToolCall } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
 
-type StoreToolCall = ToolCall & { call_id: string };
+type StoreToolCall = ToolCall & { call_id: string }; // not-wire-format: internal Zustand store type enriching ToolCall with a required call_id; never emitted to the backend
 
 // ── Message conversion ────────────────────────────────────────────────────────
 

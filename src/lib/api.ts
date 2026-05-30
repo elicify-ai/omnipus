@@ -14,6 +14,325 @@
 
 import { ApiError } from './api-error'
 export { ApiError, isApiError } from './api-error'
+import { maybeDevToast } from './dev-toast'
+
+import type { ZodType } from 'zod'
+import { z } from 'zod'
+
+// ── Generated Zod schemas (REST edge validation) ────────────────────────────
+//
+// These are the generated schemas from contracts/openapi.yaml. They are used
+// to validate API responses at the SPA edge (hard-constraint #8). Callers
+// that need a SPA-internal transform type before passing to consumers are
+// validated against the wire schema first, then transformed.
+//
+// GAP REPORT — endpoints that genuinely cannot use a generated schema:
+//   GET /config / PUT /config — Config is a deep SPA transform (rawToFrontendConfig /
+//     frontendToRawConfig); no named schema component matches the wire shape exactly.
+//     Wire shape is an untyped JSON object; the transform is the contract.
+//   GET /channels/:id       — Record<string,unknown> passthrough; schema varies per channel.
+//   PUT /channels/:id/configure — void; channel-specific body; no generated schema.
+//   GET /credentials        — wire returns string[]; SPA shape is CredentialKey[]; the
+//     SPA-internal shape is a SPA-only concern, not a generated schema component.
+//   GET /about              — AboutInfo is a looser SPA-compatibility subset of AboutResponse
+//     (different field names: uptime_seconds vs uptime); cannot validate without false negatives.
+
+import {
+  LoginResponse as LoginResponseSchema,
+  ProbeProviderResponse as ProbeProviderResponseSchema,
+  Agent as AgentSchema,
+  AgentSession as AgentSessionSchema,
+  AuditEntry as AuditEntrySchema,
+  AuditLogToggle as AuditLogToggleSchema,
+  ExecAllowlist as ExecAllowlistSchema,
+  ExecProxyStatus as ExecProxyStatusSchema,
+  GlobalToolPolicies as GlobalToolPoliciesSchema,
+  PendingRestartEntry as PendingRestartEntrySchema,
+  PromptGuardResponse as PromptGuardResponseSchema,
+  RetentionConfig as RetentionConfigSchema,
+  RetentionSweepResult as RetentionSweepResultSchema,
+  SandboxConfig as SandboxConfigSchema,
+  SandboxStatus as SandboxStatusSchema,
+  SessionScopeResponse as SessionScopeResponseSchema,
+  SkillTrustResponse as SkillTrustResponseSchema,
+  UserCreateResponse as UserCreateResponseSchema,
+  UserDeleteResponse as UserDeleteResponseSchema,
+  UserResetPasswordResponse as UserResetPasswordResponseSchema,
+  UserRoleChangeResponse as UserRoleChangeResponseSchema,
+  // New generated Zod schemas (contract-first #8):
+  AppState as AppStateSchema,
+  ValidateTokenResponse as ValidateTokenResponseSchema,
+  DoctorResult as DoctorResultSchema,
+  DevicesResponse as DevicesResponseSchema,
+  BackupEntry as BackupEntrySchema,
+  StorageStats as StorageStatsSchema,
+  MeInfo as MeInfoSchema,
+  // Newly wired schemas:
+  Provider as ProviderSchema,
+  Task as TaskSchema,
+  GatewayStatus as GatewayStatusSchema,
+  ToolRegistryEntry as ToolRegistryEntrySchema,
+  ChannelEntry as ChannelEntrySchema,
+  ChannelEnabledResponse as ChannelEnabledResponseSchema,
+  Skill as SkillSchema,
+  McpServer as McpServerSchema,
+  ActivityEvent as ActivityEventSchema,
+  // Wire-shape schemas used for raw-to-SPA transform validation:
+  Message as WireMessageSchema,
+  Session as WireSessionSchema,
+  SessionDetail as WireSessionDetailSchema,
+  // Newly promoted from inline openapi.yaml schemas:
+  AuditLogUpdateResponse as AuditLogUpdateResponseSchema,
+  SkillTrustUpdateResponse as SkillTrustUpdateResponseSchema,
+  PromptGuardUpdateResponse as PromptGuardUpdateResponseSchema,
+  RateLimitsResponse as RateLimitsResponseSchema,
+  RateLimitsUpdateResponse as RateLimitsUpdateResponseSchema,
+  SessionScopeUpdateResponse as SessionScopeUpdateResponseSchema,
+  RetentionUpdateResponse as RetentionUpdateResponseSchema,
+  AgentToolsResponse as AgentToolsResponseSchema,
+  ChannelTestResponse as ChannelTestResponseSchema,
+  OperationResult as OperationResultSchema,
+  UploadFilesResponse as UploadFilesResponseSchema,
+  BackupCreateResponse as BackupCreateResponseSchema,
+  User as UserSchema,
+  // fix-AC: promoted from hand-written inline schemas:
+  UserContextResponse as UserContextResponseSchema,
+  McpServerToolsResponse as McpServerToolsResponseSchema,
+} from '@/lib/api/generated/schemas'
+
+// ── Schema validation error ────────────────────────────────────────────────────
+//
+// Thrown when an API response does not conform to the expected Zod schema.
+// Only thrown when a schema was explicitly passed to request() — unvalidated
+// calls fall back to the old untyped behaviour.
+//
+// In dev mode, a toast is emitted as well (see request() below).
+
+export class ApiSchemaError extends Error {
+  readonly endpoint: string
+  readonly zodIssues: Array<{ path: (string | number)[]; message: string }>
+  readonly rawBody: unknown
+
+  constructor(endpoint: string, zodIssues: Array<{ path: (string | number)[]; message: string }>, rawBody: unknown) {
+    super(`API response schema mismatch for ${endpoint}: ${zodIssues[0]?.message ?? 'unknown'}`)
+    this.name = 'ApiSchemaError'
+    this.endpoint = endpoint
+    this.zodIssues = zodIssues
+    this.rawBody = rawBody
+  }
+}
+
+let _apiSchemaErrorCount = 0
+
+export function getApiSchemaErrorCount(): number {
+  return _apiSchemaErrorCount
+}
+
+export function resetApiSchemaErrorCount(): void {
+  _apiSchemaErrorCount = 0
+}
+
+// Config validEnum coercion counter — incremented each time validEnum replaces
+// an unexpected backend enum value with the fallback. Exposed on
+// window.__omnipus_test_hooks so Playwright tests can assert coercion health.
+let _configCoercionCount = 0
+
+export function getConfigCoercionCount(): number {
+  return _configCoercionCount
+}
+
+export function resetConfigCoercionCount(): void {
+  _configCoercionCount = 0
+}
+
+// Expose counters on window.__omnipus_test_hooks in DEV/test builds
+// so Playwright tests can assert on validation health without reaching into module
+// internals.
+if ((import.meta.env.DEV || import.meta.env.MODE === 'test') && typeof window !== 'undefined') {
+  const w = window as unknown as { __omnipus_test_hooks?: Record<string, unknown> }
+  w.__omnipus_test_hooks ??= {}
+  w.__omnipus_test_hooks.getApiSchemaErrorCount = getApiSchemaErrorCount
+  w.__omnipus_test_hooks.resetApiSchemaErrorCount = resetApiSchemaErrorCount
+  w.__omnipus_test_hooks.getConfigCoercionCount = getConfigCoercionCount
+  w.__omnipus_test_hooks.resetConfigCoercionCount = resetConfigCoercionCount
+}
+
+// ── Re-exports from generated types ───────────────────────────────────────────
+//
+// Wire-format types come from the generated openapi-types.ts. The hand-written
+// interfaces below replace the generated types only when the SPA-internal shape
+// differs from the wire shape (e.g. Session flattens nested stats, ToolCall uses
+// `params` while the wire uses `parameters`).
+//
+// RULE: types with hand-written bodies below are imported aliased and NOT
+// re-exported from generated — the local export interface is canonical.
+// Types without local bodies are imported and immediately re-exported.
+// See CLAUDE.md hard-constraint #8.
+
+// Types whose generated shape is canonical (no local body) — import into scope
+// so function return-type annotations compile, then re-export for consumers.
+import type {
+  LoginResponse,
+  ProbeProviderResponse,
+  AgentSession,
+  AgentToolEntry,
+  SessionStats,
+  Attachment,
+  User,
+  UserCreateRequest,
+  UserCreateResponse,
+  UserDeleteResponse,
+  UserRoleChangeRequest,
+  UserRoleChangeResponse,
+  UserResetPasswordRequest,
+  UserResetPasswordResponse,
+  SessionScopeRequest,
+  SessionScopeResponse,
+  ToolRegistryEntry,
+  GlobalToolPolicies,
+  ToolPolicy,
+  ChannelEntry,
+  RetentionConfig,
+  RetentionSweepResult,
+  SandboxConfig,
+  SandboxConfigUpdate,
+  SandboxStatus,
+  AuditEntry,
+  AuditLogToggle,
+  RateLimitConfig,
+  ExecAllowlist,
+  ExecProxyStatus,
+  SkillTrustResponse,
+  PromptGuardResponse,
+  PendingRestartEntry,
+  AboutResponse,
+  // Wire types migrated from hand-written interfaces to generated types:
+  Agent,
+  Provider,
+  GatewayStatus,
+  Skill,
+  ActivityEvent,
+  UploadedFile,
+  AgentToolsCfg,
+  OnboardingCompleteRequest,
+  // New wire types (contract-first #8):
+  Task,
+  McpServer,
+  McpServerCreate,
+  AppState,
+  ValidateTokenResponse,
+  DoctorIssue,
+  DoctorResult,
+  DevicePending,
+  DevicePaired,
+  DevicesResponse,
+  BackupEntry,
+  StorageStats,
+  MeInfo,
+  // Newly promoted from inline openapi.yaml schemas:
+  AuditLogUpdateResponse,
+  SkillTrustUpdateRequest,
+  SkillTrustUpdateResponse,
+  PromptGuardUpdateRequest,
+  PromptGuardUpdateResponse,
+  RateLimitsResponse,
+  RateLimitsUpdateRequest,
+  RateLimitsUpdateResponse,
+  SessionScopeUpdateResponse,
+  RetentionUpdateResponse,
+  ChannelEnabledResponse,
+  AgentToolsResponse,
+  UploadFilesResponse,
+  BackupCreateResponse,
+  ChannelTestResponse,
+  OperationResult,
+  // fix-AC: promoted from hand-written inline schemas:
+  UserContextResponse,
+  McpServerToolsResponse,
+  AgentUpdateRequest,
+  AgentCreateRequest,
+} from '@/lib/api/generated/openapi-types'
+
+export type {
+  LoginResponse,
+  ProbeProviderResponse,
+  AgentSession,
+  AgentToolEntry,
+  SessionStats,
+  Attachment,
+  User,
+  UserCreateRequest,
+  UserCreateResponse,
+  UserDeleteResponse,
+  UserRoleChangeRequest,
+  UserRoleChangeResponse,
+  UserResetPasswordRequest,
+  UserResetPasswordResponse,
+  SessionScopeRequest,
+  SessionScopeResponse,
+  ToolRegistryEntry,
+  GlobalToolPolicies,
+  ToolPolicy,
+  ChannelEntry,
+  RetentionConfig,
+  RetentionSweepResult,
+  SandboxConfig,
+  SandboxStatus,
+  AuditEntry,
+  AuditLogToggle,
+  RateLimitConfig,
+  ExecAllowlist,
+  ExecProxyStatus,
+  SkillTrustResponse,
+  PromptGuardResponse,
+  PendingRestartEntry,
+  AboutResponse,
+  // Wire types migrated from hand-written interfaces:
+  Agent,
+  Provider,
+  GatewayStatus,
+  Skill,
+  ActivityEvent,
+  UploadedFile,
+  AgentToolsCfg,
+  OnboardingCompleteRequest,
+  // New wire types:
+  Task,
+  McpServer,
+  McpServerCreate,
+  AppState,
+  ValidateTokenResponse,
+  DoctorIssue,
+  DoctorResult,
+  DevicePending,
+  DevicePaired,
+  DevicesResponse,
+  BackupEntry,
+  StorageStats,
+  MeInfo,
+  // Promoted from inline openapi.yaml schemas:
+  AuditLogUpdateResponse,
+  SkillTrustUpdateRequest,
+  SkillTrustUpdateResponse,
+  PromptGuardUpdateRequest,
+  PromptGuardUpdateResponse,
+  RateLimitsResponse,
+  RateLimitsUpdateRequest,
+  RateLimitsUpdateResponse,
+  SessionScopeUpdateResponse,
+  RetentionUpdateResponse,
+  ChannelEnabledResponse,
+  AgentToolsResponse,
+  UploadFilesResponse,
+  BackupCreateResponse,
+  ChannelTestResponse,
+  OperationResult,
+  // fix-AC: promoted from hand-written inline schemas:
+  UserContextResponse,
+  McpServerToolsResponse,
+  AgentUpdateRequest,
+  AgentCreateRequest,
+}
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
 
@@ -100,7 +419,7 @@ function isPathCSRFExempt(apiPath: string): boolean {
   return CSRF_EXEMPT_PATHS.has(`/api/v1${apiPath}`)
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>): Promise<T> {
   // Client-side CSRF gate: reject state-changing calls that would be
   // guaranteed to 403 at the server. This gives a clear error immediately
   // instead of a cryptic "403 csrf cookie missing" from the network tab
@@ -140,91 +459,98 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     throw await ApiError.fromResponse(res)
   }
-  return res.json() as Promise<T>
+
+  // Parse the response body, handling non-JSON (e.g. unexpected HTML 200)
+  // gracefully — surface as ApiSchemaError with the raw text as rawBody so
+  // callers can see what the server actually sent.
+  let body: unknown
+  try {
+    body = await res.json() as unknown
+  } catch (cause) {
+    const rawText = String(cause instanceof Error ? cause.message : cause)
+    if (schema !== undefined) {
+      _apiSchemaErrorCount++
+      const schemaErr = new ApiSchemaError(
+        `${method} /api/v1${path}`,
+        [{ path: [], message: 'Response is not valid JSON' }],
+        rawText,
+      )
+      void maybeDevToast(`[api] Non-JSON response: ${path}`, `${method}:${path}:non-json`)
+      throw schemaErr
+    }
+    // No schema — throw a generic ApiError for non-JSON bodies on non-2xx
+    // (we already checked res.ok above, so a JSON parse error here on a 200
+    // is itself unexpected; surface as a 0-status transport error).
+    throw new ApiError(0, `Response from ${path} is not valid JSON`, { cause })
+  }
+
+  if (import.meta.env.DEV && schema === undefined) {
+    console.warn(`[api] ${method} /api/v1${path}: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.`)
+  }
+
+  // When a Zod schema is provided, validate the response body against it.
+  // On failure: throw ApiSchemaError (+ dev toast). Never silently return
+  // schema-invalid data — callers that need the old unchecked behaviour
+  // should not pass a schema.
+  if (schema !== undefined) {
+    const result = schema.safeParse(body)
+    if (!result.success) {
+      _apiSchemaErrorCount++
+      const schemaErr = new ApiSchemaError(
+        `${method} /api/v1${path}`,
+        result.error.issues.map((i) => ({ path: i.path as (string | number)[], message: i.message })),
+        body,
+      )
+      const first = schemaErr.zodIssues[0]
+      void maybeDevToast(`[api] Schema mismatch: ${path} — ${first?.message ?? 'unknown'}`, `${method}:${path}:schema`)
+      throw schemaErr
+    }
+    return result.data
+  }
+
+  return body as T
 }
 
 // ── Agents ────────────────────────────────────────────────────────────────────
 
-export type SandboxProfile = 'none' | 'workspace' | 'workspace+net' | 'host' | 'off'
+// 'none' is a UI-only sentinel meaning "inherit global default" — it is NOT a
+// valid contract value and must be stripped before submission (see AgentProfile.tsx).
+// The wire format only accepts: workspace | workspace+net | host | off.
+export type SandboxProfile = 'none' | 'workspace' | 'workspace+net' | 'host' | 'off' // not-wire-format: 'none' is UI-only; strip to undefined before send
 
-export interface AgentShellPolicy {
+export interface AgentShellPolicy { // not-wire-format: SPA-internal helper type — the shell_policy field on the generated Agent type is an inline anonymous object; this interface is never sent to or received from the gateway as a standalone value
   enable_deny_patterns?: boolean
   custom_deny_patterns?: string[]
 }
 
-export interface Agent {
-  id: string
-  name: string
-  description: string
-  type: 'core' | 'custom'
-  model: string
-  status: 'active' | 'idle' | 'error' | 'draft'
-  locked?: boolean
-  icon?: string
-  color?: string
-  tools?: string[]
-  tools_cfg?: AgentToolsCfg
-  soul?: string
-  heartbeat?: string
-  instructions?: string
-  fallback_models?: string[]
-  model_params?: {
-    temperature?: number
-    max_tokens?: number
-    top_p?: number
-  }
-  timeout_seconds?: number
-  max_tool_iterations?: number
-  steering_mode?: string
-  tool_feedback?: boolean
-  heartbeat_enabled?: boolean
-  heartbeat_interval?: number
-  rate_limits?: {
-    use_global_defaults: boolean
-    max_llm_calls_per_hour?: number
-    max_tool_calls_per_minute?: number
-    max_cost_per_day?: number
-  }
-  sandbox_profile?: SandboxProfile
-  shell_policy?: AgentShellPolicy
-  stats?: {
-    total_sessions: number
-    total_tokens: number
-    total_cost: number
-    last_active?: string
-  }
-}
+// Agent — re-exported from generated openapi-types (contract-first #8).
+// The generated type is the source of truth; see contracts/components/schemas/Agent.yaml.
 
 export function fetchAgents(): Promise<Agent[]> {
-  return request<Agent[]>('/agents')
+  return request<Agent[]>('/agents', undefined, z.array(AgentSchema) as ZodType<Agent[]>)
 }
 
 export function fetchAgent(id: string): Promise<Agent> {
-  return request<Agent>(`/agents/${encodeURIComponent(id)}`)
+  return request<Agent>(`/agents/${encodeURIComponent(id)}`, undefined, AgentSchema as ZodType<Agent>)
 }
 
-export function createAgent(data: Partial<Agent>): Promise<Agent> {
-  return request<Agent>('/agents', { method: 'POST', body: JSON.stringify(data) })
+export function createAgent(data: AgentCreateRequest): Promise<Agent> {
+  return request<Agent>('/agents', { method: 'POST', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
 }
 
-export function updateAgent(id: string, data: Partial<Agent>): Promise<Agent> {
-  return request<Agent>(`/agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) })
+export function updateAgent(id: string, data: AgentUpdateRequest): Promise<Agent> {
+  return request<Agent>(`/agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
 }
 
-export interface AgentSession {
-  id: string
-  title: string
-  created_at: string
-  updated_at: string
-}
+// AgentSession — re-exported from generated openapi-types (no local body needed).
 
 export function fetchAgentSessions(agentId: string): Promise<AgentSession[]> {
-  return request<AgentSession[]>(`/agents/${encodeURIComponent(agentId)}/sessions`)
+  return request<AgentSession[]>(`/agents/${encodeURIComponent(agentId)}/sessions`, undefined, z.array(AgentSessionSchema))
 }
 
 // ── Sessions ──────────────────────────────────────────────────────────────────
 
-export interface Session {
+export interface Session { // not-wire-format: SPA transformation type produced by rawToSession(). Flattens the nested stats sub-object from the wire RawSession into top-level fields (message_count, total_tokens, total_cost). The wire shape is the generated Session schema; this SPA shape is intentionally different.
   id: string
   agent_id: string
   title: string
@@ -243,7 +569,7 @@ export interface Session {
   active_agent_id?: string  // the agent currently handling this session
 }
 
-interface RawSession {
+interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that renames nested stats fields before public Session type; the wire shape is validated via WireSessionSchema, this type only models the pre-transform intermediate
   id: string
   agent_id: string
   title: string
@@ -264,6 +590,9 @@ interface RawSession {
   }
 }
 
+// Alias for backward-compat within this file (rawToSession signature).
+type RawSession = _RawSessionInternal
+
 function rawToSession(raw: RawSession): Session {
   return {
     id: raw.id,
@@ -283,7 +612,7 @@ function rawToSession(raw: RawSession): Session {
   }
 }
 
-export interface Message {
+export interface Message { // not-wire-format: SPA-internal chat message shape. The status enum diverges from the wire Message schema ('streaming'/'done' vs wire's 'ok'/'error'). The tool_calls field references the SPA-internal ToolCall (params field) rather than the wire ToolCall (parameters field). This type is NOT the same as the generated Message schema.
   id: string
   session_id?: string
   role: 'user' | 'assistant' | 'system'
@@ -295,7 +624,7 @@ export interface Message {
   tool_calls?: ToolCall[]
 }
 
-export interface ToolCall {
+export interface ToolCall { // not-wire-format: SPA-internal tool call shape. Uses 'params' for the input parameters while the wire ToolCall schema uses 'parameters'. The status enum also differs (SPA adds 'running'; wire uses 'pending'/'denied'). This type is intentionally different from the generated ToolCall schema.
   id: string
   tool: string
   params: Record<string, unknown>
@@ -336,7 +665,7 @@ export interface ToolCall {
  * transcripts may contain legacy `0.0.0.0` URLs that the SPA rewrites via
  * `rewriteLegacyURL` in `src/lib/preview-url.ts`.
  */
-export interface ServeWorkspaceResult {
+export interface ServeWorkspaceResult { // not-wire-format: parsed from ToolCall.result (typed as unknown on the wire). Not a direct REST or WebSocket response schema — this is a tool-result payload shape that the SPA casts from the opaque result field. See WebServeBlock in chat/tools/.
   /** Relative preview path, e.g. `"/preview/<agent>/<token>/"`. */
   path: string
   /** Absolute URL — preserved for replay safety; may contain legacy hosts. */
@@ -363,7 +692,7 @@ export interface ServeWorkspaceResult {
  * `command` is the command string that was executed.
  * `port` is the local port the dev server is listening on (inside the workspace).
  */
-export interface RunInWorkspaceResult {
+export interface RunInWorkspaceResult { // not-wire-format: parsed from ToolCall.result (typed as unknown on the wire). Not a direct REST or WebSocket response schema — this is a tool-result payload shape that the SPA casts from the opaque result field. See WebServeBlock in chat/tools/.
   /** Relative dev path, e.g. `"/preview/<agent>/<token>/"`. */
   path: string
   /** Absolute URL — preserved for replay safety; may contain legacy hosts. */
@@ -376,30 +705,171 @@ export interface RunInWorkspaceResult {
   port: number
 }
 
+// ── Wire ToolCall / Message adapters ─────────────────────────────────────────
+//
+// The wire ToolCall schema uses `parameters` (matching the Go struct tag
+// `json:"parameters,omitempty"`). The SPA-internal ToolCall uses `params`.
+// These adapter types are NOT new wire-format types — they are aliases over
+// the generated Message/ToolCall wire shape used only in the transform layer.
+// They carry a `// not-wire-format` marker as adapter aliases per CLAUDE.md #8.
+
+interface RawToolCall { // not-wire-format: adapter alias over the generated ToolCall wire schema. Used only in rawToToolCall() to rename `parameters`→`params` before the SPA consumer sees it. The wire name is `parameters` (Go json tag); the SPA-internal name is `params` (ToolCall interface above). Never sent to or received as a standalone type from the gateway.
+  id: string
+  tool: string
+  status: 'success' | 'error' | 'pending' | 'denied' | 'running' | 'cancelled'
+  duration_ms?: number
+  parameters?: Record<string, unknown>
+  result?: unknown
+  parent_tool_call_id?: string
+}
+
+interface RawMessage { // not-wire-format: adapter alias over the generated Message wire schema. Used only in rawToMessage() to delegate ToolCall transformation. The wire `status` enum values differ from the SPA's ('ok'|'error'|'interrupted' vs 'streaming'|'done'|'error'|'interrupted'). Never sent to or received as a standalone type from the gateway.
+  id: string
+  type?: 'message' | 'compaction' | 'system'
+  role?: 'user' | 'assistant' | 'system'
+  content?: string
+  summary?: string
+  timestamp: string
+  tokens?: number
+  cost?: number
+  status?: 'ok' | 'error' | 'interrupted'
+  attachments?: Attachment[]
+  tool_calls?: RawToolCall[]
+  agent_id: string
+  messages_compacted?: number
+}
+
+function rawToToolCall(raw: RawToolCall): ToolCall {
+  // Map wire status → SPA status.
+  // Wire values: 'success' | 'error' | 'pending' | 'denied' | 'running' | 'cancelled'
+  // SPA values:  'running' | 'success' | 'error' | 'cancelled'
+  //
+  // 'pending' → 'running': the SPA uses 'running' for in-progress calls; in a
+  //   completed transcript 'pending' should never occur, but we map it safely.
+  // 'denied'  → 'cancelled': the tool call was rejected by policy — the SPA
+  //   has no 'denied' state, so 'cancelled' is the closest accurate status.
+  let status: ToolCall['status']
+  switch (raw.status) {
+    case 'success':
+    case 'error':
+    case 'running':
+    case 'cancelled':
+      status = raw.status
+      break
+    case 'denied':
+      status = 'cancelled'
+      break
+    case 'pending':
+    default:
+      status = 'running'
+      break
+  }
+  return {
+    id: raw.id,
+    tool: raw.tool,
+    status,
+    params: raw.parameters ?? {},
+    result: raw.result,
+    duration_ms: raw.duration_ms,
+    error: undefined,
+  }
+}
+
+function rawToMessage(raw: RawMessage): Message {
+  return {
+    id: raw.id,
+    session_id: undefined,
+    role: raw.role ?? 'assistant',
+    content: raw.content ?? raw.summary ?? '',
+    timestamp: raw.timestamp,
+    tokens: raw.tokens,
+    cost: raw.cost,
+    // Wire status 'ok' maps to SPA 'done'. 'error' and 'interrupted' are direct.
+    status: raw.status === 'ok' ? 'done' : raw.status,
+    tool_calls: raw.tool_calls?.map(rawToToolCall),
+  }
+}
+
 export async function fetchSessions(agentId?: string, type?: Session['type']): Promise<Session[]> {
   const params: Record<string, string> = {}
   if (agentId) params.agent_id = agentId
   if (type) params.type = type
   const qs = Object.keys(params).length > 0 ? '?' + new URLSearchParams(params).toString() : ''
-  const raw = await request<RawSession[]>(`/sessions${qs}`)
+  // The OpenAPI contract for GET /sessions describes a oneOf response: a
+  // plain JSON array when there are no partial errors, OR
+  // {sessions: [...], partial_errors: [...]} when one or more agents failed
+  // to list. The previous code validated only the array variant — when
+  // partial_errors fired (e.g. a session with a missing .context entry),
+  // Zod rejected the whole response and the session panel showed empty.
+  // Accept both shapes so legitimate sessions still render alongside any
+  // partial-error info.
+  const unionSchema = z.union([
+    z.array(WireSessionSchema),
+    z.object({
+      sessions: z.array(WireSessionSchema),
+      partial_errors: z.array(z.string()).optional(),
+    }),
+  ])
+  const resp = await request<unknown>(`/sessions${qs}`, undefined, unionSchema as ZodType<unknown>)
+  const raw: RawSession[] = Array.isArray(resp)
+    ? (resp as RawSession[])
+    : ((resp as { sessions: RawSession[] }).sessions ?? [])
   return raw.map(rawToSession)
 }
 
-export function fetchSessionMessages(sessionId: string): Promise<Message[]> {
-  return request<Message[]>(`/sessions/${encodeURIComponent(sessionId)}/messages`)
+export async function fetchSessionMessages(sessionId: string): Promise<Message[]> {
+  // Validate with the wire Message schema first, then transform each message
+  // so that tool_calls[].parameters is renamed to tool_calls[].params.
+  const raw = await request<RawMessage[]>(
+    `/sessions/${encodeURIComponent(sessionId)}/messages`,
+    undefined,
+    z.array(WireMessageSchema) as ZodType<RawMessage[]>,
+  )
+  return raw.map(rawToMessage)
 }
 
-export function createSession(agentId: string): Promise<Session> {
-  return request<Session>('/sessions', {
+export async function installSkillFromFile(content: string, filename: string): Promise<void> {
+  await request<void>('/skills/install', {
+    method: 'POST',
+    body: JSON.stringify({ content, filename }),
+  })
+}
+
+export interface SessionDetail { // not-wire-format: SPA-internal detail type. Uses the SPA-internal Session (stats-flattened) and SPA-internal Message (params field), not the wire-format generated SessionDetail. See fetchSessionDetail() which transforms the raw response.
+  session: Session
+  messages: Message[]
+  agent_removed?: boolean
+}
+
+export async function fetchSessionDetail(sessionId: string): Promise<SessionDetail> {
+  // Validate with the wire SessionDetail schema (session + messages array),
+  // then transform both the nested session stats and each message's tool_calls.
+  type RawSessionDetail = { session: RawSession; messages: RawMessage[]; agent_removed?: boolean }
+  const raw = await request<RawSessionDetail>(
+    `/sessions/${encodeURIComponent(sessionId)}`,
+    undefined,
+    WireSessionDetailSchema as ZodType<RawSessionDetail>,
+  )
+  return {
+    session: rawToSession(raw.session),
+    messages: raw.messages.map(rawToMessage),
+    agent_removed: raw.agent_removed,
+  }
+}
+
+export async function createSession(agentId: string): Promise<Session> {
+  // Wire returns the wire Session shape (nested stats); transform to SPA Session.
+  const raw = await request<RawSession>('/sessions', {
     method: 'POST',
     body: JSON.stringify({ agent_id: agentId }),
-  })
+  }, WireSessionSchema as ZodType<RawSession>)
+  return rawToSession(raw)
 }
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
 // Frontend-shaped config. Mapped from raw backend response via rawToFrontendConfig().
-export interface Config {
+export interface Config { // not-wire-format: SPA-internal configuration shape produced by rawToFrontendConfig(). The backend returns a raw nested JSON object with different field names (e.g. gateway.host instead of gateway.bind_address, nested storage.retention.session_days instead of data.session_retention_days). This type is the SPA's normalised view, not the wire format.
   gateway: {
     bind_address: string
     port: number
@@ -451,8 +921,13 @@ const VALID_EXEC_APPROVALS = ['auto', 'ask', 'deny'] as const
 const VALID_INJECTION_LEVELS = ['off', 'low', 'medium', 'high'] as const
 
 function validEnum<T extends string>(value: unknown, valid: readonly T[], fallback: T): T {
-  if ((valid as readonly string[]).includes(value as string)) return value as T
-  console.warn('[api] validEnum: unexpected value', value, '— falling back to', fallback)
+  if (typeof value === 'string' && (valid as readonly string[]).includes(value)) return value as T
+  if (value !== undefined && value !== null) {
+    _configCoercionCount++
+    if (import.meta.env.DEV) {
+      console.warn(`[api] validEnum coercion: ${JSON.stringify(value)} → ${fallback}`)
+    }
+  }
   return fallback
 }
 
@@ -510,23 +985,74 @@ export async function fetchConfig(): Promise<Config> {
   return rawToFrontendConfig(raw)
 }
 
-export function updateConfig(data: Partial<Config>): Promise<Config> {
-  return request<Config>('/config', { method: 'PUT', body: JSON.stringify(data) })
+// frontendToRawConfig is the inverse of rawToFrontendConfig. It serialises the
+// SPA-shaped Config back to the wire shape the backend expects on PUT /config.
+// The gateway's config.json uses `gateway.host` (not `bind_address`), and the
+// session-retention field lives at `storage.retention.session_days` (not
+// `data.session_retention_days`). Sending the SPA shape directly causes silent
+// data loss — the backend ignores unknown keys.
+//
+// This function only serialises fields the PUT /config handler accepts. It
+// intentionally omits `gateway.dev_mode_bypass` (blocked server-side) and
+// `security.prompt_injection_level` (owned by PUT /security/prompt-guard).
+function frontendToRawConfig(data: Partial<Config>): Record<string, unknown> {
+  const raw: Record<string, unknown> = {}
+  if (data.gateway) {
+    const gw: Record<string, unknown> = {}
+    if (data.gateway.bind_address !== undefined) gw.host = data.gateway.bind_address
+    if (data.gateway.port !== undefined) gw.port = data.gateway.port
+    if (data.gateway.auth_mode !== undefined) gw.auth_mode = data.gateway.auth_mode
+    if (data.gateway.token !== undefined) gw.token = data.gateway.token
+    if (data.gateway.hot_reload !== undefined) gw.hot_reload = data.gateway.hot_reload
+    if (data.gateway.log_level !== undefined) gw.log_level = data.gateway.log_level
+    // dev_mode_bypass is intentionally omitted — PUT /config blocks that field.
+    raw.gateway = gw
+  }
+  if (data.security) {
+    const sec: Record<string, unknown> = {}
+    if (data.security.policy_mode !== undefined) sec.policy_mode = data.security.policy_mode
+    if (data.security.exec_approval !== undefined) sec.exec_approval = data.security.exec_approval
+    // prompt_injection_level intentionally omitted — owned by PUT /security/prompt-guard.
+    if (data.security.daily_cost_cap !== undefined) sec.daily_cost_cap = data.security.daily_cost_cap
+    if (data.security.exec_timeout_seconds !== undefined) sec.exec_timeout_seconds = data.security.exec_timeout_seconds
+    if (data.security.max_background_seconds !== undefined) sec.max_background_seconds = data.security.max_background_seconds
+    if (data.security.enable_deny_patterns !== undefined) sec.enable_deny_patterns = data.security.enable_deny_patterns
+    if (data.security.rate_limits) {
+      sec.rate_limits = { ...data.security.rate_limits }
+    }
+    raw.security = sec
+  }
+  if (data.data) {
+    raw.storage = {
+      retention: {
+        session_days: data.data.session_retention_days,
+      },
+    }
+  }
+  if (data.agents?.defaults) {
+    raw.agents = { defaults: { ...data.agents.defaults } }
+  }
+  return raw
+}
+
+export async function updateConfig(data: Partial<Config>): Promise<Config> {
+  // Translate SPA shape → wire shape before sending, then transform the
+  // raw wire response back to SPA shape on success.
+  const wireBody = frontendToRawConfig(data)
+  const raw = await request<Record<string, unknown>>('/config', {
+    method: 'PUT',
+    body: JSON.stringify(wireBody),
+  })
+  return rawToFrontendConfig(raw)
 }
 
 // ── Providers ─────────────────────────────────────────────────────────────────
 
-export interface Provider {
-  id: string
-  name?: string
-  display_name?: string
-  status: 'connected' | 'disconnected' | 'error'
-  models?: string[]
-  error?: string
-}
+// Provider — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/Provider.yaml.
 
 export function fetchProviders(): Promise<Provider[]> {
-  return request<Provider[]>('/providers')
+  return request<Provider[]>('/providers', undefined, z.array(ProviderSchema) as ZodType<Provider[]>)
 }
 
 export function configureProvider(id: string, apiKey?: string, endpoint?: string, model?: string): Promise<Provider> {
@@ -537,11 +1063,11 @@ export function configureProvider(id: string, apiKey?: string, endpoint?: string
   return request<Provider>(`/providers/${id}`, {
     method: 'PUT',
     body: JSON.stringify(body),
-  })
+  }, ProviderSchema as ZodType<Provider>)
 }
 
-export function testProvider(id: string): Promise<{ success: boolean; error?: string }> {
-  return request(`/providers/${id}/test`, { method: 'POST' })
+export function testProvider(id: string): Promise<OperationResult> {
+  return request<OperationResult>(`/providers/${id}/test`, { method: 'POST' }, OperationResultSchema as ZodType<OperationResult>)
 }
 
 export function rotateGatewayToken(): Promise<{ token: string }> {
@@ -550,32 +1076,16 @@ export function rotateGatewayToken(): Promise<{ token: string }> {
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
 
-export interface Task {
-  id: string
-  title: string
-  prompt: string
-  agent_id?: string
-  agent_name?: string
-  created_by?: string
-  parent_task_id?: string
-  priority: number
-  status: 'queued' | 'assigned' | 'running' | 'completed' | 'failed'
-  result?: string
-  artifacts?: string[]
-  session_id?: string
-  trigger_type: 'manual' | 'time' | 'event'
-  created_at?: string
-  started_at?: string
-  completed_at?: string
-}
+// Task — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/Task.yaml.
 
 export function fetchTasks(status?: Task['status']): Promise<Task[]> {
   const qs = status ? '?' + new URLSearchParams({ status }).toString() : ''
-  return request<Task[]>(`/tasks${qs}`)
+  return request<Task[]>(`/tasks${qs}`, undefined, z.array(TaskSchema) as ZodType<Task[]>)
 }
 
 export function fetchSubtasks(taskId: string): Promise<Task[]> {
-  return request<Task[]>(`/tasks/${encodeURIComponent(taskId)}/subtasks`)
+  return request<Task[]>(`/tasks/${encodeURIComponent(taskId)}/subtasks`, undefined, z.array(TaskSchema) as ZodType<Task[]>)
 }
 
 export function createTask(data: {
@@ -585,11 +1095,11 @@ export function createTask(data: {
   priority?: number
   parent_task_id?: string
 }): Promise<Task> {
-  return request<Task>('/tasks', { method: 'POST', body: JSON.stringify(data) })
+  return request<Task>('/tasks', { method: 'POST', body: JSON.stringify(data) }, TaskSchema as ZodType<Task>)
 }
 
 export function updateTask(id: string, data: Partial<Task>): Promise<Task> {
-  return request<Task>(`/tasks/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) })
+  return request<Task>(`/tasks/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }, TaskSchema as ZodType<Task>)
 }
 
 export function startTask(id: string): Promise<void> {
@@ -602,145 +1112,123 @@ export function deleteTask(id: string): Promise<void> {
 
 // ── Gateway Status ────────────────────────────────────────────────────────────
 
-export interface GatewayStatus {
-  online: boolean
-  agent_count: number
-  channel_count: number
-  daily_cost: number
-  version?: string
-}
+// GatewayStatus — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/GatewayStatus.yaml.
 
 export function fetchGatewayStatus(): Promise<GatewayStatus> {
-  return request<GatewayStatus>('/status')
+  return request<GatewayStatus>('/status', undefined, GatewayStatusSchema as ZodType<GatewayStatus>)
 }
 
 // ── Tools & Channels ──────────────────────────────────────────────────────────
 
-export interface Tool {
-  name: string
-  category: string
-  description: string
+// Tool — type alias for ToolRegistryEntry (contract-first #8).
+// GET /tools returns ToolRegistryEntry[]; this alias preserves backward compat.
+// See contracts/components/schemas/ToolRegistryEntry.yaml.
+export type Tool = ToolRegistryEntry
+
+// fetchTools is a backward-compat alias for fetchRegistryTools.
+// New callers should use fetchRegistryTools (or fetchBuiltinTools) directly.
+export function fetchTools(): Promise<ToolRegistryEntry[]> { return fetchRegistryTools() }
+
+// Channel — type alias for ChannelEntry (contract-first #8).
+// GET /channels returns ChannelEntry[]; this alias preserves backward compat.
+// See contracts/components/schemas/ChannelEntry.yaml.
+export type Channel = ChannelEntry
+
+export function fetchChannels(): Promise<ChannelEntry[]> {
+  return request<ChannelEntry[]>('/channels', undefined, z.array(ChannelEntrySchema) as ZodType<ChannelEntry[]>)
 }
 
-export function fetchTools(): Promise<Tool[]> {
-  return request<Tool[]>('/tools')
+export function enableChannel(id: string): Promise<ChannelEnabledResponse> {
+  // Backend returns ChannelEnabledResponse {id, enabled} — not a full ChannelEntry.
+  return request<ChannelEnabledResponse>(
+    `/channels/${encodeURIComponent(id)}/enable`,
+    { method: 'PUT' },
+    ChannelEnabledResponseSchema as ZodType<ChannelEnabledResponse>,
+  )
 }
 
-export interface Channel {
-  id: string
-  name: string
-  transport: string
-  enabled: boolean
-  configured?: boolean
-}
-
-export function fetchChannels(): Promise<Channel[]> {
-  return request<Channel[]>('/channels')
-}
-
-export function enableChannel(id: string): Promise<Channel> {
-  return request<Channel>(`/channels/${encodeURIComponent(id)}/enable`, { method: 'PUT' })
-}
-
-export function disableChannel(id: string): Promise<Channel> {
-  return request<Channel>(`/channels/${encodeURIComponent(id)}/disable`, { method: 'PUT' })
+export function disableChannel(id: string): Promise<ChannelEnabledResponse> {
+  // Backend returns ChannelEnabledResponse {id, enabled} — not a full ChannelEntry.
+  return request<ChannelEnabledResponse>(
+    `/channels/${encodeURIComponent(id)}/disable`,
+    { method: 'PUT' },
+    ChannelEnabledResponseSchema as ZodType<ChannelEnabledResponse>,
+  )
 }
 
 export function fetchChannelConfig(id: string): Promise<Record<string, unknown>> {
+  // no-schema: channel config structure varies per channel type; no generated schema component.
   return request<Record<string, unknown>>(`/channels/${encodeURIComponent(id)}`)
 }
 
 export function configureChannel(id: string, config: Record<string, unknown>): Promise<void> {
+  // no-schema: void response; channel-specific body.
   return request<void>(`/channels/${encodeURIComponent(id)}/configure`, {
     method: 'PUT',
     body: JSON.stringify(config),
   })
 }
 
-export function testChannel(id: string): Promise<{ success: boolean; message: string }> {
-  return request<{ success: boolean; message: string }>(`/channels/${encodeURIComponent(id)}/test`, {
+export function testChannel(id: string): Promise<ChannelTestResponse> {
+  return request<ChannelTestResponse>(`/channels/${encodeURIComponent(id)}/test`, {
     method: 'POST',
-  })
+  }, ChannelTestResponseSchema as ZodType<ChannelTestResponse>)
 }
 
 // ── Skills ────────────────────────────────────────────────────────────────────
 
-export interface Skill {
-  id: string
-  name: string
-  version: string
-  description: string
-  author: string
-  verified: boolean
-  status: 'active' | 'inactive' | 'error'
-  agent_assignment?: string
-}
+// Skill — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/Skill.yaml.
 
-export interface McpServer {
-  id: string
-  name: string
-  transport: 'stdio' | 'sse' | 'websocket'
-  status: 'connected' | 'disconnected' | 'error'
-  tool_count: number
-  tools?: string[]
-}
-
-export interface McpServerCreate {
-  name: string
-  command: string
-  args?: string[]
-  transport: 'stdio' | 'sse' | 'websocket'
-}
+// McpServer — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/McpServer.yaml.
+// McpServerCreate — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/McpServerCreate.yaml.
 
 export function fetchSkills(): Promise<Skill[]> {
-  return request<Skill[]>('/skills')
+  return request<Skill[]>('/skills', undefined, z.array(SkillSchema) as ZodType<Skill[]>)
 }
 
 export function deleteSkill(name: string): Promise<void> {
+  // no-schema: void response; DELETE has no body.
   return request<void>(`/skills/${encodeURIComponent(name)}`, { method: 'DELETE' })
 }
 
-export function fetchMcpServers(): Promise<McpServer[]> {
-  return request<McpServer[]>('/mcp-servers')
-}
+// fetchMcpServers is a backward-compat alias for fetchMcpServersForAgent.
+// New callers should use fetchMcpServersForAgent directly.
+export function fetchMcpServers(): Promise<McpServer[]> { return fetchMcpServersForAgent() }
 
 export function addMcpServer(data: McpServerCreate): Promise<McpServer> {
-  return request<McpServer>('/mcp-servers', { method: 'POST', body: JSON.stringify(data) })
+  return request<McpServer>('/mcp-servers', { method: 'POST', body: JSON.stringify(data) }, McpServerSchema as ZodType<McpServer>)
 }
 
 export function deleteMcpServer(id: string): Promise<void> {
+  // no-schema: void response; DELETE has no body.
   return request<void>(`/mcp-servers/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
-export function fetchMcpServerTools(id: string): Promise<string[]> {
-  return request<string[]>(`/mcp-servers/${encodeURIComponent(id)}/tools`)
+export async function fetchMcpServerTools(id: string): Promise<string[]> {
+  const resp = await request<McpServerToolsResponse>(`/mcp-servers/${encodeURIComponent(id)}/tools`, undefined, McpServerToolsResponseSchema as ZodType<McpServerToolsResponse>)
+  return resp.tools
 }
 
 // ── Storage Stats ─────────────────────────────────────────────────────────────
 
-export interface StorageStats {
-  workspace_size_bytes: number
-  session_count: number
-  memory_entry_count: number
-  oldest_session_date?: string
-}
+// StorageStats — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/StorageStats.yaml.
 
 export function fetchStorageStats(): Promise<StorageStats> {
-  return request<StorageStats>('/storage/stats')
+  return request<StorageStats>('/storage/stats', undefined, StorageStatsSchema)
 }
 
 // ── App State ─────────────────────────────────────────────────────────────────
 
-export interface AppState {
-  onboarding_complete: boolean
-  last_doctor_run?: string
-  last_doctor_score?: number
-  god_mode_available?: boolean
-  god_mode_opted_in?: boolean
-}
+// AppState — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/AppState.yaml.
 
 export function fetchAppState(): Promise<AppState> {
-  return request<AppState>('/state')
+  return request<AppState>('/state', undefined, AppStateSchema)
 }
 
 export function completeOnboarding(): Promise<void> {
@@ -751,44 +1239,29 @@ export function completeOnboarding(): Promise<void> {
 }
 
 // ── Auth / Login ─────────────────────────────────────────────────────────────────
-
-export interface LoginResponse {
-  token: string
-  role: UserRole
-  username: string
-}
+//
+// LoginResponse is re-exported from @/lib/api/generated/openapi-types at the
+// top of this file. The hand-written interface has been removed.
 
 export async function login(username: string, password: string): Promise<LoginResponse> {
   return request<LoginResponse>('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ username, password }),
-  })
+  }, LoginResponseSchema)
 }
 
 export async function registerAdmin(username: string, password: string): Promise<LoginResponse> {
   return request<LoginResponse>('/auth/register-admin', {
     method: 'POST',
     body: JSON.stringify({ username, password }),
-  })
+  }, LoginResponseSchema)
 }
 
-export interface CompleteOnboardingRequest {
-  provider: {
-    id: string
-    api_key: string
-    model: string
-  }
-  admin: {
-    username: string
-    password: string
-  }
-}
-
-export async function completeOnboardingTransaction(req: CompleteOnboardingRequest): Promise<LoginResponse> {
+export async function completeOnboardingTransaction(req: OnboardingCompleteRequest): Promise<LoginResponse> {
   return request<LoginResponse>('/onboarding/complete', {
     method: 'POST',
     body: JSON.stringify(req),
-  })
+  }, LoginResponseSchema)
 }
 
 // probeProvider is a non-persistent "test + fetch model list" call used during
@@ -801,11 +1274,8 @@ export async function completeOnboardingTransaction(req: CompleteOnboardingReque
 // Admins who want to add providers post-onboarding use configureProvider
 // (PUT /providers/{id}) + fetchProviders (GET /providers) — both work
 // because the browser has the __Host-csrf cookie at that point.
-export interface ProbeProviderResponse {
-  success: boolean
-  models?: string[]
-  error?: string
-}
+//
+// ProbeProviderResponse is re-exported from @/lib/api/generated/openapi-types.
 export async function probeProvider(
   id: string,
   apiKey: string,
@@ -814,146 +1284,119 @@ export async function probeProvider(
   return request<ProbeProviderResponse>('/onboarding/probe-provider', {
     method: 'POST',
     body: JSON.stringify({ id, api_key: apiKey, endpoint: endpoint ?? '' }),
-  })
+  }, ProbeProviderResponseSchema)
 }
 
-export interface ValidateTokenResponse {
-  username: string
-  role: UserRole
-}
+// ValidateTokenResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/ValidateTokenResponse.yaml.
 
 export async function validateToken(): Promise<ValidateTokenResponse> {
-  return request<ValidateTokenResponse>('/auth/validate')
+  return request<ValidateTokenResponse>('/auth/validate', undefined, ValidateTokenResponseSchema)
 }
 
 // ── Doctor ────────────────────────────────────────────────────────────────────
 
-export interface DoctorIssue {
-  id: string
-  severity: 'high' | 'medium' | 'low'
-  title: string
-  description: string
-  recommendation: string
-  action_link?: string
-  action_label?: string
-}
-
-export interface DoctorResult {
-  score: number
-  issues: DoctorIssue[]
-  checked_at: string
-}
+// DoctorIssue — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/DoctorIssue.yaml.
+// DoctorResult — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/DoctorResult.yaml.
 
 export function fetchDoctorResults(): Promise<DoctorResult | null> {
-  return request<DoctorResult | null>('/doctor')
+  return request<DoctorResult | null>('/doctor', undefined, DoctorResultSchema.nullable())
 }
 
 export function runDoctor(): Promise<DoctorResult> {
-  return request<DoctorResult>('/doctor', { method: 'POST' })
+  return request<DoctorResult>('/doctor', { method: 'POST' }, DoctorResultSchema)
 }
 
 // ── Activity Feed ─────────────────────────────────────────────────────────────
 
-export interface ActivityEvent {
-  id: string
-  type: 'task_created' | 'task_updated' | 'session_started' | 'session_ended' | 'agent_error' | 'tool_called' | 'approval_requested' | (string & {})
-  summary: string
-  timestamp: string
-  agent_id?: string
-  agent_name?: string
-}
+// ActivityEvent — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/ActivityEvent.yaml.
 
 export function fetchActivity(): Promise<ActivityEvent[]> {
-  return request<ActivityEvent[]>('/activity')
+  return request<ActivityEvent[]>('/activity', undefined, z.array(ActivityEventSchema) as ZodType<ActivityEvent[]>)
 }
 
 // ── Credentials ───────────────────────────────────────────────────────────────
 
-export interface CredentialKey {
+export interface CredentialKey { // not-wire-format: SPA-internal credential display shape. The wire GET /credentials endpoint returns string[] (key names only); the component accesses .key on each entry. This interface reflects how the SPA displays credential entries but does NOT match the wire format. The wire format is defined inline in the openapi.yaml /credentials GET response schema as string[].
   key: string
   created_at?: string
   updated_at?: string
 }
 
-export function fetchCredentials(): Promise<CredentialKey[]> {
-  return request<CredentialKey[]>('/credentials')
+export async function fetchCredentials(): Promise<CredentialKey[]> {
+  // Wire format: GET /credentials returns string[] (key names only).
+  // The SPA uses CredentialKey[] (objects with .key) so SecuritySection.tsx can
+  // render cred.key and use it as a React key. We validate the wire shape, then
+  // transform string[] → {key:string}[].
+  const wire = await request<string[]>('/credentials', undefined, z.array(z.string()) as ZodType<string[]>)
+  return wire.map((key) => ({ key }))
 }
 
 export function addCredential(key: string, value: string): Promise<void> {
+  // no-schema: void response; POST body is a write-only operation.
   return request<void>('/credentials', { method: 'POST', body: JSON.stringify({ key, value }) })
 }
 
 export function deleteCredential(key: string): Promise<void> {
+  // no-schema: void response; DELETE has no body.
   return request<void>(`/credentials/${encodeURIComponent(key)}`, { method: 'DELETE' })
 }
 
 // ── Devices ───────────────────────────────────────────────────────────────────
 
-export interface DevicePending {
-  device_id: string
-  fingerprint: string
-  pairing_code: string
-  device_name: string
-  created_at: string
-  expires_at: string
-}
-
-export interface DevicePaired {
-  device_id: string
-  fingerprint: string
-  device_name: string
-  paired_at: string
-  last_seen_at: string
-  status: 'active' | 'revoked'
-}
-
-export interface DevicesResponse {
-  pending: DevicePending[]
-  paired: DevicePaired[]
-}
+// DevicePending — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/DevicePending.yaml.
+// DevicePaired — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/DevicePaired.yaml.
+// DevicesResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/DevicesResponse.yaml.
 
 export function fetchDevices(): Promise<DevicesResponse> {
-  return request<DevicesResponse>('/devices')
+  return request<DevicesResponse>('/devices', undefined, DevicesResponseSchema)
 }
 
 // ── Backup / Restore ──────────────────────────────────────────────────────────
 
-export interface BackupEntry {
-  filename: string
-  size_bytes: number
-  created_at: string
-}
+// BackupEntry — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/BackupEntry.yaml.
 
-export function createBackup(): Promise<{ filename: string }> {
-  return request('/backup', { method: 'POST' })
+export function createBackup(): Promise<BackupCreateResponse> {
+  return request<BackupCreateResponse>('/backup', { method: 'POST' }, BackupCreateResponseSchema as ZodType<BackupCreateResponse>)
 }
 
 export function fetchBackups(): Promise<BackupEntry[]> {
-  return request<BackupEntry[]>('/backups')
+  return request<BackupEntry[]>('/backups', undefined, z.array(BackupEntrySchema))
 }
 
 export function restoreBackup(filename: string): Promise<void> {
+  // no-schema: void response; 204 No Content on success.
   return request<void>('/restore', { method: 'POST', body: JSON.stringify({ filename }) })
 }
 
 export function clearAllSessions(): Promise<void> {
+  // no-schema: void response; DELETE returns 204 No Content.
   return request<void>('/sessions/all', { method: 'DELETE' })
 }
 
-export function renameSession(id: string, title: string): Promise<Session> {
-  return request<Session>(`/sessions/${encodeURIComponent(id)}`, {
+export async function renameSession(id: string, title: string): Promise<Session> {
+  // Wire returns the wire Session shape (nested stats); transform to SPA Session.
+  const raw = await request<RawSession>(`/sessions/${encodeURIComponent(id)}`, {
     method: 'PUT',
     body: JSON.stringify({ title }),
-  })
+  }, WireSessionSchema as ZodType<RawSession>)
+  return rawToSession(raw)
 }
 
-export function deleteSession(id: string): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })
+export function deleteSession(id: string): Promise<OperationResult> {
+  return request<OperationResult>(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }, OperationResultSchema as ZodType<OperationResult>)
 }
 
 // ── About ─────────────────────────────────────────────────────────────────────
 
-export interface AboutInfo {
+export interface AboutInfo { // not-wire-format: SPA-internal backward-compatible subset of AboutResponse. The generated AboutResponse has required fields (uptime, pid, frame_ancestors_fallback) and different optionality for preview_port/preview_listener_enabled. The SPA uses this looser interface to maintain backward compatibility with older gateway versions that may not send all AboutResponse fields.
   version: string
   go_version: string
   os: string
@@ -978,6 +1421,9 @@ export interface AboutInfo {
 }
 
 export function fetchAboutInfo(): Promise<AboutInfo> {
+  // no-schema: AboutInfo is a looser SPA-compatibility subset of the wire AboutResponse
+  // (different field names: uptime_seconds vs uptime). Validating against a strict schema
+  // would produce false negatives on older gateway versions.
   return request<AboutInfo>('/about')
 }
 
@@ -998,30 +1444,21 @@ export function isPreviewListenerEnabled(info: AboutInfo | undefined): boolean {
 export type AuditEventType = 'tool_call' | 'exec' | 'file_op' | 'llm_call' | 'policy_eval' | 'rate_limit' | 'ssrf' | 'startup' | 'shutdown'
 export type AuditDecision = 'allow' | 'deny' | 'error'
 
-export interface AuditEntry {
-  timestamp: string
-  event: AuditEventType | (string & {})
-  decision?: AuditDecision | (string & {})
-  agent_id?: string
-  session_id?: string
-  tool?: string
-  command?: string
-  parameters?: Record<string, unknown>
-  policy_rule?: string
-  details?: Record<string, unknown>
-}
+// AuditEntry — re-exported from generated openapi-types (no local body needed).
+// AuditEventType and AuditDecision remain as local type aliases for UI use.
 
 export function fetchAuditLog(): Promise<AuditEntry[]> {
-  return request<AuditEntry[]>('/audit-log')
+  return request<AuditEntry[]>('/audit-log', undefined, z.array(AuditEntrySchema))
 }
 
 // ── User Context (USER.md) ────────────────────────────────────────────────────
 
-export function fetchUserContext(): Promise<{ content: string }> {
-  return request<{ content: string }>('/user-context')
+export function fetchUserContext(): Promise<UserContextResponse> {
+  return request<UserContextResponse>('/user-context', undefined, UserContextResponseSchema as ZodType<UserContextResponse>)
 }
 
 export function updateUserContext(content: string): Promise<void> {
+  // no-schema: void response; PUT returns 204 No Content.
   return request<void>('/user-context', {
     method: 'PUT',
     body: JSON.stringify({ content }),
@@ -1032,24 +1469,19 @@ export function updateUserContext(content: string): Promise<void> {
 
 export type UserRole = 'admin' | 'user'
 
-export interface MeInfo {
-  role: UserRole
-}
+// MeInfo — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/MeInfo.yaml.
 
 export async function fetchMe(): Promise<MeInfo> {
-  return request<MeInfo>('/me')
+  return request<MeInfo>('/me', undefined, MeInfoSchema)
 }
 
 // ── File Upload ───────────────────────────────────────────────────────────────
 
-export interface UploadedFile {
-  name: string
-  path: string
-  size: number
-  content_type: string
-}
+// UploadedFile — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/UploadedFile.yaml.
 
-export async function uploadFiles(sessionId: string, files: File[]): Promise<{ files: UploadedFile[] }> {
+export async function uploadFiles(sessionId: string, files: File[]): Promise<UploadFilesResponse> {
   const formData = new FormData()
   formData.append('session_id', sessionId)
   for (const file of files) {
@@ -1088,37 +1520,39 @@ export async function uploadFiles(sessionId: string, files: File[]): Promise<{ f
   if (!res.ok) {
     throw await ApiError.fromResponse(res)
   }
-  return res.json()
+  const raw: unknown = await res.json()
+  const parsed = (UploadFilesResponseSchema as ZodType<UploadFilesResponse>).safeParse(raw)
+  if (!parsed.success) {
+    _apiSchemaErrorCount++
+    const issues = parsed.error.issues.map((i) => ({ path: i.path as (string | number)[], message: i.message }))
+    void maybeDevToast(`[api] uploadFiles response schema mismatch: ${issues[0]?.message ?? 'unknown'}`, 'POST:/upload:schema')
+    throw new ApiSchemaError('/upload', issues, raw)
+  }
+  return parsed.data
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
-export function changePassword(currentPassword: string, newPassword: string): Promise<{ success: boolean }> {
-  return request<{ success: boolean }>('/auth/change-password', {
+export function changePassword(currentPassword: string, newPassword: string): Promise<OperationResult> {
+  return request<OperationResult>('/auth/change-password', {
     method: 'POST',
     body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
-  })
+  }, OperationResultSchema as ZodType<OperationResult>)
 }
 
 // ── Exec Allowlist ────────────────────────────────────────────────────────────
 
-export interface ExecAllowlist {
-  allowed_binaries: string[]
-  // restart_required is true on a successful PUT: the in-memory agent loop
-  // still uses the previous allowlist until Omnipus restarts (SEC-12). The UI
-  // surfaces this via a "Restart required" badge in ExecAllowlistSection.
-  restart_required?: boolean
-}
+// ExecAllowlist — re-exported from generated openapi-types (no local body needed).
 
 export function fetchExecAllowlist(): Promise<ExecAllowlist> {
-  return request<ExecAllowlist>('/security/exec-allowlist')
+  return request<ExecAllowlist>('/security/exec-allowlist', undefined, ExecAllowlistSchema)
 }
 
 export function updateExecAllowlist(patterns: string[]): Promise<ExecAllowlist> {
   return request<ExecAllowlist>('/security/exec-allowlist', {
     method: 'PUT',
     body: JSON.stringify({ allowed_binaries: patterns }),
-  })
+  }, ExecAllowlistSchema)
 }
 
 // ── Security Admin Endpoints ──────────────────────────────────────────────────
@@ -1131,195 +1565,124 @@ export type SkillTrustLevel = 'block_unverified' | 'warn_unverified' | 'allow_al
 export type PromptInjectionLevel = 'low' | 'medium' | 'high'
 export type DMScope = 'main' | 'per-peer' | 'per-channel-peer' | 'per-account-channel-peer'
 
-// PendingRestartEntry represents one config key that has been written to disk
-// but not yet applied to the running process — the running value differs from
-// the persisted value and a restart is required to reconcile them.
-export interface PendingRestartEntry {
-  key: string
-  applied_value: unknown
-  persisted_value: unknown
-}
+// PendingRestartEntry — re-exported from generated openapi-types (no local body needed).
 
 export function fetchPendingRestart(): Promise<PendingRestartEntry[]> {
-  return request<PendingRestartEntry[]>('/config/pending-restart')
+  return request<PendingRestartEntry[]>('/config/pending-restart', undefined, z.array(PendingRestartEntrySchema) as ZodType<PendingRestartEntry[]>)
 }
 
 // Audit log toggle — distinct from GET /audit-log (which returns AuditEntry[]).
 // This endpoint controls whether audit logging is enabled at all.
-export interface AuditLogToggle {
-  enabled: boolean
-}
+// AuditLogToggle is re-exported from generated openapi-types above.
 
-export interface AuditLogUpdateResponse {
-  saved: boolean
-  requires_restart: boolean
-  applied_enabled: boolean
-}
+// AuditLogUpdateResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/AuditLogUpdateResponse.yaml.
 
 export function fetchAuditLogToggle(): Promise<AuditLogToggle> {
-  return request<AuditLogToggle>('/security/audit-log')
+  return request<AuditLogToggle>('/security/audit-log', undefined, AuditLogToggleSchema)
 }
 
 export function updateAuditLog(enabled: boolean): Promise<AuditLogUpdateResponse> {
   return request<AuditLogUpdateResponse>('/security/audit-log', {
     method: 'PUT',
     body: JSON.stringify({ enabled }),
-  })
+  }, AuditLogUpdateResponseSchema)
 }
 
 // Skill trust — controls how unverified community skills are handled.
-export interface SkillTrustResponse {
-  level: SkillTrustLevel
-}
-
-export interface SkillTrustUpdateResponse {
-  saved: boolean
-  requires_restart: boolean
-  applied_level: SkillTrustLevel
-}
-
-export interface SkillTrustUpdateBody {
-  level: SkillTrustLevel
-}
+// SkillTrustResponse is re-exported from generated openapi-types above.
+// SkillTrustUpdateRequest — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/SkillTrustUpdateRequest.yaml.
+// SkillTrustUpdateResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/SkillTrustUpdateResponse.yaml.
 
 export function fetchSkillTrust(): Promise<SkillTrustResponse> {
-  return request<SkillTrustResponse>('/security/skill-trust')
+  return request<SkillTrustResponse>('/security/skill-trust', undefined, SkillTrustResponseSchema)
 }
 
 export function updateSkillTrust(level: SkillTrustLevel): Promise<SkillTrustUpdateResponse> {
   return request<SkillTrustUpdateResponse>('/security/skill-trust', {
     method: 'PUT',
-    body: JSON.stringify({ level } satisfies SkillTrustUpdateBody),
-  })
+    body: JSON.stringify({ level } satisfies SkillTrustUpdateRequest),
+  }, SkillTrustUpdateResponseSchema)
 }
 
 // Prompt guard — uses `level` field, aligns with PromptInjectionLevel.
-export interface PromptGuardResponse {
-  level: PromptInjectionLevel
-}
-
-export interface PromptGuardUpdateResponse {
-  saved: boolean
-  requires_restart: boolean
-  applied_level: PromptInjectionLevel
-}
-
-export interface PromptGuardUpdateBody {
-  level: PromptInjectionLevel
-}
+// PromptGuardResponse is re-exported from generated openapi-types above.
+// PromptGuardUpdateRequest — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/PromptGuardUpdateRequest.yaml.
+// PromptGuardUpdateResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/PromptGuardUpdateResponse.yaml.
 
 export function fetchPromptGuardLevel(): Promise<PromptGuardResponse> {
-  return request<PromptGuardResponse>('/security/prompt-guard')
+  return request<PromptGuardResponse>('/security/prompt-guard', undefined, PromptGuardResponseSchema)
 }
 
 export function updatePromptGuardLevel(level: PromptInjectionLevel): Promise<PromptGuardUpdateResponse> {
   return request<PromptGuardUpdateResponse>('/security/prompt-guard', {
     method: 'PUT',
-    body: JSON.stringify({ level } satisfies PromptGuardUpdateBody),
-  })
+    body: JSON.stringify({ level } satisfies PromptGuardUpdateRequest),
+  }, PromptGuardUpdateResponseSchema)
 }
 
 // Rate limits — adds write support and configures spending/throughput caps.
-export interface RateLimitsResponse {
-  daily_cost_cap_usd?: number
-  max_agent_llm_calls_per_hour?: number
-  max_agent_tool_calls_per_minute?: number
-}
-
-export interface RateLimitsUpdateBody {
-  daily_cost_cap_usd?: number
-  max_agent_llm_calls_per_hour?: number
-  max_agent_tool_calls_per_minute?: number
-}
+// RateLimitsResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/RateLimitsResponse.yaml.
+// RateLimitsUpdateRequest — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/RateLimitsUpdateRequest.yaml.
+// RateLimitsUpdateResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/RateLimitsUpdateResponse.yaml.
 
 export function fetchRateLimits(): Promise<RateLimitsResponse> {
-  return request<RateLimitsResponse>('/security/rate-limits')
+  return request<RateLimitsResponse>('/security/rate-limits', undefined, RateLimitsResponseSchema)
 }
 
-export function updateRateLimits(body: RateLimitsUpdateBody): Promise<RateLimitsResponse> {
-  return request<RateLimitsResponse>('/security/rate-limits', {
+export function updateRateLimits(body: RateLimitsUpdateRequest): Promise<RateLimitsUpdateResponse> {
+  return request<RateLimitsUpdateResponse>('/security/rate-limits', {
     method: 'PUT',
     body: JSON.stringify(body),
-  })
+  }, RateLimitsUpdateResponseSchema)
 }
 
 // Sandbox config — mode, allowed paths, SSRF controls, and the global
 // agent defaults (default_profile, shell_deny_patterns).
-// allow_internal is []string matching OmnipusSSRFConfig.AllowInternal in pkg/config/sandbox.go.
-// Entries may be hostname, exact IP, or CIDR range. Empty slice means "block all".
-export interface SandboxConfigResponse {
-  mode?: string
-  // applied_mode is the value the gateway is currently enforcing. It differs
-  // from `mode` when the operator saved a change but hasn't restarted.
-  applied_mode?: string
-  allow_network_outbound?: boolean
-  allowed_paths?: string[]
-  ssrf_enabled?: boolean
-  ssrf_allow_internal?: string[]
-  ssrf?: {
-    enabled?: boolean
-    allow_internal?: string[]
-  }
-  // default_profile is the global fallback applied to NEW custom agents
-  // that do not pick their own SandboxProfile. Empty = inherit hardcoded.
-  default_profile?: SandboxProfile | ''
-  // shell_deny_patterns is the global fallback shell-deny regex list
-  // applied on top of any per-agent custom patterns.
-  shell_deny_patterns?: string[]
-  requires_restart?: boolean
-}
+// SandboxConfig — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/SandboxConfig.yaml.
+// SandboxConfigUpdate — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/SandboxConfigUpdate.yaml.
 
-export interface SandboxConfigUpdateBody {
-  mode?: string
-  allow_network_outbound?: boolean
-  allowed_paths?: string[]
-  ssrf_enabled?: boolean
-  ssrf_allow_internal?: string[]
-  ssrf?: {
-    enabled?: boolean
-    allow_internal?: string[]
-  }
-  default_profile?: SandboxProfile | ''
-  shell_deny_patterns?: string[]
-}
+// SandboxConfigResponse is a backward-compat alias for the generated SandboxConfig.
+// SandboxConfig already contains requires_restart, applied_mode, saved, and all
+// sandbox fields — no extra SPA-specific shape is needed.
+export type SandboxConfigResponse = SandboxConfig
 
 export function fetchSandboxConfig(): Promise<SandboxConfigResponse> {
-  return request<SandboxConfigResponse>('/security/sandbox-config')
+  return request<SandboxConfigResponse>('/security/sandbox-config', undefined, SandboxConfigSchema)
 }
 
-export function updateSandboxConfig(body: SandboxConfigUpdateBody): Promise<SandboxConfigResponse> {
+export function updateSandboxConfig(body: SandboxConfigUpdate): Promise<SandboxConfigResponse> {
   return request<SandboxConfigResponse>('/security/sandbox-config', {
     method: 'PUT',
     body: JSON.stringify(body),
-  })
+  }, SandboxConfigSchema)
 }
 
 // Session scope — controls DM conversation isolation granularity.
-export interface SessionScopeResponse {
-  dm_scope: DMScope
-}
-
-export interface SessionScopeUpdateBody {
-  dm_scope: DMScope
-}
-
-export interface SessionScopeUpdateResponse {
-  saved: boolean
-  requires_restart: boolean
-  // applied_dm_scope reflects the value currently in effect. Since DM scope is
-  // restart-gated, this is the previous value until the gateway is restarted.
-  applied_dm_scope: DMScope
-}
+// SessionScopeResponse is re-exported from generated openapi-types above.
+// SessionScopeRequest (request body) — re-exported from generated openapi-types.
+// See contracts/components/schemas/SessionScopeRequest.yaml.
+// SessionScopeUpdateResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/SessionScopeUpdateResponse.yaml.
 
 export function fetchSessionScope(): Promise<SessionScopeResponse> {
-  return request<SessionScopeResponse>('/security/session-scope')
+  return request<SessionScopeResponse>('/security/session-scope', undefined, SessionScopeResponseSchema as ZodType<SessionScopeResponse>)
 }
 
 export function updateSessionScope(dm_scope: DMScope): Promise<SessionScopeUpdateResponse> {
   return request<SessionScopeUpdateResponse>('/security/session-scope', {
     method: 'PUT',
-    body: JSON.stringify({ dm_scope } satisfies SessionScopeUpdateBody),
-  })
+    body: JSON.stringify({ dm_scope } satisfies SessionScopeRequest),
+  }, SessionScopeUpdateResponseSchema)
 }
 
 // Retention — session log retention policy.
@@ -1338,205 +1701,120 @@ export function retentionMode(resp: {
   return 'default'
 }
 
-export interface RetentionResponse {
-  session_days?: number
-  disabled?: boolean
-}
+// GET /security/retention returns RetentionConfig (session_days?, disabled?).
+// RetentionConfig — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/RetentionConfig.yaml.
 
-export interface RetentionUpdateBody {
-  session_days?: number
-  disabled?: boolean
-}
+// RetentionUpdateBody is a backward-compat alias for the PUT request body.
+export type RetentionUpdateBody = RetentionConfig
 
-// Matches the handler at pkg/gateway/rest_retention.go's putRetention response:
-// flat {saved, requires_restart, session_days, disabled}. An earlier nested
-// `applied: {...}` shape never shipped — the handler always wrote flat.
-export interface RetentionUpdateResponse {
-  saved: boolean
-  requires_restart: boolean
-  session_days: number
-  disabled: boolean
-}
+// RetentionUpdateResponse — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/RetentionUpdateResponse.yaml.
 
-export function fetchRetention(): Promise<RetentionResponse> {
-  return request<RetentionResponse>('/security/retention')
+export function fetchRetention(): Promise<RetentionConfig> {
+  return request<RetentionConfig>('/security/retention', undefined, RetentionConfigSchema)
 }
 
 export function updateRetention(body: RetentionUpdateBody): Promise<RetentionUpdateResponse> {
   return request<RetentionUpdateResponse>('/security/retention', {
     method: 'PUT',
     body: JSON.stringify(body),
-  })
+  }, RetentionUpdateResponseSchema)
 }
 
 // Retention sweep — immediately purge sessions beyond the retention window.
-export interface RetentionSweepResponse {
-  removed: number
-  skipped_reason?: string
-}
+// RetentionSweepResult is re-exported from generated openapi-types above.
 
-export function triggerRetentionSweep(): Promise<RetentionSweepResponse> {
-  return request<RetentionSweepResponse>('/security/retention/sweep', { method: 'POST' })
+export function triggerRetentionSweep(): Promise<RetentionSweepResult> {
+  return request<RetentionSweepResult>('/security/retention/sweep', { method: 'POST' }, RetentionSweepResultSchema)
 }
 
 // Users — list, create, delete, reset password, change role.
-export interface UserEntry {
-  username: string
-  role: UserRole
-  has_password: boolean
-  has_active_token: boolean
-}
+// UserEntry — type alias for the generated User schema (contract-first #8).
+// See contracts/components/schemas/User.yaml.
+export type UserEntry = User
 
-export interface CreateUserBody {
-  username: string
-  role: UserRole
-  password: string
-}
-
-export interface CreateUserResponse {
-  username: string
-  role: UserRole
-  warning?: string
-  requires_restart?: boolean
-}
-
-export interface DeleteUserResponse {
-  deleted: true
-  warning?: string
-  requires_restart?: boolean
-}
-
-export interface ResetUserPasswordBody {
-  password: string
-}
-
-export interface ResetUserPasswordResponse {
-  username: string
-  password_reset: true
-  warning?: string
-  requires_restart?: boolean
-}
-
-export interface UpdateUserRoleBody {
-  role: UserRole
-}
-
-export interface UpdateUserRoleResponse {
-  username: string
-  role: UserRole
-  warning?: string
-  requires_restart?: boolean
-}
-
+// UserEntry is the SPA-internal type; the generated User schema is compatible (passthrough).
 export function fetchUsers(): Promise<UserEntry[]> {
-  return request<UserEntry[]>('/users')
+  return request<UserEntry[]>('/users', undefined, z.array(UserSchema) as ZodType<UserEntry[]>)
 }
 
-export async function createUser(body: CreateUserBody): Promise<CreateUserResponse> {
-  const response = await request<CreateUserResponse & { token?: string }>('/users', {
+export async function createUser(body: UserCreateRequest): Promise<UserCreateResponse> {
+  const response = await request<UserCreateResponse & { token?: string }>('/users', {
     method: 'POST',
     body: JSON.stringify(body),
-  })
+  }, UserCreateResponseSchema)
   if ('token' in response) {
     throw new Error('unexpected token in create response')
   }
   return response
 }
 
-export function deleteUser(username: string): Promise<DeleteUserResponse> {
-  return request<DeleteUserResponse>(`/users/${encodeURIComponent(username)}`, { method: 'DELETE' })
+export function deleteUser(username: string): Promise<UserDeleteResponse> {
+  return request<UserDeleteResponse>(`/users/${encodeURIComponent(username)}`, { method: 'DELETE' }, UserDeleteResponseSchema)
 }
 
-export function resetUserPassword(username: string, password: string): Promise<ResetUserPasswordResponse> {
-  return request<ResetUserPasswordResponse>(`/users/${encodeURIComponent(username)}/password`, {
+export function resetUserPassword(username: string, password: string): Promise<UserResetPasswordResponse> {
+  return request<UserResetPasswordResponse>(`/users/${encodeURIComponent(username)}/password`, {
     method: 'PUT',
-    body: JSON.stringify({ password } satisfies ResetUserPasswordBody),
-  })
+    body: JSON.stringify({ password } satisfies UserResetPasswordRequest),
+  }, UserResetPasswordResponseSchema)
 }
 
-export function updateUserRole(username: string, role: UserRole): Promise<UpdateUserRoleResponse> {
-  return request<UpdateUserRoleResponse>(`/users/${encodeURIComponent(username)}/role`, {
+export function updateUserRole(username: string, role: UserRole): Promise<UserRoleChangeResponse> {
+  return request<UserRoleChangeResponse>(`/users/${encodeURIComponent(username)}/role`, {
     method: 'PATCH',
-    body: JSON.stringify({ role } satisfies UpdateUserRoleBody),
-  })
+    body: JSON.stringify({ role } satisfies UserRoleChangeRequest),
+  }, UserRoleChangeResponseSchema)
 }
 
 // ── Exec Proxy ────────────────────────────────────────────────────────────────
-
-export interface ExecProxyStatus {
-  running: boolean
-  enabled: boolean
-  address?: string
-}
+// ExecProxyStatus — re-exported from generated openapi-types (no local body needed).
 
 export function fetchExecProxyStatus(): Promise<ExecProxyStatus> {
-  return request<ExecProxyStatus>('/security/exec-proxy-status')
+  return request<ExecProxyStatus>('/security/exec-proxy-status', undefined, ExecProxyStatusSchema)
 }
 
 
 // ── Agent Tools ───────────────────────────────────────────────────────────────
 
-/**
- * Central registry tool entry (FR-027, FR-029).
- * Replaces the narrower BuiltinTool shape — includes a source discriminator
- * so the UI can badge MCP tools differently from builtin ones.
- */
-export interface RegistryTool {
-  name: string
-  scope: 'system' | 'core' | 'general'
-  category: string
-  description: string
-  /** Origin of the tool. 'builtin' = compiled-in Go tool; 'mcp' = MCP server tool. */
-  source: 'builtin' | 'mcp'
-}
+// RegistryTool — type alias for ToolRegistryEntry (contract-first #8).
+// Central registry tool entry (FR-027, FR-029). Includes a source discriminator
+// so the UI can badge MCP tools differently from builtin ones.
+// See contracts/components/schemas/ToolRegistryEntry.yaml.
+export type RegistryTool = ToolRegistryEntry
 
 /** Backward-compat alias — existing callers that reference BuiltinTool still work. */
 export type BuiltinTool = RegistryTool
 
-export interface AgentToolsCfg {
-  builtin: {
-    default_policy?: 'allow' | 'ask' | 'deny'
-    policies?: Record<string, 'allow' | 'ask' | 'deny'>
-  }
-  mcp?: { servers: { id: string; tools?: string[] }[] }
-}
+// AgentToolsCfg — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/AgentToolsCfg.yaml.
 
-/**
- * Per-tool entry returned by GET /agents/{id}/tools (FR-086, MAJ-008).
- * Exposes both the configured policy and the effective (post-fence) policy
- * so the UI can display policy downgrades.
- */
-export interface AgentToolEntry {
-  name: string
-  configured_policy: 'allow' | 'ask' | 'deny'
-  effective_policy: 'allow' | 'ask' | 'deny'
-  /** True when the tool is admin-required and the agent type is 'custom' — policy was downgraded to 'ask'. */
-  fence_applied: boolean
-  /** True when the tool requires admin approval regardless of configured policy. */
-  requires_admin_ask: boolean
-}
+// AgentToolEntry — re-exported from generated openapi-types (no local body needed).
 
 /** Fetch all tools from the central registry (FR-027). Includes both builtin and MCP tools. */
 export function fetchRegistryTools(): Promise<RegistryTool[]> {
-  return request<RegistryTool[]>('/tools')
+  return request<RegistryTool[]>('/tools', undefined, z.array(ToolRegistryEntrySchema) as ZodType<RegistryTool[]>)
 }
 
 /** Backward-compat alias — callers that used fetchBuiltinTools() still work. */
 export const fetchBuiltinTools = fetchRegistryTools
 
 export function fetchMcpServersForAgent(): Promise<McpServer[]> {
-  return request<McpServer[]>('/mcp-servers')
+  return request<McpServer[]>('/mcp-servers', undefined, z.array(McpServerSchema) as ZodType<McpServer[]>)
 }
 
-export function fetchAgentTools(agentId: string): Promise<{ config: AgentToolsCfg; tools: AgentToolEntry[] }> {
-  return request<{ config: AgentToolsCfg; tools: AgentToolEntry[] }>(`/agents/${encodeURIComponent(agentId)}/tools`)
+// AgentToolsResponse — imported from generated openapi-types (contract-first #8).
+// AgentToolsResponseSchema — imported from generated schemas (contract-first #8).
+export function fetchAgentTools(agentId: string): Promise<AgentToolsResponse> {
+  return request<AgentToolsResponse>(`/agents/${encodeURIComponent(agentId)}/tools`, undefined, AgentToolsResponseSchema as ZodType<AgentToolsResponse>)
 }
 
-export function updateAgentTools(agentId: string, cfg: AgentToolsCfg): Promise<{ config: AgentToolsCfg; tools: AgentToolEntry[] }> {
-  return request<{ config: AgentToolsCfg; tools: AgentToolEntry[] }>(`/agents/${encodeURIComponent(agentId)}/tools`, {
+export function updateAgentTools(agentId: string, cfg: AgentToolsCfg): Promise<AgentToolsResponse> {
+  return request<AgentToolsResponse>(`/agents/${encodeURIComponent(agentId)}/tools`, {
     method: 'PUT',
     body: JSON.stringify(cfg),
-  })
+  }, AgentToolsResponseSchema as ZodType<AgentToolsResponse>)
 }
 
 /**
@@ -1544,6 +1822,7 @@ export function updateAgentTools(agentId: string, cfg: AgentToolsCfg): Promise<{
  * FR-011, FR-082. Throws with status code prefix on non-2xx (e.g. "403: ...").
  */
 export function postToolApproval(approvalId: string, action: 'approve' | 'deny' | 'cancel'): Promise<void> {
+  // no-schema: void response; POST returns 204 No Content.
   return request<void>(`/tool-approvals/${encodeURIComponent(approvalId)}`, {
     method: 'POST',
     body: JSON.stringify({ action }),
@@ -1551,44 +1830,32 @@ export function postToolApproval(approvalId: string, action: 'approve' | 'deny' 
 }
 
 // ── Global Tool Policies ──────────────────────────────────────────────────────
-
-export interface GlobalToolPolicies {
-  default_policy: 'allow' | 'ask' | 'deny'
-  policies: Record<string, 'allow' | 'ask' | 'deny'>
-}
+// GlobalToolPolicies — re-exported from generated openapi-types (no local body needed).
 
 export function fetchGlobalToolPolicies(): Promise<GlobalToolPolicies> {
-  return request<GlobalToolPolicies>('/security/tool-policies')
+  return request<GlobalToolPolicies>('/security/tool-policies', undefined, GlobalToolPoliciesSchema)
 }
 
 export function updateGlobalToolPolicies(cfg: GlobalToolPolicies): Promise<GlobalToolPolicies> {
   return request<GlobalToolPolicies>('/security/tool-policies', {
     method: 'PUT',
     body: JSON.stringify(cfg),
-  })
+  }, GlobalToolPoliciesSchema)
 }
 
 // ── Sandbox Status ────────────────────────────────────────────────────────────
-
-export interface SandboxStatus {
-  backend: string
-  available: boolean
-  // kernel_level reports the CAPABILITY — the backend can enforce at the
-  // kernel level if Apply() is called. policy_applied reports whether the
-  // enforcement is actually live on this process. A kernel-capable backend
-  // without policy_applied has status notes explaining the gap.
-  kernel_level: boolean
-  policy_applied: boolean
-  abi_version?: number
-  // issue_ref is set by the server when a known kernel incompatibility is flagged
-  // (currently ABI v4+). Do NOT hard-code the literal issue number in the UI.
-  issue_ref?: string
-  blocked_syscalls?: string[]
-  seccomp_enabled: boolean
-  landlock_features?: string[]
-  notes?: string[]
-}
+// SandboxStatus — re-exported from generated openapi-types (no local body needed).
+// The generated schema is a superset of the previous hand-written shape.
 
 export function fetchSandboxStatus(): Promise<SandboxStatus> {
-  return request<SandboxStatus>('/security/sandbox-status')
+  return request<SandboxStatus>('/security/sandbox-status', undefined, SandboxStatusSchema)
+}
+
+// ── Tool Results (lazy fetch for ToolResultRef sentinels) ─────────────────────
+// Endpoint: GET /api/v1/sessions/{session_id}/tool-results/{ref}
+// Session-scoped: a ref is only readable in the session that produced it.
+export function fetchToolResult(sessionId: string, ref: string): Promise<unknown> {
+  return request<unknown>(
+    `/sessions/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(ref)}`,
+  )
 }

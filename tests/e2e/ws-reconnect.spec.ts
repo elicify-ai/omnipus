@@ -39,16 +39,50 @@ test(
     const chatInput = page.locator('textarea').first()
     await expect(chatInput).toBeEnabled({ timeout: 15_000 })
 
-    // Step 1: Kill the WebSocket connection from within the browser.
-    // We close all open WebSocket instances via page.evaluate. This simulates
-    // a network drop without actually disabling the network (so the reconnect
-    // logic can immediately re-establish).
+    // Step 1a: Stub the WebSocket constructor so any reconnect attempt
+    // produces a never-opens socket. page.route() does NOT intercept
+    // WebSocket connections, so we patch the constructor in-page. The
+    // override is reverted in step 5 by restoring the real constructor.
     await page.evaluate(() => {
-      // Monkey-patch the WebSocket constructor to track instances is brittle;
-      // instead, dispatch a synthetic 'close' event to the ws.ts connection
-      // manager by finding all WS objects attached to the window and closing them.
-      // If the SPA keeps a reference on window, we can access it that way.
-      // Fallback: directly close any open WebSocket via the global list.
+      const w = window as unknown as {
+        __real_WebSocket?: typeof WebSocket
+        WebSocket: typeof WebSocket
+      }
+      w.__real_WebSocket = w.WebSocket
+      class StubWebSocket {
+        readyState = 0
+        url: string
+        onopen: ((ev: Event) => void) | null = null
+        onclose: ((ev: CloseEvent) => void) | null = null
+        onerror: ((ev: Event) => void) | null = null
+        onmessage: ((ev: MessageEvent) => void) | null = null
+        constructor(url: string) {
+          this.url = url
+        }
+        send() {}
+        close() {
+          this.readyState = 3
+          if (this.onclose) {
+            const ev = new CloseEvent('close', { code: 1006, reason: 'stubbed' })
+            this.onclose(ev)
+          }
+        }
+        addEventListener() {}
+        removeEventListener() {}
+        dispatchEvent() { return true }
+      }
+      ;(StubWebSocket as unknown as typeof WebSocket & { CONNECTING: number; OPEN: number; CLOSING: number; CLOSED: number }).CONNECTING = 0
+      ;(StubWebSocket as unknown as typeof WebSocket & { CONNECTING: number; OPEN: number; CLOSING: number; CLOSED: number }).OPEN = 1
+      ;(StubWebSocket as unknown as typeof WebSocket & { CONNECTING: number; OPEN: number; CLOSING: number; CLOSED: number }).CLOSING = 2
+      ;(StubWebSocket as unknown as typeof WebSocket & { CONNECTING: number; OPEN: number; CLOSING: number; CLOSED: number }).CLOSED = 3
+      w.WebSocket = StubWebSocket as unknown as typeof WebSocket
+    })
+
+    // Step 1b: Kill the WebSocket connection from within the browser via the
+    // ws.ts-exposed __ws_instances registry. This simulates a network drop
+    // without actually disabling the network so the visibilitychange-driven
+    // reconnect logic still fires (and is blocked by the WebSocket stub).
+    await page.evaluate(() => {
       const wsList = (window as unknown as { __ws_instances?: WebSocket[] }).__ws_instances
       if (wsList) {
         for (const ws of wsList) {
@@ -114,9 +148,24 @@ test(
       ].join(' '),
     ).toBeVisible()
 
-    // Step 5: Wait for the connection to restore (WS reconnect should happen
-    // quickly since the gateway is still running).
-    // The chat input re-enables when isConnected=true.
+    // Step 5: Restore the real WebSocket constructor and force the in-flight
+    // stub socket to close so the visibilitychange handler creates a fresh
+    // (real) one.
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __real_WebSocket?: typeof WebSocket
+        WebSocket: typeof WebSocket
+        __ws_instances?: WebSocket[]
+      }
+      if (w.__real_WebSocket) w.WebSocket = w.__real_WebSocket
+      for (const ws of w.__ws_instances ?? []) {
+        try { ws.close(1000, 'restore') } catch { /* ignore */ }
+      }
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get() { return 'hidden' } })
+      document.dispatchEvent(new Event('visibilitychange'))
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get() { return 'visible' } })
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
     await expect(chatInput).toBeEnabled({ timeout: 20_000 })
 
     // Step 6: Assert the banner clears once the connection is restored.

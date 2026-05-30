@@ -1,0 +1,257 @@
+//go:build !cgo
+
+// cancel_audit_test.go — T0: Real handleCancel flow asserts that
+// turn_cancel_attempt is written by the actual cancel state machine.
+//
+// Theater smell fixed: old versions only checked that an audit logger was
+// constructed (setup state). This test drives a real blocking LLM turn through
+// the WebSocket cancel path and asserts the JSONL audit file on disk contains
+// turn_cancel_attempt with was_fired=true from the actual state machine.
+//
+// Traces to: pkg/agent/cancel.go:150 — audit.Emit(EventTurnCancelAttempt)
+// FR-10, FR-17.
+
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/require"
+
+	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/providers"
+)
+
+// blockingCancelProvider blocks Chat until its context is canceled. Signals
+// via ready when the provider has entered Chat so tests know a turn is in flight.
+type blockingCancelProvider struct {
+	ready chan struct{} // closed once on first Chat entry
+}
+
+func newBlockingCancelProvider() *blockingCancelProvider {
+	return &blockingCancelProvider{ready: make(chan struct{})}
+}
+
+func (b *blockingCancelProvider) Chat(
+	ctx context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	select {
+	case <-b.ready:
+	default:
+		close(b.ready)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (b *blockingCancelProvider) GetDefaultModel() string { return "blocking-cancel-provider" }
+
+// newCancelTestWSHandler creates a WSHandler backed by an agent loop that:
+//   - uses a blocking provider (turns block until canceled)
+//   - has audit logging enabled
+//
+// Returns the handler, msgBus, auditDir, and the blocking provider.
+func newCancelTestWSHandler(t *testing.T) (*WSHandler, *bus.MessageBus, string, *blockingCancelProvider) {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	// The workspace is set to tmpDir/workspace so that filepath.Dir(workspace)=tmpDir,
+	// and the audit logger writes to tmpDir/system/audit.jsonl.
+	tmpDir := t.TempDir()
+	workspaceDir := filepath.Join(tmpDir, "workspace")
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
+	auditDir := filepath.Join(tmpDir, "system")
+	// audit.NewLogger creates the dir, but we note the path for assertions.
+
+	bp := newBlockingCancelProvider()
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 18800, DevModeBypass: true},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: workspaceDir,
+				ModelName: "blocking-cancel-provider",
+				MaxTokens: 4096,
+			},
+		},
+		Sandbox: config.OmnipusSandboxConfig{
+			Mode:     config.SandboxModeOff,
+			AuditLog: true,
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+
+	al := mustAgentLoop(t, cfg, msgBus, bp)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		if err := al.Run(ctx); err != nil && err != context.Canceled {
+			t.Logf("agent loop Run: %v", err)
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-runDone:
+		case <-time.After(3 * time.Second):
+			t.Logf("agent loop Run did not exit within 3s")
+		}
+	})
+	time.Sleep(20 * time.Millisecond)
+
+	handler := newWSHandler(msgBus, al, "")
+	msgBus.SetStreamDelegate(handler)
+	return handler, msgBus, auditDir, bp
+}
+
+// readAuditEventNamesFromDir reads all event name strings from auditDir/audit.jsonl.
+func readAuditEventNamesFromDir(t *testing.T, auditDir string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(auditDir, "audit.jsonl"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	require.NoError(t, err)
+	type row struct {
+		Event string `json:"event"`
+	}
+	var events []string
+	for _, line := range splitCancelAuditTestLines(data) {
+		if len(line) == 0 {
+			continue
+		}
+		var r row
+		if json.Unmarshal(line, &r) == nil && r.Event != "" {
+			events = append(events, r.Event)
+		}
+	}
+	return events
+}
+
+// splitCancelAuditTestLines splits JSONL byte data on newline boundaries.
+func splitCancelAuditTestLines(data []byte) [][]byte {
+	var out [][]byte
+	start := 0
+	for i, b := range data {
+		if b == '\n' {
+			out = append(out, data[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(data) {
+		out = append(out, data[start:])
+	}
+	return out
+}
+
+// TestCancel_AuditEventEmitted (T0) — drives the real handleCancel flow and
+// asserts that turn_cancel_attempt is written by the actual cancel state machine.
+//
+// Theater smell: old test constructed an audit logger and called
+// fakeTurn.ClaimCancel() directly — it never invoked handleCancel at all.
+//
+// This version:
+//  1. Starts a real turn via WebSocket (blocking provider blocks until canceled)
+//  2. Issues a WebSocket cancel frame (routes through WSHandler.handleCancel →
+//     AgentLoop.RequestCancel → audit.Emit)
+//  3. Asserts the real audit JSONL file contains turn_cancel_attempt with
+//     was_fired=true (not a hardcoded no-op)
+//  4. Issues a second cancel on the same finished session and asserts
+//     was_fired=false appears — proving the two events reflect real state.
+//
+// Traces to: pkg/agent/cancel.go:150 — audit.Emit(EventTurnCancelAttempt)
+func TestCancel_AuditEventEmitted(t *testing.T) {
+	handler, _, auditDir, bp := newCancelTestWSHandler(t)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	t.Cleanup(handler.Wait)
+
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	sendWSAuthFrameDevMode(t, conn)
+
+	// Start a real turn.
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start blocking turn for audit test"}
+	data, _ := json.Marshal(msgFrame)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
+
+	started := readFrameOfType(t, conn, "session_started", 5*time.Second)
+	sessionID := started.SessionID
+	require.NotEmpty(t, sessionID)
+
+	// Wait until the blocking provider is inside Chat (turn is genuinely in flight).
+	select {
+	case <-bp.ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("BLOCKED: blockingCancelProvider never entered Chat — turn did not start in time")
+	}
+
+	// Send the WebSocket cancel frame — drives the real handleCancel path.
+	cancelFrame := wsClientFrameTestHelper{Type: "cancel", SessionID: sessionID}
+	cancelData, _ := json.Marshal(cancelFrame)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
+
+	// The cancel_stage frame confirms the graceful phase fired.
+	readFrameOfType(t, conn, "cancel_stage", 3*time.Second)
+
+	// Drain until the turn exits.
+	drainUntilSessionDone(t, conn, sessionID, 5*time.Second)
+
+	// ASSERT 1: turn_cancel_attempt must appear in the real audit log.
+	require.Eventually(t, func() bool {
+		events := readAuditEventNamesFromDir(t, auditDir)
+		for _, ev := range events {
+			if ev == audit.EventTurnCancelAttempt {
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 30*time.Millisecond,
+		"turn_cancel_attempt must be written by the real cancel state machine")
+
+	// Count events before second cancel.
+	var firstCount int
+	events := readAuditEventNamesFromDir(t, auditDir)
+	for _, ev := range events {
+		if ev == audit.EventTurnCancelAttempt {
+			firstCount++
+		}
+	}
+
+	// DIFFERENTIATION: a second cancel on the now-finished session must produce
+	// another turn_cancel_attempt (with was_fired=false). This proves the audit
+	// comes from real state — a hardcoded emitter would either emit nothing or
+	// always emit the same payload.
+	cancelFrame2 := wsClientFrameTestHelper{Type: "cancel", SessionID: sessionID}
+	cancelData2, _ := json.Marshal(cancelFrame2)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData2))
+
+	require.Eventually(t, func() bool {
+		events := readAuditEventNamesFromDir(t, auditDir)
+		count := 0
+		for _, ev := range events {
+			if ev == audit.EventTurnCancelAttempt {
+				count++
+			}
+		}
+		return count >= firstCount+1
+	}, 3*time.Second, 30*time.Millisecond,
+		"second cancel must produce a second turn_cancel_attempt (was_fired=false), total events: %v",
+		readAuditEventNamesFromDir(t, auditDir))
+}

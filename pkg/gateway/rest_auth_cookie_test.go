@@ -269,7 +269,7 @@ func TestHandleRegisterAdmin_IssuesSessionCookie(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// #70c — HandleLogout clears both cookies 
+// #70c — HandleLogout clears both cookies
 // BDD: Given an authenticated user,
 // When HandleLogout is called,
 // Then both omnipus-session and csrf cookies are revoked (MaxAge ≤ 0).

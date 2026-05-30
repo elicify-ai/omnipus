@@ -1,0 +1,15 @@
+title: RestoreBackupRequest
+description: >
+  Request body for POST /api/v1/restore. Extracts a backup tar.gz archive over
+  ~/.omnipus/, skipping config.json to preserve current settings.
+type: object
+required:
+  - filename
+additionalProperties: false
+properties:
+  filename:
+    type: string
+    description: >
+      Name of the backup file (without path). Must not contain path
+      separators or traversal sequences. Must end with .tar.gz.
+    example: "omnipus-backup-20260516T103000Z.tar.gz"

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/routing"
@@ -178,6 +179,30 @@ func (al *AgentLoop) Steer(msg providers.Message) error {
 		agentID = ts.agentID
 	}
 	return al.enqueueSteeringMessage(scope, agentID, msg)
+}
+
+// enqueueSteeringFromMessage redirects an inbound bus message into the
+// steering queue for the scope that owns the currently running turn for
+// this message's chat. Used by sessionWorker.enqueue when a same-scope
+// message arrives while the worker is mid-turn, so the agent auto-continues
+// with the late-append text rather than starting a fresh turn after.
+//
+// Returns an error if the routing target cannot be resolved, no turn is
+// active for the scope, or the steering queue is full (caller falls back
+// to inbox dispatch in that case).
+func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
+	route, ag, err := al.resolveMessageRoute(msg)
+	if err != nil || ag == nil {
+		return fmt.Errorf("enqueueSteeringFromMessage: route resolution failed: %w", err)
+	}
+	// The steering queue uses route.SessionKey ("agent:<id>:<sid>") — the same
+	// key that runTurn registered the active turn under in activeTurnStates.
+	pmsg := providers.Message{
+		Role:    "user",
+		Content: msg.Content,
+		Media:   append([]string(nil), msg.Media...),
+	}
+	return al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg)
 }
 
 func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
@@ -376,37 +401,156 @@ func (al *AgentLoop) InterruptGraceful(hint string) error {
 	return nil
 }
 
-// InterruptSession gracefully cancels the turn that belongs to the given sessionID.
-// Unlike InterruptGraceful, this targets only the one session rather than the first
-// active turn found, preventing two parallel sessions from being cancelled together.
-func (al *AgentLoop) InterruptSession(sessionID, hint string) error {
-	if sessionID == "" {
-		return fmt.Errorf("empty session_id")
-	}
-	var target *turnState
+// collectDescendantTurnIDs walks activeTurnStates and returns the turn IDs of
+// every turnState whose transcriptSessionID matches sessionID. This is the
+// canonical session-match predicate shared by InterruptSession and
+// RequestCancel so both callers produce an identical descendants list.
+//
+// The returned slice is freshly allocated; modifying it does not affect the
+// sync.Map. Returns nil (not an error) when no matching turns are found.
+func (al *AgentLoop) collectDescendantTurnIDs(sessionID string) []string {
+	var ids []string
 	al.activeTurnStates.Range(func(_, value any) bool {
 		ts := value.(*turnState)
 		if ts.transcriptSessionID == sessionID {
-			target = ts
-			return false // stop
+			ids = append(ids, ts.turnID)
 		}
 		return true
 	})
-	if target == nil {
-		return fmt.Errorf("no active turn for session %s", sessionID)
+	return ids
+}
+
+// InterruptSession gracefully cancels the parent turn AND every sub-turn sharing
+// the given sessionID (transcriptSessionID match). FR-6, FR-10, FR-12a, FR-15.
+//
+// The cascade walks activeTurnStates and, for each matching turnState, spawns a
+// goroutine that calls requestGracefulInterrupt AND providerCancel in parallel so
+// the in-flight LLM HTTP request is aborted immediately (FR-12a) rather than
+// waiting for the stream to drain naturally within the 3s graceful window.
+//
+// Returns the list of turn IDs that received the cancel signal (parent + sub-turns).
+// The cancel handler includes this in the turn_canceled audit/transcript entry.
+// Returns an error only if sessionID is empty. A session with no active turns is
+// not an error — cancel handlers treat it as a no-op (was_fired=false).
+func (al *AgentLoop) InterruptSession(sessionID, hint string) (descendants []string, err error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("empty session_id")
 	}
-	if !target.requestGracefulInterrupt(hint) {
-		return fmt.Errorf("turn %s cannot accept graceful interrupt", target.turnID)
+
+	// Collect all matching turn states before spawning goroutines so we hold the
+	// sync.Map range lock for as short a time as possible.
+	var matches []*turnState
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts := value.(*turnState)
+		if ts.transcriptSessionID == sessionID {
+			matches = append(matches, ts)
+			descendants = append(descendants, ts.turnID)
+		}
+		return true // continue walking — cascade to ALL matches (parent + sub-turns)
+	})
+
+	if len(matches) == 0 {
+		return nil, nil // no active turn — caller emits turn_cancel_attempt{was_fired:false}
 	}
-	al.emitEvent(
-		EventKindInterruptReceived,
-		target.eventMeta("InterruptSession", "turn.interrupt.received"),
-		InterruptReceivedPayload{
-			Kind:    InterruptKindGraceful,
-			HintLen: len(hint),
-		},
-	)
-	return nil
+
+	var wg sync.WaitGroup
+	for _, ts := range matches {
+		// capture loop variable
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					logger.ErrorCF("agent", "Panic in InterruptSession goroutine",
+						map[string]any{"panic": r, "turn_id": ts.turnID})
+				}
+			}()
+			// FR-12a: call providerCancel first so the in-flight HTTP stream is
+			// aborted immediately, before the graceful-interrupt flag is polled.
+			ts.mu.Lock()
+			pc := ts.providerCancel
+			ts.mu.Unlock()
+			if pc != nil {
+				pc()
+			}
+			if ts.requestGracefulInterrupt(hint) {
+				al.emitEvent(
+					EventKindInterruptReceived,
+					ts.eventMeta("InterruptSession", "turn.interrupt.received"),
+					InterruptReceivedPayload{
+						Kind:    InterruptKindGraceful,
+						HintLen: len(hint),
+					},
+				)
+			}
+		}()
+	}
+	wg.Wait()
+	return descendants, nil
+}
+
+// InterruptSessionHard escalates a previously-graceful cancel to a hard abort for
+// every turn matching sessionID. Called at t=3s after InterruptSession per FR-11.
+// See InterruptHard for the legacy single-turn path; this function is session-scoped.
+//
+// Returns the list of turn IDs that received the hard-abort signal.
+func (al *AgentLoop) InterruptSessionHard(sessionID, hint string) (descendants []string, err error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("empty session_id")
+	}
+
+	var matches []*turnState
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts := value.(*turnState)
+		if ts.transcriptSessionID == sessionID {
+			matches = append(matches, ts)
+			descendants = append(descendants, ts.turnID)
+		}
+		return true
+	})
+
+	if len(matches) == 0 {
+		return nil, nil
+	}
+
+	var wg sync.WaitGroup
+	for _, ts := range matches {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					logger.ErrorCF("agent", "Panic in InterruptSessionHard goroutine",
+						map[string]any{"panic": r, "turn_id": ts.turnID})
+				}
+			}()
+			// requestHardAbort sets hardAbort and fires providerCancel+turnCancel
+			// atomically (see turn.go:requestHardAbort). The else branch executes
+			// only when hardAbort was already true — meaning a concurrent caller
+			// already flipped the flag and fired providerCancel. We re-fire it here
+			// defensively in case its turnCancel pointer was reset between the two
+			// calls (e.g. a new turn started on the same turnState slot).
+			if !ts.requestHardAbort() {
+				// Concurrent caller already set hardAbort — re-fire providerCancel
+				// in case the pointer was replaced since that call.
+				ts.mu.Lock()
+				pc := ts.providerCancel
+				ts.mu.Unlock()
+				if pc != nil {
+					pc()
+				}
+			}
+			al.emitEvent(
+				EventKindInterruptReceived,
+				ts.eventMeta("InterruptSessionHard", "turn.interrupt.received"),
+				InterruptReceivedPayload{
+					Kind: InterruptKindHard,
+				},
+			)
+		}()
+	}
+	wg.Wait()
+	return descendants, nil
 }
 
 func (al *AgentLoop) InterruptHard() error {
@@ -429,6 +573,54 @@ func (al *AgentLoop) InterruptHard() error {
 	return nil
 }
 
+// InterruptByChannelChat gracefully cancels the active root turn (depth==0)
+// whose channel and chatID match the supplied values, then cascades to all
+// sub-turns that share the same transcriptSessionID via InterruptSession.
+//
+// This is the correct cancellation path for Tier B (text-parsing) channels:
+// inbound messages from those channels carry no explicit SessionID so a direct
+// InterruptSession call would match nothing. Sub-turns inherit their parent's
+// transcriptSessionID but NOT channel/chatID (they are created with empty
+// values), so matching by channel+chatID alone misses them. The two-step
+// strategy — find root by channel+chatID, then cascade by sessionID — covers
+// both parent and all sub-turns.
+//
+// Returns nil whether or not any matching turn was found — "no active turn" is
+// a valid no-op. Returns a non-nil error only when channel or chatID is empty.
+func (al *AgentLoop) InterruptByChannelChat(channel, chatID, hint string) error {
+	if channel == "" || chatID == "" {
+		return fmt.Errorf("InterruptByChannelChat: channel and chatID must be non-empty")
+	}
+
+	// Step 1: find the root turn (depth==0) matching channel+chatID and extract
+	// its transcriptSessionID. We stop at the first match because a given
+	// channel+chatID pair can have at most one active root turn at a time.
+	var sid string
+	al.activeTurnStates.Range(func(_, value any) bool {
+		ts := value.(*turnState)
+		ts.mu.RLock()
+		ch := ts.channel
+		cid := ts.chatID
+		depth := ts.depth
+		ts.mu.RUnlock()
+		if ch == channel && cid == chatID && depth == 0 {
+			sid = ts.transcriptSessionID
+			return false // stop walking — found the root
+		}
+		return true
+	})
+
+	if sid == "" {
+		// No active root turn for this channel+chatID — valid no-op.
+		return nil
+	}
+
+	// Step 2: cascade via InterruptSession which covers parent + all sub-turns
+	// that share the same transcriptSessionID.
+	_, err := al.InterruptSession(sid, hint)
+	return err
+}
+
 // ====================== SubTurn Result Polling ======================
 
 // dequeuePendingSubTurnResults polls the SubTurn result channel for the given
@@ -447,10 +639,7 @@ func (al *AgentLoop) dequeuePendingSubTurnResults(sessionKey string) []*tools.To
 	var results []*tools.ToolResult
 	for {
 		select {
-		case result, ok := <-ts.pendingResults:
-			if !ok {
-				return results
-			}
+		case result := <-ts.pendingResults:
 			if result != nil {
 				results = append(results, result)
 			}

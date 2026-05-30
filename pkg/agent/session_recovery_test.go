@@ -11,7 +11,7 @@
 //   tool_result (gateway was SIGKILL'd while paused awaiting approval),
 // And no in-process pending approval matches the orphaned tool_call_id,
 // When the gateway restarts and the session is loaded,
-// Then a synthetic entry {role: "system", type: "turn_cancelled_restart",
+// Then a synthetic entry {role: "system", type: "turn_canceled_restart",
 //   tool_call_id: <orphan>, reason: "ungraceful_shutdown_recovery"} is appended,
 // And an audit event tool.policy.ask.denied with reason: "restart" is emitted at session-load time,
 // And the orphaned turn is not resumed; the next user message starts a fresh turn.
@@ -232,7 +232,7 @@ func TestRecovery_RecoverOrphaned_AppendsSyntheticEntry(t *testing.T) {
 	fullHistory := store.GetHistory(sessionKey)
 	foundSynthetic := false
 	for _, msg := range fullHistory {
-		if msg.Role == "system" && strings.Contains(msg.Content, "turn_cancelled_restart") {
+		if msg.Role == "system" && strings.Contains(msg.Content, "turn_canceled_restart") {
 			foundSynthetic = true
 			assert.Contains(t, msg.Content, toolCallID,
 				"synthetic entry must contain the orphaned tool_call_id")
@@ -241,7 +241,7 @@ func TestRecovery_RecoverOrphaned_AppendsSyntheticEntry(t *testing.T) {
 		}
 	}
 	assert.True(t, foundSynthetic,
-		"session transcript must contain a synthetic turn_cancelled_restart entry")
+		"session transcript must contain a synthetic turn_canceled_restart entry")
 
 	// 3. Audit event must have been emitted.
 	// Close the logger to flush pending writes before reading the file.
@@ -330,12 +330,12 @@ func TestRecovery_RecoverOrphaned_DifferentInputsDifferentOutputs(t *testing.T) 
 
 	var syn1, syn2 string
 	for _, m := range hist1 {
-		if m.Role == "system" && strings.Contains(m.Content, "turn_cancelled_restart") {
+		if m.Role == "system" && strings.Contains(m.Content, "turn_canceled_restart") {
 			syn1 = m.Content
 		}
 	}
 	for _, m := range hist2 {
-		if m.Role == "system" && strings.Contains(m.Content, "turn_cancelled_restart") {
+		if m.Role == "system" && strings.Contains(m.Content, "turn_canceled_restart") {
 			syn2 = m.Content
 		}
 	}

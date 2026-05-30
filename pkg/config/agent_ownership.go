@@ -1,5 +1,5 @@
-// Package config provides the Omnipus configuration data model.
-// This file implements agent ownership helpers.
+// agent_ownership.go implements agent ownership helpers.
+
 package config
 
 import "errors"
@@ -13,7 +13,6 @@ var ErrAgentOrphan = errors.New("agent has no owner; reassign via PATCH /api/v1/
 // IsSystemAgent reports whether agent a is a system-level agent.
 // System agents (type "system" or "core") are accessible to any authenticated
 // user regardless of ownership. They must never have an OwnerUsername set.
-//
 func IsSystemAgent(a *AgentConfig) bool {
 	return a.Type == AgentTypeSystem || a.Type == AgentTypeCore
 }
@@ -21,7 +20,6 @@ func IsSystemAgent(a *AgentConfig) bool {
 // RequiresOwner reports whether agent a must have a non-empty OwnerUsername.
 // Custom agents (and unclassified agents that default to custom) require an
 // owner. System and core agents do not.
-//
 func RequiresOwner(a *AgentConfig) bool {
 	return !IsSystemAgent(a)
 }

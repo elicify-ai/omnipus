@@ -1,0 +1,16 @@
+type: object
+description: >
+  Response from GET /mcp-servers/{id}/tools. Returns the list of tool names
+  exposed by a specific MCP server.
+additionalProperties: false
+required:
+  - tools
+properties:
+  tools:
+    type: array
+    items:
+      type: string
+    description: List of tool names exposed by the MCP server.
+    example:
+      - "search"
+      - "fetch"

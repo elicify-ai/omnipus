@@ -37,7 +37,7 @@ import (
 //
 // A "torn output" is defined as the replacer returning a string that contains
 // a partial secret (e.g., "sk-part" instead of "[FILTERED]") — indicating the
-// replacer was called with a half-initialised cache.
+// replacer was called with a half-initialized cache.
 //
 // Traces to: quizzical-marinating-frog.md — Wave V2.G stage 3, item 1
 func TestSensitiveCache_ConcurrentReadWriteNoPanic(t *testing.T) {
@@ -82,7 +82,7 @@ func TestSensitiveCache_ConcurrentReadWriteNoPanic(t *testing.T) {
 					r := cfg.SensitiveDataReplacer()
 					if r == nil {
 						// nil replacer is not expected after the first RegisterSensitiveValues
-						// call, but the cache lazily initialises on first read so nil is
+						// call, but the cache lazily initializes on first read so nil is
 						// only possible before any secret has been registered.
 						continue
 					}

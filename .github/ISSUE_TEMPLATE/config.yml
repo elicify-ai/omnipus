@@ -1,0 +1,29 @@
+# Configuration for the "New issue" landing page.
+# Reference: https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/configuring-issue-templates-for-your-repository
+
+blank_issues_enabled: false
+
+contact_links:
+  - name: 🔐 Security vulnerability (private)
+    url: https://github.com/elicify-ai/omnipus/security/advisories/new
+    about: Report a vulnerability privately via GitHub Security Advisory. Do not open a public issue.
+
+  - name: 💬 Question or discussion
+    url: https://github.com/elicify-ai/omnipus/discussions
+    about: Ask how to use Omnipus, share what you built, or propose ideas before opening a feature request.
+
+  - name: 📚 Documentation
+    url: https://github.com/elicify-ai/omnipus/blob/main/docs/README.md
+    about: How-to guides, architecture, troubleshooting. The docs index lists everything.
+
+  - name: 🗺️ Roadmap
+    url: https://github.com/elicify-ai/omnipus/blob/main/ROADMAP.md
+    about: Current release plan (v0.1, v0.2, v0.3 / 1.0, post-1.0).
+
+  - name: 🤝 Contributing
+    url: https://github.com/elicify-ai/omnipus/blob/main/CONTRIBUTING.md
+    about: Development setup, contract-first wire formats, the CLA, and the PR workflow.
+
+  - name: 📧 Commercial / partnership / press
+    url: mailto:contact@elicify.ai
+    about: Anything that doesn't fit a public channel — email elicify.ai Pte. Ltd.

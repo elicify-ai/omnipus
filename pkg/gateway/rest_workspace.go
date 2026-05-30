@@ -40,7 +40,6 @@ import (
 	"strings"
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
-	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
@@ -65,7 +64,7 @@ const workspaceStreamingThreshold = 1 << 20 // 1,048,576 bytes
 //     FR-023a (the dropped Origin middleware on /dev/).
 //   - frame-ancestors '<mainOrigin>' — only the SPA's own origin may
 //     embed served content. Falls back to '*' when mainOrigin is empty
-//     (host=0.0.0.0/[::] without public_url set — see FR-007e). Defence
+//     (host=0.0.0.0/[::] without public_url set — see FR-007e). Defense
 //     against T-04 (foreign embed of leaked-token URL).
 //   - base-uri 'none' — forbid <base> tag hijacking
 //   - object-src 'none' — no plugins
@@ -328,15 +327,4 @@ func (a *restAPI) HandleWorkspace(w http.ResponseWriter, r *http.Request) {
 	if _, copyErr := io.Copy(w, f); copyErr != nil {
 		slog.Debug("rest: HandleWorkspace: io.Copy failed", "error", copyErr)
 	}
-}
-
-// workspaceAuthMiddleware wraps the workspace handler with session-cookie-or-
-// bearer auth. Separated so tests can inject a pre-authenticated request
-// without going through the full auth chain.
-//
-// This is a helper used by registerAdditionalEndpoints to compose the final
-// handler. It is intentionally not a method on restAPI so the auth closure
-// captures a stable getCfg function.
-func workspaceAuthMiddleware(getCfg func() *config.Config, h http.HandlerFunc) http.Handler {
-	return middleware.RequireSessionCookieOrBearer(getCfg)(h)
 }

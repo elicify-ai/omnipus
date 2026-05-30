@@ -1,0 +1,33 @@
+title: PromptGuardUpdateResponse
+description: >
+  Response from PUT /api/v1/security/prompt-guard.
+  Returns save status and the currently active level.
+type: object
+required:
+  - saved
+  - requires_restart
+  - applied_level
+additionalProperties: false
+properties:
+  saved:
+    type: boolean
+    description: True when the configuration was successfully persisted to disk.
+    example: true
+  requires_restart:
+    type: boolean
+    description: >
+      False when hot-reload succeeded.
+      True when hot-reload failed (warning will be present).
+    example: false
+  applied_level:
+    type: string
+    description: The prompt guard level now active.
+    enum:
+      - low
+      - medium
+      - high
+    example: medium
+  warning:
+    type: string
+    description: Present when hot-reload failed — config is saved but restart is required.
+    example: config saved to disk but hot-reload failed; restart the gateway to apply

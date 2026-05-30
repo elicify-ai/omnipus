@@ -29,16 +29,16 @@ func makeForwarderTestConn(bufSize int) (*wsConn, chan []byte) {
 }
 
 // drainFrame reads one marshaled frame from the send channel and unmarshals it.
-func drainFrame(t *testing.T, ch chan []byte) wsServerFrame {
+func drainFrame(t *testing.T, ch chan []byte) replayFrameDecoder {
 	t.Helper()
 	select {
 	case data := <-ch:
-		var f wsServerFrame
+		var f replayFrameDecoder
 		require.NoError(t, json.Unmarshal(data, &f), "frame must be valid JSON")
 		return f
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for frame on send channel")
-		return wsServerFrame{}
+		return replayFrameDecoder{}
 	}
 }
 
@@ -259,7 +259,7 @@ func TestSpawn_OrphanSubTurn_EmitsInterruptedAfter5s(t *testing.T) {
 	<-done
 
 	// Drain frames: first is subagent_start, second is synthesized subagent_end.
-	var frames []wsServerFrame
+	var frames []replayFrameDecoder
 	for len(ch) > 0 {
 		frames = append(frames, drainFrame(t, ch))
 	}
@@ -336,7 +336,7 @@ func TestSpawn_SubTurnEnd_AfterParentDone_CancelsWatchdog(t *testing.T) {
 	<-done
 
 	// Drain all frames.
-	var frames []wsServerFrame
+	var frames []replayFrameDecoder
 	for len(ch) > 0 {
 		frames = append(frames, drainFrame(t, ch))
 	}

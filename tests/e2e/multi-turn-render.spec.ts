@@ -112,16 +112,18 @@ test(
     ])
 
     // Step 1: Verify initial render has 2 assistant messages and 2 badges
-    const assistants = page.locator('[data-message-id]:not(.flex-row-reverse)')
+    // Exclude data-status="running" — only count completed messages, not placeholders.
+    const assistants = page.locator('[data-message-id]:not(.flex-row-reverse):not([data-status="running"])')
     await expect(assistants).toHaveCount(2, { timeout: 15_000 })
 
     const badges = page.locator('[data-testid="tool-call-badge"]')
     await expect(badges).toHaveCount(2, { timeout: 10_000 })
 
-    // Capture the message IDs for the two assistant messages
+    // Capture the message IDs for the two completed assistant messages.
+    // Filter out data-status="running" to exclude in-progress placeholders.
     const msgIds = await page.evaluate(() => {
       const msgs = Array.from(document.querySelectorAll('[data-message-id]'))
-        .filter((el) => !el.classList.contains('flex-row-reverse'))
+        .filter((el) => !el.classList.contains('flex-row-reverse') && el.getAttribute('data-status') !== 'running')
       return msgs.map((el) => el.getAttribute('data-message-id'))
     })
 

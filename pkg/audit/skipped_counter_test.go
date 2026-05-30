@@ -13,6 +13,7 @@
 // Each test calls ResetSkippedForTest() at the start so tests are independent
 // when run in the default single-count sequential mode.
 // ResetSkippedForTest is a test-only helper; production code must never call it.
+
 package audit
 
 import (
@@ -82,14 +83,14 @@ func TestSkippedCounter_UnknownTool(t *testing.T) {
 }
 
 // TestSkippedCounter_SnapshotSum verifies that SnapshotSkipped.Total is always
-// the arithmetic sum of the labelled buckets — no hidden state.
+// the arithmetic sum of the labeled buckets — no hidden state.
 func TestSkippedCounter_SnapshotSum(t *testing.T) {
 	ResetSkippedForTest()
 
-	IncSkipped("web_serve", DecisionAllow)  // +1 web_serve_allow
-	IncSkipped("web_serve", DecisionDeny)   // +1 web_serve_deny
-	IncSkipped("unknown_tool", DecisionAllow)    // +1 other
-	IncSkipped("web_serve", "bad_decision") // +1 other
+	IncSkipped("web_serve", DecisionAllow)    // +1 web_serve_allow
+	IncSkipped("web_serve", DecisionDeny)     // +1 web_serve_deny
+	IncSkipped("unknown_tool", DecisionAllow) // +1 other
+	IncSkipped("web_serve", "bad_decision")   // +1 other
 
 	snap := SnapshotSkipped()
 	require.Equal(t, snap.WebServeAllow+snap.WebServeDeny+snap.Other, snap.Total,

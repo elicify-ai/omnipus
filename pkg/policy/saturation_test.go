@@ -1,4 +1,5 @@
 // Tests for the saturation cap validation + evaluation (FR-016).
+
 package policy
 
 import (
@@ -55,8 +56,14 @@ func readEvents(t *testing.T, path string) []string {
 // TestSaturationGuard_NegativeCapRejected — FR-016: a negative cap MUST
 // be rejected at boot with HIGH audit `gateway.config.invalid_value` and
 // a stderr-fallback line; the gateway exits non-zero.
+//
+// NOTE: This test mutates the package-level audit.BootAbortWriter and
+// therefore must not run with t.Parallel(). The companion
+// TestSaturationGuard_NilLogger has the same constraint. Running them in
+// parallel races on the writer pointer — the last test to assign wins,
+// and the earlier test's buffer ends up empty (observed in CI on fast
+// multi-core runners).
 func TestSaturationGuard_NegativeCapRejected(t *testing.T) {
-	t.Parallel()
 	lg, path := newTestLogger(t)
 
 	var stderr bytes.Buffer
@@ -131,8 +138,11 @@ func TestSaturationGuard_PositiveCapAccepted(t *testing.T) {
 // TestSaturationGuard_NilLogger — boot-validation MUST work even when
 // audit is disabled (early-boot path); the stderr fallback still fires
 // for the negative case.
+//
+// NOTE: mutates the package-level audit.BootAbortWriter; cannot run
+// with t.Parallel(). See TestSaturationGuard_NegativeCapRejected above
+// for the race explanation.
 func TestSaturationGuard_NilLogger(t *testing.T) {
-	t.Parallel()
 	var stderr bytes.Buffer
 	prev := audit.BootAbortWriter
 	audit.BootAbortWriter = &stderr
@@ -153,7 +163,7 @@ func TestShouldSaturate(t *testing.T) {
 		cap, pending int
 		want         bool
 	}{
-		{cap: 0, pending: 0, want: false},        // unlimited
+		{cap: 0, pending: 0, want: false},         // unlimited
 		{cap: 0, pending: 1_000_000, want: false}, // unlimited
 		{cap: 64, pending: 0, want: false},
 		{cap: 64, pending: 63, want: false},
