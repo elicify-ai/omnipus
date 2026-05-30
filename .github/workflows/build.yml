@@ -1,6 +1,14 @@
 name: build
 
 on:
+  # Run on every PR so cross-compile breakage (NetBSD, mipsle, riscv64, …)
+  # fails fast in review instead of landing on main. Before 2026-05-30 this
+  # workflow ran only on push:main, which meant `make build-all` was post-
+  # merge-only: any cross-compile regression would sit red on main for
+  # weeks (the NetBSD failure that triggered this change was red for >1
+  # month). Keep `push:main` so a successful merge still produces a build
+  # artifact for the release-drafter / nightly tooling that depends on it.
+  pull_request: { }
   push:
     branches: [ "main" ]
   workflow_dispatch:
