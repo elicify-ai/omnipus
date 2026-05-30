@@ -89,21 +89,62 @@ func defaultModelFor(providerID string) string {
 
 // NewOnboardCommand returns the `omnipus onboard` Cobra command.
 func NewOnboardCommand() *cobra.Command {
-	var homeFlag string
+	var (
+		homeFlag           string
+		providerFlag       string
+		apiKeyFlag         string
+		apiKeyStdin        bool
+		modelFlag          string
+		adminUsernameFlag  string
+		adminPasswordFlag  string
+		adminPasswordStdin bool
+		nonInteractive     bool
+	)
 	cmd := &cobra.Command{
 		Use:   "onboard",
-		Short: "Interactive first-run setup (provider, API key, admin user)",
-		Long: `Interactively configure a fresh Omnipus install.
+		Short: "First-run setup (provider, API key, admin user) — interactive or headless",
+		Long: `Configure a fresh Omnipus install.
 
-Prompts for an LLM provider, API key, default model, and admin
-username/password. The API key is encrypted into credentials.json
-(creating master.key on first run); the admin user and provider entry
-are written to config.json; system/state.json is marked complete.
+Two modes:
+
+  Interactive (default)
+    Prompts for an LLM provider, API key, default model, and admin
+    username/password.
+
+  Headless
+    Pass --non-interactive together with all of --provider, --api-key
+    (or --api-key-stdin), --admin-username, and --admin-password (or
+    --admin-password-stdin). --model is optional and defaults to a
+    sensible per-provider model.
+
+In both modes the API key is encrypted into credentials.json (creating
+master.key on first run); the admin user and provider entry are written
+to config.json; system/state.json is marked complete.
 
 After running this command, ` + "`omnipus gateway`" + ` can boot without
 ` + "`dev_mode_bypass`" + ` and the operator can log in with the credentials
 they just entered. The web onboarding wizard remains available for users
-who prefer a browser.`,
+who prefer a browser.
+
+Examples:
+
+  # interactive
+  omnipus onboard
+
+  # headless (key + password on command line — visible to other users on the box)
+  omnipus onboard --non-interactive \
+    --provider openrouter \
+    --api-key sk-or-v1-... \
+    --model 'z-ai/glm-5v-turbo' \
+    --admin-username admin \
+    --admin-password 'p@ssw0rd!'
+
+  # headless (key + password from stdin — safer)
+  printf 'sk-or-v1-...\np@ssw0rd!\n' | omnipus onboard --non-interactive \
+    --provider openrouter \
+    --api-key-stdin \
+    --admin-username admin \
+    --admin-password-stdin`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home := homeFlag
 			if home == "" {
@@ -116,10 +157,53 @@ who prefer a browser.`,
 				}
 				home = filepath.Join(h, ".omnipus")
 			}
+			if nonInteractive {
+				in, err := inputFromFlags(cmd.InOrStdin(), inputFlags{
+					providerID:         providerFlag,
+					apiKey:             apiKeyFlag,
+					apiKeyStdin:        apiKeyStdin,
+					model:              modelFlag,
+					username:           adminUsernameFlag,
+					password:           adminPasswordFlag,
+					adminPasswordStdin: adminPasswordStdin,
+				})
+				if err != nil {
+					return err
+				}
+				return RunHeadless(home, defaultIO(cmd), in)
+			}
 			return Run(home, defaultIO(cmd))
 		},
 	}
 	cmd.Flags().StringVar(&homeFlag, "home", "", "Omnipus home directory (default: $OMNIPUS_HOME or ~/.omnipus)")
+	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "Skip all prompts; require the answers via flags")
+	cmd.Flags().StringVar(&providerFlag, "provider", "", "Provider id (e.g. openrouter, anthropic, openai, gemini)")
+	cmd.Flags().StringVar(
+		&apiKeyFlag,
+		"api-key",
+		"",
+		"Provider API key (visible to other users via /proc — prefer --api-key-stdin)",
+	)
+	cmd.Flags().BoolVar(&apiKeyStdin, "api-key-stdin", false, "Read the provider API key from the first line of stdin")
+	cmd.Flags().StringVar(
+		&modelFlag,
+		"model",
+		"",
+		"Default model id (e.g. z-ai/glm-5v-turbo); falls back to a per-provider default",
+	)
+	cmd.Flags().StringVar(&adminUsernameFlag, "admin-username", "", "Admin username to create")
+	cmd.Flags().StringVar(
+		&adminPasswordFlag,
+		"admin-password",
+		"",
+		"Admin password (min 8 chars; prefer --admin-password-stdin)",
+	)
+	cmd.Flags().BoolVar(
+		&adminPasswordStdin,
+		"admin-password-stdin",
+		false,
+		"Read the admin password from stdin (next line after the api key if --api-key-stdin is also set)",
+	)
 	return cmd
 }
 
@@ -136,6 +220,116 @@ func defaultIO(cmd *cobra.Command) wizardIO {
 			return string(b), nil
 		},
 	}
+}
+
+// inputFlags is the raw flag bundle the Cobra binding hands to
+// inputFromFlags. Kept as a struct rather than a parameter list so the
+// signature stays stable as we add knobs.
+type inputFlags struct {
+	providerID         string
+	apiKey             string
+	apiKeyStdin        bool
+	model              string
+	username           string
+	password           string
+	adminPasswordStdin bool
+}
+
+// inputFromFlags assembles an Input from --non-interactive flags, validating
+// each field with the same rules the interactive prompt applies. Secret
+// values are read from stdin when --api-key-stdin or --admin-password-stdin
+// is set; the api key (if requested) is read first, then the admin password,
+// each as a single line.
+func inputFromFlags(stdin io.Reader, f inputFlags) (Input, error) {
+	in := Input{}
+
+	if f.providerID == "" {
+		return in, errors.New("--provider is required in --non-interactive mode")
+	}
+	if !providers.IsKnownProtocol(f.providerID) {
+		return in, fmt.Errorf("provider %q is not a known protocol", f.providerID)
+	}
+	in.ProviderID = f.providerID
+
+	if f.apiKey != "" && f.apiKeyStdin {
+		return in, errors.New("set exactly one of --api-key or --api-key-stdin, not both")
+	}
+	if f.password != "" && f.adminPasswordStdin {
+		return in, errors.New("set exactly one of --admin-password or --admin-password-stdin, not both")
+	}
+
+	apiKey := f.apiKey
+	password := f.password
+	if f.apiKeyStdin || f.adminPasswordStdin {
+		reader := bufio.NewReader(stdin)
+		if f.apiKeyStdin {
+			line, err := reader.ReadString('\n')
+			if err != nil && !errors.Is(err, io.EOF) {
+				return in, fmt.Errorf("read api key from stdin: %w", err)
+			}
+			apiKey = strings.TrimRight(line, "\r\n")
+		}
+		if f.adminPasswordStdin {
+			line, err := reader.ReadString('\n')
+			if err != nil && !errors.Is(err, io.EOF) {
+				return in, fmt.Errorf("read admin password from stdin: %w", err)
+			}
+			password = strings.TrimRight(line, "\r\n")
+		}
+	}
+
+	if strings.TrimSpace(apiKey) == "" {
+		return in, errors.New("--api-key (or --api-key-stdin) is required in --non-interactive mode")
+	}
+	in.APIKey = strings.TrimSpace(apiKey)
+
+	if f.username == "" {
+		return in, errors.New("--admin-username is required in --non-interactive mode")
+	}
+	in.Username = strings.TrimSpace(f.username)
+
+	if password == "" {
+		return in, errors.New("--admin-password (or --admin-password-stdin) is required in --non-interactive mode")
+	}
+	if len(password) < 8 {
+		return in, errors.New("admin password must be at least 8 characters")
+	}
+	in.Password = password
+
+	in.Model = strings.TrimSpace(f.model)
+	if in.Model == "" {
+		in.Model = defaultModelFor(in.ProviderID)
+	}
+
+	return in, nil
+}
+
+// RunHeadless writes the headless onboarding state from a pre-validated Input.
+// It is the non-interactive counterpart of Run.
+func RunHeadless(home string, io wizardIO, in Input) error {
+	if err := datamodel.Init(home); err != nil {
+		return fmt.Errorf("init home: %w", err)
+	}
+	mgr := onboarding.NewManager(home)
+	if mgr.IsComplete() {
+		fmt.Fprintln(io.stdout, "Onboarding is already complete; nothing to do.")
+		fmt.Fprintln(io.stdout,
+			"To re-run, delete ~/.omnipus/system/state.json"+
+				" (or the equivalent under your OMNIPUS_HOME).",
+		)
+		return nil
+	}
+
+	in.Home = home
+	if err := applyInput(in, io); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(io.stdout, "")
+	fmt.Fprintln(io.stdout, "Onboarding complete.")
+	fmt.Fprintf(io.stdout, "Run `omnipus gateway` to start serving on the configured port.\n")
+	fmt.Fprintf(io.stdout, "Log in as %q with the password you just entered.\n", in.Username)
+	return nil
 }
 
 // Run executes the wizard against the supplied IO and home directory. It is

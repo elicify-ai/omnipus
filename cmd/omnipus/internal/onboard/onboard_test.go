@@ -250,3 +250,251 @@ func TestPrompt_UnknownProvider_Rejected(t *testing.T) {
 		t.Errorf("expected 'known protocol' error, got: %v", err)
 	}
 }
+
+// ── Headless (--non-interactive) ─────────────────────────────────────────────
+
+// TestInputFromFlags_HappyPath checks that a fully-specified flag set
+// produces a usable Input without touching stdin.
+func TestInputFromFlags_HappyPath(t *testing.T) {
+	in, err := inputFromFlags(strings.NewReader(""), inputFlags{
+		providerID: "openrouter",
+		apiKey:     "sk-or-v1-test",
+		model:      "z-ai/glm-5v-turbo",
+		username:   "admin",
+		password:   "correcthorsebattery",
+	})
+	if err != nil {
+		t.Fatalf("inputFromFlags: %v", err)
+	}
+	if in.ProviderID != "openrouter" || in.APIKey != "sk-or-v1-test" ||
+		in.Model != "z-ai/glm-5v-turbo" || in.Username != "admin" ||
+		in.Password != "correcthorsebattery" {
+		t.Errorf("unexpected Input: %+v", in)
+	}
+}
+
+// TestInputFromFlags_StdinSecrets confirms that --api-key-stdin and
+// --admin-password-stdin read one line each, in that order, and trim CR/LF.
+func TestInputFromFlags_StdinSecrets(t *testing.T) {
+	stdin := strings.NewReader("sk-secret\r\np@ssw0rd-from-stdin\n")
+	in, err := inputFromFlags(stdin, inputFlags{
+		providerID:         "openrouter",
+		apiKeyStdin:        true,
+		username:           "admin",
+		adminPasswordStdin: true,
+	})
+	if err != nil {
+		t.Fatalf("inputFromFlags: %v", err)
+	}
+	if in.APIKey != "sk-secret" {
+		t.Errorf("API key not trimmed correctly, got %q", in.APIKey)
+	}
+	if in.Password != "p@ssw0rd-from-stdin" {
+		t.Errorf("password not trimmed correctly, got %q", in.Password)
+	}
+}
+
+// TestInputFromFlags_ModelDefault confirms that omitting --model picks the
+// per-provider default rather than failing.
+func TestInputFromFlags_ModelDefault(t *testing.T) {
+	in, err := inputFromFlags(strings.NewReader(""), inputFlags{
+		providerID: "anthropic",
+		apiKey:     "sk-ant-test",
+		username:   "admin",
+		password:   "longenoughpw",
+	})
+	if err != nil {
+		t.Fatalf("inputFromFlags: %v", err)
+	}
+	if in.Model != "claude-sonnet-4-6" {
+		t.Errorf("expected per-provider default model, got %q", in.Model)
+	}
+}
+
+func TestInputFromFlags_Validation(t *testing.T) {
+	cases := []struct {
+		name string
+		f    inputFlags
+		want string // substring of error message
+	}{
+		{
+			name: "missing provider",
+			f:    inputFlags{apiKey: "k", username: "u", password: "longenoughpw"},
+			want: "--provider is required",
+		},
+		{
+			name: "unknown provider",
+			f:    inputFlags{providerID: "not-real", apiKey: "k", username: "u", password: "longenoughpw"},
+			want: "known protocol",
+		},
+		{
+			name: "api-key + api-key-stdin both set",
+			f: inputFlags{
+				providerID:  "openai",
+				apiKey:      "k",
+				apiKeyStdin: true,
+				username:    "u",
+				password:    "longenoughpw",
+			},
+			want: "exactly one of --api-key or --api-key-stdin",
+		},
+		{
+			name: "admin-password + admin-password-stdin both set",
+			f: inputFlags{
+				providerID:         "openai",
+				apiKey:             "k",
+				username:           "u",
+				password:           "longenoughpw",
+				adminPasswordStdin: true,
+			},
+			want: "exactly one of --admin-password or --admin-password-stdin",
+		},
+		{
+			name: "missing api key",
+			f:    inputFlags{providerID: "openai", username: "u", password: "longenoughpw"},
+			want: "--api-key (or --api-key-stdin) is required",
+		},
+		{
+			name: "missing username",
+			f:    inputFlags{providerID: "openai", apiKey: "k", password: "longenoughpw"},
+			want: "--admin-username is required",
+		},
+		{
+			name: "missing password",
+			f:    inputFlags{providerID: "openai", apiKey: "k", username: "u"},
+			want: "--admin-password (or --admin-password-stdin) is required",
+		},
+		{
+			name: "short password",
+			f:    inputFlags{providerID: "openai", apiKey: "k", username: "u", password: "short"},
+			want: "at least 8 characters",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := inputFromFlags(strings.NewReader(""), tc.f)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("expected error containing %q, got: %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// TestRunHeadless_EndToEnd drives the non-interactive Run path against a
+// fresh OMNIPUS_HOME and asserts the same on-disk shape as the interactive
+// regression test in TestRun_FreshInstall_WritesUsableConfig.
+func TestRunHeadless_EndToEnd(t *testing.T) {
+	home := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	io := wizardIO{
+		stdin:  strings.NewReader(""),
+		stdout: &stdout,
+		stderr: &stderr,
+		readPassword: func() (string, error) {
+			t.Fatal("readPassword called but headless path must not prompt")
+			return "", nil
+		},
+	}
+
+	in := Input{
+		ProviderID: "openrouter",
+		APIKey:     "sk-or-v1-headless-test",
+		Model:      "z-ai/glm-5v-turbo",
+		Username:   "alice",
+		Password:   "correcthorsebatterystaple",
+	}
+	if err := RunHeadless(home, io, in); err != nil {
+		t.Fatalf("RunHeadless: %v", err)
+	}
+
+	// State.json is committed.
+	mgr := onboarding.NewManager(home)
+	if !mgr.IsComplete() {
+		t.Errorf("state.json onboarding_complete is false after headless run")
+	}
+
+	// Credentials store has the API key.
+	credPath := filepath.Join(home, "credentials.json")
+	if _, err := os.Stat(credPath); err != nil {
+		t.Fatalf("credentials.json missing: %v", err)
+	}
+	store := credentials.NewStore(credPath)
+	if err := credentials.Unlock(store); err != nil {
+		t.Fatalf("unlock store: %v", err)
+	}
+	got, err := store.Get("openrouter_api_key")
+	if err != nil {
+		t.Fatalf("get api key: %v", err)
+	}
+	if got != "sk-or-v1-headless-test" {
+		t.Errorf("api key roundtrip mismatch, got %q", got)
+	}
+
+	// Config.json has provider + admin entries; password bcrypt-validates.
+	rawCfg, err := os.ReadFile(filepath.Join(home, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(rawCfg, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	gw, _ := cfg["gateway"].(map[string]any)
+	users, _ := gw["users"].([]any)
+	if len(users) == 0 {
+		t.Fatalf("config.gateway.users empty: %s", rawCfg)
+	}
+	user, _ := users[0].(map[string]any)
+	hash, _ := user["password_hash"].(string)
+	if hash == "" {
+		t.Fatalf("password_hash empty")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Password)); err != nil {
+		t.Errorf("password_hash does not bcrypt-validate against the headless password: %v", err)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Onboarding complete.") {
+		t.Errorf("stdout missing completion line, got: %s", out)
+	}
+	_ = stderr // silence unused
+}
+
+// TestRunHeadless_AlreadyComplete confirms the headless path mirrors the
+// interactive no-op behavior — never overwriting an existing install.
+func TestRunHeadless_AlreadyComplete(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "system"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := onboarding.NewManager(home).CompleteOnboarding(); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	io := wizardIO{
+		stdin:  strings.NewReader(""),
+		stdout: &stdout,
+		stderr: io.Discard,
+		readPassword: func() (string, error) {
+			t.Fatal("readPassword called but RunHeadless must short-circuit")
+			return "", nil
+		},
+	}
+	in := Input{
+		ProviderID: "openrouter",
+		APIKey:     "irrelevant",
+		Model:      "z-ai/glm-5v-turbo",
+		Username:   "alice",
+		Password:   "longenoughpw",
+	}
+	if err := RunHeadless(home, io, in); err != nil {
+		t.Fatalf("RunHeadless on completed install must be a no-op, got: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "already complete") {
+		t.Errorf("expected 'already complete' in stdout, got: %s", stdout.String())
+	}
+}

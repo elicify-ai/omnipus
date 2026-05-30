@@ -28,5 +28,11 @@ func TestNewGatewayCommand(t *testing.T) {
 
 	assert.True(t, cmd.HasFlags())
 	assert.NotNil(t, cmd.Flags().Lookup("debug"))
-	assert.NotNil(t, cmd.Flags().Lookup("allow-empty"))
+	// --allow-empty is preserved as a hidden, deprecated no-op so existing
+	// scripts (CI workflows, ops runbooks, eval-runner, docs.troubleshooting)
+	// keep working unchanged. The gateway now ALWAYS boots into limited mode
+	// when no provider is configured, regardless of the flag value.
+	allowEmpty := cmd.Flags().Lookup("allow-empty")
+	assert.NotNil(t, allowEmpty)
+	assert.True(t, allowEmpty.Hidden, "--allow-empty must be hidden from --help")
 }

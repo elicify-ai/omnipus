@@ -19,9 +19,14 @@ import (
 func NewGatewayCommand() *cobra.Command {
 	var debug bool
 	var noTruncate bool
-	var allowEmpty bool
 	var sandboxMode string
 	var allowGodMode bool
+	// allowEmptyDeprecated accepts the legacy --allow-empty flag silently so
+	// existing callers (CI workflows, ops scripts, eval-runner, etc.) keep
+	// working unchanged. The behavior is now unconditional: the gateway
+	// boots into limited mode when no provider is configured regardless of
+	// the flag. Hidden from --help so new users don't discover it.
+	var allowEmptyDeprecated bool
 
 	cmd := &cobra.Command{
 		Use:     "gateway",
@@ -66,11 +71,17 @@ func NewGatewayCommand() *cobra.Command {
 						"remove --allow-god-mode and restart")
 				os.Exit(2)
 			}
+			// AllowEmptyStartup is unconditionally true: if no provider is
+			// configured the gateway boots into limited mode so the operator
+			// can finish onboarding via the SPA wizard (or `omnipus onboard`).
+			// The previous --allow-empty flag was a foot-gun: a fresh install
+			// failed to start with a misleading "no providers configured" error
+			// and the operator had to read the help text to discover the flag.
 			runErr := gateway.RunWithOptions(gateway.RunOptions{
 				Debug:             debug,
 				HomePath:          internal.GetOmnipusHome(),
 				ConfigPath:        internal.GetConfigPath(),
-				AllowEmptyStartup: allowEmpty,
+				AllowEmptyStartup: true,
 				SandboxMode:       sandboxMode,
 				AllowGodMode:      allowGodMode,
 			})
@@ -91,13 +102,18 @@ func NewGatewayCommand() *cobra.Command {
 
 	cmd.Flags().BoolVarP(&debug, "debug", "d", false, "Enable debug logging")
 	cmd.Flags().BoolVarP(&noTruncate, "no-truncate", "T", false, "Disable string truncation in debug logs")
+	// Legacy --allow-empty / -E: silently accepted, hidden from help. The
+	// gateway now always boots into limited mode when no provider is
+	// configured, which is what --allow-empty did. Existing scripts keep
+	// working unchanged. The variable is intentionally unread.
 	cmd.Flags().BoolVarP(
-		&allowEmpty,
+		&allowEmptyDeprecated,
 		"allow-empty",
 		"E",
 		false,
-		"Continue starting even when no default model is configured",
+		"Deprecated; gateway always boots into limited mode on a fresh install",
 	)
+	_ = cmd.Flags().MarkHidden("allow-empty")
 	cmd.Flags().StringVar(
 		&sandboxMode,
 		"sandbox",
