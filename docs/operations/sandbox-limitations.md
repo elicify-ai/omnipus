@@ -9,7 +9,7 @@ On macOS, Windows, and Linux kernels older than 5.13, `sandbox.SelectBackend()` 
 - No Landlock filesystem confinement on the gateway or its children. Tool path-guard checks (`pkg/tools/path_audit.go`, the per-tool allow-list inside each builtin) are still enforced in Go, but a compromised tool that bypasses the Go check has no kernel net to catch it.
 - No seccomp filter. The deny-list of dangerous syscalls (`ptrace`, `mount`, `bpf`, `kexec_load`, `init_module`, etc.) is not installed — see `pkg/sandbox/seccomp_linux.go:28-42` for the canonical list.
 - No kernel-level port allow-list. `cfg.Sandbox.DevServerPortRange` is honored by the gateway's own dev-server registry but not by the kernel, so a compiled child can bind any port the OS permits.
-- The Windows kernel-sandbox story (Job Objects + Restricted Tokens + DACL) described in `docs/BRD/Omnipus Windows BRD appendic.md` is specified but not implemented. Windows currently uses `FallbackBackend`.
+- The Windows kernel-sandbox story (Job Objects + Restricted Tokens + DACL) described in `docs/internal/BRD/Omnipus Windows BRD appendic.md` is specified but not implemented. Windows currently uses `FallbackBackend`.
 
 `/health` and `/api/v1/security/sandbox-status` both report `backend: "fallback"` and `kernel_level: false` in this configuration, and the field `disabled_by: "kernel_unsupported"` may appear when the operator asked for `enforce` but the kernel cannot deliver it.
 

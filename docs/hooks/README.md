@@ -30,7 +30,7 @@ ToolApprover    ApproveTool(ctx, *ToolApprovalRequest) → (ApprovalDecision, er
 
 A single hook struct may implement any combination of these interfaces.
 
-**Where hooks are used in production today.** The only non-test `MountHook` call site at HEAD is `pkg/gateway/websocket.go`, which mounts a `ToolApprover` that drives the interactive tool-approval flow over the WebSocket. Every `ask`/`always-ask` policy decision in the per-agent tool policy (see `docs/specs/tool-registry-redesign-spec.md` "Approval round-trip" and `pkg/policy/admin_ask_fence.go`) eventually arrives at that hook. Custom hooks can supplement it; if you replace it, you take over the approval round-trip.
+**Where hooks are used in production today.** The only non-test `MountHook` call site at HEAD is `pkg/gateway/websocket.go`, which mounts a `ToolApprover` that drives the interactive tool-approval flow over the WebSocket. Every `ask`/`always-ask` policy decision in the per-agent tool policy (see `docs/internal/specs/tool-registry-redesign-spec.md` "Approval round-trip" and `pkg/policy/admin_ask_fence.go`) eventually arrives at that hook. Custom hooks can supplement it; if you replace it, you take over the approval round-trip.
 
 ## Hook Actions
 
@@ -156,8 +156,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent"
-	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 type ExampleLoggerHookOptions struct {
@@ -323,8 +323,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/dapicom-ai/omnipus/pkg/agent"
-	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 func init() {
@@ -806,7 +806,7 @@ binaries you control.
 
 **Do not re-export credential references into the hook's `env` block.** The
 gateway resolves secrets from `credentials.json` at boot (see
-[ADR-004](../architecture/ADR-004-credential-boot-contract.md)); putting
+[ADR-004](../internal/architecture/ADR-004-credential-boot-contract.md)); putting
 `OMNIPUS_MASTER_KEY` or any `*_ref`-resolved secret into a hook's `env` config
 re-exposes that secret to every subprocess and defeats the credential boundary.
 

@@ -4,7 +4,7 @@
 
 The gateway runs two listeners so that the SPA and agent-served content occupy different browser origins. An `<iframe>` loading `https://preview.omnipus.example.com` cannot read cookies, `localStorage`, or in-memory state from `https://omnipus.example.com` because the browser enforces the same-origin policy across hostnames. Without this separation, an agent that writes and immediately serves a malicious HTML file would inherit the SPA's origin and could make authenticated requests to the admin API.
 
-See [Threat Model in chat-served-iframe-preview-spec.md](../specs/chat-served-iframe-preview-spec.md#threat-model) for the full threat enumeration. T-01 through T-10 cover the iframe-preview attack surface in detail, including token leakage (T-02), cross-origin escalation (T-03), content injection into the SPA (T-04), and exfiltration via embedded resources (T-08).
+See [Threat Model in chat-served-iframe-preview-spec.md](../internal/specs/chat-served-iframe-preview-spec.md#threat-model) for the full threat enumeration. T-01 through T-10 cover the iframe-preview attack surface in detail, including token leakage (T-02), cross-origin escalation (T-03), content injection into the SPA (T-04), and exfiltration via embedded resources (T-08).
 
 ---
 
@@ -76,7 +76,7 @@ The gateway will then emit `frame-ancestors https://omnipus.example.com` and all
 
 The credential store (`~/.omnipus/credentials.json`) is encrypted with a 256-bit key. Losing that key makes every stored secret — API keys, channel tokens, webhook credentials — permanently inaccessible.
 
-Key provisioning priority, rotation procedure, and the auto-generate first-boot behavior are documented in [ADR-004](../architecture/ADR-004-credential-boot-contract.md#master-key-provisioning). Follow the key rotation steps there before decommissioning a server or moving the data directory.
+Key provisioning priority, rotation procedure, and the auto-generate first-boot behavior are documented in [ADR-004](../internal/architecture/ADR-004-credential-boot-contract.md#master-key-provisioning). Follow the key rotation steps there before decommissioning a server or moving the data directory.
 
 ---
 
@@ -84,7 +84,7 @@ Key provisioning priority, rotation procedure, and the auto-generate first-boot 
 
 The gateway executes tool calls on behalf of the active agent and the user directing it. A user with chat access can instruct agents to read files, run shell commands (subject to tool policy), and make outbound HTTP requests. This is by design — the product is an agentic runtime.
 
-Operators should extend chat access only to users they trust with shell-level capabilities on the host. T-06 in the [Threat Model](../specs/chat-served-iframe-preview-spec.md#threat-model) covers the trusted-prompt boundary and what happens when an agent receives instructions from untrusted content (for example, an HTML file fetched from the web).
+Operators should extend chat access only to users they trust with shell-level capabilities on the host. T-06 in the [Threat Model](../internal/specs/chat-served-iframe-preview-spec.md#threat-model) covers the trusted-prompt boundary and what happens when an agent receives instructions from untrusted content (for example, an HTML file fetched from the web).
 
 ---
 

@@ -95,7 +95,7 @@ Defined at `pkg/tools/skills_install.go:39-179`. Downloads and extracts a skill 
 | `version`  | string  | no       | Defaults to `latest`.                                          |
 | `force`    | boolean | no       | If `true`, removes any existing install before re-installing.  |
 
-The tool holds a process-wide mutex while installing (`pkg/tools/skills_install.go:77-78` — TODO: scope down to per-slug). It refuses to overwrite an existing directory unless `force=true`, then delegates to `registry.DownloadAndInstall` (`pkg/skills/clawhub_registry.go:230-308`). That call:
+The tool holds a process-wide mutex while installing (`pkg/tools/skills_install.go:77-78`). It refuses to overwrite an existing directory unless `force=true`, then delegates to `registry.DownloadAndInstall` (`pkg/skills/clawhub_registry.go:230-308`). That call:
 
 1. Fetches metadata for the slug.
 2. Streams the ZIP to a temp file, capped at `MaxZipSize` bytes (default 50 MiB, `pkg/skills/clawhub_registry.go:21,400-403`).
@@ -152,7 +152,7 @@ Both `install` (registry mode) and `update` enforce `sandbox.skill_trust` (see [
 
 The SPA has a top-level **Skills & Tools** route at `/skills` (`src/routes/_app/skills.tsx`, linked from the sidebar at `src/components/layout/Sidebar.tsx:24`). It lists installed skills and exposes a "Browse Skills" button that opens `SkillBrowser` (`src/components/skills/SkillBrowser.tsx`).
 
-`SkillBrowser` is currently a **stub**: it shows "ClawHub registry not yet available" and only supports "Install from file" (uploading a SKILL.md / ZIP). It hard-codes the unavailable message even though the backend `find_skills` tool talks to a live ClawHub. Tracked as issue [#14](https://github.com/dapicom-ai/omnipus/issues/14).
+`SkillBrowser` is currently a **stub**: it shows "ClawHub registry not yet available" and only supports "Install from file" (uploading a SKILL.md / ZIP). It hard-codes the unavailable message even though the backend `find_skills` tool talks to a live ClawHub. Tracked as issue [#14](https://github.com/elicify-ai/omnipus/issues/14).
 
 The Security settings tab includes a `SkillTrustSection` (`src/components/settings/SkillTrustSection.tsx`) that reads and writes `sandbox.skill_trust` via `GET`/`PUT /api/v1/settings/skill-trust` (`pkg/gateway/rest_skill_trust.go`). All three levels — `block_unverified`, `warn_unverified`, `allow_all` — are selectable, with copy describing the trade-off.
 
@@ -170,7 +170,7 @@ Hash-based trust is governed by `sandbox.skill_trust` in `config.json` (`pkg/con
 
 The empty string is treated as `warn_unverified` (`pkg/policy/wave3_skill_trust_test.go:34-41`). Unknown values are rejected at config decode time so a typo fails boot rather than silently downgrading to a permissive level.
 
-`allow_all` is intended to be loud, but the doctor warning is **not yet wired** — `omnipus doctor` does not currently flag the setting. Tracked as issue [#99](https://github.com/dapicom-ai/omnipus/issues/99).
+`allow_all` is intended to be loud, but the doctor warning is **not yet wired** — `omnipus doctor` does not currently flag the setting. Tracked as issue [#99](https://github.com/elicify-ai/omnipus/issues/99).
 
 Additional gates already in place:
 
@@ -182,9 +182,9 @@ Additional gates already in place:
 
 ## What's not shipping yet
 
-- Issue [#14](https://github.com/dapicom-ai/omnipus/issues/14) — the **Browse Skills** modal in the SPA is a stub. The backend `find_skills` tool already speaks to ClawHub correctly; only the UI is gated.
-- Issue [#99](https://github.com/dapicom-ai/omnipus/issues/99) — `omnipus doctor` does **not** warn when `sandbox.skill_trust = allow_all`. The setting is reachable from the UI and CLI but the doctor surface is silent.
-- Issue [#152](https://github.com/dapicom-ai/omnipus/issues/152) — **auto-load on relevance** (Anthropic-style progressive disclosure) is not implemented. Today the agent gets the full `<skills>` summary every turn and must `read_file` the bodies it wants to use; there is no model-driven match-and-load step.
+- Issue [#14](https://github.com/elicify-ai/omnipus/issues/14) — the **Browse Skills** modal in the SPA is a stub. The backend `find_skills` tool already speaks to ClawHub correctly; only the UI is gated.
+- Issue [#99](https://github.com/elicify-ai/omnipus/issues/99) — `omnipus doctor` does **not** warn when `sandbox.skill_trust = allow_all`. The setting is reachable from the UI and CLI but the doctor surface is silent.
+- Issue [#152](https://github.com/elicify-ai/omnipus/issues/152) — **auto-load on relevance** (Anthropic-style progressive disclosure) is not implemented. Today the agent gets the full `<skills>` summary every turn and must `read_file` the bodies it wants to use; there is no model-driven match-and-load step.
 - `POST /api/v1/skills/search` and `POST /api/v1/skills/install` return HTTP 501 (`pkg/gateway/rest.go:2129-2143`). Use the CLI or the in-loop `install_skill` tool.
 - GitHub installs are not hash-verified. `sandbox.skill_trust` only applies to ClawHub installs (the GitHub flow has no manifest to verify against).
 - `model-hint` is parsed but not acted on — the runtime does not auto-switch models based on a skill's preferred model.

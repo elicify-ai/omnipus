@@ -168,7 +168,7 @@ You can now remove sensitive fields from `config.json` since they're loaded from
   ],
   "channels": {
     "telegram": {
-      "enabled": true"
+      "enabled": true,
       // token is now loaded from .security.yml
     }
   }

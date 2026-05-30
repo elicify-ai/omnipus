@@ -41,7 +41,7 @@ at load time. The canonical key written by `SaveConfig` is `"providers"`.
 If the v0 config contained plaintext `api_key` values, the migration code
 moves them into `credentials.json` (requires `OMNIPUS_MASTER_KEY` to be set)
 and replaces each entry with an `api_key_ref` pointer. See
-[ADR-004](../architecture/ADR-004-credential-boot-contract.md) for the full
+[ADR-004](../internal/architecture/ADR-004-credential-boot-contract.md) for the full
 credential boot contract.
 
 ## Before: Legacy v0 `providers` (keyed object)

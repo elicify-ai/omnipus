@@ -64,15 +64,15 @@ Items that **required architectural change** (process isolation, capability-base
 
 **Issue:** [#156](https://github.com/elicify-ai/omnipus/issues/156) — design complete, implementation not started
 
-Fresh-build. **No backward compatibility guarantee** with v0.1/v0.2 storage layouts. The five locked design documents in `docs/design/` are the implementation spec:
+Fresh-build. **No backward compatibility guarantee** with v0.1/v0.2 storage layouts. The five locked design documents in `docs/internal/design/` are the implementation spec:
 
 | Design doc | What changes |
 |---|---|
-| [`sandbox-redesign-2026-05.md`](docs/design/sandbox-redesign-2026-05.md) | Two-room workspace topology — **private agent rooms** under each agent's workspace, **shared project rooms** under `.omnipus/projects/`, each room being its own sandbox boundary |
-| [`memory-redesign-2026-05.md`](docs/design/memory-redesign-2026-05.md) | 4-tier memory (sessions / memories / learnings / last-session.md), three tools (`remember` / `recall` / `retrospective`) — **rename `recall_memory` → `recall`** — Dreamcatcher consolidation pass that promotes per-session retros to durable memories, bleve + JSONL + MinHash for similarity, no embeddings |
-| [`tasks-redesign-2026-05.md`](docs/design/tasks-redesign-2026-05.md) | Tasks scoped per-room, cascade-delete with project, reassignment audit trail, replaces today's flat task list |
-| [`projects-ui-2026-05.md`](docs/design/projects-ui-2026-05.md) | Three SPA surfaces: session creation modal (project picker), Command Center pivoted to rooms, session history with project grouping |
-| [`settings-notifications-2026-05.md`](docs/design/settings-notifications-2026-05.md) | Memory and Dreamcatcher settings tabs, tier-based retention notifications |
+| [`sandbox-redesign-2026-05.md`](docs/internal/design/sandbox-redesign-2026-05.md) | Two-room workspace topology — **private agent rooms** under each agent's workspace, **shared project rooms** under `.omnipus/projects/`, each room being its own sandbox boundary |
+| [`memory-redesign-2026-05.md`](docs/internal/design/memory-redesign-2026-05.md) | 4-tier memory (sessions / memories / learnings / last-session.md), three tools (`remember` / `recall` / `retrospective`) — **rename `recall_memory` → `recall`** — Dreamcatcher consolidation pass that promotes per-session retros to durable memories, bleve + JSONL + MinHash for similarity, no embeddings |
+| [`tasks-redesign-2026-05.md`](docs/internal/design/tasks-redesign-2026-05.md) | Tasks scoped per-room, cascade-delete with project, reassignment audit trail, replaces today's flat task list |
+| [`projects-ui-2026-05.md`](docs/internal/design/projects-ui-2026-05.md) | Three SPA surfaces: session creation modal (project picker), Command Center pivoted to rooms, session history with project grouping |
+| [`settings-notifications-2026-05.md`](docs/internal/design/settings-notifications-2026-05.md) | Memory and Dreamcatcher settings tabs, tier-based retention notifications |
 
 When v0.3 ships, the version cut is **1.0** — the rooms redesign is the architectural foundation we want to commit to long-term.
 
