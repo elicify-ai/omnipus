@@ -23,7 +23,7 @@ func NewGatewayCommand() *cobra.Command {
 	var allowGodMode bool
 	// allowEmptyDeprecated accepts the legacy --allow-empty flag silently so
 	// existing callers (CI workflows, ops scripts, eval-runner, etc.) keep
-	// working unchanged. The behaviour is now unconditional: the gateway
+	// working unchanged. The behavior is now unconditional: the gateway
 	// boots into limited mode when no provider is configured regardless of
 	// the flag. Hidden from --help so new users don't discover it.
 	var allowEmptyDeprecated bool
@@ -106,7 +106,13 @@ func NewGatewayCommand() *cobra.Command {
 	// gateway now always boots into limited mode when no provider is
 	// configured, which is what --allow-empty did. Existing scripts keep
 	// working unchanged. The variable is intentionally unread.
-	cmd.Flags().BoolVarP(&allowEmptyDeprecated, "allow-empty", "E", false, "Deprecated; gateway now always boots into limited mode on a fresh install")
+	cmd.Flags().BoolVarP(
+		&allowEmptyDeprecated,
+		"allow-empty",
+		"E",
+		false,
+		"Deprecated; gateway always boots into limited mode on a fresh install",
+	)
 	_ = cmd.Flags().MarkHidden("allow-empty")
 	cmd.Flags().StringVar(
 		&sandboxMode,
