@@ -20,7 +20,7 @@
 //  4. writes a provider entry and an admin user entry into config.json;
 //  5. marks onboarding complete in system/state.json.
 //
-// On the next start `omnipus gateway` boots without requiring dev_mode_bypass
+// After this runs, `omnipus start` boots without requiring dev_mode_bypass
 // or env-injected secrets — the admin can log in immediately with the
 // username/password they entered.
 package onboard
@@ -121,7 +121,7 @@ In both modes the API key is encrypted into credentials.json (creating
 master.key on first run); the admin user and provider entry are written
 to config.json; system/state.json is marked complete.
 
-After running this command, ` + "`omnipus gateway`" + ` can boot without
+After running this command, ` + "`omnipus start`" + ` can boot without
 ` + "`dev_mode_bypass`" + ` and the operator can log in with the credentials
 they just entered. The web onboarding wizard remains available for users
 who prefer a browser.
@@ -327,7 +327,7 @@ func RunHeadless(home string, io wizardIO, in Input) error {
 
 	fmt.Fprintln(io.stdout, "")
 	fmt.Fprintln(io.stdout, "Onboarding complete.")
-	fmt.Fprintf(io.stdout, "Run `omnipus gateway` to start serving on the configured port.\n")
+	fmt.Fprintf(io.stdout, "Run `omnipus start` to serve the SPA + API on the configured port.\n")
 	fmt.Fprintf(io.stdout, "Log in as %q with the password you just entered.\n", in.Username)
 	return nil
 }
@@ -361,7 +361,7 @@ func Run(home string, io wizardIO) error {
 
 	fmt.Fprintln(io.stdout, "")
 	fmt.Fprintln(io.stdout, "Onboarding complete.")
-	fmt.Fprintf(io.stdout, "Run `omnipus gateway` to start serving on the configured port.\n")
+	fmt.Fprintf(io.stdout, "Run `omnipus start` to serve the SPA + API on the configured port.\n")
 	fmt.Fprintf(io.stdout, "Log in as %q with the password you just entered.\n", in.Username)
 	return nil
 }
