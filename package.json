@@ -65,7 +65,7 @@
     "framer-motion": "^12.6.3",
     "immer": "^11.1.8",
     "katex": "^0.16.44",
-    "mermaid": "^11.13.0",
+    "mermaid": "^11.15.0",
     "react-markdown": "^10.1.0",
     "react-shiki": "^0.9.2",
     "rehype-katex": "^7.0.1",
