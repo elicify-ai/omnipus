@@ -29,10 +29,19 @@ func NewGatewayCommand() *cobra.Command {
 	var allowEmptyDeprecated bool
 
 	cmd := &cobra.Command{
-		Use:     "gateway",
-		Aliases: []string{"g"},
-		Short:   "Start omnipus gateway",
-		Long: "Start omnipus gateway.\n\n" +
+		Use: "start",
+		// Aliases: "gateway" is preserved because every existing script,
+		// workflow, doc, and runbook references it (CLAUDE.md, evals/,
+		// tests/e2e/README.md, .github/workflows/*.yml, eval-runner, etc.).
+		// "g" is the original short alias. Both are accepted unchanged so the
+		// rename is zero-break, but only "start" is shown in --help.
+		Aliases: []string{"gateway", "g"},
+		Short:   "Start Omnipus (serves the SPA + API on port 5000)",
+		Long: "Start Omnipus.\n\n" +
+			"Opens two ports — 5000 for the SPA + REST + WebSocket API, 5001 for\n" +
+			"sandboxed agent preview iframes. On a fresh install the SPA at\n" +
+			"http://localhost:5000 runs the onboarding wizard; afterwards `start`\n" +
+			"boots straight into the chat UI with the configured provider.\n\n" +
 			"Exit codes:\n" +
 			"  0   clean shutdown\n" +
 			"  1   generic boot failure (credential/config/provider error)\n" +

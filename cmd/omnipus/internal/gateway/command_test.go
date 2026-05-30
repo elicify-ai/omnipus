@@ -12,11 +12,16 @@ func TestNewGatewayCommand(t *testing.T) {
 
 	require.NotNil(t, cmd)
 
-	assert.Equal(t, "gateway", cmd.Use)
-	assert.Equal(t, "Start omnipus gateway", cmd.Short)
+	// Renamed `gateway` → `start` (2026-05-30) so the canonical command
+	// reflects what a new user wants to do: type `omnipus start`. The legacy
+	// names are preserved as aliases so every existing script, CI workflow,
+	// doc, and runbook keeps working.
+	assert.Equal(t, "start", cmd.Use)
+	assert.Contains(t, cmd.Short, "Start Omnipus")
 
-	assert.Len(t, cmd.Aliases, 1)
-	assert.True(t, cmd.HasAlias("g"))
+	assert.Len(t, cmd.Aliases, 2)
+	assert.True(t, cmd.HasAlias("gateway"), "legacy 'gateway' alias must be accepted")
+	assert.True(t, cmd.HasAlias("g"), "legacy 'g' short alias must be accepted")
 
 	assert.Nil(t, cmd.Run)
 	assert.NotNil(t, cmd.RunE)
