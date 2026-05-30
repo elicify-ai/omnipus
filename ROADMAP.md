@@ -13,6 +13,7 @@ A single open-source Go binary today. The long-term plan also includes an Electr
 | **v0.1** | ✅ Complete on `feature/iframe-preview-tier13` | Stabilized branch; iframe preview + kernel bind-port allow-list + sandbox-aware exec + `web_serve` unification all shipped |
 | **v0.2** | ✅ Complete ([#155](https://github.com/elicify-ai/omnipus/issues/155) closed 2026-05-04) | Pentest quick wins: HMAC-chained audit log, default-deny internal-CIDR egress, per-agent memory rate limits, shell-guard hardening, master.key path guard, env-var allowlist |
 | **v0.3 / 1.0** | 🟡 Design complete; implementation pending ([#156](https://github.com/elicify-ai/omnipus/issues/156)) | "Rooms" redesign — memory + projects + tasks + sandbox topology rebuilt around private agent rooms and shared project rooms |
+| **v1.0 — Feature Parity** | 🟡 In progress | Close the gap between the CLI and the web UI so a terminal/headless user can do (nearly) everything a browser user can — tracked by epic [#211](https://github.com/elicify-ai/omnipus/issues/211) |
 | **Post-1.0** | 📋 Planned | Desktop variant (Electron wrapper), Cloud / SaaS variant (hosted with team features) |
 
 ---
