@@ -350,6 +350,42 @@ omnipus gateway -d --no-truncate
 
 ---
 
+## What the CLI can't do (yet)
+
+The CLI and the web app aren't identical. The CLI is built for **setup, running a
+server, secrets, skills, scheduling, and terminal chat** — and it's the better tool for
+headless boxes. But some things are **web-app only** today. If you need one of these,
+open the app in a browser (`omnipus gateway`, then visit `http://localhost:5000`):
+
+| Want to… | CLI | Web app |
+|---|---|---|
+| Chat with an agent | ✅ `omnipus agent` | ✅ |
+| Cancel a running reply | ✅ press **Esc** twice | ✅ |
+| Use slash commands (`/help`, `/switch`, …) | ❌ not in the REPL | ✅ |
+| See replies stream in live | ❌ prints when finished | ✅ |
+| Send an image or file in chat | ❌ text only | ✅ |
+| Browse / resume / delete past sessions | ⚠️ resume by key (`-s`) only | ✅ full history panel |
+| Manage skills | ✅ `omnipus skills …` | ✅ |
+| Schedule recurring jobs | ✅ `omnipus cron …` | ✅ (per-agent) |
+| Switch model / sign in to a provider | ✅ `omnipus model` / `omnipus auth` | ✅ |
+| Add a provider **after** first setup | ⚠️ `credentials set` + config edit | ✅ Settings → Providers |
+| **Create / edit custom agents** | ❌ | ✅ (a form, or ask Ava) |
+| **Task board (Command Center)** | ❌ | ✅ |
+| **Connect most channels** (Telegram, Discord, Slack…) | ⚠️ WeChat only (`auth weixin`/`wecom`) | ✅ |
+| **Add MCP servers** | ❌ | ✅ |
+| **Set your preferences** ("what agents know about you") | ❌ | ✅ Settings → Profile |
+| **Manage users, roles, devices** | ❌ | ✅ (admin) |
+
+A few things are **easier from the CLI** than the app: first-run setup
+(`omnipus onboard`), running the server (`omnipus gateway`), rotating the credential
+vault (`omnipus credentials rotate`), verifying the audit log (`omnipus audit verify`),
+and importing from another install (`omnipus migrate`).
+
+> Closing these gaps is tracked under the **Feature Parity** milestone — see the
+> CLI↔UI parity epic in the issue tracker.
+
+---
+
 ## 13. Where to go next
 
 - [Getting started](getting-started.md) — the quickest path from zero to your first chat.
