@@ -8,13 +8,13 @@ Common operator issues, grouped by symptom. If the gateway started, [debug.md](d
 
 You're booting a fresh `~/.omnipus/` with no provider yet. Two paths forward:
 
-- **Drive the web onboarding wizard** (recommended) — start with `--allow-empty` and visit `http://localhost:5000`:
+- **Drive the web onboarding wizard** (recommended) — just start Omnipus and visit `http://localhost:5000`:
 
   ```bash
-  omnipus start --allow-empty
+  omnipus start
   ```
 
-  The wizard at `/onboarding` walks Welcome → Provider → API Key → Model → Admin Account → Done, then the gateway is fully provisioned.
+  On a fresh install the gateway boots into limited mode automatically (no flag needed). The wizard at `/onboarding` walks Welcome → Provider → API Key → Model → Admin Account → Done, then the gateway is fully provisioned.
 
 - **Use the interactive CLI wizard** — same end result, no browser:
 

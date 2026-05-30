@@ -67,7 +67,7 @@ Onboarding flow, sandbox behaviour, and the rest of this guide apply identically
 |---|---|---|
 | `ghcr.io/elicify-ai/omnipus:latest` | Built by goreleaser on release | `docker/entrypoint.sh` |
 | Local build (`docker build -f docker/Dockerfile .`) | Multi-stage SPA + Go build | `omnipus start` directly |
-| Local build (`docker build -f docker/Dockerfile.heavy .`) | Same SPA + Go build, chromium + python + uv runtime | `omnipus start --allow-empty` directly |
+| Local build (`docker build -f docker/Dockerfile.heavy .`) | Same SPA + Go build, chromium + python + uv runtime | `omnipus start` directly |
 
 The release image uses `entrypoint.sh` as a first-run guard (see [First-run behavior](#first-run-behavior)). Locally-built images (minimal and heavy) start the gateway directly — they self-bootstrap on the first run.
 
