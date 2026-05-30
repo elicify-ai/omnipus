@@ -34,7 +34,7 @@ jobs:
     steps:
       - name: Check / record CLA signature
         # contributor-assistant/github-action v2.6.1 (pinned to commit SHA)
-        uses: contributor-assistant/github-action@c0cb1f99918b8db4be844e7bb786cd9e76bf488e
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Repo-scoped fine-grained PAT (Contents: read/write) used ONLY to write
