@@ -53,10 +53,35 @@ Welcome to Omnipus.
 ? Default model:          openai/gpt-4o
 ? Admin username:         daniel
 ? Admin password:         ******** (min 8 characters)
-Setup complete. You can now start the gateway.
+Setup complete. You can now start Omnipus.
 ```
 
-This is the terminal twin of the web onboarding — once it finishes, you can start the gateway or jump straight into terminal chat. (New to providers? [OpenRouter or OpenAI are the easiest first pick](providers.md); pick Ollama if you want to run fully local.)
+This is the terminal twin of the web onboarding — once it finishes, you can start Omnipus or jump straight into terminal chat. (New to providers? [OpenRouter or OpenAI are the easiest first pick](providers.md); pick Ollama if you want to run fully local.)
+
+### Headless setup (no prompts) — for servers and scripts
+
+On an unattended box (Docker entrypoint, CI, a remote VPS) you can do the whole setup in one command with `--non-interactive`. Pass the answers as flags:
+
+```bash
+omnipus onboard --non-interactive \
+  --provider openrouter \
+  --api-key 'sk-or-v1-...' \
+  --model 'openai/gpt-4o' \
+  --admin-username admin \
+  --admin-password 'choose-a-strong-one'
+```
+
+To keep secrets out of your shell history and the process list, read them from stdin instead — the API key first, then the admin password, one per line:
+
+```bash
+printf 'sk-or-v1-...\nchoose-a-strong-one\n' | omnipus onboard --non-interactive \
+  --provider openrouter \
+  --api-key-stdin \
+  --admin-username admin \
+  --admin-password-stdin
+```
+
+`--model` is optional (a sensible default is picked per provider). Use `--home` to target a non-default data directory.
 
 ---
 
@@ -64,15 +89,17 @@ This is the terminal twin of the web onboarding — once it finishes, you can st
 
 There are two completely different ways to use Omnipus from here. Pick whichever fits.
 
-### (a) Headless server — serve the web UI and API
+### (a) Server — serve the web UI and API
 
-This starts the gateway: the web app, the API, and all your chat channels. Use this on a server, or any time you want the browser UI and chat platforms working.
+This starts Omnipus: the web app, the API, and all your chat channels. Use this on a server, or any time you want the browser UI and chat platforms working.
 
 ```bash
-omnipus gateway
-# Gateway listening on http://localhost:5000
-# Agent previews on  http://localhost:5001
+omnipus start
+# Serving on    http://localhost:5000
+# Agent previews http://localhost:5001
 ```
+
+> The command used to be `omnipus gateway`. That still works (it's kept as an alias), but `omnipus start` is the name to use now. On a brand-new install, `start` automatically comes up in limited mode and shows the onboarding wizard at `http://localhost:5000` — you don't need any special flag for a first run.
 
 Useful flags:
 
@@ -80,18 +107,17 @@ Useful flags:
 |------|--------------|
 | `-d`, `--debug` | Verbose logs — handy when something isn't working |
 | `-T`, `--no-truncate` | Don't shorten long log lines |
-| `--allow-empty` | Start with no users yet (for local development only) |
 
 ```bash
-# Local dev, with debug logging and no users required yet
-omnipus gateway --allow-empty -d
+# With debug logging
+omnipus start -d
 ```
 
-To expose the gateway safely on a real domain (HTTPS, behind nginx or Caddy), follow [Reverse proxy setup](operations/reverse-proxy.md). Don't put `--allow-empty` on anything reachable from the internet — that flag is for your laptop.
+To expose Omnipus safely on a real domain (HTTPS, behind nginx or Caddy), follow [Reverse proxy setup](operations/reverse-proxy.md).
 
 ### (b) Pure terminal chat — no browser at all
 
-If you just want to talk to your agents from the terminal, you don't need the gateway at all:
+If you just want to talk to your agents from the terminal, you don't need to run the server at all:
 
 ```bash
 omnipus agent
@@ -336,7 +362,7 @@ Run `omnipus doctor` after any big config change, and especially before exposing
 
 Running Omnipus on a server with no screen? A few things make life easier.
 
-**Run it under systemd.** Create a service that runs `omnipus gateway` and keeps it alive across reboots. Point your reverse proxy at it for HTTPS — see [Reverse proxy setup](operations/reverse-proxy.md).
+**Run it under systemd.** Create a service that runs `omnipus start` and keeps it alive across reboots. Point your reverse proxy at it for HTTPS — see [Reverse proxy setup](operations/reverse-proxy.md).
 
 **Or run it in Docker.** A container is often the simplest way to keep Omnipus isolated and easy to update. See [Running with Docker](docker.md).
 
@@ -345,7 +371,7 @@ Running Omnipus on a server with no screen? A few things make life easier.
 **Watch the logs while you set things up:**
 
 ```bash
-omnipus gateway -d --no-truncate
+omnipus start -d --no-truncate
 ```
 
 ---
@@ -355,7 +381,7 @@ omnipus gateway -d --no-truncate
 The CLI and the web app aren't identical. The CLI is built for **setup, running a
 server, secrets, skills, scheduling, and terminal chat** — and it's the better tool for
 headless boxes. But some things are **web-app only** today. If you need one of these,
-open the app in a browser (`omnipus gateway`, then visit `http://localhost:5000`):
+open the app in a browser (`omnipus start`, then visit `http://localhost:5000`):
 
 | Want to… | CLI | Web app |
 |---|---|---|
@@ -377,7 +403,7 @@ open the app in a browser (`omnipus gateway`, then visit `http://localhost:5000`
 | **Manage users, roles, devices** | ❌ | ✅ (admin) |
 
 A few things are **easier from the CLI** than the app: first-run setup
-(`omnipus onboard`), running the server (`omnipus gateway`), rotating the credential
+(`omnipus onboard`), running the server (`omnipus start`), rotating the credential
 vault (`omnipus credentials rotate`), verifying the audit log (`omnipus audit verify`),
 and importing from another install (`omnipus migrate`).
 

@@ -34,7 +34,7 @@ build-from-source, and more), see the **Install section of the
 If you installed natively, start the app:
 
 ```bash
-omnipus gateway
+omnipus start
 ```
 
 Then open **http://localhost:5000** in your browser. (With Docker, it's already
