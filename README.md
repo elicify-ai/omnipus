@@ -99,7 +99,7 @@ Three supported paths. Pick the one that matches your host, then jump to [First 
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/install.sh | sh
-omnipus gateway
+omnipus start
 # open http://localhost:5000
 ```
 
@@ -162,7 +162,7 @@ Heavy image is not currently published to GHCR — build it yourself per the sni
 git clone https://github.com/elicify-ai/omnipus.git
 cd omnipus
 make build        # builds SPA + Go binary in one step
-./build/omnipus gateway
+./build/omnipus start
 ```
 
 Requires Go 1.26+ and Node 24+. `make build` runs `spa-embed` first so `go:embed` picks up the latest Vite output.
@@ -172,6 +172,24 @@ Requires Go 1.26+ and Node 24+. `make build` runs `spa-embed` first so `go:embed
 Two ports open: **5000** for SPA + API, **5001** for sandboxed agent preview iframes. The onboarding wizard runs on first visit: Welcome → Provider → API Key → Model → Admin Account → Done.
 
 A 256-bit AES key auto-generates at `~/.omnipus/master.key` (mode `0600`). **Back it up** — losing it means losing every encrypted credential. For headless deployments, pre-provision via `OMNIPUS_KEY_FILE` or `OMNIPUS_MASTER_KEY`. → [docs/credential_encryption.md](docs/credential_encryption.md)
+
+### Headless onboarding (no browser)
+
+If you can't open `localhost:5000` — Docker host, remote VPS, CI runner — finish onboarding from the shell instead. Secrets read from stdin so they never appear in `ps`:
+
+```bash
+printf '%s\n%s\n' "$OPENROUTER_API_KEY" "$ADMIN_PASSWORD" | \
+  omnipus onboard --non-interactive \
+    --provider openrouter \
+    --api-key-stdin \
+    --model 'z-ai/glm-5v-turbo' \
+    --admin-username admin \
+    --admin-password-stdin
+
+omnipus start
+```
+
+`omnipus onboard --help` lists every flag (`--provider`, `--api-key`, `--api-key-stdin`, `--model`, `--admin-username`, `--admin-password`, `--admin-password-stdin`, `--non-interactive`). Same end-state mutations as the SPA wizard — config, credentials, admin user, state — so you can log in immediately with the credentials you just passed.
 
 ---
 

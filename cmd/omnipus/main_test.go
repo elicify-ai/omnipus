@@ -40,7 +40,10 @@ func TestNewOmnipusCommand(t *testing.T) {
 		"credentials",
 		"cron",
 		"doctor",
-		"gateway",
+		// "gateway" was renamed to "start" (2026-05-30). The legacy name
+		// remains accepted via Cobra aliases; only the canonical Use is
+		// enumerated by cmd.Commands().
+		"start",
 		"migrate",
 		"model",
 		"onboard",

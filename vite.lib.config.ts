@@ -9,7 +9,7 @@ export default defineConfig({
   plugins: [
     tailwindcss(),
     react(),
-    dts({ include: ['src'], outDir: 'dist/lib' }),
+    dts({ include: ['src'], outDirs: ['dist/lib'] }),
   ],
   resolve: {
     alias: {
