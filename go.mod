@@ -15,7 +15,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/ergochat/irc-go v0.6.0
 	github.com/ergochat/readline v0.1.3
-	github.com/gdamore/tcell/v2 v2.13.8
+	github.com/gdamore/tcell/v2 v2.13.10
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/gomarkdown/markdown v0.0.0-20260411013819-759bbc3e3207
 	github.com/google/uuid v1.6.0
