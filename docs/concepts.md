@@ -31,9 +31,24 @@ the new agent simply takes over and keeps going.
 switch which agent you're talking to at any time, and reopen an old conversation
 later to pick up where you left off.
 
-**Memory.** When a chat goes quiet or ends, the app quietly writes a short recap of
-what happened and remembers it for next time. You never manage files or notes — your
-agents just remember the important bits when you come back.
+**Memory & self-learning.** When a chat goes quiet or ends, the app quietly writes a
+short recap of what happened — and records **lessons learned** (what went well, what
+to improve). The recap carries into your next session automatically, and the lessons
+are saved so an agent can recall them when they're relevant. You never manage files or
+notes: your team remembers the important bits, and builds on past work instead of
+starting cold each time.
+
+**Your preferences.** You can tell every agent how you like to work once, and they'll
+all know it. In **Settings → Profile**, the *"What should the agents know about you?"*
+box is shared with every agent — use it for standing preferences (your name, your
+timezone, "always answer concisely", "I prefer Python", and so on).
+
+**Delegation & parallel work.** Agents don't only talk to you — they can **delegate**.
+An agent can plan a piece of work and assign it to a teammate as a **task**; the
+assignee picks it up when it's started (by you, or automatically on the next scheduled
+sweep). Capable agents can also **spawn subagents** to work on several parts of a big
+job at the same time, then bring the results back together. You watch all of this on
+the **Command Center** task board.
 
 **Channels.** These are the ways you can reach your agents: the **web app**, the
 **command line (CLI)**, or **14 chat platforms** like Telegram, Discord, and Slack.
@@ -47,6 +62,10 @@ more skills to teach your team new tricks.
 browse a site, create a file. When an action could be sensitive, you'll see an inline
 **Allow / Deny / Always** prompt before anything happens, so you always stay in control.
 (Your API keys, by the way, are encrypted on disk.)
+
+**Tasks.** A task is a piece of background work with a title, a priority, and an agent
+assigned to it. You (or an agent) can create tasks, and the **Command Center** shows
+them on a board you can track from queued → running → done.
 
 ## Two ways to use Omnipus
 

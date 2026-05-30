@@ -192,13 +192,17 @@ For more on what skills are and how to pick good ones, see the [Skills guide](sk
 
 The **Command Center** is your dashboard for everything happening across your agents.
 
-- **Task board** — see work as a **list** or a **kanban** board, and click any task for its details.
+- **Task board** — see work as a **list** or a **kanban** board, filter by status (queued, running, completed, failed), drag a card between columns, and click any task for its details.
+- **Create a task** — give it a title, a description, a priority, and assign it to an agent.
+- **Delegation between agents** — agents can create and assign tasks to *each other*, not just to you. An agent might plan a job and hand a piece of it to a teammate. An assigned task waits in **queued** until it's started — either you start it from the board, or it's picked up automatically on the next scheduled sweep. (It doesn't run the instant it's assigned.)
 - **Activity feed** — a live stream of what your agents have been doing.
 - **Pending-approval badge** — a heads-up when something is waiting on your **Allow / Deny** decision.
 - **Daily cost** — what you've spent today at a glance, alongside how many agents and channels are active.
 
 ![The Command Center dashboard](marketing/screenshots/08-command-center.png)
 *Tasks, activity, approvals, and daily cost — all in one place.*
+
+**Parallel work with subagents.** For a big job, a capable agent can **spawn subagents** that work on different parts at the same time and report back — so a large task finishes faster. Jim can do this out of the box; other agents can be given the ability in their **Tools & permissions**. The subagents' work appears as nested cards in the chat (see [Watching work happen](#watching-work-happen)).
 
 ---
 
@@ -211,13 +215,24 @@ The **Settings** page is organized into tabs. Here's what each one is for:
 - **Gateway** — settings for the server that runs the web app and API.
 - **Data** — your data, storage, and exports.
 - **Routing** — how requests get matched to the right agent or model. (See [Routing](routing.md).)
-- **Profile** — your own account details.
+- **Profile** — your own account details, plus **"What should the agents know about you?"** (see below).
 - **About** — version and app info.
 
 Two tabs, **Devices** and **Access** (users and roles), only appear if you're an **admin**.
 
 ![The Settings page](marketing/screenshots/10-settings.png)
 *Settings, grouped by what you're trying to change.*
+
+### Tell your agents your preferences
+
+In **Settings → Profile** there's a box labelled **"What should the agents know about you?"**. Whatever you write here is shared with **every** agent, on every conversation — so you only have to say it once. Good things to put here:
+
+- your name and timezone,
+- how you like answers ("be concise", "always show your reasoning"),
+- tools or languages you prefer ("I use Python", "default to metric units"),
+- anything an agent should always keep in mind.
+
+> 📸 **Screenshot needed:** Settings → Profile showing the "What should the agents know about you?" text box.
 
 ---
 

@@ -63,7 +63,9 @@ Four live screenshots, captured against the running gateway.
 ## What you actually get
 
 - **A team, not a chatbot.** Five named agents who hand work to each other in the same conversation — Mia hears your request, picks the right teammate, and passes control over. No copy-paste, no re-explaining. → [How it works](docs/concepts.md)
-- **Agents that remember you.** When a conversation winds down, Omnipus quietly writes a recap and recalls it next time — so you're not starting from scratch every session. Nothing for you to manage. → [docs/memory.md](docs/memory.md)
+- **They delegate and parallelize.** Agents can plan work and assign tasks to each other — track it all on the Command Center board — and break a big job into parallel subagents that report back. → [Using the web app](docs/using-omnipus-ui.md)
+- **Memory that learns.** When a conversation winds down, Omnipus writes a recap *and* records the lessons learned — what went well, what to improve. The recap carries into your next session automatically and the lessons are kept for recall, so your team builds on past work instead of starting cold. → [docs/memory.md](docs/memory.md)
+- **Agents that know your preferences.** Tell them once in Settings → Profile ("be concise", "I use Python", your timezone) and every agent keeps it in mind. → [How it works](docs/concepts.md)
 - **Reach them anywhere.** Use the web app, the terminal, or wire your agents into Telegram, Discord, Slack, WhatsApp, and 10 other chat platforms — voice notes and images included. → [docs/chat-apps.md](docs/chat-apps.md)
 - **You stay in control.** Agents ask permission before running anything sensitive (Allow / Deny / Always), and every action is logged so you can see exactly what happened. → [Using the web app](docs/using-omnipus-ui.md)
 - **Extend it.** Install reusable **skills**, connect **MCP** servers, and let Ava build brand-new custom agents for you on demand. → [docs/skills.md](docs/skills.md)
