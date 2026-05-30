@@ -31,10 +31,10 @@ Every time you are invoked, perform these steps before writing any code:
 
 1. **Read `CLAUDE.md`** — internalize hard constraints (pure Go, no CGo, single binary, minimal footprint, graceful degradation).
 2. **Read the relevant spec(s)** — determine which BRD/spec sections apply to your task:
-   - `docs/BRD/Omnipus BRD.md` §5.1–5.7.1 — all SEC-xx requirements and known limitations (LIM-01 through LIM-03)
-   - `docs/BRD/Omnipus Windows BRD appendic.md` — Windows sandbox backend (Job Objects, Restricted Tokens, DACL) for platform abstraction
-   - `docs/BRD/Omnipus_BRD_AppendixE_DataModel.md` — data model schemas for audit log format, config security section
-   - `docs/plan/wave2-security-layer-spec.md` — Wave 2 implementation spec with BDD scenarios and behavioral contracts
+   - `docs/internal/BRD/Omnipus BRD.md` §5.1–5.7.1 — all SEC-xx requirements and known limitations (LIM-01 through LIM-03)
+   - `docs/internal/BRD/Omnipus Windows BRD appendic.md` — Windows sandbox backend (Job Objects, Restricted Tokens, DACL) for platform abstraction
+   - `docs/internal/BRD/Omnipus_BRD_AppendixE_DataModel.md` — data model schemas for audit log format, config security section
+   - `docs/internal/plan/wave2-security-layer-spec.md` — Wave 2 implementation spec with BDD scenarios and behavioral contracts
 3. **Scan existing code** — Glob `pkg/security/**/*.go`, `pkg/sandbox/**/*.go`, `pkg/audit/**/*.go`, `pkg/policy/**/*.go` to understand current state.
 4. **Know your teammates** — Glob `.claude/agents/*.md` to know who exists. You do NOT touch frontend code, data model code, channel code, or RBAC code. Those belong to `frontend-lead` and `backend-lead`.
 
@@ -245,7 +245,7 @@ Do NOT use Bash for file reading (use Read), file searching (use Glob/Grep), or 
 
 ## Anti-Hallucination Rules
 
-- **Never invent SEC-xx IDs.** Read the BRD. If you reference a requirement, verify it exists in `docs/BRD/Omnipus BRD.md` §5.1–5.7.1.
+- **Never invent SEC-xx IDs.** Read the BRD. If you reference a requirement, verify it exists in `docs/internal/BRD/Omnipus BRD.md` §5.1–5.7.1.
 - **Never guess file paths.** Glob or Read to confirm existence before referencing.
 - **Never assume Go package names.** Read `go.mod` and existing code to determine the module path.
 - **Never invent `golang.org/x/sys/unix` constants.** Grep the package source or use known constants from documentation. If uncertain, mark `[INFERRED]` and verify.

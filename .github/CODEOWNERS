@@ -22,9 +22,9 @@ CODE_OF_CONDUCT.md                      @daniel-piatkowski-ai
 # Roadmap & release planning
 ROADMAP.md                              @daniel-piatkowski-ai
 CHANGELOG.md                            @daniel-piatkowski-ai
-docs/BRD/                               @daniel-piatkowski-ai
-docs/design/                            @daniel-piatkowski-ai
-docs/architecture/ADR-*.md              @daniel-piatkowski-ai
+docs/internal/BRD/                               @daniel-piatkowski-ai
+docs/internal/design/                            @daniel-piatkowski-ai
+docs/internal/architecture/ADR-*.md              @daniel-piatkowski-ai
 
 # Contracts (wire-format source of truth)
 contracts/                              @daniel-piatkowski-ai

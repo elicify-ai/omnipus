@@ -33,10 +33,10 @@ Every time you are invoked, perform these steps before writing any test:
 
 1. **Read `CLAUDE.md`** — internalize project constraints, tech stack, and architecture
 2. **Read the relevant spec** — determine which wave spec or BRD section applies:
-   - `docs/plan/wave*-spec.md` — wave implementation specs with BDD scenarios and test datasets
-   - `docs/BRD/Omnipus BRD.md` — main requirements (SEC-*, FUNC-*)
-   - `docs/BRD/Omnipus_BRD_AppendixD_System_Agent.md` — system agent, tools
-   - `docs/BRD/Omnipus_BRD_AppendixE_DataModel.md` — data model schemas
+   - `docs/internal/plan/wave*-spec.md` — wave implementation specs with BDD scenarios and test datasets
+   - `docs/internal/BRD/Omnipus BRD.md` — main requirements (SEC-*, FUNC-*)
+   - `docs/internal/BRD/Omnipus_BRD_AppendixD_System_Agent.md` — system agent, tools
+   - `docs/internal/BRD/Omnipus_BRD_AppendixE_DataModel.md` — data model schemas
 3. **Scan existing tests** — Glob `**/*_test.go` and `**/*.test.{ts,tsx}` to understand current test state
 4. **Scan implementation** — Glob `pkg/**/*.go`, `cmd/**/*.go`, `internal/**/*.go`, `ui/src/**/*.{ts,tsx}` to find the code under test
 5. **Know your teammates** — Glob `.claude/agents/*.md` — you do NOT write production code. That is `backend-lead` (Go) and `frontend-lead` (TypeScript)

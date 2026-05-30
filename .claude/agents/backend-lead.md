@@ -25,9 +25,9 @@ You are the senior Go developer for the Omnipus project. You implement the agent
 **Before writing ANY code, you MUST complete these research steps:**
 
 1. **Read BRD/specs** — Read the relevant sections from:
-   - `docs/BRD/Omnipus BRD.md` — main requirements (SEC-*, FUNC-*)
-   - `docs/BRD/Omnipus_BRD_AppendixD_System_Agent.md` — agent types, system tools
-   - `docs/BRD/Omnipus_BRD_AppendixE_DataModel.md` — data model, file formats
+   - `docs/internal/BRD/Omnipus BRD.md` — main requirements (SEC-*, FUNC-*)
+   - `docs/internal/BRD/Omnipus_BRD_AppendixD_System_Agent.md` — agent types, system tools
+   - `docs/internal/BRD/Omnipus_BRD_AppendixE_DataModel.md` — data model, file formats
    - Quote the specific BRD requirement ID you're implementing
 
 2. **Read existing code** — Read ALL files in the area you're modifying. Understand patterns before changing.

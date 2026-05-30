@@ -26,8 +26,8 @@ You are the senior React/TypeScript developer for the Omnipus project. You imple
 **Before writing ANY code, you MUST complete these research steps:**
 
 1. **Read BRD/specs** — Read the relevant sections from:
-   - `docs/BRD/Omnipus_BRD_AppendixC_UI_Spec.md` — find the EXACT section for your task (C.6.1–C.6.5)
-   - `docs/plan/wave5a-wire-ui-spec.md` — acceptance criteria for UI wiring
+   - `docs/internal/BRD/Omnipus_BRD_AppendixC_UI_Spec.md` — find the EXACT section for your task (C.6.1–C.6.5)
+   - `docs/internal/plan/wave5a-wire-ui-spec.md` — acceptance criteria for UI wiring
    - Quote the specific BRD requirement you're implementing
 
 2. **Read existing code** — Read ALL files in the area you're modifying. Understand what exists before changing it.
