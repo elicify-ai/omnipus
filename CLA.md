@@ -84,7 +84,7 @@ discussion.
 **Document version:** Omnipus CLA v1.0 (2026)
 **Project:** Omnipus (https://github.com/elicify-ai/omnipus)
 **Project Steward:** elicify.ai Pte. Ltd., a company incorporated in Singapore
-(UEN: _________________; registered address: _________________________________).
+(UEN 202622464W; registered address: 68 Circular Road, #02-01, Singapore 049422).
 
 This Individual Contributor License Agreement (this "Agreement") is entered into
 by **You** (the individual identified by the GitHub account used to accept it) and
@@ -224,7 +224,7 @@ arising under or in connection with this Agreement.
 **Document version:** Omnipus CLA v1.0 (2026)
 **Project:** Omnipus (https://github.com/elicify-ai/omnipus)
 **Project Steward:** elicify.ai Pte. Ltd., a company incorporated in Singapore
-(UEN: _________________; registered address: _________________________________).
+(UEN 202622464W; registered address: 68 Circular Road, #02-01, Singapore 049422).
 
 This Corporate Contributor License Agreement (this "Agreement") is entered into by
 a corporation or other legal entity (the "Corporation") that wishes to submit
