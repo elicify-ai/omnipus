@@ -2,7 +2,7 @@
 //
 // This file declares the audit event-name constants, severity constants,
 // reason enum, and lightweight emitter helpers required by the Central
-// Tool Registry redesign spec (`docs/specs/tool-registry-redesign-spec.md`,
+// Tool Registry redesign spec (`docs/internal/specs/tool-registry-redesign-spec.md`,
 // revision 6). The events listed below are referenced by FRs:
 //
 //	FR-011, FR-038, FR-047, FR-049, FR-051, FR-054, FR-057, FR-060,

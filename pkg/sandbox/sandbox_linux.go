@@ -474,7 +474,7 @@ func (lb *LinuxBackend) ApplyToCmd(_ *exec.Cmd, _ SandboxPolicy) error {
 // field) was written-but-never-read dead code: the doc comment promised a
 // "debug-build assertion below" that was never implemented. Removed under the
 // v0.2 quick-wins charter; a proper per-cmd assertion via sync.Map is deferred
-// to v0.3 per docs/design/sandbox-redesign-2026-05.md.
+// to v0.3 per docs/internal/design/sandbox-redesign-2026-05.md.
 //
 // The function signature is preserved so callers (hardened_exec.go) do not
 // need a conditional: the call is a no-op and the compiler will inline+elide it.

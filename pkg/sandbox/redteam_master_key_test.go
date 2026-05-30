@@ -127,7 +127,7 @@ func runSecretReadChild(target string) {
 // $OMNIPUS_HOME, so the read is expected to succeed today — the test FAILS
 // by design until v0.2 (#155) lands the secrets-subtree carve-out.
 //
-// Reference: docs/architecture/AS-IS-architecture.md (sandbox carve-out for
+// Reference: docs/internal/architecture/AS-IS-architecture.md (sandbox carve-out for
 // $OMNIPUS_HOME), pkg/sandbox/sandbox.go::DefaultPolicy.
 func TestRedteam_MasterKey_Exfil_Blocked(t *testing.T) {
 	t.Logf(

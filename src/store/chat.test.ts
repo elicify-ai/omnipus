@@ -1266,7 +1266,7 @@ describe('chat store — H1-FE: unknown-sid done does not corrupt active stream'
 })
 
 // B3: cancel_stage frame handling
-// Refs: docs/specs/cancel-cross-channel-spec-review.md B3, L-1
+// Refs: docs/internal/specs/cancel-cross-channel-spec-review.md B3, L-1
 describe('chat store — cancel_stage frame (B3)', () => {
   it('sets cancelStage to "graceful" when a cancel_stage graceful frame arrives', () => {
     // Seed session as streaming so the frame has a valid target bucket.

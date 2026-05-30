@@ -7,7 +7,7 @@
 // Package gateway — in-process tool-approval registry.
 //
 // This file implements the approval state machine specified in the
-// "Approval State Table" section of docs/specs/tool-registry-redesign-spec.md
+// "Approval State Table" section of docs/internal/specs/tool-registry-redesign-spec.md
 // (revision 6).  The registry is purely in-process: gateway restart cancels
 // all pending approvals (FR-013).
 //

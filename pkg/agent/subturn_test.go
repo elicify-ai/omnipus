@@ -2089,7 +2089,7 @@ func TestSubTurn_IndependentContext(t *testing.T) {
 // TranscriptSessionID on the child's processOptions) and MUST pass after the
 // FR-6a fix in subturn.go.
 //
-// Refs: docs/specs/cancel-cross-channel-spec.md FR-6a, TDD Plan T0.
+// Refs: docs/internal/specs/cancel-cross-channel-spec.md FR-6a, TDD Plan T0.
 func TestSubTurnInheritsTranscriptSessionID(t *testing.T) {
 	al, cleanup := newAL(t)
 	defer cleanup()

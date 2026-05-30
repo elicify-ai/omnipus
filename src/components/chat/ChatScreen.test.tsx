@@ -2,7 +2,7 @@
 // Also covers: non-streaming shows all commands; commands without
 // availableWhileStreaming are hidden during streaming.
 //
-// Traces to: docs/specs/cancel-cross-channel-spec.md FR-3a
+// Traces to: docs/internal/specs/cancel-cross-channel-spec.md FR-3a
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'

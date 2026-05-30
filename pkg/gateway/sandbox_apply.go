@@ -6,7 +6,7 @@
 
 // Package gateway — Sprint-J sandbox-apply wiring.
 //
-// This file implements FR-J-001..016 from docs/plan/sprint-j-sandbox-apply-spec.md.
+// This file implements FR-J-001..016 from docs/internal/plan/sprint-j-sandbox-apply-spec.md.
 // It owns the boot-time orchestration of:
 //
 //   1. Mode resolution (CLI > config > default) with legacy Enabled mapping.

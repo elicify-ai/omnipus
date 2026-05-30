@@ -2,7 +2,7 @@
  * cancel-cross-channel.spec.ts — E2E tests for cross-channel /cancel feature.
  *
  * Scope: T21–T26 from cancel-cross-channel-spec.md §10 TDD Plan.
- * Traces to: docs/specs/cancel-cross-channel-spec.md US-1, US-4, US-5; T21–T26.
+ * Traces to: docs/internal/specs/cancel-cross-channel-spec.md US-1, US-4, US-5; T21–T26.
  *
  * Tests T21–T24, T26 drive a real LLM (OPENROUTER_API_KEY_CI required in CI).
  * T25 is partially driven by real LLM; the "Force-stopping..." path requires a

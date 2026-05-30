@@ -13,7 +13,7 @@
  *
  * We also verify the module exports MarkdownText (existence + type check).
  *
- * Traces to: docs/specs/chat-served-iframe-preview-spec.md
+ * Traces to: docs/internal/specs/chat-served-iframe-preview-spec.md
  * FR-016 / FR-017: Legacy URL rewrite in markdown link renderer
  */
 
