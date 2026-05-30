@@ -79,6 +79,31 @@ When v0.3 ships, the version cut is **1.0** — the rooms redesign is the archit
 
 ---
 
+## v1.0 — CLI ↔ UI feature parity 🟡
+
+**Epic:** [#211](https://github.com/elicify-ai/omnipus/issues/211) — tracked under the **Feature Parity** milestone.
+
+The CLI is already strong at setup, running the gateway, secrets, skills, scheduling, model/auth, and terminal chat — but several surfaces are web-app only today. The 1.0 goal is to let a terminal/headless user do (nearly) everything a browser user can. The current gaps are summarised for users in [`docs/using-omnipus-cli.md`](docs/using-omnipus-cli.md) ("What the CLI can't do (yet)").
+
+Child issues by priority:
+
+| Priority | Gap | Issue |
+|---|---|---|
+| P1 | Manage custom agents (create/edit/delete/list) | [#201](https://github.com/elicify-ai/omnipus/issues/201) |
+| P1 | Task board / Command Center commands | [#202](https://github.com/elicify-ai/omnipus/issues/202) |
+| P1 | Connect & manage chat channels (beyond WeChat) | [#203](https://github.com/elicify-ai/omnipus/issues/203) |
+| P2 | Add/test providers after first-run | [#208](https://github.com/elicify-ai/omnipus/issues/208) |
+| P2 | Manage MCP servers | [#204](https://github.com/elicify-ai/omnipus/issues/204) |
+| P2 | Richer terminal chat (attachments, streaming, slash commands) | [#205](https://github.com/elicify-ai/omnipus/issues/205) |
+| P3 | List / resume / delete sessions | [#206](https://github.com/elicify-ai/omnipus/issues/206) |
+| P3 | Set user preferences (USER.md) | [#207](https://github.com/elicify-ai/omnipus/issues/207) |
+| P3 | User / role / device management (admin) | [#209](https://github.com/elicify-ai/omnipus/issues/209) |
+| P3 | Routing, retention & sandbox settings | [#210](https://github.com/elicify-ai/omnipus/issues/210) |
+
+The CLI already **leads** the UI on `omnipus onboard`, `omnipus gateway`, `omnipus credentials rotate`, `omnipus audit verify`, and `omnipus migrate` — those stay CLI-first.
+
+---
+
 ## Post-1.0 — Variants and ecosystem 📋
 
 Long-term, the Go core ships as three product variants:
