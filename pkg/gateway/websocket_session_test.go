@@ -354,11 +354,11 @@ func TestWS_Message_FindsSession_InPerAgentStore(t *testing.T) {
 
 	// Assertion 1: no "error" frame surfaces.
 	select {
-	case cap := <-errs:
-		if cap.got {
-			assert.NotEqual(t, "session not found", cap.message,
+	case captured := <-errs:
+		if captured.got {
+			assert.NotEqual(t, "session not found", captured.message,
 				"regression: per-agent session must not produce 'session not found'")
-			t.Fatalf("unexpected error frame: %q", cap.message)
+			t.Fatalf("unexpected error frame: %q", captured.message)
 		}
 	case <-time.After(2 * time.Second):
 		// No error frame within budget — that's the happy path.

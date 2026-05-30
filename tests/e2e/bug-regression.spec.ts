@@ -310,7 +310,13 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
       return
     }
 
-    // 1. Create a custom agent — its store lives at
+    // 1. Navigate to the SPA first so the page is on the right origin —
+    //    localStorage is inaccessible from about:blank, which is the default
+    //    page state before any goto().
+    await page.goto('/')
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+
+    // 2. Create a custom agent — its store lives at
     //    OMNIPUS_HOME/agents/<id>/sessions/, NOT in the shared layout.
     //    Auth via the storageState token captured by global-setup.
     const token = await page.evaluate(() => localStorage.getItem('omnipus_auth_token'))
@@ -327,7 +333,7 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     expect(agentResp.ok(), `POST /agents failed: ${agentResp.status()} ${await agentResp.text()}`).toBe(true)
     const agent = (await agentResp.json()) as { id: string; name: string }
 
-    // 2. Seed a session directly under the agent's per-agent store —
+    // 3. Seed a session directly under the agent's per-agent store —
     //    mimicking what the task scheduler does when scheduling work to a
     //    custom agent. The session_id ULID is from the gateway's normal
     //    minting alphabet so validation.EntityID accepts it.
@@ -361,32 +367,32 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     fs.writeFileSync(path.join(sessionDir, 'meta.json'), JSON.stringify(meta, null, 2))
     fs.writeFileSync(path.join(sessionDir, 'transcript.jsonl'), '')
 
-    // 3. Navigate directly to the seeded session (TanStack Router hash form).
+    // 4. Navigate directly to the seeded session (TanStack Router hash form).
     await page.goto(`/#/sessions/${sessionID}`)
     await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
 
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 15_000 })
 
-    // 4. Listen for the "session not found" error frame. If it arrives,
+    // 5. Listen for the "session not found" error frame. If it arrives,
     //    the bug is back. We watch the page's connection store for a
     //    toast or error banner with that text.
     const errorBanner = page.locator('text=/session not found/i')
 
-    // 5. Send a follow-up message. With the fix this lands normally; without
+    // 6. Send a follow-up message. With the fix this lands normally; without
     //    it the SPA would surface the WS error.
     await input.fill('Hello from the regression test.')
     await input.press('Enter')
 
-    // 6. The user message bubble must appear (echoed by the WS).
+    // 7. The user message bubble must appear (echoed by the WS).
     const userMsg = page.locator('[data-message-id].flex-row-reverse').first()
     await expect(userMsg).toBeVisible({ timeout: 10_000 })
     await expect(userMsg).toContainText('Hello from the regression test.')
 
-    // 7. The "session not found" surface must NOT appear at any point.
+    // 8. The "session not found" surface must NOT appear at any point.
     await expect(errorBanner).toBeHidden({ timeout: 2_000 })
 
-    // 8. Belt-and-suspenders: the transcript on disk now contains the user
+    // 9. Belt-and-suspenders: the transcript on disk now contains the user
     //    message — proving the WS handler accepted the frame and wrote it
     //    through the per-agent store.
     await page.waitForTimeout(1_000) // let the append flush
