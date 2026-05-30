@@ -9,7 +9,16 @@ is missing, it's because the doc doesn't exist yet — please open an issue.
 
 ---
 
-## Get started
+## ▶ Start here
+
+New to Omnipus? Read these in order.
+
+- **Your first 10 minutes** — [getting-started.md](getting-started.md) — install → first conversation → handoff → build an agent
+- **How Omnipus works (plain English)** — [concepts.md](concepts.md) — the agents, sessions, memory, channels, skills
+- **Using the web app** — [using-omnipus-ui.md](using-omnipus-ui.md) — a task-based tour of the browser app
+- **Using the terminal / CLI** — [using-omnipus-cli.md](using-omnipus-cli.md) — run and chat from the command line
+
+## Install & run
 
 - **Install (one-liner / Docker / source)** — [../README.md#install](../README.md#install)
 - **First boot & onboarding** — [../README.md#first-boot](../README.md#first-boot)
