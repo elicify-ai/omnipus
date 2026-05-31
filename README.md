@@ -1,4 +1,4 @@
-<div align="center">
+<div align="left">
 <img src="src/assets/logo/omnipus-avatar.svg" alt="Omnipus" width="240">
 
 <h1>Omnipus</h1>
@@ -21,62 +21,6 @@
 <img src="docs/marketing/screenshots/04-agents-roster.png" alt="Omnipus agent roster" width="900">
 
 </div>
-
----
-
-## Meet the team
-
-Five named coworkers ship with every install.
-
-Their identity is locked — no silent knock-offs — but you control each one's model and tool policy.
-
-| Agent | Role | Best at |
-|---|---|---|
-| **Mia** | Coach & Guide | Onboarding new users, routing requests to the right teammate by intent — not by name. |
-| **Jim** | General Purpose | Hands-on implementation: writing code, creating files, scoping projects, coordinating across agents. |
-| **Ava** | Agent Builder | Interviews you, then creates a brand-new custom agent — persona, tools, prompt — in seconds. |
-| **Ray** | Researcher | Deep research with citations. Web search, fetch, synthesis. Refuses to bluff when evidence is thin. |
-| **Max** | Automator | Browser automation. Plan-then-execute multi-step flows with approval gates. |
-
-Need more? Ava builds unlimited custom agents, and Omnipus runs them all in the same binary.
-
----
-
-## See it work
-
-Four live screenshots, captured against the running gateway.
-
-### Mia routes by intent
-
-Tell her what you need — "I need an agent to help me build a marketing website" — and she picks the right teammate, says why, and hands off in 12 ms.
-
-The receiving agent picks up in the same transcript. No copy-paste.
-
-<img src="docs/marketing/screenshots/16-handoff-mia-to-jim.png" alt="Mia routes a website-build request to Jim by intent" width="900">
-
-### Ray researches with sources
-
-Web searches fan out, and the results synthesise into a numbered list with citations.
-
-He won't fake an answer.
-
-<img src="docs/marketing/screenshots/14-ray-research-demo.png" alt="Ray researches open-source agent frameworks with citations" width="900">
-
-### Max sees the web
-
-`browser.navigate` → `browser.screenshot`, chained in one turn.
-
-The image streams back through the media pipeline and renders inline.
-
-<img src="docs/marketing/screenshots/13-max-screenshot-demo.png" alt="Max screenshots anthropic.com and describes the page" width="900">
-
-### Ava builds an agent live
-
-Tell her what you need, watch her call `system.agent.create`, and get a summary card.
-
-The new agent shows up in the roster instantly.
-
-<img src="docs/marketing/screenshots/15-ava-build-agent.png" alt="Ava builds Penny the pricing analyst" width="900">
 
 ---
 
@@ -152,6 +96,62 @@ Pick from 35+ AI providers — including fully-local options like Ollama.
 **Channel-to-agent routing** — binds inbound messages to specific agents by channel, account, guild, team, or peer. → [Inbound bindings](docs/routing.md#inbound-bindings)
 
 </details>
+
+---
+
+## Meet the team
+
+Five named coworkers ship with every install.
+
+Their identity is locked — no silent knock-offs — but you control each one's model and tool policy.
+
+| Agent | Role | Best at |
+|---|---|---|
+| **Mia** | Coach & Guide | Onboarding new users, routing requests to the right teammate by intent — not by name. |
+| **Jim** | General Purpose | Hands-on implementation: writing code, creating files, scoping projects, coordinating across agents. |
+| **Ava** | Agent Builder | Interviews you, then creates a brand-new custom agent — persona, tools, prompt — in seconds. |
+| **Ray** | Researcher | Deep research with citations. Web search, fetch, synthesis. Refuses to bluff when evidence is thin. |
+| **Max** | Automator | Browser automation. Plan-then-execute multi-step flows with approval gates. |
+
+Need more? Ava builds unlimited custom agents, and Omnipus runs them all in the same binary.
+
+---
+
+## See it work
+
+Four live screenshots, captured against the running gateway.
+
+### Mia routes by intent
+
+Tell her what you need — "I need an agent to help me build a marketing website" — and she picks the right teammate, says why, and hands off in 12 ms.
+
+The receiving agent picks up in the same transcript. No copy-paste.
+
+<img src="docs/marketing/screenshots/16-handoff-mia-to-jim.png" alt="Mia routes a website-build request to Jim by intent" width="900">
+
+### Ray researches with sources
+
+Web searches fan out, and the results synthesise into a numbered list with citations.
+
+He won't fake an answer.
+
+<img src="docs/marketing/screenshots/14-ray-research-demo.png" alt="Ray researches open-source agent frameworks with citations" width="900">
+
+### Max sees the web
+
+`browser.navigate` → `browser.screenshot`, chained in one turn.
+
+The image streams back through the media pipeline and renders inline.
+
+<img src="docs/marketing/screenshots/13-max-screenshot-demo.png" alt="Max screenshots anthropic.com and describes the page" width="900">
+
+### Ava builds an agent live
+
+Tell her what you need, watch her call `system.agent.create`, and get a summary card.
+
+The new agent shows up in the roster instantly.
+
+<img src="docs/marketing/screenshots/15-ava-build-agent.png" alt="Ava builds Penny the pricing analyst" width="900">
 
 ---
 
