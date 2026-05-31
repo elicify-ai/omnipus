@@ -235,18 +235,28 @@ func (t *ModelsListTool) Execute(_ context.Context, args map[string]any) *tools.
 		if name == "" {
 			name = providerFromModelRef(p.Model)
 		}
-		if name == "" || providersSeen[name] != nil {
+		if name == "" {
 			continue
 		}
 		if filterProvider != "" && name != filterProvider {
 			continue
 		}
-		// Resolve API key.
+		// The credential store (referenced by APIKeyRef) is the single source of
+		// truth for a provider's key; APIKey() returns the value boot-injected
+		// into the environment from that same ref. A provider name can appear in
+		// config multiple times — seed scaffolding entries carry an empty
+		// APIKeyRef while the onboarded/configured entry carries the ref. We must
+		// therefore select the entry that actually resolves a key rather than the
+		// first one encountered (the previous bug: the keyless seed entry won and
+		// models.list reported "no API key configured").
 		apiKey := p.APIKey()
 		if apiKey == "" && p.APIKeyRef != "" && t.deps.CredStore != nil {
 			if v, err := t.deps.CredStore.Get(p.APIKeyRef); err == nil {
 				apiKey = v
 			}
+		}
+		if existing := providersSeen[name]; existing != nil && (existing.apiKey != "" || apiKey == "") {
+			continue
 		}
 		providersSeen[name] = &providerInfo{name: name, apiKey: apiKey}
 	}
