@@ -157,15 +157,18 @@ Pick from 35+ AI providers — including fully-local options like Ollama.
 
 ## Install
 
-Three supported paths. Pick the one that matches your host, then jump to [First boot](#first-boot).
+Find your platform below. Most people want the one-line install; Windows and Intel-Mac users run Omnipus in Docker for now.
 
-| Path | When to use | Browser tools (`browser.*`, `web_serve`) |
-|---|---|---|
-| [Native binary](#native-binary-recommended) | Bare-metal / VPS / WSL2; you own the host kernel | ✅ — Chromium auto-downloads on first `browser.*` call |
-| [Docker, minimal image](#docker-minimal-image) | Lowest-overhead deploy; chat + channels only, no browsing | ❌ — see [limitations](#minimal-image-limitations) |
-| [Docker, heavy image](#docker-heavy-image) | Full feature parity inside a container | ✅ — apk Chromium pre-baked |
+| Your system | Do this |
+|---|---|
+| **Linux** (x86-64 or ARM64) | [One-line install](#linux-and-macos-apple-silicon) |
+| **macOS** (Apple Silicon — M1/M2/M3/M4) | [One-line install](#linux-and-macos-apple-silicon) |
+| **macOS** (Intel) | [Run in Docker](#windows-and-intel-macos) — no native binary yet |
+| **Windows** | [Run in Docker](#windows-and-intel-macos) — native app in progress |
 
-### Native binary (recommended)
+Once it's running, continue to [First boot](#first-boot).
+
+### Linux and macOS (Apple Silicon)
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/install.sh | sh
@@ -173,7 +176,9 @@ omnipus start
 # open http://localhost:5000
 ```
 
-The script detects your OS and architecture (`uname -s` / `uname -m`), downloads the matching `omnipus_<OS>_<arch>.tar.gz` from the latest GitHub Release, and verifies its SHA256 against the published `checksums.txt`.
+The same command works on Linux (x86-64 or ARM64) and Apple-Silicon Macs — it auto-detects your system and downloads the right build. (On macOS you may need to approve the binary the first time under System Settings → Privacy & Security.)
+
+Under the hood, the script detects your OS and architecture (`uname -s` / `uname -m`), downloads the matching `omnipus_<OS>_<arch>.tar.gz` from the latest GitHub Release, and verifies its SHA256 against the published `checksums.txt`.
 
 It then extracts a single ~30 MB self-contained Go binary (SPA embedded via `go:embed`, no shared-lib runtime) to `/usr/local/bin/omnipus`.
 
@@ -191,7 +196,17 @@ Customise via environment:
 
 That download needs glibc, so on Alpine hosts install `chromium` via `apk` first — the PATH lookup then resolves and the managed download is skipped.
 
-**Supported platforms in v0.1:** Linux amd64, Linux arm64, macOS arm64. Other targets are tracked in [platform support](docs/operations/platform-support.md).
+**Supported platforms in v0.1:** Linux amd64, Linux arm64, macOS arm64 (Apple Silicon). Other targets are tracked in [platform support](docs/operations/platform-support.md).
+
+### Windows and Intel macOS
+
+We don't ship a native binary for these platforms yet, so the smooth path is Docker.
+
+**Windows** — a native Windows app is on the roadmap and actively being worked on. Until it ships, run Omnipus in Docker.
+
+**Intel Macs** — there's no prebuilt Intel binary in v0.1 (it's deferred to v0.1.1). Use Docker, or [build from source](#from-source-contributors).
+
+For both, we recommend the **full (heavy) Docker image**: it bundles browser automation and Python MCP support, so you get complete feature parity — nothing is missing. The build-and-run commands are in [Docker, heavy image](#docker-heavy-image) just below. If you only need chat and channels and don't care about in-app browsing, the smaller [published image](#docker-minimal-image) starts with a single `docker run`.
 
 ### Docker, minimal image
 
