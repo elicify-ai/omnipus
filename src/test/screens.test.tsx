@@ -42,6 +42,14 @@ vi.mock('@tanstack/react-router', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/mock-avatar.svg' }))
 
+// react-shiki ships a CSS file that jsdom cannot handle (Unknown file extension ".css").
+// Mock the entire shiki-highlighter wrapper so its transitive CSS import never fires
+// when ChatScreen is loaded via @/routes/_app/index in the Chat screen describe block.
+vi.mock('@/components/chat/shiki-highlighter', () => ({
+  SyntaxHighlighter: () => null,
+  CopyCodeHeader: () => null,
+}))
+
 // Wave C fix: ChatScreen uses AssistantUI hooks and primitives that require an
 // AuiProvider runtime context. OmnipusRuntimeProvider is too heavy for unit tests
 // (it opens a WebSocket connection). Mock @assistant-ui/react so all primitives

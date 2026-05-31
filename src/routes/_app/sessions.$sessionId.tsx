@@ -8,6 +8,7 @@ import { useSessionStore } from '@/store/session'
 function SessionRoute() {
   const { sessionId } = Route.useParams()
   const setActiveSession = useSessionStore((s) => s.setActiveSession)
+  const setAttachedContext = useSessionStore((s) => s.setAttachedContext)
 
   // Loader pre-fetches session detail and activates the session synchronously
   // in the Zustand store before this component renders. The useQuery below is
@@ -27,11 +28,16 @@ function SessionRoute() {
   })
 
   // Keep the store in sync when detail refreshes (e.g. agent_removed toggles).
+  // When the session type is 'task', also restore the attached context so
+  // the Task title banner in ChatScreen stays visible after a background refresh.
   useEffect(() => {
     if (detail?.session) {
       setActiveSession(detail.session.id, detail.session.agent_id, null)
+      if (detail.session.type === 'task') {
+        setAttachedContext('task', detail.session.title)
+      }
     }
-  }, [detail?.session?.id, detail?.session?.agent_id, setActiveSession])
+  }, [detail?.session?.id, detail?.session?.agent_id, detail?.session?.type, detail?.session?.title, setActiveSession, setAttachedContext])
 
   return <ChatScreen agentRemoved={detail?.agent_removed ?? false} />
 }
@@ -45,10 +51,19 @@ export const Route = createFileRoute('/_app/sessions/$sessionId')({
     // typed message is routed by the gateway to a new orphan session instead
     // of the URL session (because activeSessionId was still null from useEffect
     // firing after the first render).
+    //
+    // When the session type is 'task', also set the attached context so
+    // ChatScreen renders the Task title banner on first mount. setAttachedContext
+    // does not send a WS frame — the WS attach_session is handled by
+    // OmnipusRuntimeProvider / WsLifecycle on route mount.
     try {
       const detail = await fetchSessionDetail(params.sessionId)
       if (detail?.session) {
-        useSessionStore.getState().setActiveSession(detail.session.id, detail.session.agent_id, null)
+        const store = useSessionStore.getState()
+        store.setActiveSession(detail.session.id, detail.session.agent_id, null)
+        if (detail.session.type === 'task') {
+          store.setAttachedContext('task', detail.session.title)
+        }
       }
       return detail ?? null
     } catch (err) {
