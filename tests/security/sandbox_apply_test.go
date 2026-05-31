@@ -10,7 +10,7 @@ package security_test
 // state. On macOS / Windows / pre-5.13 kernels, the tests verify graceful fallback
 // (no panic, sandbox.applied=false, backend=fallback).
 //
-// Traces to: docs/plan/sprint-j-sandbox-apply-spec.md US-1 (boot-time wiring),
+// Traces to: docs/internal/plan/sprint-j-sandbox-apply-spec.md US-1 (boot-time wiring),
 // US-2 (dev override), Acceptance Scenarios 2, 4, 6.
 //
 // Note: Apply() is a one-way ratchet on the calling process (Landlock restrict_self

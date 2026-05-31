@@ -13,7 +13,7 @@
  * We test the no-warmup path by rendering IframePreview directly with
  * kind='serve_workspace' (matching what ServeWorkspaceBlock passes).
  *
- * Traces to: docs/specs/chat-served-iframe-preview-spec.md
+ * Traces to: docs/internal/specs/chat-served-iframe-preview-spec.md
  * FR-008: result includes both path and url
  * FR-013: serve_workspace does NOT require warmup
  * FR-015: link-only fallback for invalid path

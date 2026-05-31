@@ -74,7 +74,7 @@ A fresh install with no `sandbox.mode` written to disk and an empty `allowed_pat
 ## CLI override
 
 ```
-./omnipus gateway --sandbox=enforce|permissive|off
+./omnipus start --sandbox=enforce|permissive|off
 ```
 
 The flag is parsed and validated in `cmd/omnipus/internal/gateway/command.go:23-49`. An invalid value (`--sandbox=of`) fails fast with a usage error (exit code 2) before any boot logic runs. The CLI flag takes precedence over the config file unconditionally — useful for one-shot debugging without persisting state. The status endpoint will report `disabled_by: "cli_flag"` when `--sandbox=off` overrode a config value.

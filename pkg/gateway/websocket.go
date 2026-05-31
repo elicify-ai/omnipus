@@ -150,7 +150,7 @@ type wsConn struct {
 	// they don't interleave with replay frames. After replay finishes they are
 	// drained into sendCh in arrival order.
 	//
-	// Ordering invariant (see docs/investigation/bug-5-replay-order.md,
+	// Ordering invariant (see docs/internal/investigation/bug-5-replay-order.md,
 	// code-reviewer Finding #2, and architect Finding #4):
 	//   Writers must NOT snapshot isReplayingLive and then send to the snapshotted
 	//   channel as two separate operations — the drain can empty replayDivertCh and
@@ -1281,7 +1281,7 @@ func (h *WSHandler) handleAttachSession(
 	// FR-I-009: drain any live events buffered during replay, in arrival order,
 	// BEFORE disarming the divert flag.
 	//
-	// Ordering guarantee (see docs/investigation/bug-5-replay-order.md and
+	// Ordering guarantee (see docs/internal/investigation/bug-5-replay-order.md and
 	// code-reviewer Finding #2 / architect Finding #4):
 	//
 	//   The flag must be cleared AFTER the drain, not before.  Clearing it first
@@ -1504,7 +1504,7 @@ func sendConnGenFrame(wc *wsConn, frameType string, frame any) {
 // backpressure drop logic shared by sendConnGenFrame and wsStreamer.Update.
 // frameType is used to determine criticality (done, error, exec_approval_*).
 //
-// Ordering guarantee (see docs/investigation/bug-5-replay-order.md, code-reviewer
+// Ordering guarantee (see docs/internal/investigation/bug-5-replay-order.md, code-reviewer
 // Finding #2): the channel-selection decision (read isReplayingLive + pick targetCh)
 // and the channel send are performed while holding wc.replayMu.RLock().  The drain in
 // handleAttachSession holds wc.replayMu.Lock() for the entire drain+disarm sequence.
@@ -2128,7 +2128,7 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	//
 	// sendRawFrameBytes also holds wc.replayMu.RLock() for the channel-selection +
 	// send operation, which prevents the TOCTOU race described in
-	// docs/investigation/bug-5-replay-order.md (code-reviewer Finding #2).
+	// docs/internal/investigation/bug-5-replay-order.md (code-reviewer Finding #2).
 	//
 	// sendRawFrameBytes uses a 3-attempt backoff and increments BOTH droppedFrames
 	// AND droppedTokens on final drop.  We do not duplicate the droppedTokens

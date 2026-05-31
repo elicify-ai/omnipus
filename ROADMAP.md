@@ -13,6 +13,7 @@ A single open-source Go binary today. The long-term plan also includes an Electr
 | **v0.1** | ✅ Complete on `feature/iframe-preview-tier13` | Stabilized branch; iframe preview + kernel bind-port allow-list + sandbox-aware exec + `web_serve` unification all shipped |
 | **v0.2** | ✅ Complete ([#155](https://github.com/elicify-ai/omnipus/issues/155) closed 2026-05-04) | Pentest quick wins: HMAC-chained audit log, default-deny internal-CIDR egress, per-agent memory rate limits, shell-guard hardening, master.key path guard, env-var allowlist |
 | **v0.3 / 1.0** | 🟡 Design complete; implementation pending ([#156](https://github.com/elicify-ai/omnipus/issues/156)) | "Rooms" redesign — memory + projects + tasks + sandbox topology rebuilt around private agent rooms and shared project rooms |
+| **v1.0 — Feature Parity** | 🟡 In progress | Close the gap between the CLI and the web UI so a terminal/headless user can do (nearly) everything a browser user can — tracked by epic [#211](https://github.com/elicify-ai/omnipus/issues/211) |
 | **Post-1.0** | 📋 Planned | Desktop variant (Electron wrapper), Cloud / SaaS variant (hosted with team features) |
 
 ---
@@ -64,17 +65,42 @@ Items that **required architectural change** (process isolation, capability-base
 
 **Issue:** [#156](https://github.com/elicify-ai/omnipus/issues/156) — design complete, implementation not started
 
-Fresh-build. **No backward compatibility guarantee** with v0.1/v0.2 storage layouts. The five locked design documents in `docs/design/` are the implementation spec:
+Fresh-build. **No backward compatibility guarantee** with v0.1/v0.2 storage layouts. The five locked design documents in `docs/internal/design/` are the implementation spec:
 
 | Design doc | What changes |
 |---|---|
-| [`sandbox-redesign-2026-05.md`](docs/design/sandbox-redesign-2026-05.md) | Two-room workspace topology — **private agent rooms** under each agent's workspace, **shared project rooms** under `.omnipus/projects/`, each room being its own sandbox boundary |
-| [`memory-redesign-2026-05.md`](docs/design/memory-redesign-2026-05.md) | 4-tier memory (sessions / memories / learnings / last-session.md), three tools (`remember` / `recall` / `retrospective`) — **rename `recall_memory` → `recall`** — Dreamcatcher consolidation pass that promotes per-session retros to durable memories, bleve + JSONL + MinHash for similarity, no embeddings |
-| [`tasks-redesign-2026-05.md`](docs/design/tasks-redesign-2026-05.md) | Tasks scoped per-room, cascade-delete with project, reassignment audit trail, replaces today's flat task list |
-| [`projects-ui-2026-05.md`](docs/design/projects-ui-2026-05.md) | Three SPA surfaces: session creation modal (project picker), Command Center pivoted to rooms, session history with project grouping |
-| [`settings-notifications-2026-05.md`](docs/design/settings-notifications-2026-05.md) | Memory and Dreamcatcher settings tabs, tier-based retention notifications |
+| [`sandbox-redesign-2026-05.md`](docs/internal/design/sandbox-redesign-2026-05.md) | Two-room workspace topology — **private agent rooms** under each agent's workspace, **shared project rooms** under `.omnipus/projects/`, each room being its own sandbox boundary |
+| [`memory-redesign-2026-05.md`](docs/internal/design/memory-redesign-2026-05.md) | 4-tier memory (sessions / memories / learnings / last-session.md), three tools (`remember` / `recall` / `retrospective`) — **rename `recall_memory` → `recall`** — Dreamcatcher consolidation pass that promotes per-session retros to durable memories, bleve + JSONL + MinHash for similarity, no embeddings |
+| [`tasks-redesign-2026-05.md`](docs/internal/design/tasks-redesign-2026-05.md) | Tasks scoped per-room, cascade-delete with project, reassignment audit trail, replaces today's flat task list |
+| [`projects-ui-2026-05.md`](docs/internal/design/projects-ui-2026-05.md) | Three SPA surfaces: session creation modal (project picker), Command Center pivoted to rooms, session history with project grouping |
+| [`settings-notifications-2026-05.md`](docs/internal/design/settings-notifications-2026-05.md) | Memory and Dreamcatcher settings tabs, tier-based retention notifications |
 
 When v0.3 ships, the version cut is **1.0** — the rooms redesign is the architectural foundation we want to commit to long-term.
+
+---
+
+## v1.0 — CLI ↔ UI feature parity 🟡
+
+**Epic:** [#211](https://github.com/elicify-ai/omnipus/issues/211) — tracked under the **Feature Parity** milestone.
+
+The CLI is already strong at setup, running the gateway, secrets, skills, scheduling, model/auth, and terminal chat — but several surfaces are web-app only today. The 1.0 goal is to let a terminal/headless user do (nearly) everything a browser user can. The current gaps are summarised for users in [`docs/using-omnipus-cli.md`](docs/using-omnipus-cli.md) ("What the CLI can't do (yet)").
+
+Child issues by priority:
+
+| Priority | Gap | Issue |
+|---|---|---|
+| P1 | Manage custom agents (create/edit/delete/list) | [#201](https://github.com/elicify-ai/omnipus/issues/201) |
+| P1 | Task board / Command Center commands | [#202](https://github.com/elicify-ai/omnipus/issues/202) |
+| P1 | Connect & manage chat channels (beyond WeChat) | [#203](https://github.com/elicify-ai/omnipus/issues/203) |
+| P2 | Add/test providers after first-run | [#208](https://github.com/elicify-ai/omnipus/issues/208) |
+| P2 | Manage MCP servers | [#204](https://github.com/elicify-ai/omnipus/issues/204) |
+| P2 | Richer terminal chat (attachments, streaming, slash commands) | [#205](https://github.com/elicify-ai/omnipus/issues/205) |
+| P3 | List / resume / delete sessions | [#206](https://github.com/elicify-ai/omnipus/issues/206) |
+| P3 | Set user preferences (USER.md) | [#207](https://github.com/elicify-ai/omnipus/issues/207) |
+| P3 | User / role / device management (admin) | [#209](https://github.com/elicify-ai/omnipus/issues/209) |
+| P3 | Routing, retention & sandbox settings | [#210](https://github.com/elicify-ai/omnipus/issues/210) |
+
+The CLI already **leads** the UI on `omnipus onboard`, `omnipus gateway`, `omnipus credentials rotate`, `omnipus audit verify`, and `omnipus migrate` — those stay CLI-first.
 
 ---
 

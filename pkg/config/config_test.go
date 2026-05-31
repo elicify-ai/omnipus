@@ -1584,7 +1584,7 @@ func TestAgentConfig_SandboxProfile_OmittedWhenEmpty(t *testing.T) {
 }
 
 // TestConfigMigration_LegacyMaixCamGracefullyIgnored verifies T28 from
-// docs/specs/cancel-cross-channel-spec.md: a config.json that still contains a
+// docs/internal/specs/cancel-cross-channel-spec.md: a config.json that still contains a
 // "maixcam" section under "channels" loads without panic, emits a structured
 // Warn log entry, and leaves other channels intact.
 func TestConfigMigration_LegacyMaixCamGracefullyIgnored(t *testing.T) {

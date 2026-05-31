@@ -1,0 +1,57 @@
+name: CLA Assistant
+
+# Gates pull requests on a signed Contributor License Agreement.
+# The CLA text lives in CLA.md; signatures are recorded in-repo in the
+# `cla-signatures` branch (signatures/version1/cla.json). No third-party app is
+# used — this runs entirely as a GitHub Action with a repo-scoped token.
+#
+# Setup prerequisite (one-time, by a maintainer):
+#   Create a fine-grained Personal Access Token scoped to THIS repo only, with
+#   Repository permission "Contents: Read and write", and add it as the repo
+#   secret PERSONAL_ACCESS_TOKEN. See docs/internal/cla-setup.md.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  actions: write
+  contents: read          # the action uses PERSONAL_ACCESS_TOKEN for the signature branch
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    name: CLA Assistant
+    runs-on: ubuntu-latest
+    # Only act on the PR-opened/updated events or on the explicit sign/recheck comment.
+    if: >
+      (github.event.issue.pull_request && contains(github.event.comment.body, 'I have read the CLA Document and I hereby sign the CLA'))
+      || contains(github.event.comment.body, 'recheck')
+      || github.event_name == 'pull_request_target'
+    steps:
+      - name: Check / record CLA signature
+        # contributor-assistant/github-action v2.6.1 (pinned to commit SHA)
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Repo-scoped fine-grained PAT (Contents: read/write) used ONLY to write
+          # the signatures file to the cla-signatures branch.
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        with:
+          # Where signatures are stored (kept out of main; its own branch).
+          path-to-signatures: 'signatures/version1/cla.json'
+          branch: 'cla-signatures'
+          # The agreement contributors are signing.
+          path-to-document: 'https://github.com/elicify-ai/omnipus/blob/main/CLA.md'
+          # Wording contributors type to sign / to re-run the check.
+          custom-notsigned-prcomment: 'Thanks for your pull request! Before we can merge it, please read our [Contributor License Agreement (CLA)](https://github.com/elicify-ai/omnipus/blob/main/CLA.md) and sign it by posting the comment below in this pull request.'
+          custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
+          custom-allsigned-prcomment: 'All contributors have signed the CLA. ✅'
+          # Don't gate bots or elicify.ai maintainers (covered by employment/contract).
+          allowlist: 'dependabot[bot],dependabot-preview[bot],github-actions[bot],renovate[bot],daniel-piatkowski-ai,*[bot]'
+          # Re-ask for a signature if the CLA changes (bump to version2, etc.).
+          # signatures stay valid per-version.
+          lock-pullrequest-aftermerge: false

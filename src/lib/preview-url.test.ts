@@ -1,7 +1,7 @@
 /**
  * Tests for preview-url.ts — validatePreviewPath, rewriteLegacyURL, buildIframeURL
  *
- * Traces to: docs/specs/chat-served-iframe-preview-spec.md
+ * Traces to: docs/internal/specs/chat-served-iframe-preview-spec.md
  * FR-010, FR-010a, FR-010b, FR-016, FR-017, FR-017a, FR-017b
  *
  * Test order mirrors the spec's 15-row rewrite dataset and 8-row path validation

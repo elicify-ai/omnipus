@@ -1582,7 +1582,7 @@ func init() {
 
 // --------------------------------------------------------------------------
 // Cancel-cascade tests (TDD Plan T1, T2, T4)
-// Refs: docs/specs/cancel-cross-channel-spec.md FR-6, FR-10, FR-11, FR-12a
+// Refs: docs/internal/specs/cancel-cross-channel-spec.md FR-6, FR-10, FR-11, FR-12a
 // --------------------------------------------------------------------------
 
 // stubTurnState builds a minimal turnState wired with a stub providerCancel.

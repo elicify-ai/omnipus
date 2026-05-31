@@ -66,8 +66,8 @@ Onboarding flow, sandbox behaviour, and the rest of this guide apply identically
 | Image | Source | Entrypoint |
 |---|---|---|
 | `ghcr.io/elicify-ai/omnipus:latest` | Built by goreleaser on release | `docker/entrypoint.sh` |
-| Local build (`docker build -f docker/Dockerfile .`) | Multi-stage SPA + Go build | `omnipus gateway` directly |
-| Local build (`docker build -f docker/Dockerfile.heavy .`) | Same SPA + Go build, chromium + python + uv runtime | `omnipus gateway --allow-empty` directly |
+| Local build (`docker build -f docker/Dockerfile .`) | Multi-stage SPA + Go build | `omnipus start` directly |
+| Local build (`docker build -f docker/Dockerfile.heavy .`) | Same SPA + Go build, chromium + python + uv runtime | `omnipus start` directly |
 
 The release image uses `entrypoint.sh` as a first-run guard (see [First-run behavior](#first-run-behavior)). Locally-built images (minimal and heavy) start the gateway directly — they self-bootstrap on the first run.
 
@@ -165,14 +165,14 @@ The release image (`ghcr.io/elicify-ai/omnipus:latest`) uses `docker/entrypoint.
 
 ```
 if no workspace/ dir AND no config.json → print setup instructions and exit 0
-else → exec omnipus gateway
+else → exec omnipus start
 ```
 
 **The check is a gate, not a bootstrapper.** The `omnipus onboard` command is a stub that prints instructions; it does not create a `config.json`. You must supply a `config.json` via volume mount before the gateway will start. Without it, the container exits cleanly on every run.
 
 > The `workspace/` test in the gate is vestigial — `datamodel.Init()` never creates a top-level `~/.omnipus/workspace/` directory, so in practice only the presence of `config.json` matters. Don't waste time creating a `workspace/` directory hoping to satisfy the gate; provide `config.json` instead. (Re-visit this callout when the v0.3 "Rooms" redesign lands — it reintroduces a top-level workspace concept and will change the gate semantics.)
 
-The local-build image has no `entrypoint.sh`. It runs `omnipus gateway` directly. On the first start the gateway:
+The local-build image has no `entrypoint.sh`. It runs `omnipus start` directly. On the first start the gateway:
 
 1. Calls `datamodel.Init()`, which creates `~/.omnipus/` subdirectories and writes a minimal `config.json` (seeded port `3000`, no providers).
 2. Boots into onboarding mode. Visit `http://localhost:3000/onboarding` (the seeded port) to complete setup, or override via `OMNIPUS_GATEWAY_PORT`.

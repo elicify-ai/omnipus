@@ -5,7 +5,9 @@
 
 <h3>A team of AI agents you actually own.</h3>
 
-<p>Five named agents that hand off to each other, remember what happened, and run inside a kernel-level sandbox. One Go binary. No database. No SaaS. No telemetry. Boot it on a $10 VPS and you're done.</p>
+<p>Five named agents that hand off to each other, remember what you discussed, and do real work — research, writing, code, browsing, automation. You run them yourself: no cloud account, no subscription, no data leaving your machine except the calls to the AI model you choose.</p>
+
+<p><b>New here?</b> → <a href="docs/getting-started.md">Get started in 10 minutes</a> · <a href="docs/concepts.md">How it works</a> · <a href="docs/using-omnipus-ui.md">Use the web app</a> · <a href="docs/using-omnipus-cli.md">Use the terminal</a></p>
 
 <p>
   <img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
@@ -60,14 +62,26 @@ Four live screenshots, captured against the running gateway.
 
 ## What you actually get
 
-- **A team of agents, not a chatbot.** Five named coworkers with locked identity and editable model/tool policy. Hand-off transfers control mid-conversation in the same transcript — no copy-paste, no re-explaining. Sub-agents, task delegation, shared transcript, per-agent budgets.
-- **Channel-to-agent routing.** Inbound messages from Telegram, Slack, Discord, WhatsApp, and 11 other platforms route to specific agents by channel, account, guild, team, or peer. The default agent (Mia) routes by intent — give her the goal and she picks the right teammate. → [docs/routing.md](docs/routing.md)
-- **Memory the agent maintains itself.** When a conversation goes quiet, Omnipus writes a retro. When it ends, it writes another. When the gateway restarts, it catches up on the ones it missed. `recall_memory` searches across long-term notes, last-session summaries, and 30 days of retros in one query. No vector DB, no embeddings, no extra services. → [docs/memory.md](docs/memory.md)
-- **Full transparency by default.** Every tool call, every LLM request, every cancel, every agent event lands in a day-partitioned JSONL transcript on disk, replayable any time. Live event stream (24 typed event kinds) feeds the UI, subprocess hooks, and the HMAC-chained audit log. → [docs/observability.md](docs/observability.md)
-- **Kernel-level sandbox.** Landlock + seccomp applied to the gateway process *before* `net.Listen` on Linux 5.13+. Three-tier per-tool policy (allow/ask/deny). SSRF guard wired into every outbound HTTP tool. AES-256-GCM credential vault with Argon2id KDF. → [docs/operations/sandbox-config.md](docs/operations/sandbox-config.md)
-- **15 chat channels** compiled in: Telegram, Discord, Slack, WhatsApp, Matrix, Line, Feishu, DingTalk, Google Chat, IRC, WeCom, Weixin, QQ, OneBot, plus Web Chat. → [pkg/channels/README.md](pkg/channels/README.md)
-- **Skills, hooks, and MCP.** Install reusable skill bundles from ClawHub; register MCP servers at runtime; subscribe subprocess hooks to the live event stream. → [docs/skills.md](docs/skills.md) · [docs/hooks/README.md](docs/hooks/README.md)
-- **20+ LLM providers.** OpenRouter, Anthropic, OpenAI, Google Gemini, DeepSeek, Qwen, Moonshot, Groq, Cerebras, Mistral, MiniMax, Ollama, vLLM, Azure, GitHub Copilot, NVIDIA, Volcengine, ModelScope, Zhipu, and more. Fallback chains, multi-key rotation, streaming, vision. → [docs/providers.md](docs/providers.md)
+- **A team, not a chatbot.** Five named agents who hand work to each other in the same conversation — Mia hears your request, picks the right teammate, and passes control over. No copy-paste, no re-explaining. → [How it works](docs/concepts.md)
+- **They delegate and parallelize.** Agents can plan work and assign tasks to each other — track it all on the Command Center board — and break a big job into parallel subagents that report back. → [Using the web app](docs/using-omnipus-ui.md)
+- **Memory that learns.** When a conversation winds down, Omnipus writes a recap *and* records the lessons learned — what went well, what to improve. The recap carries into your next session automatically and the lessons are kept for recall, so your team builds on past work instead of starting cold. → [docs/memory.md](docs/memory.md)
+- **Agents that know your preferences.** Tell them once in Settings → Profile ("be concise", "I use Python", your timezone) and every agent keeps it in mind. → [How it works](docs/concepts.md)
+- **Reach them anywhere.** Use the web app, the terminal, or wire your agents into Telegram, Discord, Slack, WhatsApp, and 10 other chat platforms — voice notes and images included. → [docs/chat-apps.md](docs/chat-apps.md)
+- **You stay in control.** Agents ask permission before running anything sensitive (Allow / Deny / Always), and every action is logged so you can see exactly what happened. → [Using the web app](docs/using-omnipus-ui.md)
+- **Extend it.** Install reusable **skills**, connect **MCP** servers, and let Ava build brand-new custom agents for you on demand. → [docs/skills.md](docs/skills.md)
+- **Your keys, your machine.** API keys are encrypted on disk, nothing phones home, and there's no telemetry. Pick from 35+ AI providers — including fully-local options like Ollama. → [docs/providers.md](docs/providers.md)
+
+<details>
+<summary><b>For the technically curious</b> — what's under the hood</summary>
+
+- **Single Go binary**, ~30 MB, with the web app embedded. No database, no Redis — file-based storage at `~/.omnipus/`.
+- **Kernel-level sandbox** (Landlock + seccomp on Linux 5.13+), three-tier per-tool policy (allow/ask/deny), and an SSRF guard on every outbound HTTP tool. → [docs/operations/sandbox-config.md](docs/operations/sandbox-config.md)
+- **Encrypted credential vault** (AES-256-GCM, Argon2id KDF). → [docs/credential_encryption.md](docs/credential_encryption.md)
+- **Full audit trail** — every tool call, LLM request, and agent event lands in a replayable on-disk transcript feeding the UI, subprocess hooks, and a tamper-evident audit log. → [docs/observability.md](docs/observability.md)
+- **14 in-process chat channels**, **35+ LLM providers** with fallback chains, multi-key rotation, streaming, and vision. → [pkg/channels/README.md](pkg/channels/README.md) · [docs/providers.md](docs/providers.md)
+- **Channel-to-agent routing** binds inbound messages to specific agents by channel, account, guild, team, or peer. → [docs/routing.md](docs/routing.md)
+
+</details>
 
 ---
 
@@ -185,7 +199,11 @@ User-facing guides, grouped by what you're trying to do:
 
 | Topic | Where to go |
 |---|---|
-| **Getting started** | This README + [docs/README.md](docs/README.md) index |
+| **▶ Start here — your first 10 minutes** | [docs/getting-started.md](docs/getting-started.md) |
+| **How Omnipus works (plain English)** | [docs/concepts.md](docs/concepts.md) |
+| **Using the web app** | [docs/using-omnipus-ui.md](docs/using-omnipus-ui.md) |
+| **Using the terminal / CLI** | [docs/using-omnipus-cli.md](docs/using-omnipus-cli.md) |
+| **Full documentation index** | [docs/README.md](docs/README.md) |
 | **Memory system** | [docs/memory.md](docs/memory.md) |
 | **Channel-to-agent routing** | [docs/routing.md](docs/routing.md) |
 | **Session history & event stream** | [docs/observability.md](docs/observability.md) |
@@ -226,13 +244,13 @@ Single Go binary. File-based JSON/JSONL storage at `~/.omnipus/`. No Postgres, n
 
 ## Status
 
-Pre-1.0, active development on [`feature/iframe-preview-tier13`](https://github.com/elicify-ai/omnipus/tree/feature/iframe-preview-tier13). Single Go binary with the SPA embedded via `go:embed` — that's the product. MIT-licensed, community-focused, no telemetry.
+Pre-1.0 and moving fast. **v0.1** (stabilized gateway, iframe preview, sandbox hardening) and **v0.2** (security hardening) are complete; **v0.3 / 1.0** — the "Rooms" redesign of memory, projects, and tasks — is in design. A single Go binary with the web app embedded *is* the product. MIT-licensed, community-focused, no telemetry. See the [roadmap](ROADMAP.md).
 
 ---
 
 ## Contributing
 
-Issues, PRs, discussions — all welcome. Browse [open issues](https://github.com/elicify-ai/omnipus/issues) for live work, or jump straight to [SUPPORT.md](SUPPORT.md) for the channel that matches your question. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations, and [SECURITY.md](SECURITY.md) for vulnerability reporting. External PRs need a one-time [Contributor License Agreement](CLA.md); the Omnipus name and logo are reserved per the [trademark policy](TRADEMARKS.md). For internal context — BRDs, ADRs, in-flight specs, future designs — see the [For contributors](docs/README.md#for-contributors) section of the docs index.
+Issues, PRs, discussions — all welcome. Browse [open issues](https://github.com/elicify-ai/omnipus/issues) for live work, or jump straight to [SUPPORT.md](SUPPORT.md) for the channel that matches your question. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations, and [SECURITY.md](SECURITY.md) for vulnerability reporting. External PRs need a one-time [Contributor License Agreement](CLA.md); the Omnipus name and logo are reserved per the [trademark policy](TRADEMARKS.md). For internal context — BRDs, ADRs, in-flight specs, future designs — see the [internal documentation](docs/internal/README.md).
 
 ## License
 

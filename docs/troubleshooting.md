@@ -8,13 +8,13 @@ Common operator issues, grouped by symptom. If the gateway started, [debug.md](d
 
 You're booting a fresh `~/.omnipus/` with no provider yet. Two paths forward:
 
-- **Drive the web onboarding wizard** (recommended) — start with `--allow-empty` and visit `http://localhost:5000`:
+- **Drive the web onboarding wizard** (recommended) — just start Omnipus and visit `http://localhost:5000`:
 
   ```bash
-  omnipus gateway --allow-empty
+  omnipus start
   ```
 
-  The wizard at `/onboarding` walks Welcome → Provider → API Key → Model → Admin Account → Done, then the gateway is fully provisioned.
+  On a fresh install the gateway boots into limited mode automatically (no flag needed). The wizard at `/onboarding` walks Welcome → Provider → API Key → Model → Admin Account → Done, then the gateway is fully provisioned.
 
 - **Use the interactive CLI wizard** — same end result, no browser:
 
@@ -34,7 +34,7 @@ Check `$OMNIPUS_HOME/logs/gateway_panic.log` for the startup error. The runtime 
 
 The kernel sandbox failed to apply on a kernel that claims Landlock support. This is a **fail-closed** path — the HTTP listener never binds. Inspect `gateway.log` for `sandbox apply failed`, then either:
 
-- Lower the kernel's expectations: `omnipus gateway --sandbox=permissive` to log violations without blocking, or `--sandbox=off` for development.
+- Lower the kernel's expectations: `omnipus start --sandbox=permissive` to log violations without blocking, or `--sandbox=off` for development.
 - Set `OMNIPUS_ENV=production` to nothing — production mode prints a recurring stderr nag banner when the sandbox is off or permissive, by design.
 
 Full sandbox configuration: [operations/sandbox-config.md](operations/sandbox-config.md). Known limitations (macOS, Windows, older kernels): [operations/sandbox-limitations.md](operations/sandbox-limitations.md).

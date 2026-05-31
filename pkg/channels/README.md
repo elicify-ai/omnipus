@@ -66,7 +66,7 @@ This document describes the channel system as it exists in the current codebase.
 | Centralized orchestration | Rate limiting, message splitting, retries, and typing/reaction/placeholder lifecycle are all handled by Manager and BaseChannel; individual channels only implement `Send` |
 | Credential injection | Factory functions receive a `credentials.SecretBundle` directly; channel secrets are never read from the process environment (`pkg/channels/registry.go:15`) |
 
-> **Note on extensibility.** The current factory map is open at compile time but the `initChannels` if-ladder is closed: adding a channel requires editing both `pkg/channels/manager.go` and `pkg/gateway/gateway.go`. A migration to a fully map-driven loader is scoped in `docs/architecture/plugin-extensibility-assessment.md` (§1) and tracked under the broader plugin work in issue #151.
+> **Note on extensibility.** The current factory map is open at compile time but the `initChannels` if-ladder is closed: adding a channel requires editing both `pkg/channels/manager.go` and `pkg/gateway/gateway.go`. A migration to a fully map-driven loader is scoped in `docs/internal/architecture/plugin-extensibility-assessment.md` (§1) and tracked under the broader plugin work in issue #151.
 
 ---
 

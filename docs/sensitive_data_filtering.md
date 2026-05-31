@@ -8,7 +8,7 @@ Omnipus can filter sensitive values (API keys, tokens, secrets, passwords) from 
 
 When the LLM uses a tool that returns its own credentials (e.g., a tool that echoes the API key being used), those values are automatically replaced with `[FILTERED]` in the message sent to the LLM.
 
-Sensitive values are collected from [`.security.yml`](./credential_encryption.md) — the centralized storage for all sensitive configuration (API keys, tokens, secrets stored alongside `config.json`). This includes:
+Sensitive values are collected from [`.security.yml`](credential_encryption.md) — the centralized storage for all sensitive configuration (API keys, tokens, secrets stored alongside `config.json`). This includes:
 
 - Model API keys
 - Channel tokens (Telegram, Discord, Slack, Matrix, etc.)
@@ -103,5 +103,5 @@ The model is using API key [FILTERED] and Telegram bot [FILTERED]
 
 ## Related
 
-- [Credential Encryption](./credential_encryption.md) — encrypting API keys in config
-- [Tools Configuration](./tools_configuration.md)
+- [Credential Encryption](credential_encryption.md) — encrypting API keys in config
+- [Tools Configuration](tools_configuration.md)

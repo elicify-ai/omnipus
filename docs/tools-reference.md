@@ -95,7 +95,7 @@ Registered by `pkg/tools/browser/register.go:39-49`. All seven are namespaced un
 | `recall_memory` | Search durable memory (`MEMORY.md`), recent recaps (`LAST_SESSION.md`), and indexed session JSONL. | `pkg/tools/memory.go:262`. |
 | `retrospective` | Record a session retrospective after confirming its contents with the user. | `pkg/tools/memory.go:353`. |
 
-Note: the tool name for recall is `recall_memory`, not `recall`. The v0.3 Rooms redesign (`docs/design/memory-redesign-2026-05.md`) plans a renamed three-tool surface (`remember`/`recall`/`retrospective`) but the current code ships `recall_memory`.
+Note: the tool name for recall is `recall_memory`, not `recall`. The v0.3 Rooms redesign (`docs/internal/design/memory-redesign-2026-05.md`) plans a renamed three-tool surface (`remember`/`recall`/`retrospective`) but the current code ships `recall_memory`.
 
 ### Messaging
 

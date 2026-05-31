@@ -11,7 +11,7 @@
 // We keep this in `pkg/policy/` (rather than inlining in pkg/gateway) so
 // the security lane owns the predicate and tests for it. The function is
 // trivial today; the indirection is deliberate so that future RBAC
-// granularity changes (per `docs/specs/rbac-granularity-spec.md`) have one
+// granularity changes (per `docs/internal/specs/rbac-granularity-spec.md`) have one
 // chokepoint to update.
 
 package policy

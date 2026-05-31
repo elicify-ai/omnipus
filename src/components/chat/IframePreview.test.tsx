@@ -1,7 +1,7 @@
 /**
  * IframePreview component tests
  *
- * Traces to: docs/specs/chat-served-iframe-preview-spec.md
+ * Traces to: docs/internal/specs/chat-served-iframe-preview-spec.md
  * FR-010, FR-010a, FR-011, FR-012, FR-012a, FR-012b, FR-013, FR-014, FR-015, FR-019
  *
  * Strategy:
@@ -605,7 +605,7 @@ describe('IframePreview — reload action when ready (FR-012)', () => {
 // ── F-41 — Probe iframe success transition (CRITICAL) ────────────────────────
 
 describe('IframePreview — warmup probe success transition (F-41)', () => {
-  // Traces to: docs/specs/chat-served-iframe-preview-spec.md — FR-013 warmup schedule
+  // Traces to: docs/internal/specs/chat-served-iframe-preview-spec.md — FR-013 warmup schedule
   // The warmup state machine renders a hidden probe iframe, waits for its onload,
   // then transitions to showing the visible iframe. This is the centrepiece of
   // the warmup feature and was previously uncovered.

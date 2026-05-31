@@ -20,7 +20,7 @@ You can override default paths using environment variables. This is useful for p
 ```bash
 # Run omnipus using a specific config file
 # The workspace path will be read from within that config file
-OMNIPUS_CONFIG=/etc/omnipus/production.json omnipus gateway
+OMNIPUS_CONFIG=/etc/omnipus/production.json omnipus start
 
 # Run omnipus with all its data stored in /opt/omnipus
 # Config will be loaded from the default ~/.omnipus/config.json
@@ -28,7 +28,7 @@ OMNIPUS_CONFIG=/etc/omnipus/production.json omnipus gateway
 OMNIPUS_HOME=/opt/omnipus omnipus agent
 
 # Use both for a fully customized setup
-OMNIPUS_HOME=/srv/omnipus OMNIPUS_CONFIG=/srv/omnipus/main.json omnipus gateway
+OMNIPUS_HOME=/srv/omnipus OMNIPUS_CONFIG=/srv/omnipus/main.json omnipus start
 ```
 
 ### Gateway Log Level
@@ -519,7 +519,7 @@ chmod 600 ~/.omnipus/.security.yml
   ],
   "channels": {
     "telegram": {
-      "enabled": true"
+      "enabled": true,
       // token loaded from .security.yml
     }
   }
@@ -761,7 +761,7 @@ model_list:
 
 #### Migration from Legacy `providers` Config
 
-The old `providers` configuration is **deprecated** but still supported for backward compatibility. See [docs/migration/model-list-migration.md](../migration/model-list-migration.md) for the full guide.
+The old `providers` configuration is **deprecated** but still supported for backward compatibility. See [docs/migration/model-list-migration.md](migration/model-list-migration.md) for the full guide.
 
 ### Provider Architecture
 
@@ -816,7 +816,7 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
   },
   "channels": {
     "telegram": {
-      "enabled": true"
+      "enabled": true,
       // token: set in .security.yml
       "allow_from": ["123456789"]
     }
@@ -864,6 +864,6 @@ Scheduled tasks persist across restarts and are stored in `~/.omnipus/workspace/
 | [Security Configuration](security_configuration.md) | Store API keys and secrets in separate `.security.yml` file |
 | [Sensitive Data Filtering](sensitive_data_filtering.md) | Filter API keys and tokens from tool results before sending to LLM |
 | [Hook System](hooks/README.md) | Event-driven hooks: observers, interceptors, approval hooks |
-| [Steering](steering.md) | Inject messages into a running agent loop between tool calls |
-| [SubTurn](subturn.md) | Subagent coordination, concurrency control, lifecycle |
-| [Context Management](agent-refactor/context.md) | Context boundary detection, proactive budget check, compression |
+| [Steering](internal/architecture/steering.md) | Inject messages into a running agent loop between tool calls |
+| [SubTurn](internal/architecture/subturn.md) | Subagent coordination, concurrency control, lifecycle |
+| [Context Management](internal/agent-refactor/context.md) | Context boundary detection, proactive budget check, compression |

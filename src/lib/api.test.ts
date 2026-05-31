@@ -698,7 +698,7 @@ describe('Security API helpers', () => {
 // preview listener). Reading the field directly risks treating undefined as
 // falsy; the accessor encapsulates this polarity safely.
 //
-// Traces to: docs/specs/chat-served-iframe-preview-spec.md — F-34 polarity accessor
+// Traces to: docs/internal/specs/chat-served-iframe-preview-spec.md — F-34 polarity accessor
 
 describe('isPreviewListenerEnabled', () => {
   it('returns true when info is undefined (old gateway — no field present)', async () => {

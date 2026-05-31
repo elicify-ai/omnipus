@@ -17,7 +17,7 @@ This command requests a QR code from the iLink API, renders it in your terminal,
 After onboarding, start the gateway:
 
 ```bash
-omnipus gateway
+omnipus start
 ```
 
 ## Configuration

@@ -126,7 +126,7 @@ describe('MessageInput — Escape key no-op when idle (test #39)', () => {
 })
 
 // B3: stop-button label state machine
-// Refs: docs/specs/cancel-cross-channel-spec-review.md B3
+// Refs: docs/internal/specs/cancel-cross-channel-spec-review.md B3
 describe('MessageInput — stop button label morphing (B3)', () => {
   it('shows "Stopping..." when cancelStage is "graceful"', () => {
     // Traces to: B3 — graceful stage must display "Stopping..." same as optimistic click state.

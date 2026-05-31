@@ -46,7 +46,7 @@ import (
 // drain. With the fix (drain-before-disarm order), the drain completes under the
 // protection of isReplayingLive=true, guaranteeing FIFO ordering.
 //
-// Traces to: docs/investigation/bug-5-replay-order.md
+// Traces to: docs/internal/investigation/bug-5-replay-order.md
 func TestReplay_DivertedLiveFramesArriveBeforePostReplayFrames(t *testing.T) {
 	handler, _, _ := newTestWSHandler(t)
 	t.Cleanup(handler.Wait)
@@ -201,7 +201,7 @@ func TestReplay_DivertedLiveFramesArriveBeforePostReplayFrames(t *testing.T) {
 //	When handleAttachSession completes successfully,
 //	Then wc.isReplayingLive must be false.
 //
-// Traces to: docs/investigation/bug-5-replay-order.md
+// Traces to: docs/internal/investigation/bug-5-replay-order.md
 func TestReplay_DivertFlagClearedAfterDrain_FlagState(t *testing.T) {
 	handler, _, _ := newTestWSHandler(t)
 	t.Cleanup(handler.Wait)
@@ -241,7 +241,7 @@ func TestReplay_DivertFlagClearedAfterDrain_FlagState(t *testing.T) {
 //	Then no data race is reported and the divert-buffered frames precede
 //	any post-disarm live frames in the sendCh stream.
 //
-// Traces to: docs/investigation/bug-5-replay-order.md
+// Traces to: docs/internal/investigation/bug-5-replay-order.md
 func TestReplay_DivertDrainedBeforeFlag_OrderWithRealConcurrency(t *testing.T) {
 	handler, _, _ := newTestWSHandler(t)
 	t.Cleanup(handler.Wait)
@@ -326,7 +326,7 @@ func TestReplay_DivertDrainedBeforeFlag_OrderWithRealConcurrency(t *testing.T) {
 //	When wsStreamer.Update is called,
 //	Then the token frame is written to replayDivertCh, not to sendCh.
 //
-// This is Fix B from docs/investigation/bug-5-replay-order.md.
+// This is Fix B from docs/internal/investigation/bug-5-replay-order.md.
 // Traces to: pkg/gateway/websocket.go wsStreamer.Update
 func TestWsStreamer_Update_RespectsReplayDivert(t *testing.T) {
 	wc := &wsConn{
