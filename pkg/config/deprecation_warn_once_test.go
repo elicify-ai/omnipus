@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -232,6 +233,97 @@ func TestMigrateDeprecatedToolEnableFlags_MigrateOnce(t *testing.T) {
 	}
 	assert.Equal(t, 1, lineCount,
 		"migration warning must fire exactly once (sync.Once guard); got %d log lines in output: %q", lineCount, output)
+}
+
+// TestToolEnableToPolicyGlobs_CoverageCheck asserts that every policyGlob in
+// toolEnableToPolicy resolves to at least one known builtin tool name. This
+// guards against typos or stale globs that would silently do nothing at
+// policy-evaluation time.
+//
+// Implementation note: the resolveFromMap function in pkg/tools/compositor.go
+// supports two matching modes:
+//   - Exact match: the key equals the tool name.
+//   - Trailing ".*" wildcard: e.g. "browser.*" matches "browser.navigate".
+//
+// The "mcp_*" entry in toolEnableToPolicy uses underscore-wildcard rather than
+// ".*" style. MCP tool names are dynamically generated at runtime
+// ("mcp_<server>_<tool>") and cannot be statically enumerated here. The test
+// therefore skips the mcp_* glob and documents why — this is not a coverage
+// gap but a runtime-only pattern. Any future operator-facing documentation
+// should note that the mcp disable flag maps to a prefix filter.
+func TestToolEnableToPolicyGlobs_CoverageCheck(t *testing.T) {
+	// knownBuiltinTools is a representative subset of the static builtins that
+	// must be covered by toolEnableToPolicy globs. Derived from the Name()
+	// implementations in pkg/tools/ at the time of this test.
+	// Intentionally NOT exhaustive — the goal is to catch typos, not enumerate
+	// every tool.
+	knownBuiltinTools := []string{
+		"browser.navigate",
+		"browser.click",
+		"browser.type",
+		"browser.screenshot",
+		"browser.get_text",
+		"browser.wait",
+		"browser.evaluate",
+		"web_search",
+		"web_fetch",
+		"exec",
+		"cron",
+		"spawn",
+		"spawn_status",
+		"subagent",
+		"write_file",
+		"edit_file",
+		"append_file",
+		"send_file",
+		"task_list",
+		"task_create",
+		"task_update",
+	}
+
+	for _, entry := range toolEnableToPolicy {
+		glob := entry.policyGlob
+
+		// mcp_* covers dynamically-named MCP tools ("mcp_<server>_<tool>")
+		// that are not statically registered. Skip static coverage check
+		// and document the pattern for future readers.
+		if glob == "mcp_*" {
+			t.Logf("skipping mcp_* glob: MCP tool names are dynamic (mcp_<server>_<tool>) " +
+				"and cannot be validated against static builtins; " +
+				"verify by checking pkg/tools/mcp_tool.go Name() format")
+			continue
+		}
+
+		matched := false
+		for _, toolName := range knownBuiltinTools {
+			if globMatchesToolName(glob, toolName) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Errorf("toolEnableToPolicy glob %q (from jsonKey=%q) does not match any known builtin tool name; "+
+				"check for typos in policyGlob or add the tool name to knownBuiltinTools",
+				glob, entry.jsonKey)
+		}
+	}
+}
+
+// globMatchesToolName implements the same matching semantics as
+// pkg/tools/compositor.go resolveFromMap:
+//   - Exact match: glob == toolName.
+//   - Trailing ".*" wildcard: strings.HasPrefix(toolName, prefix+".") or toolName == prefix.
+//
+// This ensures the test matches what the policy engine actually does at runtime.
+func globMatchesToolName(glob, toolName string) bool {
+	if glob == toolName {
+		return true
+	}
+	if strings.HasSuffix(glob, ".*") {
+		prefix := glob[:len(glob)-2]
+		return strings.HasPrefix(toolName, prefix+".") || toolName == prefix
+	}
+	return false
 }
 
 // splitLines splits a string by newlines, returning non-empty lines.

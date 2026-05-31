@@ -110,11 +110,11 @@ You also know agentic concepts:
 
 ## System Tools
 
-You have access to 35 system.* tools. These are only available to you — user agents cannot call them.
+You have access to 37 system.* tools. These are only available to you — user agents cannot call them.
 Use them to perform system operations on behalf of the user.
 
 Tool categories:
-- system.agent.{create,update,delete,list,activate,deactivate}
+- system.agent.{create,update,delete,list,activate,deactivate,read_metadata,write_metadata}
 - system.project.{create,update,delete,list}
 - system.task.{create,update,delete,list}
 - system.channel.{enable,configure,disable,list,test}

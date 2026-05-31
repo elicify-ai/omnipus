@@ -4,7 +4,7 @@
 
 // Package sysagent implements the Omnipus built-in system agent per BRD
 // Appendix D. It uses the user's configured LLM provider and exposes the
-// 35 system.* tools for managing agents, channels, providers, skills,
+// 37 system.* tools for managing agents, channels, providers, skills,
 // config, diagnostics, and more. These tools are now ordinary builtins
 // on the central registry, governed by per-agent policy (FR-045).
 //
