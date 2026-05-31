@@ -42,6 +42,16 @@ vi.mock('@tanstack/react-router', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/mock-avatar.svg' }))
 
+// react-shiki ships a ./style.css side-effect import that Node ESM cannot load.
+// Mock the whole module so the Chat screen test can import the route without error.
+vi.mock('react-shiki', () => {
+  const React = require('react')
+  return {
+    ShikiHighlighter: ({ children }: { children?: React.ReactNode }) =>
+      React.createElement('pre', {}, children ?? null),
+  }
+})
+
 // Wave C fix: ChatScreen uses AssistantUI hooks and primitives that require an
 // AuiProvider runtime context. OmnipusRuntimeProvider is too heavy for unit tests
 // (it opens a WebSocket connection). Mock @assistant-ui/react so all primitives

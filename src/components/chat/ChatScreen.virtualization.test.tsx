@@ -354,4 +354,169 @@ describe('VirtualizedMessageList', () => {
     const distanceFromBottomMid = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight
     expect(distanceFromBottomMid).toBeGreaterThanOrEqual(50)
   })
+
+  // ── Regression tests for issue #251: auto-scroll during token streaming ────────
+
+  /**
+   * Helper: seed the store with N completed messages plus a final streaming assistant message.
+   * Sets isStreaming=true on both the bucket and foreground selectors.
+   */
+  function seedStreamingStore(completedCount: number): ChatMessage[] {
+    const completed = makeMessages(completedCount)
+    const streamingMsg: ChatMessage = {
+      id: 'msg_streaming',
+      role: 'assistant',
+      content: 'Partial response...',
+      timestamp: new Date().toISOString(),
+      status: 'streaming',
+      isStreaming: true,
+    }
+    const allMessages = [...completed, streamingMsg]
+    const bucket = makeBucketMessages(allMessages)
+    useChatStore.setState((s) => ({
+      ...s,
+      sessionsById: {
+        [SID]: {
+          ...((s.sessionsById ?? {})[SID] ?? {}),
+          ...bucket,
+          isStreaming: true,
+          isReplaying: false,
+          replayCompletedForSession: SID,
+          toolCalls: {},
+          toolCallOrder: [],
+          textAtToolCallStart: {},
+          pendingApprovals: [],
+          sessionTokens: 0,
+          sessionCost: 0,
+          rateLimitEvent: null,
+          lastUserMessageAt: null,
+          cancelStage: null,
+          lastReceivedEventTime: null,
+          spanByParentCallId: {},
+          trimmedCount: 0,
+        },
+      },
+      messages: allMessages,
+      isStreaming: true,
+      isReplaying: false,
+      replayCompletedForSession: SID,
+    }))
+    useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'agent-1' })
+    return allMessages
+  }
+
+  it('auto-scrolls to bottom as streaming tokens append while user is pinned to bottom', async () => {
+    // BDD:
+    //   Given: a chat session with 10 completed messages plus a live streaming assistant message,
+    //          and the user is pinned to the bottom (scrollTop within 50px of scrollHeight)
+    //   When: new tokens arrive and update the streaming message content
+    //   Then: the scroll container re-pins to the bottom after each token append
+    //
+    // Regression test for issue #251.
+    // BEFORE fix: layout effect deps were [messages.length, isStreaming] — neither
+    //   changes during token streaming, so the effect never re-fired.
+    // AFTER fix: streamingContentLength is added to deps and changes with every token,
+    //   so the effect fires and re-pins scrollTop to scrollHeight.
+
+    // Replace requestAnimationFrame with a synchronous version so we can assert
+    // synchronously without fake timers.
+    const originalRaf = globalThis.requestAnimationFrame
+    const originalCaf = globalThis.cancelAnimationFrame
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { cb(0); return 0 })
+    vi.stubGlobal('cancelAnimationFrame', (_id: number) => {})
+
+    seedStreamingStore(10)
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    const scrollEl = container.querySelector('[data-testid="virtualized-message-list"]') as HTMLElement | null
+    if (!scrollEl) {
+      // jsdom without layout — structural skip.
+      vi.stubGlobal('requestAnimationFrame', originalRaf)
+      vi.stubGlobal('cancelAnimationFrame', originalCaf)
+      return
+    }
+
+    // Step 1: Simulate user at the bottom (distanceFromBottom = 0, within 50px threshold).
+    patchScrollContainer(scrollEl, { clientHeight: 600, scrollHeight: 1600, scrollTop: 1000 })
+
+    // Fire the scroll event so the onScroll handler records wasAtBottom=true.
+    await act(async () => {
+      scrollEl.dispatchEvent(new Event('scroll', { bubbles: true }))
+    })
+
+    // Step 2: Simulate DOM height growing (streaming anchor rendered more content).
+    // We patch scrollHeight to 2400 BEFORE the token append, simulating that the
+    // virtualizer/streaming-anchor have already measured the new content size.
+    // scrollTop stays at 1000 (the user has NOT been auto-followed yet).
+    patchScrollContainer(scrollEl, { clientHeight: 600, scrollHeight: 2400, scrollTop: 1000 })
+
+    // Step 3: Simulate token append — content grows, messages.length stays the same.
+    // The layout effect fires (streamingContentLength dep changed), reads scrollHeight=2400,
+    // and sets scrollTop=2400 via the synchronous rAF stub.
+    await act(async () => {
+      useChatStore.getState().updateLastAssistantMessage(' More tokens appended to streaming content.', false)
+    })
+
+    // After the fix: scrollTop must equal scrollHeight (re-pinned to bottom = 2400).
+    expect(scrollEl.scrollTop).toBe(scrollEl.scrollHeight)
+
+    vi.stubGlobal('requestAnimationFrame', originalRaf)
+    vi.stubGlobal('cancelAnimationFrame', originalCaf)
+  })
+
+  it('does NOT auto-scroll when user has scrolled up during streaming', async () => {
+    // BDD:
+    //   Given: a chat session with a live streaming assistant message,
+    //          and the user has scrolled UP (> 50px from bottom) to read history
+    //   When: new tokens arrive and update the streaming message content
+    //   Then: the scroll container does NOT move — user intent is preserved
+    //
+    // Guards the "don't fight the user reading history" requirement.
+
+    const originalRaf = globalThis.requestAnimationFrame
+    const originalCaf = globalThis.cancelAnimationFrame
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { cb(0); return 0 })
+    vi.stubGlobal('cancelAnimationFrame', (_id: number) => {})
+
+    seedStreamingStore(10)
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    const scrollEl = container.querySelector('[data-testid="virtualized-message-list"]') as HTMLElement | null
+    if (!scrollEl) {
+      vi.stubGlobal('requestAnimationFrame', originalRaf)
+      vi.stubGlobal('cancelAnimationFrame', originalCaf)
+      return
+    }
+
+    // Step 1: Simulate user scrolled up — distanceFromBottom = 1400 >> 50px threshold.
+    patchScrollContainer(scrollEl, { clientHeight: 600, scrollHeight: 1800, scrollTop: 200 })
+
+    // Fire the scroll event so the onScroll handler records wasAtBottom=false.
+    await act(async () => {
+      scrollEl.dispatchEvent(new Event('scroll', { bubbles: true }))
+    })
+
+    // Step 2: Simulate token append.
+    await act(async () => {
+      useChatStore.getState().updateLastAssistantMessage(' More tokens while user is reading history.', false)
+    })
+
+    // Step 3: Flush effects — scrollTop must NOT change (still 200, not re-pinned).
+    await act(async () => {})
+
+    expect(scrollEl.scrollTop).toBe(200)
+
+    vi.stubGlobal('requestAnimationFrame', originalRaf)
+    vi.stubGlobal('cancelAnimationFrame', originalCaf)
+  })
 })

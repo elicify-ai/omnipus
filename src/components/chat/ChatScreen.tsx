@@ -591,7 +591,30 @@ function VirtualizedMessageListInner({
   const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
   const historicalMessages = hasStreamingMessage ? messages.slice(0, messages.length - 1) : messages
 
+  // Track the growing length of the live streaming message so the layout
+  // effect re-fires on every token append (messages.length does not change
+  // during streaming because tokens are appended in-place, not as new entries).
+  const streamingContentLength = hasStreamingMessage
+    ? (messages[messages.length - 1]?.content?.length ?? 0)
+    : 0
+
+  // wasAtBottomRef is maintained by the scroll event handler (onScroll) so it
+  // correctly records user intent BETWEEN render frames, including when the user
+  // scrolls up to read history while tokens are still streaming in. It must NOT
+  // be recomputed inside the layout effect itself (after the DOM has already
+  // grown) because at that point the geometry no longer reflects where the user
+  // was before the growth.
   const wasAtBottomRef = useRef(true)
+
+  const SCROLL_THRESHOLD = 50
+
+  // Continuously update wasAtBottomRef as the user scrolls. This fires
+  // synchronously in the event handler, before any DOM growth.
+  const onScroll = useCallback(() => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    wasAtBottomRef.current = (el.scrollHeight - el.scrollTop - el.clientHeight) < SCROLL_THRESHOLD
+  }, [])
 
   const virtualizer = useVirtualizer({
     count: historicalMessages.length,
@@ -601,17 +624,21 @@ function VirtualizedMessageListInner({
     // measureElement default (getBoundingClientRect().height) is correct; no override needed.
   })
 
-  // Capture wasAtBottom BEFORE the render that triggered this layout effect,
-  // then scroll to bottom if the user was already there.
+  // Re-pin the scroll position to the bottom after every render that either
+  // adds a new message OR grows the streaming message's content. The rAF
+  // ensures the streaming-anchor node's final measured height is committed to
+  // the DOM before we read scrollHeight.
   useLayoutEffect(() => {
     const el = scrollContainerRef.current
     if (!el) return
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    wasAtBottomRef.current = distanceFromBottom < 50
     if (wasAtBottomRef.current && messages.length > 0) {
-      el.scrollTop = el.scrollHeight
+      const raf = requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight
+      })
+      return () => cancelAnimationFrame(raf)
     }
-  }, [messages.length, isStreaming])
+    return undefined
+  }, [messages.length, isStreaming, streamingContentLength])
 
   const virtualItems = virtualizer.getVirtualItems()
 
@@ -627,6 +654,7 @@ function VirtualizedMessageListInner({
       data-testid="virtualized-message-list"
       className="flex-1 overflow-y-auto pt-4 pb-2"
       style={{ position: 'relative' }}
+      onScroll={onScroll}
     >
       <div className="max-w-4xl mx-auto w-full">
         <div
