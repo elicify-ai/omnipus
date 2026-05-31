@@ -585,6 +585,9 @@ func (us *UnifiedStore) Close() error {
 }
 
 // DeleteSession removes a single session directory from the store.
+// It also cascade-deletes the corresponding uploads directory
+// (~/.omnipus/uploads/{sessionID}/) when it exists; failure to remove uploads
+// is logged but does not fail the operation — the session data is gone either way.
 // Returns an error if the session does not exist or cannot be removed.
 func (us *UnifiedStore) DeleteSession(sessionID string) error {
 	if err := validateSessionID(sessionID); err != nil {
@@ -605,6 +608,15 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 	}
 	contextFile := filepath.Join(us.baseDir, ".context", sessionID+".jsonl")
 	os.Remove(contextFile) // best-effort, ignore error if file does not exist
+
+	// Cascade-delete uploads that were associated with this session.
+	// The uploads root is a sibling of the sessions directory:
+	//   {home}/sessions/{sessionID}  → {home}/uploads/{sessionID}
+	uploadsDir := filepath.Join(filepath.Dir(filepath.Clean(us.baseDir)), "uploads", sessionID)
+	if rmErr := os.RemoveAll(uploadsDir); rmErr != nil && !os.IsNotExist(rmErr) {
+		slog.Warn("unified_store: delete session: cascade-delete uploads failed",
+			"session_id", sessionID, "uploads_dir", uploadsDir, "error", rmErr)
+	}
 	return nil
 }
 
@@ -622,6 +634,7 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 		return 0, fmt.Errorf("unified_store: clear all: read dir: %w", err)
 	}
 
+	uploadsRoot := filepath.Join(filepath.Dir(filepath.Clean(us.baseDir)), "uploads")
 	removed := 0
 	for _, entry := range entries {
 		if !entry.IsDir() || entry.Name() == ".context" {
@@ -634,6 +647,12 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 		}
 		contextFile := filepath.Join(us.baseDir, ".context", entry.Name()+".jsonl")
 		os.Remove(contextFile) // best-effort, ignore error if file does not exist
+		// Cascade-delete uploads for this session.
+		uploadsDir := filepath.Join(uploadsRoot, entry.Name())
+		if rmErr := os.RemoveAll(uploadsDir); rmErr != nil && !os.IsNotExist(rmErr) {
+			slog.Warn("unified_store: clear all: cascade-delete uploads failed",
+				"session_id", entry.Name(), "error", rmErr)
+		}
 		removed++
 	}
 	return removed, nil

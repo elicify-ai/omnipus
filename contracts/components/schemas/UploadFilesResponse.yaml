@@ -10,4 +10,4 @@ properties:
     type: array
     description: Uploaded file metadata entries.
     items:
-      $ref: UploadedFile.yaml
+      $ref: './UploadedFile.yaml'

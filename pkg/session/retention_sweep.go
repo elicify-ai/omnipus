@@ -103,6 +103,7 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// session in the UI. This check is mtime-independent because filesystems
 	// (ext4, xfs) bump the parent directory's mtime to "now" the moment a
 	// child file is removed, breaking any post-deletion mtime comparison.
+	uploadsRoot := filepath.Join(filepath.Dir(filepath.Clean(us.baseDir)), "uploads")
 	for sessDir := range touchedSessionDirs {
 		entries, readErr := os.ReadDir(sessDir)
 		if readErr != nil {
@@ -118,8 +119,15 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 		if hasTranscript {
 			continue
 		}
+		sessID := filepath.Base(sessDir)
 		if rmErr := os.RemoveAll(sessDir); rmErr != nil {
 			slog.Warn("session: retention_sweep: dir remove failed", "dir", sessDir, "error", rmErr)
+		}
+		// Cascade-delete uploads for this session so disk space is reclaimed.
+		uploadsDir := filepath.Join(uploadsRoot, sessID)
+		if rmErr := os.RemoveAll(uploadsDir); rmErr != nil && !os.IsNotExist(rmErr) {
+			slog.Warn("session: retention_sweep: cascade-delete uploads failed",
+				"session_id", sessID, "error", rmErr)
 		}
 	}
 

@@ -2003,13 +2003,7 @@ func FixtureToolApprovalResponse_Edge() ToolApprovalResponse {
 
 func FixtureUploadFilesResponse_Populated() UploadFilesResponse {
 	return UploadFilesResponse{
-		Files: []struct {
-			ContentType string  `json:"content_type"`
-			Name        string  `json:"name"`
-			Path        string  `json:"path"`
-			Ref         *string `json:"ref,omitempty"`
-			Size        int64   `json:"size"`
-		}{
+		Files: []UploadedFile{
 			{
 				Name:        "report.pdf",
 				Path:        "uploads/sess-1/report.pdf",
@@ -2027,13 +2021,7 @@ func FixtureUploadFilesResponse_ZeroValue() UploadFilesResponse {
 
 func FixtureUploadFilesResponse_Edge() UploadFilesResponse {
 	return UploadFilesResponse{
-		Files: []struct {
-			ContentType string  `json:"content_type"`
-			Name        string  `json:"name"`
-			Path        string  `json:"path"`
-			Ref         *string `json:"ref,omitempty"`
-			Size        int64   `json:"size"`
-		}{
+		Files: []UploadedFile{
 			{Name: "a.png", Path: "uploads/s/a.png", ContentType: "image/png", Size: 0},
 			{Name: "b.txt", Path: "uploads/s/b.txt", ContentType: "text/plain", Size: 1},
 		},

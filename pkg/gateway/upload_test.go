@@ -56,6 +56,49 @@ func TestHandleUpload_RegistersMediaRef(t *testing.T) {
 	assert.Equal(t, "PNGDATA", string(data))
 }
 
+// TestHandleUpload_UsesAgentLoopStore verifies the stale-store fix:
+// when the agent loop has a store set (simulating post-restartServices state),
+// HandleUpload registers the ref in the AGENT LOOP's store, not a.mediaStore.
+// This is the key invariant — the agent loop always resolves via GetMediaStore().
+//
+// Traces to: #254 stale media store (BLOCKER)
+func TestHandleUpload_UsesAgentLoopStore(t *testing.T) {
+	api := newUploadTestAPI(t)
+
+	// agentLoopStore simulates the store that restartServices installed.
+	agentLoopStore := media.NewFileMediaStore()
+	api.agentLoop.SetMediaStore(agentLoopStore)
+
+	// a.mediaStore is set to a DIFFERENT (old) store to detect if upload
+	// uses the stale reference. After the fix, the agentLoopStore must be used.
+	staleStore := media.NewFileMediaStore()
+	api.mediaStore = staleStore
+
+	sessionID := "agent-loop-store-session"
+	body, ct := buildMultipart(t, sessionID, map[string]string{"doc.txt": "content"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+	req.Header.Set("Content-Type", ct)
+	rr := httptest.NewRecorder()
+
+	api.HandleUpload(rr, req)
+
+	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
+	var resp gen.UploadFilesResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Len(t, resp.Files, 1)
+	require.NotNil(t, resp.Files[0].Ref, "must have a ref")
+
+	ref := *resp.Files[0].Ref
+
+	// The ref must resolve in the AGENT LOOP store (the current store).
+	_, errAgentLoop := agentLoopStore.Resolve(ref)
+	assert.NoError(t, errAgentLoop, "ref must resolve in agent loop's store (the live store)")
+
+	// The ref must NOT resolve in the stale store.
+	_, errStale := staleStore.Resolve(ref)
+	assert.Error(t, errStale, "ref must NOT resolve in the stale a.mediaStore")
+}
+
 // newUploadTestAPI returns a restAPI wired to a temp directory for upload tests.
 func newUploadTestAPI(t *testing.T) *restAPI {
 	t.Helper()

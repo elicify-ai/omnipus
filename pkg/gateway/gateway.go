@@ -1573,6 +1573,14 @@ func restartServices(
 	}
 	fmt.Println("  ✓ Heartbeat service restarted")
 
+	// Flush any pending debounced registry saves on the outgoing store before
+	// swapping. Without this, a store write that was coalesced but not yet
+	// flushed would be lost when the old store is garbage-collected (N3 lifecycle
+	// fix). Stop() is idempotent and safe to call here even if the cleanup
+	// goroutine was never started.
+	if oldFMS, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
+		oldFMS.Stop()
+	}
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  cfg.Tools.MediaCleanup.Enabled,
 		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,

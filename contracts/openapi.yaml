@@ -181,7 +181,47 @@ components:
     ActivityEvent:
       $ref: ./components/schemas/ActivityEvent.yaml
     UploadedFile:
-      $ref: ./components/schemas/UploadedFile.yaml
+      type: object
+      description: >
+        Metadata for a single successfully uploaded file, as returned in the
+        POST /upload response body's "files" array. Callers use the path field
+        to construct the /api/v1/uploads/{session_id}/{filename} download URL.
+      required:
+        - name
+        - path
+        - size
+        - content_type
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Sanitised filename as stored on disk.
+          example: "screenshot.png"
+        path:
+          type: string
+          description: >
+            Relative path within the uploads directory for constructing a download URL.
+            Format: "uploads/{session_id}/{filename}".
+          example: "uploads/550e8400-e29b-41d4-a716-446655440000/screenshot.png"
+        size:
+          type: integer
+          format: int64
+          description: File size in bytes.
+          minimum: 0
+          example: 204800
+        content_type:
+          type: string
+          description: Detected MIME type of the uploaded file.
+          example: "image/png"
+        ref:
+          type: string
+          description: >
+            media:// ref registered for this file in the media store. Present when
+            the server could register the file (always, for now). The SPA echoes
+            this ref back in the message frame's "media" array so the agent loop can
+            thread the file into the LLM content array as a multimodal content block.
+            Empty if registration failed (the file is still downloadable via path).
+          example: "media://550e8400-e29b-41d4-a716-446655440000"
     SandboxConfigUpdate:
       $ref: ./components/schemas/SandboxConfigUpdate.yaml
     Task:
@@ -249,7 +289,19 @@ components:
     ToolApprovalResponse:
       $ref: ./components/schemas/ToolApprovalResponse.yaml
     UploadFilesResponse:
-      $ref: ./components/schemas/UploadFilesResponse.yaml
+      title: UploadFilesResponse
+      description: >
+        Response from POST /api/v1/upload (HTTP 201).
+        Returns the list of uploaded files with their metadata.
+      type: object
+      required:
+        - files
+      properties:
+        files:
+          type: array
+          description: Uploaded file metadata entries.
+          items:
+            $ref: '#/components/schemas/UploadedFile'
     TaskAcceptedResponse:
       $ref: ./components/schemas/TaskAcceptedResponse.yaml
     AgentOwnerUpdateResponse:
