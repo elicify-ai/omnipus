@@ -73,18 +73,29 @@ getters hold the read lock. Hot turn paths snapshot both at the start of `runTur
 
 ### D5 — Cascade-delete uploads on session delete
 
-`UnifiedStore.DeleteSession` and `UnifiedStore.ClearAll` cascade-delete
-`<workspace>/uploads/<sessionID>/` when removing a session. The retention sweep also
-cascade-deletes uploads when an empty session directory is pruned. Failure to remove
-uploads is logged at Warn but never fails the operation (the transcript is gone; the
-orphaned files are a space concern, not a correctness concern).
+`UnifiedStore.DeleteSession`, `UnifiedStore.ClearAll`, and `RetentionSweep` cascade-delete
+`<homePath>/uploads/<sessionID>/` when removing a session. Upload files are **home-rooted**
+(`rest.go:4352` writes them at `<homePath>/uploads/<sessionID>/`), so all three delete
+paths must use the home path regardless of the store's `baseDir` depth. Stores created
+via `NewUnifiedStoreWithHome(baseDir, homePath)` carry the home path; `NewUnifiedStore`
+derives it as `filepath.Dir(baseDir)` (correct for stores directly under home). Failure to
+remove uploads is logged at Warn but never fails the operation.
 
-### D6 — media.ParseMediaRef as newtype validation
+### D6 — media.ParseMediaRef as the validation chokepoint
 
 `media.ParseMediaRef(string) (Ref, error)` is the canonical constructor for validated
-media:// refs. `media.FilterValidRefs([]string) []string` centralizes ingress filtering
-for bus-level code. All channel implementations that populate `InboundMessage.Media`
-should use these functions at ingress.
+media:// refs. It rejects empty strings, non-prefixed strings, and refs with an empty ID
+(bare `"media://"`). `media.FilterValidRefs([]string) []string` is a batch convenience
+helper. The authoritative ingress chokepoints are:
+
+- **WebSocket ingress** (`pkg/gateway/websocket.go`): calls `ParseMediaRef` per-ref and
+  drops + counts (`inboundDropped`) any that fail validation before they reach the bus.
+- **LLM pipeline** (`pkg/agent/loop_media.go::resolveMediaRefs`): calls `ParseMediaRef`
+  per-ref and drops non-matching strings before the model ever sees them.
+
+`FilterValidRefs` is available for callers that need batch filtering outside these two
+paths. `InboundMessage.Media` remains `[]string` for backwards compatibility; `Ref` is
+the validation type used at call-sites, not a data-model type.
 
 ---
 

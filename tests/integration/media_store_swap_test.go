@@ -5,7 +5,6 @@ package integration
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -166,18 +165,17 @@ func assertMediaRefResolvable(t *testing.T, gw *testutil.TestGateway, ref, expec
 	}
 }
 
-// triggerReload triggers a config reload by PATCHing the config endpoint with
-// the current config. This causes restartServices to run and swap the media store.
+// triggerReload triggers a config reload by PUT-ing the current config back to the
+// config endpoint. This causes restartServices to run and swap the media store.
+// It fatals the test on any read or PUT failure so a no-op reload doesn't yield a
+// false green (G5 fix).
 func triggerReload(t *testing.T, gw *testutil.TestGateway) {
 	t.Helper()
 
 	// Read current config.
 	configPath := filepath.Join(gw.HomeDir(), "config.json")
 	data, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Logf("triggerReload: read config: %v (skipping reload trigger)", err)
-		return
-	}
+	require.NoError(t, err, "triggerReload: failed to read config.json — reload cannot proceed")
 
 	req, err := http.NewRequest(http.MethodPut, gw.URL+"/api/v1/config", bytes.NewReader(data))
 	require.NoError(t, err)
@@ -190,11 +188,12 @@ func triggerReload(t *testing.T, gw *testutil.TestGateway) {
 	resp, err := gw.HTTPClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		body, _ := io.ReadAll(resp.Body)
-		t.Logf("triggerReload: PUT /api/v1/config returned %d: %s", resp.StatusCode, body)
-		return
-	}
+
+	body, _ := io.ReadAll(resp.Body)
+	require.True(t,
+		resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusAccepted,
+		"triggerReload: PUT /api/v1/config returned %d (want 200/202): %s",
+		resp.StatusCode, body,
+	)
 	t.Logf("triggerReload: config reload triggered (status=%d)", resp.StatusCode)
-	_ = fmt.Sprintf("reload triggered")
 }

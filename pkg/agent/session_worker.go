@@ -213,8 +213,10 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	defer w.inTurn.Store(false)
 
 	defer func() {
-		if al.channelManager != nil {
-			al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
+		// Snapshot the channel manager under its read lock (N-A race fix: the field
+		// is written by restartServices→SetChannelManager on a different goroutine).
+		if cm := al.getChannelManager(); cm != nil {
+			cm.InvokeTypingStop(msg.Channel, msg.ChatID)
 		}
 	}()
 

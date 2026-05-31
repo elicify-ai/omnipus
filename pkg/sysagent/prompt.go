@@ -110,7 +110,7 @@ You also know agentic concepts:
 
 ## System Tools
 
-You have access to 37 system.* tools. These are only available to you — user agents cannot call them.
+You have access to 41 system.* tools. These are only available to you — user agents cannot call them.
 Use them to perform system operations on behalf of the user.
 
 Tool categories:
@@ -121,6 +121,7 @@ Tool categories:
 - system.skill.{install,remove,search,list}
 - system.mcp.{add,remove,list}
 - system.provider.{configure,list,test}
+- system.models.list
 - system.pin.{list,create,delete}
 - system.config.{get,set}
 - system.doctor.run

@@ -148,6 +148,55 @@ func TestResolveMediaRefs_ValidRef_Resolved(t *testing.T) {
 	assert.EqualValues(t, 0, counter.Load(), "successful resolve must not increment dropped counter")
 }
 
+// TestResolveMediaRefs_OversizeImage_UnavailableMarkerAndCount verifies that
+// when an image ref is registered and its file exists on disk but exceeds the
+// maxSize limit, encodeImageToDataURL returns "" and the caller must:
+//   - produce an "[attachment unavailable: ... (too large or unreadable)]" marker
+//   - increment the droppedCounter
+//   - NOT add anything to the Media data-URL array
+//
+// Traces to: #258 Fix 3 — oversize image silently dropped (MAJOR)
+func TestResolveMediaRefs_OversizeImage_UnavailableMarkerAndCount(t *testing.T) {
+	store := media.NewFileMediaStore()
+	var counter atomic.Int64
+
+	// Write a small image-like file and register it.
+	tmpFile := filepath.Join(t.TempDir(), "big.png")
+	// Minimal valid PNG bytes (1x1 transparent pixel) — small on disk but we set
+	// maxSize=0 so it's always considered "too large".
+	pngBytes := []byte{
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00,
+	}
+	require.NoError(t, os.WriteFile(tmpFile, pngBytes, 0o600))
+
+	ref, err := store.Store(tmpFile, media.MediaMeta{
+		Filename:    "big.png",
+		ContentType: "image/png",
+	}, "test-scope")
+	require.NoError(t, err)
+
+	messages := []providers.Message{
+		{Role: "user", Content: "huge image", Media: []string{ref}},
+	}
+
+	// maxSize=0 forces every image to be considered oversize.
+	result := resolveMediaRefs(messages, store, 0, &counter)
+
+	require.Len(t, result, 1)
+	// Media array must be empty — the oversize image must not appear as a data URL.
+	assert.Empty(t, result[0].Media, "oversize image must not appear in Media data-URL array")
+	// An unavailability marker must appear in Content.
+	assert.Contains(t, result[0].Content, "[attachment unavailable:",
+		"oversize image must produce [attachment unavailable] marker in Content")
+	assert.Contains(t, result[0].Content, "too large or unreadable",
+		"unavailability marker must describe the reason")
+	// The dropped counter must be incremented — same treatment as resolve/stat failures.
+	assert.EqualValues(t, 1, counter.Load(), "dropped counter must increment for oversize image")
+}
+
 // TestResolveMediaRefs_NilStore_PassThrough verifies that with a nil store
 // the messages are returned unmodified (no panic, no modification).
 func TestResolveMediaRefs_NilStore_PassThrough(t *testing.T) {

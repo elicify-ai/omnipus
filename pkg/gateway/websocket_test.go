@@ -307,7 +307,7 @@ func TestWSHandlerMessageMediaThreadedToBus(t *testing.T) {
 // non-media:// ref in the message frame's "media" array increments the
 // inbound dropped counter (observable metric) and does NOT reach the bus.
 //
-// Traces to: #254 bogus-ref drop (MAJOR)
+// Traces to: #254 bogus-ref drop (MAJOR); G3 — counter must be asserted.
 func TestWSHandlerMessageMediaBogusRef_IncreasesDropCount(t *testing.T) {
 	handler, msgBus, _ := newTestWSHandler(t)
 	t.Cleanup(handler.Wait)
@@ -327,16 +327,18 @@ func TestWSHandlerMessageMediaBogusRef_IncreasesDropCount(t *testing.T) {
 	}()
 
 	// Send a message with ONLY bogus refs — no valid media:// refs.
+	// Also send "media://" (empty ID) which ParseMediaRef rejects.
+	const bogusCount = 3
 	msgFrame := wsClientFrameTestHelper{
 		Type:    "message",
 		Content: "text with bad media",
-		Media:   []string{"not-a-ref", "http://example.com/file.jpg"},
+		Media:   []string{"not-a-ref", "http://example.com/file.jpg", "media://"},
 	}
 	msgData, _ := json.Marshal(msgFrame)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
 
 	// Wait briefly for the frame to be processed.
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 
 	select {
 	case msg := <-received:
@@ -346,13 +348,20 @@ func TestWSHandlerMessageMediaBogusRef_IncreasesDropCount(t *testing.T) {
 		t.Fatal("message was not published to bus within 3 seconds")
 	}
 
-	// The inbound dropped counter must be > 0 for the bogus refs.
-	// Access via the exported websocket connection state — we access it via the
-	// handler's internal wc counter through a helper if available. Since
-	// inboundDropped is on wsConn (per-connection), we verify indirectly via
-	// the bus message having empty Media instead of testing the counter directly.
-	// The handler-level dropped counter is tested in unit tests; this test
-	// provides the behavioral proof that bogus refs are filtered end-to-end.
+	// Assert the per-connection inboundDropped counter.
+	// wsConnChatIDsForTest gives us the chatID of the active connection so we can
+	// retrieve the wsConn and load the atomic counter directly.
+	chatIDs := wsConnChatIDsForTest(handler)
+	require.NotEmpty(t, chatIDs, "must have at least one active connection")
+
+	var totalDropped int32
+	for _, cid := range chatIDs {
+		if d := wsConnDroppedForTest(handler, cid); d > 0 {
+			totalDropped += d
+		}
+	}
+	assert.EqualValues(t, bogusCount, totalDropped,
+		"inboundDropped counter must equal the number of bogus refs sent (%d)", bogusCount)
 }
 
 // --- E5: WebSocket auth path tests ---
