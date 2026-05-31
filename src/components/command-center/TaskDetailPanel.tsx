@@ -14,7 +14,6 @@ import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useUiStore } from '@/store/ui'
-import { useSessionStore } from '@/store/session'
 import {
   Play,
   Copy,
@@ -71,7 +70,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const attachToSession = useSessionStore((s) => s.attachToSession)
 
   // Prompt editing state — only for queued tasks
   const [editingPrompt, setEditingPrompt] = useState(false)
@@ -273,8 +271,12 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                 size="sm"
                 className="w-full gap-2 text-xs h-8"
                 onClick={() => {
-                  attachToSession(task.session_id!, 'task', task.title, task.agent_id)
-                  void navigate({ to: '/' })
+                  // Navigate to the session URL directly. The sessions.$sessionId
+                  // route calls attachToSession (which sends the attach_session WS
+                  // frame and triggers replay) in its useEffect. Navigating to '/'
+                  // was wrong: RootChatScreen calls startNewSession() on mount which
+                  // clears activeSessionId, racing the attachToSession call.
+                  void navigate({ to: '/sessions/$sessionId', params: { sessionId: task.session_id! } })
                   onClose()
                 }}
               >

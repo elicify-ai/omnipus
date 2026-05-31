@@ -80,7 +80,9 @@ describe.each([
   'MessageItem renders assistant message with %s without throwing',
   (_label: string, overrides: Partial<ChatMessage>) => {
     it('renders without throwing', () => {
-      const props: ChatMessage = { ...validBaseMessage, ...overrides }
+      // #3: validBaseMessage is role:'assistant'; some override sets role:'user'.
+      // Cast to ChatMessage — test exercises runtime render path, not type safety.
+      const props = { ...validBaseMessage, ...overrides } as ChatMessage
       expect(() => renderWithQuery(<MessageItem message={props} />)).not.toThrow()
     })
   }
@@ -103,7 +105,9 @@ describe.each([
   'MessageItem renders user message with %s without throwing',
   (_label: string, overrides: Partial<ChatMessage>) => {
     it('renders without throwing', () => {
-      const props: ChatMessage = { ...validBaseMessage, ...overrides }
+      // #3: validBaseMessage is role:'assistant'; some override sets role:'user'.
+      // Cast to ChatMessage — test exercises runtime render path, not type safety.
+      const props = { ...validBaseMessage, ...overrides } as ChatMessage
       expect(() => renderWithQuery(<MessageItem message={props} />)).not.toThrow()
     })
   }
@@ -122,7 +126,9 @@ describe.each([
   'MessageItem renders with %s without throwing',
   (_label: string, overrides: Partial<ChatMessage>) => {
     it('renders without throwing', () => {
-      const props: ChatMessage = { ...validBaseMessage, ...overrides }
+      // #3: validBaseMessage is role:'assistant'; some override sets role:'user'.
+      // Cast to ChatMessage — test exercises runtime render path, not type safety.
+      const props = { ...validBaseMessage, ...overrides } as ChatMessage
       expect(() => renderWithQuery(<MessageItem message={props} />)).not.toThrow()
     })
   }
@@ -152,7 +158,9 @@ describe.each([
   'MessageItem renders with %s without throwing',
   (_label: string, overrides: Partial<ChatMessage>) => {
     it('renders without throwing', () => {
-      const props: ChatMessage = { ...validBaseMessage, ...overrides }
+      // #3: validBaseMessage is role:'assistant'; some override sets role:'user'.
+      // Cast to ChatMessage — test exercises runtime render path, not type safety.
+      const props = { ...validBaseMessage, ...overrides } as ChatMessage
       expect(() => renderWithQuery(<MessageItem message={props} />)).not.toThrow()
     })
   }
@@ -170,7 +178,9 @@ describe.each([
   'MessageItem renders with %s without throwing',
   (_label: string, overrides: Partial<ChatMessage>) => {
     it('renders without throwing', () => {
-      const props: ChatMessage = { ...validBaseMessage, ...overrides }
+      // #3: validBaseMessage is role:'assistant'; some override sets role:'user'.
+      // Cast to ChatMessage — test exercises runtime render path, not type safety.
+      const props = { ...validBaseMessage, ...overrides } as ChatMessage
       expect(() => renderWithQuery(<MessageItem message={props} />)).not.toThrow()
     })
   }
@@ -189,11 +199,12 @@ it('HTML script tag in assistant content does not produce a <script> element', (
 })
 
 it('HTML script tag in user content does not produce a <script> element', () => {
-  const props: ChatMessage = {
+  // #3: cast needed because validBaseMessage is role:'assistant' and we override to 'user'.
+  const props = {
     ...validBaseMessage,
-    role: 'user',
+    role: 'user' as const,
     content: "<script>window.__xss = true</script>",
-  }
+  } as ChatMessage
   renderWithQuery(<MessageItem message={props} />)
   expect(document.querySelectorAll('script')).toHaveLength(0)
 })
@@ -235,7 +246,9 @@ describe.each([
   'MessageItem renders system message with %s without throwing',
   (_label: string, overrides: Partial<ChatMessage>) => {
     it('renders without throwing', () => {
-      const props: ChatMessage = { ...validBaseMessage, ...overrides }
+      // #3: validBaseMessage is role:'assistant'; some override sets role:'user'.
+      // Cast to ChatMessage — test exercises runtime render path, not type safety.
+      const props = { ...validBaseMessage, ...overrides } as ChatMessage
       expect(() => renderWithQuery(<MessageItem message={props} />)).not.toThrow()
     })
   }

@@ -170,10 +170,23 @@ function buildContentParts(
 }
 
 function buildMessageStatus(msg: ChatMessage): ThreadMessageLike["status"] {
-  if (msg.isStreaming) return { type: "running" };
-  if (msg.status === "error") return { type: "incomplete", reason: "error" };
-  if (msg.status === "interrupted") return { type: "incomplete", reason: "cancelled" };
-  return { type: "complete", reason: "stop" };
+  // #3: discriminate by role so the compiler catches any unhandled role/status combination.
+  switch (msg.role) {
+    case "assistant": {
+      if (msg.isStreaming) return { type: "running" };
+      if (msg.status === "error") return { type: "incomplete", reason: "error" };
+      if (msg.status === "interrupted") return { type: "incomplete", reason: "cancelled" };
+      return { type: "complete", reason: "stop" };
+    }
+    case "user":
+      // User messages are never surfaced through AssistantUI's status system — this
+      // function is only called for assistant messages (see convertMessage below).
+      // Returning complete is safe; error-state rendering is handled by
+      // VirtualUserMessageRow / UserMessageRetryButton in ChatScreen.tsx.
+      return { type: "complete", reason: "stop" };
+    case "system":
+      return { type: "complete", reason: "stop" };
+  }
 }
 
 function convertMessage(

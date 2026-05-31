@@ -329,22 +329,62 @@ function InterruptedMessageMarkers() {
 // ── Standalone message row components (virtualizer) ──────────────────────────
 // Render ChatMessage from props (no AssistantUI context) for use by the virtualizer.
 
+/** Inline retry button for user messages that failed to send (#253b). */
+function UserMessageRetryButton({ message }: { message: ChatMessage }) {
+  const sendMessage = useChatStore((s) => s.sendMessage)
+  const isStreaming = useChatStore((s) => s.isStreaming)
+
+  if (message.status !== 'error' || isStreaming) return null
+
+  function handleRetry() {
+    // #253(c): resend the original content — file refs are already embedded in
+    // the content string by handleSendWithFiles, so no separate mediaRefs needed.
+    sendMessage(message.content)
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-2 mt-1">
+      <span className="text-[10px] text-[var(--color-error)]">Send failed</span>
+      <button
+        type="button"
+        data-testid="user-message-retry"
+        onClick={handleRetry}
+        aria-label="Retry — resend this message"
+        className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+        title="Retry — resend this message"
+      >
+        <ArrowCounterClockwise size={11} />
+        <span>Retry</span>
+      </button>
+    </div>
+  )
+}
+
 /** Standalone user message row for the virtualizer. */
 function VirtualUserMessageRow({ message }: { message: ChatMessage }) {
+  const isError = message.status === 'error'
   return (
     <div
       data-testid="user-message"
       data-message-role="user"
       data-message-id={message.id}
+      data-status={message.status}
       className="group flex gap-3 px-4 py-3 flex-row-reverse"
     >
       <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
         <User size={14} weight="bold" />
       </div>
       <div className="flex flex-col items-end gap-1 max-w-[85%] min-w-0">
-        <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm">
+        <div className={cn(
+          "rounded-xl px-4 py-3 text-sm leading-relaxed rounded-tr-sm",
+          isError
+            ? "bg-[var(--color-error)]/10 border border-[var(--color-error)]/30 text-[var(--color-secondary)]"
+            : "bg-[var(--color-surface-2)] text-[var(--color-secondary)]"
+        )}>
           <p className="whitespace-pre-wrap break-words">{message.content}</p>
         </div>
+        {/* #253(b): show error + Retry when message failed to send */}
+        <UserMessageRetryButton message={message} />
       </div>
     </div>
   )
@@ -1119,15 +1159,40 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       sendMessage(text)
       return
     }
-    if (!activeSessionId) {
-      addToast({ message: 'No active session — cannot upload files', variant: 'error' })
+    if (!activeSessionId || activeSessionId === '__pending') {
+      addToast({ message: 'No active session — cannot upload files. Send a text message first to start a session.', variant: 'error' })
       return
     }
     setIsUploading(true)
     try {
       const { files: uploaded } = await uploadFiles(activeSessionId, pendingFiles)
-      const fileList = uploaded.map((f) => `[${f.name}](${f.path})`).join(', ')
-      sendMessage(text ? `${text}\n\nAttached files: ${fileList}` : `Attached files: ${fileList}`)
+
+      // #4: model upload result as paired (attachment, ref) so display and
+      // agent-accessible path are always consistent. An uploaded file without
+      // a path cannot be referenced by the agent — surface "not available" so
+      // the user knows to re-attach, rather than silently sending a broken link.
+      type FilePair = { name: string; path: string | null }
+      const pairs: FilePair[] = pendingFiles.map((file) => {
+        const match = uploaded.find((u) => u.name === file.name)
+        return { name: file.name, path: match?.path ?? null }
+      })
+
+      const unavailable = pairs.filter((p) => p.path === null)
+      if (unavailable.length > 0) {
+        addToast({
+          message: `Attachment not available: ${unavailable.map((p) => p.name).join(', ')} — could not register with session. Re-attach and try again.`,
+          variant: 'error',
+        })
+      }
+
+      const available = pairs.filter((p) => p.path !== null) as { name: string; path: string }[]
+      if (available.length === 0 && !text.trim()) {
+        // Nothing to send — all files failed and no text.
+        return
+      }
+      const fileList = available.map((p) => `[${p.name}](${p.path})`).join(', ')
+      const finalContent = [text, fileList ? `Attached files: ${fileList}` : ''].filter(Boolean).join('\n\n')
+      sendMessage(finalContent)
       setPendingFiles([])
     } catch (err) {
       addToast({

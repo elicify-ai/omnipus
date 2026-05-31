@@ -397,6 +397,86 @@ describe('chat store — sendMessage optimistic render', () => {
   })
 })
 
+// ── #253: recovery error-bubble tests ────────────────────────────────────────
+// Traces to: sprint-258 review finding #253 — failed send must preserve typed
+// content as a retriable error bubble, not silently drop the message.
+
+describe('chat store — #253 no-session send failure creates retriable error bubble', () => {
+  it('when activeSessionId is null and send() fails, user message gets status:error (not dropped)', () => {
+    // BDD:
+    //   Given no active session (activeSessionId = null)
+    //   And the WS send() returns false (connection dropped mid-send)
+    //   When sendMessage('Hello') is called
+    //   Then a user message with content 'Hello' and status 'error' is present in the store
+    //   And isStreaming is false (no phantom spinner)
+    //   And a Retry affordance is reachable (the message is in the store with status:'error')
+    const mockSend = vi.fn().mockReturnValue(false) // send fails
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        isConnected: true,
+        connectionError: null,
+      })
+      // No active session — null triggers the no-session path
+      useSessionStore.setState({
+        activeSessionId: null,
+        activeAgentId: 'general-assistant',
+      })
+      useChatStore.getState().sendMessage('Hello no-session')
+    })
+
+    // After the failed send, the user message must be preserved with status:'error'
+    const state = useChatStore.getState()
+
+    // The message must be in SOME bucket (either the pending one or the active one)
+    // Check the global messages selector which reflects the active session.
+    // The pending bucket is activated via setActiveSession('__pending', ...)
+    const userMsg = state.messages.find((m) => m.role === 'user' && m.content === 'Hello no-session')
+    expect(userMsg).toBeDefined()
+    expect(userMsg?.status).toBe('error')
+
+    // isStreaming must be false — no phantom spinner
+    expect(state.isStreaming).toBe(false)
+
+    // The Retry affordance: VirtualUserMessageRow renders UserMessageRetryButton
+    // when message.status === 'error'. Assert the store state that drives it:
+    // the user message with status:'error' IS reachable in the messages array.
+    const errorMessages = state.messages.filter((m) => m.role === 'user' && m.status === 'error')
+    expect(errorMessages.length).toBeGreaterThan(0)
+  })
+
+  it('when activeSessionId is null and send() succeeds, user message is rendered optimistically', () => {
+    // BDD:
+    //   Given no active session
+    //   And the WS send() returns true (succeeds)
+    //   When sendMessage('Hello') is called
+    //   Then a user message with content 'Hello' is visible (not status:'error')
+    //   And isStreaming is true (awaiting session_started ack)
+    const mockSend = vi.fn().mockReturnValue(true)
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        isConnected: true,
+      })
+      useSessionStore.setState({
+        activeSessionId: null,
+        activeAgentId: 'general-assistant',
+      })
+      useChatStore.getState().sendMessage('Hello pending')
+    })
+
+    const state = useChatStore.getState()
+    const userMsg = state.messages.find((m) => m.role === 'user' && m.content === 'Hello pending')
+    expect(userMsg).toBeDefined()
+    // status should be 'done' (successfully queued, awaiting session_started)
+    expect(userMsg?.status).toBe('done')
+    // isStreaming should be true — the agent is about to respond
+    expect(state.isStreaming).toBe(true)
+  })
+})
+
 // ── Sprint H: subagent span tests ─────────────────────────────────────────────
 // TDD row 11: ChatStore_GroupsFramesBySpan
 // Traces to: sprint-h-subagent-block-spec.md Scenarios 2, 4, 5, 8
