@@ -18,7 +18,7 @@ This trademark notice is **separate from** and **in addition to** the source-cod
 - Domain names containing "omnipus", "elicify", or confusingly similar strings.
 - Use of the brand assets (logo SVGs, design tokens, the "Sovereign Deep" palette) in a way unrelated to the unmodified upstream project.
 
-If you need any of the above for a legitimate purpose — community event, commercial integration, partnership — please contact **contact@elicify.ai** (or, until that mailbox is live, file an issue tagged `[trademark]` describing your use case).
+If you need any of the above for a legitimate purpose — community event, commercial integration, partnership — please contact **connect@elicify.ai** (or, until that mailbox is live, file an issue tagged `[trademark]` describing your use case).
 
 ## Why this exists
 
@@ -28,7 +28,7 @@ The pattern is standard across the open-source ecosystem: Linux, Kubernetes, Moz
 
 ## Reporting trademark misuse
 
-If you see a project, product, or service using the Omnipus name or logo in a way you believe is unauthorized, please email **contact@elicify.ai** or open a GitHub issue tagged `[trademark]`. Include a link to the misuse and any context that helps us evaluate.
+If you see a project, product, or service using the Omnipus name or logo in a way you believe is unauthorized, please email **connect@elicify.ai** or open a GitHub issue tagged `[trademark]`. Include a link to the misuse and any context that helps us evaluate.
 
 ---
 

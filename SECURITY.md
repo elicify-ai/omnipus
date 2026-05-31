@@ -7,7 +7,7 @@ Omnipus's central pitch is a kernel-level sandbox, an HMAC-chained audit log, an
 **Do not open a public GitHub issue for a security report.** Choose one of the following:
 
 1. **(Preferred) GitHub Private Vulnerability Reporting.** Open a private advisory at <https://github.com/elicify-ai/omnipus/security/advisories/new>. This keeps the conversation between you, the project maintainers, and (optionally) named experts you invite — without exposing the issue to the public until a fix ships.
-2. **Email.** Write to **contact@elicify.ai** with subject line `[security]` and a description detailed enough for us to reproduce the issue. PGP / signed mail is not yet supported; consider GitHub PVR if confidentiality of transport matters.
+2. **Email.** Write to **connect@elicify.ai** with subject line `[security]` and a description detailed enough for us to reproduce the issue. PGP / signed mail is not yet supported; consider GitHub PVR if confidentiality of transport matters.
 
 If you don't get an acknowledgement within 72 hours, please re-send through the other channel — mail filters do occasionally lose messages.
 
