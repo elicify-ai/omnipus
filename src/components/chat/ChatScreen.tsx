@@ -1215,13 +1215,20 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     try {
       const { files: uploaded } = await uploadFiles(sessionId, pendingFiles)
 
-      // #4 (sprint258 review): model upload result as paired (attachment, ref)
-      // so display and agent-accessible path are always consistent. An uploaded
-      // file without a path cannot be referenced by the agent — surface
-      // "not available" so the user knows to re-attach, rather than silently
-      // sending a broken link.
+      // #4 (sprint258 review): model upload result as a paired structure so
+      // the visible attachment and the agent-accessible ref are always derived
+      // from the same predicate. A file without a valid path cannot be
+      // referenced in the message body — surface "not available" so the user
+      // knows to re-attach, rather than silently sending a broken link.
+      //
+      // A file may have a valid path but no ref (registration failed). In that
+      // case we still include it in the file list body text so the agent sees
+      // the filename, but we do NOT add it to mediaRefs (agent cannot
+      // access it as a multimodal content block). The attachment is shown
+      // to the user only when the paired ref is present so display and
+      // agent-accessible content are always consistent.
       const unavailable = pendingFiles.filter(
-        (file) => !uploaded.some((u) => u.name === file.name && typeof u.path === 'string' && u.path.length > 0),
+        (file) => !uploaded.some((u) => u.name === file.name && u.path.length > 0),
       )
       if (unavailable.length > 0) {
         addToast({
@@ -1230,24 +1237,57 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         })
       }
 
-      // Only thread files that actually registered (have a usable path).
-      const available = uploaded.filter((f) => typeof f.path === 'string' && f.path.length > 0)
-      if (available.length === 0 && !text.trim()) {
-        // Nothing to send — all files failed and no text.
+      // Build paired (attachment, ref) structures from the uploaded files that
+      // have a usable path. Both the visible bubble attachment and the agent
+      // media:// ref are derived from the same source object — a file without
+      // a ref is excluded from the display attachment list so no attachment is
+      // visible to the user without a corresponding agent-accessible ref.
+      interface UploadPair {
+        attachment: MediaAttachment
+        ref: string
+        fileEntry: string
+      }
+      const availablePairs: UploadPair[] = uploaded
+        .filter((f) => f.path.length > 0 && typeof f.ref === 'string' && f.ref.length > 0)
+        .map((f) => ({
+          attachment: {
+            type: f.content_type.startsWith('image/') ? 'image' : 'file',
+            url: `/api/v1/uploads/${sessionId}/${f.name}`,
+            filename: f.name,
+            contentType: f.content_type,
+          } as MediaAttachment,
+          ref: f.ref as string,
+          fileEntry: `[${f.name}](${f.path})`,
+        }))
+
+      // Files with a valid path but no ref still appear in the text body so
+      // the agent knows a file was sent, but they are not shown as bubble
+      // attachments (no ref → agent cannot access).
+      const reflessFiles = uploaded.filter(
+        (f) => f.path.length > 0 && (typeof f.ref !== 'string' || f.ref.length === 0),
+      )
+      const allFileEntries = [
+        ...availablePairs.map((p) => p.fileEntry),
+        ...reflessFiles.map((f) => `[${f.name}](${f.path})`),
+      ]
+
+      // Fix #1: when ALL uploads failed (no path-bearing file at all), send
+      // plain text if the user typed something — do NOT append an empty
+      // "Attached files:" suffix and do NOT clear pendingFiles so the user
+      // can re-attach after seeing the toast.
+      if (allFileEntries.length === 0) {
+        if (!text.trim()) {
+          // Nothing to send at all.
+          return
+        }
+        // Send text-only; keep pendingFiles so user can retry the attach.
+        sendMessage(text)
         return
       }
 
-      // #254: thread media:// refs into the message frame so the agent sees
-      // the attachment as a multimodal content block. Build display
-      // attachments for the optimistic user bubble in parallel.
-      const mediaRefs = available.map((f) => f.ref).filter((r): r is string => typeof r === 'string' && r.length > 0)
-      const attachments: MediaAttachment[] = available.map((f) => ({
-        type: f.content_type.startsWith('image/') ? 'image' : 'file',
-        url: `/api/v1/uploads/${sessionId}/${f.name}`,
-        filename: f.name,
-        contentType: f.content_type,
-      }))
-      const fileList = available.map((f) => `[${f.name}](${f.path})`).join(', ')
+      const mediaRefs = availablePairs.map((p) => p.ref)
+      const attachments = availablePairs.map((p) => p.attachment)
+      const fileList = allFileEntries.join(', ')
       const body = text ? `${text}\n\nAttached files: ${fileList}` : `Attached files: ${fileList}`
       sendMessage(body, { mediaRefs, attachments })
       setPendingFiles([])
