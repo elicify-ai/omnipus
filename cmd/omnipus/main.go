@@ -4,6 +4,7 @@
 //
 // Copyright (c) 2026 Omnipus contributors
 
+// Package main is the entry point for the Omnipus CLI.
 package main
 
 import (
