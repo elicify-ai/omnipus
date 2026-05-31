@@ -904,16 +904,42 @@ func (h *WSHandler) handleChatMessage(
 
 	// #254: thread client-supplied media refs into the inbound message so the
 	// agent loop resolves them into multimodal content blocks. Only accept
-	// well-formed media:// refs — anything else is a client error or an
-	// attempt to smuggle an arbitrary string into the LLM content array, so
-	// we drop it rather than forward it.
+	// Hard-cap inbound media to prevent resource exhaustion. Refs beyond
+	// maxInboundMediaRefs and refs exceeding maxInboundRefLen are dropped and
+	// counted against the inbound-dropped counter.
+	const maxInboundMediaRefs = 16
+	const maxInboundRefLen = 256
+
 	var acceptedMedia []string
-	for _, ref := range mediaRefs {
+	for i, ref := range mediaRefs {
+		if i >= maxInboundMediaRefs {
+			wc.inboundDropped.Add(1)
+			slog.Warn("ws: media array exceeds cap — dropping remaining refs",
+				"chat_id", chatID, "session_id", sessionID,
+				"dropped_from_index", i, "total_supplied", len(mediaRefs))
+			break
+		}
+		if len(ref) > maxInboundRefLen {
+			wc.inboundDropped.Add(1)
+			slog.Warn("ws: dropping oversized ref in message frame",
+				"chat_id", chatID, "session_id", sessionID,
+				"ref_prefix", ref[:32])
+			continue
+		}
+		// Accept only well-formed media:// refs. Non-matching strings are a
+		// client error or an attempt to smuggle an arbitrary value into the LLM
+		// content array — drop and count them.
 		if strings.HasPrefix(ref, "media://") {
 			acceptedMedia = append(acceptedMedia, ref)
 		} else {
+			wc.inboundDropped.Add(1)
+			truncated := ref
+			if len(truncated) > 64 {
+				truncated = truncated[:64] + "…"
+			}
 			slog.Warn("ws: dropping non-media:// ref in message frame",
-				"chat_id", chatID, "session_id", sessionID)
+				"chat_id", chatID, "session_id", sessionID,
+				"ref_prefix", truncated)
 		}
 	}
 

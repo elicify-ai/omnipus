@@ -4261,8 +4261,10 @@ func (a *restAPI) withUploadAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return a.withAuthAndBodyLimit(handler, maxUploadFileSize*10)
 }
 
-// UploadedFile type is defined in contracts/components/schemas/UploadedFile.yaml
-// and generated into pkg/api/generated/. Use gen.UploadedFile directly.
+// UploadedFile is defined as the UploadedFile component schema in contracts/openapi.yaml
+// (components/schemas/UploadedFile). oapi-codegen v2 inlines it as an anonymous struct
+// element type within gen.UploadFilesResponse.Files. Callers must use the element type
+// of gen.UploadFilesResponse.Files for struct literals; there is no standalone gen.UploadedFile.
 
 // HandleUpload handles POST /api/v1/upload — streams multipart file uploads to disk.
 // Files are stored at ~/.omnipus/uploads/{session_id}/{sanitized_filename}.
@@ -4357,15 +4359,18 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Use O_CREATE|O_EXCL to atomically create the destination file.
+		// If another concurrent upload or replay already created a file with
+		// the same name (TOCTOU-safe: Stat+Create would race), retry once
+		// with a nanosecond suffix to guarantee uniqueness.
 		destPath := filepath.Join(uploadDir, sanitized)
-
-		// If a file with this name already exists, append a nanosecond timestamp
-		// to avoid silent overwrites.
-		if _, statErr := os.Stat(destPath); statErr == nil {
+		f, createErr := os.OpenFile(destPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if createErr != nil && os.IsExist(createErr) {
 			ext := filepath.Ext(sanitized)
 			base := strings.TrimSuffix(sanitized, ext)
 			sanitized = fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext)
 			destPath = filepath.Join(uploadDir, sanitized)
+			f, createErr = os.OpenFile(destPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		}
 
 		// Read Content-Type before closing the part.
@@ -4381,7 +4386,6 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		f, createErr := os.Create(destPath)
 		if createErr != nil {
 			part.Close()
 			slog.Error("rest: upload: create file failed", "path", destPath, "error", createErr)
@@ -4429,10 +4433,18 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		// the media store must never auto-delete the file. Registration failure
 		// is non-fatal: the file is still downloadable via path, the agent just
 		// won't see it inline.
+		// #254 stale media store fix: always fetch the current store via the
+		// agent loop so uploads survive a restartServices store swap. Fall back
+		// to a.mediaStore only when the agent loop is not yet wired (e.g. tests
+		// that construct a restAPI with a direct mediaStore but no agentLoop).
 		var ref string
-		if a.mediaStore != nil {
+		store := a.agentLoop.GetMediaStore()
+		if store == nil {
+			store = a.mediaStore
+		}
+		if store != nil {
 			var storeErr error
-			ref, storeErr = a.mediaStore.Store(destPath, media.MediaMeta{
+			ref, storeErr = store.Store(destPath, media.MediaMeta{
 				Filename:      sanitized,
 				ContentType:   contentType,
 				Source:        "upload:webchat",
@@ -4458,13 +4470,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			refCopy := ref
 			refPtr = &refCopy
 		}
-		resp.Files = append(resp.Files, struct {
-			ContentType string  `json:"content_type"`
-			Name        string  `json:"name"`
-			Path        string  `json:"path"`
-			Ref         *string `json:"ref,omitempty"`
-			Size        int64   `json:"size"`
-		}{
+		resp.Files = append(resp.Files, gen.UploadedFile{
 			ContentType: contentType,
 			Name:        sanitized,
 			Path:        relativePath,

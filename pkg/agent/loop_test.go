@@ -2672,14 +2672,37 @@ func TestResolveMediaRefs_UnknownTypeInjectsPath(t *testing.T) {
 	}
 }
 
-func TestResolveMediaRefs_PassesThroughNonMediaRefs(t *testing.T) {
+// TestResolveMediaRefs_PassesThroughNonMediaRefs_NilStore verifies that with a
+// nil store, messages are returned unchanged (including any non-media:// strings).
+// A nil store means the agent loop is not yet wired; in that case we cannot
+// resolve anything, so we return the message as-is rather than strip data.
+func TestResolveMediaRefs_PassesThroughNonMediaRefs_NilStore(t *testing.T) {
 	messages := []providers.Message{
 		{Role: "user", Content: "hi", Media: []string{"https://example.com/img.png"}},
 	}
 	result := resolveMediaRefs(messages, nil, config.DefaultMaxMediaSize)
 
+	// With nil store we return unchanged.
 	if len(result[0].Media) != 1 || result[0].Media[0] != "https://example.com/img.png" {
-		t.Fatalf("expected passthrough of non-media:// URL, got %v", result[0].Media)
+		t.Fatalf("expected passthrough with nil store, got %v", result[0].Media)
+	}
+}
+
+// TestResolveMediaRefs_DropsNonMediaRefWhenStorePresent verifies that a
+// non-media:// string in Media is dropped (not forwarded) when a live store
+// is present. This guards against channels that fall back to local paths.
+//
+// Traces to: #254 resolveMediaRefs pass-through (MAJOR)
+func TestResolveMediaRefs_DropsNonMediaRefWhenStorePresent(t *testing.T) {
+	store := media.NewFileMediaStore()
+	messages := []providers.Message{
+		{Role: "user", Content: "hi", Media: []string{"https://example.com/img.png", "/tmp/local/file.jpg"}},
+	}
+	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize)
+
+	// Non-media:// strings must be dropped when store is non-nil.
+	if len(result[0].Media) != 0 {
+		t.Fatalf("expected non-media:// refs to be dropped, got Media=%v", result[0].Media)
 	}
 }
 

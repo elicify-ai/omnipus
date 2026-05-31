@@ -18,19 +18,40 @@ const (
 
 // Defines values for ActivityEventType.
 const (
-	SessionStart ActivityEventType = "session_start"
-	TaskCreated  ActivityEventType = "task_created"
-	TaskUpdated  ActivityEventType = "task_updated"
+	ActivityEventTypeSessionStart ActivityEventType = "session_start"
+	ActivityEventTypeTaskCreated  ActivityEventType = "task_created"
+	ActivityEventTypeTaskUpdated  ActivityEventType = "task_updated"
 )
 
 // Valid indicates whether the value is a known member of the ActivityEventType enum.
 func (e ActivityEventType) Valid() bool {
 	switch e {
-	case SessionStart:
+	case ActivityEventTypeSessionStart:
 		return true
-	case TaskCreated:
+	case ActivityEventTypeTaskCreated:
 		return true
-	case TaskUpdated:
+	case ActivityEventTypeTaskUpdated:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ActivityEventsResponseEventsType.
+const (
+	ActivityEventsResponseEventsTypeSessionStart ActivityEventsResponseEventsType = "session_start"
+	ActivityEventsResponseEventsTypeTaskCreated  ActivityEventsResponseEventsType = "task_created"
+	ActivityEventsResponseEventsTypeTaskUpdated  ActivityEventsResponseEventsType = "task_updated"
+)
+
+// Valid indicates whether the value is a known member of the ActivityEventsResponseEventsType enum.
+func (e ActivityEventsResponseEventsType) Valid() bool {
+	switch e {
+	case ActivityEventsResponseEventsTypeSessionStart:
+		return true
+	case ActivityEventsResponseEventsTypeTaskCreated:
+		return true
+	case ActivityEventsResponseEventsTypeTaskUpdated:
 		return true
 	default:
 		return false
@@ -184,6 +205,48 @@ func (e AgentCreateRequestToolsCfgBuiltinPolicies) Valid() bool {
 	case AgentCreateRequestToolsCfgBuiltinPoliciesAsk:
 		return true
 	case AgentCreateRequestToolsCfgBuiltinPoliciesDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolEntryConfiguredPolicy.
+const (
+	AgentToolEntryConfiguredPolicyAllow AgentToolEntryConfiguredPolicy = "allow"
+	AgentToolEntryConfiguredPolicyAsk   AgentToolEntryConfiguredPolicy = "ask"
+	AgentToolEntryConfiguredPolicyDeny  AgentToolEntryConfiguredPolicy = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolEntryConfiguredPolicy enum.
+func (e AgentToolEntryConfiguredPolicy) Valid() bool {
+	switch e {
+	case AgentToolEntryConfiguredPolicyAllow:
+		return true
+	case AgentToolEntryConfiguredPolicyAsk:
+		return true
+	case AgentToolEntryConfiguredPolicyDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolEntryEffectivePolicy.
+const (
+	AgentToolEntryEffectivePolicyAllow AgentToolEntryEffectivePolicy = "allow"
+	AgentToolEntryEffectivePolicyAsk   AgentToolEntryEffectivePolicy = "ask"
+	AgentToolEntryEffectivePolicyDeny  AgentToolEntryEffectivePolicy = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolEntryEffectivePolicy enum.
+func (e AgentToolEntryEffectivePolicy) Valid() bool {
+	switch e {
+	case AgentToolEntryEffectivePolicyAllow:
+		return true
+	case AgentToolEntryEffectivePolicyAsk:
+		return true
+	case AgentToolEntryEffectivePolicyDeny:
 		return true
 	default:
 		return false
@@ -421,6 +484,30 @@ func (e AgentUpdateRequestToolsCfgBuiltinPolicies) Valid() bool {
 	}
 }
 
+// Defines values for AttachmentType.
+const (
+	AttachmentTypeAudio AttachmentType = "audio"
+	AttachmentTypeFile  AttachmentType = "file"
+	AttachmentTypeImage AttachmentType = "image"
+	AttachmentTypeVideo AttachmentType = "video"
+)
+
+// Valid indicates whether the value is a known member of the AttachmentType enum.
+func (e AttachmentType) Valid() bool {
+	switch e {
+	case AttachmentTypeAudio:
+		return true
+	case AttachmentTypeFile:
+		return true
+	case AttachmentTypeImage:
+		return true
+	case AttachmentTypeVideo:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AuditEntryDecision.
 const (
 	AuditEntryDecisionAllow AuditEntryDecision = "allow"
@@ -586,6 +673,81 @@ func (e ChannelEntryTransport) Valid() bool {
 	}
 }
 
+// Defines values for ChannelId.
+const (
+	Dingtalk ChannelId = "dingtalk"
+	Discord  ChannelId = "discord"
+	Feishu   ChannelId = "feishu"
+	Irc      ChannelId = "irc"
+	Line     ChannelId = "line"
+	Maixcam  ChannelId = "maixcam"
+	Matrix   ChannelId = "matrix"
+	Onebot   ChannelId = "onebot"
+	Qq       ChannelId = "qq"
+	Slack    ChannelId = "slack"
+	Telegram ChannelId = "telegram"
+	Webchat  ChannelId = "webchat"
+	Wecom    ChannelId = "wecom"
+	Weixin   ChannelId = "weixin"
+	Whatsapp ChannelId = "whatsapp"
+)
+
+// Valid indicates whether the value is a known member of the ChannelId enum.
+func (e ChannelId) Valid() bool {
+	switch e {
+	case Dingtalk:
+		return true
+	case Discord:
+		return true
+	case Feishu:
+		return true
+	case Irc:
+		return true
+	case Line:
+		return true
+	case Maixcam:
+		return true
+	case Matrix:
+		return true
+	case Onebot:
+		return true
+	case Qq:
+		return true
+	case Slack:
+		return true
+	case Telegram:
+		return true
+	case Webchat:
+		return true
+	case Wecom:
+		return true
+	case Weixin:
+		return true
+	case Whatsapp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DevicePairedStatus.
+const (
+	DevicePairedStatusActive  DevicePairedStatus = "active"
+	DevicePairedStatusRevoked DevicePairedStatus = "revoked"
+)
+
+// Valid indicates whether the value is a known member of the DevicePairedStatus enum.
+func (e DevicePairedStatus) Valid() bool {
+	switch e {
+	case DevicePairedStatusActive:
+		return true
+	case DevicePairedStatusRevoked:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DevicesResponsePairedStatus.
 const (
 	DevicesResponsePairedStatusActive  DevicesResponsePairedStatus = "active"
@@ -598,6 +760,27 @@ func (e DevicesResponsePairedStatus) Valid() bool {
 	case DevicesResponsePairedStatusActive:
 		return true
 	case DevicesResponsePairedStatusRevoked:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DoctorIssueSeverity.
+const (
+	DoctorIssueSeverityHigh   DoctorIssueSeverity = "high"
+	DoctorIssueSeverityLow    DoctorIssueSeverity = "low"
+	DoctorIssueSeverityMedium DoctorIssueSeverity = "medium"
+)
+
+// Valid indicates whether the value is a known member of the DoctorIssueSeverity enum.
+func (e DoctorIssueSeverity) Valid() bool {
+	switch e {
+	case DoctorIssueSeverityHigh:
+		return true
+	case DoctorIssueSeverityLow:
+		return true
+	case DoctorIssueSeverityMedium:
 		return true
 	default:
 		return false
@@ -1134,19 +1317,19 @@ func (e PromptGuardUpdateRequestLevel) Valid() bool {
 
 // Defines values for PromptGuardUpdateResponseAppliedLevel.
 const (
-	PromptGuardUpdateResponseAppliedLevelHigh   PromptGuardUpdateResponseAppliedLevel = "high"
-	PromptGuardUpdateResponseAppliedLevelLow    PromptGuardUpdateResponseAppliedLevel = "low"
-	PromptGuardUpdateResponseAppliedLevelMedium PromptGuardUpdateResponseAppliedLevel = "medium"
+	High   PromptGuardUpdateResponseAppliedLevel = "high"
+	Low    PromptGuardUpdateResponseAppliedLevel = "low"
+	Medium PromptGuardUpdateResponseAppliedLevel = "medium"
 )
 
 // Valid indicates whether the value is a known member of the PromptGuardUpdateResponseAppliedLevel enum.
 func (e PromptGuardUpdateResponseAppliedLevel) Valid() bool {
 	switch e {
-	case PromptGuardUpdateResponseAppliedLevelHigh:
+	case High:
 		return true
-	case PromptGuardUpdateResponseAppliedLevelLow:
+	case Low:
 		return true
-	case PromptGuardUpdateResponseAppliedLevelMedium:
+	case Medium:
 		return true
 	default:
 		return false
@@ -1341,22 +1524,22 @@ func (e SessionCreateRequestType) Valid() bool {
 
 // Defines values for SessionDetailMessagesAttachmentsType.
 const (
-	SessionDetailMessagesAttachmentsTypeAudio SessionDetailMessagesAttachmentsType = "audio"
-	SessionDetailMessagesAttachmentsTypeFile  SessionDetailMessagesAttachmentsType = "file"
-	SessionDetailMessagesAttachmentsTypeImage SessionDetailMessagesAttachmentsType = "image"
-	SessionDetailMessagesAttachmentsTypeVideo SessionDetailMessagesAttachmentsType = "video"
+	Audio SessionDetailMessagesAttachmentsType = "audio"
+	File  SessionDetailMessagesAttachmentsType = "file"
+	Image SessionDetailMessagesAttachmentsType = "image"
+	Video SessionDetailMessagesAttachmentsType = "video"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesAttachmentsType enum.
 func (e SessionDetailMessagesAttachmentsType) Valid() bool {
 	switch e {
-	case SessionDetailMessagesAttachmentsTypeAudio:
+	case Audio:
 		return true
-	case SessionDetailMessagesAttachmentsTypeFile:
+	case File:
 		return true
-	case SessionDetailMessagesAttachmentsTypeImage:
+	case Image:
 		return true
-	case SessionDetailMessagesAttachmentsTypeVideo:
+	case Video:
 		return true
 	default:
 		return false
@@ -1482,19 +1665,19 @@ func (e SessionDetailMessagesType) Valid() bool {
 
 // Defines values for SessionDetailSessionStatus.
 const (
-	Active      SessionDetailSessionStatus = "active"
-	Archived    SessionDetailSessionStatus = "archived"
-	Interrupted SessionDetailSessionStatus = "interrupted"
+	SessionDetailSessionStatusActive      SessionDetailSessionStatus = "active"
+	SessionDetailSessionStatusArchived    SessionDetailSessionStatus = "archived"
+	SessionDetailSessionStatusInterrupted SessionDetailSessionStatus = "interrupted"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailSessionStatus enum.
 func (e SessionDetailSessionStatus) Valid() bool {
 	switch e {
-	case Active:
+	case SessionDetailSessionStatusActive:
 		return true
-	case Archived:
+	case SessionDetailSessionStatusArchived:
 		return true
-	case Interrupted:
+	case SessionDetailSessionStatusInterrupted:
 		return true
 	default:
 		return false
@@ -1825,6 +2008,57 @@ func (e ToolApprovalResponseStatus) Valid() bool {
 	}
 }
 
+// Defines values for ToolCallStatus.
+const (
+	ToolCallStatusCancelled ToolCallStatus = "cancelled"
+	ToolCallStatusDenied    ToolCallStatus = "denied"
+	ToolCallStatusError     ToolCallStatus = "error"
+	ToolCallStatusPending   ToolCallStatus = "pending"
+	ToolCallStatusRunning   ToolCallStatus = "running"
+	ToolCallStatusSuccess   ToolCallStatus = "success"
+)
+
+// Valid indicates whether the value is a known member of the ToolCallStatus enum.
+func (e ToolCallStatus) Valid() bool {
+	switch e {
+	case ToolCallStatusCancelled:
+		return true
+	case ToolCallStatusDenied:
+		return true
+	case ToolCallStatusError:
+		return true
+	case ToolCallStatusPending:
+		return true
+	case ToolCallStatusRunning:
+		return true
+	case ToolCallStatusSuccess:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ToolPolicy.
+const (
+	Allow ToolPolicy = "allow"
+	Ask   ToolPolicy = "ask"
+	Deny  ToolPolicy = "deny"
+)
+
+// Valid indicates whether the value is a known member of the ToolPolicy enum.
+func (e ToolPolicy) Valid() bool {
+	switch e {
+	case Allow:
+		return true
+	case Ask:
+		return true
+	case Deny:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ToolRegistryEntryScope.
 const (
 	ToolRegistryEntryScopeCore    ToolRegistryEntryScope = "core"
@@ -2040,25 +2274,25 @@ func (e ClearAllSessions200JSONResponseBodyStatus) Valid() bool {
 
 // Defines values for ListTasksParamsStatus.
 const (
-	Assigned  ListTasksParamsStatus = "assigned"
-	Completed ListTasksParamsStatus = "completed"
-	Failed    ListTasksParamsStatus = "failed"
-	Queued    ListTasksParamsStatus = "queued"
-	Running   ListTasksParamsStatus = "running"
+	ListTasksParamsStatusAssigned  ListTasksParamsStatus = "assigned"
+	ListTasksParamsStatusCompleted ListTasksParamsStatus = "completed"
+	ListTasksParamsStatusFailed    ListTasksParamsStatus = "failed"
+	ListTasksParamsStatusQueued    ListTasksParamsStatus = "queued"
+	ListTasksParamsStatusRunning   ListTasksParamsStatus = "running"
 )
 
 // Valid indicates whether the value is a known member of the ListTasksParamsStatus enum.
 func (e ListTasksParamsStatus) Valid() bool {
 	switch e {
-	case Assigned:
+	case ListTasksParamsStatusAssigned:
 		return true
-	case Completed:
+	case ListTasksParamsStatusCompleted:
 		return true
-	case Failed:
+	case ListTasksParamsStatusFailed:
 		return true
-	case Queued:
+	case ListTasksParamsStatusQueued:
 		return true
-	case Running:
+	case ListTasksParamsStatusRunning:
 		return true
 	default:
 		return false
@@ -2127,6 +2361,36 @@ type ActivityEvent struct {
 
 // ActivityEventType Event category. "session_start" = new session began. "task_created" = a task was created. "task_updated" = a task completed or changed status.
 type ActivityEventType string
+
+// ActivityEventsResponse Response from GET /api/v1/activity when partial data is available with a warning. Returned instead of a plain ActivityEvent array when a session read error occurred.
+type ActivityEventsResponse struct {
+	// Events Activity events (reverse-chronological, max 50, last 24 hours).
+	Events []struct {
+		// AgentId ID of the agent involved in the event (absent for system events).
+		AgentId *string `json:"agent_id,omitempty"`
+
+		// AgentName Display name of the agent involved (absent for system events).
+		AgentName *string `json:"agent_name,omitempty"`
+
+		// Id Opaque event identifier derived from the source entity. E.g. "session-<uuid>", "task-c-<id>", "task-u-<id>".
+		Id string `json:"id"`
+
+		// Summary Human-readable one-line summary of the event (e.g. session title, task title).
+		Summary *string `json:"summary,omitempty"`
+
+		// Timestamp RFC3339 UTC timestamp when the event occurred.
+		Timestamp time.Time `json:"timestamp"`
+
+		// Type Event category. "session_start" = new session began. "task_created" = a task was created. "task_updated" = a task completed or changed status.
+		Type ActivityEventsResponseEventsType `json:"type"`
+	} `json:"events"`
+
+	// Warning Present when a non-fatal error occurred while collecting events (e.g. a session store was unreadable). The response is still returned.
+	Warning *string `json:"warning,omitempty"`
+}
+
+// ActivityEventsResponseEventsType Event category. "session_start" = new session began. "task_created" = a task was created. "task_updated" = a task completed or changed status.
+type ActivityEventsResponseEventsType string
 
 // Agent An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the Go agentResponse struct and the TypeScript Agent interface in src/lib/api.ts. Core (locked) agents suppress soul/instructions in list responses and forbid identity mutations via PUT.
 type Agent struct {
@@ -2362,6 +2626,18 @@ type AgentCreateRequestToolsCfgBuiltinDefaultPolicy string
 // AgentCreateRequestToolsCfgBuiltinPolicies defines model for AgentCreateRequest.ToolsCfg.Builtin.Policies.
 type AgentCreateRequestToolsCfgBuiltinPolicies string
 
+// AgentModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
+type AgentModelParams struct {
+	// MaxTokens Maximum tokens to generate per turn.
+	MaxTokens *int `json:"max_tokens,omitempty"`
+
+	// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+	Temperature *float64 `json:"temperature,omitempty"`
+
+	// TopP Nucleus sampling probability mass. 1.0 disables nucleus sampling.
+	TopP *float64 `json:"top_p,omitempty"`
+}
+
 // AgentOwnerUpdateResponse Response from PATCH /api/v1/agents/{id}/ownership. Confirms the ownership change.
 type AgentOwnerUpdateResponse struct {
 	// AgentId The agent whose ownership was changed.
@@ -2378,6 +2654,108 @@ type AgentOwnerUpdateResponse struct {
 type AgentOwnershipUpdateRequest struct {
 	// OwnerUsername Username of the new owner. Empty string clears ownership (requires X-Confirm-Demote: 1 header to prevent accidents).
 	OwnerUsername *string `json:"owner_username,omitempty"`
+}
+
+// AgentRateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
+type AgentRateLimits struct {
+	// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
+	MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
+
+	// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
+	MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
+
+	// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
+	MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
+
+	// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
+	UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
+}
+
+// AgentSession Minimal session summary as returned by GET /agents/{id}/sessions. Maps to the AgentSession interface in src/lib/api.ts. This is the same underlying session.UnifiedMeta object, but the SPA consumes it through the AgentSession interface which reads id, title, created_at, and updated_at directly.
+type AgentSession struct {
+	// CreatedAt RFC3339 creation timestamp.
+	CreatedAt time.Time `json:"created_at"`
+
+	// Id Session identifier.
+	Id string `json:"id"`
+
+	// Title Session title.
+	Title string `json:"title"`
+
+	// UpdatedAt RFC3339 last-update timestamp.
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// AgentShellPolicy Per-agent shell command deny-pattern configuration.
+type AgentShellPolicy struct {
+	// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
+	CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
+
+	// EnableDenyPatterns Enable pattern-based shell command blocking.
+	EnableDenyPatterns *bool `json:"enable_deny_patterns,omitempty"`
+}
+
+// AgentStats Aggregate runtime statistics for an agent. Absent on the Agent object when no sessions have been run.
+type AgentStats struct {
+	// LastActive RFC3339 timestamp of the last turn completed by this agent.
+	LastActive *time.Time `json:"last_active,omitempty"`
+
+	// TotalCost Lifetime USD cost across all sessions.
+	TotalCost float64 `json:"total_cost"`
+
+	// TotalSessions Lifetime count of sessions created for this agent.
+	TotalSessions int `json:"total_sessions"`
+
+	// TotalTokens Lifetime token count across all sessions.
+	TotalTokens int `json:"total_tokens"`
+}
+
+// AgentToolEntry Per-tool entry returned by GET /api/v1/agents/{id}/tools (FR-086, MAJ-008). Exposes both the configured policy and the effective (post-fence) policy so the SPA can display policy downgrades.
+type AgentToolEntry struct {
+	// ConfiguredPolicy The policy as written in the agent's config (before fence application).
+	ConfiguredPolicy AgentToolEntryConfiguredPolicy `json:"configured_policy"`
+
+	// EffectivePolicy The policy actually enforced at LLM-call time after fence and global policy overrides are applied.
+	EffectivePolicy AgentToolEntryEffectivePolicy `json:"effective_policy"`
+
+	// FenceApplied True when the tool requires admin approval (RequiresAdminAsk=true), the agent type is "custom", and the configured policy was "allow" but was downgraded to "ask" by the admin-ask fence (FR-061).
+	FenceApplied bool `json:"fence_applied"`
+
+	// Name Canonical tool name.
+	Name string `json:"name"`
+
+	// RequiresAdminAsk True when the tool's RequiresAdminAsk() returns true — the tool always needs an admin to approve its use.
+	RequiresAdminAsk bool `json:"requires_admin_ask"`
+}
+
+// AgentToolEntryConfiguredPolicy The policy as written in the agent's config (before fence application).
+type AgentToolEntryConfiguredPolicy string
+
+// AgentToolEntryEffectivePolicy The policy actually enforced at LLM-call time after fence and global policy overrides are applied.
+type AgentToolEntryEffectivePolicy string
+
+// AgentToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
+type AgentToolsCfg struct {
+	// Builtin Controls builtin tool visibility for this agent.
+	Builtin *struct {
+		// DefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
+		DefaultPolicy *AgentToolsCfgBuiltinDefaultPolicy `json:"default_policy,omitempty"`
+
+		// Policies Per-tool policy overrides. Keys are tool names or glob patterns (e.g. "system.*", "workspace.shell"). Values are one of "allow", "ask", "deny".
+		Policies *map[string]AgentToolsCfgBuiltinPolicies `json:"policies,omitempty"`
+	} `json:"builtin,omitempty"`
+
+	// Mcp MCP server bindings for this agent.
+	Mcp *struct {
+		// Servers List of MCP server bindings.
+		Servers *[]struct {
+			// Id MCP server identifier as registered in config.json.
+			Id string `json:"id"`
+
+			// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
+			Tools *[]string `json:"tools,omitempty"`
+		} `json:"servers,omitempty"`
+	} `json:"mcp,omitempty"`
 }
 
 // AgentToolsResponse Response from GET /api/v1/agents/{id}/tools and PUT /api/v1/agents/{id}/tools. Returns the agent's tool policy configuration plus the effective per-tool policy list.
@@ -2627,6 +3005,24 @@ type AppStatePatchRequest struct {
 	OnboardingComplete *bool `json:"onboarding_complete,omitempty"`
 }
 
+// Attachment File attachment associated with a transcript entry.
+type Attachment struct {
+	// MimeType MIME type of the attachment.
+	MimeType string `json:"mime_type"`
+
+	// Path Relative path within the session workspace.
+	Path string `json:"path"`
+
+	// Size File size in bytes.
+	Size int64 `json:"size"`
+
+	// Type Attachment category. Aligned with MediaPart.type enum.
+	Type AttachmentType `json:"type"`
+}
+
+// AttachmentType Attachment category. Aligned with MediaPart.type enum.
+type AttachmentType string
+
 // AuditEntry A single audit log record from the JSONL audit log file (~/.omnipus/system/audit.jsonl). Matches the Go pkg/audit.Entry struct.
 type AuditEntry struct {
 	// AgentId ID of the agent that triggered the event. May be absent.
@@ -2699,6 +3095,21 @@ type BackupCreateResponse struct {
 	SizeBytes int64 `json:"size_bytes"`
 }
 
+// BackupEntry A single backup archive entry returned by GET /api/v1/backups.
+type BackupEntry struct {
+	// CreatedAt RFC3339 timestamp when the backup was created.
+	CreatedAt time.Time `json:"created_at"`
+
+	// Filename Backup archive filename (e.g. "omnipus-backup-2026-05-16.tar.gz").
+	Filename string `json:"filename"`
+
+	// SizeBytes Archive size in bytes.
+	SizeBytes int64 `json:"size_bytes"`
+}
+
+// BearerToken Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
+type BearerToken = string
+
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
 type ChangePasswordRequest struct {
 	// CurrentPassword The user's current password for verification. Maximum 72 characters (bcrypt limit).
@@ -2706,6 +3117,25 @@ type ChangePasswordRequest struct {
 
 	// NewPassword The new password. Minimum 8 characters, maximum 72 (bcrypt limit).
 	NewPassword string `json:"new_password"`
+}
+
+// ChannelConfigureRequest Request body for PUT /api/v1/channels/{id}/configure. Merges the supplied fields into the channel's config section. The "enabled" field is reserved and silently removed — use the separate enable/disable endpoints instead. Field names and value types are channel-specific; unknown fields are stored as-is and passed through to the channel implementation.
+type ChannelConfigureRequest struct {
+	// AppId Application ID (used by Slack, Discord).
+	AppId *string `json:"app_id,omitempty"`
+
+	// AppSecret Application secret / signing secret.
+	AppSecret *string `json:"app_secret,omitempty"`
+
+	// BotToken Alias for token used by some channels.
+	BotToken *string `json:"bot_token,omitempty"`
+
+	// Token Channel authentication token (e.g. Telegram bot token, Discord bot token).
+	Token *string `json:"token,omitempty"`
+
+	// WebhookSecret HMAC secret for verifying incoming webhook payloads.
+	WebhookSecret        *string                `json:"webhook_secret,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
 // ChannelEnabledResponse Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
@@ -2744,6 +3174,9 @@ type ChannelEntryId string
 // ChannelEntryTransport Transport mechanism used by this channel.
 type ChannelEntryTransport string
 
+// ChannelId Stable identifier for a built-in channel.
+type ChannelId string
+
 // ChannelTestResponse Response from POST /api/v1/channels/{id}/test. Returns whether required credentials are configured.
 type ChannelTestResponse struct {
 	// Message Human-readable description of the test result.
@@ -2760,6 +3193,51 @@ type CredentialSetRequest struct {
 
 	// Value Credential value (stored encrypted).
 	Value string `json:"value"`
+}
+
+// DevicePaired A device that has been successfully paired. Returned as part of the DevicesResponse from GET /api/v1/devices.
+type DevicePaired struct {
+	// DeviceId Unique device identifier.
+	DeviceId string `json:"device_id"`
+
+	// DeviceName Human-readable device name.
+	DeviceName string `json:"device_name"`
+
+	// Fingerprint Cryptographic fingerprint of the device's public key.
+	Fingerprint string `json:"fingerprint"`
+
+	// LastSeenAt RFC3339 timestamp of the last authenticated request from this device.
+	LastSeenAt time.Time `json:"last_seen_at"`
+
+	// PairedAt RFC3339 timestamp when the device was paired.
+	PairedAt time.Time `json:"paired_at"`
+
+	// Status Whether this device's access is currently active or revoked.
+	Status DevicePairedStatus `json:"status"`
+}
+
+// DevicePairedStatus Whether this device's access is currently active or revoked.
+type DevicePairedStatus string
+
+// DevicePending A device pairing request that has not yet been approved. Returned as part of the DevicesResponse from GET /api/v1/devices.
+type DevicePending struct {
+	// CreatedAt RFC3339 timestamp when the pairing request was created.
+	CreatedAt time.Time `json:"created_at"`
+
+	// DeviceId Unique device identifier.
+	DeviceId string `json:"device_id"`
+
+	// DeviceName Human-readable device name provided during pairing.
+	DeviceName string `json:"device_name"`
+
+	// ExpiresAt RFC3339 timestamp when the pairing request expires.
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// Fingerprint Cryptographic fingerprint of the device's public key.
+	Fingerprint string `json:"fingerprint"`
+
+	// PairingCode Short human-readable pairing code displayed to the user.
+	PairingCode string `json:"pairing_code"`
 }
 
 // DevicesResponse Response from GET /api/v1/devices. Lists both pending pairing requests and already-paired devices.
@@ -2809,6 +3287,33 @@ type DevicesResponse struct {
 
 // DevicesResponsePairedStatus Whether this device's access is currently active or revoked.
 type DevicesResponsePairedStatus string
+
+// DoctorIssue A single health-check finding returned as part of a DoctorResult. Each issue has a severity, a human-readable title and description, and an optional actionable link.
+type DoctorIssue struct {
+	// ActionLabel Display label for the action link.
+	ActionLabel *string `json:"action_label,omitempty"`
+
+	// ActionLink Optional URL or SPA route to navigate to for remediation.
+	ActionLink *string `json:"action_link,omitempty"`
+
+	// Description Full description of the issue and its impact.
+	Description string `json:"description"`
+
+	// Id Unique identifier for this issue type.
+	Id string `json:"id"`
+
+	// Recommendation Recommended remediation action.
+	Recommendation string `json:"recommendation"`
+
+	// Severity Issue severity level.
+	Severity DoctorIssueSeverity `json:"severity"`
+
+	// Title Short human-readable title for the issue.
+	Title string `json:"title"`
+}
+
+// DoctorIssueSeverity Issue severity level.
+type DoctorIssueSeverity string
 
 // DoctorResult Health-check result returned by GET /api/v1/doctor and POST /api/v1/doctor. Contains an overall score and a list of individual findings.
 type DoctorResult struct {
@@ -3210,6 +3715,12 @@ type OnboardingCompleteResponse struct {
 // OnboardingCompleteResponseRole RBAC role of the authenticated user.
 type OnboardingCompleteResponseRole string
 
+// OnboardingStatusResponse Response from PATCH /api/v1/state when marking onboarding complete. Confirms that onboarding has been completed.
+type OnboardingStatusResponse struct {
+	// OnboardingComplete True when onboarding has been successfully marked as complete.
+	OnboardingComplete bool `json:"onboarding_complete"`
+}
+
 // OperationResult Generic success/failure envelope for simple admin operations. Used by endpoints that perform an action and return only whether it succeeded.
 type OperationResult struct {
 	// Error Human-readable error message. Present only when success=false.
@@ -3336,6 +3847,27 @@ type ProviderUpdateRequest struct {
 	Model *string `json:"model,omitempty"`
 }
 
+// RateLimitConfig Rate limit configuration returned by GET /api/v1/security/rate-limits and accepted by PUT /api/v1/security/rate-limits.
+type RateLimitConfig struct {
+	// DailyCostCap Maximum allowed daily LLM cost in USD. 0 = unlimited. Only present in GET responses (mapped from daily_cost_cap_usd).
+	DailyCostCap *float64 `json:"daily_cost_cap,omitempty"`
+
+	// DailyCostCapUsd Maximum allowed daily LLM cost in USD. 0 = unlimited. Used in PUT request body.
+	DailyCostCapUsd *float64 `json:"daily_cost_cap_usd,omitempty"`
+
+	// DailyCostUsd Current cumulative LLM spending for today (UTC). Only present in GET responses.
+	DailyCostUsd *float64 `json:"daily_cost_usd,omitempty"`
+
+	// Enabled True when any rate limit cap is configured. Derived from whether any limit field is non-zero. Only present in GET responses.
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// MaxAgentLlmCallsPerHour Maximum LLM API calls per agent per hour. 0 = unlimited.
+	MaxAgentLlmCallsPerHour *int64 `json:"max_agent_llm_calls_per_hour,omitempty"`
+
+	// MaxAgentToolCallsPerMinute Maximum tool calls per agent per minute. 0 = unlimited.
+	MaxAgentToolCallsPerMinute *int64 `json:"max_agent_tool_calls_per_minute,omitempty"`
+}
+
 // RateLimitsResponse Response from GET /api/v1/security/rate-limits. Returns the current rate-limit configuration and the live daily LLM cost.
 type RateLimitsResponse struct {
 	// DailyCostCap Configured daily cost cap in USD. 0 means unlimited.
@@ -3419,6 +3951,15 @@ type RetentionSweepResult struct {
 
 	// SkippedReason Present when the sweep was skipped without removing anything. Currently only "disabled" (retention is configured as disabled).
 	SkippedReason *string `json:"skipped_reason,omitempty"`
+}
+
+// RetentionUpdateRequest Request body for PUT /api/v1/security/retention. Partial update — any subset of the two retention fields. Strict type validation rejects JSON strings for session_days, floats with fractional parts for session_days, and non-boolean values for disabled. An empty body {} is accepted as a no-op.
+type RetentionUpdateRequest struct {
+	// Disabled When true, retention sweeps are disabled and session logs are kept forever. Strings ("true"/"false") and numbers are rejected with 400.
+	Disabled *bool `json:"disabled,omitempty"`
+
+	// SessionDays Number of days to retain session logs. 0 means use the system default (90 days). Floats and strings are rejected with 400.
+	SessionDays *int `json:"session_days,omitempty"`
 }
 
 // RetentionUpdateResponse Response from PUT /api/v1/security/retention. Returns save status and the currently active retention settings.
@@ -3904,6 +4445,27 @@ type SessionScopeUpdateResponse struct {
 	Warning *string `json:"warning,omitempty"`
 }
 
+// SessionStats Aggregated statistics for a session transcript.
+type SessionStats struct {
+	// Cost Total USD cost for this session (based on provider pricing).
+	Cost float64 `json:"cost"`
+
+	// MessageCount Number of transcript entries in this session.
+	MessageCount int `json:"message_count"`
+
+	// TokensIn Total input tokens consumed across all messages in this session.
+	TokensIn int `json:"tokens_in"`
+
+	// TokensOut Total output tokens generated across all messages in this session.
+	TokensOut int `json:"tokens_out"`
+
+	// TokensTotal Sum of tokens_in and tokens_out.
+	TokensTotal int `json:"tokens_total"`
+
+	// ToolCalls Total number of tool calls made in this session.
+	ToolCalls int `json:"tool_calls"`
+}
+
 // Skill A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata.
 type Skill struct {
 	// AgentAssignment ID of the agent this skill is assigned to, when the skill is bound to a specific agent rather than globally available. Absent for globally assigned skills.
@@ -4162,6 +4724,36 @@ type ToolApprovalResponseAction string
 // ToolApprovalResponseStatus Result status. Always "ok" when the action was accepted.
 type ToolApprovalResponseStatus string
 
+// ToolCall A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts.
+type ToolCall struct {
+	// DurationMs Elapsed time in milliseconds. Absent when still running.
+	DurationMs *int64 `json:"duration_ms,omitempty"`
+
+	// Id Unique tool call identifier (ToolCallID type on the Go side).
+	Id string `json:"id"`
+
+	// Parameters Input parameters passed to the tool.
+	Parameters *map[string]interface{} `json:"parameters,omitempty"`
+
+	// ParentToolCallId Parent tool call ID for nested subagent tool invocations.
+	ParentToolCallId *string `json:"parent_tool_call_id,omitempty"`
+
+	// Result Return value from the tool. Shape is tool-specific.
+	Result *map[string]interface{} `json:"result,omitempty"`
+
+	// Status Outcome of the tool call.
+	Status ToolCallStatus `json:"status"`
+
+	// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
+	Tool string `json:"tool"`
+}
+
+// ToolCallStatus Outcome of the tool call.
+type ToolCallStatus string
+
+// ToolPolicy A policy value governing whether a tool call is allowed, requires approval, or is denied.
+type ToolPolicy string
+
 // ToolRegistryEntry A single entry in the central tool registry snapshot returned by GET /api/v1/tools (FR-027).
 type ToolRegistryEntry struct {
 	// Category Tool category prefix derived from the tool name (e.g. "workspace", "browser", "system") or "general".
@@ -4189,22 +4781,25 @@ type ToolRegistryEntrySource string
 // UploadFilesResponse Response from POST /api/v1/upload (HTTP 201). Returns the list of uploaded files with their metadata.
 type UploadFilesResponse struct {
 	// Files Uploaded file metadata entries.
-	Files []struct {
-		// ContentType Detected MIME type of the uploaded file.
-		ContentType string `json:"content_type"`
+	Files []UploadedFile `json:"files"`
+}
 
-		// Name Sanitised filename as stored on disk.
-		Name string `json:"name"`
+// UploadedFile Metadata for a single successfully uploaded file, as returned in the POST /upload response body's "files" array. Callers use the path field to construct the /api/v1/uploads/{session_id}/{filename} download URL.
+type UploadedFile struct {
+	// ContentType Detected MIME type of the uploaded file.
+	ContentType string `json:"content_type"`
 
-		// Path Relative path within the uploads directory for constructing a download URL. Format: "uploads/{session_id}/{filename}".
-		Path string `json:"path"`
+	// Name Sanitised filename as stored on disk.
+	Name string `json:"name"`
 
-		// Ref media:// ref registered for this file in the media store. Present when the server could register the file (always, for now). The SPA echoes this ref back in the message frame's "media" array so the agent loop can thread the file into the LLM content array as a multimodal content block. Empty if registration failed (the file is still downloadable via path).
-		Ref *string `json:"ref,omitempty"`
+	// Path Relative path within the uploads directory for constructing a download URL. Format: "uploads/{session_id}/{filename}".
+	Path string `json:"path"`
 
-		// Size File size in bytes.
-		Size int64 `json:"size"`
-	} `json:"files"`
+	// Ref media:// ref registered for this file in the media store. Present when the server could register the file (always, for now). The SPA echoes this ref back in the message frame's "media" array so the agent loop can thread the file into the LLM content array as a multimodal content block. Empty if registration failed (the file is still downloadable via path).
+	Ref *string `json:"ref,omitempty"`
+
+	// Size File size in bytes.
+	Size int64 `json:"size"`
 }
 
 // User Represents a gateway user account as returned by GET /users and POST /users. Password hashes and token hashes are NEVER included in responses — only the boolean presence flags are exposed.
@@ -4563,6 +5158,134 @@ type ResetUserPasswordJSONRequestBody = UserResetPasswordRequest
 
 // ChangeUserRoleJSONRequestBody defines body for ChangeUserRole for application/json ContentType.
 type ChangeUserRoleJSONRequestBody = UserRoleChangeRequest
+
+// Getter for additional properties for ChannelConfigureRequest. Returns the specified
+// element and whether it was found
+func (a ChannelConfigureRequest) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ChannelConfigureRequest
+func (a *ChannelConfigureRequest) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ChannelConfigureRequest to handle AdditionalProperties
+func (a *ChannelConfigureRequest) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["app_id"]; found {
+		err = json.Unmarshal(raw, &a.AppId)
+		if err != nil {
+			return fmt.Errorf("error reading 'app_id': %w", err)
+		}
+		delete(object, "app_id")
+	}
+
+	if raw, found := object["app_secret"]; found {
+		err = json.Unmarshal(raw, &a.AppSecret)
+		if err != nil {
+			return fmt.Errorf("error reading 'app_secret': %w", err)
+		}
+		delete(object, "app_secret")
+	}
+
+	if raw, found := object["bot_token"]; found {
+		err = json.Unmarshal(raw, &a.BotToken)
+		if err != nil {
+			return fmt.Errorf("error reading 'bot_token': %w", err)
+		}
+		delete(object, "bot_token")
+	}
+
+	if raw, found := object["token"]; found {
+		err = json.Unmarshal(raw, &a.Token)
+		if err != nil {
+			return fmt.Errorf("error reading 'token': %w", err)
+		}
+		delete(object, "token")
+	}
+
+	if raw, found := object["webhook_secret"]; found {
+		err = json.Unmarshal(raw, &a.WebhookSecret)
+		if err != nil {
+			return fmt.Errorf("error reading 'webhook_secret': %w", err)
+		}
+		delete(object, "webhook_secret")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ChannelConfigureRequest to handle AdditionalProperties
+func (a ChannelConfigureRequest) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.AppId != nil {
+		object["app_id"], err = json.Marshal(a.AppId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'app_id': %w", err)
+		}
+	}
+
+	if a.AppSecret != nil {
+		object["app_secret"], err = json.Marshal(a.AppSecret)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'app_secret': %w", err)
+		}
+	}
+
+	if a.BotToken != nil {
+		object["bot_token"], err = json.Marshal(a.BotToken)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'bot_token': %w", err)
+		}
+	}
+
+	if a.Token != nil {
+		object["token"], err = json.Marshal(a.Token)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'token': %w", err)
+		}
+	}
+
+	if a.WebhookSecret != nil {
+		object["webhook_secret"], err = json.Marshal(a.WebhookSecret)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'webhook_secret': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
 
 // Getter for additional properties for McpToolsListResponse_Item. Returns the specified
 // element and whether it was found

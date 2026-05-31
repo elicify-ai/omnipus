@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/h2non/filetype"
 
@@ -24,10 +25,28 @@ import (
 // Images are base64-encoded into the Media array for multimodal LLMs.
 // Non-image files (documents, audio, video) have their local path injected
 // into Content so the agent can access them via file tools like read_file.
+//
+// Non-media:// strings are dropped (validation guard — every channel should
+// only emit media:// refs, but the pass-through was a bug). Refs that cannot
+// be resolved (unknown ref or file missing on disk) produce a visible
+// "[attachment unavailable: <name>]" marker in Content so the LLM knows the
+// file was referenced but unavailable, and increment droppedCounter when
+// non-nil.
+//
 // Returns a new slice; original messages are not mutated.
-func resolveMediaRefs(messages []providers.Message, store media.MediaStore, maxSize int) []providers.Message {
+func resolveMediaRefs(
+	messages []providers.Message,
+	store media.MediaStore,
+	maxSize int,
+	droppedCounter ...*atomic.Int64,
+) []providers.Message {
 	if store == nil {
 		return messages
+	}
+
+	var counter *atomic.Int64
+	if len(droppedCounter) > 0 {
+		counter = droppedCounter[0]
 	}
 
 	result := make([]providers.Message, len(messages))
@@ -40,28 +59,51 @@ func resolveMediaRefs(messages []providers.Message, store media.MediaStore, maxS
 
 		resolved := make([]string, 0, len(m.Media))
 		var pathTags []string
+		var unavailableTags []string
 
 		for _, ref := range m.Media {
-			if !strings.HasPrefix(ref, "media://") {
-				resolved = append(resolved, ref)
+			// Guard: only accept well-formed media:// refs. Non-matching strings
+			// (e.g. raw local paths or HTTP URLs leaked by channel fallback code)
+			// are silently dropped here — they were already logged at the channel
+			// ingress point and must never reach the LLM content array.
+			if _, err := media.ParseMediaRef(ref); err != nil {
+				logger.WarnCF("agent", "resolveMediaRefs: dropping non-media:// string", map[string]any{
+					"ref": ref,
+				})
 				continue
 			}
 
 			localPath, meta, err := store.ResolveWithMeta(ref)
 			if err != nil {
-				logger.WarnCF("agent", "Failed to resolve media ref", map[string]any{
+				name := ref // truncated ref as fallback name
+				if meta.Filename != "" {
+					name = meta.Filename
+				}
+				logger.WarnCF("agent", "Failed to resolve media ref — attachment unavailable", map[string]any{
 					"ref":   ref,
 					"error": err.Error(),
 				})
+				if counter != nil {
+					counter.Add(1)
+				}
+				unavailableTags = append(unavailableTags, "[attachment unavailable: "+name+"]")
 				continue
 			}
 
 			info, err := os.Stat(localPath)
 			if err != nil {
-				logger.WarnCF("agent", "Failed to stat media file", map[string]any{
+				name := meta.Filename
+				if name == "" {
+					name = ref
+				}
+				logger.WarnCF("agent", "Failed to stat media file — attachment unavailable", map[string]any{
 					"path":  localPath,
 					"error": err.Error(),
 				})
+				if counter != nil {
+					counter.Add(1)
+				}
+				unavailableTags = append(unavailableTags, "[attachment unavailable: "+name+"]")
 				continue
 			}
 
@@ -81,6 +123,15 @@ func resolveMediaRefs(messages []providers.Message, store media.MediaStore, maxS
 		result[i].Media = resolved
 		if len(pathTags) > 0 {
 			result[i].Content = injectPathTags(result[i].Content, pathTags)
+		}
+		// Inject unavailable-attachment markers into Content so the LLM can
+		// report them back to the user rather than silently ignoring the refs.
+		for _, tag := range unavailableTags {
+			if result[i].Content == "" {
+				result[i].Content = tag
+			} else {
+				result[i].Content += " " + tag
+			}
 		}
 	}
 

@@ -58,18 +58,27 @@ type AgentLoop struct {
 	hooks    *HookManager
 
 	// Runtime state
-	running        atomic.Bool
-	summarizing    sync.Map
-	fallback       *providers.FallbackChain
-	channelManager *channels.Manager
-	mediaStore     media.MediaStore
-	transcriber    voice.Transcriber
-	cmdRegistry    *commands.Registry
-	mcp            mcpRuntime
-	hookRuntime    hookRuntime
-	steering       *steeringQueue
-	pendingSkills  sync.Map
-	mu             sync.RWMutex
+	running     atomic.Bool
+	summarizing sync.Map
+	fallback    *providers.FallbackChain
+	transcriber voice.Transcriber
+
+	// channelManager and mediaStore are replaced on every restartServices
+	// (config-watch goroutine). They are read on the hot turn path and from
+	// voice/transcription helpers. These dedicated mutexes prevent data races
+	// between the writer goroutine and the reader goroutines. Always acquire
+	// channelManagerMu/mediaStoreMu independently; never hold both at the
+	// same time to avoid deadlock.
+	channelManagerMu sync.RWMutex
+	channelManager   *channels.Manager
+	mediaStoreMu     sync.RWMutex
+	mediaStore       media.MediaStore
+	cmdRegistry      *commands.Registry
+	mcp              mcpRuntime
+	hookRuntime      hookRuntime
+	steering         *steeringQueue
+	pendingSkills    sync.Map
+	mu               sync.RWMutex
 
 	// Concurrent turn management
 	activeTurnStates   sync.Map     // key: sessionKey (string), value: *turnState
@@ -79,6 +88,11 @@ type AgentLoop struct {
 	// Turn tracking
 	turnSeq        atomic.Uint64
 	activeRequests sync.WaitGroup
+
+	// mediaRefsDropped counts media refs that could not be resolved (unknown ref
+	// or file missing on disk). Observable via GetMediaRefsDropped for tests and
+	// diagnostics; incremented atomically from resolveMediaRefs hot path.
+	mediaRefsDropped atomic.Int64
 
 	reloadFunc func() error
 
@@ -2124,7 +2138,18 @@ func (al *AgentLoop) RegisterTool(tool tools.Tool) {
 }
 
 func (al *AgentLoop) SetChannelManager(cm *channels.Manager) {
+	al.channelManagerMu.Lock()
 	al.channelManager = cm
+	al.channelManagerMu.Unlock()
+}
+
+// getChannelManager returns the current channel manager under the read lock.
+// Internal callers on the hot turn path use this to avoid the N2 data race.
+func (al *AgentLoop) getChannelManager() *channels.Manager {
+	al.channelManagerMu.RLock()
+	cm := al.channelManager
+	al.channelManagerMu.RUnlock()
+	return cm
 }
 
 // ReloadProviderAndConfig atomically swaps the provider and config with proper synchronization.
@@ -2496,7 +2521,9 @@ func (al *AgentLoop) processTaskDirect(
 
 // SetMediaStore injects a MediaStore for media lifecycle management.
 func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
+	al.mediaStoreMu.Lock()
 	al.mediaStore = s
+	al.mediaStoreMu.Unlock()
 
 	// Propagate store to all registered tools that can emit media.
 	registry := al.GetRegistry()
@@ -2514,7 +2541,17 @@ func (al *AgentLoop) GetMediaStore() media.MediaStore {
 	if al == nil {
 		return nil
 	}
-	return al.mediaStore
+	al.mediaStoreMu.RLock()
+	s := al.mediaStore
+	al.mediaStoreMu.RUnlock()
+	return s
+}
+
+// GetMediaRefsDropped returns the cumulative count of media refs that were
+// dropped because they could not be resolved (unknown ref or file missing
+// on disk). Safe for concurrent access; incremented on the hot turn path.
+func (al *AgentLoop) GetMediaRefsDropped() int64 {
+	return al.mediaRefsDropped.Load()
 }
 
 // SetTranscriber injects a voice transcriber for agent-level audio transcription.
@@ -2606,14 +2643,15 @@ var audioAnnotationRe = regexp.MustCompile(`\[(voice|audio)(?::[^\]]*)?\]`)
 // replaces audio annotations in msg.Content with the transcribed text.
 // Returns the (possibly modified) message and true if audio was transcribed.
 func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.InboundMessage) (bus.InboundMessage, bool) {
-	if al.transcriber == nil || al.mediaStore == nil || len(msg.Media) == 0 {
+	store := al.GetMediaStore()
+	if al.transcriber == nil || store == nil || len(msg.Media) == 0 {
 		return msg, false
 	}
 
 	// Transcribe each audio media ref in order.
 	var transcriptions []string
 	for _, ref := range msg.Media {
-		path, meta, err := al.mediaStore.ResolveWithMeta(ref)
+		path, meta, err := store.ResolveWithMeta(ref)
 		if err != nil {
 			logger.WarnCF("voice", "Failed to resolve media ref", map[string]any{"ref": ref, "error": err})
 			continue
@@ -2669,7 +2707,8 @@ func (al *AgentLoop) sendTranscriptionFeedback(
 	if !cfg.Voice.EchoTranscription {
 		return
 	}
-	if al.channelManager == nil {
+	cm := al.getChannelManager()
+	if cm == nil {
 		return
 	}
 
@@ -2687,7 +2726,7 @@ func (al *AgentLoop) sendTranscriptionFeedback(
 		feedbackMsg = "No voice detected in the audio"
 	}
 
-	err := al.channelManager.SendMessage(ctx, bus.OutboundMessage{
+	err := cm.SendMessage(ctx, bus.OutboundMessage{
 		Channel:          channel,
 		ChatID:           chatID,
 		Content:          feedbackMsg,
@@ -2830,8 +2869,10 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 
 	// For audio messages the placeholder was deferred by the channel.
 	// Now that transcription (and optional feedback) is done, send it.
-	if hadAudio && al.channelManager != nil {
-		al.channelManager.SendPlaceholder(ctx, msg.Channel, msg.ChatID)
+	if hadAudio {
+		if cm := al.getChannelManager(); cm != nil {
+			cm.SendPlaceholder(ctx, msg.Channel, msg.ChatID)
+		}
 	}
 
 	// Route system messages to processSystemMessage
@@ -3249,10 +3290,11 @@ func (al *AgentLoop) runAgentLoop(
 }
 
 func (al *AgentLoop) targetReasoningChannelID(channelName string) (chatID string) {
-	if al.channelManager == nil {
+	cm := al.getChannelManager()
+	if cm == nil {
 		return ""
 	}
-	if ch, ok := al.channelManager.GetChannel(channelName); ok {
+	if ch, ok := cm.GetChannel(channelName); ok {
 		return ch.ReasoningChannelID()
 	}
 	return ""
@@ -3309,6 +3351,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	if ctx.Err() != nil {
 		return turnResult{}, fmt.Errorf("turn not started: %w", ctx.Err())
 	}
+
+	// Snapshot the media store once at turn start to avoid repeated lock
+	// acquisitions on the hot path and to ensure consistency across the turn
+	// even if restartServices swaps the store mid-turn (N2 data-race fix).
+	turnMediaStore := al.GetMediaStore()
+	// Snapshot the channel manager for the same reason.
+	turnChannelManager := al.getChannelManager()
 
 	var turnCtx context.Context
 	var turnCancel context.CancelFunc
@@ -3408,7 +3457,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 
 	cfg := al.GetConfig()
 	maxMediaSize := cfg.Agents.Defaults.GetMaxMediaSize()
-	messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
+	messages = resolveMediaRefs(messages, turnMediaStore, maxMediaSize, &al.mediaRefsDropped)
 
 	if !ts.opts.NoHistory {
 		toolDefs := ts.agent.Tools.ToProviderDefs()
@@ -3435,7 +3484,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				ts.opts.SenderID, ts.opts.SenderDisplayName,
 				activeSkillNames(ts.agent, ts.opts)...,
 			)
-			messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize)
+			messages = resolveMediaRefs(messages, turnMediaStore, maxMediaSize, &al.mediaRefsDropped)
 		}
 	}
 
@@ -3597,7 +3646,7 @@ turnLoop:
 
 		// Inject pending steering messages
 		if len(pendingMessages) > 0 {
-			resolvedPending := resolveMediaRefs(pendingMessages, al.mediaStore, maxMediaSize)
+			resolvedPending := resolveMediaRefs(pendingMessages, turnMediaStore, maxMediaSize, &al.mediaRefsDropped)
 			totalContentLen := 0
 			for i, pm := range pendingMessages {
 				messages = append(messages, resolvedPending[i])
@@ -4779,8 +4828,8 @@ turnLoop:
 				parts := make([]bus.MediaPart, 0, len(toolResult.Media))
 				for _, ref := range toolResult.Media {
 					part := bus.MediaPart{Ref: ref}
-					if al.mediaStore != nil {
-						if _, meta, err := al.mediaStore.ResolveWithMeta(ref); err == nil {
+					if turnMediaStore != nil {
+						if _, meta, err := turnMediaStore.ResolveWithMeta(ref); err == nil {
 							part.Filename = meta.Filename
 							part.ContentType = meta.ContentType
 							part.Type = inferMediaType(meta.Filename, meta.ContentType)
@@ -4794,8 +4843,8 @@ turnLoop:
 					SessionID: ts.transcriptSessionID,
 					Parts:     parts,
 				}
-				if al.channelManager != nil && ts.channel != "" && !constants.IsInternalChannel(ts.channel) {
-					if err := al.channelManager.SendMedia(ctx, outboundMedia); err != nil {
+				if turnChannelManager != nil && ts.channel != "" && !constants.IsInternalChannel(ts.channel) {
+					if err := turnChannelManager.SendMedia(ctx, outboundMedia); err != nil {
 						logger.WarnCF("agent", "Failed to deliver tool media",
 							map[string]any{
 								"agent_id": ts.agent.ID,
@@ -4809,7 +4858,7 @@ turnLoop:
 				} else if al.bus != nil {
 					al.bus.PublishOutboundMedia(ctx, outboundMedia)
 				}
-				toolResult.ArtifactTags = buildArtifactTags(al.mediaStore, toolResult.Media)
+				toolResult.ArtifactTags = buildArtifactTags(turnMediaStore, toolResult.Media)
 			}
 
 			if !toolResult.Silent && toolResult.ForUser != "" && ts.opts.SendResponse {
@@ -4888,9 +4937,9 @@ turnLoop:
 			// Attach inline image data URLs so vision-capable models can SEE the
 			// screenshot/image returned by the tool. Without this the LLM only
 			// gets the placeholder text and cannot reason about the picture.
-			if len(toolResult.Media) > 0 && al.mediaStore != nil {
+			if len(toolResult.Media) > 0 && turnMediaStore != nil {
 				for _, ref := range toolResult.Media {
-					localPath, meta, err := al.mediaStore.ResolveWithMeta(ref)
+					localPath, meta, err := turnMediaStore.ResolveWithMeta(ref)
 					if err != nil || !strings.HasPrefix(meta.ContentType, "image/") {
 						continue
 					}
@@ -4941,8 +4990,8 @@ turnLoop:
 				descs := make([]map[string]any, 0, len(toolResult.Media))
 				for _, ref := range toolResult.Media {
 					d := map[string]any{"ref": ref}
-					if al.mediaStore != nil {
-						if _, meta, err := al.mediaStore.ResolveWithMeta(ref); err == nil {
+					if turnMediaStore != nil {
+						if _, meta, err := turnMediaStore.ResolveWithMeta(ref); err == nil {
 							if meta.Filename != "" {
 								d["filename"] = meta.Filename
 							}
@@ -5834,10 +5883,10 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 		ListAgentIDs:    registry.ListAgentIDs,
 		ListDefinitions: al.cmdRegistry.Definitions,
 		GetEnabledChannels: func() []string {
-			if al.channelManager == nil {
-				return nil
+			if cm := al.getChannelManager(); cm != nil {
+				return cm.GetEnabledChannels()
 			}
-			return al.channelManager.GetEnabledChannels()
+			return nil
 		},
 		GetActiveTurn: func() any {
 			info := al.GetActiveTurn()
@@ -5847,10 +5896,11 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			return info
 		},
 		SwitchChannel: func(value string) error {
-			if al.channelManager == nil {
+			cm := al.getChannelManager()
+			if cm == nil {
 				return fmt.Errorf("channel manager not initialized")
 			}
-			if _, exists := al.channelManager.GetChannel(value); !exists && value != "cli" {
+			if _, exists := cm.GetChannel(value); !exists && value != "cli" {
 				return fmt.Errorf("channel '%s' not found or not enabled", value)
 			}
 			return nil
