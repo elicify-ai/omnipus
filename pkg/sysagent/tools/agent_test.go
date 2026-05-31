@@ -108,6 +108,25 @@ func parseError(t *testing.T, body string) map[string]any {
 	return m
 }
 
+// newTestDepsWithHome creates a minimal Deps that uses a real temp-dir as Home
+// (so workspace file paths are real). No config persistence.
+func newTestDepsWithHome(t *testing.T) (*systools.Deps, string) {
+	t.Helper()
+	home := t.TempDir()
+	cfg := config.DefaultConfig()
+	var mu sync.Mutex
+	getCfg := func() *config.Config { return cfg }
+	deps := &systools.Deps{
+		Home:         home,
+		ConfigPath:   filepath.Join(home, "config.json"),
+		GetCfg:       getCfg,
+		MutateConfig: testMutateConfig(&mu, getCfg),
+		SaveConfig:   func() error { return nil },
+		CredStore:    nil,
+	}
+	return deps, home
+}
+
 // TestAgentCreate_WithColorAndIcon verifies that create persists color and icon
 // into the AgentConfig in-memory and returns them in the response.
 //
@@ -860,4 +879,231 @@ func TestConcurrentRESTAndSysagentConfigWrite(t *testing.T) {
 			)
 		}
 	}
+}
+
+// TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass verifies that
+// system.agent.create and system.agent.update write content-only to SOUL.md
+// and HEARTBEAT.md (no extra frontmatter injection, no extra files).
+//
+// This locks the content-only invariant per issue #240: the create/update paths
+// are the canonical write path for soul/heartbeat content. agent.write_metadata
+// must not change this — both paths must produce byte-for-byte identical content
+// on disk.
+//
+// Traces to: issue #240 regression lock A.
+func TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+
+	soulContent := "You are a focused research assistant."
+	heartbeatContent := "Check in every morning at 9am."
+
+	createTool := systools.NewAgentCreateTool(deps)
+	result := createTool.Execute(context.Background(), map[string]any{
+		"name":        "Content Only Bot",
+		"description": "A content-only research assistant",
+		"soul":        soulContent,
+		"heartbeat":   heartbeatContent,
+		"model":       "test/model",
+		"color":       "#22C55E",
+		"icon":        "robot",
+	})
+	if result.IsError {
+		t.Fatalf("create failed: %s", result.ForLLM)
+	}
+
+	wsPath := filepath.Join(home, "agents", "content-only-bot")
+
+	soulOnDisk, err := os.ReadFile(filepath.Join(wsPath, "SOUL.md"))
+	if err != nil {
+		t.Fatalf("read SOUL.md: %v", err)
+	}
+	if string(soulOnDisk) != soulContent {
+		t.Errorf("SOUL.md content mismatch:\ngot:  %q\nwant: %q", string(soulOnDisk), soulContent)
+	}
+
+	hbOnDisk, err := os.ReadFile(filepath.Join(wsPath, "HEARTBEAT.md"))
+	if err != nil {
+		t.Fatalf("read HEARTBEAT.md: %v", err)
+	}
+	if string(hbOnDisk) != heartbeatContent {
+		t.Errorf("HEARTBEAT.md content mismatch:\ngot:  %q\nwant: %q", string(hbOnDisk), heartbeatContent)
+	}
+
+	// Update soul — verify SOUL.md still content-only (no frontmatter injection).
+	newSoul := "You are now an expert in data analysis."
+	updateTool := systools.NewAgentUpdateTool(deps)
+	updateResult := updateTool.Execute(context.Background(), map[string]any{
+		"id":   "content-only-bot",
+		"soul": newSoul,
+	})
+	if updateResult.IsError {
+		t.Fatalf("update failed: %s", updateResult.ForLLM)
+	}
+
+	updatedSoul, err := os.ReadFile(filepath.Join(wsPath, "SOUL.md"))
+	if err != nil {
+		t.Fatalf("re-read SOUL.md after update: %v", err)
+	}
+	if string(updatedSoul) != newSoul {
+		t.Errorf("SOUL.md after update:\ngot:  %q\nwant: %q", string(updatedSoul), newSoul)
+	}
+
+	// Verify no unexpected files exist in workspace root.
+	entries, err := os.ReadDir(wsPath)
+	if err != nil {
+		t.Fatalf("readdir workspace: %v", err)
+	}
+	for _, e := range entries {
+		switch e.Name() {
+		case "SOUL.md", "HEARTBEAT.md", "sessions", "memory", "skills":
+			// expected
+		default:
+			t.Errorf("unexpected entry in agent workspace after create/update: %q", e.Name())
+		}
+	}
+}
+
+// TestAgentMetadataTools_RoundTrip verifies the round-trip semantics of
+// system.agent.write_metadata + system.agent.read_metadata.
+//
+// Scenario A: write heartbeat content, read it back → exact match.
+// Scenario B: write malformed AGENT.md frontmatter → validation error.
+// Scenario C: read a non-existent file → NOT_FOUND error.
+//
+// BEFORE fix: these tools do not exist (compile/registration failure → test fails).
+// AFTER fix: they pass.
+//
+// Traces to: issue #240 regression lock B.
+func TestAgentMetadataTools_RoundTrip(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+	agentID := "test-roundtrip-agent"
+
+	wsPath := filepath.Join(home, "agents", agentID)
+	if err := os.MkdirAll(wsPath, 0o700); err != nil {
+		t.Fatalf("setup workspace: %v", err)
+	}
+
+	writeTool := systools.NewAgentWriteMetadataTool(deps)
+	readTool := systools.NewAgentReadMetadataTool(deps)
+
+	t.Run("heartbeat_roundtrip", func(t *testing.T) {
+		beatContent := "Remind the team about the standup at 10am."
+
+		writeResult := writeTool.Execute(context.Background(), map[string]any{
+			"file":     "heartbeat",
+			"content":  beatContent,
+			"agent_id": agentID,
+		})
+		if writeResult.IsError {
+			t.Fatalf("write_metadata(heartbeat) failed: %s", writeResult.ForLLM)
+		}
+
+		onDisk, err := os.ReadFile(filepath.Join(wsPath, "HEARTBEAT.md"))
+		if err != nil {
+			t.Fatalf("read HEARTBEAT.md: %v", err)
+		}
+		if string(onDisk) != beatContent {
+			t.Errorf("disk content mismatch: got %q, want %q", string(onDisk), beatContent)
+		}
+
+		readResult := readTool.Execute(context.Background(), map[string]any{
+			"file":     "heartbeat",
+			"agent_id": agentID,
+		})
+		if readResult.IsError {
+			t.Fatalf("read_metadata(heartbeat) failed: %s", readResult.ForLLM)
+		}
+
+		var body struct {
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal([]byte(readResult.ForLLM), &body); err != nil {
+			t.Fatalf("parse read_metadata result: %v", err)
+		}
+		if body.Content != beatContent {
+			t.Errorf("read_metadata returned %q, want %q", body.Content, beatContent)
+		}
+	})
+
+	t.Run("agent_md_malformed_frontmatter_rejected", func(t *testing.T) {
+		// Unclosed frontmatter block — must be rejected before I/O.
+		malformedContent := "---\nname: Test Agent\n"
+		writeResult := writeTool.Execute(context.Background(), map[string]any{
+			"file":     "agent",
+			"content":  malformedContent,
+			"agent_id": agentID,
+		})
+		if !writeResult.IsError {
+			t.Fatalf("write_metadata(agent) with unclosed frontmatter should fail, got success: %s", writeResult.ForLLM)
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(writeResult.ForLLM), &m); err != nil {
+			t.Fatalf("result not JSON: %v", err)
+		}
+		errObj, _ := m["error"].(map[string]any)
+		if errObj["code"] != "INVALID_FRONTMATTER" {
+			t.Errorf("expected INVALID_FRONTMATTER error code, got %v", errObj["code"])
+		}
+	})
+
+	t.Run("agent_md_valid_frontmatter_accepted", func(t *testing.T) {
+		validContent := "---\nname: Test Agent\ndescription: A fine agent\n---\n\nSome body text.\n"
+		writeResult := writeTool.Execute(context.Background(), map[string]any{
+			"file":     "agent",
+			"content":  validContent,
+			"agent_id": agentID,
+		})
+		if writeResult.IsError {
+			t.Fatalf("write_metadata(agent) with valid frontmatter should succeed: %s", writeResult.ForLLM)
+		}
+	})
+
+	t.Run("agent_md_no_frontmatter_accepted", func(t *testing.T) {
+		noFrontmatter := "Just plain text, no frontmatter block."
+		writeResult := writeTool.Execute(context.Background(), map[string]any{
+			"file":     "agent",
+			"content":  noFrontmatter,
+			"agent_id": agentID,
+		})
+		if writeResult.IsError {
+			t.Fatalf("write_metadata(agent) without frontmatter should succeed: %s", writeResult.ForLLM)
+		}
+	})
+
+	t.Run("read_nonexistent_returns_not_found", func(t *testing.T) {
+		readResult := readTool.Execute(context.Background(), map[string]any{
+			"file":     "memory",
+			"agent_id": agentID,
+		})
+		if !readResult.IsError {
+			t.Fatalf("reading nonexistent MEMORY.md should fail, got success: %s", readResult.ForLLM)
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(readResult.ForLLM), &m); err != nil {
+			t.Fatalf("result not JSON: %v", err)
+		}
+		errObj, _ := m["error"].(map[string]any)
+		if errObj["code"] != "NOT_FOUND" {
+			t.Errorf("expected NOT_FOUND error code, got %v", errObj["code"])
+		}
+	})
+
+	t.Run("invalid_file_key_rejected", func(t *testing.T) {
+		result := writeTool.Execute(context.Background(), map[string]any{
+			"file":     "totally-wrong",
+			"content":  "x",
+			"agent_id": agentID,
+		})
+		if !result.IsError {
+			t.Fatal("invalid file key should be rejected")
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(result.ForLLM), &m); err != nil {
+			t.Fatalf("result not JSON: %v", err)
+		}
+		errObj, _ := m["error"].(map[string]any)
+		if errObj["code"] != "INVALID_INPUT" {
+			t.Errorf("expected INVALID_INPUT, got %v", errObj["code"])
+		}
+	})
 }

@@ -35,8 +35,22 @@
     "source": "builtin"
   },
   {
+    "name": "system.agent.read_metadata",
+    "description": "Read one of the calling agent's metadata files (SOUL.md, HEARTBEAT.md, MEMORY.md, or AGENT.md). Pass agent_id to read another agent's metadata (subject to per-agent policy).",
+    "scope": "core",
+    "category": "system",
+    "source": "builtin"
+  },
+  {
     "name": "system.agent.update",
     "description": "Update an existing agent's configuration. Only provided fields are changed; omitted fields are left as-is.",
+    "scope": "core",
+    "category": "system",
+    "source": "builtin"
+  },
+  {
+    "name": "system.agent.write_metadata",
+    "description": "Write one of the calling agent's metadata files (SOUL.md, HEARTBEAT.md, MEMORY.md, or AGENT.md) atomically. AGENT.md content is validated for well-formed frontmatter before writing. Pass agent_id to write another agent's metadata (subject to per-agent policy).",
     "scope": "core",
     "category": "system",
     "source": "builtin"

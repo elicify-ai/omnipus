@@ -13,12 +13,14 @@ import "github.com/dapicom-ai/omnipus/pkg/tools"
 
 // Agent tools
 
-func (*AgentCreateTool) Category() tools.ToolCategory     { return tools.CategorySystem }
-func (*AgentUpdateTool) Category() tools.ToolCategory     { return tools.CategorySystem }
-func (*AgentDeleteTool) Category() tools.ToolCategory     { return tools.CategorySystem }
-func (*AgentListTool) Category() tools.ToolCategory       { return tools.CategorySystem }
-func (*AgentActivateTool) Category() tools.ToolCategory   { return tools.CategorySystem }
-func (*AgentDeactivateTool) Category() tools.ToolCategory { return tools.CategorySystem }
+func (*AgentCreateTool) Category() tools.ToolCategory        { return tools.CategorySystem }
+func (*AgentUpdateTool) Category() tools.ToolCategory        { return tools.CategorySystem }
+func (*AgentDeleteTool) Category() tools.ToolCategory        { return tools.CategorySystem }
+func (*AgentListTool) Category() tools.ToolCategory          { return tools.CategorySystem }
+func (*AgentActivateTool) Category() tools.ToolCategory      { return tools.CategorySystem }
+func (*AgentDeactivateTool) Category() tools.ToolCategory    { return tools.CategorySystem }
+func (*AgentReadMetadataTool) Category() tools.ToolCategory  { return tools.CategorySystem }
+func (*AgentWriteMetadataTool) Category() tools.ToolCategory { return tools.CategorySystem }
 
 // Channel tools
 
