@@ -23,7 +23,7 @@ Every time you are invoked, perform these steps before any analysis:
    - `docs/internal/BRD/Omnipus BRD.md` — 27 security + 18 functional requirements
    - `docs/internal/BRD/Omnipus_BRD_AppendixB_Feature_Parity.md` — 38 feature parity requirements
    - `docs/internal/BRD/Omnipus_BRD_AppendixC_UI_Spec.md` — UI/UX spec (React 19, Vite 6, shadcn/ui)
-   - `docs/internal/BRD/Omnipus_BRD_AppendixD_System_Agent.md` — system agent, 35 tools, 3 agent types
+   - `docs/internal/BRD/Omnipus_BRD_AppendixD_System_Agent.md` — system agent, 41 tools, 3 agent types
    - `docs/internal/BRD/Omnipus_BRD_AppendixE_DataModel.md` — file-based data model, schemas
    - `docs/internal/BRD/Omnipus Windows BRD appendic.md` — Windows kernel security
 3. **Scan existing code** — Glob `pkg/**/*.go`, `cmd/**/*.go`, `internal/**/*.go`, `src/**/*.{ts,tsx}`, `packages/**/*.{ts,tsx}` to understand current state
@@ -294,7 +294,7 @@ Reference these when analyzing designs:
 - Policy engine and audit logging are cross-platform
 
 ### Agent Types
-- System (`omnipus-system`): hardcoded, always on, 35 exclusive `system.*` tools
+- System (`omnipus-system`): hardcoded, always on, 41 exclusive `system.*` tools
 - Core: hardcoded prompts compiled into binary, user can toggle/configure
 - Custom: user-defined with SOUL.md + AGENTS.md
 

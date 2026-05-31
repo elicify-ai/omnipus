@@ -113,6 +113,20 @@ func resolveMediaRefs(
 				dataURL := encodeImageToDataURL(localPath, mime, info, maxSize)
 				if dataURL != "" {
 					resolved = append(resolved, dataURL)
+				} else {
+					// encodeImageToDataURL returns "" for oversize files, open
+					// failures, and base64 encoding failures. Produce a visible
+					// marker so the LLM knows the attachment was referenced but
+					// unavailable, and count it the same as resolve/stat failures.
+					name := meta.Filename
+					if name == "" {
+						name = localPath
+					}
+					if counter != nil {
+						counter.Add(1)
+					}
+					unavailableTags = append(unavailableTags,
+						"[attachment unavailable: "+name+" (too large or unreadable)]")
 				}
 				continue
 			}

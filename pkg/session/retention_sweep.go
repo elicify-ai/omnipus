@@ -103,7 +103,7 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// session in the UI. This check is mtime-independent because filesystems
 	// (ext4, xfs) bump the parent directory's mtime to "now" the moment a
 	// child file is removed, breaking any post-deletion mtime comparison.
-	uploadsRoot := filepath.Join(filepath.Dir(filepath.Clean(us.baseDir)), "uploads")
+	uploadsRoot := us.uploadsRoot() // home-rooted per ADR-017 D5 / N-B fix
 	for sessDir := range touchedSessionDirs {
 		entries, readErr := os.ReadDir(sessDir)
 		if readErr != nil {

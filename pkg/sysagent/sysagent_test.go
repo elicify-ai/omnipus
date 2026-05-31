@@ -659,21 +659,22 @@ func TestSystemPromptHardcoded(t *testing.T) {
 }
 
 // =====================================================================
-// Supplementary: 35 tools coverage check (pending tools implementation)
+// Supplementary: 41 tools coverage check
 // =====================================================================
 
-// TestToolPermissionsMapCoversAll35Tools verifies that the RBAC permission map
-// covers exactly the tools specified in BRD Appendix D §D.4.
+// TestToolPermissionsMapCoversAll41Tools verifies that the RBAC permission map
+// covers exactly the 41 tools returned by AllTools() per BRD Appendix D §D.4.
 //
-// Traces to: wave5b-system-agent-spec.md — FR-002 (35 system tools)
-func TestToolPermissionsMapCoversAll35Tools(t *testing.T) {
-	// Traces to: wave5b-system-agent-spec.md line 900 (FR-002: 35 system tools)
-
-	// The 35 tools defined in BRD Appendix D §D.4.1-D.4.10.
-	expected35Tools := []string{
-		// Agent management (6)
+// Traces to: wave5b-system-agent-spec.md — FR-002 (system tools)
+func TestToolPermissionsMapCoversAll41Tools(t *testing.T) {
+	// The 41 tools in AllTools() as of the tool-registry redesign.
+	// Count: 8 agent + 4 project + 4 task + 5 channel + 4 skill + 3 mcp +
+	//        4 provider + 3 pin + 2 config + 4 diagnostics = 41.
+	expected41Tools := []string{
+		// Agent management (8: 6 original + 2 metadata accessors from issue #240)
 		"system.agent.create", "system.agent.update", "system.agent.delete",
 		"system.agent.list", "system.agent.activate", "system.agent.deactivate",
+		"system.agent.read_metadata", "system.agent.write_metadata",
 		// Project management (4)
 		"system.project.create", "system.project.update",
 		"system.project.delete", "system.project.list",
@@ -688,23 +689,22 @@ func TestToolPermissionsMapCoversAll35Tools(t *testing.T) {
 		"system.skill.search", "system.skill.list",
 		// MCP management (3)
 		"system.mcp.add", "system.mcp.remove", "system.mcp.list",
-		// Provider management (3)
+		// Provider management (4: configure + list + test + models.list)
 		"system.provider.configure", "system.provider.list", "system.provider.test",
+		"system.models.list",
 		// Pin management (3)
 		"system.pin.list", "system.pin.create", "system.pin.delete",
 		// Config (2)
 		"system.config.get", "system.config.set",
-		// Diagnostics / utility (4 — but backup, cost, navigate, doctor = 4)
+		// Diagnostics / utility (4)
 		"system.doctor.run", "system.backup.create", "system.cost.query", "system.navigate",
 	}
 
-	// BRD Appendix D text says "35" but the actual tool table lists 38 tools.
-	// The implementation matches the table (authoritative), not the introductory text.
-	assert.Len(t, expected35Tools, 38,
-		"BRD Appendix D tool table defines 38 system tools — test dataset must reflect this")
+	assert.Len(t, expected41Tools, 41,
+		"AllTools() returns exactly 41 system tools — test dataset must reflect this")
 
 	// Every expected tool must have an RBAC permission entry.
-	for _, tool := range expected35Tools {
+	for _, tool := range expected41Tools {
 		t.Run("tool "+tool+" has RBAC entry", func(t *testing.T) {
 			// A tool without an entry is denied by default (deny-by-default posture).
 			// We check that the tool IS correctly defined in the permission map by
@@ -715,9 +715,9 @@ func TestToolPermissionsMapCoversAll35Tools(t *testing.T) {
 		})
 	}
 
-	// Verify all 35 tools have sort-stable ordering (no duplicates).
-	sorted := make([]string, len(expected35Tools))
-	copy(sorted, expected35Tools)
+	// Verify all 41 tools have sort-stable ordering (no duplicates).
+	sorted := make([]string, len(expected41Tools))
+	copy(sorted, expected41Tools)
 	sort.Strings(sorted)
 	unique := make([]string, 0, len(sorted))
 	prev := ""
@@ -727,7 +727,7 @@ func TestToolPermissionsMapCoversAll35Tools(t *testing.T) {
 			prev = s
 		}
 	}
-	assert.Len(t, unique, 38, "tool list must not contain duplicates")
+	assert.Len(t, unique, 41, "tool list must not contain duplicates")
 }
 
 // =====================================================================

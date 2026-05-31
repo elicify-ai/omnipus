@@ -502,3 +502,91 @@ func TestMarkLastEntryTruncated_DoesNotMutatePreviousTurnEntry(t *testing.T) {
 	assert.True(t, t1.Truncated, "T1 entry must be marked truncated")
 	assert.False(t, t2.Truncated, "T2 entry must NOT be marked truncated by a T1 cancel")
 }
+
+// --- Cascade-delete uploads tests (N-B fix) ---
+
+// TestDeleteSession_CascadeDeletesUploads_SharedStore verifies that DeleteSession
+// on the shared store (baseDir = <home>/sessions) removes the session's uploads
+// directory at <home>/uploads/<sessionID>.
+//
+// BDD: Given a shared store at <home>/sessions with a session whose uploads exist
+//
+//	at <home>/uploads/<sessionID>/,
+//	When DeleteSession is called,
+//	Then the uploads directory is removed.
+//
+// Traces to: ADR-017 D5, N-B fix — uploads are home-rooted.
+func TestDeleteSession_CascadeDeletesUploads_SharedStore(t *testing.T) {
+	home := t.TempDir()
+	sessionsDir := filepath.Join(home, "sessions")
+
+	store, err := NewUnifiedStoreWithHome(sessionsDir, home)
+	require.NoError(t, err)
+
+	meta, err := store.NewSession(SessionTypeChat, "", "agent-test")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	// Simulate an upload at <home>/uploads/<sessionID>/file.txt.
+	uploadsDir := filepath.Join(home, "uploads", sessionID)
+	require.NoError(t, os.MkdirAll(uploadsDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(uploadsDir, "file.txt"), []byte("data"), 0o600))
+
+	// Delete the session.
+	require.NoError(t, store.DeleteSession(sessionID))
+
+	// The session directory must be gone.
+	_, statErr := os.Stat(filepath.Join(sessionsDir, sessionID))
+	assert.True(t, os.IsNotExist(statErr), "session dir must be removed after DeleteSession")
+
+	// The uploads directory must also be gone (cascade-delete, N-B fix).
+	_, uploadsStatErr := os.Stat(uploadsDir)
+	assert.True(t, os.IsNotExist(uploadsStatErr),
+		"uploads dir at <home>/uploads/<sessionID> must be removed by cascade-delete (N-B fix)")
+}
+
+// TestDeleteSession_CascadeDeletesUploads_PerAgentStore verifies that DeleteSession
+// on a per-agent store (baseDir = <home>/agents/<id>/sessions) still correctly
+// removes uploads at <home>/uploads/<sessionID> — not at the wrong
+// <home>/agents/<id>/uploads/<sessionID> path that the old filepath.Dir logic
+// would have computed.
+//
+// BDD: Given a per-agent store at <home>/agents/my-agent/sessions
+//
+//	with uploads at <home>/uploads/<sessionID>/,
+//	When DeleteSession is called,
+//	Then the uploads dir at <home>/uploads/<sessionID> is removed,
+//	And NO directory is created or removed under <home>/agents/my-agent/uploads/.
+//
+// Traces to: ADR-017 D5, N-B fix — per-agent stores must use home-rooted uploads path.
+func TestDeleteSession_CascadeDeletesUploads_PerAgentStore(t *testing.T) {
+	home := t.TempDir()
+	agentSessionsDir := filepath.Join(home, "agents", "my-agent", "sessions")
+
+	store, err := NewUnifiedStoreWithHome(agentSessionsDir, home)
+	require.NoError(t, err)
+
+	meta, err := store.NewSession(SessionTypeChat, "", "my-agent")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	// Uploads at the correct home-rooted path.
+	correctUploadsDir := filepath.Join(home, "uploads", sessionID)
+	require.NoError(t, os.MkdirAll(correctUploadsDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(correctUploadsDir, "upload.txt"), []byte("data"), 0o600))
+
+	// The WRONG path (what the old code would have used).
+	wrongUploadsDir := filepath.Join(home, "agents", "my-agent", "uploads", sessionID)
+
+	require.NoError(t, store.DeleteSession(sessionID))
+
+	// The correct uploads directory must be removed (N-B fix).
+	_, correctStatErr := os.Stat(correctUploadsDir)
+	assert.True(t, os.IsNotExist(correctStatErr),
+		"uploads at <home>/uploads/<sessionID> must be removed by cascade-delete")
+
+	// The wrong path must never have been created or touched.
+	_, wrongStatErr := os.Stat(wrongUploadsDir)
+	assert.True(t, os.IsNotExist(wrongStatErr),
+		"<home>/agents/<id>/uploads/<sessionID> must not be touched — wrong path for uploads")
+}

@@ -4261,10 +4261,11 @@ func (a *restAPI) withUploadAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return a.withAuthAndBodyLimit(handler, maxUploadFileSize*10)
 }
 
-// UploadedFile is defined as the UploadedFile component schema in contracts/openapi.yaml
-// (components/schemas/UploadedFile). oapi-codegen v2 inlines it as an anonymous struct
-// element type within gen.UploadFilesResponse.Files. Callers must use the element type
-// of gen.UploadFilesResponse.Files for struct literals; there is no standalone gen.UploadedFile.
+// UploadedFile is the named type gen.UploadedFile, generated from the UploadedFile
+// component schema in contracts/openapi.yaml (components/schemas/UploadedFile).
+// oapi-codegen v2 generates it as a named struct that is referenced as the element
+// type within gen.UploadFilesResponse.Files. Use gen.UploadedFile directly for
+// struct literals.
 
 // HandleUpload handles POST /api/v1/upload — streams multipart file uploads to disk.
 // Files are stored at ~/.omnipus/uploads/{session_id}/{sanitized_filename}.

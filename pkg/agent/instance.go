@@ -135,7 +135,7 @@ func NewAgentInstance(
 	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")
-	sessions := initSessionStore(sessionsDir, agentID)
+	sessions := initSessionStore(sessionsDir, agentID, omnipusHome())
 
 	mcpDiscoveryActive := cfg.Tools.MCP.Enabled && cfg.Tools.MCP.Discovery.Enabled
 	contextBuilder := NewContextBuilder(workspace).
@@ -433,9 +433,12 @@ func (a *AgentInstance) Close() error {
 }
 
 // initSessionStore creates the unified session store for an agent.
+// homePath is the ~/.omnipus/ root so that uploads cascade-delete on
+// DeleteSession finds the correct <homePath>/uploads/<sessionID> path
+// regardless of how deep the store's baseDir is in the directory tree (N-B fix).
 // Falls back to the JSONL backend if the unified store cannot be initialized.
-func initSessionStore(dir, agentID string) session.SessionStore {
-	us, err := session.NewUnifiedStore(dir)
+func initSessionStore(dir, agentID, homePath string) session.SessionStore {
+	us, err := session.NewUnifiedStoreWithHome(dir, homePath)
 	if err != nil {
 		logger.ErrorCF("agent", "UnifiedStore init failed; falling back to JSONL backend",
 			map[string]any{"dir": dir, "error": err.Error()})

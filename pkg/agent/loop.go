@@ -377,7 +377,7 @@ func NewAgentLoop(
 		logger.ErrorCF("agent", "Shared session store unavailable — new sessions will use per-agent stores",
 			map[string]any{"dir": sharedDir, "error": err.Error()})
 	} else {
-		sharedStore, ssErr := session.NewUnifiedStore(sharedDir)
+		sharedStore, ssErr := session.NewUnifiedStoreWithHome(sharedDir, homePath)
 		if ssErr != nil {
 			logger.ErrorCF("agent", "Shared session store init failed — new sessions will use per-agent stores",
 				map[string]any{"dir": sharedDir, "error": ssErr.Error()})
@@ -2592,7 +2592,7 @@ func (al *AgentLoop) SetAllowGodMode(allow bool) {
 	al.mu.Unlock()
 }
 
-// WireSysagentDeps registers all 37 system.* tools on every agent in the
+// WireSysagentDeps registers all 41 system.* tools on every agent in the
 // current registry (FR-001, FR-002). Mirrors the WireTier13Deps pattern:
 // called once at boot after NewAgentLoop, and again on hot-reload. The deps
 // pointer is stashed so hot-reload can re-apply the wiring on the rebuilt registry.
