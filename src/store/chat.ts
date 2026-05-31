@@ -69,7 +69,11 @@ interface BufferedFrame {
   arrivedAt: number
 }
 
-export interface ChatMessage extends Message {
+// #3: ChatMessage is the SPA-internal display type. It intersects Message (the
+// discriminated union) with extra display-only fields so each role variant
+// still carries its role-specific status constraints. Using a type alias (not
+// interface extends) because TypeScript does not allow extending a union type.
+export type ChatMessage = Message & {
   isStreaming?: boolean
   media?: MediaAttachment[]
   spans?: SubagentSpan[]
@@ -754,7 +758,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
               if (!b) return {}
               const updatedById = { ...b.messagesById }
               if (updatedById[lastMsgId!]) {
-                updatedById[lastMsgId!] = { ...updatedById[lastMsgId!], isStreaming: false, status: 'interrupted' }
+                // #3: last assistant message — status:'interrupted' is legal on AssistantMessage.
+                // Cast required because the union prevents spreading without role narrowing.
+                updatedById[lastMsgId!] = { ...updatedById[lastMsgId!], isStreaming: false, status: 'interrupted' } as ChatMessage
               }
               const updated: SessionChatState = { ...b, messagesById: updatedById }
               const updatedSessions = { ...s.sessionsById, [bucketSid]: updated }
@@ -1213,10 +1219,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
               for (const tc of (prev.tool_calls ?? [])) mergedById.set(tc.id, tc)
               for (const tc of baked) mergedById.set(tc.id, tc)
               finalMsgs = [...msgs]
+              // #3: prev is guaranteed assistant (prevAssistantIdx only set for role:'assistant')
+              // Cast to assert the tool_calls field is legal on this variant.
               finalMsgs[prevAssistantIdx] = {
                 ...prev,
                 tool_calls: Array.from(mergedById.values()),
-              }
+              } as ChatMessage
               const liveSet = new Set(liveIds)
               const remainingCalls: typeof b.toolCalls = {}
               for (const [k, v] of Object.entries(b.toolCalls)) {
@@ -1269,7 +1277,40 @@ export const useChatStore = create<ChatStore>((set, get) => {
         }
       } else {
         // No active session — send without session_id; server will mint one
-        // and ack with session_started. UI renders nothing until that ack.
+        // and ack with session_started.
+        //
+        // #253(a): Render the user message optimistically in a temporary bucket
+        // so it is visible immediately. If the WS send fails, mark the message
+        // with status:'error' so the user sees a Retry affordance instead of a
+        // silent drop. The temporary bucket key '__pending' is replaced by the
+        // real session_id once session_started arrives (see handleFrame case
+        // 'session_started'). If the send succeeds, the message stays visible
+        // until session_started migrates the bucket.
+        const pendingSid = '__pending'
+        const userMsg: ChatMessage = {
+          id: generateId(),
+          session_id: pendingSid,
+          role: 'user',
+          content,
+          timestamp: new Date().toISOString(),
+          status: 'done',
+        }
+        const assistantMsg: ChatMessage = {
+          id: generateId(),
+          session_id: pendingSid,
+          role: 'assistant',
+          content: '',
+          timestamp: new Date().toISOString(),
+          status: 'streaming',
+          isStreaming: true,
+        }
+        // Render optimistically in the pending bucket and activate it.
+        withBucket(pendingSid, (b) => {
+          const allMsgs = [...getMessages(b), userMsg, assistantMsg]
+          return { ...applyMessageArray(allMsgs, b), isStreaming: true, lastUserMessageAt: Date.now() }
+        })
+        useSessionStore.getState().setActiveSession(pendingSid, activeAgentId)
+
         const sent = connection.send({
           type: 'message',
           content,
@@ -1277,6 +1318,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
         })
         if (!sent) {
+          // #253(a): Mark the user message with status:'error' and remove the
+          // optimistic assistant placeholder. This preserves the typed content
+          // as a retriable error bubble rather than silently dropping the message.
+          withBucket(pendingSid, (b) => {
+            const msgs = getMessages(b).map((m) =>
+              // #3: UserMessage allows status:'error'; cast is safe because userMsg was created
+              // with role:'user'. The discriminated union prevents inline spread without cast.
+              m.id === userMsg.id ? ({ ...m, status: 'error' as const } as ChatMessage) : m
+            ).filter((m) => m.id !== assistantMsg.id)
+            return { ...applyMessageArray(msgs, b), isStreaming: false }
+          })
           useConnectionStore.getState().setConnectionError('Message could not be sent — connection dropped. Please try again.')
         }
       }
@@ -1413,11 +1465,31 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // for a message sent without a session_id. The agent is about to stream —
           // pre-set isStreaming:true so the Stop button appears immediately without
           // waiting for the first token or tool_call_start frame.
+          //
+          // #253(a): If a '__pending' bucket exists (from the no-session optimistic
+          // render path), migrate its messages into the real session bucket so the
+          // user sees a continuous conversation rather than a blank slate + re-render.
           set((state) => {
-            if (state.sessionsById[newSid]) return {}
-            const newBucket: SessionChatState = { ...emptySessionState(), isStreaming: true }
-            const sessionsById = { ...state.sessionsById, [newSid]: newBucket }
-            return { sessionsById, ...bucketToForeground(newBucket) }
+            const pendingBucket = state.sessionsById['__pending']
+            if (state.sessionsById[newSid]) {
+              // Real bucket already exists — drop the pending bucket if present.
+              if (!pendingBucket) return {}
+              const sessionsById = { ...state.sessionsById }
+              delete sessionsById['__pending']
+              return { sessionsById }
+            }
+            // Migrate pending bucket messages into the new bucket, or start fresh.
+            const baseBucket: SessionChatState = pendingBucket
+              ? {
+                  ...pendingBucket,
+                  isStreaming: true,
+                  lastUserMessageAt: Date.now(),
+                }
+              : { ...emptySessionState(), isStreaming: true }
+            const sessionsById = { ...state.sessionsById, [newSid]: baseBucket }
+            // Remove the temporary pending bucket.
+            delete sessionsById['__pending']
+            return { sessionsById, ...bucketToForeground(baseBucket) }
           })
           // Invalidate sessions list so SessionPanel shows the new session.
           queryClient.invalidateQueries({ queryKey: ['sessions'] })

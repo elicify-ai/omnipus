@@ -276,10 +276,12 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                 size="sm"
                 className="w-full gap-2 text-xs h-8"
                 onClick={() => {
-                  void navigate({
-                    to: '/sessions/$sessionId',
-                    params: { sessionId: task.session_id! },
-                  })
+                  // Navigate to the session URL directly. The sessions.$sessionId
+                  // route calls attachToSession (which sends the attach_session WS
+                  // frame and triggers replay) in its useEffect. Navigating to '/'
+                  // was wrong: RootChatScreen calls startNewSession() on mount which
+                  // clears activeSessionId, racing the attachToSession call.
+                  void navigate({ to: '/sessions/$sessionId', params: { sessionId: task.session_id! } })
                   onClose()
                 }}
               >

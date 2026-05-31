@@ -39,7 +39,7 @@ const makeMsg = (overrides: Partial<ChatMessage>): ChatMessage => ({
   timestamp: '2026-03-29T10:00:00Z',
   status: 'done',
   ...overrides,
-})
+} as ChatMessage) // #3: cast required because spreading role:'user' + role:'assistant' overrides can't narrow the discriminated union at compile time
 
 describe('MessageItem — user message', () => {
   it('renders user message content', () => {

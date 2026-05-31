@@ -329,22 +329,62 @@ function InterruptedMessageMarkers() {
 // ── Standalone message row components (virtualizer) ──────────────────────────
 // Render ChatMessage from props (no AssistantUI context) for use by the virtualizer.
 
+/** Inline retry button for user messages that failed to send (#253b). */
+function UserMessageRetryButton({ message }: { message: ChatMessage }) {
+  const sendMessage = useChatStore((s) => s.sendMessage)
+  const isStreaming = useChatStore((s) => s.isStreaming)
+
+  if (message.status !== 'error' || isStreaming) return null
+
+  function handleRetry() {
+    // #253(c): resend the original content — file refs are already embedded in
+    // the content string by handleSendWithFiles, so no separate mediaRefs needed.
+    sendMessage(message.content)
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-2 mt-1">
+      <span className="text-[10px] text-[var(--color-error)]">Send failed</span>
+      <button
+        type="button"
+        data-testid="user-message-retry"
+        onClick={handleRetry}
+        aria-label="Retry — resend this message"
+        className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+        title="Retry — resend this message"
+      >
+        <ArrowCounterClockwise size={11} />
+        <span>Retry</span>
+      </button>
+    </div>
+  )
+}
+
 /** Standalone user message row for the virtualizer. */
 function VirtualUserMessageRow({ message }: { message: ChatMessage }) {
+  const isError = message.status === 'error'
   return (
     <div
       data-testid="user-message"
       data-message-role="user"
       data-message-id={message.id}
+      data-status={message.status}
       className="group flex gap-3 px-4 py-3 flex-row-reverse"
     >
       <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
         <User size={14} weight="bold" />
       </div>
       <div className="flex flex-col items-end gap-1 max-w-[85%] min-w-0">
-        <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm">
+        <div className={cn(
+          "rounded-xl px-4 py-3 text-sm leading-relaxed rounded-tr-sm",
+          isError
+            ? "bg-[var(--color-error)]/10 border border-[var(--color-error)]/30 text-[var(--color-secondary)]"
+            : "bg-[var(--color-surface-2)] text-[var(--color-secondary)]"
+        )}>
           <p className="whitespace-pre-wrap break-words">{message.content}</p>
         </div>
+        {/* #253(b): show error + Retry when message failed to send */}
+        <UserMessageRetryButton message={message} />
       </div>
     </div>
   )
@@ -1151,7 +1191,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     // #252: uploading before the first message used to error "no active
     // session". Auto-create a session first, then upload + send against it.
     let sessionId = activeSessionId
-    if (!sessionId) {
+    if (!sessionId || sessionId === '__pending') {
       if (!activeAgentId) {
         addToast({ message: 'Select an agent before sending files', variant: 'error' })
         return
@@ -1174,17 +1214,40 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     setIsUploading(true)
     try {
       const { files: uploaded } = await uploadFiles(sessionId, pendingFiles)
+
+      // #4 (sprint258 review): model upload result as paired (attachment, ref)
+      // so display and agent-accessible path are always consistent. An uploaded
+      // file without a path cannot be referenced by the agent — surface
+      // "not available" so the user knows to re-attach, rather than silently
+      // sending a broken link.
+      const unavailable = pendingFiles.filter(
+        (file) => !uploaded.some((u) => u.name === file.name && typeof u.path === 'string' && u.path.length > 0),
+      )
+      if (unavailable.length > 0) {
+        addToast({
+          message: `Attachment not available: ${unavailable.map((f) => f.name).join(', ')} — could not register with session. Re-attach and try again.`,
+          variant: 'error',
+        })
+      }
+
+      // Only thread files that actually registered (have a usable path).
+      const available = uploaded.filter((f) => typeof f.path === 'string' && f.path.length > 0)
+      if (available.length === 0 && !text.trim()) {
+        // Nothing to send — all files failed and no text.
+        return
+      }
+
       // #254: thread media:// refs into the message frame so the agent sees
       // the attachment as a multimodal content block. Build display
       // attachments for the optimistic user bubble in parallel.
-      const mediaRefs = uploaded.map((f) => f.ref).filter((r): r is string => typeof r === 'string' && r.length > 0)
-      const attachments: MediaAttachment[] = uploaded.map((f) => ({
+      const mediaRefs = available.map((f) => f.ref).filter((r): r is string => typeof r === 'string' && r.length > 0)
+      const attachments: MediaAttachment[] = available.map((f) => ({
         type: f.content_type.startsWith('image/') ? 'image' : 'file',
         url: `/api/v1/uploads/${sessionId}/${f.name}`,
         filename: f.name,
         contentType: f.content_type,
       }))
-      const fileList = uploaded.map((f) => `[${f.name}](${f.path})`).join(', ')
+      const fileList = available.map((f) => `[${f.name}](${f.path})`).join(', ')
       const body = text ? `${text}\n\nAttached files: ${fileList}` : `Attached files: ${fileList}`
       sendMessage(body, { mediaRefs, attachments })
       setPendingFiles([])

@@ -1,19 +1,23 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ChatScreen } from '@/components/chat/ChatScreen'
 import { fetchSessionDetail, isApiError } from '@/lib/api'
 import { useSessionStore } from '@/store/session'
+import { useConnectionStore } from '@/store/connection'
 
 function SessionRoute() {
   const { sessionId } = Route.useParams()
+  const attachToSession = useSessionStore((s) => s.attachToSession)
   const setActiveSession = useSessionStore((s) => s.setActiveSession)
   const setAttachedContext = useSessionStore((s) => s.setAttachedContext)
+  // Track which session we last attached to so a re-render doesn't re-send
+  // the attach_session frame (causing a double replay).
+  const attachedRef = useRef<string | null>(null)
 
   // Loader pre-fetches session detail and activates the session synchronously
   // in the Zustand store before this component renders. The useQuery below is
-  // kept for live data updates (e.g. agent_removed flag changing) but the
-  // activeSessionId is guaranteed to be set by loader before first render.
+  // kept for live data updates (e.g. agent_removed flag changing).
   const loaderData = Route.useLoaderData()
 
   const { data: detail } = useQuery({
@@ -27,17 +31,45 @@ function SessionRoute() {
     staleTime: 10_000,
   })
 
-  // Keep the store in sync when detail refreshes (e.g. agent_removed toggles).
-  // When the session type is 'task', also restore the attached context so
-  // the Task title banner in ChatScreen stays visible after a background refresh.
+  // #250: When the WS is already open and we navigate to a session URL (e.g.
+  // "Open in Chat" from TaskDetailPanel, or a direct deep-link), trigger the
+  // full attach pipeline so the gateway replays the transcript and live tokens
+  // stream into this bucket. setActiveSession alone does NOT send attach_session;
+  // only attachToSession does (session.ts:108).
+  //
+  // attachToSession is used when the WS is connected. When the WS is not yet
+  // open (cold load), setActiveSession is sufficient because WsLifecycle will
+  // call attachToSession once the connection opens.
+  //
+  // When the session type is 'task', also restore the attached context so the
+  // Task title banner in ChatScreen stays visible after a navigation/refresh.
+  // setAttachedContext does not send a WS frame.
   useEffect(() => {
-    if (detail?.session) {
-      setActiveSession(detail.session.id, detail.session.agent_id, null)
-      if (detail.session.type === 'task') {
-        setAttachedContext('task', detail.session.title)
-      }
+    if (!detail?.session) return
+    const { session } = detail
+    const { connection } = useConnectionStore.getState()
+
+    if (connection && attachedRef.current !== session.id) {
+      attachedRef.current = session.id
+      attachToSession(session.id, 'chat', undefined, session.agent_id)
+    } else if (!connection) {
+      // WS not open — fall back to setActiveSession so the store is consistent.
+      // WsLifecycle sends attach_session once the WS connects (onConnected path).
+      setActiveSession(session.id, session.agent_id, null)
     }
-  }, [detail?.session?.id, detail?.session?.agent_id, detail?.session?.type, detail?.session?.title, setActiveSession, setAttachedContext])
+
+    if (session.type === 'task') {
+      setAttachedContext('task', session.title)
+    }
+  }, [
+    detail?.session?.id,
+    detail?.session?.agent_id,
+    detail?.session?.type,
+    detail?.session?.title,
+    attachToSession,
+    setActiveSession,
+    setAttachedContext,
+  ])
 
   return <ChatScreen agentRemoved={detail?.agent_removed ?? false} />
 }
@@ -54,8 +86,13 @@ export const Route = createFileRoute('/_app/sessions/$sessionId')({
     //
     // When the session type is 'task', also set the attached context so
     // ChatScreen renders the Task title banner on first mount. setAttachedContext
-    // does not send a WS frame — the WS attach_session is handled by
-    // OmnipusRuntimeProvider / WsLifecycle on route mount.
+    // does not send a WS frame.
+    //
+    // Note: the loader runs on every navigation to this route. Using
+    // setActiveSession here (not attachToSession) is intentional — the loader
+    // runs before the component mounts, so the WS connection state is not yet
+    // observable. The component's useEffect above handles the attach_session
+    // WS frame once the component is mounted and the connection is available.
     try {
       const detail = await fetchSessionDetail(params.sessionId)
       if (detail?.session) {

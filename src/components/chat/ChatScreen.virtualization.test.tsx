@@ -337,12 +337,12 @@ describe('VirtualizedMessageList', () => {
       container = result.container
     })
 
-    const scrollEl = container.querySelector('[data-testid="virtualized-message-list"]') as HTMLElement | null
-    if (!scrollEl) {
-      // In jsdom without layout, the component may not render the scroll container.
-      // The test is a structural check — skip gracefully.
-      return
-    }
+    const scrollElOrNull = container.querySelector('[data-testid="virtualized-message-list"]') as HTMLElement | null
+    // #251: hard assertion — if the scroll container is absent the virtualizer is broken.
+    // jsdom supports DOM but not layout; the scroll container MUST be in the DOM regardless.
+    expect(scrollElOrNull).not.toBeNull()
+    // Non-null assertion after the hard expect above: TypeScript cannot narrow from expect().
+    const scrollEl = scrollElOrNull!
 
     // Simulate being at the bottom (within 50px).
     patchScrollContainer(scrollEl, { clientHeight: 600, scrollHeight: 1600, scrollTop: 1000 })
