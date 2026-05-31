@@ -177,6 +177,29 @@ func triggerReload(t *testing.T, gw *testutil.TestGateway) {
 	data, err := os.ReadFile(configPath)
 	require.NoError(t, err, "triggerReload: failed to read config.json — reload cannot proceed")
 
+	// PUT /api/v1/config refuses credential and security-sensitive top-level
+	// keys (providers, sandbox, credentials, security, and *api_key*/*secret*/
+	// *password* keys) — they must be mutated via their dedicated endpoints.
+	// A full config.json always contains at least "providers", so PUT-ing it
+	// verbatim is a guaranteed 403. Strip those keys here: the remaining benign
+	// body still triggers safeUpdateConfigJSON → restartServices, which is all
+	// this test needs to swap the media store.
+	var cfgMap map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &cfgMap),
+		"triggerReload: config.json is not a JSON object")
+	for k := range cfgMap {
+		kl := strings.ToLower(k)
+		if kl == "providers" || kl == "sandbox" || kl == "credentials" || kl == "security" ||
+			strings.Contains(kl, "api_key") || strings.Contains(kl, "secret") ||
+			strings.Contains(kl, "password") {
+			delete(cfgMap, k)
+		}
+	}
+	require.NotEmpty(t, cfgMap,
+		"triggerReload: nothing left to PUT after stripping blocked keys")
+	data, err = json.Marshal(cfgMap)
+	require.NoError(t, err)
+
 	req, err := http.NewRequest(http.MethodPut, gw.URL+"/api/v1/config", bytes.NewReader(data))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
