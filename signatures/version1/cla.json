@@ -1,1 +1,12 @@
-{"signedContributors":[]}
+{
+  "signedContributors": [
+    {
+      "name": "daniel-piatkowski-ai",
+      "id": 10800669,
+      "comment_id": 4586593437,
+      "created_at": "2026-05-31T11:47:48Z",
+      "repoId": 1194751349,
+      "pullRequestNo": 261
+    }
+  ]
+}
