@@ -285,11 +285,34 @@ func isWithinWorkspace(candidate, workspace string) bool {
 	return err == nil && (rel == "." || filepath.IsLocal(rel))
 }
 
+// resolveAbsPath returns the absolute path of rawPath relative to workspace.
+// If rawPath is already absolute it is returned cleaned. An error is returned
+// only when workspace itself cannot be made absolute (very rare). This helper
+// is used by the metadata guard to resolve a tool path argument before
+// metadataFileMatch can determine whether it targets a metadata file.
+func resolveAbsPath(rawPath, workspace string) (string, error) {
+	if filepath.IsAbs(rawPath) {
+		return filepath.Clean(rawPath), nil
+	}
+	absWS, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(filepath.Join(absWS, rawPath)), nil
+}
+
 type ReadFileTool struct {
 	BaseTool
 	fs            fileSystem
 	maxSize       int64
 	allowPathsLen int
+	// workspace is the agent's workspace root used for metadata-guard path
+	// resolution. Empty means no guard is applied (e.g. static read-only tools
+	// that have no agent workspace concept).
+	workspace string
+	// restrict mirrors the restrict flag passed to NewReadFileTool. Used
+	// together with workspace for the metadata path guard.
+	restrict bool
 	// auditLogger receives path.access_denied events on workspace-guard
 	// rejections. Nil means audit logging is disabled (best-effort).
 	auditLogger *audit.Logger
@@ -315,6 +338,8 @@ func NewReadFileTool(
 		fs:            buildFs(workspace, restrict, patterns),
 		maxSize:       maxSize,
 		allowPathsLen: len(patterns),
+		workspace:     workspace,
+		restrict:      restrict,
 	}
 }
 
@@ -366,6 +391,16 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	path, ok := args["path"].(string)
 	if !ok {
 		return ErrorResult("path is required")
+	}
+
+	// Metadata guard: reject reads of agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
+	// via generic file tools — callers must use agent.read_metadata instead.
+	if t.workspace != "" {
+		if absPath, err := resolveAbsPath(path, t.workspace); err == nil {
+			if _, _, matched := metadataFileMatch(absPath); matched {
+				return ErrorResult(metadataGuardError(absPath, "read"))
+			}
+		}
 	}
 
 	// offset (optional, default 0)
@@ -553,7 +588,8 @@ func getInt64Arg(args map[string]any, key string, defaultVal int64) (int64, erro
 
 type WriteFileTool struct {
 	BaseTool
-	fs fileSystem
+	fs        fileSystem
+	workspace string
 }
 
 func NewWriteFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.Regexp) *WriteFileTool {
@@ -561,7 +597,10 @@ func NewWriteFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.R
 	if len(allowPaths) > 0 {
 		patterns = allowPaths[0]
 	}
-	return &WriteFileTool{fs: buildFs(workspace, restrict, patterns)}
+	return &WriteFileTool{
+		fs:        buildFs(workspace, restrict, patterns),
+		workspace: workspace,
+	}
 }
 
 func (t *WriteFileTool) Name() string {
@@ -600,6 +639,16 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	path, ok := args["path"].(string)
 	if !ok {
 		return ErrorResult("path is required")
+	}
+
+	// Metadata guard: reject writes to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
+	// via generic file tools — callers must use agent.write_metadata instead.
+	if t.workspace != "" {
+		if absPath, err := resolveAbsPath(path, t.workspace); err == nil {
+			if _, _, matched := metadataFileMatch(absPath); matched {
+				return ErrorResult(metadataGuardError(absPath, "write"))
+			}
+		}
 	}
 
 	content, ok := args["content"].(string)

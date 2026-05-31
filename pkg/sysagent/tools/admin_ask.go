@@ -18,12 +18,14 @@ package systools
 
 // Agent tools
 
-func (*AgentCreateTool) RequiresAdminAsk() bool     { return true }
-func (*AgentUpdateTool) RequiresAdminAsk() bool     { return true }
-func (*AgentDeleteTool) RequiresAdminAsk() bool     { return true }
-func (*AgentListTool) RequiresAdminAsk() bool       { return true }
-func (*AgentActivateTool) RequiresAdminAsk() bool   { return true }
-func (*AgentDeactivateTool) RequiresAdminAsk() bool { return true }
+func (*AgentCreateTool) RequiresAdminAsk() bool        { return true }
+func (*AgentUpdateTool) RequiresAdminAsk() bool        { return true }
+func (*AgentDeleteTool) RequiresAdminAsk() bool        { return true }
+func (*AgentListTool) RequiresAdminAsk() bool          { return true }
+func (*AgentActivateTool) RequiresAdminAsk() bool      { return true }
+func (*AgentDeactivateTool) RequiresAdminAsk() bool    { return true }
+func (*AgentReadMetadataTool) RequiresAdminAsk() bool  { return true }
+func (*AgentWriteMetadataTool) RequiresAdminAsk() bool { return true }
 
 // Channel tools
 
