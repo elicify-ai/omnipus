@@ -19,6 +19,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dapicom-ai/omnipus/pkg/bus"
 )
 
 // readFrameOfType drains incoming frames until it receives one with the
@@ -255,4 +257,120 @@ func TestWS_AttachSession_NoLazyCAS_WhenSameSession(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, sessionID, gotSession,
 		"same-session attach_session must not disturb the current session")
+}
+
+// TestWS_Message_FindsSession_InPerAgentStore is a regression for the
+// "session not found" bug where a follow-up user message against a session
+// owned by a per-agent store (e.g. created by the task scheduler under a
+// custom agent like Hans) was rejected even though REST GET /api/v1/sessions/{id}
+// could load the same session via ResolveSessionStore.
+//
+// Reproduce:
+//
+//  1. Boot a gateway with a non-default agent (here we use "main", whose
+//     per-agent store is the legacy fast-path that ResolveSessionStore
+//     consults). A custom agent like Hans would land in the slow-path scan
+//     but the resolution outcome is the same: the session is found via the
+//     per-agent store, not via sharedSessionStore.
+//  2. Create a session directly on the per-agent store — mimicking what the
+//     task runner does when scheduling work to a custom agent.
+//  3. Send a {type:"message", session_id, agent_id} frame from the client.
+//  4. Assert: the server does NOT respond with
+//     {type:"error", message:"session not found"}.
+//  5. Assert: the message is published to the bus with the resolved
+//     session_id — i.e. the chat is honored as a continuation, not rejected.
+//
+// Before the fix this test would fail with an "error" frame in step 4 and no
+// bus delivery in step 5.
+func TestWS_Message_FindsSession_InPerAgentStore(t *testing.T) {
+	handler, msgBus, al := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	// Pre-create a session in the "main" agent's per-agent store. Using "main"
+	// guarantees this exercises the per-agent path (it's a legacy store the
+	// shared store does not own). The same code path covers custom agents
+	// since ResolveSessionStore's slow path scans all per-agent stores.
+	const agentID = "main"
+	perAgentStore := al.GetAgentStore(agentID)
+	require.NotNil(t, perAgentStore, "main per-agent store must exist")
+	meta, err := perAgentStore.NewSession("chat", "webchat", agentID)
+	require.NoError(t, err, "create per-agent session")
+	t.Cleanup(func() { _ = perAgentStore.DeleteSession(meta.ID) })
+
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	sendWSAuthFrameDevMode(t, conn)
+
+	received := make(chan bus.InboundMessage, 1)
+	go func() {
+		select {
+		case msg := <-msgBus.InboundChan():
+			received <- msg
+		case <-time.After(3 * time.Second):
+		}
+	}()
+
+	// Capture any error frames the server emits — drives the assertion that
+	// "session not found" is NOT one of them.
+	type errCapture struct {
+		got     bool
+		message string
+	}
+	errs := make(chan errCapture, 1)
+	go func() {
+		conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		for {
+			_, raw, readErr := conn.ReadMessage()
+			if readErr != nil {
+				errs <- errCapture{}
+				return
+			}
+			var frame struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(raw, &frame) != nil {
+				continue
+			}
+			if frame.Type == "error" {
+				errs <- errCapture{got: true, message: frame.Message}
+				return
+			}
+		}
+	}()
+
+	// Send a message frame referencing the pre-existing per-agent session.
+	msgFrame := wsClientFrameTestHelper{
+		Type:      "message",
+		Content:   "follow-up after task completion",
+		SessionID: meta.ID,
+		AgentID:   agentID,
+	}
+	data, err := json.Marshal(msgFrame)
+	require.NoError(t, err, "marshal message frame")
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data), "write message frame")
+
+	// Assertion 1: no "error" frame surfaces.
+	select {
+	case captured := <-errs:
+		if captured.got {
+			assert.NotEqual(t, "session not found", captured.message,
+				"regression: per-agent session must not produce 'session not found'")
+			t.Fatalf("unexpected error frame: %q", captured.message)
+		}
+	case <-time.After(2 * time.Second):
+		// No error frame within budget — that's the happy path.
+	}
+
+	// Assertion 2: bus delivery happened with the supplied session_id.
+	select {
+	case msg := <-received:
+		assert.Equal(t, meta.ID, msg.SessionID,
+			"bus message must carry the resolved session_id")
+		assert.Equal(t, "follow-up after task completion", msg.Content)
+	case <-time.After(3 * time.Second):
+		t.Fatal("message was not published to bus within 3s — per-agent session lookup likely still broken")
+	}
 }

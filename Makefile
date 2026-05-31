@@ -219,8 +219,18 @@ build-all: spa-embed generate
 	GOOS=linux GOARCH=arm GOARM=7 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-armv7 ./$(CMD_DIR)
 	GOOS=darwin GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 ./$(CMD_DIR)
 	GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe ./$(CMD_DIR)
-	GOOS=netbsd GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-netbsd-amd64 ./$(CMD_DIR)
-	GOOS=netbsd GOARCH=arm64 $(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-netbsd-arm64 ./$(CMD_DIR)
+	# NetBSD targets removed 2026-05-30. They have never built in this repo:
+	#   (a) pkg/sandbox/hardened_exec.go references applyPlatformHardening,
+	#       applyPostStartHardening, memoryLimitSupported — defined only in
+	#       _linux.go / _darwin.go / _windows.go. A _netbsd.go shim would
+	#       need to land before NetBSD compiles cleanly.
+	#   (b) modernc.org/sqlite (vendored transitively via whatsmeow) ships a
+	#       sqlite_netbsd_amd64.go with its own type errors upstream.
+	# docs/operations/platform-support.md lists only Linux x86_64, Linux
+	# aarch64, and macOS arm64 as supported, so the NetBSD lines were aspirational
+	# rather than load-bearing — the `build` workflow on main has been red on
+	# every push since 2026-04-26 purely because of these two lines.
+	# Re-add once both upstream issues are resolved.
 	@echo "All builds complete"
 
 ## release-snapshot: Run goreleaser locally without publishing (produces dist/ artifacts).

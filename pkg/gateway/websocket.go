@@ -776,12 +776,49 @@ func (h *WSHandler) handleChatMessage(
 	if targetAgentID == "" {
 		targetAgentID = "main"
 	}
-	store := h.agentLoop.GetSessionStore()
-	if store == nil {
-		store = h.agentLoop.GetAgentStore(targetAgentID)
-	}
 
 	sessionID := frameSessionID
+
+	// Pick the right store for the operation:
+	//
+	//   * Resuming an existing session: ask ResolveSessionStore to find the
+	//     owning store. New chat sessions live in sharedSessionStore, but
+	//     sessions created by the task scheduler, by per-agent tools, or by
+	//     custom agents (e.g. Hans completing a task) live under
+	//     agents/<id>/sessions and are visible only via the per-agent stores.
+	//     The previous code unconditionally picked sharedSessionStore here,
+	//     so any non-shared session produced "session not found" on the next
+	//     user message even though the SPA could read its transcript through
+	//     the REST GET /api/v1/sessions/{id} endpoint (which already uses
+	//     ResolveSessionStore).
+	//
+	//   * Minting a new session: keep using the shared store so every fresh
+	//     chat lands in the modern shared layout — that part was never broken.
+	var store *session.UnifiedStore
+	if sessionID != "" {
+		store = h.agentLoop.ResolveSessionStore(sessionID)
+		if store == nil {
+			// Truly unknown session — surface it explicitly so the SPA can
+			// render the "session not found" toast/banner rather than silently
+			// publishing the message to the bus against a non-existent session.
+			slog.Warn(
+				"ws: session not found (no store owns it)",
+				"session_id", sessionID,
+			)
+			sidCopy := sessionID
+			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:      string(generated.WsFrameTypeError),
+				Message:   "session not found",
+				SessionId: &sidCopy,
+			})
+			return
+		}
+	} else {
+		store = h.agentLoop.GetSessionStore()
+		if store == nil {
+			store = h.agentLoop.GetAgentStore(targetAgentID)
+		}
+	}
 
 	if store != nil {
 		if sessionID == "" {
