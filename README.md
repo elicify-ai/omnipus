@@ -5,9 +5,11 @@
 
 <h3>A team of AI agents you actually own.</h3>
 
-<p>Five named agents that hand off to each other, remember what you discussed, and do real work — research, writing, code, browsing, automation.</p>
+<p>Research. Code. Write. Automate. Browse. Analyze. — five named agents that hand off to each other and remember what you discussed.</p>
 
-<p>You run them yourself: no cloud account, no subscription, no data leaving your machine — except the calls to the AI model you choose.</p>
+<p>Or have <b>Ava build entirely new agents</b> for tasks nobody's imagined yet. <b>You run the team. Ava grows the team.</b></p>
+
+<p>It all runs on your own machine — no cloud account, no subscription, no data leaving your box except the calls to the AI model you choose.</p>
 
 <p><b>New here?</b> → <a href="docs/getting-started.md">Get started in 10 minutes</a> · <a href="docs/concepts.md">How it works</a> · <a href="docs/using-omnipus-ui.md">Use the web app</a> · <a href="docs/using-omnipus-cli.md">Use the terminal</a></p>
 
@@ -21,6 +23,24 @@
 <img src="docs/marketing/screenshots/04-agents-roster.png" alt="Omnipus agent roster" width="900">
 
 </div>
+
+---
+
+## What can Omnipus do?
+
+People install Omnipus to get things done, not to study the architecture. Out of the box, your team can:
+
+✓ **Build applications** with a team of coding agents
+
+✓ **Research a topic** and get back a cited report
+
+✓ **Create a custom expert agent** in minutes — no prompt engineering
+
+✓ **Automate browser workflows** with approval gates
+
+✓ **Remember decisions** across sessions and projects
+
+✓ **Run entirely on your own machine** — your keys, no telemetry
 
 ---
 
