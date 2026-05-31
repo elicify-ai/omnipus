@@ -287,6 +287,20 @@ func (e *RecapModelBootError) Error() string {
 	)
 }
 
+// perCandidateTimeoutFromConfig derives a per-candidate timeout for the fallback
+// chain from the provider config. It uses the RequestTimeout of the first
+// configured provider, falling back to the providers package default (120s) when
+// no provider is configured or the configured timeout is zero.
+func perCandidateTimeoutFromConfig(cfg *config.Config) time.Duration {
+	for _, p := range cfg.Providers {
+		if p != nil && p.RequestTimeout > 0 {
+			return time.Duration(p.RequestTimeout) * time.Second
+		}
+	}
+	// 0 signals NewFallbackChainWithTimeout to use its own default (120s).
+	return 0
+}
+
 // NewAgentLoop constructs an AgentLoop from the given config, message bus, and LLM provider.
 // Returns (*AgentLoop, nil) on success. Returns (nil, *RecapModelBootError) when
 // AutoRecapEnabled is true and the recap model fails the allow-list gate (FR-029a) —
@@ -303,9 +317,11 @@ func NewAgentLoop(
 		registry.SetDefaultAgentOverride(cfg.Agents.Defaults.DefaultAgentID)
 	}
 
-	// Set up shared fallback chain
+	// Set up shared fallback chain with per-candidate timeout so a primary
+	// provider timeout does not strand fallback candidates with an exhausted
+	// context deadline (#235).
 	cooldown := providers.NewCooldownTracker()
-	fallbackChain := providers.NewFallbackChain(cooldown)
+	fallbackChain := providers.NewFallbackChainWithTimeout(cooldown, perCandidateTimeoutFromConfig(cfg))
 
 	// Create state manager using default agent's workspace for channel recording
 	defaultAgent := registry.GetDefaultAgent()
@@ -2200,7 +2216,10 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	al.registry = registry
 
 	// Also update fallback chain with new config
-	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker())
+	al.fallback = providers.NewFallbackChainWithTimeout(
+		providers.NewCooldownTracker(),
+		perCandidateTimeoutFromConfig(cfg),
+	)
 
 	al.mu.Unlock()
 
