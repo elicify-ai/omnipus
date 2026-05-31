@@ -217,6 +217,13 @@ func buildRequestBody(
 				if merged {
 					continue
 				}
+			} else if len(msg.Media) > 0 {
+				// User message with media attachments — build multipart content.
+				content := buildAnthropicUserContent(msg.Content, msg.Media)
+				apiMessages = append(apiMessages, map[string]any{
+					"role":    "user",
+					"content": content,
+				})
 			} else {
 				// Regular user message
 				apiMessages = append(apiMessages, map[string]any{
@@ -304,6 +311,61 @@ func buildTools(tools []ToolDefinition) []any {
 		result[i] = toolDef
 	}
 	return result
+}
+
+// buildAnthropicUserContent builds the Anthropic multipart content block for a
+// user message that has media attachments. Each data URL is converted to the
+// appropriate Anthropic content block type:
+//
+//   - data:image/<type>;base64,<data> → image block with base64 source
+//   - data:application/pdf;base64,<data> → document block with base64 source
+//
+// Unrecognized data URLs are silently skipped.
+func buildAnthropicUserContent(text string, media []string) []any {
+	content := make([]any, 0, 1+len(media))
+	if text != "" {
+		content = append(content, map[string]any{
+			"type": "text",
+			"text": text,
+		})
+	}
+	for _, dataURL := range media {
+		if strings.HasPrefix(dataURL, "data:image/") {
+			// Strip "data:" prefix and split into "type;base64" and "<data>" parts.
+			payload := strings.TrimPrefix(dataURL, "data:")
+			meta, b64data, found := strings.Cut(payload, ",")
+			if !found {
+				continue
+			}
+			mediaType, _, _ := strings.Cut(meta, ";")
+			mediaType = strings.TrimSpace(mediaType)
+			if mediaType == "" {
+				continue
+			}
+			content = append(content, map[string]any{
+				"type": "image",
+				"source": map[string]any{
+					"type":       "base64",
+					"media_type": mediaType,
+					"data":       b64data,
+				},
+			})
+			continue
+		}
+		if strings.HasPrefix(dataURL, "data:application/pdf;base64,") {
+			b64data := strings.TrimPrefix(dataURL, "data:application/pdf;base64,")
+			content = append(content, map[string]any{
+				"type": "document",
+				"source": map[string]any{
+					"type":       "base64",
+					"media_type": "application/pdf",
+					"data":       b64data,
+				},
+			})
+			continue
+		}
+	}
+	return content
 }
 
 // parseResponseBody parses Anthropic Messages API response.

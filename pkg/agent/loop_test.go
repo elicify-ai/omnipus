@@ -2614,7 +2614,7 @@ func TestResolveMediaRefs_ResolvesToBase64(t *testing.T) {
 	messages := []providers.Message{
 		{Role: "user", Content: "describe this", Media: []string{ref}},
 	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize)
+	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
 
 	if len(result[0].Media) != 1 {
 		t.Fatalf("expected 1 resolved media, got %d", len(result[0].Media))
@@ -2641,14 +2641,14 @@ func TestResolveMediaRefs_SkipsOversizedFile(t *testing.T) {
 		{Role: "user", Content: "hi", Media: []string{ref}},
 	}
 	// Use a tiny limit (1KB) so the file is oversized
-	result := resolveMediaRefs(messages, store, 1024)
+	result := resolveMediaRefs(messages, store, 1024, "")
 
 	if len(result[0].Media) != 0 {
 		t.Fatalf("expected 0 media (oversized), got %d", len(result[0].Media))
 	}
 }
 
-func TestResolveMediaRefs_UnknownTypeInjectsPath(t *testing.T) {
+func TestResolveMediaRefs_TextFileInjectsContent(t *testing.T) {
 	store := media.NewFileMediaStore()
 	dir := t.TempDir()
 
@@ -2656,19 +2656,25 @@ func TestResolveMediaRefs_UnknownTypeInjectsPath(t *testing.T) {
 	if err := os.WriteFile(txtPath, []byte("hello world"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ref, _ := store.Store(txtPath, media.MediaMeta{}, "test")
+	ref, _ := store.Store(txtPath, media.MediaMeta{Filename: "readme.txt", ContentType: "text/plain"}, "test")
 
 	messages := []providers.Message{
 		{Role: "user", Content: "hi", Media: []string{ref}},
 	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize)
+	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
 
 	if len(result[0].Media) != 0 {
 		t.Fatalf("expected 0 media entries, got %d", len(result[0].Media))
 	}
-	expected := "hi [file:" + txtPath + "]"
-	if result[0].Content != expected {
-		t.Fatalf("expected content %q, got %q", expected, result[0].Content)
+	// Content should contain the extracted text wrapped in delimiters, not a path.
+	if strings.Contains(result[0].Content, txtPath) {
+		t.Fatalf("content must not contain local path, got %q", result[0].Content)
+	}
+	if !strings.Contains(result[0].Content, "hello world") {
+		t.Fatalf("expected extracted text in content, got %q", result[0].Content)
+	}
+	if !strings.Contains(result[0].Content, `[Attached file "readme.txt"]`) {
+		t.Fatalf("expected attachment delimiter in content, got %q", result[0].Content)
 	}
 }
 
@@ -2680,7 +2686,7 @@ func TestResolveMediaRefs_PassesThroughNonMediaRefs_NilStore(t *testing.T) {
 	messages := []providers.Message{
 		{Role: "user", Content: "hi", Media: []string{"https://example.com/img.png"}},
 	}
-	result := resolveMediaRefs(messages, nil, config.DefaultMaxMediaSize)
+	result := resolveMediaRefs(messages, nil, config.DefaultMaxMediaSize, "")
 
 	// With nil store we return unchanged.
 	if len(result[0].Media) != 1 || result[0].Media[0] != "https://example.com/img.png" {
@@ -2688,21 +2694,19 @@ func TestResolveMediaRefs_PassesThroughNonMediaRefs_NilStore(t *testing.T) {
 	}
 }
 
-// TestResolveMediaRefs_DropsNonMediaRefWhenStorePresent verifies that a
-// non-media:// string in Media is dropped (not forwarded) when a live store
-// is present. This guards against channels that fall back to local paths.
-//
-// Traces to: #254 resolveMediaRefs pass-through (MAJOR)
-func TestResolveMediaRefs_DropsNonMediaRefWhenStorePresent(t *testing.T) {
+// TestResolveMediaRefs_PassesThroughNonMediaRefs verifies that non-media:// strings
+// (pre-resolved data URLs, external URLs) are passed through unchanged. This allows
+// callers to pre-resolve URLs before calling resolveMediaRefs.
+func TestResolveMediaRefs_PassesThroughNonMediaRefs(t *testing.T) {
 	store := media.NewFileMediaStore()
 	messages := []providers.Message{
-		{Role: "user", Content: "hi", Media: []string{"https://example.com/img.png", "/tmp/local/file.jpg"}},
+		{Role: "user", Content: "hi", Media: []string{"https://example.com/img.png"}},
 	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize)
+	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
 
-	// Non-media:// strings must be dropped when store is non-nil.
-	if len(result[0].Media) != 0 {
-		t.Fatalf("expected non-media:// refs to be dropped, got Media=%v", result[0].Media)
+	// Non-media:// strings are passed through when store is non-nil.
+	if len(result[0].Media) != 1 || result[0].Media[0] != "https://example.com/img.png" {
+		t.Fatalf("expected passthrough of non-media:// URL, got %v", result[0].Media)
 	}
 }
 
@@ -2724,7 +2728,7 @@ func TestResolveMediaRefs_DoesNotMutateOriginal(t *testing.T) {
 	}
 	originalRef := original[0].Media[0]
 
-	resolveMediaRefs(original, store, config.DefaultMaxMediaSize)
+	resolveMediaRefs(original, store, config.DefaultMaxMediaSize, "")
 
 	if original[0].Media[0] != originalRef {
 		t.Fatal("resolveMediaRefs mutated original message slice")
@@ -2744,7 +2748,7 @@ func TestResolveMediaRefs_UsesMetaContentType(t *testing.T) {
 	messages := []providers.Message{
 		{Role: "user", Content: "hi", Media: []string{ref}},
 	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize)
+	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
 
 	if len(result[0].Media) != 1 {
 		t.Fatalf("expected 1 media, got %d", len(result[0].Media))
@@ -2754,109 +2758,168 @@ func TestResolveMediaRefs_UsesMetaContentType(t *testing.T) {
 	}
 }
 
-func TestResolveMediaRefs_PDFInjectsFilePath(t *testing.T) {
+func TestResolveMediaRefs_PDFNonCapableModelInjectsContent(t *testing.T) {
 	store := media.NewFileMediaStore()
 	dir := t.TempDir()
 
 	pdfPath := filepath.Join(dir, "report.pdf")
-	// PDF magic bytes
+	// Invalid PDF — text extraction will fail gracefully.
 	os.WriteFile(pdfPath, []byte("%PDF-1.4 test content"), 0o644)
-	ref, _ := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf"}, "test")
+	ref, _ := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf", Filename: "report.pdf"}, "test")
 
 	messages := []providers.Message{
-		{Role: "user", Content: "report.pdf [file]", Media: []string{ref}},
+		{Role: "user", Content: "check this", Media: []string{ref}},
 	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize)
+	// Use an empty model string — no model is PDF-capable.
+	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
 
 	if len(result[0].Media) != 0 {
 		t.Fatalf("expected 0 media (non-image), got %d", len(result[0].Media))
 	}
-	expected := "report.pdf [file:" + pdfPath + "]"
-	if result[0].Content != expected {
-		t.Fatalf("expected content %q, got %q", expected, result[0].Content)
+	// Must NOT contain the local path.
+	if strings.Contains(result[0].Content, pdfPath) {
+		t.Fatalf("content must not contain local path, got %q", result[0].Content)
+	}
+	// Must contain the file name and either extracted text or a failure notice.
+	if !strings.Contains(result[0].Content, "report.pdf") {
+		t.Fatalf("expected filename in content, got %q", result[0].Content)
 	}
 }
 
-func TestResolveMediaRefs_AudioInjectsAudioPath(t *testing.T) {
+func TestResolveMediaRefs_PDFCapableModelGoesIntoMedia(t *testing.T) {
 	store := media.NewFileMediaStore()
 	dir := t.TempDir()
 
-	oggPath := filepath.Join(dir, "voice.ogg")
-	os.WriteFile(oggPath, []byte("fake audio"), 0o644)
-	ref, _ := store.Store(oggPath, media.MediaMeta{ContentType: "audio/ogg"}, "test")
+	pdfPath := filepath.Join(dir, "report.pdf")
+	pdfData := []byte(
+		"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n" +
+			"xref\n0 1\n0000000000 65535 f\n\ntrailer\n<< /Size 1 /Root 1 0 R >>\nstartxref\n9\n%%EOF",
+	)
+	os.WriteFile(pdfPath, pdfData, 0o644)
+	ref, _ := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf", Filename: "report.pdf"}, "test")
 
 	messages := []providers.Message{
-		{Role: "user", Content: "voice.ogg [audio]", Media: []string{ref}},
+		{Role: "user", Content: "check this", Media: []string{ref}},
 	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize)
+	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "claude-3.5-sonnet")
 
-	if len(result[0].Media) != 0 {
-		t.Fatalf("expected 0 media, got %d", len(result[0].Media))
+	// PDF-capable model: PDF goes into Media as data URL, not Content.
+	if len(result[0].Media) != 1 {
+		t.Fatalf("expected 1 media entry for PDF-capable model, got %d", len(result[0].Media))
 	}
-	expected := "voice.ogg [audio:" + oggPath + "]"
-	if result[0].Content != expected {
-		t.Fatalf("expected content %q, got %q", expected, result[0].Content)
+	if !strings.HasPrefix(result[0].Media[0], "data:application/pdf;base64,") {
+		t.Fatalf("expected data:application/pdf;base64, prefix, got %q", result[0].Media[0][:40])
+	}
+	// Content should not have an attachment notice for the PDF.
+	if strings.Contains(result[0].Content, "report.pdf") {
+		t.Fatalf("expected no content injection for PDF on capable model, got %q", result[0].Content)
 	}
 }
 
-func TestResolveMediaRefs_VideoInjectsVideoPath(t *testing.T) {
-	store := media.NewFileMediaStore()
-	dir := t.TempDir()
-
-	mp4Path := filepath.Join(dir, "clip.mp4")
-	os.WriteFile(mp4Path, []byte("fake video"), 0o644)
-	ref, _ := store.Store(mp4Path, media.MediaMeta{ContentType: "video/mp4"}, "test")
-
-	messages := []providers.Message{
-		{Role: "user", Content: "clip.mp4 [video]", Media: []string{ref}},
+func TestResolveMediaRefs_AudioVideoInjectsFailureNotice(t *testing.T) {
+	tests := []struct {
+		name        string
+		filename    string
+		contentType string
+		content     []byte
+		userMsg     string
+	}{
+		{
+			name:        "audio/ogg",
+			filename:    "voice.ogg",
+			contentType: "audio/ogg",
+			content:     []byte("fake audio"),
+			userMsg:     "voice message",
+		},
+		{
+			name:        "video/mp4",
+			filename:    "clip.mp4",
+			contentType: "video/mp4",
+			content:     []byte("fake video"),
+			userMsg:     "watch this",
+		},
 	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := media.NewFileMediaStore()
+			dir := t.TempDir()
+			path := filepath.Join(dir, tc.filename)
+			os.WriteFile(path, tc.content, 0o644)
+			ref, _ := store.Store(path, media.MediaMeta{ContentType: tc.contentType, Filename: tc.filename}, "test")
 
-	if len(result[0].Media) != 0 {
-		t.Fatalf("expected 0 media, got %d", len(result[0].Media))
-	}
-	expected := "clip.mp4 [video:" + mp4Path + "]"
-	if result[0].Content != expected {
-		t.Fatalf("expected content %q, got %q", expected, result[0].Content)
+			msgs := []providers.Message{
+				{Role: "user", Content: tc.userMsg, Media: []string{ref}},
+			}
+			result := resolveMediaRefs(msgs, store, config.DefaultMaxMediaSize, "")
+
+			if len(result[0].Media) != 0 {
+				t.Fatalf("expected 0 media, got %d", len(result[0].Media))
+			}
+			// Must NOT contain the local file path.
+			if strings.Contains(result[0].Content, path) {
+				t.Fatalf("content must not contain local path, got %q", result[0].Content)
+			}
+			// Must contain the filename in the failure notice.
+			if !strings.Contains(result[0].Content, tc.filename) {
+				t.Fatalf("expected filename %q in notice, got %q", tc.filename, result[0].Content)
+			}
+			if !strings.Contains(result[0].Content, "could not be extracted") {
+				t.Fatalf("expected extraction failure notice, got %q", result[0].Content)
+			}
+		})
 	}
 }
 
-func TestResolveMediaRefs_NoGenericTagAppendsPath(t *testing.T) {
+func TestResolveMediaRefs_CSVInjectsExtractedContent(t *testing.T) {
 	store := media.NewFileMediaStore()
 	dir := t.TempDir()
 
 	csvPath := filepath.Join(dir, "data.csv")
 	os.WriteFile(csvPath, []byte("a,b,c"), 0o644)
-	ref, _ := store.Store(csvPath, media.MediaMeta{ContentType: "text/csv"}, "test")
+	ref, _ := store.Store(csvPath, media.MediaMeta{ContentType: "text/csv", Filename: "data.csv"}, "test")
 
 	messages := []providers.Message{
 		{Role: "user", Content: "here is my data", Media: []string{ref}},
 	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize)
+	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
 
-	expected := "here is my data [file:" + csvPath + "]"
-	if result[0].Content != expected {
-		t.Fatalf("expected content %q, got %q", expected, result[0].Content)
+	// Must NOT contain the local path.
+	if strings.Contains(result[0].Content, csvPath) {
+		t.Fatalf("content must not contain local path, got %q", result[0].Content)
+	}
+	// Must contain the extracted CSV content.
+	if !strings.Contains(result[0].Content, "a,b,c") {
+		t.Fatalf("expected extracted csv text in content, got %q", result[0].Content)
+	}
+	if !strings.Contains(result[0].Content, `[Attached file "data.csv"]`) {
+		t.Fatalf("expected attachment delimiter in content, got %q", result[0].Content)
 	}
 }
 
-func TestResolveMediaRefs_EmptyContentGetsPathTag(t *testing.T) {
+func TestResolveMediaRefs_InvalidDocxInjectsFailureNotice(t *testing.T) {
 	store := media.NewFileMediaStore()
 	dir := t.TempDir()
 
 	docPath := filepath.Join(dir, "doc.docx")
 	os.WriteFile(docPath, []byte("fake docx"), 0o644)
 	docxMIME := "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-	ref, _ := store.Store(docPath, media.MediaMeta{ContentType: docxMIME}, "test")
+	ref, _ := store.Store(docPath, media.MediaMeta{ContentType: docxMIME, Filename: "doc.docx"}, "test")
 
 	messages := []providers.Message{
 		{Role: "user", Content: "", Media: []string{ref}},
 	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize)
+	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
 
-	expected := "[file:" + docPath + "]"
-	if result[0].Content != expected {
-		t.Fatalf("expected content %q, got %q", expected, result[0].Content)
+	// Must NOT contain the local path.
+	if strings.Contains(result[0].Content, docPath) {
+		t.Fatalf("content must not contain local path, got %q", result[0].Content)
+	}
+	// Must contain filename and failure notice since the file is not a valid zip/docx.
+	if !strings.Contains(result[0].Content, "doc.docx") {
+		t.Fatalf("expected filename in notice, got %q", result[0].Content)
+	}
+	if !strings.Contains(result[0].Content, "could not be extracted") {
+		t.Fatalf("expected extraction failure notice, got %q", result[0].Content)
 	}
 }
 
@@ -2876,12 +2939,12 @@ func TestResolveMediaRefs_MixedImageAndFile(t *testing.T) {
 
 	pdfPath := filepath.Join(dir, "report.pdf")
 	os.WriteFile(pdfPath, []byte("%PDF-1.4 test"), 0o644)
-	fileRef, _ := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf"}, "test")
+	fileRef, _ := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf", Filename: "report.pdf"}, "test")
 
 	messages := []providers.Message{
-		{Role: "user", Content: "check these [file]", Media: []string{imgRef, fileRef}},
+		{Role: "user", Content: "check these", Media: []string{imgRef, fileRef}},
 	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize)
+	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
 
 	if len(result[0].Media) != 1 {
 		t.Fatalf("expected 1 media (image only), got %d", len(result[0].Media))
@@ -2889,9 +2952,12 @@ func TestResolveMediaRefs_MixedImageAndFile(t *testing.T) {
 	if !strings.HasPrefix(result[0].Media[0], "data:image/png;base64,") {
 		t.Fatal("expected image to be base64 encoded")
 	}
-	expectedContent := "check these [file:" + pdfPath + "]"
-	if result[0].Content != expectedContent {
-		t.Fatalf("expected content %q, got %q", expectedContent, result[0].Content)
+	// PDF with invalid content → failure notice injected, no local path.
+	if strings.Contains(result[0].Content, pdfPath) {
+		t.Fatalf("content must not contain local path, got %q", result[0].Content)
+	}
+	if !strings.Contains(result[0].Content, "report.pdf") {
+		t.Fatalf("expected pdf filename in content, got %q", result[0].Content)
 	}
 }
 

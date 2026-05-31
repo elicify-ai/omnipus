@@ -114,6 +114,21 @@ func SerializeMessages(messages []Message) []any {
 				continue
 			}
 
+			if strings.HasPrefix(mediaURL, "data:application/pdf;base64,") {
+				// OpenRouter / OpenAI-compat native PDF file part.
+				// The full data URL (including the data:application/pdf;base64, prefix)
+				// is passed in the file_data field; OpenRouter routes it to the model's
+				// file-parsing pipeline.
+				parts = append(parts, map[string]any{
+					"type": "file",
+					"file": map[string]any{
+						"filename":  "attachment.pdf",
+						"file_data": mediaURL,
+					},
+				})
+				continue
+			}
+
 			if format, data, ok := parseDataAudioURL(mediaURL); ok {
 				parts = append(parts, map[string]any{
 					"type": "input_audio",

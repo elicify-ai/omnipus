@@ -337,8 +337,7 @@ function UserMessageRetryButton({ message }: { message: ChatMessage }) {
   if (message.status !== 'error' || isStreaming) return null
 
   function handleRetry() {
-    // #253(c): resend the original content — file refs are already embedded in
-    // the content string by handleSendWithFiles, so no separate mediaRefs needed.
+    // #253(c): resend the original user message content.
     sendMessage(message.content)
   }
 
@@ -1308,7 +1307,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       interface UploadPair {
         attachment: MediaAttachment
         ref: string
-        fileEntry: string
       }
       const availablePairs: UploadPair[] = uploaded
         .filter((f) => f.path.length > 0 && typeof f.ref === 'string' && f.ref.length > 0)
@@ -1320,25 +1318,13 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             contentType: f.content_type,
           } as MediaAttachment,
           ref: f.ref as string,
-          fileEntry: `[${f.name}](${f.path})`,
         }))
 
-      // Files with a valid path but no ref still appear in the text body so
-      // the agent knows a file was sent, but they are not shown as bubble
-      // attachments (no ref → agent cannot access).
-      const reflessFiles = uploaded.filter(
-        (f) => f.path.length > 0 && (typeof f.ref !== 'string' || f.ref.length === 0),
-      )
-      const allFileEntries = [
-        ...availablePairs.map((p) => p.fileEntry),
-        ...reflessFiles.map((f) => `[${f.name}](${f.path})`),
-      ]
-
       // Fix #1: when ALL uploads failed (no path-bearing file at all), send
-      // plain text if the user typed something — do NOT append an empty
-      // "Attached files:" suffix and do NOT clear pendingFiles so the user
-      // can re-attach after seeing the toast.
-      if (allFileEntries.length === 0) {
+      // plain text if the user typed something — do NOT clear pendingFiles so
+      // the user can re-attach after seeing the toast.
+      const anyPathUploaded = uploaded.some((f) => f.path.length > 0)
+      if (!anyPathUploaded) {
         if (!text.trim()) {
           // Nothing to send at all.
           return
@@ -1348,11 +1334,11 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         return
       }
 
+      // The backend (resolveMediaRefs) extracts and injects document content
+      // from the refs into the agent context — no path text needed in the body.
       const mediaRefs = availablePairs.map((p) => p.ref)
       const attachments = availablePairs.map((p) => p.attachment)
-      const fileList = allFileEntries.join(', ')
-      const body = text ? `${text}\n\nAttached files: ${fileList}` : `Attached files: ${fileList}`
-      sendMessage(body, { mediaRefs, attachments })
+      sendMessage(text, { mediaRefs, attachments })
       setPendingFiles([])
     } catch (err) {
       // #253: surface the failure and KEEP the pending files + restore the

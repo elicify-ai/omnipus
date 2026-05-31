@@ -9,13 +9,14 @@ package agent
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"os"
 	"strings"
-	"sync/atomic"
 
 	"github.com/h2non/filetype"
 
+	"github.com/dapicom-ai/omnipus/pkg/docextract"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/media"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
@@ -23,30 +24,27 @@ import (
 
 // resolveMediaRefs resolves media:// refs in messages.
 // Images are base64-encoded into the Media array for multimodal LLMs.
-// Non-image files (documents, audio, video) have their local path injected
-// into Content so the agent can access them via file tools like read_file.
+// PDFs are routed to the Media array as data:application/pdf;base64,… for
+// PDF-capable models (native document blocks); for other models the text is
+// extracted and injected into Content.
+// Other document types (docx, txt, etc.) have their text extracted and injected
+// into Content as a clearly delimited block. Binary files that cannot be
+// extracted produce a descriptive notice in Content instead.
 //
-// Non-media:// strings are dropped (validation guard — every channel should
-// only emit media:// refs, but the pass-through was a bug). Refs that cannot
-// be resolved (unknown ref or file missing on disk) produce a visible
-// "[attachment unavailable: <name>]" marker in Content so the LLM knows the
-// file was referenced but unavailable, and increment droppedCounter when
-// non-nil.
+// Non-media:// strings are passed through unchanged (they may be pre-resolved
+// data URLs or external URLs already handled by the caller).
+// Refs that cannot be resolved produce a visible "[attachment unavailable: …]"
+// marker in Content.
 //
 // Returns a new slice; original messages are not mutated.
 func resolveMediaRefs(
 	messages []providers.Message,
 	store media.MediaStore,
 	maxSize int,
-	droppedCounter ...*atomic.Int64,
+	model string,
 ) []providers.Message {
 	if store == nil {
 		return messages
-	}
-
-	var counter *atomic.Int64
-	if len(droppedCounter) > 0 {
-		counter = droppedCounter[0]
 	}
 
 	result := make([]providers.Message, len(messages))
@@ -58,24 +56,18 @@ func resolveMediaRefs(
 		}
 
 		resolved := make([]string, 0, len(m.Media))
-		var pathTags []string
-		var unavailableTags []string
+		var contentInjections []string
 
 		for _, ref := range m.Media {
-			// Guard: only accept well-formed media:// refs. Non-matching strings
-			// (e.g. raw local paths or HTTP URLs leaked by channel fallback code)
-			// are silently dropped here — they were already logged at the channel
-			// ingress point and must never reach the LLM content array.
-			if _, err := media.ParseMediaRef(ref); err != nil {
-				logger.WarnCF("agent", "resolveMediaRefs: dropping non-media:// string", map[string]any{
-					"ref": ref,
-				})
+			// Pass through non-media:// strings (pre-resolved data URLs, HTTP URLs).
+			if !strings.HasPrefix(ref, "media://") {
+				resolved = append(resolved, ref)
 				continue
 			}
 
 			localPath, meta, err := store.ResolveWithMeta(ref)
 			if err != nil {
-				name := ref // truncated ref as fallback name
+				name := ref
 				if meta.Filename != "" {
 					name = meta.Filename
 				}
@@ -83,10 +75,7 @@ func resolveMediaRefs(
 					"ref":   ref,
 					"error": err.Error(),
 				})
-				if counter != nil {
-					counter.Add(1)
-				}
-				unavailableTags = append(unavailableTags, "[attachment unavailable: "+name+"]")
+				contentInjections = append(contentInjections, "[attachment unavailable: "+name+"]")
 				continue
 			}
 
@@ -100,10 +89,7 @@ func resolveMediaRefs(
 					"path":  localPath,
 					"error": err.Error(),
 				})
-				if counter != nil {
-					counter.Add(1)
-				}
-				unavailableTags = append(unavailableTags, "[attachment unavailable: "+name+"]")
+				contentInjections = append(contentInjections, "[attachment unavailable: "+name+"]")
 				continue
 			}
 
@@ -114,42 +100,172 @@ func resolveMediaRefs(
 				if dataURL != "" {
 					resolved = append(resolved, dataURL)
 				} else {
-					// encodeImageToDataURL returns "" for oversize files, open
-					// failures, and base64 encoding failures. Produce a visible
-					// marker so the LLM knows the attachment was referenced but
-					// unavailable, and count it the same as resolve/stat failures.
 					name := meta.Filename
 					if name == "" {
 						name = localPath
 					}
-					if counter != nil {
-						counter.Add(1)
-					}
-					unavailableTags = append(unavailableTags,
+					contentInjections = append(contentInjections,
 						"[attachment unavailable: "+name+" (too large or unreadable)]")
 				}
 				continue
 			}
 
-			pathTags = append(pathTags, buildPathTag(mime, localPath))
+			// PDF: route to native document blocks for capable models, else extract text.
+			if isPDF(mime, meta.Filename) {
+				if pdfCapableModel(model) {
+					dataURL := encodePDFToDataURL(localPath, info, maxSize)
+					if dataURL != "" {
+						resolved = append(resolved, dataURL)
+					} else {
+						// File too large or unreadable — fall back to text extraction.
+						inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
+						contentInjections = append(contentInjections, inj)
+					}
+				} else {
+					inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
+					contentInjections = append(contentInjections, inj)
+				}
+				continue
+			}
+
+			// All other non-image files: extract text and inject into Content.
+			inj := buildDocumentInjection(localPath, mime, meta.Filename, info.Size())
+			contentInjections = append(contentInjections, inj)
 		}
 
 		result[i].Media = resolved
-		if len(pathTags) > 0 {
-			result[i].Content = injectPathTags(result[i].Content, pathTags)
-		}
-		// Inject unavailable-attachment markers into Content so the LLM can
-		// report them back to the user rather than silently ignoring the refs.
-		for _, tag := range unavailableTags {
-			if result[i].Content == "" {
-				result[i].Content = tag
-			} else {
-				result[i].Content += " " + tag
-			}
+		if len(contentInjections) > 0 {
+			result[i].Content = injectDocumentContent(result[i].Content, contentInjections)
 		}
 	}
 
 	return result
+}
+
+// pdfCapableModel returns true for models known to support native PDF document
+// blocks (base64 application/pdf content). The list is conservative — any
+// model not on it gets the text-extraction fallback rather than risking an
+// API error.
+//
+// Allow-list substrings (case-insensitive match against the full model string):
+//
+//	Anthropic: claude-3, claude-4, sonnet, opus (all Claude 3+ family)
+//	OpenAI:    gpt-4o, gpt-4.1, o1-, o3-
+//	Google:    gemini-1.5, gemini-2
+func pdfCapableModel(model string) bool {
+	lower := strings.ToLower(model)
+	capablePrefixes := []string{
+		// Anthropic Claude 3+ family (all variants support PDF natively)
+		"claude-3",
+		"claude-4",
+		"sonnet",
+		"opus",
+		"anthropic/claude-3",
+		"anthropic/claude-4",
+		// OpenAI GPT-4o and 4.1 family
+		"gpt-4o",
+		"gpt-4.1",
+		"openai/gpt-4o",
+		"openai/gpt-4.1",
+		// OpenAI o1/o3 reasoning models
+		"o1-",
+		"o3-",
+		"openai/o1",
+		"openai/o3",
+		// Google Gemini 1.5+
+		"gemini-1.5",
+		"gemini-2",
+		"google/gemini-1.5",
+		"google/gemini-2",
+	}
+	for _, prefix := range capablePrefixes {
+		if strings.Contains(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPDF returns true for files detected as PDF by MIME type or filename extension.
+func isPDF(mime, filename string) bool {
+	if mime == "application/pdf" {
+		return true
+	}
+	return strings.HasSuffix(strings.ToLower(filename), ".pdf")
+}
+
+// encodePDFToDataURL base64-encodes a PDF file as a data:application/pdf;base64,…
+// data URL for native document blocks. Returns empty string if the file exceeds
+// maxSize or cannot be read.
+func encodePDFToDataURL(localPath string, info os.FileInfo, maxSize int) string {
+	if info.Size() > int64(maxSize) {
+		logger.WarnCF("agent", "PDF file too large for native block, falling back to text extraction", map[string]any{
+			"path":     localPath,
+			"size":     info.Size(),
+			"max_size": maxSize,
+		})
+		return ""
+	}
+
+	f, err := os.Open(localPath)
+	if err != nil {
+		logger.WarnCF("agent", "Failed to open PDF file", map[string]any{
+			"path":  localPath,
+			"error": err.Error(),
+		})
+		return ""
+	}
+	defer f.Close()
+
+	prefix := "data:application/pdf;base64,"
+	encodedLen := base64.StdEncoding.EncodedLen(int(info.Size()))
+	var buf bytes.Buffer
+	buf.Grow(len(prefix) + encodedLen)
+	buf.WriteString(prefix)
+
+	encoder := base64.NewEncoder(base64.StdEncoding, &buf)
+	if _, err := io.Copy(encoder, f); err != nil {
+		logger.WarnCF("agent", "Failed to encode PDF file", map[string]any{
+			"path":  localPath,
+			"error": err.Error(),
+		})
+		return ""
+	}
+	encoder.Close()
+
+	return buf.String()
+}
+
+// buildDocumentInjection extracts text from a document file and returns a
+// formatted injection string for the message Content. If extraction fails
+// it returns an honest failure notice with file metadata but NO local path.
+func buildDocumentInjection(localPath, mime, filename string, size int64) string {
+	if filename == "" {
+		parts := strings.Split(localPath, "/")
+		filename = parts[len(parts)-1]
+	}
+
+	text, ok, reason := docextract.Extract(localPath, mime, filename)
+	if !ok {
+		return fmt.Sprintf(
+			"\n\n[Attached file %q (%s, %d bytes) — content could not be extracted: %s]",
+			filename, mime, size, reason,
+		)
+	}
+	return fmt.Sprintf(
+		"\n\n[Attached file %q]\n%s\n[End of attached file]",
+		filename, text,
+	)
+}
+
+// injectDocumentContent appends document content injections to the message content.
+func injectDocumentContent(content string, injections []string) string {
+	var sb strings.Builder
+	sb.WriteString(content)
+	for _, inj := range injections {
+		sb.WriteString(inj)
+	}
+	return sb.String()
 }
 
 func buildArtifactTags(store media.MediaStore, refs []string) []string {
@@ -228,6 +344,8 @@ func encodeImageToDataURL(localPath, mime string, info os.FileInfo, maxSize int)
 
 // buildPathTag creates a structured tag exposing the local file path.
 // Tag type is derived from MIME: [audio:/path], [video:/path], or [file:/path].
+// This is retained for buildArtifactTags (agent-generated files) and must not
+// be used for user-uploaded files whose paths are outside the sandbox workspace.
 func buildPathTag(mime, localPath string) string {
 	switch {
 	case strings.HasPrefix(mime, "audio/"):
@@ -237,29 +355,4 @@ func buildPathTag(mime, localPath string) string {
 	default:
 		return "[file:" + localPath + "]"
 	}
-}
-
-// injectPathTags replaces generic media tags in content with path-bearing versions,
-// or appends if no matching generic tag is found.
-func injectPathTags(content string, tags []string) string {
-	for _, tag := range tags {
-		var generic string
-		switch {
-		case strings.HasPrefix(tag, "[audio:"):
-			generic = "[audio]"
-		case strings.HasPrefix(tag, "[video:"):
-			generic = "[video]"
-		case strings.HasPrefix(tag, "[file:"):
-			generic = "[file]"
-		}
-
-		if generic != "" && strings.Contains(content, generic) {
-			content = strings.Replace(content, generic, tag, 1)
-		} else if content == "" {
-			content = tag
-		} else {
-			content += " " + tag
-		}
-	}
-	return content
 }

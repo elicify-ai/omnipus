@@ -3461,7 +3461,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 
 	cfg := al.GetConfig()
 	maxMediaSize := cfg.Agents.Defaults.GetMaxMediaSize()
-	messages = resolveMediaRefs(messages, turnMediaStore, maxMediaSize, &al.mediaRefsDropped)
+	messages = resolveMediaRefs(messages, turnMediaStore, maxMediaSize, ts.agent.Model)
 
 	if !ts.opts.NoHistory {
 		toolDefs := ts.agent.Tools.ToProviderDefs()
@@ -3488,7 +3488,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				ts.opts.SenderID, ts.opts.SenderDisplayName,
 				activeSkillNames(ts.agent, ts.opts)...,
 			)
-			messages = resolveMediaRefs(messages, turnMediaStore, maxMediaSize, &al.mediaRefsDropped)
+			messages = resolveMediaRefs(messages, turnMediaStore, maxMediaSize, ts.agent.Model)
 		}
 	}
 
@@ -3650,7 +3650,7 @@ turnLoop:
 
 		// Inject pending steering messages
 		if len(pendingMessages) > 0 {
-			resolvedPending := resolveMediaRefs(pendingMessages, turnMediaStore, maxMediaSize, &al.mediaRefsDropped)
+			resolvedPending := resolveMediaRefs(pendingMessages, turnMediaStore, maxMediaSize, activeModel)
 			totalContentLen := 0
 			for i, pm := range pendingMessages {
 				messages = append(messages, resolvedPending[i])
