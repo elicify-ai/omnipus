@@ -36,6 +36,11 @@ interface SessionStore {
     title?: string,
     agentId?: string
   ) => void
+  /** Sets attachedSessionType and attachedTaskTitle WITHOUT sending a WS attach_session
+   *  frame or resetting chat buckets. Used by the session route loader when navigating
+   *  directly to a task session via the session route (the WS attach is handled by
+   *  OmnipusRuntimeProvider / WsLifecycle on route mount). */
+  setAttachedContext: (type: Session['type'], title: string | null) => void
 
   /** Starts a fresh chat in the SPA: clears activeSessionId so the next
    *  message frame omits session_id, prompting the server to mint a new
@@ -158,5 +163,15 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       attachedTaskTitle: null,
     })
     syncForeground()
+  },
+
+  setAttachedContext: (type, title) => {
+    // No WS frame — the session route path (OmnipusRuntimeProvider / WsLifecycle)
+    // handles the attach_session frame. This action only sets the UI context so
+    // ChatScreen can render the Task title banner (attachedSessionType === 'task').
+    set({
+      attachedSessionType: type,
+      attachedTaskTitle: title,
+    })
   },
 }))
