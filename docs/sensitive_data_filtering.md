@@ -8,12 +8,7 @@ Omnipus can filter sensitive values (API keys, tokens, secrets, passwords) from 
 
 When the LLM uses a tool that returns its own credentials (e.g., a tool that echoes the API key being used), those values are automatically replaced with `[FILTERED]` in the message sent to the LLM.
 
-Sensitive values are collected from [`.security.yml`](credential_encryption.md) — the centralized storage for all sensitive configuration (API keys, tokens, secrets stored alongside `config.json`). This includes:
-
-- Model API keys
-- Channel tokens (Telegram, Discord, Slack, Matrix, etc.)
-- Web tool API keys (Brave, Tavily, Perplexity, etc.)
-- Skills tokens (GitHub, ClawHub)
+Sensitive values are collected from [`.security.yml`](credential_encryption.md) — the centralized storage for all sensitive configuration (API keys, tokens, secrets stored alongside `config.json`). This includes model API keys, channel tokens (Telegram, Discord, Slack, Matrix, etc.), web tool API keys (Brave, Tavily, Perplexity, etc.), and skills tokens (GitHub, ClawHub).
 
 ---
 
@@ -45,14 +40,11 @@ Sensitive data filtering is configured in the `tools` section of `config.json`:
 
 ## How It Works
 
-1. **On startup**: All sensitive values are collected from `.security.yml` using reflection and compiled into a `strings.Replacer` (O(n+m) performance, computed once).
+On startup, all sensitive values are collected from `.security.yml` using reflection and compiled into a `strings.Replacer` (O(n+m) performance, computed once).
 
-2. **Per tool result**: Before sending any tool result content to the LLM:
-   - If `filter_sensitive_data` is `false`, content is passed through unchanged
-   - If content length < `filter_min_length`, content is passed through unchanged (fast path)
-   - Otherwise, all sensitive values are replaced with `[FILTERED]`
+Before sending any tool result content to the LLM, the filter checks three conditions in order: if `filter_sensitive_data` is `false`, content is passed through unchanged; if content length is less than `filter_min_length`, content is passed through unchanged (fast path); otherwise, all sensitive values are replaced with `[FILTERED]`.
 
-3. **Replacement**: Uses `strings.Replacer` for efficient O(n+m) string substitution, where n = content length and m = total sensitive value length.
+Replacement uses `strings.Replacer` for efficient O(n+m) string substitution, where n = content length and m = total sensitive value length.
 
 ---
 
@@ -87,21 +79,29 @@ The model is using API key [FILTERED] and Telegram bot [FILTERED]
 
 ## Performance
 
-- **Fast path**: Content shorter than `filter_min_length` (default 8) is returned unchanged without any string scanning
-- **Efficient replacement**: Uses `strings.Replacer` with O(n+m) complexity instead of regex
-- **Lazy initialization**: The replacement map is built once on first access via `sync.Once`
+Content shorter than `filter_min_length` (default 8) is returned unchanged without any string scanning. The `strings.Replacer` approach achieves O(n+m) complexity instead of regex, avoiding repeated scans. The replacement map is built once on first access via `sync.Once`.
 
 ---
 
 ## Security Considerations
 
-- **Credential exposure prevention**: Without filtering, tools that echo credentials could cause the LLM to see its own API keys, potentially leading to confusion or credential leakage in logs
-- **Defense in depth**: Filtering complements (but does not replace) credential encryption — both features should be used together
-- **No false positives**: Only values explicitly stored in `.security.yml` are filtered; the LLM's general knowledge is unaffected
+### Credential Exposure Prevention
+
+Without filtering, tools that echo credentials could cause the LLM to see its own API keys, potentially leading to confusion or credential leakage in logs.
+
+### Defense in Depth
+
+Filtering complements (but does not replace) credential encryption — both features should be used together.
+
+### No False Positives
+
+Only values explicitly stored in `.security.yml` are filtered; the LLM's general knowledge is unaffected.
 
 ---
 
 ## Related
 
-- [Credential Encryption](credential_encryption.md) — encrypting API keys in config
-- [Tools Configuration](tools_configuration.md)
+[Credential Encryption](credential_encryption.md) — encrypting API keys in config
+
+[Tools Configuration](tools_configuration.md).
+

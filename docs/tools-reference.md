@@ -1,10 +1,12 @@
 # Tools reference
 
-Omnipus exposes three kinds of tools to agents:
+Omnipus exposes three kinds of tools to agents.
 
-- **Built-in tools** — compiled into the binary, registered on per-agent `ToolRegistry` instances by `pkg/agent/loop.go` and `pkg/agent/instance.go`. Names use snake_case (`read_file`) for the original set and dotted prefixes (`workspace.shell`, `browser.navigate`) for newer namespaced families.
-- **System tools (`system.*`)** — 39 administrative tools defined in `pkg/sysagent/tools/`. Available to any agent whose per-agent policy allows them; custom agents have `system.*: deny` seeded by default. There is no separate "system agent" runtime — these are ordinary builtins governed entirely by policy.
-- **MCP tools** — registered at runtime from Model Context Protocol servers configured under `mcp_servers` in `config.json`. Each tool is namespaced by the server name; the registry merges them into the same per-agent surface that the builtins occupy.
+**Built-in tools** are compiled into the binary, registered on per-agent `ToolRegistry` instances by `pkg/agent/loop.go` and `pkg/agent/instance.go`. Names use snake_case (`read_file`) for the original set and dotted prefixes (`workspace.shell`, `browser.navigate`) for newer namespaced families.
+
+**System tools (`system.*`)** are 39 administrative tools defined in `pkg/sysagent/tools/`. Available to any agent whose per-agent policy allows them; custom agents have `system.*: deny` seeded by default. There is no separate "system agent" runtime — these are ordinary builtins governed entirely by policy.
+
+**MCP tools** are registered at runtime from Model Context Protocol servers configured under `mcp_servers` in `config.json`. Each tool is namespaced by the server name; the registry merges them into the same per-agent surface that the builtins occupy.
 
 The canonical tool name for any builtin is whatever `Name() string` returns on its concrete type. To find a tool, grep for `Name() string` in `pkg/tools/`, `pkg/tools/browser/`, or `pkg/sysagent/tools/`. The same name is used for policy matches (`pkg/tools/compositor.go:94-106`), audit logging, and `tool_call` frames over the WebSocket.
 
@@ -127,16 +129,18 @@ Defined in `pkg/sysagent/tools/registry.go:13-74` as a flat list of 39 tools. Pe
 
 Grouped by namespace:
 
-- **`system.agent.*`** — 6 tools: `create`, `update`, `delete`, `list`, `activate`, `deactivate` (`pkg/sysagent/tools/agent.go`).
-- **`system.project.*`** — 4 tools: `create`, `update`, `delete`, `list` (`pkg/sysagent/tools/project.go`).
-- **`system.task.*`** — 4 tools: `create`, `update`, `delete`, `list` (`pkg/sysagent/tools/task.go`).
-- **`system.channel.*`** — 5 tools: `enable`, `configure`, `disable`, `list`, `test` (`pkg/sysagent/tools/channel.go`).
-- **`system.skill.*`** — 4 tools: `install`, `remove`, `search`, `list` (`pkg/sysagent/tools/skill.go`).
-- **`system.mcp.*`** — 3 tools: `add`, `remove`, `list` (`pkg/sysagent/tools/mcp.go`).
-- **`system.provider.*`** + **`system.models.list`** — 4 tools: `configure`, `list`, `test`, `models.list` (`pkg/sysagent/tools/provider.go`).
-- **`system.pin.*`** — 3 tools: `list`, `create`, `delete` (`pkg/sysagent/tools/pin.go`).
-- **`system.config.*`** — 2 tools: `get`, `set` (`pkg/sysagent/tools/config.go`).
-- **`system.doctor.run`**, **`system.backup.create`**, **`system.cost.query`**, **`system.navigate`** — 4 utility tools (`pkg/sysagent/tools/diag.go`, `navigate.go`).
+| Namespace | Count | Tools | Source |
+|---|---|---|---|
+| `system.agent.*` | 6 | `create`, `update`, `delete`, `list`, `activate`, `deactivate` | `pkg/sysagent/tools/agent.go` |
+| `system.project.*` | 4 | `create`, `update`, `delete`, `list` | `pkg/sysagent/tools/project.go` |
+| `system.task.*` | 4 | `create`, `update`, `delete`, `list` | `pkg/sysagent/tools/task.go` |
+| `system.channel.*` | 5 | `enable`, `configure`, `disable`, `list`, `test` | `pkg/sysagent/tools/channel.go` |
+| `system.skill.*` | 4 | `install`, `remove`, `search`, `list` | `pkg/sysagent/tools/skill.go` |
+| `system.mcp.*` | 3 | `add`, `remove`, `list` | `pkg/sysagent/tools/mcp.go` |
+| `system.provider.*` + `system.models.list` | 4 | `configure`, `list`, `test`, `models.list` | `pkg/sysagent/tools/provider.go` |
+| `system.pin.*` | 3 | `list`, `create`, `delete` | `pkg/sysagent/tools/pin.go` |
+| `system.config.*` | 2 | `get`, `set` | `pkg/sysagent/tools/config.go` |
+| Utilities | 4 | `system.doctor.run`, `system.backup.create`, `system.cost.query`, `system.navigate` | `pkg/sysagent/tools/diag.go`, `navigate.go` |
 
 `pkg/sysagent/tools/` is the source of truth for the exact set; the BRD's `Omnipus_BRD_AppendixD_System_Agent.md` describes the original 35 and predates the four utility additions.
 
@@ -148,10 +152,7 @@ MCP tools are filtered through the same `FilterToolsByPolicy` pass as builtins. 
 
 ## Per-agent policy
 
-Every tool decision routes through `FilterToolsByPolicy` in `pkg/tools/compositor.go:181-260`. Resolution order with strictest-wins semantics:
-
-1. Global policy — `cfg.Sandbox.ToolPolicies` plus `cfg.Sandbox.DefaultToolPolicy` (`pkg/config/sandbox.go:339-346`).
-2. Agent policy — the per-agent `Policies` map and `DefaultPolicy`.
+Every tool decision routes through `FilterToolsByPolicy` in `pkg/tools/compositor.go:181-260`. Resolution uses strictest-wins semantics, evaluated in order: first global policy (`cfg.Sandbox.ToolPolicies` plus `cfg.Sandbox.DefaultToolPolicy`, `pkg/config/sandbox.go:339-346`), then agent policy (the per-agent `Policies` map and `DefaultPolicy`).
 
 The three legal values are `allow`, `ask`, and `deny`. `deny > ask > allow` — denial at any layer wins. Empty values default to `allow`. Trailing-`.*` wildcards are supported (`browser.*`, `system.agent.*`, `mcp_server_name.*`); exact-name matches always beat wildcards, and among wildcards the most-specific prefix wins (`pkg/tools/compositor.go:51-106`).
 

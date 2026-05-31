@@ -190,37 +190,35 @@ OMNIPUS_TOOLS_EXEC_ENABLED=false
 
 ### Functionality
 
-- **`enable_deny_patterns`**: Set to `false` to completely disable the default dangerous command blocking patterns
-- **`custom_deny_patterns`**: Add custom deny regex patterns; commands matching these will be blocked
+**`enable_deny_patterns`** — Set to `false` to completely disable the default dangerous command blocking patterns.
+
+**`custom_deny_patterns`** — Add custom deny regex patterns; commands matching these will be blocked.
 
 ### Default Blocked Command Patterns
 
-By default, Omnipus blocks the following dangerous commands:
+By default, Omnipus blocks the following categories of dangerous commands:
 
-- Delete commands: `rm -rf`, `del /f/q`, `rmdir /s`
-- Disk operations: `format`, `mkfs`, `diskpart`, `dd if=`, writing to `/dev/sd*`
-- System operations: `shutdown`, `reboot`, `poweroff`
-- Command substitution: `$()`, `${}`, backticks
-- Pipe to shell: `| sh`, `| bash`
-- Privilege escalation: `sudo`, `chmod`, `chown`
-- Process control: `pkill`, `killall`, `kill -9`
-- Remote operations: `curl | sh`, `wget | sh`, `ssh`
-- Package management: `apt`, `yum`, `dnf`, `npm install -g`, `pip install --user`
-- Containers: `docker run`, `docker exec`
-- Git: `git push`, `git force`
-- Other: `eval`, `source *.sh`
+| Category | Examples |
+|---|---|
+| Delete commands | `rm -rf`, `del /f/q`, `rmdir /s` |
+| Disk operations | `format`, `mkfs`, `diskpart`, `dd if=`, writing to `/dev/sd*` |
+| System operations | `shutdown`, `reboot`, `poweroff` |
+| Command substitution | `$()`, `${}`, backticks |
+| Pipe to shell | `| sh`, `| bash` |
+| Privilege escalation | `sudo`, `chmod`, `chown` |
+| Process control | `pkill`, `killall`, `kill -9` |
+| Remote operations | `curl | sh`, `wget | sh`, `ssh` |
+| Package management | `apt`, `yum`, `dnf`, `npm install -g`, `pip install --user` |
+| Containers | `docker run`, `docker exec` |
+| Git | `git push`, `git force` |
+| Other | `eval`, `source *.sh` |
 
 ### Known Architectural Limitation
 
 The exec guard only validates the top-level command sent to Omnipus. It does **not** recursively inspect child
 processes spawned by build tools or scripts after that command starts running.
 
-Examples of workflows that can bypass the direct command guard once the initial command is allowed:
-
-- `make run`
-- `go run ./cmd/...`
-- `cargo run`
-- `npm run build`
+Workflows that can bypass the direct command guard once the initial command is allowed include `make run`, `go run ./cmd/...`, `cargo run`, and `npm run build`.
 
 This means the guard is useful for blocking obviously dangerous direct commands, but it is **not** a full sandbox for
 unreviewed build pipelines. If your threat model includes untrusted code in the workspace, use stronger isolation such
@@ -301,11 +299,7 @@ and injected into the context for a configured number of turns (`ttl`).
 
 ### Transport Behavior
 
-- If `type` is omitted, transport is auto-detected:
-    - `url` is set → `sse`
-    - `command` is set → `stdio`
-- `http` and `sse` both use `url` + optional `headers`.
-- `env` and `env_file` are only applied to `stdio` servers.
+If `type` is omitted, transport is auto-detected: a `url` being set implies `sse`; a `command` being set implies `stdio`. Both `http` and `sse` use `url` plus optional `headers`. The `env` and `env_file` fields are only applied to `stdio` servers.
 
 ### Configuration Examples
 
@@ -518,13 +512,13 @@ The skills tool configures skill discovery and installation via registries like 
 
 All configuration options can be overridden via environment variables with the format `OMNIPUS_TOOLS_<SECTION>_<KEY>`:
 
-For example:
-
-- `OMNIPUS_TOOLS_WEB_BRAVE_ENABLED=true`
-- `OMNIPUS_TOOLS_EXEC_ENABLED=false`
-- `OMNIPUS_TOOLS_EXEC_ENABLE_DENY_PATTERNS=false`
-- `OMNIPUS_TOOLS_CRON_EXEC_TIMEOUT_MINUTES=10`
-- `OMNIPUS_TOOLS_MCP_ENABLED=true`
+| Variable | Effect |
+|---|---|
+| `OMNIPUS_TOOLS_WEB_BRAVE_ENABLED=true` | Enable Brave search |
+| `OMNIPUS_TOOLS_EXEC_ENABLED=false` | Disable the exec tool |
+| `OMNIPUS_TOOLS_EXEC_ENABLE_DENY_PATTERNS=false` | Disable default deny patterns |
+| `OMNIPUS_TOOLS_CRON_EXEC_TIMEOUT_MINUTES=10` | Set cron exec timeout |
+| `OMNIPUS_TOOLS_MCP_ENABLED=true` | Enable MCP integration |
 
 Note: Nested map-style config (for example `tools.mcp.servers.<name>.*`) is configured in `config.json` rather than
 environment variables.

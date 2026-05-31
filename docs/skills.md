@@ -51,9 +51,17 @@ The body is plain Markdown; everything between the closing `---` and end of file
 
 There is no separate "skill registration" step — the loader scans three directories every time it is asked for the list, in priority order (`pkg/skills/loader.go:99-159`):
 
-1. **Workspace skills** — `<workspace>/skills/<name>/SKILL.md`. The workspace is the agent's working directory, typically `~/.omnipus/`.
-2. **Global skills** — `<globalSkillsDir>/<name>/SKILL.md`. By default this is `~/.omnipus/skills/` (set by `cmd/omnipus/internal/skills/command.go:44-47`).
-3. **Builtin skills** — `<builtinSkillsDir>/<name>/SKILL.md`. By default `~/.omnipus/omnipus/skills/`, populated by `omnipus skills install-builtin`.
+### Workspace skills
+
+`<workspace>/skills/<name>/SKILL.md`. The workspace is the agent's working directory, typically `~/.omnipus/`.
+
+### Global skills
+
+`<globalSkillsDir>/<name>/SKILL.md`. By default this is `~/.omnipus/skills/` (set by `cmd/omnipus/internal/skills/command.go:44-47`).
+
+### Builtin skills
+
+`<builtinSkillsDir>/<name>/SKILL.md`. By default `~/.omnipus/omnipus/skills/`, populated by `omnipus skills install-builtin`.
 
 Earlier directories win — a workspace skill with the same name as a global one shadows it. Each entry must be a directory containing a `SKILL.md`; other files in the parent directory are ignored.
 
@@ -95,13 +103,7 @@ Defined at `pkg/tools/skills_install.go:39-179`. Downloads and extracts a skill 
 | `version`  | string  | no       | Defaults to `latest`.                                          |
 | `force`    | boolean | no       | If `true`, removes any existing install before re-installing.  |
 
-The tool holds a process-wide mutex while installing (`pkg/tools/skills_install.go:77-78`). It refuses to overwrite an existing directory unless `force=true`, then delegates to `registry.DownloadAndInstall` (`pkg/skills/clawhub_registry.go:230-308`). That call:
-
-1. Fetches metadata for the slug.
-2. Streams the ZIP to a temp file, capped at `MaxZipSize` bytes (default 50 MiB, `pkg/skills/clawhub_registry.go:21,400-403`).
-3. **Verifies the SHA-256 of the ZIP against `latestVersion.sha256` from the metadata** (`pkg/skills/clawhub_registry.go:288-300`, SEC-09). On mismatch the install aborts with `hash verification failed`.
-4. Extracts via `utils.ExtractZipFile`, which rejects path-traversal entries and any entry with the symlink bit set (`pkg/utils/zip.go:17,53-55`).
-5. Returns an `InstallResult` with `Verified`, `IsMalwareBlocked`, `IsSuspicious`, and `Summary`. The caller blocks malware-flagged installs outright and surfaces a warning for `IsSuspicious`.
+The tool holds a process-wide mutex while installing (`pkg/tools/skills_install.go:77-78`). It refuses to overwrite an existing directory unless `force=true`, then delegates to `registry.DownloadAndInstall` (`pkg/skills/clawhub_registry.go:230-308`). That call fetches metadata for the slug, streams the ZIP to a temp file capped at `MaxZipSize` bytes (default 50 MiB, `pkg/skills/clawhub_registry.go:21,400-403`), verifies the SHA-256 of the ZIP against `latestVersion.sha256` from the metadata (`pkg/skills/clawhub_registry.go:288-300`, SEC-09) — on mismatch the install aborts with `hash verification failed` — then extracts via `utils.ExtractZipFile`, which rejects path-traversal entries and any entry with the symlink bit set (`pkg/utils/zip.go:17,53-55`), and finally returns an `InstallResult` with `Verified`, `IsMalwareBlocked`, `IsSuspicious`, and `Summary`. The caller blocks malware-flagged installs outright and surfaces a warning for `IsSuspicious`.
 
 Successful installs also write `.skill-origin.json` into the skill directory (`pkg/tools/skills_install.go:181-206`) recording the registry, slug, installed version, and install timestamp — `omnipus skills update` uses this to re-resolve the source registry.
 
@@ -123,11 +125,7 @@ How a skill ends up on ClawHub is out of scope for this repo; that is the regist
 
 ## GitHub installs
 
-The CLI also supports installing directly from a GitHub repo (`pkg/skills/installer.go:135-167`). `InstallFromGitHub` accepts:
-
-- shorthand `owner/repo`,
-- `owner/repo/sub/path` to install only a subdirectory,
-- a full `https://github.com/owner/repo/tree/<ref>/<path>` URL.
+The CLI also supports installing directly from a GitHub repo (`pkg/skills/installer.go:135-167`). `InstallFromGitHub` accepts a shorthand `owner/repo`, an `owner/repo/sub/path` to install only a subdirectory, or a full `https://github.com/owner/repo/tree/<ref>/<path>` URL.
 
 It walks `https://api.github.com/repos/<owner>/<repo>/contents/<path>?ref=<ref>` (`pkg/skills/installer.go:151-156`), downloads `SKILL.md` at the root plus every file under the conventional subdirectories `scripts/`, `references/`, `assets/`, `templates/`, `docs/` (`pkg/skills/installer.go:282-297`). If the API call fails it falls back to a single raw `SKILL.md` fetch from `raw.githubusercontent.com` (`pkg/skills/installer.go:222-254`). There is **no** hash verification on the GitHub path today — only ClawHub installs are SHA-256 verified.
 
@@ -172,22 +170,53 @@ The empty string is treated as `warn_unverified` (`pkg/policy/wave3_skill_trust_
 
 `allow_all` is intended to be loud, but the doctor warning is **not yet wired** — `omnipus doctor` does not currently flag the setting. Tracked as issue [#99](https://github.com/elicify-ai/omnipus/issues/99).
 
-Additional gates already in place:
+Additional gates are already in place.
 
-- **Malware flag.** If ClawHub metadata returns `moderation.isMalwareBlocked: true`, the install is aborted and the partial directory removed unconditionally — independent of `skill_trust` (`pkg/tools/skills_install.go:137-149`).
-- **Suspicious flag.** Surfaced as a warning in the install output but does not block.
-- **Path traversal & symlinks.** The ZIP extractor rejects entries whose path escapes the target directory and any entry with the symlink mode bit set (`pkg/utils/zip.go:53-55`).
-- **SSRF.** When constructed with `NewSkillInstallerWithSSRF` or a `cfg.HTTPClient` from `security.SSRFChecker.SafeClient()`, outbound HTTP refuses RFC1918 / metadata-IP targets (`pkg/skills/installer.go:50-78`, `pkg/skills/clawhub_registry.go:71-84`).
-- **Size cap.** ZIPs over `MaxZipSize` (default 50 MiB) and search responses over `MaxResponseSize` (default 2 MiB) are truncated and the install fails.
+#### Malware flag
+
+If ClawHub metadata returns `moderation.isMalwareBlocked: true`, the install is aborted and the partial directory removed unconditionally — independent of `skill_trust` (`pkg/tools/skills_install.go:137-149`).
+
+#### Suspicious flag
+
+Surfaced as a warning in the install output but does not block.
+
+#### Path traversal and symlinks
+
+The ZIP extractor rejects entries whose path escapes the target directory and any entry with the symlink mode bit set (`pkg/utils/zip.go:53-55`).
+
+#### SSRF
+
+When constructed with `NewSkillInstallerWithSSRF` or a `cfg.HTTPClient` from `security.SSRFChecker.SafeClient()`, outbound HTTP refuses RFC1918 / metadata-IP targets (`pkg/skills/installer.go:50-78`, `pkg/skills/clawhub_registry.go:71-84`).
+
+#### Size cap
+
+ZIPs over `MaxZipSize` (default 50 MiB) and search responses over `MaxResponseSize` (default 2 MiB) are truncated and the install fails.
 
 ## What's not shipping yet
 
-- Issue [#14](https://github.com/elicify-ai/omnipus/issues/14) — the **Browse Skills** modal in the SPA is a stub. The backend `find_skills` tool already speaks to ClawHub correctly; only the UI is gated.
-- Issue [#99](https://github.com/elicify-ai/omnipus/issues/99) — `omnipus doctor` does **not** warn when `sandbox.skill_trust = allow_all`. The setting is reachable from the UI and CLI but the doctor surface is silent.
-- Issue [#152](https://github.com/elicify-ai/omnipus/issues/152) — **auto-load on relevance** (Anthropic-style progressive disclosure) is not implemented. Today the agent gets the full `<skills>` summary every turn and must `read_file` the bodies it wants to use; there is no model-driven match-and-load step.
-- `POST /api/v1/skills/search` and `POST /api/v1/skills/install` return HTTP 501 (`pkg/gateway/rest.go:2129-2143`). Use the CLI or the in-loop `install_skill` tool.
-- GitHub installs are not hash-verified. `sandbox.skill_trust` only applies to ClawHub installs (the GitHub flow has no manifest to verify against).
-- `model-hint` is parsed but not acted on — the runtime does not auto-switch models based on a skill's preferred model.
+#### Issue #14 — Browse Skills modal stub
+
+The **Browse Skills** modal in the SPA is a stub. The backend `find_skills` tool already speaks to ClawHub correctly; only the UI is gated. Tracked as [#14](https://github.com/elicify-ai/omnipus/issues/14).
+
+#### Issue #99 — doctor does not warn on `allow_all`
+
+`omnipus doctor` does **not** warn when `sandbox.skill_trust = allow_all`. The setting is reachable from the UI and CLI but the doctor surface is silent. Tracked as [#99](https://github.com/elicify-ai/omnipus/issues/99).
+
+#### Issue #152 — no auto-load on relevance
+
+**Auto-load on relevance** (Anthropic-style progressive disclosure) is not implemented. Today the agent gets the full `<skills>` summary every turn and must `read_file` the bodies it wants to use; there is no model-driven match-and-load step. Tracked as [#152](https://github.com/elicify-ai/omnipus/issues/152).
+
+#### REST install endpoints return 501
+
+`POST /api/v1/skills/search` and `POST /api/v1/skills/install` return HTTP 501 (`pkg/gateway/rest.go:2129-2143`). Use the CLI or the in-loop `install_skill` tool.
+
+#### GitHub installs are not hash-verified
+
+`sandbox.skill_trust` only applies to ClawHub installs (the GitHub flow has no manifest to verify against).
+
+#### `model-hint` is parsed but not acted on
+
+The runtime does not auto-switch models based on a skill's preferred model.
 
 ## Quick start
 

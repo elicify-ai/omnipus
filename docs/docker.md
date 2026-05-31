@@ -31,11 +31,7 @@ All variants share the same three-stage build internally: `node:24-alpine` compi
 
 ### Minimal image — what it can and can't do
 
-The minimal image (`ghcr.io/elicify-ai/omnipus:latest`) **deliberately omits Chromium** to stay small. Concretely, what won't work:
-
-- `browser.navigate`, `browser.screenshot`, `browser.read_content`, `browser.console_logs`, `browser.action` — the entire `browser.*` tool family.
-- `web_serve` dev-server previews (the iframe-preview feature on the chat surface).
-- Any custom skill or MCP server that shells out to a system chromium.
+The minimal image (`ghcr.io/elicify-ai/omnipus:latest`) **deliberately omits Chromium** to stay small. Without Chromium, the entire `browser.*` tool family (`browser.navigate`, `browser.screenshot`, `browser.read_content`, `browser.console_logs`, `browser.action`) will not work, nor will `web_serve` dev-server previews (the iframe-preview feature on the chat surface) or any custom skill or MCP server that shells out to a system chromium.
 
 The gateway falls through to its managed-Chromium download path on first call, but the downloaded binary is glibc-linked and Alpine is musl — `exec` returns a misleading `no such file or directory` (the missing ELF interpreter is `/lib64/ld-linux-x86-64.so.2`, not the binary itself). The Max agent gracefully degrades to `web_fetch` and surfaces the failure inline in chat.
 
@@ -261,11 +257,13 @@ docker run -d \
 
 Do this only after onboarding is complete and a strong admin password is set.
 
-### Three flags every Docker operator should set deliberately
+### Three Flags Every Docker Operator Should Set Deliberately
 
-- **`gateway.sandbox.mode`** (config.json) or CLI `--sandbox=enforce|permissive|off`. Defaults to `enforce` when the kernel supports Landlock + seccomp; falls back automatically otherwise. Verify after first boot with `omnipus doctor` (or `gateway.log` — see [Sandbox under Docker](#sandbox-under-docker)). See [docs/operations/security-considerations.md](operations/security-considerations.md) for the full threat model.
-- **`gateway.trust_xff`** — leave `false` unless you front the container with a reverse proxy. When `true`, the gateway honours `X-Forwarded-For` for audit logs and rate-limit keys. Setting it `true` without a trusted proxy lets any client spoof their IP. See [reverse-proxy.md](operations/reverse-proxy.md).
-- **`gateway.dev_mode_bypass`** — **never set this `true` in any Docker deployment.** It disables auth on routes that haven't completed onboarding and is intended for unit-test scaffolding only.
+**`gateway.sandbox.mode`** (config.json) or CLI `--sandbox=enforce|permissive|off`. Defaults to `enforce` when the kernel supports Landlock + seccomp; falls back automatically otherwise. Verify after first boot with `omnipus doctor` (or `gateway.log` — see [Sandbox under Docker](#sandbox-under-docker)). See [docs/operations/security-considerations.md](operations/security-considerations.md) for the full threat model.
+
+**`gateway.trust_xff`** — leave `false` unless you front the container with a reverse proxy. When `true`, the gateway honours `X-Forwarded-For` for audit logs and rate-limit keys. Setting it `true` without a trusted proxy lets any client spoof their IP. See [reverse-proxy.md](operations/reverse-proxy.md).
+
+**`gateway.dev_mode_bypass`** — **never set this `true` in any Docker deployment.** It disables auth on routes that haven't completed onboarding and is intended for unit-test scaffolding only.
 
 ---
 
@@ -363,27 +361,35 @@ The gateway writes to two files inside the data volume's `logs/` directory:
 | `gateway.log` | Runtime log (requests, errors, sandbox events) |
 | `gateway_panic.log` | Stderr capture, populated only on startup panic |
 
-**The gateway does not rotate these files itself.** On a long-running deployment they will grow unbounded. Two options:
+**The gateway does not rotate these files itself.** On a long-running deployment they will grow unbounded.
 
-1. **Host-side rotation.** Mount `logs/` as a separate bind-mount and rotate with `logrotate` on the host (`/etc/logrotate.d/omnipus`):
-   ```
-   /var/lib/omnipus/logs/*.log {
-       daily
-       rotate 14
-       compress
-       missingok
-       copytruncate
-   }
-   ```
-2. **Docker logging driver.** Run the gateway with the JSON file driver's built-in rotation (in `docker-compose.yml`):
-   ```yaml
-   logging:
-     driver: json-file
-     options:
-       max-size: "100m"
-       max-file: "5"
-   ```
-   Note: this only captures stdout/stderr; the file-based `gateway.log` still grows. The container logs are a duplicate of `gateway.log` for the most recent boot only.
+### Host-Side Rotation
+
+Mount `logs/` as a separate bind-mount and rotate with `logrotate` on the host (`/etc/logrotate.d/omnipus`):
+
+```
+/var/lib/omnipus/logs/*.log {
+    daily
+    rotate 14
+    compress
+    missingok
+    copytruncate
+}
+```
+
+### Docker Logging Driver
+
+Run the gateway with the JSON file driver's built-in rotation (in `docker-compose.yml`):
+
+```yaml
+logging:
+  driver: json-file
+  options:
+    max-size: "100m"
+    max-file: "5"
+```
+
+Note: this only captures stdout/stderr; the file-based `gateway.log` still grows. The container logs are a duplicate of `gateway.log` for the most recent boot only.
 
 For a production deployment, prefer host-side `logrotate` against the bind-mount.
 
@@ -391,10 +397,8 @@ For a production deployment, prefer host-side `logrotate` against the bind-mount
 
 ## Vestigial files
 
-The following files in `docker/` are inherited from upstream and are not part of the v0.1 product. Do not use them; they may be removed in a future cleanup commit:
+The following files in `docker/` are inherited from upstream and are not part of the v0.1 product. Do not use them; they may be removed in a future cleanup commit.
 
-- `Dockerfile.full` — same broken Go-only builder stage that `Dockerfile.heavy` had before its fix. Untested; the v0.1 path for chat + MCP without browser tools is the minimal image plus a user-supplied MCP server.
-- `Dockerfile.goreleaser.launcher`
-- `docker-compose.full.yml`
+`Dockerfile.full` is the same broken Go-only builder stage that `Dockerfile.heavy` had before its fix. It is untested; the v0.1 path for chat and MCP without browser tools is the minimal image plus a user-supplied MCP server. `Dockerfile.goreleaser.launcher` and `docker-compose.full.yml` are similarly vestigial.
 
 (`Dockerfile.heavy` was previously listed here but has been rewritten with a working three-stage build and is now a supported image variant — see [Image variants](#image-variants).)

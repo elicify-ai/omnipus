@@ -123,10 +123,7 @@ If you just want to talk to your agents from the terminal, you don't need to run
 omnipus agent
 ```
 
-This opens an interactive chat (a REPL). Type, get a reply, type again.
-
-- Press **Ctrl+C** to exit.
-- Press **Esc twice** to cancel a reply that's still being written.
+This opens an interactive chat (a REPL). Press **Ctrl+C** to exit. Press **Esc twice** to cancel a reply that's still being written.
 
 More on this next.
 
@@ -362,13 +359,19 @@ Run `omnipus doctor` after any big config change, and especially before exposing
 
 Running Omnipus on a server with no screen? A few things make life easier.
 
-**Run it under systemd.** Create a service that runs `omnipus start` and keeps it alive across reboots. Point your reverse proxy at it for HTTPS — see [Reverse proxy setup](operations/reverse-proxy.md).
+### Run it under systemd
 
-**Or run it in Docker.** A container is often the simplest way to keep Omnipus isolated and easy to update. See [Running with Docker](docker.md).
+Create a service that runs `omnipus start` and keeps it alive across reboots. Point your reverse proxy at it for HTTPS — see [Reverse proxy setup](operations/reverse-proxy.md).
 
-**Pre-provision the master key for unattended starts.** On a headless box you usually can't type the vault password by hand on every restart, so you can supply the master key through an environment variable instead — see [Credential encryption](credential_encryption.md) for the exact variable and how to store it securely.
+### Or run it in Docker
 
-**Watch the logs while you set things up:**
+A container is often the simplest way to keep Omnipus isolated and easy to update. See [Running with Docker](docker.md).
+
+### Pre-provision the master key for unattended starts
+
+On a headless box you usually can't type the vault password by hand on every restart, so you can supply the master key through an environment variable instead — see [Credential encryption](credential_encryption.md) for the exact variable and how to store it securely.
+
+### Watch the logs while you set things up
 
 ```bash
 omnipus start -d --no-truncate
@@ -414,7 +417,10 @@ and importing from another install (`omnipus migrate`).
 
 ## 13. Where to go next
 
-- [Getting started](getting-started.md) — the quickest path from zero to your first chat.
-- [Using Omnipus from the web UI](using-omnipus-ui.md) — the graphical half of this guide.
-- [Concepts](concepts.md) — the five agents, sessions, tools, and how routing works.
-- [Troubleshooting](troubleshooting.md) — when something doesn't behave.
+[Getting started](getting-started.md) is the quickest path from zero to your first chat.
+
+[Using Omnipus from the web UI](using-omnipus-ui.md) covers the graphical half of this guide.
+
+[Concepts](concepts.md) explains the five agents, sessions, tools, and how routing works.
+
+[Troubleshooting](troubleshooting.md) is the place to start when something doesn't behave.

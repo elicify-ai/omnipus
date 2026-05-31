@@ -1,10 +1,10 @@
-# 💬 Chat Apps Configuration
+# Chat Apps Configuration
 
 > Back to [README](../README.md)
 
-## 💬 Chat Apps
+## Chat Apps
 
-Talk to your omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, LINE, WeCom, Weixin, Feishu, Slack, IRC, OneBot, or Google Chat
+Talk to your Omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, LINE, WeCom, Weixin, Feishu, Slack, IRC, OneBot, or Google Chat.
 
 > **Note**: Channels that rely on HTTP callbacks share a single Gateway HTTP server (`gateway.host`:`gateway.port`, default `127.0.0.1:18790`). Socket/stream-based channels such as Feishu, DingTalk, and WeCom do not rely on the shared webhook server for inbound delivery.
 
@@ -30,9 +30,7 @@ Talk to your omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, 
 
 **1. Create a bot**
 
-* Open Telegram, search `@BotFather`
-* Send `/newbot`, follow prompts
-* Copy the token
+Open Telegram, search for `@BotFather`, send `/newbot`, follow the prompts, and copy the token.
 
 **2. Configure**
 
@@ -59,20 +57,15 @@ omnipus start
 
 **4. Telegram command menu (auto-registered at startup)**
 
-Omnipus now keeps command definitions in one shared registry. On startup, Telegram will automatically register supported bot commands (for example `/start`, `/help`, `/show`, `/list`, `/use`) so command menu and runtime behavior stay in sync.
-Telegram command menu registration remains channel-local discovery UX; generic command execution is handled centrally in the agent loop via the commands executor.
+Omnipus keeps command definitions in one shared registry. On startup, Telegram automatically registers supported bot commands (for example `/start`, `/help`, `/show`, `/list`, `/use`) so command menu and runtime behavior stay in sync. Telegram command menu registration remains channel-local discovery UX; generic command execution is handled centrally in the agent loop via the commands executor.
 
 If command registration fails (network/API transient errors), the channel still starts and Omnipus retries registration in the background.
 
-You can also manage installed skills directly from Telegram:
+You can also manage installed skills directly from Telegram using `/list skills`, `/use <skill> <message>`, `/use <skill>` and then send the actual request in the next message, or `/use clear`.
 
-- `/list skills`
-- `/use <skill> <message>`
-- `/use <skill>` and then send the actual request in the next message
-- `/use clear`
+**5. Advanced Formatting**
 
-**4. Advanced Formatting**
-You can set use_markdown_v2: true to enable enhanced formatting options. This allows the bot to utilize the full range of Telegram MarkdownV2 features, including nested styles, spoilers, and custom fixed-width blocks.
+You can set `use_markdown_v2: true` to enable enhanced formatting options. This allows the bot to utilize the full range of Telegram MarkdownV2 features, including nested styles, spoilers, and custom fixed-width blocks.
 
 </details>
 
@@ -82,18 +75,15 @@ You can set use_markdown_v2: true to enable enhanced formatting options. This al
 
 **1. Create a bot**
 
-* Go to <https://discord.com/developers/applications>
-* Create an application → Bot → Add Bot
-* Copy the bot token
+Go to <https://discord.com/developers/applications>, create an application, navigate to Bot → Add Bot, and copy the bot token.
 
 **2. Enable intents**
 
-* In the Bot settings, enable **MESSAGE CONTENT INTENT**
-* (Optional) Enable **SERVER MEMBERS INTENT** if you plan to use allow lists based on member data
+In the Bot settings, enable **MESSAGE CONTENT INTENT**. Optionally enable **SERVER MEMBERS INTENT** if you plan to use allow lists based on member data.
 
 **3. Get your User ID**
-* Discord Settings → Advanced → enable **Developer Mode**
-* Right-click your avatar → **Copy User ID**
+
+Go to Discord Settings → Advanced, enable **Developer Mode**, then right-click your avatar and select **Copy User ID**.
 
 **4. Configure**
 
@@ -111,10 +101,7 @@ You can set use_markdown_v2: true to enable enhanced formatting options. This al
 
 **5. Invite the bot**
 
-* OAuth2 → URL Generator
-* Scopes: `bot`
-* Bot Permissions: `Send Messages`, `Read Message History`
-* Open the generated invite URL and add the bot to your server
+Go to OAuth2 → URL Generator, set Scopes to `bot`, set Bot Permissions to `Send Messages` and `Read Message History`, open the generated invite URL, and add the bot to your server.
 
 **Optional: Group trigger mode**
 
@@ -154,10 +141,11 @@ omnipus start
 <details>
 <summary><b>WhatsApp</b> (native via whatsmeow)</summary>
 
-Omnipus can connect to WhatsApp in two ways:
+Omnipus can connect to WhatsApp in two ways.
 
-- **Native (recommended):** In-process using [whatsmeow](https://github.com/tulir/whatsmeow). No separate bridge. Set `"use_native": true` and leave `bridge_url` empty. On first run, scan the QR code with WhatsApp (Linked Devices). Session is stored under your workspace (e.g. `workspace/whatsapp/`). The native channel is **optional** to keep the default binary small; build with `-tags whatsapp_native` (e.g. `make build-whatsapp-native` or `go build -tags whatsapp_native ./cmd/...`).
-- **Bridge:** Connect to an external WebSocket bridge. Set `bridge_url` (e.g. `ws://localhost:3001`) and keep `use_native` false.
+**Native (recommended):** In-process using [whatsmeow](https://github.com/tulir/whatsmeow). No separate bridge. Set `"use_native": true` and leave `bridge_url` empty. On first run, scan the QR code with WhatsApp (Linked Devices). Session is stored under your workspace (e.g. `workspace/whatsapp/`). The native channel is **optional** to keep the default binary small; build with `-tags whatsapp_native` (e.g. `make build-whatsapp-native` or `go build -tags whatsapp_native ./cmd/...`).
+
+**Bridge:** Connect to an external WebSocket bridge. Set `bridge_url` (e.g. `ws://localhost:3001`) and keep `use_native` false.
 
 **Configure (native)**
 
@@ -247,12 +235,7 @@ QQ Open Platform provides a one-click setup page for OpenClaw-compatible bots:
 
 **Manual setup**
 
-If you prefer to create the bot manually:
-
-* Log in at [QQ Open Platform](https://q.qq.com/) to register as a developer
-* Create a QQ bot — customize its avatar and name
-* Copy the **App ID** and **App Secret** from the bot settings
-* Configure as shown above and run `omnipus start`
+Log in at [QQ Open Platform](https://q.qq.com/) to register as a developer, create a QQ bot and customize its avatar and name, copy the **App ID** and **App Secret** from the bot settings, then configure as shown above and run `omnipus start`.
 
 </details>
 
@@ -262,9 +245,7 @@ If you prefer to create the bot manually:
 
 **1. Create a bot**
 
-* Go to [Open Platform](https://open.dingtalk.com/)
-* Create an internal app
-* Copy Client ID and Client Secret
+Go to [Open Platform](https://open.dingtalk.com/), create an internal app, and copy the Client ID and Client Secret.
 
 **2. Configure**
 
@@ -296,8 +277,7 @@ omnipus start
 
 **1. Prepare bot account**
 
-* Use your preferred homeserver (e.g. `https://matrix.org` or self-hosted)
-* Create a bot user and obtain its access token
+Use your preferred homeserver (e.g. `https://matrix.org` or self-hosted), create a bot user, and obtain its access token.
 
 **2. Configure**
 
@@ -331,9 +311,7 @@ For full options (`device_id`, `join_on_invite`, `group_trigger`, `placeholder`,
 
 **1. Create a LINE Official Account**
 
-- Go to [LINE Developers Console](https://developers.line.biz/)
-- Create a provider → Create a Messaging API channel
-- Copy **Channel Secret** and **Channel Access Token**
+Go to [LINE Developers Console](https://developers.line.biz/), create a provider and then a Messaging API channel, and copy the **Channel Secret** and **Channel Access Token**.
 
 **2. Configure**
 
@@ -378,8 +356,7 @@ omnipus start
 <details>
 <summary><b>WeCom (企业微信)</b></summary>
 
-Omnipus now exposes WeCom as a single AI Bot channel over WebSocket.
-No public webhook callback URL is required.
+Omnipus exposes WeCom as a single AI Bot channel over WebSocket. No public webhook callback URL is required.
 
 See [WeCom Configuration Guide](channels/wecom/README.md) for the full configuration reference and migration notes.
 
@@ -391,7 +368,7 @@ See [WeCom Configuration Guide](channels/wecom/README.md) for the full configura
 omnipus auth wecom
 ```
 
-This command shows a QR code, waits for approval in WeCom, and writes `bot_id` + `secret` into `channels.wecom`.
+This command shows a QR code, waits for approval in WeCom, and writes `bot_id` and `secret` into `channels.wecom`.
 
 **2. Configure manually if needed**
 
@@ -429,10 +406,7 @@ Omnipus connects to Feishu via WebSocket/SDK mode — no public webhook URL or c
 
 **1. Create an app**
 
-* Go to [Feishu Open Platform](https://open.feishu.cn/) and create an application
-* In the app settings, enable the **Bot** capability
-* Create a version and publish the app (the app must be published to take effect)
-* Copy the **App ID** (starts with `cli_`) and **App Secret**
+Go to [Feishu Open Platform](https://open.feishu.cn/) and create an application. In the app settings, enable the **Bot** capability. Create a version and publish the app (the app must be published to take effect). Copy the **App ID** (starts with `cli_`) and **App Secret**.
 
 **2. Configure**
 
@@ -469,10 +443,7 @@ For full options, see [Feishu Channel Configuration Guide](channels/feishu/READM
 
 **1. Create a Slack app**
 
-* Go to [Slack API](https://api.slack.com/apps) and create a new app
-* Under **OAuth & Permissions**, add bot scopes: `chat:write`, `app_mentions:read`, `im:history`, `im:read`, `im:write`
-* Install the app to your workspace
-* Copy the **Bot Token** (`xoxb-...`) and **App-Level Token** (`xapp-...`, enable Socket Mode to get this)
+Go to [Slack API](https://api.slack.com/apps) and create a new app. Under **OAuth & Permissions**, add bot scopes: `chat:write`, `app_mentions:read`, `im:history`, `im:read`, `im:write`. Install the app to your workspace. Copy the **Bot Token** (`xoxb-...`) and **App-Level Token** (`xapp-...`, enable Socket Mode to get this).
 
 **2. Configure**
 
