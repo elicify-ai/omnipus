@@ -51,7 +51,7 @@ jobs:
           custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
           custom-allsigned-prcomment: 'All contributors have signed the CLA. ✅'
           # Don't gate bots or elicify.ai maintainers (covered by employment/contract).
-          allowlist: 'dependabot[bot],dependabot-preview[bot],github-actions[bot],renovate[bot],daniel-piatkowski-ai,*[bot]'
+          allowlist: 'dependabot[bot],dependabot-preview[bot],github-actions[bot],renovate[bot],*[bot]'
           # Re-ask for a signature if the CLA changes (bump to version2, etc.).
           # signatures stay valid per-version.
           lock-pullrequest-aftermerge: false
