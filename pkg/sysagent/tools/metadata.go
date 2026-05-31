@@ -3,20 +3,25 @@
 // Copyright (c) 2026 Omnipus contributors
 //
 // These are the deterministic, self-validating accessors for an agent's
-// metadata files (SOUL.md, HEARTBEAT.md, MEMORY.md, AGENT.md). All other
-// write paths for these files are blocked by the metadata guard in
-// pkg/tools/metadata_guard.go and pkg/tools/filesystem.go.
+// metadata files (SOUL.md, HEARTBEAT.md, MEMORY.md, AGENT.md). The four generic
+// file tools (read_file, write_file, edit_file, append_file) are blocked from
+// touching these files by the metadata guard in pkg/tools/metadata_guard.go and
+// pkg/tools/filesystem.go; other write paths (e.g. system.agent.create/update,
+// the agent loader) are not routed through the guard.
 //
 // Design invariants:
 //   - Path resolution uses deps.Home + canonical filename; validateID guards
 //     path traversal.
-//   - Writes are atomic via fileutil.WriteFileAtomic with 0o644 perms,
-//     matching system.agent.create/update.
+//   - Writes use fileutil.WriteFileAtomic with 0o644 perms. The 0o644 perm
+//     matches system.agent.create/update; those paths use non-atomic
+//     os.WriteFile, so only the permission bits are shared, not the atomicity.
 //   - AGENT.md writes are validated: the content must contain a valid
 //     YAML frontmatter block (or no frontmatter at all — blank is valid).
 //     Malformed frontmatter (e.g. unclosed ---) is rejected before any I/O.
 //   - After a successful write deps.ReloadFunc() is called so the change is
 //     live, matching create/update behavior.
+//   - The canonical key→filename mapping is the single source of truth in
+//     pkg/tools (tools.CanonicalMetadataFilename), shared with the guard.
 
 package systools
 
@@ -33,23 +38,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
-
-// canonicalMetadataFilename returns the on-disk filename for a metadata key
-// (soul/heartbeat/memory/agent). Returns ("", false) for unknown keys.
-func canonicalMetadataFilename(key string) (string, bool) {
-	switch strings.ToLower(key) {
-	case "soul":
-		return "SOUL.md", true
-	case "heartbeat":
-		return "HEARTBEAT.md", true
-	case "memory":
-		return "MEMORY.md", true
-	case "agent":
-		return "AGENT.md", true
-	default:
-		return "", false
-	}
-}
 
 // validateAgentMDFrontmatter parses the frontmatter block (if any) from content
 // and returns an error when it is malformed YAML.  A file with no frontmatter
@@ -118,7 +106,7 @@ func (t *AgentReadMetadataTool) Parameters() map[string]any {
 func (t *AgentReadMetadataTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	fileKey, _ := args["file"].(string)
 	fileKey = strings.ToLower(strings.TrimSpace(fileKey))
-	filename, ok := canonicalMetadataFilename(fileKey)
+	filename, ok := tools.CanonicalMetadataFilename(fileKey)
 	if !ok {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT",
 			fmt.Sprintf("unknown file %q: must be one of soul, heartbeat, memory, agent", fileKey),
@@ -202,7 +190,7 @@ func (t *AgentWriteMetadataTool) Parameters() map[string]any {
 func (t *AgentWriteMetadataTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	fileKey, _ := args["file"].(string)
 	fileKey = strings.ToLower(strings.TrimSpace(fileKey))
-	filename, ok := canonicalMetadataFilename(fileKey)
+	filename, ok := tools.CanonicalMetadataFilename(fileKey)
 	if !ok {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT",
 			fmt.Sprintf("unknown file %q: must be one of soul, heartbeat, memory, agent", fileKey),

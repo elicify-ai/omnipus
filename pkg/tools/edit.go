@@ -68,11 +68,10 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	// Metadata guard: reject edits to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
 	// via generic file tools — callers must use agent.write_metadata instead.
+	// Skipped only for static tools that have no agent workspace concept.
 	if t.workspace != "" {
-		if absPath, err := resolveAbsPath(path, t.workspace); err == nil {
-			if _, _, matched := metadataFileMatch(absPath); matched {
-				return ErrorResult(metadataGuardError(absPath, "write"))
-			}
+		if denied := guardMetadataPath(t.workspace, path, "write"); denied != nil {
+			return denied
 		}
 	}
 
@@ -144,11 +143,10 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 
 	// Metadata guard: reject appends to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
 	// via generic file tools — callers must use agent.write_metadata instead.
+	// Skipped only for static tools that have no agent workspace concept.
 	if t.workspace != "" {
-		if absPath, err := resolveAbsPath(path, t.workspace); err == nil {
-			if _, _, matched := metadataFileMatch(absPath); matched {
-				return ErrorResult(metadataGuardError(absPath, "write"))
-			}
+		if denied := guardMetadataPath(t.workspace, path, "write"); denied != nil {
+			return denied
 		}
 	}
 
