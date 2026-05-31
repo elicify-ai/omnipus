@@ -69,11 +69,7 @@ Omnipus stores data in your configured workspace (default: `~/.omnipus/workspace
 
 ### Skill Sources
 
-By default, skills are loaded from:
-
-1. `~/.omnipus/workspace/skills` (workspace)
-2. `~/.omnipus/skills` (global)
-3. `<binary-embedded-path>/skills` (builtin, set at build time)
+By default, skills are loaded from three locations in priority order: the workspace directory (`~/.omnipus/workspace/skills`), the global directory (`~/.omnipus/skills`), and the binary-embedded path (`<binary-embedded-path>/skills`, set at build time).
 
 For advanced/test setups, you can override the builtin skills root with:
 
@@ -83,12 +79,15 @@ export OMNIPUS_BUILTIN_SKILLS=/path/to/skills
 
 ### Using Skills From Chat Channels
 
-Once skills are installed, you can inspect and force them directly from a chat channel:
+Once skills are installed, you can inspect and force them directly from a chat channel.
 
-- `/list skills` shows the installed skill names available to the current agent.
-- `/use <skill> <message>` forces a specific skill for a single request.
-- `/use <skill>` arms that skill for your next message in the same chat session.
-- `/use clear` cancels a pending skill override created by `/use <skill>`.
+`/list skills` shows the installed skill names available to the current agent.
+
+`/use <skill> <message>` forces a specific skill for a single request.
+
+`/use <skill>` arms that skill for your next message in the same chat session.
+
+`/use clear` cancels a pending skill override created by `/use <skill>`.
 
 Examples:
 
@@ -101,10 +100,9 @@ dammi le ultime news
 
 ### Unified Command Execution Policy
 
-- Generic slash commands are executed through a single path in `pkg/agent/loop.go` via `commands.Executor`.
-- Channel adapters no longer consume generic commands locally; they forward inbound text to the bus/agent path. Telegram still auto-registers supported commands at startup.
-- Unknown slash command (for example `/foo`) passes through to normal LLM processing.
-- Registered but unsupported command on the current channel (for example `/show` on WhatsApp) returns an explicit user-facing error and stops further processing.
+Generic slash commands are executed through a single path in `pkg/agent/loop.go` via `commands.Executor`. Channel adapters no longer consume generic commands locally; they forward inbound text to the bus/agent path. Telegram still auto-registers supported commands at startup.
+
+An unknown slash command (for example `/foo`) passes through to normal LLM processing. A registered but unsupported command on the current channel (for example `/show` on WhatsApp) returns an explicit user-facing error and stops further processing.
 
 ### Agent Bindings (Route messages to specific agents)
 
@@ -222,17 +220,18 @@ In other words: **channel + account form the candidate set; peer/guild/team then
 
 #### Authoring guidelines (important)
 
-- Keep exactly one clear default agent in `agents.list` (`"default": true`).
-- Put specific rules (`peer`, `guild_id`, `team_id`) and broad rules (`account_id: "*"` only) together safely; priority already guarantees specific rules win.
-- Avoid duplicate rules with the same specificity and match values. If duplicates exist, the first matching entry in the config array wins.
-- Ensure every `agent_id` exists in `agents.list`; unknown IDs silently fall back to default.
+Keep exactly one clear default agent in `agents.list` (`"default": true`). Specific rules (`peer`, `guild_id`, `team_id`) and broad rules (`account_id: "*"` only) can coexist safely because priority already guarantees specific rules win.
+
+Avoid duplicate rules with the same specificity and match values. If duplicates exist, the first matching entry in the config array wins. Ensure every `agent_id` exists in `agents.list`; unknown IDs silently fall back to default.
 
 #### Troubleshooting checklist
 
-- **Rule not taking effect?** Check `match.channel` spelling first (must be exact).
-- **Expected account-specific routing but still using default?** Verify `match.account_id` equals actual runtime account id.
-- **Wildcard catches too much traffic?** Add more specific `peer/guild/team` rules for critical paths.
-- **Unexpected default fallback?** Confirm `agent_id` exists and is not misspelled.
+| Symptom | Check |
+|---------|-------|
+| Rule not taking effect | `match.channel` spelling (must be exact) |
+| Expected account-specific routing but still using default | Verify `match.account_id` equals actual runtime account id |
+| Wildcard catches too much traffic | Add more specific `peer/guild/team` rules for critical paths |
+| Unexpected default fallback | Confirm `agent_id` exists and is not misspelled |
 
 ### 🔒 Security Sandbox
 
@@ -271,14 +270,16 @@ When `restrict_to_workspace: true`, the following tools are sandboxed:
 
 #### Additional Exec Protection
 
-Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous commands:
+Even with `restrict_to_workspace: false`, the `exec` tool blocks the following dangerous commands:
 
-* `rm -rf`, `del /f`, `rmdir /s` — Bulk deletion
-* `format`, `mkfs`, `diskpart` — Disk formatting
-* `dd if=` — Disk imaging
-* Writing to `/dev/sd[a-z]` — Direct disk writes
-* `shutdown`, `reboot`, `poweroff` — System shutdown
-* Fork bomb `:(){ :|:& };:`
+| Command pattern | Reason blocked |
+|---|---|
+| `rm -rf`, `del /f`, `rmdir /s` | Bulk deletion |
+| `format`, `mkfs`, `diskpart` | Disk formatting |
+| `dd if=` | Disk imaging |
+| Writing to `/dev/sd[a-z]` | Direct disk writes |
+| `shutdown`, `reboot`, `poweroff` | System shutdown |
+| Fork bomb `:(){ :|:& };:` | Resource exhaustion |
 
 ### File Access Control
 
@@ -300,18 +301,11 @@ Even with `restrict_to_workspace: false`, the `exec` tool blocks these dangerous
 
 #### Known Limitation: Child Processes From Build Tools
 
-The exec safety guard only inspects the command line Omnipus launches directly. It does not recursively inspect child
-processes spawned by allowed developer tools such as `make`, `go run`, `cargo`, `npm run`, or custom build scripts.
+The exec safety guard only inspects the command line Omnipus launches directly. It does not recursively inspect child processes spawned by allowed developer tools such as `make`, `go run`, `cargo`, `npm run`, or custom build scripts.
 
-That means a top-level command can still compile or launch other binaries after it passes the initial guard check. In
-practice, treat build scripts, Makefiles, package scripts, and generated binaries as executable code that needs the same
-level of review as a direct shell command.
+That means a top-level command can still compile or launch other binaries after it passes the initial guard check. In practice, treat build scripts, Makefiles, package scripts, and generated binaries as executable code that needs the same level of review as a direct shell command.
 
-For higher-risk environments:
-
-* Review build scripts before execution.
-* Prefer approval/manual review for compile-and-run workflows.
-* Run Omnipus inside a container or VM if you need stronger isolation than the built-in guard provides.
+For higher-risk environments, review build scripts before execution and prefer approval/manual review for compile-and-run workflows. Run Omnipus inside a container or VM if you need stronger isolation than the built-in guard provides.
 
 #### Error Examples
 
@@ -435,10 +429,7 @@ The subagent has access to tools (message, web_search, etc.) and can communicate
 | `enabled`  | `true`  | Enable/disable heartbeat           |
 | `interval` | `30`    | Check interval in minutes (min: 5) |
 
-**Environment variables:**
-
-* `OMNIPUS_HEARTBEAT_ENABLED=false` to disable
-* `OMNIPUS_HEARTBEAT_INTERVAL=60` to change interval
+Set `OMNIPUS_HEARTBEAT_ENABLED=false` to disable via environment variable, or `OMNIPUS_HEARTBEAT_INTERVAL=60` to change the interval.
 
 ### Providers
 
@@ -463,22 +454,13 @@ The subagent has access to tools (message, web_search, etc.) and can communicate
 
 > **What's New?** Omnipus now uses a **model-centric** configuration approach. Simply specify `vendor/model` format (e.g., `zhipu/glm-4.7`) to add new providers — **zero code changes required!**
 
-This design also enables **multi-agent support** with flexible provider selection:
-
-- **Different agents, different providers**: Each agent can use its own LLM provider
-- **Model fallbacks**: Configure primary and fallback models for resilience
-- **Load balancing**: Distribute requests across multiple endpoints
-- **Centralized configuration**: Manage all providers in one place
+This design also enables **multi-agent support** with flexible provider selection. Each agent can use its own LLM provider. You can configure primary and fallback models for resilience, distribute requests across multiple endpoints for load balancing, and manage all providers in one place through centralized configuration.
 
 #### 🔒 Security Configuration (Recommended)
 
 Omnipus supports separating sensitive data (API keys, tokens, secrets) from your main configuration by storing them in a `.security.yml` file.
 
-**Key Benefits:**
-- **Security**: Sensitive data is never in your main config file
-- **Easy sharing**: Share config.json without exposing API keys
-- **Version control**: Add `.security.yml` to `.gitignore`
-- **Flexible deployment**: Different environments can use different security files
+Sensitive data is never stored in your main config file, which makes it safe to share `config.json` without exposing API keys. Add `.security.yml` to `.gitignore` to keep it out of version control. Different environments can use different security files for flexible deployment.
 
 **Quick Setup:**
 
@@ -527,10 +509,7 @@ chmod 600 ~/.omnipus/.security.yml
 ```
 
 **How it works:**
-- Values from `.security.yml` are automatically mapped to config fields
-- No special syntax needed — just omit sensitive fields from config.json
-- If a field exists in both files, `.security.yml` value takes precedence
-- You can mix direct values in config.json with security values
+Values from `.security.yml` are automatically mapped to config fields. No special syntax is needed — just omit sensitive fields from `config.json`. If a field exists in both files, the `.security.yml` value takes precedence. You can mix direct values in `config.json` with security values.
 
 For complete documentation, see [`security_configuration.md`](security_configuration.md).
 
@@ -765,11 +744,7 @@ The old `providers` configuration is **deprecated** but still supported for back
 
 ### Provider Architecture
 
-Omnipus routes providers by protocol family:
-
-- **OpenAI-compatible**: OpenRouter, Groq, Zhipu, vLLM-style endpoints, and most others.
-- **Anthropic**: Claude-native API behavior.
-- **Codex/OAuth**: OpenAI OAuth/token authentication route.
+Omnipus routes providers by protocol family. The **OpenAI-compatible** protocol covers OpenRouter, Groq, Zhipu, vLLM-style endpoints, and most others. The **Anthropic** protocol handles Claude-native API behavior. The **Codex/OAuth** path covers the OpenAI OAuth/token authentication route.
 
 This keeps the runtime lightweight while making new OpenAI-compatible backends mostly a config operation (`api_base` + `api_key`).
 

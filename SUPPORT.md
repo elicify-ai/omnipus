@@ -27,11 +27,11 @@ A short routing guide. Pick the channel that matches what you're trying to do.
 
 ## I found a security vulnerability
 
-→ **Do not** open a public issue. See [`SECURITY.md`](SECURITY.md) for the private disclosure process. Either open a [private security advisory](https://github.com/elicify-ai/omnipus/security/advisories/new) or email **contact@elicify.ai** with subject line `[security]`.
+→ **Do not** open a public issue. See [`SECURITY.md`](SECURITY.md) for the private disclosure process. Either open a [private security advisory](https://github.com/elicify-ai/omnipus/security/advisories/new) or email **connect@elicify.ai** with subject line `[security]`.
 
 ## I want to use the Omnipus name / logo / brand
 
-→ See [`TRADEMARKS.md`](TRADEMARKS.md). Most use cases (articles, integrations, unmodified redistribution) don't need permission. Commercial use of the brand does — email **contact@elicify.ai**.
+→ See [`TRADEMARKS.md`](TRADEMARKS.md). Most use cases (articles, integrations, unmodified redistribution) don't need permission. Commercial use of the brand does — email **connect@elicify.ai**.
 
 ## I want to contribute code
 
@@ -43,7 +43,7 @@ A short routing guide. Pick the channel that matches what you're trying to do.
 
 ## Anything else (partnerships, press, commercial inquiries)
 
-→ **contact@elicify.ai**
+→ **connect@elicify.ai**
 
 ---
 

@@ -76,9 +76,7 @@ The default-agent fall-back triggers a `WARN` log line if you have custom agents
 
 ## Wildcards
 
-- `account_id: "*"` matches any account on the channel
-- `channel: "*"` matches any channel (use only for the catch-all binding)
-- Field omission (e.g. no `peer` block) means "don't constrain on this dimension"
+`account_id: "*"` matches any account on the channel. `channel: "*"` matches any channel and should only appear on the catch-all binding at the end of the list. Omitting a field entirely (e.g. no `peer` block) means "don't constrain on this dimension".
 
 ## Per-binding access control
 
@@ -129,12 +127,7 @@ Mia's prompt knows about Jim / Ava / Ray / Max and uses the `handoff` tool when 
 
 ## Mid-session hand-off (the second layer)
 
-Once an agent owns a message, it can call the `handoff` tool to transfer control. The tool:
-
-- Accepts a target `agent_id` and an optional short brief
-- Atomically switches the session's active agent
-- Hands the receiver the full transcript so it sees what came before
-- Returns immediately (12 ms in the live demo)
+Once an agent owns a message, it can call the `handoff` tool to transfer control. It accepts a target `agent_id` and an optional short brief, atomically switches the session's active agent, hands the receiver the full transcript so it sees what came before, and returns immediately (12 ms in the live demo).
 
 The receiving agent's first turn sees a tool-call entry naming the handoff and the brief — the agent can ack, ask scoping questions, or start work. The chat UI shows the handoff chip in line with the conversation, so the user understands who they're talking to at every point.
 
@@ -148,7 +141,10 @@ A typical multi-channel deployment has one Omnipus binary fielding messages from
 
 ## See also
 
-- [pkg/channels/README.md](../pkg/channels/README.md) — per-channel config (allow_from, dm_policy, group_policy)
-- [tools-reference.md](tools-reference.md) — `handoff`, `return_to_default`, and the rest of the agent-tools API
-- [memory.md](memory.md) — what survives a hand-off (the transcript) and what doesn't (per-agent memory)
-- [observability.md](observability.md) — every routing decision is logged with its `matched_by` value
+[pkg/channels/README.md](../pkg/channels/README.md) covers per-channel config (`allow_from`, `dm_policy`, `group_policy`).
+
+[tools-reference.md](tools-reference.md) documents `handoff`, `return_to_default`, and the rest of the agent-tools API.
+
+[memory.md](memory.md) explains what survives a hand-off (the transcript) and what doesn't (per-agent memory).
+
+[observability.md](observability.md) describes how every routing decision is logged with its `matched_by` value.

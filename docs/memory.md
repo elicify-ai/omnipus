@@ -12,40 +12,50 @@ All three tools are ordinary builtins registered on the central tool registry. T
 
 Persists a single fact, decision, reference, or lesson to `MEMORY.md`. Implementation: `pkg/tools/memory.go:117-154`.
 
-- **Args:** `content` (string, required, ≤ 4096 runes) and `category` (string, required, one of `key_decision | reference | lesson_learned`).
-- **What lands on disk:** appended to `<agent_workspace>/memory/MEMORY.md` as a structured block:
-  ```
-  <!-- next -->
+**Args:** `content` (string, required, ≤ 4096 runes) and `category` (string, required, one of `key_decision | reference | lesson_learned`).
 
-  <!-- ts=2026-05-21T14:30:00.000Z cat=key_decision -->
-  <the content>
-  ```
-  The leading `<!-- next -->` separator is only written when the file is non-empty; the first entry omits it. Writes go through `MemoryStore.AppendLongTerm` (`pkg/agent/memory.go:148-209`) which acquires an advisory `flock`, opens with `O_APPEND`, calls `f.Sync()`, and rejects content containing `<!--` (to prevent header forgery) or NUL bytes (silently stripped).
-- **Audit:** every call emits a `memory.remember` audit entry with the content's SHA-256 (never the raw content), byte count, category, and outcome (`ok` / `error_invalid` / `error_io`).
-- **Rate limits** (`pkg/tools/memory_rate_limit.go`): a sliding-window limiter gates writes per-agent and per-caller, both windows 1 minute, defaults **60 writes/min per agent** and **600 writes/min per caller** (`PerAgentLimit` / `PerCallerLimit` in `MemoryRateLimitConfig`, defaults applied at construction: `pkg/tools/memory_rate_limit.go:118-135`). Caller identity is `channel:chat_id` (e.g. `telegram:123456789`, `rest:user-x`); empty identities share a single `<anonymous>` bucket. A rejection emits a `memory.rate_limited` audit entry with `Decision=deny`, `Scope=agent|caller`, `retry_after_seconds`, and the caller key, then returns an `IsError: true` result with a parseable `error_kind="rate_limited"` suffix.
+**What lands on disk:** the entry is appended to `<agent_workspace>/memory/MEMORY.md` as a structured block:
+
+```
+<!-- next -->
+
+<!-- ts=2026-05-21T14:30:00.000Z cat=key_decision -->
+<the content>
+```
+
+The leading `<!-- next -->` separator is only written when the file is non-empty; the first entry omits it. Writes go through `MemoryStore.AppendLongTerm` (`pkg/agent/memory.go:148-209`) which acquires an advisory `flock`, opens with `O_APPEND`, calls `f.Sync()`, and rejects content containing `<!--` (to prevent header forgery) or NUL bytes (silently stripped).
+
+**Audit:** every call emits a `memory.remember` audit entry with the content's SHA-256 (never the raw content), byte count, category, and outcome (`ok` / `error_invalid` / `error_io`).
+
+**Rate limits** (`pkg/tools/memory_rate_limit.go`): a sliding-window limiter gates writes per-agent and per-caller, both windows 1 minute, defaults **60 writes/min per agent** and **600 writes/min per caller** (`PerAgentLimit` / `PerCallerLimit` in `MemoryRateLimitConfig`, defaults applied at construction: `pkg/tools/memory_rate_limit.go:118-135`). Caller identity is `channel:chat_id` (e.g. `telegram:123456789`, `rest:user-x`); empty identities share a single `<anonymous>` bucket. A rejection emits a `memory.rate_limited` audit entry with `Decision=deny`, `Scope=agent|caller`, `retry_after_seconds`, and the caller key, then returns an `IsError: true` result with a parseable `error_kind="rate_limited"` suffix.
 
 ### `recall_memory`
 
 Reads back from durable memory. Implementation: `pkg/tools/memory.go:262-322`. Backed by the narrower `MemorySearcher` interface — read tools have no path to write capability even via type coercion.
 
-- **Args:** `query` (string, required, literal substring; **no regex**) and `limit` (number, default 20, max 50).
-- **Scope:** searches three sources from the agent's own workspace and concatenates them newest-first:
-  1. `memory/MEMORY.md` long-term entries (parsed by `ReadLongTermEntries`)
-  2. `memory/sessions/LAST_SESSION.md` (as one synthetic entry, category `last_session`, timestamp = file mtime)
-  3. retros from the last 30 days under `memory/sessions/<YYYY-MM-DD>/` (category `retro`)
-- **Match rule:** case-insensitive substring on either the entry content or the category name. Duplicates with the same timestamp are dropped.
-- **Result shape:** plain text, one entry per block, separated by `\n\n---\n\n`. Each entry is formatted `[<ISO8601> | <category>]\n<content>`. Empty results return the literal string `"no matching entries"`.
-- **No audit.** Read-side is intentionally clean (FR-014).
+**Args:** `query` (string, required, literal substring; **no regex**) and `limit` (number, default 20, max 50).
+
+**Scope:** searches three sources from the agent's own workspace and concatenates them newest-first: long-term entries from `memory/MEMORY.md` (parsed by `ReadLongTermEntries`); `memory/sessions/LAST_SESSION.md` (as one synthetic entry, category `last_session`, timestamp = file mtime); and retros from the last 30 days under `memory/sessions/<YYYY-MM-DD>/` (category `retro`).
+
+**Match rule:** case-insensitive substring on either the entry content or the category name. Duplicates with the same timestamp are dropped.
+
+**Result shape:** plain text, one entry per block, separated by `\n\n---\n\n`. Each entry is formatted `[<ISO8601> | <category>]\n<content>`. Empty results return the literal string `"no matching entries"`.
+
+There is no audit on the read side — it is intentionally clean (FR-014).
 
 ### `retrospective`
 
 Explicit retro from inside a turn — used when the agent wants to commit a retro before session-end auto-recap fires. Implementation: `pkg/tools/memory.go:384-426`.
 
-- **Args:** `went_well` (array of strings, required) and `needs_improvement` (array of strings, required). At least one of the two must be non-empty.
-- **What lands on disk:** appended to `memory/sessions/<YYYY-MM-DD>/<sessionID>_retro.md` via `MemoryStore.AppendRetro` (`pkg/agent/memory.go:485-536`). The `Trigger` field is hardcoded to `joined` for explicit tool calls (vs. `explicit` / `lazy` / `idle` / `bootstrap` for the auto-recap paths). `Recap` is left empty — only auto-recap fills that.
-- **Session ID fallback:** if the call happens outside a session context, the tool synthesizes `session-<unix_milli>` so the retro still lands somewhere.
-- **Rate limits:** shares the same per-agent / per-caller buckets as `remember` — an agent can't trivially work around the limit by alternating verbs.
-- **Audit:** `memory.retrospective` entries record `went_well_count` / `needs_improve_count` and outcome; rejections emit `memory.rate_limited` exactly as `remember` does.
+**Args:** `went_well` (array of strings, required) and `needs_improvement` (array of strings, required). At least one of the two must be non-empty.
+
+**What lands on disk:** the retro is appended to `memory/sessions/<YYYY-MM-DD>/<sessionID>_retro.md` via `MemoryStore.AppendRetro` (`pkg/agent/memory.go:485-536`). The `Trigger` field is hardcoded to `joined` for explicit tool calls (vs. `explicit` / `lazy` / `idle` / `bootstrap` for the auto-recap paths). `Recap` is left empty — only auto-recap fills that.
+
+**Session ID fallback:** if the call happens outside a session context, the tool synthesizes `session-<unix_milli>` so the retro still lands somewhere.
+
+**Rate limits:** shares the same per-agent / per-caller buckets as `remember` — an agent can't trivially work around the limit by alternating verbs.
+
+**Audit:** `memory.retrospective` entries record `went_well_count` / `needs_improve_count` and outcome; rejections emit `memory.rate_limited` exactly as `remember` does.
 
 The auto-recap that fires at session close (next section) writes the **same retro format** but via the agent loop, not the `retrospective` tool. The two paths converge at `MemoryStore.AppendRetro`.
 
@@ -53,29 +63,33 @@ The auto-recap that fires at session close (next section) writes the **same retr
 
 `AgentLoop.CloseSession(sessionID, trigger)` is the entry point. Triggers are `explicit` (the SPA's "End session" button), `lazy` (next-turn check after idle threshold), `idle` (idle-ticker fired), and `bootstrap` (post-restart sweep). Implementation: `pkg/agent/session_end.go:30-46`.
 
-The flow if `Agents.Defaults.AutoRecapEnabled` is true:
+The flow below applies when `Agents.Defaults.AutoRecapEnabled` is true.
 
-1. **Idempotency claim** — `claimedCloseSessions` is a `sync.Map`; only the first caller for a given session ID proceeds. Duplicates emit `skipped_already_claimed` and return (`session_end.go:36-41`).
-2. **Spawn goroutine** with a top-level `recover()` so a panic in any subsystem (provider, JSON parse, file I/O) can't kill the gateway (`session_end.go:51-61`).
-3. **Resolve owning agent** via `AgentForSession` — reads session meta, prefers `ActiveAgentID` (v2 multi-agent) over the legacy `AgentID`. If the agent is gone, write a heuristic fallback retro and stop.
-4. **Read transcript** from `sharedSessionStore.ReadTranscript(sessionID)`.
-5. **Filter to user turns** (FR-028): drop empty messages, `[SubTurn Result]`-prefixed lines, and the literal interrupt-hint string. Count tool calls in passing for the fallback retro.
-6. **Truncate to ~2000 tokens** (~8000 runes) keeping the **tail** of the conversation. A `[history truncated for summarisation]\n\n` marker is prepended when truncation fires (`session_end.go:109-117`).
-7. **Resolve recap model** — prefer `Agents.Defaults.Routing.LightModel`; fall back to the agent's primary model. The light model is configured by the operator; on a typical setup it's something cheap like `anthropic/claude-3.5-haiku`.
-8. **LLM call** with cost-guard options (`session_end.go:136-148`):
-   ```go
-   opts := map[string]any{
-       "max_tokens":        250,
-       "extended_thinking": false,
-       "extra_body": map[string]any{
-           "reasoning": map[string]any{"exclude": true},
-       },
-   }
-   ```
-   Context timeout: 60 s. The recap prompt asks for exactly `{"recap": "...", "went_well": [...], "needs_improvement": [...], "worth_remembering": [...]}`.
-9. **Parse JSON.** On success: `memory.WriteLastSession(parsed.Recap)` writes `memory/sessions/LAST_SESSION.md` (atomically via `fileutil.WriteFileAtomic`), and `memory.AppendRetro(sessionID, retro)` writes the day-bucketed retro with `Trigger = RecapTrigger(trigger)` and `Fallback = false`. Audit: `memory.auto_recap` with `outcome=success`.
-10. **On JSON parse failure or LLM error:** `writeHeuristicFallbackRetroWithCount` builds a deterministic recap (`"Session <id> ended. Turns: N. Tool calls: M. Fallback reason: <reason>."`) and writes both `LAST_SESSION.md` and a fallback retro with `Fallback=true` and the `FallbackReason` set (`session_end.go:275-325`). Reasons include `json_parse_error`, `llm_timeout`, `llm_rate_limit`, `llm_unauthorized`, `llm_error`, `agent_deleted`, `no_session_store`, `no_memory_store`, `transcript_read_error: <err>`.
-11. **Bootstrap pass** — `BootstrapRecapPass` (`session_end.go:412-540`) runs on gateway start. It walks the gateway-wide sessions directory, skips anything younger than 30 minutes or already represented by a `<sessionID>_retro.md` in the owning agent's workspace (`agentSessionHasRetro`, `session_end.go:546-572`), and enqueues `CloseSession(id, "bootstrap")` for the rest. Throttled to `GetBootstrapRecapMaxPerMinute` starts per minute and capped at `GetBootstrapRecapDailyBudgetUSD` (rough estimate `1e-5 USD` per recap).
+First, `claimedCloseSessions` (a `sync.Map`) is checked for idempotency — only the first caller for a given session ID proceeds. Duplicates emit `skipped_already_claimed` and return (`session_end.go:36-41`). A goroutine is then spawned with a top-level `recover()` so a panic in any subsystem (provider, JSON parse, file I/O) can't kill the gateway (`session_end.go:51-61`).
+
+The owning agent is resolved via `AgentForSession`, which reads session meta and prefers `ActiveAgentID` (v2 multi-agent) over the legacy `AgentID`. If the agent is gone, a heuristic fallback retro is written and processing stops.
+
+The session transcript is read from `sharedSessionStore.ReadTranscript(sessionID)`. User turns are filtered (FR-028): empty messages, `[SubTurn Result]`-prefixed lines, and the literal interrupt-hint string are dropped. Tool calls are counted in passing for the fallback retro. The filtered transcript is then truncated to ~2000 tokens (~8000 runes) keeping the **tail** of the conversation. When truncation fires, a `[history truncated for summarisation]\n\n` marker is prepended (`session_end.go:109-117`).
+
+The recap model is resolved by preferring `Agents.Defaults.Routing.LightModel` and falling back to the agent's primary model. The light model is configured by the operator; on a typical setup it's something cheap like `anthropic/claude-3.5-haiku`. The LLM call uses cost-guard options (`session_end.go:136-148`):
+
+```go
+opts := map[string]any{
+    "max_tokens":        250,
+    "extended_thinking": false,
+    "extra_body": map[string]any{
+        "reasoning": map[string]any{"exclude": true},
+    },
+}
+```
+
+Context timeout: 60 s. The recap prompt asks for exactly `{"recap": "...", "went_well": [...], "needs_improvement": [...], "worth_remembering": [...]}`.
+
+On success, `memory.WriteLastSession(parsed.Recap)` writes `memory/sessions/LAST_SESSION.md` (atomically via `fileutil.WriteFileAtomic`), and `memory.AppendRetro(sessionID, retro)` writes the day-bucketed retro with `Trigger = RecapTrigger(trigger)` and `Fallback = false`. The audit entry is `memory.auto_recap` with `outcome=success`.
+
+On JSON parse failure or LLM error, `writeHeuristicFallbackRetroWithCount` builds a deterministic recap (`"Session <id> ended. Turns: N. Tool calls: M. Fallback reason: <reason>."`) and writes both `LAST_SESSION.md` and a fallback retro with `Fallback=true` and the `FallbackReason` set (`session_end.go:275-325`). Reasons include `json_parse_error`, `llm_timeout`, `llm_rate_limit`, `llm_unauthorized`, `llm_error`, `agent_deleted`, `no_session_store`, `no_memory_store`, `transcript_read_error: <err>`.
+
+`BootstrapRecapPass` (`session_end.go:412-540`) runs on gateway start. It walks the gateway-wide sessions directory, skips anything younger than 30 minutes or already represented by a `<sessionID>_retro.md` in the owning agent's workspace (`agentSessionHasRetro`, `session_end.go:546-572`), and enqueues `CloseSession(id, "bootstrap")` for the rest. It is throttled to `GetBootstrapRecapMaxPerMinute` starts per minute and capped at `GetBootstrapRecapDailyBudgetUSD` (rough estimate `1e-5 USD` per recap).
 
 The `worth_remembering` array returned by the LLM is parsed but **not** auto-written to `MEMORY.md` today — only `recap`, `went_well`, and `needs_improvement` reach disk. Promoting `worth_remembering` to long-term memory is part of the v0.3 Dreamcatcher pass.
 
@@ -143,13 +157,21 @@ It's overwritten — there is only ever one. `GetMemoryContext` injects this fil
 
 ## Concurrency and safety
 
-**Sharded mutex pool.** `JSONLStore` (the per-session transcript backend) keeps 64 mutexes in a fixed array and maps each session key to a shard via FNV-1a hash (`pkg/memory/jsonl.go:21-77`). Memory usage is O(1) regardless of total session count — important for a long-running daemon. Each shard mutex covers all reads and writes on its bucket of session files, which serializes appends, history reads, summary updates, and truncation against each other.
+### Sharded mutex pool
 
-**Atomic writes.** Every replace-the-whole-file write (`MEMORY.md` snapshots, `LAST_SESSION.md`, JSONL rewrites, meta.json) goes through `fileutil.WriteFileAtomic` — write to a temp file in the same directory, `fsync`, `rename` over the target. A crash mid-write leaves either the old or the new file intact, never a torn one. JSONL appends use `O_APPEND` with an explicit `f.Sync()` before close (`jsonl.go:233-256`) so an appended message is on disk before the call returns.
+`JSONLStore` (the per-session transcript backend) keeps 64 mutexes in a fixed array and maps each session key to a shard via FNV-1a hash (`pkg/memory/jsonl.go:21-77`). Memory usage is O(1) regardless of total session count — important for a long-running daemon. Each shard mutex covers all reads and writes on its bucket of session files, which serializes appends, history reads, summary updates, and truncation against each other.
 
-**Advisory flock on Linux/macOS.** `fileutil.WithFlock` (`pkg/fileutil/flock_unix.go:35-58`) opens the target with `O_RDWR|O_CREATE`, takes an exclusive `unix.LOCK_EX` flock, runs the callback, and joins any unlock/close errors with the callback's. `AppendLongTerm` and `AppendRetro` both run inside `WithFlock` — the flock is defense-in-depth against a second process appending to the same file from outside the gateway (e.g. a sidecar tool, an editor).
+### Atomic writes
 
-**Windows.** `WithFlock` on Windows is a pass-through that emits a one-time `slog.Warn` and calls the function directly (`pkg/fileutil/flock_windows.go:34-40`). The reason is that an open Windows handle on a file blocks `WriteFileAtomic` from renaming the temp over it — graceful degradation per hard constraint 4. Concurrency safety on Windows relies on the single-writer goroutine pattern in the store layer rather than OS-level locks.
+Every replace-the-whole-file write (`MEMORY.md` snapshots, `LAST_SESSION.md`, JSONL rewrites, meta.json) goes through `fileutil.WriteFileAtomic` — write to a temp file in the same directory, `fsync`, `rename` over the target. A crash mid-write leaves either the old or the new file intact, never a torn one. JSONL appends use `O_APPEND` with an explicit `f.Sync()` before close (`jsonl.go:233-256`) so an appended message is on disk before the call returns.
+
+### Advisory flock on Linux/macOS
+
+`fileutil.WithFlock` (`pkg/fileutil/flock_unix.go:35-58`) opens the target with `O_RDWR|O_CREATE`, takes an exclusive `unix.LOCK_EX` flock, runs the callback, and joins any unlock/close errors with the callback's. `AppendLongTerm` and `AppendRetro` both run inside `WithFlock` — the flock is defense-in-depth against a second process appending to the same file from outside the gateway (e.g. a sidecar tool, an editor).
+
+### Windows
+
+`WithFlock` on Windows is a pass-through that emits a one-time `slog.Warn` and calls the function directly (`pkg/fileutil/flock_windows.go:34-40`). The reason is that an open Windows handle on a file blocks `WriteFileAtomic` from renaming the temp over it — graceful degradation per hard constraint 4. Concurrency safety on Windows relies on the single-writer goroutine pattern in the store layer rather than OS-level locks.
 
 ## What's not implemented yet
 

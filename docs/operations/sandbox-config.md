@@ -145,14 +145,24 @@ Field semantics are in `pkg/sandbox/sandbox.go:733-769`. `connect_ports_count` w
 
 ## Boot failure modes
 
-The exit-code contract is in `cmd/omnipus/internal/gateway/command.go:34-36` and `pkg/gateway/sandbox_apply.go:50-54`:
+The exit-code contract is in `cmd/omnipus/internal/gateway/command.go:34-36` and `pkg/gateway/sandbox_apply.go:50-54`.
 
-- **Exit 78 (`EX_CONFIG`)** — Apply or Install failed on a kernel that claims Landlock support (`linuxApplier` type assertion succeeded). The error path in `pkg/gateway/sandbox_apply.go:389-406` returns a `SandboxBootError` and the gateway main loop exits before any HTTP listener binds. External TCP probes see `ECONNREFUSED`, not HTTP 503.
-- **Exit 1** — Any other boot failure (credential unlock, config load, port already in use, etc.).
-- **Exit 2** — Usage error (invalid `--sandbox` value).
+### Exit 78 (`EX_CONFIG`)
+
+Apply or Install failed on a kernel that claims Landlock support (`linuxApplier` type assertion succeeded). The error path in `pkg/gateway/sandbox_apply.go:389-406` returns a `SandboxBootError` and the gateway main loop exits before any HTTP listener binds. External TCP probes see `ECONNREFUSED`, not HTTP 503.
+
+### Exit 1
+
+Any other boot failure (credential unlock, config load, port already in use, etc.).
+
+### Exit 2
+
+Usage error (invalid `--sandbox` value).
 
 Graceful degradation is **not** a failure: an operator who asks for `enforce` on a pre-5.13 kernel gets a `FallbackBackend` and a `sandbox.degraded` log entry, and boot continues to completion.
 
 ## Restart-required UX
 
-The SPA Sandbox section (`src/components/settings/SandboxSection.tsx`) compares each editable field to the running value reported by `/api/v1/security/sandbox-status` and renders a "Restart required" pill next to any field that diverges. The mode toggle, allowed-paths editor, and SSRF preset all participate. Saving writes to disk via the existing config-update endpoint but does **not** trigger any in-process reload — the operator must run `systemctl restart omnipus` (or the equivalent for their deployment) for the new policy to take effect.
+The SPA Sandbox section (`src/components/settings/SandboxSection.tsx`) compares each editable field to the running value reported by `/api/v1/security/sandbox-status` and renders a "Restart required" pill next to any field that diverges. The mode toggle, allowed-paths editor, and SSRF preset all participate.
+
+Saving writes to disk via the existing config-update endpoint but does **not** trigger any in-process reload — the operator must run `systemctl restart omnipus` (or the equivalent for their deployment) for the new policy to take effect.

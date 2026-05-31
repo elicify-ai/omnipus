@@ -5,11 +5,12 @@ your AI team. Every step has something concrete to do. Let's go.
 
 ## 1. What you need
 
-- **A machine or Docker.** A Linux or macOS computer, or anywhere you can run Docker.
-- **One LLM API key.** This is the AI "brain" behind your agents. The easiest first
-  pick is **[OpenRouter](providers.md)** or **OpenAI** — sign up and copy an API key.
-  Prefer fully local and free? Use **[Ollama](providers.md)**, which runs models on
-  your own machine with no key at all.
+You need a machine or Docker — a Linux or macOS computer, or anywhere you can run Docker.
+
+You also need one LLM API key. This is the AI "brain" behind your agents. The easiest first
+pick is **[OpenRouter](providers.md)** or **OpenAI** — sign up and copy an API key.
+Prefer fully local and free? Use **[Ollama](providers.md)**, which runs models on
+your own machine with no key at all.
 
 That's it. See **[providers.md](providers.md)** for the full list of 35+ supported providers.
 
@@ -86,18 +87,20 @@ the switch, and Jim picks up the thread without you repeating yourself.
 
 ## 6. Try the specialists
 
-You can also work with a specialist directly. A few to copy and paste:
+You can also work with a specialist directly.
 
-- **Ask Ray to research something:**
-  > **Ray, what are the top 3 open-source note-taking apps right now? Include links.**
+### Ask Ray to research something
 
-  Ray searches the web and answers with citations — he won't bluff.
+> **Ray, what are the top 3 open-source note-taking apps right now? Include links.**
 
-  ![Ray running a research task](marketing/screenshots/14-ray-research-demo.png)
-  *Ray returns answers backed by sources.*
+Ray searches the web and answers with citations — he won't bluff.
 
-- **Ask Jim to create a file or scope a task:**
-  > **Jim, create a file called notes.md with a short to-do list for launching a blog.**
+![Ray running a research task](marketing/screenshots/14-ray-research-demo.png)
+*Ray returns answers backed by sources.*
+
+### Ask Jim to create a file or scope a task
+
+> **Jim, create a file called notes.md with a short to-do list for launching a blog.**
 
 **Want to pick an agent on purpose?** Use the **agent picker** at the top of the chat
 to switch teammates mid-conversation, any time.
@@ -119,8 +122,12 @@ When she's done, it shows up in your roster alongside the others.
 
 ## 8. Where to go next
 
-- **Connect a chat channel** (talk to your agents from Telegram, Discord, and more): **[chat-apps.md](chat-apps.md)**
-- **Prefer the terminal?** **[Using the CLI](using-omnipus-cli.md)**
-- **Full tour of the web app:** **[Using the web app](using-omnipus-ui.md)**
-- **The mental model behind it all:** **[How Omnipus works](concepts.md)**
-- **Something not working?** **[Troubleshooting](troubleshooting.md)**
+**Connect a chat channel** (talk to your agents from Telegram, Discord, and more): **[chat-apps.md](chat-apps.md)**
+
+**Prefer the terminal?** **[Using the CLI](using-omnipus-cli.md)**
+
+**Full tour of the web app:** **[Using the web app](using-omnipus-ui.md)**
+
+**The mental model behind it all:** **[How Omnipus works](concepts.md)**
+
+**Something not working?** **[Troubleshooting](troubleshooting.md)**

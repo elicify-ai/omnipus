@@ -1,9 +1,10 @@
 # Observability: session history and the event stream
 
-Every action an Omnipus agent takes is visible. There are two complementary surfaces:
+Every action an Omnipus agent takes is visible. There are two complementary surfaces.
 
-- **Session transcript** — the persistent, on-disk JSONL of everything that happened in a conversation. Survives restarts, replays at any time, drives the SPA's chat history.
-- **Event stream** — the live runtime feed of typed events emitted as the agent loop runs. Powers the SPA in real time, drives subprocess hooks, and feeds the audit log.
+The **session transcript** is the persistent, on-disk JSONL of everything that happened in a conversation. It survives restarts, replays at any time, and drives the SPA's chat history.
+
+The **event stream** is the live runtime feed of typed events emitted as the agent loop runs. It powers the SPA in real time, drives subprocess hooks, and feeds the audit log.
 
 You don't enable these. They run on every install, by default, with no extra services.
 
@@ -78,13 +79,17 @@ While a turn is running, the agent loop emits typed events into the in-process e
 
 ### Who consumes the events
 
-Three consumers in the runtime:
+#### WebSocket subscribers (SPA chat view)
 
-1. **WebSocket subscribers (SPA chat view).** Every event is fanned out to connected clients. The chat UI shows the live progression: "Tool call: web_search" → "Tool call complete" → "LLM response streaming" → "Turn end". This is what gives the chat its real-time feel.
+Every event is fanned out to connected clients. The chat UI shows the live progression: "Tool call: web_search" → "Tool call complete" → "LLM response streaming" → "Turn end". This is what gives the chat its real-time feel.
 
-2. **Subprocess hooks.** External processes can subscribe to the same event feed via JSON-RPC over stdin/stdout. Every event becomes a `hook.event` notification. Authors observe (read-only), or in-process hooks can intercept and rewrite. See [hooks/README.md](hooks/README.md). The wire format uses the canonical string name of each `EventKind` so authors don't carry private int → name tables (per issue #164).
+#### Subprocess hooks
 
-3. **Audit log.** A subset of security-relevant events (tool calls, denials, sandbox state changes, cancel events, rate limits) are mirrored into `~/.omnipus/system/audit.jsonl` with HMAC chain integrity (v0.2 hardening, #155 item 1). See [security_configuration.md](security_configuration.md).
+External processes can subscribe to the same event feed via JSON-RPC over stdin/stdout. Every event becomes a `hook.event` notification. Authors observe (read-only), or in-process hooks can intercept and rewrite. See [hooks/README.md](hooks/README.md). The wire format uses the canonical string name of each `EventKind` so authors don't carry private int → name tables (per issue #164).
+
+#### Audit log
+
+A subset of security-relevant events (tool calls, denials, sandbox state changes, cancel events, rate limits) are mirrored into `~/.omnipus/system/audit.jsonl` with HMAC chain integrity (v0.2 hardening, #155 item 1). See [security_configuration.md](security_configuration.md).
 
 ### Event payload shape
 
@@ -125,6 +130,8 @@ Everything is captured. Nothing is silent. An operator can audit any turn after 
 
 ## See also
 
-- [hooks/README.md](hooks/README.md) — how to write a subprocess hook that consumes the event stream
-- [security_configuration.md](security_configuration.md) — audit log + HMAC chain + sensitive-data redaction
-- [memory.md](memory.md) — how transcripts become memory via auto-recap at session close
+[hooks/README.md](hooks/README.md) explains how to write a subprocess hook that consumes the event stream.
+
+[security_configuration.md](security_configuration.md) covers the audit log, HMAC chain, and sensitive-data redaction.
+
+[memory.md](memory.md) describes how transcripts become memory via auto-recap at session close.
