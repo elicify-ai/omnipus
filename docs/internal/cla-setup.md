@@ -22,28 +22,30 @@ one-time setup a maintainer must do.
 
 ## One-time setup (maintainer)
 
-### Step 1 — Create a fine-grained Personal Access Token (scoped to this repo only)
+### Step 1 — Seed the signatures branch (one-time)
 
-1. Go to **https://github.com/settings/personal-access-tokens/new**
-2. **Token name:** `omnipus-cla-signatures`
-3. **Resource owner:** `elicify-ai`
-4. **Expiration:** 1 year (set a reminder to rotate).
-5. **Repository access:** *Only select repositories* → choose **`elicify-ai/omnipus`**.
-6. **Permissions → Repository permissions → Contents:** **Read and write**.
-   (Leave everything else as "No access".)
-7. Click **Generate token** and copy it.
+Signatures live on a dedicated `cla-signatures` branch in this same repo. Create it
+once with an empty ledger so the action only ever has to *update* the file:
 
-This token can only write contents to the one repo — nothing else, no other repos,
-no other orgs.
+```bash
+git switch --orphan cla-signatures
+git rm -rf . >/dev/null 2>&1 || true
+mkdir -p signatures/version1
+printf '{"signedContributors":[]}' > signatures/version1/cla.json
+git add signatures/version1/cla.json
+git commit -m "chore(cla): initialize empty CLA signatures ledger"
+git push -u origin cla-signatures
+git switch -   # back to your previous branch
+```
 
-### Step 2 — Add it as a repository secret
+**No Personal Access Token or repository secret is required.** The workflow grants its
+built-in `GITHUB_TOKEN` `contents: write`, which commits to this branch directly — and
+it works for fork PRs too, because `pull_request_target` runs in the base repo's
+context. (Avoiding a fine-grained org PAT also removes an expiry/approval failure mode:
+on an org-owned repo an unapproved PAT silently lacks write and the action fails with
+"Resource not accessible by integration".)
 
-1. Go to **https://github.com/elicify-ai/omnipus/settings/secrets/actions/new**
-2. **Name:** `PERSONAL_ACCESS_TOKEN`
-3. **Secret:** paste the token from Step 1.
-4. **Add secret.**
-
-### Step 3 — Let the check run once, then require it
+### Step 2 — Let the check run once, then require it
 
 1. Open (or wait for) any pull request. The CLA check will run and a status check
    named **`CLA Assistant`** / **`license/cla`** appears on the PR.
@@ -70,8 +72,8 @@ re-sign the new terms:
 
 ## Notes
 
-- The `cla-signatures` branch is created automatically on first run; do not delete
-  it — it is the signature record.
+- The `cla-signatures` branch holds the signature record (seeded in Step 1); do not
+  delete it.
 - The workflow uses `pull_request_target`, which runs in the context of the base
   repo so the token and secrets are available even for fork PRs. The action only
   reads PR metadata and writes the signatures file; it does not run contributor
