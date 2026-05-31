@@ -5,7 +5,7 @@ import { useExternalStoreRuntime } from "@assistant-ui/react";
 import type { ThreadMessageLike, AppendMessage } from "@assistant-ui/react";
 import { useChatStore } from "@/store/chat";
 import type { ChatMessage } from "@/store/chat";
-import type { ToolCall } from "@/lib/api";
+import type { AssistantMessage, ToolCall } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
 
 type StoreToolCall = ToolCall & { call_id: string }; // not-wire-format: internal Zustand store type enriching ToolCall with a required call_id; never emitted to the backend
@@ -169,24 +169,14 @@ function buildContentParts(
   }
 }
 
-function buildMessageStatus(msg: ChatMessage): ThreadMessageLike["status"] {
-  // #3: discriminate by role so the compiler catches any unhandled role/status combination.
-  switch (msg.role) {
-    case "assistant": {
-      if (msg.isStreaming) return { type: "running" };
-      if (msg.status === "error") return { type: "incomplete", reason: "error" };
-      if (msg.status === "interrupted") return { type: "incomplete", reason: "cancelled" };
-      return { type: "complete", reason: "stop" };
-    }
-    case "user":
-      // User messages are never surfaced through AssistantUI's status system — this
-      // function is only called for assistant messages (see convertMessage below).
-      // Returning complete is safe; error-state rendering is handled by
-      // VirtualUserMessageRow / UserMessageRetryButton in ChatScreen.tsx.
-      return { type: "complete", reason: "stop" };
-    case "system":
-      return { type: "complete", reason: "stop" };
-  }
+// buildMessageStatus is only ever called for assistant messages (see convertMessage below).
+// Tightening the parameter to AssistantMessage makes the role-narrowing real at the call
+// site and removes the dead user/system arms that were typed but never reachable.
+function buildMessageStatus(msg: AssistantMessage & { isStreaming?: boolean }): ThreadMessageLike["status"] {
+  if (msg.isStreaming) return { type: "running" };
+  if (msg.status === "error") return { type: "incomplete", reason: "error" };
+  if (msg.status === "interrupted") return { type: "incomplete", reason: "cancelled" };
+  return { type: "complete", reason: "stop" };
 }
 
 function convertMessage(

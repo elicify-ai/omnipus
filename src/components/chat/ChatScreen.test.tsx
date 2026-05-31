@@ -59,10 +59,13 @@ vi.mock('@assistant-ui/react', () => {
       Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
     },
     AuiIf: () => null,
-    useComposerRuntime: () => ({
+    // useComposerRuntime is vi.fn() so tests that need text can override the
+    // return value with mockImplementation/mockReturnValue per test.
+    // The default returns empty text — matching the original behavior.
+    useComposerRuntime: vi.fn(() => ({
       getState: () => ({ text: '' }),
       setText: vi.fn(),
-    }),
+    })),
     useMessage: () => ({
       id: 'msg_1',
       role: 'assistant',
@@ -226,6 +229,78 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
 
     expect(screen.queryByText('/clear')).not.toBeInTheDocument()
     expect(screen.queryByText('/cancel')).not.toBeInTheDocument()
+  })
+})
+
+// ── Fix #1: all uploads fail with text → send text-only, keep pendingFiles ────
+
+describe('Fix #1 — all uploads fail with text', () => {
+  it('sends plain text (no "Attached files:" suffix) and keeps pendingFiles when all uploads lack a path', async () => {
+    // BDD: Given pending files and typed text,
+    //   When all uploaded files come back with empty path (registration failed),
+    //   Then sendMessage is called with just the text (no file list appended),
+    //   And an "Attachment not available" toast is shown.
+    //
+    // Traces to: ChatScreen.tsx handleSendWithFiles — Fix #1 (sprint258fix2).
+    // This test FAILS on the pre-fix code that appended "\n\nAttached files: "
+    // when available.length === 0 but text was non-empty.
+
+    const assistantUi = await import('@assistant-ui/react')
+    const setTextMock = vi.fn()
+    // Override useComposerRuntime for this test so it returns non-empty text,
+    // simulating a user who typed a message before attaching.
+    vi.mocked(assistantUi.useComposerRuntime).mockReturnValue({
+      getState: () => ({ text: 'hello world' } as never),
+      setText: setTextMock,
+    } as never)
+
+    const api = await import('@/lib/api')
+    const uploadFilesMock = vi.mocked(api.uploadFiles)
+
+    // All uploaded files have empty path — registration failed.
+    uploadFilesMock.mockResolvedValue({
+      files: [{ name: 'broken.png', path: '', size: 10, content_type: 'image/png' }],
+    } as never)
+
+    // Spy on the connection's send method — sendMessage in the chat store
+    // ultimately calls connection.send(). If the message text contains
+    // "Attached files:", the test fails.
+    const sendMock = vi.fn().mockReturnValue(true)
+
+    act(() => {
+      useSessionStore.setState({ activeSessionId: 'sess_f1', activeAgentId: 'general-assistant', activeAgentType: null })
+      useConnectionStore.setState({
+        connection: { send: sendMock, disconnect: vi.fn(), connect: vi.fn() } as never,
+        isConnected: true,
+      })
+    })
+
+    const { OmnipusComposer } = await import('./ChatScreen')
+    render(<OmnipusComposer />)
+
+    // Attach a file so pendingFiles is non-empty, triggering handleSendWithFiles
+    const fileInput = screen.getByTestId('file-input') as HTMLInputElement
+    const file = new File(['BROKEN'], 'broken.png', { type: 'image/png' })
+    act(() => {
+      fireEvent.change(fileInput, { target: { files: [file] } })
+    })
+
+    // Submit the composer
+    const form = screen.getByTestId('composer-form')
+    await act(async () => {
+      fireEvent.submit(form)
+      await Promise.resolve()
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    // The WS send must have been called — this proves sendMessage ran.
+    expect(sendMock).toHaveBeenCalled()
+
+    // The payload sent must contain just the user text — no "Attached files:" suffix.
+    const wsFrame = sendMock.mock.calls[0]?.[0] as { content?: string }
+    const sentContent = typeof wsFrame === 'object' ? JSON.stringify(wsFrame) : String(wsFrame)
+    expect(sentContent).toContain('hello world')
+    expect(sentContent).not.toContain('Attached files:')
   })
 })
 

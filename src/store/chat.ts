@@ -757,10 +757,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
               const b = s.sessionsById[bucketSid]
               if (!b) return {}
               const updatedById = { ...b.messagesById }
-              if (updatedById[lastMsgId!]) {
-                // #3: last assistant message — status:'interrupted' is legal on AssistantMessage.
-                // Cast required because the union prevents spreading without role narrowing.
-                updatedById[lastMsgId!] = { ...updatedById[lastMsgId!], isStreaming: false, status: 'interrupted' } as ChatMessage
+              const target = updatedById[lastMsgId!]
+              if (target && target.role === 'assistant') {
+                // #3: role guard ensures status:'interrupted' is only stamped onto
+                // AssistantMessage where that status is legal per the discriminated union.
+                // The outer loop already restricts lastMsgId to role:'assistant' entries,
+                // so this guard is defence-in-depth against future refactors that could
+                // break that invariant.
+                updatedById[lastMsgId!] = { ...target, isStreaming: false, status: 'interrupted' } as ChatMessage
               }
               const updated: SessionChatState = { ...b, messagesById: updatedById }
               const updatedSessions = { ...s.sessionsById, [bucketSid]: updated }
@@ -1219,12 +1223,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
               for (const tc of (prev.tool_calls ?? [])) mergedById.set(tc.id, tc)
               for (const tc of baked) mergedById.set(tc.id, tc)
               finalMsgs = [...msgs]
-              // #3: prev is guaranteed assistant (prevAssistantIdx only set for role:'assistant')
-              // Cast to assert the tool_calls field is legal on this variant.
-              finalMsgs[prevAssistantIdx] = {
-                ...prev,
-                tool_calls: Array.from(mergedById.values()),
-              } as ChatMessage
+              // #3: prev is guaranteed assistant (prevAssistantIdx only set for
+              // role:'assistant' entries above), so the role guard is defence-in-depth
+              // to prevent tool_calls — which is illegal on UserMessage/SystemMessage —
+              // being stamped if the invariant is ever broken by a future refactor.
+              if (prev.role === 'assistant') {
+                finalMsgs[prevAssistantIdx] = {
+                  ...prev,
+                  tool_calls: Array.from(mergedById.values()),
+                } as ChatMessage
+              }
               const liveSet = new Set(liveIds)
               const remainingCalls: typeof b.toolCalls = {}
               for (const [k, v] of Object.entries(b.toolCalls)) {
