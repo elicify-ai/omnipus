@@ -2,12 +2,23 @@
 
 ## Overview
 
-Omnipus supports separating sensitive data (API keys, tokens, secrets, passwords) from the main configuration by storing them in a `.security.yml` file. This improves security by:
+Omnipus supports separating sensitive data (API keys, tokens, secrets, passwords) from the main configuration by storing them in a `.security.yml` file.
 
-1. **Separation of concerns**: Configuration settings and secrets are in separate files
-2. **Easier sharing**: The main config can be shared without exposing sensitive data
-3. **Better version control**: `.security.yml` should be added to `.gitignore`
-4. **Flexible deployment**: Different environments can use different security files
+### Separation of Concerns
+
+Configuration settings and secrets live in separate files, making the main config safe to share without exposing sensitive data.
+
+### Easier Sharing
+
+The main `config.json` can be shared or committed to version control. Only `.security.yml` must be kept private.
+
+### Better Version Control
+
+`.security.yml` should be added to `.gitignore` so secrets are never accidentally committed.
+
+### Flexible Deployment
+
+Different environments (dev, staging, production) can use different `.security.yml` files without touching `config.json`.
 
 ## File Structure
 
@@ -21,12 +32,7 @@ Omnipus supports separating sensitive data (API keys, tokens, secrets, passwords
 
 The security configuration works through **direct field mapping**, NOT through `ref:` string references. The system automatically loads values from `.security.yml` and applies them to the corresponding fields in `config.json`.
 
-### Key Points:
-
-- Values in `.security.yml` are automatically mapped to corresponding fields in the config
-- The mapping is based on field names and structure, not on reference strings
-- If a value exists in `.security.yml`, it **overrides** the value in `config.json`
-- You can omit sensitive fields from `config.json` entirely (recommended)
+Values in `.security.yml` are automatically mapped to corresponding fields in the config based on field names and structure, not on reference strings. If a value exists in `.security.yml`, it **overrides** the value in `config.json`. You can omit sensitive fields from `config.json` entirely (recommended).
 
 ## Security Configuration Structure
 
@@ -195,14 +201,11 @@ model_list:
       - "key-2"
 ```
 
-**Mapping:**
-- Field `api_keys` (array) maps to the model's API keys
-- The `<model_name>` must match the `model_name` field in `config.json`
-- Supports indexed names (e.g., "gpt-5.4:0") - the system will also try the base name ("gpt-5.4")
+The `api_keys` array maps to the model's API keys. The `<model_name>` must match the `model_name` field in `config.json`. Indexed names (e.g., `"gpt-5.4:0"`) are supported — the system will also try the base name (`"gpt-5.4"`) if the indexed name is not found.
 
 ### Channels
 
-Each channel maps its fields directly:
+Each channel maps its fields directly. Given the following `.security.yml` entries:
 
 **In .security.yml:**
 ```yaml
@@ -217,14 +220,22 @@ channels:
     token: "value"
 ```
 
-**Mapping:**
-- `channels.telegram.token` → `config.channels.telegram.token`
-- `channels.feishu.app_secret` → `config.channels.feishu.app_secret`
-- etc.
+The mappings resolve as follows:
+
+| `.security.yml` key | `config.json` field |
+|---|---|
+| `channels.telegram.token` | `config.channels.telegram.token` |
+| `channels.feishu.app_secret` | `config.channels.feishu.app_secret` |
+| `channels.feishu.encrypt_key` | `config.channels.feishu.encrypt_key` |
+| `channels.feishu.verification_token` | `config.channels.feishu.verification_token` |
+| `channels.discord.token` | `config.channels.discord.token` |
 
 ### Web Tools
 
-**Brave, Tavily, Perplexity:**
+#### Brave, Tavily, Perplexity
+
+Use `api_keys` (plural) array format:
+
 ```yaml
 web:
   brave:
@@ -232,23 +243,26 @@ web:
       - "key-1"
       - "key-2"
 ```
-- Use `api_keys` (plural) array format
 
-**GLMSearch:**
+#### GLMSearch
+
+Use `api_key` (singular) single string format:
+
 ```yaml
 web:
   glm_search:
     api_key: "single-key-here"
 ```
-- Use `api_key` (singular) single string format
 
-**BaiduSearch:**
+#### BaiduSearch
+
+Use `api_key` (singular) single string format:
+
 ```yaml
 web:
   baidu_search:
     api_key: "your-key"
 ```
-- Use `api_key` (singular) single string format
 
 ### Skills
 
@@ -263,7 +277,7 @@ skills:
 
 ## API Key Formats
 
-### Models - Single key
+### Models — Single Key
 
 Use array format with one element:
 ```yaml
@@ -273,7 +287,7 @@ model_list:
       - "sk-your-key"
 ```
 
-### Models - Multiple keys (Load Balancing & Failover)
+### Models — Multiple Keys (Load Balancing and Failover)
 
 Use array format with multiple elements:
 ```yaml
@@ -285,13 +299,9 @@ model_list:
       - "sk-your-key-3"
 ```
 
-**Benefits:**
-- **Load balancing**: Requests are distributed across multiple keys
-- **Failover**: Automatic switching to another key if one fails
-- **Rate limit management**: Distribute usage across multiple keys
-- **High availability**: Reduce downtime during API provider issues
+Multiple keys enable load balancing (requests distributed across keys), automatic failover when a key fails, rate limit management across multiple keys, and higher availability during API provider issues.
 
-### Web Tools (Brave/Tavily/Perplexity) - Single key
+### Web Tools (Brave/Tavily/Perplexity) — Single Key
 
 ```yaml
 web:
@@ -300,7 +310,7 @@ web:
       - "BSA-your-key"
 ```
 
-### Web Tools (Brave/Tavily/Perplexity) - Multiple keys
+### Web Tools (Brave/Tavily/Perplexity) — Multiple Keys
 
 ```yaml
 web:
@@ -310,7 +320,7 @@ web:
       - "BSA-key-2"
 ```
 
-### Web Tool (GLMSearch/BaiduSearch) - Single key only
+### Web Tools (GLMSearch/BaiduSearch) — Single Key Only
 
 ```yaml
 web:
@@ -322,7 +332,7 @@ web:
 
 ## Model Name Matching
 
-The system supports intelligent model name matching in `.security.yml`:
+The system supports intelligent model name matching in `.security.yml`.
 
 ### Example 1: Exact Match
 
@@ -360,47 +370,44 @@ Both methods work. The base name match allows you to use simpler keys in `.secur
 
 ## Backward Compatibility
 
-The system maintains full backward compatibility:
-
-1. **Direct values**: You can still use direct values in `config.json` (not recommended for production)
-2. **Mixed usage**: You can have some fields in `.security.yml` and others in `config.json`
-3. **Optional security file**: If `.security.yml` doesn't exist, the system will only use values from `config.json`
-4. **Override behavior**: If a field exists in both files, `.security.yml` value takes precedence
+The system maintains full backward compatibility. Direct values can still be used in `config.json` (not recommended for production). Mixed usage is supported — some fields in `.security.yml` and others in `config.json`. The security file is optional: if `.security.yml` doesn't exist, the system uses only values from `config.json`. When a field exists in both files, the `.security.yml` value takes precedence.
 
 ## Environment Variables
 
-You can override any security value using environment variables:
+Environment variables have the highest priority and override both `config.json` and `.security.yml` values. The pattern is `OMNIPUS_<SECTION>_<KEY>_<FIELD>` with underscores separating path segments, converted to uppercase.
 
-**For models:**
-```bash
-export OMNIPUS_CHANNELS_TELEGRAM_TOKEN="token-from-env"
-```
-
-**For channels:**
-```bash
-export OMNIPUS_CHANNELS_TELEGRAM_TOKEN="token-from-env"
-export OMNIPUS_CHANNELS_FEISHU_APP_SECRET="secret-from-env"
-```
-
-**For web tools:**
-```bash
-export OMNIPUS_TOOLS_WEB_BRAVE_API_KEY="key-from-env"
-export OMNIPUS_TOOLS_WEB_BAIDU_API_KEY="baidu-key-from-env"
-```
-
-Environment variables have the highest priority and will override both `config.json` and `.security.yml` values.
-
-The pattern is: `OMNIPUS_<SECTION>_<KEY>_<FIELD>` with underscores separating path segments and converted to uppercase.
+| Variable | Example value | Purpose |
+|---|---|---|
+| `OMNIPUS_CHANNELS_TELEGRAM_TOKEN` | `token-from-env` | Override Telegram token |
+| `OMNIPUS_CHANNELS_FEISHU_APP_SECRET` | `secret-from-env` | Override Feishu app secret |
+| `OMNIPUS_TOOLS_WEB_BRAVE_API_KEY` | `key-from-env` | Override Brave API key |
+| `OMNIPUS_TOOLS_WEB_BAIDU_API_KEY` | `baidu-key-from-env` | Override Baidu API key |
 
 ## Security Best Practices
 
-1. **Never commit `.security.yml`** to version control
-2. **Add to .gitignore**: Ensure `.security.yml` is in your `.gitignore` file
-3. **Set file permissions**: `chmod 600 ~/.omnipus/.security.yml`
-4. **Use different keys** for different environments (dev, staging, production)
-5. **Rotate keys regularly** and update `.security.yml`
-6. **Backup securely**: Encrypt backups containing `.security.yml`
-7. **Review access**: Ensure only authorized users have read access to the file
+### Never Commit `.security.yml`
+
+Add `.security.yml` to your `.gitignore` to prevent accidental commits.
+
+### Set File Permissions
+
+Run `chmod 600 ~/.omnipus/.security.yml` immediately after creating the file.
+
+### Use Different Keys per Environment
+
+Maintain separate API keys for dev, staging, and production. Each environment has its own `.security.yml`.
+
+### Rotate Keys Regularly
+
+Update `.security.yml` whenever you rotate API keys. Update all environments before revoking the old key.
+
+### Back Up Securely
+
+When backing up `.security.yml`, ensure the backup is also encrypted. Never store backups in plaintext alongside the codebase.
+
+### Review Access
+
+Ensure only authorized users have read access to the file. Check with `ls -l ~/.omnipus/.security.yml`.
 
 ## API
 
@@ -518,38 +525,23 @@ go test ./pkg/config -run TestSecurityConfig
 
 ### Error: "failed to load security config"
 
-- Verify `.security.yml` exists in the same directory as `config.json`
-- Check the YAML syntax is valid (use a YAML validator)
-- Ensure file permissions allow reading
+Verify `.security.yml` exists in the same directory as `config.json`. Check that the YAML syntax is valid (use a YAML validator). Ensure file permissions allow reading.
 
 ### Error: "model security entry not found"
 
-- Ensure the model name in `config.json` matches exactly in `.security.yml`
-- Check that the `model_list` section exists in `.security.yml`
-- For models with indexed names (e.g., "gpt-5.4:0"), ensure the exact name is used or check the base name without index
-- Verify the YAML structure is correct (proper indentation)
+Ensure the model name in `config.json` matches exactly in `.security.yml` and that the `model_list` section exists in `.security.yml`. For models with indexed names (e.g., `"gpt-5.4:0"`), use the exact name or the base name without index. Verify the YAML structure is correct with proper indentation.
 
 ### Multiple API Keys Not Working
 
-- Ensure you're using `api_keys` (plural) in `.security.yml` for models and web tools (except GLMSearch/BaiduSearch)
-- Check that the array format is correct in YAML (proper indentation with dashes)
-- Remember: Models, Brave, Tavily, Perplexity MUST use `api_keys` (array format)
-- GLMSearch and BaiduSearch MUST use `api_key` (single string format)
+Ensure you're using `api_keys` (plural) in `.security.yml` for models and web tools — except GLMSearch and BaiduSearch which use `api_key` (singular). Check that the array format is correct in YAML with proper indentation and dashes. Models, Brave, Tavily, and Perplexity MUST use `api_keys` (array format). GLMSearch and BaiduSearch MUST use `api_key` (single string format).
 
 ### Load Balancing/Failover Issues
 
-- Verify all API keys in the `api_keys` array are valid
-- Check that all keys have the same rate limits and permissions
-- Monitor logs to see which keys are being used and failing
-- Ensure the `api_keys` array is properly formatted in YAML
+Verify all API keys in the `api_keys` array are valid and that all keys have the same rate limits and permissions. Monitor logs to see which keys are being used and failing. Ensure the `api_keys` array is properly formatted in YAML.
 
 ### Keys Not Being Applied
 
-- Check that `.security.yml` is in the same directory as `config.json`
-- Verify the file permissions allow reading (`chmod 600 ~/.omnipus/.security.yml`)
-- Ensure the YAML structure matches the expected format
-- Check for typos in field names (case-sensitive)
-- Verify the model/channel names match exactly (case-sensitive)
+Check that `.security.yml` is in the same directory as `config.json` and that the file permissions allow reading (`chmod 600 ~/.omnipus/.security.yml`). Ensure the YAML structure matches the expected format. Check for typos in field names (case-sensitive). Verify the model and channel names match exactly (case-sensitive).
 
 ## Migration Guide
 
@@ -571,11 +563,7 @@ Edit `~/.omnipus/.security.yml` and replace placeholder values with your actual 
 
 ### Step 4: Remove sensitive fields from config.json
 
-Remove or comment out sensitive fields from `config.json`:
-- `api_key` fields from `model_list` entries
-- `token` fields from `channels`
-- `api_key` fields from `tools.web`
-- `token`/`auth_token` fields from `tools.skills`
+Remove or comment out the following from `config.json`: `api_key` fields from `model_list` entries, `token` fields from `channels`, `api_key` fields from `tools.web`, and `token`/`auth_token` fields from `tools.skills`.
 
 ### Step 5: Set proper permissions
 
@@ -606,12 +594,12 @@ Omnipus supports encrypting API keys in the security file for additional protect
 
 ### Setup
 
-1. Set a passphrase via environment variable:
+Set a passphrase via environment variable:
 ```bash
 export OMNIPUS_CREDENTIAL_PASSPHRASE="your-secure-passphrase"
 ```
 
-2. When saving config, API keys will be encrypted automatically:
+When saving config, API keys will be encrypted automatically:
 ```go
 SaveConfig(path, config)
 ```
@@ -628,15 +616,10 @@ model_list:
 
 The system automatically decrypts keys at runtime when loading the configuration.
 
-### Benefits
+### Additional Layer of Security
 
-- Additional layer of security
-- Keys are encrypted at rest
-- Passphrase can be managed separately from the config file
+Keys are encrypted at rest and the passphrase can be managed separately from the config file, providing an additional layer of protection beyond file permissions.
 
 ### Important Notes
 
-- Always backup your passphrase securely
-- If you lose the passphrase, you'll lose access to encrypted keys
-- Use a strong, unique passphrase
-- Never commit the passphrase to version control
+Always backup your passphrase securely. If you lose the passphrase, you'll lose access to encrypted keys. Use a strong, unique passphrase and never commit it to version control.

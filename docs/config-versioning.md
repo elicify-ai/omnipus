@@ -7,13 +7,17 @@ Omnipus uses a schema versioning system for `config.json` to ensure smooth upgra
 ## Version History
 
 ### Version 1
-- **Introduction**: Initial version with version field support
-- **Changes**: Added `version` field to Config struct
-- **Migration**: No structural changes needed for existing configs
+
+**Introduction:** Initial version with version field support.
+
+**Changes:** Added `version` field to the Config struct.
+
+**Migration:** No structural changes are needed for existing configs.
 
 ## How It Works
 
 ### Automatic Migration
+
 When you load a config file:
 1. The system first reads the `version` field from the JSON
 2. Based on the detected version, it loads the appropriate config struct (`ConfigV0`, `ConfigV1`, etc.)
@@ -22,9 +26,8 @@ When you load a config file:
 5. The migrated config is automatically saved back to disk
 
 ### Version Field
-The `version` field in `config.json` indicates the schema version:
-- `0` or missing: Legacy config (no version field)
-- `1`: Current version with versioning support
+
+The `version` field in `config.json` indicates the schema version. A value of `0` or a missing field means a legacy config with no version field. A value of `1` means the current version with versioning support.
 
 ```json
 {
@@ -159,13 +162,33 @@ func TestMigrateV1ToV2(t *testing.T) {
 
 ## Migration Best Practices
 
-1. **Version-Specific Structs**: Define a separate struct for each version that has structural changes
-2. **Backward Compatibility**: Ensure old configs can still be loaded with their specific structs
-3. **No Data Loss**: Migrations should preserve all user settings
-4. **Idempotent**: Running the same migration multiple times should be safe
-5. **Auto-Save**: Migrated configs are automatically saved to update the user's file
-6. **Test Thoroughly**: Test with real user config files
-7. **Update Defaults**: Keep `defaults.go` in sync with the latest schema
+#### Version-Specific Structs
+
+Define a separate struct for each version that has structural changes. This keeps the parsing logic for each version isolated and unambiguous.
+
+#### Backward Compatibility
+
+Ensure old configs can still be loaded with their specific structs. Never remove a version-specific loader until you are certain no configs at that version exist in the wild.
+
+#### No Data Loss
+
+Migrations must preserve all user settings. Every field present in the source version must be explicitly copied or transformed into the destination version struct.
+
+#### Idempotent
+
+Running the same migration multiple times must be safe and produce the same result. Avoid side effects that accumulate across repeated runs.
+
+#### Auto-Save
+
+Migrated configs are automatically saved to update the user's file. No manual save step is required after a successful migration.
+
+#### Test Thoroughly
+
+Test with real user config files in addition to synthetic test data. Edge cases found in production configs are often the ones that matter most.
+
+#### Update Defaults
+
+Keep `defaults.go` in sync with the latest schema whenever a migration adds or renames fields.
 
 ## Example Migration
 
@@ -213,18 +236,13 @@ New config (version 2):
 ## Troubleshooting
 
 ### Config Not Upgrading
-- Check that `CurrentConfigVersion` is incremented
-- Verify migration logic in `applyMigration()` handles the target version
-- Ensure `migrateConfig()` is called in `LoadConfig()`
+
+Verify that `CurrentConfigVersion` is incremented. Check that migration logic in `applyMigration()` handles the target version. Ensure `migrateConfig()` is called in `LoadConfig()`.
 
 ### Migration Errors
-- Check error messages for specific migration failures
-- Review migration logic for edge cases
-- Ensure all required fields are properly initialized
-- Verify the loader function for the source version
+
+Check error messages for specific migration failures. Review migration logic for edge cases. Ensure all required fields are properly initialized and verify the loader function for the source version.
 
 ### Data Loss After Migration
-- Ensure all fields are copied during migration
-- Check that the migration doesn't overwrite values with defaults unnecessarily
-- Review the conversion logic in the loader functions
 
+Ensure all fields are copied during migration. Check that the migration does not overwrite values with defaults unnecessarily. Review the conversion logic in the loader functions.

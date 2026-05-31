@@ -25,8 +25,7 @@ No further configuration is needed. The gateway binds both ports on the host spe
 
 The following configuration maps:
 
-- `omnipus.example.com` (port 443) to the gateway main port at `127.0.0.1:5000`
-- `preview.omnipus.example.com` (port 443) to the gateway preview port at `127.0.0.1:5001`
+`omnipus.example.com` (port 443) to the gateway main port at `127.0.0.1:5000`, and `preview.omnipus.example.com` (port 443) to the gateway preview port at `127.0.0.1:5001`.
 
 A single wildcard certificate from Let's Encrypt (obtained with `certbot certonly --nginx -d omnipus.example.com -d preview.omnipus.example.com`) covers both server blocks.
 
@@ -174,9 +173,11 @@ With `trust_xff: true` the gateway reads `X-Forwarded-For` for the audit `remote
 }
 ```
 
-- `host` / `preview_host` — the interface the gateway binds. `127.0.0.1` is correct when a reverse proxy handles external traffic; use `0.0.0.0` for bare-IP deployments.
-- `public_url` — the canonical base URL for the SPA. The gateway uses this to construct `frame-ancestors` CSP directives.
-- `preview_origin` — the origin the SPA uses as the `src` of `<iframe>` elements embedding preview content. Must match the `preview_host:preview_port` the browser reaches.
+| Field | Purpose |
+|---|---|
+| `host` / `preview_host` | The interface the gateway binds. `127.0.0.1` is correct when a reverse proxy handles external traffic; use `0.0.0.0` for bare-IP deployments. |
+| `public_url` | The canonical base URL for the SPA. The gateway uses this to construct `frame-ancestors` CSP directives. |
+| `preview_origin` | The origin the SPA uses as the `src` of `<iframe>` elements embedding preview content. Must match the `preview_host:preview_port` the browser reaches. |
 
 After editing, the gateway picks up the new values on the next `POST /api/v1/reload` or process restart.
 
@@ -213,4 +214,6 @@ If binding a second port is not possible — for example, on a restricted host w
 }
 ```
 
-When `preview_listener_enabled` is `false`, the iframe-preview feature is disabled entirely. The gateway does not start the second listener, and the `/preview/` path prefix is not registered on the main mux either — any browser request to `<main-host>:<port>/preview/...` will receive a 404 from the SPA catch-all handler. Tool calls to `web_serve` will still register tokens in the in-memory registry, but the URLs they return will not resolve. This is a full rollback of the iframe-preview feature, not a partial-degradation mode. If you need to restore functionality, re-enable the preview listener and restart the gateway.
+When `preview_listener_enabled` is `false`, the iframe-preview feature is disabled entirely. The gateway does not start the second listener, and the `/preview/` path prefix is not registered on the main mux either — any browser request to `<main-host>:<port>/preview/...` will receive a 404 from the SPA catch-all handler. Tool calls to `web_serve` will still register tokens in the in-memory registry, but the URLs they return will not resolve.
+
+This is a full rollback of the iframe-preview feature, not a partial-degradation mode. If you need to restore functionality, re-enable the preview listener and restart the gateway.

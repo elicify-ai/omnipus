@@ -20,10 +20,21 @@ Source of truth: `.github/workflows/cross-platform.yml:24-34`. Each job runs `go
 
 Each of these targets is deferred from v0.1; the linked tracking issue (where one exists) captures the work required to add it to CI and to the release matrix.
 
-- **macOS amd64 (Intel)** — Cross-compile path works (`GOOS=darwin GOARCH=amd64 go build ./cmd/omnipus`) and is explicitly excluded from `.goreleaser.yaml:60-64`. Adding a `macos-13` smoke runner to `cross-platform.yml` is a v0.1.1 task. The sandbox uses `FallbackBackend` identically to arm64.
-- **Windows amd64** — Tracked as [#113](https://github.com/elicify-ai/omnipus/issues/113). Roughly 15 unit tests assume POSIX semantics (file mode bits, advisory `flock`, fork-time signals). The kernel-sandbox story (Job Objects + Restricted Tokens + DACL) described in `docs/internal/BRD/Omnipus Windows BRD appendic.md` is specified but unimplemented; on Windows the sandbox falls back to application-level checks like on macOS.
-- **Linux riscv64, loong64, armv7, mipsle** — Go has cross-compile targets but there are no GitHub Actions runners and no smoke tests. Build with `GOOS=linux GOARCH=<arch> go build -tags goolm,stdjson ./cmd/omnipus`. The seccomp BPF emitter is currently architecture-gated to amd64 and arm64 (`pkg/sandbox/seccomp_linux_amd64.go`, `pkg/sandbox/seccomp_linux_arm64.go`); on other architectures the gateway should fall back gracefully but the path is not exercised.
-- **FreeBSD, NetBSD** — Go has the cross-compile target but no GitHub Actions runner is available. `FallbackBackend` is the only sandbox option (Landlock is Linux-only).
+### macOS amd64 (Intel)
+
+The cross-compile path works (`GOOS=darwin GOARCH=amd64 go build ./cmd/omnipus`) and is explicitly excluded from `.goreleaser.yaml:60-64`. Adding a `macos-13` smoke runner to `cross-platform.yml` is a v0.1.1 task. The sandbox uses `FallbackBackend` identically to arm64.
+
+### Windows amd64
+
+Tracked as [#113](https://github.com/elicify-ai/omnipus/issues/113). Roughly 15 unit tests assume POSIX semantics (file mode bits, advisory `flock`, fork-time signals). The kernel-sandbox story (Job Objects + Restricted Tokens + DACL) described in `docs/internal/BRD/Omnipus Windows BRD appendic.md` is specified but unimplemented; on Windows the sandbox falls back to application-level checks like on macOS.
+
+### Linux riscv64, loong64, armv7, mipsle
+
+Go has cross-compile targets but there are no GitHub Actions runners and no smoke tests. Build with `GOOS=linux GOARCH=<arch> go build -tags goolm,stdjson ./cmd/omnipus`. The seccomp BPF emitter is currently architecture-gated to amd64 and arm64 (`pkg/sandbox/seccomp_linux_amd64.go`, `pkg/sandbox/seccomp_linux_arm64.go`); on other architectures the gateway should fall back gracefully but the path is not exercised.
+
+### FreeBSD, NetBSD
+
+Go has the cross-compile target but no GitHub Actions runner is available. `FallbackBackend` is the only sandbox option (Landlock is Linux-only).
 
 ## Building for an unsupported platform
 
@@ -41,11 +52,14 @@ There is no plan to backport Landlock-equivalent enforcement to non-Linux platfo
 
 ## Reporting platform-specific issues
 
-For platform-specific bugs, file an issue on [github.com/elicify-ai/omnipus/issues](https://github.com/elicify-ai/omnipus/issues) with:
+For platform-specific bugs, file an issue on [github.com/elicify-ai/omnipus/issues](https://github.com/elicify-ai/omnipus/issues) with the following information.
 
-- Output of `omnipus doctor` — runs pre-flight configuration checks and exits non-zero if any warning is raised (`cmd/omnipus/internal/doctor/command.go:42-63`). Current checks cover DM-policy gaps, exec-egress configuration, and preview-port collisions.
-- Output of `curl -s http://localhost:5000/api/v1/security/sandbox-status` (admin-authenticated) — confirms the active backend, kernel ABI, and which Landlock features the kernel reports as supported.
-- The contents of `~/.omnipus/logs/gateway_panic.log` if the gateway exited silently on boot.
-- Output of `uname -a` on Linux to identify the kernel version; on macOS, `sw_vers`; on Windows, `winver`.
+**`omnipus doctor` output** — runs pre-flight configuration checks and exits non-zero if any warning is raised (`cmd/omnipus/internal/doctor/command.go:42-63`). Current checks cover DM-policy gaps, exec-egress configuration, and preview-port collisions.
+
+**`/api/v1/security/sandbox-status` response** — run `curl -s http://localhost:5000/api/v1/security/sandbox-status` (admin-authenticated) to confirm the active backend, kernel ABI, and which Landlock features the kernel reports as supported.
+
+**`~/.omnipus/logs/gateway_panic.log`** — include this file's contents if the gateway exited silently on boot.
+
+**Kernel/OS version** — run `uname -a` on Linux; `sw_vers` on macOS; `winver` on Windows.
 
 If the issue reproduces on Linux amd64 or arm64 (the two officially-supported Linux targets), please flag that explicitly — those reproductions block release and get prioritised over the deferred-platform tracking issues.

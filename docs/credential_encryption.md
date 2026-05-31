@@ -95,12 +95,7 @@ The GCM authentication tag is appended to the ciphertext automatically. Any tamp
 
 ## Two-Factor Security with SSH Key
 
-When a SSH private key is provided, breaking the encryption requires **both**:
-
-1. The **passphrase** (`OMNIPUS_KEY_PASSPHRASE`)
-2. The **SSH private key file**
-
-This means a leaked config file alone is not sufficient to recover the API key, even if the passphrase is weak. The SSH key contributes 256 bits of entropy (Ed25519) regardless of passphrase strength.
+When an SSH private key is provided, breaking the encryption requires both the passphrase (`OMNIPUS_KEY_PASSPHRASE`) and the SSH private key file. A leaked config file alone is not sufficient to recover the API key, even if the passphrase is weak. The SSH key contributes 256 bits of entropy (Ed25519) regardless of passphrase strength.
 
 ### Threat Model
 
@@ -128,8 +123,7 @@ If `OMNIPUS_SSH_KEY_PATH` is not set, Omnipus looks for the omnipus-specific key
 ~/.ssh/omnipus_ed25519.key
 ```
 
-This dedicated file avoids conflicts with the user's existing SSH keys.
-Run `omnipus onboard` to generate it automatically.
+This dedicated file avoids conflicts with the user's existing SSH keys. Run `omnipus onboard` to generate it automatically.
 
 `os.UserHomeDir()` is used for cross-platform home directory resolution (reads `USERPROFILE` on Windows, `HOME` on Unix/macOS).
 
@@ -139,11 +133,9 @@ Run `omnipus onboard` to generate it automatically.
 
 ## Migration
 
-Because the only secret material is `OMNIPUS_KEY_PASSPHRASE` and the SSH private key file, migration is straightforward:
+Because the only secret material is `OMNIPUS_KEY_PASSPHRASE` and the SSH private key file, migration is straightforward.
 
-1. Copy the config file to the new machine.
-2. Set `OMNIPUS_KEY_PASSPHRASE` to the same value.
-3. Copy the SSH private key file to the same path (or set `OMNIPUS_SSH_KEY_PATH` to its new location).
+Copy the config file to the new machine. Set `OMNIPUS_KEY_PASSPHRASE` to the same value. Copy the SSH private key file to the same path, or set `OMNIPUS_SSH_KEY_PATH` to its new location.
 
 No re-encryption is needed.
 
@@ -151,7 +143,18 @@ No re-encryption is needed.
 
 ## Security Considerations
 
-- **Both passphrase and SSH key are required.** The SSH key acts as a second factor — without it, encryption/decryption will fail. Run `omnipus onboard` to generate the key if it doesn't exist.
-- **The SSH key is read-only at runtime.** Omnipus never writes to or modifies the SSH key file.
-- **Plaintext keys remain supported.** Existing configs without `enc://` are unaffected.
-- **The `enc://` format is versioned** via the HKDF `info` field (`omnipus-credential-v1`), allowing future algorithm upgrades without breaking existing encrypted values.
+### Both Passphrase and SSH Key Are Required
+
+The SSH key acts as a second factor — without it, encryption/decryption will fail. Run `omnipus onboard` to generate the key if it doesn't exist.
+
+### The SSH Key Is Read-Only at Runtime
+
+Omnipus never writes to or modifies the SSH key file.
+
+### Plaintext Keys Remain Supported
+
+Existing configs without `enc://` are unaffected.
+
+### The `enc://` Format Is Versioned
+
+The HKDF `info` field (`omnipus-credential-v1`) versions the format, allowing future algorithm upgrades without breaking existing encrypted values.

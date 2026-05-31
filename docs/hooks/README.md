@@ -368,10 +368,7 @@ Once registered the following config drives mounting automatically:
 
 ### What to expect in the log
 
-- Requests that hit only the LLM path emit `before_llm` and `after_llm`.
-- Requests that trigger tools also emit `before_tool`, `approve_tool`,
-  `after_tool`.
-- With `log_events: true`, every `EventBus` broadcast appears as `"stage":"event"`.
+Requests that hit only the LLM path emit `before_llm` and `after_llm`. Requests that trigger tools also emit `before_tool`, `approve_tool`, and `after_tool`. With `log_events: true`, every `EventBus` broadcast appears as `"stage":"event"`.
 
 Typical lines:
 
@@ -541,12 +538,7 @@ if __name__ == "__main__":
 
 ### Confirming it works
 
-Watch two places:
-
-- **Gateway logs** — confirm the process started and see `stderr` lines.
-- **`OMNIPUS_HOOK_LOG_FILE`** — see exact requests and responses.
-
-Interpretation:
+Watch two places: the **gateway logs** (confirm the process started and see `stderr` lines) and the **`OMNIPUS_HOOK_LOG_FILE`** (see exact requests and responses).
 
 | What you see | Meaning |
 |---|---|
@@ -575,28 +567,18 @@ Full sample trace:
 {"ts":"2026-03-21T14:12:05+00:00","direction":"out","id":8,"response":{"verdict":"allow"},"error":null}
 ```
 
-Notes:
-
-- `notification: true` means no response is expected (used for `hook.event`).
-- `id` is a monotonically increasing `uint64` per process lifetime; it resets to
-  1 when the process restarts.
-- Timestamps are UTC ISO-8601.
+`notification: true` means no response is expected (used for `hook.event`). `id` is a monotonically increasing `uint64` per process lifetime; it resets to 1 when the process restarts. Timestamps are UTC ISO-8601.
 
 ## Process-Hook Protocol
 
 The subprocess hook uses JSON-RPC 2.0 over stdio
 (`pkg/agent/hook_process.go`):
 
-- Omnipus starts the external process via `exec.Command`.
-- One JSON object per line in each direction. The host writes to the process's
-  stdin; the process writes to its stdout.
-- `hook.event` is a **notification** (no `id`, no response expected).
-- All other methods are request/response: `hook.hello`, `hook.before_llm`,
-  `hook.after_llm`, `hook.before_tool`, `hook.after_tool`, `hook.approve_tool`.
-- `stderr` is drained by the host and forwarded to the gateway log at `WARN`
-  level (`pkg/agent/hook_process.go:442-450`).
-- The host does not currently accept RPCs initiated by the process. A subprocess
-  hook can only respond to Omnipus calls; it cannot call back into the host.
+Omnipus starts the external process via `exec.Command`. One JSON object per line is written in each direction: the host writes to the process's stdin and the process writes to its stdout.
+
+`hook.event` is a **notification** (no `id`, no response expected). All other methods are request/response: `hook.hello`, `hook.before_llm`, `hook.after_llm`, `hook.before_tool`, `hook.after_tool`, `hook.approve_tool`.
+
+`stderr` is drained by the host and forwarded to the gateway log at `WARN` level (`pkg/agent/hook_process.go:442-450`). The host does not currently accept RPCs initiated by the process. A subprocess hook can only respond to Omnipus calls; it cannot call back into the host.
 
 ### Handshake
 
@@ -762,69 +744,41 @@ Check these in order when a hook is not firing:
    text-only exchange will not trigger `before_tool`).
 6. The `observe` or `intercept` list includes the hook point you want.
 
-Minimal troubleshooting approach:
-
-- Use the Python example to validate the external protocol (confirms process
-  startup, handshake, and event delivery).
-- Use the Go example to validate the in-process chain (confirms `MountHook`
-  and the synchronous stages).
+Use the Python example to validate the external protocol (confirms process startup, handshake, and event delivery). Use the Go example to validate the in-process chain (confirms `MountHook` and the synchronous stages).
 
 If the Python side shows `hook.hello` but no subsequent business requests, the
 protocol is fine — the request simply did not reach the expected stage.
 
-**Hung handshake.** If the subprocess starts but never replies to `hook.hello`,
-the host currently waits as long as the caller's context allows — which can
-mean the entire turn lifetime. There is no defensive deadline inside
-`NewProcessHook` for non-nil contexts (`pkg/agent/hook_process.go`). Kill the
-hook subprocess to recover. Tracked in [#163](https://github.com/elicify-ai/omnipus/issues/163).
+### Hung handshake
+
+If the subprocess starts but never replies to `hook.hello`, the host currently waits as long as the caller's context allows — which can mean the entire turn lifetime. There is no defensive deadline inside `NewProcessHook` for non-nil contexts (`pkg/agent/hook_process.go`). Kill the hook subprocess to recover. Tracked in [#163](https://github.com/elicify-ai/omnipus/issues/163).
 
 ## Scope and Limits
 
-Current use cases:
+### Current use cases
 
-- LLM request rewriting (model, messages, options).
-- Tool argument normalization.
-- Pre-execution tool approval (interactive or automated).
-- Auditing and observability via `EventObserver`.
+LLM request rewriting (model, messages, options) and tool argument normalization are fully supported. Pre-execution tool approval (interactive or automated) is handled via `BeforeTool` and `ApproveTool`. Auditing and observability are available through `EventObserver`.
 
-Not yet supported:
+### Not yet supported
 
-- A subprocess hook calling back into the host to send channel messages.
-- Suspending a turn and waiting for asynchronous human approval via a separate
-  reply path (implement as an `ApprovalManager` that your hook delegates to).
-- Inbound/outbound message interception at the channel level.
+A subprocess hook calling back into the host to send channel messages is not yet implemented. Suspending a turn and waiting for asynchronous human approval via a separate reply path is not built in — implement this as an `ApprovalManager` that your hook delegates to. Inbound/outbound message interception at the channel level is also not supported.
 
 ### Security model for process hooks
 
-Subprocess hooks **inherit the gateway's UID, GID, and full process environment**
-(including secrets in env vars). The `env` block in the hook config is merged
-into the host environment, not isolated from it. Process hooks are **not**
-sandboxed by Landlock or seccomp — they run with the same filesystem and
-network access as the gateway. Treat the `command` you configure with the same
-trust posture as any other software you choose to run; only point it at
-binaries you control.
+Subprocess hooks **inherit the gateway's UID, GID, and full process environment** (including secrets in env vars). The `env` block in the hook config is merged into the host environment, not isolated from it. Process hooks are **not** sandboxed by Landlock or seccomp — they run with the same filesystem and network access as the gateway. Treat the `command` you configure with the same trust posture as any other software you choose to run; only point it at binaries you control.
 
-**Do not re-export credential references into the hook's `env` block.** The
-gateway resolves secrets from `credentials.json` at boot (see
-[ADR-004](../internal/architecture/ADR-004-credential-boot-contract.md)); putting
-`OMNIPUS_MASTER_KEY` or any `*_ref`-resolved secret into a hook's `env` config
-re-exposes that secret to every subprocess and defeats the credential boundary.
+**Do not re-export credential references into the hook's `env` block.** The gateway resolves secrets from `credentials.json` at boot (see [ADR-004](../internal/architecture/ADR-004-credential-boot-contract.md)); putting `OMNIPUS_MASTER_KEY` or any `*_ref`-resolved secret into a hook's `env` config re-exposes that secret to every subprocess and defeats the credential boundary.
 
-**Protocol-corruption rules for process hooks:**
+### Protocol-corruption rules for process hooks
 
-- **stdout is the JSON-RPC channel** — write log output to stderr only. Any
-  non-JSON-RPC text on stdout corrupts the framing and the host disconnects
-  the hook.
-- **One JSON message per line**, newline-terminated. No pretty-printing.
-- If the subprocess crashes, closes stdout, or sends malformed JSON, the host
-  marks the hook as failed and continues. The hook's events/decisions stop
-  arriving until the gateway restarts. Subprocess hooks are **not auto-restarted**.
+**stdout is the JSON-RPC channel** — write log output to stderr only. Any non-JSON-RPC text on stdout corrupts the framing and the host disconnects the hook.
+
+Send **one JSON message per line**, newline-terminated. No pretty-printing.
+
+If the subprocess crashes, closes stdout, or sends malformed JSON, the host marks the hook as failed and continues. The hook's events/decisions stop arriving until the gateway restarts. Subprocess hooks are **not auto-restarted**.
 
 ### Known limits
 
-- **Observer buffer is `hookObserverBufferSize = 64`** events per observer
-  (`pkg/agent/hooks.go`). A slow `EventObserver` (e.g. a subprocess hook lagging
-  on stdout writes) will silently drop older events when its subscription
-  channel fills. The drop is logged at DEBUG level only and is not tested under
-  sustained high event volume — consider this a soft limit for high-throughput
-  use cases. Tracked in [#165](https://github.com/elicify-ai/omnipus/issues/165).
+#### Observer buffer
+
+**Observer buffer is `hookObserverBufferSize = 64`** events per observer (`pkg/agent/hooks.go`). A slow `EventObserver` (e.g. a subprocess hook lagging on stdout writes) will silently drop older events when its subscription channel fills. The drop is logged at DEBUG level only and is not tested under sustained high event volume — consider this a soft limit for high-throughput use cases. Tracked in [#165](https://github.com/elicify-ai/omnipus/issues/165).

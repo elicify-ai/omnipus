@@ -10,7 +10,7 @@ This code applies in every Omnipus space — the GitHub repository, issues, pull
 
 ## Reporting
 
-If you experience or witness behaviour that violates the code, please report it to **contact@elicify.ai**. Reports are reviewed confidentially by the project maintainers at elicify.ai Pte. Ltd. Responses follow the enforcement guidelines in the Contributor Covenant — typically: private warning, public warning, temporary ban, or permanent ban, scaled to the severity and history.
+If you experience or witness behaviour that violates the code, please report it to **connect@elicify.ai**. Reports are reviewed confidentially by the project maintainers at elicify.ai Pte. Ltd. Responses follow the enforcement guidelines in the Contributor Covenant — typically: private warning, public warning, temporary ban, or permanent ban, scaled to the severity and history.
 
 We will not retaliate against good-faith reporters.
 

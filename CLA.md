@@ -74,7 +74,7 @@ upstream Omnipus repository**.
   projects that commit to a single license. Omnipus needs the option to ship
   commercial variants alongside open source, which the CLA enables.
 
-For any other questions, email **contact@elicify.ai** or open a GitHub
+For any other questions, email **connect@elicify.ai** or open a GitHub
 discussion.
 
 ---

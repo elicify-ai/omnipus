@@ -340,9 +340,11 @@ Before each `channel.Send` call, `preSend` (in `pkg/channels/manager.go`) runs:
 
 `runTTLJanitor` (`pkg/channels/manager.go:1250-1289`) runs every 10 seconds:
 
-- Typing stop functions: 5-minute TTL — calls `stop()` on eviction
-- Reaction undo functions: 5-minute TTL — calls `undo()` on eviction
-- Placeholder IDs: 10-minute TTL — silently deleted (no action)
+| State type | TTL | Eviction action |
+|-----------|-----|-----------------|
+| Typing stop functions | 5 minutes | Calls `stop()` |
+| Reaction undo functions | 5 minutes | Calls `undo()` |
+| Placeholder IDs | 10 minutes | Silently deleted (no action) |
 
 ---
 
@@ -451,12 +453,15 @@ The following factory names are registered. The gateway blank-imports each subpa
 | `whatsapp_native` | `pkg/channels/whatsapp_native/` | TypingCapable |
 | `google-chat` | `pkg/channels/googlechat/` | TypingCapable, WebhookHandler, CommandRegistrarCapable |
 
-**Notes on specific channels:**
+### Notes on specific channels
 
-- **matrix**: Conditionally imported with build tag `!mipsle && !netbsd && !(freebsd && arm) && cgo` (`pkg/gateway/channel_matrix.go:1-28`) because its transitive dependencies (`mautrix`, `modernc.org/sqlite`) fail on those targets.
-- **whatsapp vs whatsapp_native**: `initChannels` checks `WhatsAppConfig.UseNative` to select which factory to use (`pkg/channels/manager.go:467-477`). Only one of the two is initialized per run.
-- **weixin**: `RegisterFactory` call lives in `weixin.go` (no separate `init.go`) at `pkg/channels/weixin/weixin.go:40`.
-- **google-chat**: Factory name is `"google-chat"` (with hyphen), matching the `ChannelsConfig` JSON key (`pkg/config/config.go:789`).
+**matrix** is conditionally imported with build tag `!mipsle && !netbsd && !(freebsd && arm) && cgo` (`pkg/gateway/channel_matrix.go:1-28`) because its transitive dependencies (`mautrix`, `modernc.org/sqlite`) fail on those targets.
+
+**whatsapp vs whatsapp_native:** `initChannels` checks `WhatsAppConfig.UseNative` to select which factory to use (`pkg/channels/manager.go:467-477`). Only one of the two is initialized per run.
+
+**weixin:** The `RegisterFactory` call lives in `weixin.go` (no separate `init.go`) at `pkg/channels/weixin/weixin.go:40`.
+
+**google-chat:** Factory name is `"google-chat"` (with hyphen), matching the `ChannelsConfig` JSON key (`pkg/config/config.go:789`).
 
 ---
 
@@ -704,7 +709,7 @@ HTTP server timeout: `ReadTimeout = 30s`, `WriteTimeout = 30s` (`pkg/channels/ma
 
 **Webhook security is the channel's responsibility.** The shared mux does not enforce HMAC signature checks, IP allow-lists, or replay protection — each `WebhookHandler` implementation must validate inbound requests itself (e.g. Slack/Telegram signing secrets, Google Chat JWT, Line signature header). When adding a new webhook channel, do this validation in the `http.Handler` before publishing to the bus.
 
-#### 12.1 Webhook signature verification — project-wide invariant (#162)
+#### Webhook signature verification — project-wide invariant (#162)
 
 **Every `WebhookHandler` MUST verify a platform-issued signature on the request body BEFORE parsing the payload or publishing to the `MessageBus`.** Without this check, anyone who knows the webhook path can inject fake messages, drive agent turns, and spend LLM/credential budget.
 

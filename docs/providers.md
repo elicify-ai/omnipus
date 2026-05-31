@@ -34,12 +34,7 @@
 
 > **What's New?** Omnipus now uses a **model-centric** configuration approach. Simply specify `vendor/model` format (e.g., `zhipu/glm-4.7`) to add new providers—**zero code changes required!**
 
-This design also enables **multi-agent support** with flexible provider selection:
-
-- **Different agents, different providers**: Each agent can use its own LLM provider
-- **Model fallbacks**: Configure primary and fallback models for resilience
-- **Load balancing**: Distribute requests across multiple endpoints
-- **Centralized configuration**: Manage all providers in one place
+This design also enables **multi-agent support** with flexible provider selection. Each agent can use its own LLM provider. You can configure primary and fallback models for resilience, distribute requests across multiple endpoints for load balancing, and manage all providers in one place through centralized configuration.
 
 #### 📋 All Supported Vendors
 
@@ -374,11 +369,7 @@ For detailed migration guide, see [migration/model-list-migration.md](migration/
 
 ### Provider Architecture
 
-Omnipus routes providers by protocol family:
-
-- OpenAI-compatible protocol: OpenRouter, OpenAI-compatible gateways, Groq, Zhipu, and vLLM-style endpoints.
-- Anthropic protocol: Claude-native API behavior.
-- Codex/OAuth path: OpenAI OAuth/token authentication route.
+Omnipus routes providers by protocol family. The **OpenAI-compatible** protocol covers OpenRouter, OpenAI-compatible gateways, Groq, Zhipu, and vLLM-style endpoints. The **Anthropic** protocol handles Claude-native API behavior. The **Codex/OAuth** path covers the OpenAI OAuth/token authentication route.
 
 This keeps the runtime lightweight while making new OpenAI-compatible backends mostly a config operation (`api_base` + `api_key`).
 
@@ -387,7 +378,7 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
 
 **1. Get API key and base URL**
 
-* Get [API key](https://bigmodel.cn/usercenter/proj-mgmt/apikeys)
+Get [API key](https://bigmodel.cn/usercenter/proj-mgmt/apikeys)
 
 **2. Configure**
 

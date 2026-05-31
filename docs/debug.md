@@ -1,9 +1,10 @@
 # Debugging Omnipus
 
-Omnipus performs multiple complex interactions under the hood for every single request it receives—from routing messages and evaluating complexity, to executing tools and adapting to model failures. Being able to see exactly what is happening is crucial, not just for troubleshooting potential issues, but also for truly understanding how the agent operates.
+Omnipus performs multiple complex interactions under the hood for every single request it receives — from routing messages and evaluating complexity, to executing tools and adapting to model failures. Being able to see exactly what is happening is crucial, not just for troubleshooting potential issues, but also for truly understanding how the agent operates.
+
 ## Starting Omnipus in Debug Mode
 
-To get detailed information about what the agent is doing (LLM requests, tool calls, message routing), you can start the Omnipus gateway with the debug flag:
+To get detailed information about what the agent is doing (LLM requests, tool calls, message routing), start the Omnipus gateway with the debug flag:
 
 ```bash
 omnipus start --debug
@@ -11,26 +12,21 @@ omnipus start --debug
 omnipus start -d
 ```
 
-In this mode, the system will format the logs extensively and display previews of system prompts and tool execution results.
+In this mode, the system formats logs extensively and displays previews of system prompts and tool execution results.
 
 ## Disabling Log Truncation (Full Logs)
 
 By default, Omnipus truncates very long strings (such as the *System Prompt* or large JSON output results) in the debug logs to keep the console readable.
 
-If you need to inspect the complete output of a command or the exact payload sent to the LLM model, you can use the `--no-truncate` flag.
+If you need to inspect the complete output of a command or the exact payload sent to the LLM model, use the `--no-truncate` flag.
 
-**Note:** This flag *only* works when combined with the `--debug` mode.
+**Note:** This flag *only* works when combined with `--debug` mode.
 
 ```bash
 omnipus start --debug --no-truncate
-
 ```
 
-When this flag is active, the global truncation function is disabled. This is extremely useful for:
-
-* Verifying the exact syntax of the messages sent to the provider.
-* Reading the complete output of tools like `exec`, `web_fetch`, or `read_file`.
-* Debugging the session history saved in memory.
+When this flag is active, the global truncation function is disabled. This is useful for verifying the exact syntax of the messages sent to the provider, reading the complete output of tools like `exec`, `web_fetch`, or `read_file`, and debugging the session history saved in memory.
 
 ## Tool Call Visibility in Debug Logs
 
@@ -44,7 +40,7 @@ When debug mode is active, the agent emits structured log entries at each stage 
 | `TTL tick after tool execution` | DEBUG | `agent_id`, `iteration` | MCP tool-discovery TTL decrement after each tool round |
 | `Async tool completed, publishing result` | INFO | `tool`, `content_len`, `channel` | Only for tools that run asynchronously in the background |
 
-### Reading a tool call log entry
+### Reading a Tool Call Log Entry
 
 A typical synchronous tool call produces two consecutive lines in the console:
 
@@ -57,7 +53,7 @@ The arguments preview is hard-capped at **200 characters** in the logs regardles
 
 ## Real-Time Tool Feedback in Chat (tool_feedback)
 
-Debug logs are server-side only. If you want the agent to send a visible notification directly into the chat channel every time it executes a tool—useful when sharing the bot with other users or for transparency—enable the `tool_feedback` feature in `config.json`:
+Debug logs are server-side only. If you want the agent to send a visible notification directly into the chat channel every time it executes a tool — useful when sharing the bot with other users or for transparency — enable the `tool_feedback` feature in `config.json`:
 
 ```json
 {
@@ -79,7 +75,6 @@ When `enabled` is `true`, every tool call sends a short message to the chat befo
 {"query": "omnipus release notes"}
 ```
 
-
 ### Options
 
 | Field | Type | Default | Description |
@@ -87,7 +82,7 @@ When `enabled` is `true`, every tool call sends a short message to the chat befo
 | `enabled` | bool | `false` | Send a chat notification for each tool call |
 | `max_args_length` | int | `300` | Maximum characters of the serialised arguments included in the notification |
 
-### Environment variables
+### Environment Variables
 
 Both fields can also be set via environment variables:
 
