@@ -13,10 +13,17 @@ import (
 // past). It matches the HTTP provider default request timeout.
 const defaultPerCandidateTimeout = 120 * time.Second
 
+// minCandidateBudget is the floor applied to the fair-split per-candidate budget
+// when many candidates are competing for a small parent deadline. Without a floor,
+// an early candidate in a large chain could receive a sub-second slice.
+// Set to 5 seconds — enough for a fast provider to respond before the next
+// candidate in line gets its turn.
+const minCandidateBudget = 5 * time.Second
+
 // FallbackChain orchestrates model fallback across multiple candidates.
 type FallbackChain struct {
 	cooldown            *CooldownTracker
-	perCandidateTimeout time.Duration // 0 means "use fair-split only, no fixed cap"
+	perCandidateTimeout time.Duration // 0 means pass parent ctx unchanged (legacy behavior, NewFallbackChain)
 }
 
 // FallbackCandidate represents one model/provider to try.
@@ -81,11 +88,13 @@ func NewFallbackChainWithTimeout(cooldown *CooldownTracker, perCandidateTimeout 
 //     in ~1ms.
 //
 // budget is derived as follows:
-//  1. If the parent ctx has a live (positive) remaining deadline:
-//     budget = remaining / candidatesLeft
+//  1. If fc.perCandidateTimeout <= 0 (field not set; only possible via NewFallbackChain):
+//     returns ctx unchanged — no per-candidate deadline is applied (legacy pass-through).
+//  2. If the parent ctx has a live (positive) remaining deadline:
+//     budget = max(remaining/candidatesLeft, minCandidateBudget)
 //     If fc.perCandidateTimeout > 0: budget = min(budget, fc.perCandidateTimeout)
-//  2. If the parent ctx has no deadline, or the deadline is already past:
-//     budget = fc.perCandidateTimeout  (defaultPerCandidateTimeout when field is 0)
+//  3. If the parent ctx has no deadline, or the deadline is already past:
+//     budget = fc.perCandidateTimeout (always positive here; 0 is handled in case 1)
 //
 // The caller MUST call the returned cancel func immediately after the attempt
 // returns to release resources (do not defer inside a loop).
@@ -104,30 +113,47 @@ func (fc *FallbackChain) candidateBudget(
 	remaining := time.Until(deadline)
 
 	if hasDeadline && remaining > 0 {
-		// Parent still has live budget: split fairly, cap at perCandidateTimeout.
+		// Parent still has live budget: split fairly, apply floor, cap at perCandidateTimeout.
 		budget = remaining / time.Duration(candidatesLeft)
+
+		// Floor: prevent early candidates from receiving a sub-second slice when many
+		// candidates compete for a small remaining budget. Only apply the floor when
+		// the per-candidate cap (pct) is itself >= minCandidateBudget — if the operator
+		// explicitly chose a tight pct (e.g. 50ms), respect it rather than overriding
+		// with a 5-second floor they did not request.
+		if budget < minCandidateBudget && pct >= minCandidateBudget {
+			budget = minCandidateBudget
+		}
 		if budget > pct {
 			budget = pct
 		}
-	} else {
-		// Parent has no deadline or it is already exhausted: give a fresh budget.
-		// We detach from the expired parent deadline by starting from WithoutCancel,
-		// then bridge user cancellation manually via context.AfterFunc.
-		base := context.WithoutCancel(ctx)
-		attemptCtx, attemptCancel = context.WithTimeout(base, pct)
 
-		// Bridge: if the original ctx is canceled by the user, cancel attemptCtx too.
-		stopBridge := context.AfterFunc(ctx, attemptCancel)
-		outerCancel := attemptCancel
-		attemptCancel = func() {
-			stopBridge()
-			outerCancel()
+		if budget <= remaining {
+			// The budget fits within the parent's remaining time — attach directly.
+			return context.WithTimeout(ctx, budget)
 		}
-		return attemptCtx, attemptCancel
+		// The floor raised budget above the parent's remaining time. Detach from the
+		// parent deadline so this candidate gets its full floor budget, but preserve
+		// user cancellation via AfterFunc bridge (same pattern as exhausted-parent).
+	} else {
+		budget = pct
 	}
 
-	// Parent has live budget — use it directly with a capped deadline.
-	return context.WithTimeout(ctx, budget)
+	// Parent has no deadline, is already exhausted, or the floor raised the budget
+	// above what remains — give a fresh budget detached from the parent deadline.
+	// We detach from the expired/short parent deadline by starting from WithoutCancel,
+	// then bridge user cancellation manually via context.AfterFunc.
+	base := context.WithoutCancel(ctx)
+	attemptCtx, attemptCancel = context.WithTimeout(base, budget)
+
+	// Bridge: if the original ctx is canceled by the user, cancel attemptCtx too.
+	stopBridge := context.AfterFunc(ctx, attemptCancel)
+	outerCancel := attemptCancel
+	attemptCancel = func() {
+		stopBridge()
+		outerCancel()
+	}
+	return attemptCtx, attemptCancel
 }
 
 // ResolveCandidates parses model config into a deduplicated candidate list.

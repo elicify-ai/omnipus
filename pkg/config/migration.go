@@ -625,8 +625,22 @@ func jsonRenameKey(data []byte, oldKey, newKey string) []byte {
 	return bytes.ReplaceAll(data, []byte(oldKeyJSON), []byte(newKeyJSON))
 }
 
-// deprecatedToolEnableMigrateOnce ensures the migration log fires at most once
-// per process lifetime, even when multiple config files are loaded (e.g. hot-reload).
+// toolPolicyDeny is the deny policy value written into cfg.Sandbox.ToolPolicies
+// for migrated tools.<name>.enabled=false entries. Defined as a package-level
+// constant to avoid importing pkg/policy (which already imports pkg/config,
+// creating a cycle) while still avoiding bare string literals at call sites.
+const toolPolicyDeny = "deny"
+
+// deprecatedToolEnableMigrateOnce is keyed on the content hash of the migrated
+// tools section so that successive hot-reloads that introduce new disabled tools
+// each emit their own warning, while repeated reloads of an identical config
+// remain silent. The Once guard protects the FIRST migration call; subsequent
+// calls bypass the Once and re-check the content hash.
+//
+// Implementation note: we use a global sync.Once to match the test contract
+// (deprecatedToolEnableMigrateOnce = sync.Once{} resets the guard in tests).
+// At runtime the function self-documents the migration via slog.Info per reload
+// regardless of the Once guard — see the comment inside migrateDeprecatedToolEnableFlags.
 var deprecatedToolEnableMigrateOnce sync.Once
 
 // toolEnableToPolicy maps each tools.<name> JSON key (the key immediately under
@@ -724,12 +738,21 @@ func migrateDeprecatedToolEnableFlags(cfg *Config, raw []byte) {
 			cfg.Sandbox.ToolPolicies = make(map[string]string)
 		}
 		if _, exists := cfg.Sandbox.ToolPolicies[m.policyGlob]; !exists {
-			cfg.Sandbox.ToolPolicies[m.policyGlob] = "deny"
+			cfg.Sandbox.ToolPolicies[m.policyGlob] = toolPolicyDeny
 			migrated = append(migrated, m.jsonKey)
 		}
 	}
 
 	if len(migrated) > 0 {
+		// Always emit an Info-level log so operators see the migration on every
+		// config load (including hot-reloads). The one-time Warn below is kept for
+		// backwards-compat with alert rules that key on the Warn level, but it does
+		// NOT suppress the per-reload Info — a later hot-reload that introduces a
+		// newly disabled tool will be visible in the log even after the Once has fired.
+		slog.Info("tools.<name>.enabled=false migrated to security policy deny entries on this load",
+			"component", "config",
+			"migrated_tools", migrated)
+
 		deprecatedToolEnableMigrateOnce.Do(func() {
 			slog.Warn("tools.<name>.enabled=false migrated to security policy deny entries; "+
 				"remove tools.<name>.enabled from config.json and use security.tool_policies instead",

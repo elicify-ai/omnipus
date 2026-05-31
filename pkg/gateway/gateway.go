@@ -665,7 +665,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// Wire system.* tool dependencies into the agent loop (FR-001, FR-002).
 	// Called after SetReloadFunc so the reload trigger is available to system
 	// tools that trigger hot-reload (e.g., system.agent.create).
-	// WireSysagentDeps immediately registers all 35 system.* tools on every agent
+	// WireSysagentDeps immediately registers all 37 system.* tools on every agent
 	// in the current registry and stashes deps for re-application on hot-reload.
 	sysAgentDeps := &systools.Deps{
 		Home:         homePath,

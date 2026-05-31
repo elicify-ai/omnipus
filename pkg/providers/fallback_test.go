@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -611,6 +612,65 @@ func TestFallback_UserCancel_StillAbortsImmediately(t *testing.T) {
 	}
 	if reached2 {
 		t.Error("chain must not advance to candidate 2 after user cancellation")
+	}
+}
+
+// TestFallback_FairSplitFloor verifies that when many candidates compete for a
+// small parent deadline, each candidate receives at least minCandidateBudget
+// rather than a sub-second slice from naive division.
+//
+// Setup: 10 candidates, parent deadline of 2s (200ms per candidate via naive
+// fair-split). minCandidateBudget is 5s, so every candidate must receive ≥5s.
+// We inspect the deadline the first candidate receives; because the floor is
+// applied before we even run the first attempt, the budget must be ≥5s.
+func TestFallback_FairSplitFloor_EnforcesMinimumBudget(t *testing.T) {
+	ct := NewCooldownTracker()
+	// perCandidateTimeout = 30s (well above floor) — the floor governs here
+	fc := NewFallbackChainWithTimeout(ct, 30*time.Second)
+
+	// Parent deadline: 2s total / 10 candidates = 200ms naive share (below 5s floor).
+	parentCtx, parentCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer parentCancel()
+
+	const numCandidates = 10
+	candidates := make([]FallbackCandidate, numCandidates)
+	for i := range candidates {
+		candidates[i] = FallbackCandidate{
+			Provider: "prov",
+			Model:    fmt.Sprintf("model-%d", i),
+		}
+	}
+
+	var firstCandidateBudget time.Duration
+	callCount := 0
+
+	run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+		callCount++
+		if callCount == 1 {
+			// Record how much budget the first candidate got.
+			if d, ok := ctx.Deadline(); ok {
+				firstCandidateBudget = time.Until(d)
+			}
+			// Return a retriable error to advance to the next candidate.
+			return nil, errors.New("rate limit exceeded")
+		}
+		// All other candidates succeed immediately.
+		return &LLMResponse{Content: "ok", FinishReason: "stop"}, nil
+	}
+
+	result, err := fc.Execute(parentCtx, candidates, run)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected a successful result")
+	}
+
+	// The first candidate must have received at least minCandidateBudget (5s),
+	// not the naive 200ms from 2s/10 candidates.
+	if firstCandidateBudget < minCandidateBudget-100*time.Millisecond {
+		t.Errorf("first candidate budget = %v, want >= minCandidateBudget (%v); "+
+			"fair-split floor is not being applied", firstCandidateBudget, minCandidateBudget)
 	}
 }
 

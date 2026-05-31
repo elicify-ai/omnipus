@@ -288,9 +288,13 @@ func (e *RecapModelBootError) Error() string {
 }
 
 // perCandidateTimeoutFromConfig derives a per-candidate timeout for the fallback
-// chain from the provider config. It uses the RequestTimeout of the first
-// configured provider, falling back to the providers package default (120s) when
-// no provider is configured or the configured timeout is zero.
+// chain from the provider config. It uses the RequestTimeout of the first provider
+// that has a positive RequestTimeout value, falling back to the providers package
+// default (120s) when no provider is configured or no provider has a positive
+// timeout. This value is intentionally used as a global ceiling across all
+// candidates — it is derived from a representative provider config, not from the
+// specific candidate being attempted, because all candidates share the same
+// per-candidate deadline contract.
 func perCandidateTimeoutFromConfig(cfg *config.Config) time.Duration {
 	for _, p := range cfg.Providers {
 		if p != nil && p.RequestTimeout > 0 {
@@ -2551,7 +2555,7 @@ func (al *AgentLoop) SetAllowGodMode(allow bool) {
 	al.mu.Unlock()
 }
 
-// WireSysagentDeps registers all 35 system.* tools on every agent in the
+// WireSysagentDeps registers all 37 system.* tools on every agent in the
 // current registry (FR-001, FR-002). Mirrors the WireTier13Deps pattern:
 // called once at boot after NewAgentLoop, and again on hot-reload. The deps
 // pointer is stashed so hot-reload can re-apply the wiring on the rebuilt registry.
