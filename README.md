@@ -1,9 +1,5 @@
 <div align="left">
-<img src="src/assets/logo/omnipus-avatar.svg" alt="Omnipus" width="240">
-
-<h1>Omnipus</h1>
-
-<h3>A team of AI agents you actually own.</h3>
+<img src="docs/marketing/omnipus-hero.png" alt="Omnipus — a team of AI agents you actually own. Five named agents — Mia (Coach & Guide), Ray (Researcher), Jim (General Purpose), Ava (Agent Builder), and Max (Automator) — coordinated around the Omnipus octopus, above a capability strip (research with citations, code, browser automation, long-term memory, build unlimited custom agents) and a privacy strip (your keys, no telemetry, runs on your infrastructure, connect MCP servers and tools)." width="900">
 
 <p>Research. Code. Write. Automate. Browse. Analyze. — five named agents that hand off to each other and remember what you discussed.</p>
 
@@ -19,8 +15,6 @@
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
   <a href="https://omnipus.ai"><img src="https://img.shields.io/badge/Website-omnipus.ai-D4AF37?style=flat&logo=google-chrome&logoColor=white" alt="Website"></a>
 </p>
-
-<img src="docs/marketing/screenshots/04-agents-roster.png" alt="Omnipus agent roster" width="900">
 
 </div>
 
