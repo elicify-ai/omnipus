@@ -5,7 +5,9 @@
 
 <h3>A team of AI agents you actually own.</h3>
 
-<p>Five named agents that hand off to each other, remember what you discussed, and do real work — research, writing, code, browsing, automation. You run them yourself: no cloud account, no subscription, no data leaving your machine except the calls to the AI model you choose.</p>
+<p>Five named agents that hand off to each other, remember what you discussed, and do real work — research, writing, code, browsing, automation.</p>
+
+<p>You run them yourself: no cloud account, no subscription, no data leaving your machine — except the calls to the AI model you choose.</p>
 
 <p><b>New here?</b> → <a href="docs/getting-started.md">Get started in 10 minutes</a> · <a href="docs/concepts.md">How it works</a> · <a href="docs/using-omnipus-ui.md">Use the web app</a> · <a href="docs/using-omnipus-cli.md">Use the terminal</a></p>
 
@@ -42,7 +44,9 @@ Need more? Ava builds unlimited custom agents and Omnipus runs them all in the s
 
 Four live screenshots, captured against the running gateway.
 
-**Mia routes by intent.** Tell her what you need — "I need an agent to help me build a marketing website" — and she picks the right teammate, says why, and hands off in 12 ms. The receiving agent picks up in the same transcript. No copy-paste.
+**Mia routes by intent.** Tell her what you need — "I need an agent to help me build a marketing website" — and she picks the right teammate, says why, and hands off in 12 ms.
+
+The receiving agent picks up in the same transcript. No copy-paste.
 
 <img src="docs/marketing/screenshots/16-handoff-mia-to-jim.png" alt="Mia routes a website-build request to Jim by intent" width="900">
 
@@ -103,7 +107,15 @@ omnipus start
 # open http://localhost:5000
 ```
 
-What the script does, in one paragraph: detects your OS + arch (`uname -s` / `uname -m`), downloads `omnipus_<OS>_<arch>.tar.gz` from the latest GitHub Release, verifies the SHA256 against the published `checksums.txt`, extracts a single ~30 MB self-contained Go binary (SPA embedded via `go:embed`, no shared-lib runtime), and installs to `/usr/local/bin/omnipus`. POSIX `sh` — no bash-isms, works on Alpine, BusyBox, macOS, Ubuntu.
+What the script does:
+
+- Detects your OS and architecture (`uname -s` / `uname -m`).
+- Downloads `omnipus_<OS>_<arch>.tar.gz` from the latest GitHub Release.
+- Verifies the SHA256 against the published `checksums.txt`.
+- Extracts a single ~30 MB self-contained Go binary (SPA embedded via `go:embed`, no shared-lib runtime).
+- Installs it to `/usr/local/bin/omnipus`.
+
+It's plain POSIX `sh` — no bash-isms — so it works on Alpine, BusyBox, macOS, and Ubuntu.
 
 Customise via environment:
 
@@ -113,7 +125,12 @@ Customise via environment:
 | `OMNIPUS_INSTALL_DIR` | `/usr/local/bin` | Use `$HOME/.local/bin` if you don't have sudo |
 | `OMNIPUS_REPO` | `elicify-ai/omnipus` | Override only for forks |
 
-**Browser tools.** On first `browser.navigate` / `browser.screenshot` / `web_serve` call, the gateway looks for `google-chrome`/`chromium`/`chromium-browser` on `$PATH`. If none is present, it downloads a managed Chromium under `$OMNIPUS_HOME/browser/chromium/` (Chrome for Testing, ~150 MB, one-time). The download path needs glibc, so on Alpine hosts install `chromium` via `apk` first; the PATH lookup then resolves and the managed download is skipped.
+**Browser tools.** On the first `browser.navigate` / `browser.screenshot` / `web_serve` call, the gateway looks for `google-chrome` / `chromium` / `chromium-browser` on `$PATH`:
+
+- **Found** — it's used as-is.
+- **Not found** — a managed Chromium is downloaded to `$OMNIPUS_HOME/browser/chromium/` (Chrome for Testing, ~150 MB, one-time).
+
+That download needs glibc, so on Alpine hosts install `chromium` via `apk` first — the PATH lookup then resolves and the managed download is skipped.
 
 **Supported platforms in v0.1:** Linux amd64, Linux arm64, macOS arm64. Other targets are tracked in [docs/operations/platform-support.md](docs/operations/platform-support.md).
 
@@ -169,9 +186,18 @@ Requires Go 1.26+ and Node 24+. `make build` runs `spa-embed` first so `go:embed
 
 ### First boot
 
-Two ports open: **5000** for SPA + API, **5001** for sandboxed agent preview iframes. The onboarding wizard runs on first visit: Welcome → Provider → API Key → Model → Admin Account → Done.
+Two ports open:
 
-A 256-bit AES key auto-generates at `~/.omnipus/master.key` (mode `0600`). **Back it up** — losing it means losing every encrypted credential. For headless deployments, pre-provision via `OMNIPUS_KEY_FILE` or `OMNIPUS_MASTER_KEY`. → [docs/credential_encryption.md](docs/credential_encryption.md)
+- **5000** — SPA + API
+- **5001** — sandboxed agent preview iframes
+
+The onboarding wizard runs on first visit: Welcome → Provider → API Key → Model → Admin Account → Done.
+
+A 256-bit AES key auto-generates at `~/.omnipus/master.key` (mode `0600`).
+
+**Back it up** — losing it means losing every encrypted credential.
+
+For headless deployments, pre-provision via `OMNIPUS_KEY_FILE` or `OMNIPUS_MASTER_KEY`. → [docs/credential_encryption.md](docs/credential_encryption.md)
 
 ### Headless onboarding (no browser)
 
@@ -244,13 +270,27 @@ Single Go binary. File-based JSON/JSONL storage at `~/.omnipus/`. No Postgres, n
 
 ## Status
 
-Pre-1.0 and moving fast. **v0.1** (stabilized gateway, iframe preview, sandbox hardening) and **v0.2** (security hardening) are complete; **v0.3 / 1.0** — the "Rooms" redesign of memory, projects, and tasks — is in design. A single Go binary with the web app embedded *is* the product. MIT-licensed, community-focused, no telemetry. See the [roadmap](ROADMAP.md).
+Pre-1.0 and moving fast:
+
+- **v0.1** — stabilized gateway, iframe preview, sandbox hardening. ✅ Complete.
+- **v0.2** — security hardening. ✅ Complete.
+- **v0.3 / 1.0** — the "Rooms" redesign of memory, projects, and tasks. 🚧 In design.
+
+A single Go binary with the web app embedded *is* the product — MIT-licensed, community-focused, no telemetry. See the [roadmap](ROADMAP.md).
 
 ---
 
 ## Contributing
 
-Issues, PRs, discussions — all welcome. Browse [open issues](https://github.com/elicify-ai/omnipus/issues) for live work, or jump straight to [SUPPORT.md](SUPPORT.md) for the channel that matches your question. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations, and [SECURITY.md](SECURITY.md) for vulnerability reporting. External PRs need a one-time [Contributor License Agreement](CLA.md); the Omnipus name and logo are reserved per the [trademark policy](TRADEMARKS.md). For internal context — BRDs, ADRs, in-flight specs, future designs — see the [internal documentation](docs/internal/README.md).
+Issues, PRs, and discussions are all welcome.
+
+- **Find work** — browse the [open issues](https://github.com/elicify-ai/omnipus/issues).
+- **Ask a question** — [SUPPORT.md](SUPPORT.md) points you to the right channel.
+- **Set up to build** — [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Community expectations** — [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+- **Report a vulnerability** — [SECURITY.md](SECURITY.md).
+- **Before your first PR** — sign the one-time [Contributor License Agreement](CLA.md). (The Omnipus name and logo are reserved per the [trademark policy](TRADEMARKS.md).)
+- **Internal context** — BRDs, ADRs, specs, and designs live in the [internal documentation](docs/internal/README.md).
 
 ## License
 
