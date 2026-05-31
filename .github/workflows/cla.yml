@@ -3,12 +3,13 @@ name: CLA Assistant
 # Gates pull requests on a signed Contributor License Agreement.
 # The CLA text lives in CLA.md; signatures are recorded in-repo in the
 # `cla-signatures` branch (signatures/version1/cla.json). No third-party app is
-# used — this runs entirely as a GitHub Action with a repo-scoped token.
+# used — this runs entirely as a GitHub Action with the built-in GITHUB_TOKEN.
 #
-# Setup prerequisite (one-time, by a maintainer):
-#   Create a fine-grained Personal Access Token scoped to THIS repo only, with
-#   Repository permission "Contents: Read and write", and add it as the repo
-#   secret PERSONAL_ACCESS_TOKEN. See docs/internal/cla-setup.md.
+# No setup secret is required: signatures are stored in this same repository's
+# `cla-signatures` branch, so the workflow's built-in token (granted
+# `contents: write` below) is sufficient. The branch is seeded once with an empty
+# ledger (signatures/version1/cla.json = {"signedContributors":[]}).
+# See docs/internal/cla-setup.md.
 
 on:
   issue_comment:
@@ -18,7 +19,7 @@ on:
 
 permissions:
   actions: write
-  contents: read          # the action uses PERSONAL_ACCESS_TOKEN for the signature branch
+  contents: write         # built-in GITHUB_TOKEN commits the signature ledger to the cla-signatures branch (same repo)
   pull-requests: write
   statuses: write
 
@@ -36,10 +37,9 @@ jobs:
         # contributor-assistant/github-action v2.6.1 (pinned to commit SHA)
         uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
         env:
+          # Signatures are stored in this same repo's cla-signatures branch, so the
+          # built-in token (granted contents: write above) is sufficient — no PAT needed.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Repo-scoped fine-grained PAT (Contents: read/write) used ONLY to write
-          # the signatures file to the cla-signatures branch.
-          PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
         with:
           # Where signatures are stored (kept out of main; its own branch).
           path-to-signatures: 'signatures/version1/cla.json'
