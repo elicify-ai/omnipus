@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 )
 
 type migratable interface {
@@ -622,4 +623,118 @@ func jsonRenameKey(data []byte, oldKey, newKey string) []byte {
 	oldKeyJSON := fmt.Sprintf(`"%s"`, oldKey)
 	newKeyJSON := fmt.Sprintf(`"%s"`, newKey)
 	return bytes.ReplaceAll(data, []byte(oldKeyJSON), []byte(newKeyJSON))
+}
+
+// deprecatedToolEnableMigrateOnce ensures the migration log fires at most once
+// per process lifetime, even when multiple config files are loaded (e.g. hot-reload).
+var deprecatedToolEnableMigrateOnce sync.Once
+
+// toolEnableToPolicy maps each tools.<name> JSON key (the key immediately under
+// "tools" in config.json) to the policy-engine glob that covers all tools in
+// that subsystem. A nil cfg.Sandbox.ToolPolicies entry for the glob is created as
+// "deny" when operator intent is detected from raw JSON.
+//
+// "Operator intent" means the "enabled" key is EXPLICITLY present in the raw JSON
+// and its value is the JSON literal false. A missing key (absent from JSON) means
+// the in-memory default applies — we never treat a missing key as operator intent.
+var toolEnableToPolicy = []struct {
+	// jsonKey is the key directly under "tools" in the raw config JSON
+	jsonKey string
+	// policyGlob is the key written into cfg.Sandbox.ToolPolicies
+	policyGlob string
+}{
+	{"browser", "browser.*"},
+	{"mcp", "mcp_*"},
+	{"web", "web_search"},
+	{"web_fetch", "web_fetch"},
+	{"exec", "exec"},
+	{"cron", "cron"},
+	{"spawn", "spawn"},
+	{"spawn_status", "spawn_status"},
+	{"subagent", "subagent"},
+	{"write_file", "write_file"},
+	{"edit_file", "edit_file"},
+	{"append_file", "append_file"},
+	{"send_file", "send_file"},
+	{"task_list", "task_list"},
+	{"task_create", "task_create"},
+	{"task_update", "task_update"},
+}
+
+// migrateDeprecatedToolEnableFlags translates legacy tools.<name>.enabled=false
+// operator intent into cfg.Sandbox.ToolPolicies deny entries.
+//
+// The plan (issue #237): The tool-registry redesign removed infrastructure-level
+// enable gating; the policy engine (pkg/policy, sandbox.ToolPolicies) is the only
+// enforcement path. Configs that still carry an explicit tools.<name>.enabled=false
+// were silently fail-open (the flag had no effect). This function closes that gap
+// by converting operator-disabled tools into deny policy entries at config-load time.
+//
+// Idempotent: if a policy entry already exists (allow/ask) it is NOT downgraded.
+// Only absent keys are written as "deny".
+//
+// Intent detection: raw JSON is inspected so that absent keys (which marshal as
+// false due to Go's bool zero-value) are not misclassified as operator intent.
+// This prevents false positives for tools like mcp and spawn_status whose defaults.go
+// default is Enabled=false but which operators never explicitly disabled.
+func migrateDeprecatedToolEnableFlags(cfg *Config, raw []byte) {
+	if cfg == nil || len(raw) == 0 {
+		return
+	}
+
+	// Extract the raw "tools" object from the JSON. If absent, nothing to migrate.
+	var top struct {
+		Tools map[string]json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(raw, &top); err != nil {
+		// Best-effort: parse errors are already handled upstream.
+		return
+	}
+	if len(top.Tools) == 0 {
+		return
+	}
+
+	// For each subsystem, check whether "enabled" is explicitly present AND false.
+	var migrated []string
+	for _, m := range toolEnableToPolicy {
+		subsysRaw, present := top.Tools[m.jsonKey]
+		if !present {
+			// Key absent from JSON: no operator intent.
+			continue
+		}
+		// Parse the subsystem object to check whether "enabled" key is explicitly set.
+		var subsys map[string]json.RawMessage
+		if err := json.Unmarshal(subsysRaw, &subsys); err != nil {
+			continue
+		}
+		enabledRaw, hasEnabled := subsys["enabled"]
+		if !hasEnabled {
+			// "enabled" absent from this subsystem object: no operator intent.
+			continue
+		}
+		// Check for the literal JSON false (not "false" string or 0).
+		if string(enabledRaw) != "false" {
+			continue
+		}
+
+		// Operator explicitly set enabled=false. Translate to deny unless a
+		// stricter-or-equal policy already exists (never downgrade ask→deny or
+		// preserve an existing allow if the operator already set one explicitly).
+		if cfg.Sandbox.ToolPolicies == nil {
+			cfg.Sandbox.ToolPolicies = make(map[string]string)
+		}
+		if _, exists := cfg.Sandbox.ToolPolicies[m.policyGlob]; !exists {
+			cfg.Sandbox.ToolPolicies[m.policyGlob] = "deny"
+			migrated = append(migrated, m.jsonKey)
+		}
+	}
+
+	if len(migrated) > 0 {
+		deprecatedToolEnableMigrateOnce.Do(func() {
+			slog.Warn("tools.<name>.enabled=false migrated to security policy deny entries; "+
+				"remove tools.<name>.enabled from config.json and use security.tool_policies instead",
+				"component", "config",
+				"migrated_tools", migrated)
+		})
+	}
 }

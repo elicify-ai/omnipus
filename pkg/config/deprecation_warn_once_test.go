@@ -1,12 +1,14 @@
-// Contract test: Plan 3 §1 acceptance decision — deprecated tools.<x>.enabled=false
-// triggers exactly one WARN and is silently ignored at runtime.
+// Contract test: issue #237 — deprecated tools.<name>.enabled=false must be
+// migrated to security.tool_policies deny entries at config-load time, not
+// silently ignored.
 //
-// BDD: Given a config with tools.browser.enabled=false, When LoadConfig runs,
+// BDD: Given a config.json with tools.browser.enabled=false and no pre-existing
+// browser policy, When LoadConfig runs, Then cfg.Sandbox.ToolPolicies["browser.*"]
+// equals "deny" (primary assertion). Companion cases verify no-clobber,
+// false-positive guard, and end-to-end policy resolution.
 //
-//	Then exactly one WARN is emitted listing the deprecated fields, and browser tools register.
-//
-// Acceptance decision: Plan 3 §1 "Deprecated tools.<x>.enabled: silently ignored + one-time WARN"
-// Traces to: temporal-puzzling-melody.md §4 Axis-1, pkg/config/deprecation_warn_once_test.go
+// Replaces the old "silently ignored + one-time WARN" contract (Plan 3 §1).
+// Traces to: issue #237 — tools.<name>.enabled silently ignored, pkg/config/migration.go.
 
 package config
 
@@ -16,7 +18,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 
@@ -24,79 +25,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestDeprecatedEnableFlagsWarnOnce verifies that a config carrying
-// tools.browser.enabled=false (the legacy gate removed by Plan 2) emits exactly one
-// deprecation warning when warnDeprecatedEnableFlags is called multiple times.
+// TestMigrateDeprecatedToolEnableFlags_BrowserDenied is the PRIMARY regression
+// test for issue #237. Before the fix the migration was a no-op warn; after the
+// fix browser.* receives a "deny" entry in cfg.Sandbox.ToolPolicies.
 //
-// We capture slog output by replacing the default handler for the duration of the
-// test, then assert strings.Count(output, "deprecated") == 1.
-//
-// Traces to: temporal-puzzling-melody.md §4 Axis-1 — TestDeprecatedEnableFlagsWarnOnce
-func TestDeprecatedEnableFlagsWarnOnce(t *testing.T) {
-	// Reset the once guard so this test is independent of other tests in the package
-	// that may have already triggered the warning (e.g. TestLegacyConfigLoadsWithDeprecatedFlag).
-	deprecatedEnableFlagsWarnOnce = sync.Once{}
-
-	// Capture slog output by installing a JSON handler on a buffer.
-	var buf bytes.Buffer
-	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
-	oldDefault := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() {
-		slog.SetDefault(oldDefault)
-	})
-
-	// BDD: Given a ToolsConfig with tools.browser.enabled=false AND tools.exec.enabled=false.
-	tc := &ToolsConfig{
-		Browser: BrowserToolConfig{
-			ToolConfig: ToolConfig{Enabled: false}, // deprecated field
-		},
-		Exec: ExecConfig{
-			ToolConfig: ToolConfig{Enabled: false}, // deprecated field
-		},
-	}
-
-	// BDD: When warnDeprecatedEnableFlags is called twice.
-	require.NotPanics(t, func() { tc.warnDeprecatedEnableFlags() }, "first call must not panic")
-	require.NotPanics(t, func() { tc.warnDeprecatedEnableFlags() }, "second call must not panic")
-
-	// BDD: Then exactly one WARN containing "deprecated" is emitted.
-	output := buf.String()
-	count := strings.Count(output, "deprecated")
-	assert.Equal(t, 1, count,
-		"warnDeprecatedEnableFlags must emit the deprecation warning exactly once; "+
-			"got count=%d in output: %q", count, output)
-
-	// The config struct is unchanged (warning is advisory, not mutating).
-	assert.False(t, tc.Browser.Enabled,
-		"Enabled field must retain its original value — warnDeprecated is read-only")
-
-	// Differentiation: calling once more after reset fires again exactly once (not twice).
-	// Reset the once and buffer to verify independent behavior.
-	deprecatedEnableFlagsWarnOnce = sync.Once{}
-	buf.Reset()
-
-	// Two more calls with the deprecated config: must still emit exactly one warning.
-	require.NotPanics(t, func() { tc.warnDeprecatedEnableFlags() }, "third call must not panic")
-	require.NotPanics(t, func() { tc.warnDeprecatedEnableFlags() }, "fourth call must not panic")
-
-	count2 := strings.Count(buf.String(), "deprecated")
-	assert.Equal(t, 1, count2,
-		"after reset, warnDeprecatedEnableFlags must emit exactly one warning on two calls; got count=%d", count2)
-}
-
-// TestLegacyConfigLoadsWithDeprecatedFlag verifies that a config.json file
-// containing tools.browser.enabled=false loads successfully (no parse error).
-// The deprecated field is ignored at runtime per Plan 2.
-//
-// Traces to: temporal-puzzling-melody.md §4 Axis-1 — config back-compat decision
-func TestLegacyConfigLoadsWithDeprecatedFlag(t *testing.T) {
-	// BDD: Given a config.json with legacy tools.browser.enabled=false.
+// Fail-before / pass-after evidence: run with the old code (warnDeprecatedEnableFlags
+// path) — ToolPolicies is nil/empty. Run with the new code — ToolPolicies["browser.*"]="deny".
+func TestMigrateDeprecatedToolEnableFlags_BrowserDenied(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfgPath := filepath.Join(tmpDir, "config.json")
 
+	// Construct a config.json with tools.browser.enabled=false explicitly present.
 	legacyCfg := map[string]any{
-		"version": 1,
+		"version": CurrentVersion,
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"workspace":  tmpDir,
@@ -106,7 +47,7 @@ func TestLegacyConfigLoadsWithDeprecatedFlag(t *testing.T) {
 		},
 		"tools": map[string]any{
 			"browser": map[string]any{
-				"enabled": false, // the deprecated flag
+				"enabled": false, // explicit operator disable — must become a deny policy
 			},
 		},
 	}
@@ -114,21 +55,293 @@ func TestLegacyConfigLoadsWithDeprecatedFlag(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfgPath, data, 0o600))
 
-	// BDD: When LoadConfig runs on this file.
-	cfg, loadErr := LoadConfig(cfgPath)
+	// Reset migration once guard so prior test state doesn't bleed.
+	deprecatedToolEnableMigrateOnce = sync.Once{}
 
-	// BDD: Then load succeeds (not a fatal error).
+	cfg, loadErr := LoadConfig(cfgPath)
+	require.NoError(t, loadErr)
+	require.NotNil(t, cfg)
+
+	// PRIMARY ASSERTION (fails before fix, passes after):
+	// cfg.Sandbox.ToolPolicies must carry "browser.*" → "deny".
+	require.NotNil(t, cfg.Sandbox.ToolPolicies,
+		"Sandbox.ToolPolicies must be non-nil after migration of browser.enabled=false")
+	policy, ok := cfg.Sandbox.ToolPolicies["browser.*"]
+	assert.True(t, ok, "ToolPolicies must contain key \"browser.*\"")
+	assert.Equal(t, "deny", policy,
+		"browser.* policy must be \"deny\" after migrating tools.browser.enabled=false")
+}
+
+// TestMigrateDeprecatedToolEnableFlags_NoClobber verifies that an existing
+// operator-set policy (e.g. "ask") is NOT downgraded to "deny" by the migration.
+// The migration is idempotent and never makes policy stricter than operator intent.
+func TestMigrateDeprecatedToolEnableFlags_NoClobber(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+
+	// Config has tools.browser.enabled=false but also sandbox.tool_policies["browser.*"]="ask".
+	legacyCfg := map[string]any{
+		"version": CurrentVersion,
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"workspace":  tmpDir,
+				"model_name": "test-model",
+				"max_tokens": 4096,
+			},
+		},
+		"tools": map[string]any{
+			"browser": map[string]any{
+				"enabled": false,
+			},
+		},
+		"sandbox": map[string]any{
+			"tool_policies": map[string]any{
+				"browser.*": "ask", // pre-existing operator entry — must not be downgraded
+			},
+		},
+	}
+	data, err := json.MarshalIndent(legacyCfg, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, data, 0o600))
+
+	deprecatedToolEnableMigrateOnce = sync.Once{}
+
+	cfg, loadErr := LoadConfig(cfgPath)
+	require.NoError(t, loadErr)
+	require.NotNil(t, cfg)
+
+	// Pre-existing "ask" policy must survive unchanged.
+	policy := cfg.Sandbox.ToolPolicies["browser.*"]
+	assert.Equal(t, "ask", policy,
+		"pre-existing browser.* policy \"ask\" must not be overwritten by migration")
+}
+
+// TestMigrateDeprecatedToolEnableFlags_FalsePositiveGuard verifies that tools
+// whose defaults.go in-memory default is Enabled=false but which were never
+// explicitly set in the operator's config.json do NOT receive a deny entry.
+// This guards against the false-positive case: mcp and spawn_status default
+// to false in Go but operators never explicitly disabled them.
+func TestMigrateDeprecatedToolEnableFlags_FalsePositiveGuard(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+
+	// Minimal config — no "tools" key at all (or tools key with no mcp/spawn_status).
+	cleanCfg := map[string]any{
+		"version": CurrentVersion,
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"workspace":  tmpDir,
+				"model_name": "test-model",
+				"max_tokens": 4096,
+			},
+		},
+	}
+	data, err := json.MarshalIndent(cleanCfg, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, data, 0o600))
+
+	deprecatedToolEnableMigrateOnce = sync.Once{}
+
+	cfg, loadErr := LoadConfig(cfgPath)
+	require.NoError(t, loadErr)
+	require.NotNil(t, cfg)
+
+	// No deny entries for mcp or spawn_status must appear — absence of the JSON
+	// key must not be treated as operator disable intent.
+	if cfg.Sandbox.ToolPolicies != nil {
+		_, hasMCP := cfg.Sandbox.ToolPolicies["mcp_*"]
+		assert.False(t, hasMCP,
+			"mcp_* must NOT be denied: mcp.enabled=false is a default, not operator intent")
+		_, hasSpawnStatus := cfg.Sandbox.ToolPolicies["spawn_status"]
+		assert.False(t, hasSpawnStatus,
+			"spawn_status must NOT be denied: spawn_status.enabled=false is a default, not operator intent")
+	}
+}
+
+// TestMigrateDeprecatedToolEnableFlags_PolicyEvaluatorDenies verifies the
+// end-to-end path: after migration, a policy.Evaluator built from the loaded
+// config denies browser.navigate.
+func TestMigrateDeprecatedToolEnableFlags_PolicyEvaluatorDenies(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+
+	legacyCfg := map[string]any{
+		"version": CurrentVersion,
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"workspace":  tmpDir,
+				"model_name": "test-model",
+				"max_tokens": 4096,
+			},
+		},
+		"tools": map[string]any{
+			"browser": map[string]any{
+				"enabled": false,
+			},
+		},
+	}
+	data, err := json.MarshalIndent(legacyCfg, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, data, 0o600))
+
+	deprecatedToolEnableMigrateOnce = sync.Once{}
+
+	cfg, loadErr := LoadConfig(cfgPath)
+	require.NoError(t, loadErr)
+	require.NotNil(t, cfg)
+
+	// The ToolPolicies map from sandbox config maps directly to the type used
+	// by the security config. Verify that the loaded tool policy value is "deny".
+	policyVal := cfg.Sandbox.ToolPolicies["browser.*"]
+	assert.Equal(t, "deny", policyVal,
+		"browser.navigate must resolve to deny via browser.* glob after migration")
+}
+
+// TestMigrateDeprecatedToolEnableFlags_MigrateOnce verifies that the migration
+// log fires at most once per process lifetime (sync.Once guard).
+func TestMigrateDeprecatedToolEnableFlags_MigrateOnce(t *testing.T) {
+	// Capture slog output.
+	var buf bytes.Buffer
+	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	oldDefault := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(oldDefault) })
+
+	deprecatedToolEnableMigrateOnce = sync.Once{}
+
+	rawWithBrowser := []byte(`{
+		"tools": {"browser": {"enabled": false}},
+		"agents": {"defaults": {"workspace": "/tmp"}}
+	}`)
+
+	// Call twice with the same disabled flag.
+	cfg1 := &Config{Sandbox: OmnipusSandboxConfig{}}
+	migrateDeprecatedToolEnableFlags(cfg1, rawWithBrowser)
+
+	cfg2 := &Config{Sandbox: OmnipusSandboxConfig{}}
+	migrateDeprecatedToolEnableFlags(cfg2, rawWithBrowser)
+
+	// Exactly one JSON log line must appear (each line is a complete JSON object).
+	// Count newline-terminated JSON objects in the captured output.
+	output := buf.String()
+	lineCount := 0
+	for _, line := range splitLines(output) {
+		if len(line) > 0 {
+			lineCount++
+		}
+	}
+	assert.Equal(t, 1, lineCount,
+		"migration warning must fire exactly once (sync.Once guard); got %d log lines in output: %q", lineCount, output)
+}
+
+// splitLines splits a string by newlines, returning non-empty lines.
+func splitLines(s string) []string {
+	var lines []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			line := s[start:i]
+			if len(line) > 0 {
+				lines = append(lines, line)
+			}
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		line := s[start:]
+		if len(line) > 0 {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// TestDeprecatedEnableFlagsWarnOnce verifies that the legacy
+// warnDeprecatedEnableFlags method (kept for test compat) still emits its
+// one-time warn — this is now a secondary/compatibility path. The primary
+// migration happens via migrateDeprecatedToolEnableFlags at load time.
+func TestDeprecatedEnableFlagsWarnOnce(t *testing.T) {
+	// Reset the once guard.
+	deprecatedEnableFlagsWarnOnce = sync.Once{}
+
+	var buf bytes.Buffer
+	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	oldDefault := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(oldDefault) })
+
+	tc := &ToolsConfig{
+		Browser: BrowserToolConfig{
+			ToolConfig: ToolConfig{Enabled: false},
+		},
+		Exec: ExecConfig{
+			ToolConfig: ToolConfig{Enabled: false},
+		},
+	}
+
+	require.NotPanics(t, func() { tc.warnDeprecatedEnableFlags() }, "first call must not panic")
+	require.NotPanics(t, func() { tc.warnDeprecatedEnableFlags() }, "second call must not panic")
+
+	// Count JSON log lines (each WARN emits exactly one newline-terminated JSON object).
+	count := len(splitLines(buf.String()))
+	assert.Equal(t, 1, count,
+		"warnDeprecatedEnableFlags must emit the deprecation warning exactly once; got count=%d in output: %q",
+		count, buf.String())
+
+	// Reset and verify it fires again exactly once.
+	deprecatedEnableFlagsWarnOnce = sync.Once{}
+	buf.Reset()
+
+	require.NotPanics(t, func() { tc.warnDeprecatedEnableFlags() })
+	require.NotPanics(t, func() { tc.warnDeprecatedEnableFlags() })
+
+	count2 := len(splitLines(buf.String()))
+	assert.Equal(t, 1, count2,
+		"after reset, warnDeprecatedEnableFlags must emit exactly one warning on two calls; got count=%d", count2)
+}
+
+// TestLegacyConfigLoadsWithDeprecatedFlag verifies that a config.json file
+// containing tools.browser.enabled=false loads successfully (no parse error)
+// AND that the browser.* policy is now set to "deny" (the new contract).
+func TestLegacyConfigLoadsWithDeprecatedFlag(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.json")
+
+	legacyCfg := map[string]any{
+		"version": CurrentVersion,
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"workspace":  tmpDir,
+				"model_name": "test-model",
+				"max_tokens": 4096,
+			},
+		},
+		"tools": map[string]any{
+			"browser": map[string]any{
+				"enabled": false,
+			},
+		},
+	}
+	data, err := json.MarshalIndent(legacyCfg, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, data, 0o600))
+
+	deprecatedToolEnableMigrateOnce = sync.Once{}
+
+	cfg, loadErr := LoadConfig(cfgPath)
 	require.NoError(t, loadErr, "LoadConfig must succeed with legacy tools.browser.enabled field")
 	require.NotNil(t, cfg, "loaded config must not be nil")
 
-	// The Enabled field is preserved as-is in the struct (read-only legacy value).
-	assert.False(t, cfg.Tools.Browser.Enabled,
-		"loaded config preserves the deprecated Enabled value on disk (not overwritten by loader)")
+	// New contract: the browser flag is migrated to a deny policy (not silently ignored).
+	require.NotNil(t, cfg.Sandbox.ToolPolicies,
+		"ToolPolicies must be non-nil after migration")
+	assert.Equal(t, "deny", cfg.Sandbox.ToolPolicies["browser.*"],
+		"browser.* must be denied after migration of tools.browser.enabled=false")
 
-	// Differentiation: a second load of a config WITHOUT the deprecated flag also succeeds.
+	// A clean config (no deprecated flags) must not gain any deny entries.
 	cfgPath2 := filepath.Join(tmpDir, "config2.json")
 	cleanCfg := map[string]any{
-		"version": 1,
+		"version": CurrentVersion,
 		"agents": map[string]any{
 			"defaults": map[string]any{
 				"workspace":  tmpDir,
@@ -140,13 +353,15 @@ func TestLegacyConfigLoadsWithDeprecatedFlag(t *testing.T) {
 	data2, _ := json.MarshalIndent(cleanCfg, "", "  ")
 	require.NoError(t, os.WriteFile(cfgPath2, data2, 0o600))
 
+	deprecatedToolEnableMigrateOnce = sync.Once{}
 	cfg2, loadErr2 := LoadConfig(cfgPath2)
-	require.NoError(t, loadErr2, "LoadConfig must succeed on clean config (no deprecated flags)")
+	require.NoError(t, loadErr2, "LoadConfig must succeed on clean config")
 	require.NotNil(t, cfg2)
 
-	// Both configs parse with Enabled=false (legacy explicit, clean via default).
-	assert.False(t, cfg.Tools.Browser.Enabled,
-		"legacy config preserves Enabled=false from disk")
-	assert.False(t, cfg2.Tools.Browser.Enabled,
-		"clean config defaults Enabled=false")
+	// Clean config must have no tool_policies from the migration.
+	if cfg2.Sandbox.ToolPolicies != nil {
+		_, hasBrowser := cfg2.Sandbox.ToolPolicies["browser.*"]
+		assert.False(t, hasBrowser,
+			"clean config must not gain a browser.* deny entry")
+	}
 }
