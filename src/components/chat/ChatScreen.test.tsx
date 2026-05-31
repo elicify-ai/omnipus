@@ -29,8 +29,8 @@ vi.mock('@assistant-ui/react', () => {
       Parts: () => null,
     },
     ComposerPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
+      Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
+        React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
       Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur }: {
         disabled?: boolean; placeholder?: string; className?: string;
         onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
@@ -226,5 +226,48 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
 
     expect(screen.queryByText('/clear')).not.toBeInTheDocument()
     expect(screen.queryByText('/cancel')).not.toBeInTheDocument()
+  })
+})
+
+// ── #252: upload before first message auto-creates a session ───────────────────
+
+describe('#252 — image upload before first message', () => {
+  it('auto-creates a session when uploading with no active session, then uploads against it', async () => {
+    const api = await import('@/lib/api')
+    const createSessionMock = vi.mocked(api.createSession)
+    const uploadFilesMock = vi.mocked(api.uploadFiles)
+    createSessionMock.mockResolvedValue({ id: 'sess_new_252', agent_id: 'general-assistant' } as any)
+    uploadFilesMock.mockResolvedValue({
+      files: [{ name: 'pic.png', path: 'uploads/sess_new_252/pic.png', size: 7, content_type: 'image/png', ref: 'media://r252' }],
+    } as any)
+
+    // No active session — this is the #252 condition.
+    act(() => {
+      useSessionStore.setState({ activeSessionId: null, activeAgentId: 'general-assistant', activeAgentType: null })
+      useConnectionStore.setState({ connection: { send: vi.fn().mockReturnValue(true), disconnect: vi.fn(), connect: vi.fn() } as any, isConnected: true })
+    })
+
+    const { OmnipusComposer } = await import('./ChatScreen')
+    render(<OmnipusComposer />)
+
+    // Attach a (non-harmful) image via the hidden file input.
+    const fileInput = screen.getByTestId('file-input') as HTMLInputElement
+    const file = new File(['PNGDATA'], 'pic.png', { type: 'image/png' })
+    act(() => {
+      fireEvent.change(fileInput, { target: { files: [file] } })
+    })
+
+    // Submit the composer with a pending file present.
+    const form = screen.getByTestId('composer-form')
+    await act(async () => {
+      fireEvent.submit(form)
+      await Promise.resolve()
+    })
+    // Allow the async createSession→upload chain to settle.
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+
+    // #252: a session must have been minted instead of erroring "no active session".
+    expect(createSessionMock).toHaveBeenCalledWith('general-assistant')
+    expect(uploadFilesMock).toHaveBeenCalledWith('sess_new_252', [file])
   })
 })

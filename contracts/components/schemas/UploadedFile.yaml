@@ -30,3 +30,12 @@ properties:
     type: string
     description: Detected MIME type of the uploaded file.
     example: "image/png"
+  ref:
+    type: string
+    description: >
+      media:// ref registered for this file in the media store. Present when
+      the server could register the file (always, for now). The SPA echoes
+      this ref back in the message frame's "media" array so the agent loop can
+      thread the file into the LLM content array as a multimodal content block.
+      Empty if registration failed (the file is still downloadable via path).
+    example: "media://550e8400-e29b-41d4-a716-446655440000"

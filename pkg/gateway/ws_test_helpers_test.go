@@ -17,12 +17,13 @@ package gateway
 //
 // Field naming mirrors the JSON wire format so json.Marshal produces correct frames.
 type wsClientFrameTestHelper struct {
-	Type      string `json:"type"`
-	Token     string `json:"token,omitempty"`      // auth frame
-	Content   string `json:"content,omitempty"`    // message frame
-	SessionID string `json:"session_id,omitempty"` // message/cancel/attach_session/session_close
-	AgentID   string `json:"agent_id,omitempty"`   // message frame (route to specific agent)
-	ID        string `json:"id,omitempty"`         // exec_approval_response
-	Decision  string `json:"decision,omitempty"`   // exec_approval_response / device_pairing_response
-	DeviceID  string `json:"device_id,omitempty"`  // device_pairing_response
+	Type      string   `json:"type"`
+	Token     string   `json:"token,omitempty"`      // auth frame
+	Content   string   `json:"content,omitempty"`    // message frame
+	SessionID string   `json:"session_id,omitempty"` // message/cancel/attach_session/session_close
+	AgentID   string   `json:"agent_id,omitempty"`   // message frame (route to specific agent)
+	Media     []string `json:"media,omitempty"`      // message frame (media:// attachment refs)
+	ID        string   `json:"id,omitempty"`         // exec_approval_response
+	Decision  string   `json:"decision,omitempty"`   // exec_approval_response / device_pairing_response
+	DeviceID  string   `json:"device_id,omitempty"`  // device_pairing_response
 }

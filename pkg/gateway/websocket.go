@@ -621,7 +621,7 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 			if f.SessionId != nil {
 				sessionID = *f.SessionId
 			}
-			h.handleChatMessage(ctx, chatID, sessionID, f.Content, agentID, wc)
+			h.handleChatMessage(ctx, chatID, sessionID, f.Content, agentID, f.Media, wc)
 		case string(generated.WsFrameTypeCancel):
 			var f generated.CancelFrame
 			if err := json.Unmarshal(data, &f); err != nil {
@@ -770,6 +770,7 @@ func (h *WSHandler) handleChatMessage(
 	frameSessionID string,
 	content string,
 	agentID string,
+	mediaRefs []string,
 	wc *wsConn,
 ) {
 	targetAgentID := agentID
@@ -901,12 +902,28 @@ func (h *WSHandler) handleChatMessage(
 		}
 	}
 
+	// #254: thread client-supplied media refs into the inbound message so the
+	// agent loop resolves them into multimodal content blocks. Only accept
+	// well-formed media:// refs — anything else is a client error or an
+	// attempt to smuggle an arbitrary string into the LLM content array, so
+	// we drop it rather than forward it.
+	var acceptedMedia []string
+	for _, ref := range mediaRefs {
+		if strings.HasPrefix(ref, "media://") {
+			acceptedMedia = append(acceptedMedia, ref)
+		} else {
+			slog.Warn("ws: dropping non-media:// ref in message frame",
+				"chat_id", chatID, "session_id", sessionID)
+		}
+	}
+
 	msg := bus.InboundMessage{
 		Channel:   "webchat",
 		SenderID:  "webchat_user",
 		ChatID:    chatID,
 		Content:   content,
 		SessionID: sessionID,
+		Media:     acceptedMedia,
 	}
 	if agentID != "" {
 		if err := validateEntityID(agentID); err != nil {

@@ -812,6 +812,19 @@ components:
           type: string
           minLength: 1
           maxLength: 128
+        media:
+          type: array
+          description: >
+            Optional media:// refs for files the user attached to this message
+            (e.g. images uploaded via POST /api/v1/upload). The server threads
+            each ref into the LLM content array as a multimodal content block so
+            the agent can see the attachment. Empty or omitted for text-only
+            messages.
+          maxItems: 16
+          items:
+            type: string
+            minLength: 1
+            maxLength: 256
 
     CancelFrame:
       title: CancelFrame

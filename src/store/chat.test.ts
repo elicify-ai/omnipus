@@ -395,6 +395,58 @@ describe('chat store — sendMessage optimistic render', () => {
       expect.objectContaining({ type: 'message', content: 'Hello, world!' })
     )
   })
+
+  // #254 regression: media:// refs must be threaded into the outbound frame so
+  // the agent sees the attachment as a multimodal content block.
+  it('sendMessage threads mediaRefs into the WS message frame', () => {
+    const mockSend = vi.fn().mockReturnValue(true)
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        isConnected: true,
+      })
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
+      useChatStore.getState().sendMessage('here is a pic', {
+        mediaRefs: ['media://pic1'],
+        attachments: [{ type: 'image', url: '/api/v1/uploads/s/pic.png', filename: 'pic.png', contentType: 'image/png' }],
+      })
+    })
+    expect(mockSend).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'message', content: 'here is a pic', media: ['media://pic1'] })
+    )
+    // Optimistic user bubble carries the attachment for inline display.
+    const userMsg = useChatStore.getState().messages.find((m) => m.role === 'user')
+    expect(userMsg?.media?.[0]?.url).toBe('/api/v1/uploads/s/pic.png')
+  })
+
+  // #253 (P0 DATA LOSS) regression: when the WS send fails, the user's message
+  // must NOT be silently dropped. The user bubble is kept (flagged 'error') and
+  // only the empty assistant placeholder is removed.
+  it('sendMessage keeps the user message when the WS send fails', () => {
+    const mockSend = vi.fn().mockReturnValue(false) // simulate send failure
+    act(() => {
+      useChatStore.setState({ isStreaming: false })
+      useConnectionStore.setState({
+        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        isConnected: true,
+      })
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
+      useChatStore.getState().sendMessage('do not lose me')
+    })
+    const state = useChatStore.getState()
+    const userMsg = state.messages.find((m) => m.role === 'user')
+    // The user turn survives the failed send.
+    expect(userMsg).toBeDefined()
+    expect(userMsg?.content).toBe('do not lose me')
+    expect(userMsg?.status).toBe('error')
+    // The empty streaming assistant placeholder is removed.
+    expect(state.messages.some((m) => m.role === 'assistant')).toBe(false)
+    // Streaming flag cleared so the composer is usable again.
+    expect(state.isStreaming).toBe(false)
+    // Error surfaced to the user.
+    expect(useConnectionStore.getState().connectionError).toContain('kept')
+  })
 })
 
 // ── Sprint H: subagent span tests ─────────────────────────────────────────────

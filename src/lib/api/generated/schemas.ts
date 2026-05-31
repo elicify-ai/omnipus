@@ -282,6 +282,7 @@ type UploadedFile = {
   path: string;
   size: number;
   content_type: string;
+  ref?: string | undefined;
 };
 type ActivityEventsResponse = {
   events: Array<ActivityEvent>;
@@ -1136,6 +1137,7 @@ export const UploadedFile: z.ZodType<UploadedFile> = z.object({
   path: z.string(),
   size: z.number().int().gte(0),
   content_type: z.string(),
+  ref: z.string().optional(),
 });
 export const UploadFilesResponse: z.ZodType<UploadFilesResponse> = z
   .object({ files: z.array(UploadedFile) })
@@ -4338,6 +4340,7 @@ export const MessageFrame = z
     content: z.string().min(1).max(5242880),
     session_id: z.string().min(1).max(128).optional(),
     agent_id: z.string().min(1).max(128).optional(),
+    media: z.array(z.string().min(1).max(256)).max(16).optional(),
   })
   .strict();
 

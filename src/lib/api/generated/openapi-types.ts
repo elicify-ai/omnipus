@@ -3633,6 +3633,11 @@ export interface components {
              * @example image/png
              */
             content_type: string;
+            /**
+             * @description media:// ref registered for this file in the media store. Present when the server could register the file (always, for now). The SPA echoes this ref back in the message frame's "media" array so the agent loop can thread the file into the LLM content array as a multimodal content block. Empty if registration failed (the file is still downloadable via path).
+             * @example media://550e8400-e29b-41d4-a716-446655440000
+             */
+            ref?: string;
         };
         /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode, allowed_paths, and default_profile are restart-gated (the response includes requires_restart=true when any of these change). ssrf.allow_internal and shell_deny_patterns are hot-reloaded. */
         SandboxConfigUpdate: {
