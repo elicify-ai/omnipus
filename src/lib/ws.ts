@@ -627,8 +627,22 @@ export class WsConnection {
 
   send(frame: ClientFrame): boolean {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(frame))
-      return true
+      try {
+        this.ws.send(JSON.stringify(frame))
+        return true
+      } catch (err) {
+        // An OPEN socket can still throw on send (broken pipe, send-buffer full,
+        // abrupt teardown). Treat it as a failed send and return false so callers
+        // — notably chat sendMessage — run the no-loss recovery path (keep the
+        // user message, mark it error, offer Retry) instead of believing the
+        // frame was delivered. Without this, a throw here silently loses the turn.
+        // See #253. Surfaced via console (not onError) to avoid double-toasting:
+        // the caller already shows the user-facing "could not send" state on false.
+        console.error(
+          `WebSocket send failed on OPEN socket: ${err instanceof Error ? err.message : String(err)}`,
+        )
+        return false
+      }
     }
     return false
   }

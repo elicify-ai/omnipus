@@ -70,7 +70,10 @@ test(
     }
 
     // Create a session via the API so TaskDetailPanel has a real session_id to open.
-    const sessionResp = await apiFetch('POST', '/api/v1/sessions', {})
+    // NOTE: agent_id is REQUIRED — omitting it defaults to the non-existent "main"
+    // agent, which makes the session read-only ("Agent removed") and disables the
+    // chat input. Use a seeded core agent ('mia', the guide) so the session is live.
+    const sessionResp = await apiFetch('POST', '/api/v1/sessions', { agent_id: 'mia' })
     expect(sessionResp.ok).toBeTruthy()
     const sessionId = (sessionResp.body as { id: string }).id
     expect(typeof sessionId).toBe('string')
@@ -134,10 +137,13 @@ test(
     // before ANY page JavaScript — the real WS constructor is never reached,
     // making the failure deterministic regardless of timing.
     //
-    // The stub accepts a new connection (readyState=OPEN) but throws on send(),
-    // which is exactly how the SPA's WS helper surfaces send failures (#253).
-    // We store the real constructor on window.__real_WebSocket so the restore
-    // step below can swap it back for the Retry flow.
+    // The stub accepts a new connection (readyState=OPEN) and lets the `auth`
+    // handshake frame succeed — so the SPA reaches the connected state and enables
+    // the input — but throws on the actual `message` send. That is the realistic
+    // #253 scenario (connected, then a send fails) and exercises the WsConnection
+    // .send() try/catch that converts the throw into a failed send → no-loss
+    // recovery (kept user bubble, status:'error', Retry). We store the real
+    // constructor on window.__real_WebSocket so the restore step can swap it back.
     await page.addInitScript(() => {
       const realWebSocket = window.WebSocket
       ;(window as unknown as Record<string, unknown>).__real_WebSocket = realWebSocket
@@ -174,9 +180,17 @@ test(
           })
         }
 
-        send(): void {
-          // Synchronous throw — the SPA's try/catch marks the user message
-          // status:'error' via the store (the #253 fix).
+        send(data?: string): void {
+          // Let the auth handshake succeed so the SPA marks the connection live
+          // (onopen → auth → onConnected → input enabled). Only the message send
+          // fails — the realistic #253 case. The SPA's WsConnection.send() catches
+          // this throw, returns false, and the store marks the user message
+          // status:'error' with a reachable Retry.
+          try {
+            if (data && (JSON.parse(data) as { type?: string }).type === 'auth') return
+          } catch {
+            // non-JSON payload — fall through to the throw below
+          }
           throw new Error('WebSocket send failed (stubbed for test)')
         }
 

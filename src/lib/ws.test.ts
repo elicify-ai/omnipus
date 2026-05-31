@@ -690,6 +690,47 @@ describe('ClientFrameTypes — contract test', () => {
   })
 })
 
+// ── send() — OPEN-socket throw is a failed send, not a silent loss (#253) ──────
+//
+// Traces to: #258 Round-3 UI-validation finding — WsConnection.send() previously
+// had no try/catch, so a throw from an OPEN socket (broken pipe / send-buffer
+// full / abrupt teardown) propagated uncaught and the caller never ran the
+// no-loss recovery path. send() must return false on throw so chat sendMessage
+// keeps the user message + offers Retry.
+
+describe('WsConnection.send — OPEN-socket throw treated as failed send (#253)', () => {
+  it('returns false (not true) when the underlying OPEN socket.send throws', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+
+    // Drive onopen so the socket reports OPEN (this also sends the auth frame
+    // through the original non-throwing mock send — that must succeed).
+    const ws = (global as { __ws_instances?: { onopen?: () => void }[] }).__ws_instances?.at(-1)
+    if (ws?.onopen) ws.onopen()
+
+    // Now make the OPEN socket throw on the NEXT send (e.g. broken pipe).
+    const wsInstance = (conn as unknown as {
+      ws: { readyState: number; send: (s: string) => void } | null
+    }).ws
+    expect(wsInstance).not.toBeNull()
+    wsInstance!.send = () => {
+      throw new Error('broken pipe')
+    }
+
+    const consoleErr = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const sent = conn.send({ type: 'ping' })
+
+    // The contract: a throw on an OPEN socket is reported as a failed send, so
+    // the caller runs the no-loss recovery path instead of losing the turn.
+    expect(sent).toBe(false)
+    expect(consoleErr).toHaveBeenCalled()
+
+    consoleErr.mockRestore()
+    conn.disconnect()
+  })
+})
+
 // ── Parametrized direction-filter: all 8 client frame types ───────────────────
 //
 // Traces to: fix-Y — pr-test-analyzer gap: parametrized direction-filter coverage
