@@ -260,6 +260,49 @@ func TestWSHandlerMessagePublishedToBus(t *testing.T) {
 	}
 }
 
+// TestWSHandlerMessageMediaThreadedToBus is the #254 regression test: media://
+// refs on a message frame must be threaded into the inbound message's Media
+// field so the agent loop resolves them into multimodal content blocks.
+// Non-media:// strings must be dropped (never forwarded into LLM content).
+func TestWSHandlerMessageMediaThreadedToBus(t *testing.T) {
+	handler, msgBus, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	conn := dialTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	sendWSAuthFrameDevMode(t, conn)
+
+	received := make(chan bus.InboundMessage, 1)
+	go func() {
+		select {
+		case msg := <-msgBus.InboundChan():
+			received <- msg
+		case <-time.After(3 * time.Second):
+		}
+	}()
+
+	msgFrame := wsClientFrameTestHelper{
+		Type:    "message",
+		Content: "look at this image",
+		// One valid ref, one bogus string that must be dropped.
+		Media: []string{"media://abc123", "not-a-media-ref"},
+	}
+	msgData, _ := json.Marshal(msgFrame)
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, msgData))
+
+	select {
+	case msg := <-received:
+		assert.Equal(t, "look at this image", msg.Content)
+		// #254: the valid ref is threaded; the bogus one is dropped.
+		require.Equal(t, []string{"media://abc123"}, msg.Media,
+			"only well-formed media:// refs must reach the agent loop")
+	case <-time.After(3 * time.Second):
+		t.Fatal("message was not published to bus within 3 seconds")
+	}
+}
+
 // --- E5: WebSocket auth path tests ---
 
 // TestWSHandlerAuthNotRequired_NoFirstFrameNeeded verifies that when

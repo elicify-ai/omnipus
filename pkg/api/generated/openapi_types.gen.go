@@ -4199,6 +4199,9 @@ type UploadFilesResponse struct {
 		// Path Relative path within the uploads directory for constructing a download URL. Format: "uploads/{session_id}/{filename}".
 		Path string `json:"path"`
 
+		// Ref media:// ref registered for this file in the media store. Present when the server could register the file (always, for now). The SPA echoes this ref back in the message frame's "media" array so the agent loop can thread the file into the LLM content array as a multimodal content block. Empty if registration failed (the file is still downloadable via path).
+		Ref *string `json:"ref,omitempty"`
+
 		// Size File size in bytes.
 		Size int64 `json:"size"`
 	} `json:"files"`

@@ -38,7 +38,7 @@ import { MarkdownText } from './markdown-text'
 import { SubagentBlock } from './SubagentBlock'
 import { Button } from '@/components/ui/button'
 import { useChatStore } from '@/store/chat'
-import type { ChatMessage } from '@/store/chat'
+import type { ChatMessage, MediaAttachment } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
@@ -1119,19 +1119,54 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       sendMessage(text)
       return
     }
-    if (!activeSessionId) {
-      addToast({ message: 'No active session — cannot upload files', variant: 'error' })
-      return
+
+    // #252: uploading before the first message used to error "no active
+    // session". Auto-create a session first, then upload + send against it.
+    let sessionId = activeSessionId
+    if (!sessionId) {
+      if (!activeAgentId) {
+        addToast({ message: 'Select an agent before sending files', variant: 'error' })
+        return
+      }
+      try {
+        const created = await createSession(activeAgentId)
+        setActiveSession(created.id, created.agent_id, null)
+        queryClient.invalidateQueries({ queryKey: ['sessions'] })
+        sessionId = created.id
+      } catch (err) {
+        // #253: never lose the user's text — leave the composer untouched.
+        addToast({
+          message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Could not start a session for upload',
+          variant: 'error',
+        })
+        return
+      }
     }
+
     setIsUploading(true)
     try {
-      const { files: uploaded } = await uploadFiles(activeSessionId, pendingFiles)
+      const { files: uploaded } = await uploadFiles(sessionId, pendingFiles)
+      // #254: thread media:// refs into the message frame so the agent sees
+      // the attachment as a multimodal content block. Build display
+      // attachments for the optimistic user bubble in parallel.
+      const mediaRefs = uploaded.map((f) => f.ref).filter((r): r is string => typeof r === 'string' && r.length > 0)
+      const attachments: MediaAttachment[] = uploaded.map((f) => ({
+        type: f.content_type.startsWith('image/') ? 'image' : 'file',
+        url: `/api/v1/uploads/${sessionId}/${f.name}`,
+        filename: f.name,
+        contentType: f.content_type,
+      }))
       const fileList = uploaded.map((f) => `[${f.name}](${f.path})`).join(', ')
-      sendMessage(text ? `${text}\n\nAttached files: ${fileList}` : `Attached files: ${fileList}`)
+      const body = text ? `${text}\n\nAttached files: ${fileList}` : `Attached files: ${fileList}`
+      sendMessage(body, { mediaRefs, attachments })
       setPendingFiles([])
     } catch (err) {
+      // #253: surface the failure and KEEP the pending files + restore the
+      // typed text so the user can retry — never silently lose their turn.
+      composerRuntime.setText(text)
+      setInputValue(text)
       addToast({
-        message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Upload failed',
+        message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Upload failed — your message was kept, please retry',
         variant: 'error',
       })
     } finally {
@@ -1269,6 +1304,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         ref={fileInputRef}
         type="file"
         multiple
+        data-testid="file-input"
         className="hidden"
         onChange={(e) => {
           const files = Array.from(e.target.files ?? [])

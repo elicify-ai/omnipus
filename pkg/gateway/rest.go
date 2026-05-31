@@ -4421,22 +4421,54 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		// /api/v1/uploads/{session_id}/{filename} URL.
 		relativePath := filepath.Join("uploads", sessionID, sanitized)
 
+		// #254: register the uploaded file in the media store so it gets a
+		// media:// ref. The SPA echoes this ref back in the message frame's
+		// "media" array; the agent loop then threads it into the LLM content
+		// array as a multimodal content block so the agent can see the file.
+		// CleanupPolicyForgetOnly: the uploads dir is operator-visible data —
+		// the media store must never auto-delete the file. Registration failure
+		// is non-fatal: the file is still downloadable via path, the agent just
+		// won't see it inline.
+		var ref string
+		if a.mediaStore != nil {
+			var storeErr error
+			ref, storeErr = a.mediaStore.Store(destPath, media.MediaMeta{
+				Filename:      sanitized,
+				ContentType:   contentType,
+				Source:        "upload:webchat",
+				CleanupPolicy: media.CleanupPolicyForgetOnly,
+			}, "upload:"+sessionID)
+			if storeErr != nil {
+				slog.Warn("rest: upload: media store registration failed",
+					"path", destPath, "error", storeErr)
+				ref = ""
+			}
+		}
+
 		slog.Info("rest: upload: file stored",
 			"session_id", sessionID,
 			"filename", sanitized,
 			"size", written,
 			"content_type", contentType,
+			"media_ref", ref,
 		)
 
+		var refPtr *string
+		if ref != "" {
+			refCopy := ref
+			refPtr = &refCopy
+		}
 		resp.Files = append(resp.Files, struct {
-			ContentType string `json:"content_type"`
-			Name        string `json:"name"`
-			Path        string `json:"path"`
-			Size        int64  `json:"size"`
+			ContentType string  `json:"content_type"`
+			Name        string  `json:"name"`
+			Path        string  `json:"path"`
+			Ref         *string `json:"ref,omitempty"`
+			Size        int64   `json:"size"`
 		}{
 			ContentType: contentType,
 			Name:        sanitized,
 			Path:        relativePath,
+			Ref:         refPtr,
 			Size:        written,
 		})
 	}

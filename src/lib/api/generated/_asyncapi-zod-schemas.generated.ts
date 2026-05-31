@@ -21,6 +21,7 @@ export const MessageFrame = z
     content: z.string().min(1).max(5242880),
     session_id: z.string().min(1).max(128).optional(),
     agent_id: z.string().min(1).max(128).optional(),
+    media: z.array(z.string().min(1).max(256)).max(16).optional(),
   })
   .strict();
 

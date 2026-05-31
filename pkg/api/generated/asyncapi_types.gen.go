@@ -156,10 +156,12 @@ type MediaPart struct {
 
 // MessageFrame — Client → server user chat message. Omit session_id to start a new session; include to continue an existing one.
 type MessageFrame struct {
-	AgentId   *string `json:"agent_id,omitempty"`
-	Content   string  `json:"content"`
-	SessionId *string `json:"session_id,omitempty"`
-	Type      string  `json:"type"`
+	AgentId *string `json:"agent_id,omitempty"`
+	Content string  `json:"content"`
+	// Optional media:// refs for files the user attached to this message (e.g. images uploaded via POST /api/v1/upload). The server threads each ref into the LLM content array as a multimodal content block so the agent can see the attachment. Empty or omitted for text-only messages.
+	Media     []string `json:"media,omitempty"`
+	SessionId *string  `json:"session_id,omitempty"`
+	Type      string   `json:"type"`
 }
 
 // PingFrame — Client → server heartbeat.

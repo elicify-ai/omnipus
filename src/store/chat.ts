@@ -422,7 +422,11 @@ interface ChatStore {
   drainOutboundQueue: () => void
 
   // ── Actions ───────────────────────────────────────────────────────────────────
-  sendMessage: (content: string) => void
+  // opts.mediaRefs: optional media:// refs (e.g. uploaded images) threaded
+  //   into the outbound message frame so the agent sees the attachment (#254).
+  // opts.attachments: optional MediaAttachment[] rendered inline on the
+  //   optimistic user bubble (display only — not sent on the wire).
+  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[] }) => void
   cancelStream: () => void
   respondToApproval: (id: string, decision: 'allow' | 'deny' | 'always') => void
   respondToPairing: (deviceId: string, decision: 'approve' | 'reject') => void
@@ -1126,7 +1130,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }
     },
 
-    sendMessage: (content) => {
+    sendMessage: (content, opts) => {
+      const mediaRefs = opts?.mediaRefs ?? []
+      const attachments = opts?.attachments ?? []
       const { connection, isConnected } = useConnectionStore.getState()
       const { activeSessionId, activeAgentId } = useSessionStore.getState()
       const { isStreaming } = get()
@@ -1159,6 +1165,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           content,
           timestamp: new Date().toISOString(),
           status: 'done',
+          ...(attachments.length > 0 ? { media: attachments } : {}),
         }
         const assistantMsg: ChatMessage = {
           id: generateId(),
@@ -1236,14 +1243,29 @@ export const useChatStore = create<ChatStore>((set, get) => {
           content,
           session_id: activeSessionId,
           agent_id: activeAgentId ?? undefined,
+          ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
         })
 
         if (!sent) {
+          // #253 (P0 data loss): the user turn must NEVER be silently dropped.
+          // Previously this rollback deleted BOTH the user and assistant
+          // bubbles, so a failed send wiped the message the user just typed.
+          // Now we KEEP the user bubble (re-marked as 'error' so the UI shows
+          // a failed state + Retry affordance) and only remove the empty
+          // streaming assistant placeholder. The error is also surfaced.
           withBucket(activeSessionId, (b) => {
-            const msgs = getMessages(b).filter((m) => m.id !== userMsg.id && m.id !== assistantMsg.id)
-            return { ...applyMessageArray(msgs, b), isStreaming: false }
+            return produce(b, (draft) => {
+              // Drop the empty assistant placeholder.
+              const aIdx = draft.messageOrder.indexOf(assistantMsg.id)
+              if (aIdx !== -1) draft.messageOrder.splice(aIdx, 1)
+              delete draft.messagesById[assistantMsg.id]
+              // Keep the user message, but flag it as failed.
+              const um = draft.messagesById[userMsg.id]
+              if (um) { um.status = 'error' }
+              draft.isStreaming = false
+            }) as Partial<SessionChatState>
           })
-          useConnectionStore.getState().setConnectionError('Message could not be sent — connection dropped. Please try again.')
+          useConnectionStore.getState().setConnectionError('Message could not be sent — connection dropped. Your message was kept; press Retry to resend.')
         }
       } else {
         // No active session — send without session_id; server will mint one
@@ -1252,6 +1274,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           type: 'message',
           content,
           agent_id: activeAgentId ?? undefined,
+          ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
         })
         if (!sent) {
           useConnectionStore.getState().setConnectionError('Message could not be sent — connection dropped. Please try again.')

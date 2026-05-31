@@ -19,7 +19,42 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/media"
 )
+
+// TestHandleUpload_RegistersMediaRef is the #254 regression test: an uploaded
+// file must be registered in the media store and its media:// ref returned in
+// the response so the SPA can thread it into the message frame's "media" array.
+// Without the fix the response carries no ref and the agent never sees the file.
+func TestHandleUpload_RegistersMediaRef(t *testing.T) {
+	api := newUploadTestAPI(t)
+	api.mediaStore = media.NewFileMediaStore()
+	sessionID := "media-ref-session"
+
+	body, ct := buildMultipart(t, sessionID, map[string]string{"pic.png": "PNGDATA"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+	req.Header.Set("Content-Type", ct)
+	rr := httptest.NewRecorder()
+
+	api.HandleUpload(rr, req)
+
+	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
+	var resp gen.UploadFilesResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Len(t, resp.Files, 1)
+
+	// #254: ref must be present and a media:// URI.
+	require.NotNil(t, resp.Files[0].Ref, "uploaded file must carry a media:// ref")
+	assert.True(t, strings.HasPrefix(*resp.Files[0].Ref, "media://"),
+		"ref must be a media:// URI, got %q", *resp.Files[0].Ref)
+
+	// The ref must resolve back to the file on disk.
+	localPath, err := api.mediaStore.Resolve(*resp.Files[0].Ref)
+	require.NoError(t, err, "media store must resolve the ref")
+	data, err := os.ReadFile(localPath)
+	require.NoError(t, err)
+	assert.Equal(t, "PNGDATA", string(data))
+}
 
 // newUploadTestAPI returns a restAPI wired to a temp directory for upload tests.
 func newUploadTestAPI(t *testing.T) *restAPI {
