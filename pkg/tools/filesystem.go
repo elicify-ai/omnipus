@@ -285,20 +285,94 @@ func isWithinWorkspace(candidate, workspace string) bool {
 	return err == nil && (rel == "." || filepath.IsLocal(rel))
 }
 
-// resolveAbsPath returns the absolute path of rawPath relative to workspace.
-// If rawPath is already absolute it is returned cleaned. An error is returned
-// only when workspace itself cannot be made absolute (very rare). This helper
-// is used by the metadata guard to resolve a tool path argument before
-// metadataFileMatch can determine whether it targets a metadata file.
+// resolveAbsPath returns the absolute path of rawPath relative to workspace,
+// with symlinks resolved (best-effort) so the metadata guard cannot be bypassed
+// by pointing a decoy filename at a canonical metadata file.
+//
+// Resolution steps:
+//  1. Make rawPath absolute (relative to workspace) and Clean it. This collapses
+//     "../" reentry such as agents/<id>/sub/../SOUL.md to agents/<id>/SOUL.md.
+//  2. Apply filepath.EvalSymlinks so a symlink (e.g. decoy.md -> SOUL.md) is
+//     followed to its real target before the basename match. For not-yet-created
+//     files EvalSymlinks fails (the leaf does not exist), so we fall back to
+//     resolving the deepest existing ancestor directory and re-joining the
+//     remaining components — this defeats the "symlinked directory" vector
+//     while still resolving brand-new files.
+//
+// An error is returned only when workspace itself cannot be made absolute (very
+// rare). This helper is used by the metadata guard to resolve a tool path
+// argument before metadataFileMatch can determine whether it targets a
+// metadata file.
 func resolveAbsPath(rawPath, workspace string) (string, error) {
+	var abs string
 	if filepath.IsAbs(rawPath) {
-		return filepath.Clean(rawPath), nil
+		abs = filepath.Clean(rawPath)
+	} else {
+		absWS, err := filepath.Abs(workspace)
+		if err != nil {
+			return "", err
+		}
+		abs = filepath.Clean(filepath.Join(absWS, rawPath))
 	}
-	absWS, err := filepath.Abs(workspace)
+
+	// Fast path: the full path exists and resolves cleanly through symlinks.
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved, nil
+	}
+
+	// Slow path: the leaf (and possibly some parents) does not exist yet.
+	// Resolve the deepest existing ancestor through symlinks, then re-attach
+	// the not-yet-existing remainder. This still follows a symlinked directory
+	// component to its real location.
+	dir := filepath.Dir(abs)
+	remainder := filepath.Base(abs)
+	for dir != filepath.Dir(dir) { // stop at filesystem root
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Clean(filepath.Join(resolved, remainder)), nil
+		}
+		remainder = filepath.Join(filepath.Base(dir), remainder)
+		dir = filepath.Dir(dir)
+	}
+
+	// Nothing along the chain exists (or symlink resolution failed entirely):
+	// fall back to the lexically cleaned absolute path so the basename match
+	// still fires. This is the conservative, fail-closed choice.
+	return abs, nil
+}
+
+// guardMetadataPath enforces the metadata fail-closed guard for a generic file
+// tool. It resolves path against workspace (following symlinks and collapsing
+// "../" reentry) and, if the result is one of the four canonical metadata files
+// under agents/<id>/, returns a structured USE_METADATA_TOOL error result.
+//
+// Returns nil when the path is allowed to proceed to the real I/O.
+//
+// Fail-closed semantics:
+//   - workspace == "" is a programming error: every constructor that wires the
+//     guard passes a non-empty workspace, and the call sites only invoke this
+//     helper when their workspace is set. We log at warn and DENY rather than
+//     silently skipping the guard, in case a future caller forgets the gate.
+//   - a resolveAbsPath error means we could not establish the canonical path;
+//     we log at warn and DENY (the path *might* be a metadata file).
+//
+// op must be "read" or "write" and is used only to pick the suggested
+// replacement tool in the error message.
+func guardMetadataPath(workspace, path, op string) *ToolResult {
+	if workspace == "" {
+		logger.WarnCF("filesystem", "metadata guard invoked with empty workspace; denying (fail-closed)",
+			map[string]any{"path": path, "op": op})
+		return ErrorResult(metadataGuardError(path, op))
+	}
+	absPath, err := resolveAbsPath(path, workspace)
 	if err != nil {
-		return "", err
+		logger.WarnCF("filesystem", "metadata guard could not resolve path; denying (fail-closed)",
+			map[string]any{"path": path, "op": op, "error": err.Error()})
+		return ErrorResult(metadataGuardError(path, op))
 	}
-	return filepath.Clean(filepath.Join(absWS, rawPath)), nil
+	if _, _, matched := metadataFileMatch(absPath); matched {
+		return ErrorResult(metadataGuardError(absPath, op))
+	}
+	return nil
 }
 
 type ReadFileTool struct {
@@ -310,9 +384,6 @@ type ReadFileTool struct {
 	// resolution. Empty means no guard is applied (e.g. static read-only tools
 	// that have no agent workspace concept).
 	workspace string
-	// restrict mirrors the restrict flag passed to NewReadFileTool. Used
-	// together with workspace for the metadata path guard.
-	restrict bool
 	// auditLogger receives path.access_denied events on workspace-guard
 	// rejections. Nil means audit logging is disabled (best-effort).
 	auditLogger *audit.Logger
@@ -339,7 +410,6 @@ func NewReadFileTool(
 		maxSize:       maxSize,
 		allowPathsLen: len(patterns),
 		workspace:     workspace,
-		restrict:      restrict,
 	}
 }
 
@@ -395,11 +465,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	// Metadata guard: reject reads of agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
 	// via generic file tools — callers must use agent.read_metadata instead.
+	// Skipped only for static tools that have no agent workspace concept.
 	if t.workspace != "" {
-		if absPath, err := resolveAbsPath(path, t.workspace); err == nil {
-			if _, _, matched := metadataFileMatch(absPath); matched {
-				return ErrorResult(metadataGuardError(absPath, "read"))
-			}
+		if denied := guardMetadataPath(t.workspace, path, "read"); denied != nil {
+			return denied
 		}
 	}
 
@@ -643,11 +712,10 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	// Metadata guard: reject writes to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
 	// via generic file tools — callers must use agent.write_metadata instead.
+	// Skipped only for static tools that have no agent workspace concept.
 	if t.workspace != "" {
-		if absPath, err := resolveAbsPath(path, t.workspace); err == nil {
-			if _, _, matched := metadataFileMatch(absPath); matched {
-				return ErrorResult(metadataGuardError(absPath, "write"))
-			}
+		if denied := guardMetadataPath(t.workspace, path, "write"); denied != nil {
+			return denied
 		}
 	}
 

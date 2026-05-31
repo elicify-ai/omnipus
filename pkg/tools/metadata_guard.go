@@ -5,12 +5,14 @@
 // resolves to one of these paths is rejected with a structured error that
 // suggests agent.read_metadata / agent.write_metadata instead.
 //
-// The guard is case-insensitive and handles agent-prefixed or misspelled
-// filenames via a small Levenshtein fuzzy match over the four canonical names.
+// The guard is case-insensitive over the four canonical names.
 //
-// Security property: the guard runs AFTER validatePathWithAllowPaths has
-// normalised the path to an absolute form, so "SOUL.md", "./soul.md", and a
-// full absolute path all trigger the same check.
+// Security property: the guard runs BEFORE validatePathWithAllowPaths — it
+// resolves the tool's path argument itself (via resolveAbsPath, which applies
+// filepath.EvalSymlinks best-effort) so that "SOUL.md", "./soul.md", an
+// absolute path, a "../"-reentrant path, and a symlink to SOUL.md all trigger
+// the same check. In sandbox-on (os.Root) mode the symlink vector is already
+// defeated by the kernel; this guard additionally hardens god-mode.
 
 package tools
 
@@ -23,11 +25,24 @@ import (
 // canonicalMetadataNames maps the canonical key (lowercase) to the on-disk
 // capitalised filename.  These are the four files that must only be read or
 // written through agent.read_metadata / agent.write_metadata.
+//
+// This is the single source of truth for the metadata-guard / metadata-tool
+// security pair; pkg/sysagent/tools/metadata.go consumes it via the exported
+// CanonicalMetadataFilename function below.
 var canonicalMetadataNames = map[string]string{
 	"soul":      "SOUL.md",
 	"heartbeat": "HEARTBEAT.md",
 	"memory":    "MEMORY.md",
 	"agent":     "AGENT.md",
+}
+
+// CanonicalMetadataFilename returns the on-disk filename for a metadata key
+// (soul/heartbeat/memory/agent). Returns ("", false) for unknown keys. The key
+// match is case-insensitive. This is the exported single source of truth shared
+// by the metadata guard (pkg/tools) and the metadata tools (pkg/sysagent/tools).
+func CanonicalMetadataFilename(key string) (string, bool) {
+	name, ok := canonicalMetadataNames[strings.ToLower(strings.TrimSpace(key))]
+	return name, ok
 }
 
 // metadataFileMatch reports whether absPath is one of the four canonical
@@ -67,122 +82,29 @@ func metadataFileMatch(absPath string) (fileKey, agentID string, ok bool) {
 	return "", "", false
 }
 
-// levenshtein returns the edit distance between a and b (bounded at maxDist+1
-// so callers can bail early). This is a plain O(len(a)*len(b)) DP; it is only
-// called on short strings (≤20 chars) so allocating a 2-D slice is fine.
-func levenshtein(a, b string) int {
-	la, lb := len(a), len(b)
-	if la == 0 {
-		return lb
-	}
-	if lb == 0 {
-		return la
-	}
-
-	row := make([]int, lb+1)
-	for j := range row {
-		row[j] = j
-	}
-	for i := 1; i <= la; i++ {
-		prev := row[0]
-		row[0] = i
-		for j := 1; j <= lb; j++ {
-			old := row[j]
-			if a[i-1] == b[j-1] {
-				row[j] = prev
-			} else {
-				row[j] = min3(prev, row[j], row[j-1]) + 1
-			}
-			prev = old
-		}
-	}
-	return row[lb]
-}
-
-func min3(a, b, c int) int {
-	if a < b {
-		if a < c {
-			return a
-		}
-		return c
-	}
-	if b < c {
-		return b
-	}
-	return c
-}
-
-// fuzzyMatchMetadataKey strips common agent-prefixes and misspellings from
-// basename and returns the best-matching canonical key, or "" when no key
-// is close enough (distance ≤ 3).
-func fuzzyMatchMetadataKey(basename string) string {
-	// Strip .md extension for comparison.
-	name := strings.ToLower(strings.TrimSuffix(strings.ToLower(basename), ".md"))
-
-	// Exact match wins.
-	if _, ok := canonicalMetadataNames[name]; ok {
-		return name
-	}
-
-	// Strip common prefixes before fuzzy matching: "agent-", "<id>-", etc.
-	// Try after the last "-" separator if any.
-	if idx := strings.LastIndex(name, "-"); idx >= 0 {
-		suffix := name[idx+1:]
-		if _, ok := canonicalMetadataNames[suffix]; ok {
-			return suffix
-		}
-	}
-
-	// Fuzzy match with Levenshtein distance ≤ 3.
-	best, bestDist := "", 4
-	for key := range canonicalMetadataNames {
-		d := levenshtein(name, key)
-		if d < bestDist {
-			bestDist = d
-			best = key
-		}
-	}
-	if bestDist <= 3 {
-		return best
-	}
-	return ""
-}
-
 // metadataGuardError returns a structured JSON error string that tells the
 // agent to use agent.read_metadata / agent.write_metadata instead.
 //
-// op should be "read" or "write".
-// absPath is the resolved absolute path that was blocked.
+// op should be "read" or "write". absPath is the resolved absolute path that
+// was blocked. Callers always confirm a metadataFileMatch before invoking this
+// (or fail closed via guardMetadataPath), so the match is expected to succeed;
+// if it does not, the message degrades gracefully to the raw basename.
 func metadataGuardError(absPath, op string) string {
-	fileKey, agentID, ok := metadataFileMatch(absPath)
-	if !ok {
-		// Path was not matched by metadataFileMatch but we are being called
-		// from a code path that already confirmed a match — fall back to the
-		// base filename for the fuzzy suggestion.
-		fileKey = fuzzyMatchMetadataKey(filepath.Base(absPath))
-		agentID = "(unknown)"
-	}
+	fileKey, agentID, _ := metadataFileMatch(absPath)
 
 	var suggestion string
 	if op == "read" {
-		if fileKey != "" {
-			suggestion = `use system.agent.read_metadata(file="` + fileKey + `")`
-		} else {
-			suggestion = "use system.agent.read_metadata(file=<soul|heartbeat|memory|agent>)"
-		}
+		suggestion = `use system.agent.read_metadata(file="` + fileKey + `")`
 	} else {
-		if fileKey != "" {
-			suggestion = `use system.agent.write_metadata(file="` + fileKey + `", content=...)`
-		} else {
-			suggestion = "use system.agent.write_metadata(file=<soul|heartbeat|memory|agent>, content=...)"
-		}
+		suggestion = `use system.agent.write_metadata(file="` + fileKey + `", content=...)`
 	}
 
-	var canonical string
-	if fileKey != "" {
-		canonical = canonicalMetadataNames[fileKey]
-	} else {
+	canonical := canonicalMetadataNames[fileKey]
+	if canonical == "" {
 		canonical = filepath.Base(absPath)
+	}
+	if agentID == "" {
+		agentID = "(unknown)"
 	}
 
 	msg := map[string]any{

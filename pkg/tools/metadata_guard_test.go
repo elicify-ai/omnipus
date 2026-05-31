@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -157,23 +158,16 @@ func TestFileTools_AllowNonMetadataFiles(t *testing.T) {
 	}
 }
 
-// TestFileTools_FuzzyMetadataGuard verifies the fuzzy Levenshtein matching
-// handles agent-prefixed filenames like "hustle-heartbeat.md" and returns a
-// suggestion with file="heartbeat".
+// TestFileTools_HeartbeatGuardSuggestsKey verifies that blocking a write to
+// HEARTBEAT.md emits a suggestion that names the "heartbeat" file key and the
+// system.agent.write_metadata replacement tool.
 //
-// Traces to: issue #240 spec — fuzzy case must resolve to heartbeat.
-func TestFileTools_FuzzyMetadataGuard(t *testing.T) {
+// Traces to: issue #240 — the structured error must hand the agent the exact
+// metadata key to use.
+func TestFileTools_HeartbeatGuardSuggestsKey(t *testing.T) {
 	ws := setupMetadataTestWorkspace(t)
 	ctx := context.Background()
 
-	// "hustle-heartbeat.md" in the agents workspace — the fuzzy matcher should
-	// identify "heartbeat" as the best match and suggest it.
-	// NOTE: this file does NOT match metadataFileMatch exactly (the basename is
-	// not a canonical name), so the guard only triggers because of the fuzzy
-	// path: metadataFileMatch returns false, but the write_file guard only fires
-	// on an exact canonical match. We therefore test the fuzzy suggestion via
-	// the metadataGuardError helper directly through a write to HEARTBEAT.md.
-	// The fuzzy suggestion is embedded in the error for files already matched.
 	wt := tools.NewWriteFileTool(ws, false)
 	result := wt.Execute(ctx, map[string]any{
 		"path":      "HEARTBEAT.md",
@@ -319,5 +313,140 @@ func TestMetadataFileMatch_EdgeCases(t *testing.T) {
 	})
 	if !result2.IsError || !strings.Contains(result2.ForLLM, "USE_METADATA_TOOL") {
 		t.Errorf("./soul.md should be blocked: %s", result2.ForLLM)
+	}
+}
+
+// TestMetadataGuard_SymlinkDecoyBlocked verifies the hardened guard fires when
+// a decoy filename is a symlink to a canonical metadata file. Before the
+// EvalSymlinks hardening, `ln -s SOUL.md decoy.md` + write_file("decoy.md")
+// bypassed the guard in god-mode because the lexical basename ("decoy.md") did
+// not match. The guard now resolves the symlink to SOUL.md before matching.
+//
+// Traces to: issue #240 METADATA-GUARD finding 1 (symlink bypass).
+func TestMetadataGuard_SymlinkDecoyBlocked(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation is unreliable on Windows CI without privilege")
+	}
+	ws := setupMetadataTestWorkspace(t)
+	ctx := context.Background()
+
+	// Create the real SOUL.md, then a decoy.md symlink pointing at it.
+	soul := filepath.Join(ws, "SOUL.md")
+	if err := os.WriteFile(soul, []byte("real soul"), 0o644); err != nil {
+		t.Fatalf("setup soul: %v", err)
+	}
+	decoy := filepath.Join(ws, "decoy.md")
+	if err := os.Symlink(soul, decoy); err != nil {
+		t.Fatalf("setup symlink: %v", err)
+	}
+
+	// write_file via the decoy must be blocked (the symlink resolves to SOUL.md).
+	wt := tools.NewWriteFileTool(ws, false)
+	result := wt.Execute(ctx, map[string]any{
+		"path":      "decoy.md",
+		"content":   "pwned via symlink",
+		"overwrite": true,
+	})
+	if !result.IsError || !strings.Contains(result.ForLLM, "USE_METADATA_TOOL") {
+		t.Fatalf("symlink decoy.md -> SOUL.md must be blocked, got: %s", result.ForLLM)
+	}
+	// SOUL.md content must be unchanged (write was rejected before any I/O).
+	got, err := os.ReadFile(soul)
+	if err != nil {
+		t.Fatalf("read soul after blocked write: %v", err)
+	}
+	if string(got) != "real soul" {
+		t.Errorf("SOUL.md was modified through the symlink: %q", string(got))
+	}
+
+	// read_file via the decoy must also be blocked.
+	rt := tools.NewReadFileTool(ws, false, 1024)
+	rres := rt.Execute(ctx, map[string]any{"path": "decoy.md"})
+	if !rres.IsError || !strings.Contains(rres.ForLLM, "USE_METADATA_TOOL") {
+		t.Errorf("read via symlink decoy.md -> SOUL.md must be blocked, got: %s", rres.ForLLM)
+	}
+}
+
+// TestMetadataGuard_DotDotReentryBlocked verifies that a "../"-reentrant path
+// that lands back on a canonical metadata file is blocked. The cleaned path
+// agents/<id>/sub/../SOUL.md collapses to agents/<id>/SOUL.md.
+//
+// Traces to: issue #240 METADATA-GUARD finding 8 (..-reentry).
+func TestMetadataGuard_DotDotReentryBlocked(t *testing.T) {
+	ws := setupMetadataTestWorkspace(t)
+	ctx := context.Background()
+
+	wt := tools.NewWriteFileTool(ws, false)
+	result := wt.Execute(ctx, map[string]any{
+		"path":      "sub/../SOUL.md",
+		"content":   "reentry bypass attempt",
+		"overwrite": true,
+	})
+	if !result.IsError || !strings.Contains(result.ForLLM, "USE_METADATA_TOOL") {
+		t.Errorf("sub/../SOUL.md should be blocked, got: %s", result.ForLLM)
+	}
+}
+
+// TestMetadataGuard_TrailingSlashBlocked verifies that a trailing slash on the
+// path argument does not defeat the basename match (Clean strips it).
+//
+// Traces to: issue #240 METADATA-GUARD finding 8 (trailing-slash).
+func TestMetadataGuard_TrailingSlashBlocked(t *testing.T) {
+	ws := setupMetadataTestWorkspace(t)
+	ctx := context.Background()
+
+	wt := tools.NewWriteFileTool(ws, false)
+	result := wt.Execute(ctx, map[string]any{
+		"path":      "SOUL.md/",
+		"content":   "trailing slash attempt",
+		"overwrite": true,
+	})
+	if !result.IsError || !strings.Contains(result.ForLLM, "USE_METADATA_TOOL") {
+		t.Errorf("SOUL.md/ should be blocked, got: %s", result.ForLLM)
+	}
+}
+
+// TestMetadataGuard_NestedAgentsDirBlocked verifies the guard fires for a
+// metadata file under a deeply nested agents/<id>/ layout (e.g. when the
+// workspace itself contains a nested agents tree).
+//
+// Traces to: issue #240 METADATA-GUARD finding 8 (nested-agents dir).
+func TestMetadataGuard_NestedAgentsDirBlocked(t *testing.T) {
+	home := t.TempDir()
+	// Layout: <home>/projects/agents/nested-agent/HEARTBEAT.md, with the
+	// workspace rooted at <home>/projects so the relative path crosses an
+	// agents/<id>/ boundary.
+	ws := filepath.Join(home, "projects")
+	nested := filepath.Join(ws, "agents", "nested-agent")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatalf("setup nested: %v", err)
+	}
+	ctx := context.Background()
+
+	wt := tools.NewWriteFileTool(ws, false)
+	result := wt.Execute(ctx, map[string]any{
+		"path":      "agents/nested-agent/HEARTBEAT.md",
+		"content":   "nested attempt",
+		"overwrite": true,
+	})
+	if !result.IsError || !strings.Contains(result.ForLLM, "USE_METADATA_TOOL") {
+		t.Errorf("agents/nested-agent/HEARTBEAT.md should be blocked, got: %s", result.ForLLM)
+	}
+}
+
+// TestMetadataGuard_FailClosedOnEmptyWorkspace verifies that the guard helper
+// fails CLOSED when it cannot establish an agent workspace context: an empty
+// workspace yields a USE_METADATA_TOOL deny rather than silently falling
+// through to the real write. This pins the fix for the fail-OPEN finding.
+//
+// Traces to: issue #240 METADATA-GUARD finding 2 (fail-open) and finding 8
+// (fail-closed-on-resolve-error).
+func TestMetadataGuard_FailClosedOnEmptyWorkspace(t *testing.T) {
+	denied := tools.GuardMetadataPathForTest("", "agents/x/SOUL.md", "write")
+	if denied == nil {
+		t.Fatal("guardMetadataPath with empty workspace must fail closed (deny), got nil")
+	}
+	if !denied.IsError || !strings.Contains(denied.ForLLM, "USE_METADATA_TOOL") {
+		t.Errorf("empty-workspace guard must return USE_METADATA_TOOL deny, got: %s", denied.ForLLM)
 	}
 }

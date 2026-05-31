@@ -519,21 +519,38 @@ func (l *Logger) writeLine(data []byte, fsyncRequired bool) error {
 }
 
 // Close flushes and closes the audit log file.
+//
+// After Close, the logger is latched into degraded mode and l.file is set to
+// nil under the mutex. This makes any subsequent (or concurrent) writeLine
+// return a deterministic "operating in degraded mode" error rather than racing
+// on — or surfacing a nondeterministic "audit.jsonl: file already closed" error
+// against — an already-closed OS file descriptor. The previous behavior left
+// l.file non-nil after Close, so a late Log() from a background goroutine could
+// hit the closed fd directly under parallel test runs.
 func (l *Logger) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	// Latch degraded first so the writeLine fast-path guard fires for any
+	// caller that grabs the mutex after us, regardless of which return path
+	// below we take.
+	l.degraded = true
+
+	var flushErr error
 	if l.writer != nil {
-		if err := l.writer.Flush(); err != nil {
-			if l.file != nil {
-				l.file.Close()
-			}
-			return fmt.Errorf("audit: flush on close failed: %w", err)
-		}
+		flushErr = l.writer.Flush()
 	}
+
+	var closeErr error
 	if l.file != nil {
-		return l.file.Close()
+		closeErr = l.file.Close()
+		l.file = nil
 	}
-	return nil
+
+	if flushErr != nil {
+		return fmt.Errorf("audit: flush on close failed: %w", flushErr)
+	}
+	return closeErr
 }
 
 // RunRetentionCleanup deletes rotated audit files older than the retention period.
