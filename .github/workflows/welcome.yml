@@ -20,9 +20,9 @@ jobs:
     steps:
       - uses: actions/first-interaction@v3
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
 
-          issue-message: |
+          issue_message: |
             👋 Thanks for opening your first issue in Omnipus!
 
             A few quick pointers so we can route this efficiently:
@@ -34,7 +34,7 @@ jobs:
 
             A maintainer will triage this within a few business days. Thanks for taking the time to file it.
 
-          pr-message: |
+          pr_message: |
             🎉 Thanks for opening your first PR in Omnipus!
 
             Before this can be merged:
