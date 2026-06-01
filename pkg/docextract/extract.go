@@ -11,6 +11,7 @@ package docextract
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -25,6 +26,12 @@ import (
 // maxExtractRunes is the maximum number of Unicode code points returned.
 // Extraction is stopped after this limit and a truncation notice is appended.
 const maxExtractRunes = 100_000
+
+// MaxDocBytes bounds how many raw bytes a caller should read into memory before
+// handing them to ExtractBytes. It caps the cost of in-memory extraction (zip
+// archives and PDFs must be fully buffered) so a hostile or oversized document
+// cannot exhaust memory.
+const MaxDocBytes = 25 << 20 // 25 MiB
 
 // Extract attempts to read the plain-text content of the file at path.
 //
@@ -41,14 +48,69 @@ func Extract(path string, mime string, filename string) (text string, ok bool, r
 
 	switch {
 	case isTextLike(lowerMIME, ext):
-		return extractText(path)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return "", false, fmt.Sprintf("open failed: %v", err)
+		}
+		return extractTextBytes(raw)
 	case isOOXML(lowerMIME, ext):
-		return extractOOXML(path, ext)
+		zr, err := zip.OpenReader(path)
+		if err != nil {
+			return "", false, fmt.Sprintf("zip open failed: %v", err)
+		}
+		defer zr.Close()
+		return extractOOXML(&zr.Reader, ext)
 	case isPDF(lowerMIME, ext):
-		return extractPDF(path)
+		f, err := os.Open(path)
+		if err != nil {
+			return "", false, fmt.Sprintf("pdf open failed: %v", err)
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil {
+			return "", false, fmt.Sprintf("pdf stat failed: %v", err)
+		}
+		return extractPDF(f, info.Size())
 	default:
 		return "", false, fmt.Sprintf("unsupported format (mime=%s, ext=%s)", mime, ext)
 	}
+}
+
+// ExtractBytes is the in-memory counterpart of Extract: it extracts plain text
+// from a document already buffered in data, opening no files of its own. This
+// lets sandboxed callers (e.g. the read_file tool) feed bytes they read through
+// their own confined filesystem, so extraction can never escape the sandbox by
+// re-opening a raw path.
+//
+//   - mime is the MIME type (may be empty).
+//   - filename is used as a fallback to determine the format from the extension.
+func ExtractBytes(data []byte, mime string, filename string) (text string, ok bool, reason string) {
+	ext := strings.ToLower(filepath.Ext(filename))
+	lowerMIME := strings.ToLower(mime)
+
+	switch {
+	case isTextLike(lowerMIME, ext):
+		return extractTextBytes(data)
+	case isOOXML(lowerMIME, ext):
+		zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			return "", false, fmt.Sprintf("zip open failed: %v", err)
+		}
+		return extractOOXML(zr, ext)
+	case isPDF(lowerMIME, ext):
+		return extractPDF(bytes.NewReader(data), int64(len(data)))
+	default:
+		return "", false, fmt.Sprintf("unsupported format (mime=%s, ext=%s)", mime, ext)
+	}
+}
+
+// IsExtractable reports whether Extract / ExtractBytes can produce text for the
+// given MIME type or filename extension. Callers use it to decide whether an
+// otherwise-opaque binary is in fact a readable document.
+func IsExtractable(mime string, filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	lowerMIME := strings.ToLower(mime)
+	return isTextLike(lowerMIME, ext) || isOOXML(lowerMIME, ext) || isPDF(lowerMIME, ext)
 }
 
 // isTextLike returns true for MIME types or extensions treated as UTF-8 text.
@@ -89,17 +151,12 @@ func isPDF(mime, ext string) bool {
 	return ext == ".pdf" || mime == "application/pdf"
 }
 
-// extractText reads the file, validates it as UTF-8, and returns the content.
-func extractText(path string) (string, bool, string) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", false, fmt.Sprintf("open failed: %v", err)
-	}
-	defer f.Close()
-
-	raw, err := io.ReadAll(io.LimitReader(f, int64(maxExtractRunes*4+1)))
-	if err != nil {
-		return "", false, fmt.Sprintf("read failed: %v", err)
+// extractTextBytes validates raw as UTF-8 and returns the (possibly truncated)
+// content as text.
+func extractTextBytes(raw []byte) (string, bool, string) {
+	// Cap to the rune budget's worth of bytes (a rune is at most 4 bytes).
+	if len(raw) > maxExtractRunes*4+1 {
+		raw = raw[:maxExtractRunes*4+1]
 	}
 
 	if len(raw) == 0 {
@@ -125,14 +182,15 @@ func extractText(path string) (string, bool, string) {
 }
 
 // extractPDF reads text from a PDF using ledongthuc/pdf (pure Go, no CGo).
-func extractPDF(path string) (string, bool, string) {
-	f, r, err := pdf.Open(path)
+// It reads from r (size bytes) so the same core serves both the path-based
+// Extract and the in-memory ExtractBytes without re-opening a file.
+func extractPDF(r io.ReaderAt, size int64) (string, bool, string) {
+	pr, err := pdf.NewReader(r, size)
 	if err != nil {
 		return "", false, fmt.Sprintf("pdf open failed: %v", err)
 	}
-	defer f.Close()
 
-	plainReader, err := r.GetPlainText()
+	plainReader, err := pr.GetPlainText()
 	if err != nil {
 		return "", false, fmt.Sprintf("pdf text extraction failed: %v", err)
 	}
@@ -161,14 +219,15 @@ func extractPDF(path string) (string, bool, string) {
 }
 
 // extractOOXML dispatches to the format-specific OOXML extractor based on ext.
-func extractOOXML(path, ext string) (string, bool, string) {
+// zr is an already-open zip archive (from a file or an in-memory buffer).
+func extractOOXML(zr *zip.Reader, ext string) (string, bool, string) {
 	switch ext {
 	case ".docx":
-		return extractDocx(path)
+		return extractDocx(zr)
 	case ".pptx":
-		return extractPptx(path)
+		return extractPptx(zr)
 	case ".xlsx":
-		return extractXlsx(path)
+		return extractXlsx(zr)
 	default:
 		return "", false, fmt.Sprintf("unknown OOXML extension: %s", ext)
 	}
@@ -176,13 +235,7 @@ func extractOOXML(path, ext string) (string, bool, string) {
 
 // extractDocx extracts text from a .docx file by parsing word/document.xml.
 // It concatenates <w:t> runs and inserts a newline between paragraphs (<w:p>).
-func extractDocx(path string) (string, bool, string) {
-	zr, err := zip.OpenReader(path)
-	if err != nil {
-		return "", false, fmt.Sprintf("docx: zip open failed: %v", err)
-	}
-	defer zr.Close()
-
+func extractDocx(zr *zip.Reader) (string, bool, string) {
 	for _, f := range zr.File {
 		if f.Name != "word/document.xml" {
 			continue
@@ -272,13 +325,7 @@ func parseDocxXML(r io.Reader) (string, bool, string) {
 }
 
 // extractPptx extracts text from a .pptx file by reading all slide XML files.
-func extractPptx(path string) (string, bool, string) {
-	zr, err := zip.OpenReader(path)
-	if err != nil {
-		return "", false, fmt.Sprintf("pptx: zip open failed: %v", err)
-	}
-	defer zr.Close()
-
+func extractPptx(zr *zip.Reader) (string, bool, string) {
 	var sb strings.Builder
 	runeCount := 0
 	slideCount := 0
@@ -360,13 +407,7 @@ func parsePptxSlide(r io.Reader, runeLimit int) (string, error) {
 
 // extractXlsx extracts cell values from an .xlsx file.
 // It reads xl/sharedStrings.xml (string pool) and xl/worksheets/sheet*.xml (cells).
-func extractXlsx(path string) (string, bool, string) {
-	zr, err := zip.OpenReader(path)
-	if err != nil {
-		return "", false, fmt.Sprintf("xlsx: zip open failed: %v", err)
-	}
-	defer zr.Close()
-
+func extractXlsx(zr *zip.Reader) (string, bool, string) {
 	// Step 1: load shared strings pool.
 	sharedStrings, err := loadXlsxSharedStrings(zr)
 	if err != nil {
@@ -414,7 +455,7 @@ func extractXlsx(path string) (string, bool, string) {
 
 // loadXlsxSharedStrings reads the xl/sharedStrings.xml string table from the zip.
 // Returns a slice where index corresponds to the shared-string index.
-func loadXlsxSharedStrings(zr *zip.ReadCloser) ([]string, error) {
+func loadXlsxSharedStrings(zr *zip.Reader) ([]string, error) {
 	for _, f := range zr.File {
 		if f.Name != "xl/sharedStrings.xml" {
 			continue

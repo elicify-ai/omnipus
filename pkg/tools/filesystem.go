@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/docextract"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
@@ -429,7 +430,10 @@ func (t *ReadFileTool) Name() string {
 }
 
 func (t *ReadFileTool) Description() string {
-	return "Read the contents of a file. Supports pagination via `offset` and `length`."
+	return "Read the contents of a file. Supports pagination via `offset` and `length`. " +
+		"Word (.docx), PowerPoint (.pptx), Excel (.xlsx), and PDF (.pdf) documents are " +
+		"automatically decoded to plain text; for these, `offset` and `length` count " +
+		"characters of extracted text rather than raw bytes."
 }
 
 func (t *ReadFileTool) Scope() ToolScope { return ScopeGeneral }
@@ -521,6 +525,14 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	// Reject binary files: null bytes are a reliable binary indicator.
 	if bytes.Contains(sniff[:sniffN], []byte{0}) {
+		// Before rejecting, check whether this opaque binary is actually a
+		// readable document (Word/PowerPoint/Excel/PDF). If so, return its
+		// extracted plain text instead. Extraction reads through the SAME
+		// sandboxed filesystem (t.fs) — never a raw os.Open — so it cannot
+		// escape the workspace boundary that t.fs.Open already enforced.
+		if docextract.IsExtractable("", filepath.Base(path)) {
+			return t.extractDocument(ctx, path, offset, length)
+		}
 		return ErrorResult("binary file detected: use a dedicated tool to handle binary files")
 	}
 
@@ -621,6 +633,89 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		})
 
 	return NewToolResult(header + "\n\n" + string(data))
+}
+
+// extractDocument reads a document file through the sandboxed filesystem and
+// returns its extracted plain text, paginated by character offset/length so the
+// caller can page through long documents the same way it pages raw files.
+//
+// Sandbox safety: the bytes are read via t.fs.Open (the same confined handle
+// read_file uses), then extraction runs purely in memory via docextract.
+// ExtractBytes — it opens no paths of its own, so it cannot read outside the
+// workspace even for archive formats that would normally re-open by path.
+//
+// offset and length are interpreted as character (rune) positions into the
+// extracted text, not byte positions into the binary file (byte positions are
+// meaningless once the document is decoded).
+func (t *ReadFileTool) extractDocument(ctx context.Context, path string, offset, length int64) *ToolResult {
+	file, err := t.fs.Open(path)
+	if err != nil {
+		emitPathAccessDenied(ctx, t.auditLogger, t.Name(), path, err, t.allowPathsLen)
+		return ErrorResult(err.Error())
+	}
+	defer file.Close()
+
+	// Read up to MaxDocBytes+1 so we can detect (and reject) oversized files
+	// without buffering them in full.
+	raw, err := io.ReadAll(io.LimitReader(file, docextract.MaxDocBytes+1))
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to read document: %v", err))
+	}
+	if int64(len(raw)) > docextract.MaxDocBytes {
+		return ErrorResult(fmt.Sprintf(
+			"document too large to extract (limit %d bytes); use a dedicated tool",
+			docextract.MaxDocBytes,
+		))
+	}
+
+	text, ok, reason := docextract.ExtractBytes(raw, "", filepath.Base(path))
+	if !ok {
+		return ErrorResult(fmt.Sprintf(
+			"binary file detected: could not extract document text (%s)", reason,
+		))
+	}
+
+	// Paginate the extracted text by rune offset so multi-page documents can be
+	// retrieved across multiple calls, mirroring the raw-read offset contract.
+	runes := []rune(text)
+	total := int64(len(runes))
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := start + length
+	if end > total {
+		end = total
+	}
+	page := string(runes[start:end])
+	hasMore := end < total
+
+	displayPath := filepath.Base(path)
+	header := fmt.Sprintf(
+		"[document: %s | extracted text | chars %d-%d of %d]",
+		displayPath, start, end, total,
+	)
+	if start >= total {
+		return NewToolResult(header + "\n[END OF DOCUMENT - no content at this offset.]")
+	}
+	if hasMore {
+		header += fmt.Sprintf(
+			"\n[TRUNCATED - document has more text. Call read_file again with offset=%d to continue.]",
+			end,
+		)
+	} else {
+		header += "\n[END OF DOCUMENT - no further content.]"
+	}
+
+	logger.DebugCF("tool", "ReadFileTool document extraction completed",
+		map[string]any{
+			"path":        path,
+			"chars_total": total,
+			"chars_read":  end - start,
+			"has_more":    hasMore,
+		})
+
+	return NewToolResult(header + "\n\n" + page)
 }
 
 // getInt64Arg extracts an integer argument from the args map, returning the
