@@ -19,6 +19,10 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import { rewriteLegacyURL } from '@/lib/preview-url'
+// Static import (vi.mock calls below are hoisted above all imports by vitest, so
+// this resolves against the mocks). Was a per-test `await import('./markdown-text')`
+// which timed out under full-suite parallel load — a static import resolves once.
+import { MarkdownText } from './markdown-text'
 
 // ── Top-level mocks for markdown-text module import ───────────────────────────
 // These vi.mock calls are hoisted by vitest regardless of position.
@@ -53,12 +57,11 @@ vi.mock('@/lib/rehype-phosphor-emoji', () => ({
 // ── Module export guard ───────────────────────────────────────────────────────
 
 describe('markdown-text — module exports MarkdownText', () => {
-  it('MarkdownText is exported as a memoized component', async () => {
+  it('MarkdownText is exported as a memoized component', () => {
     // Traces to: chat-served-iframe-preview-spec.md — markdown-text module structure
-    const mod = await import('./markdown-text')
-    expect(mod.MarkdownText).toBeDefined()
+    expect(MarkdownText).toBeDefined()
     // React.memo wraps a function component — the result has a $$typeof and type property
-    expect(typeof mod.MarkdownText).toBe('object')
+    expect(typeof MarkdownText).toBe('object')
   })
 })
 

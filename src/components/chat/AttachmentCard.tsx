@@ -1,11 +1,12 @@
 // Shared attachment visuals (ChatGPT-style): image thumbnails + color-coded,
-// type-specific file cards. AssistantUI is headless here — AttachmentPrimitive.Thumb
-// only renders ".ext" text — so the presentation is ours, but it sits on top of
+// type-specific file cards. AssistantUI is headless here — AttachmentPrimitive
+// exposes an unstable_Thumb export in this version that only renders the file
+// extension as text, so the presentation is ours, but it sits on top of
 // AssistantUI's structural primitives (ComposerPrimitive.Attachments /
 // AttachmentPrimitive.*) and the public useAttachment() hook. Used in both the
 // composer (pre-send chips) and the sent user-message bubble so they're consistent.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import {
   File,
   FilePdf,
@@ -38,7 +39,12 @@ function ext(filename: string): string {
   return parts.length > 1 ? (parts.pop() as string) : ''
 }
 
-/** Maps a file's extension / MIME to a Phosphor icon, accent colour, and label. */
+/** Maps a file's extension / MIME to a Phosphor icon, accent colour, and label.
+ *
+ * Colours are intentional per-type brand values — no matching theme CSS vars
+ * exist for these (they are distinct from --color-accent / --color-error /
+ * etc.). Kept as raw hex by design.
+ */
 export function fileTypeMeta(filename: string, contentType?: string): FileTypeMeta {
   const e = ext(filename)
   const mime = (contentType ?? '').toLowerCase()
@@ -97,9 +103,16 @@ interface AttachmentCardProps {
  * any other file becomes a compact card with a colour-coded, type-specific icon
  * plus filename + type label. Styling uses the chat's CSS variables so it stays
  * consistent across the composer and the message bubble.
+ *
+ * If the image URL is broken or blocked, the component falls back to the
+ * file-card rendering (icon + name + label) so there is never a blank box.
  */
 export function AttachmentCard({ filename, contentType, imageUrl, removeButton, className }: AttachmentCardProps) {
-  if (isImageAttachment(filename, contentType) && imageUrl) {
+  // Track whether the <img> load failed so we can fall back to the file card.
+  const [imgError, setImgError] = useState(false)
+  const handleImgError = useCallback(() => setImgError(true), [])
+
+  if (isImageAttachment(filename, contentType) && imageUrl && !imgError) {
     return (
       <div
         className={cn(
@@ -108,7 +121,13 @@ export function AttachmentCard({ filename, contentType, imageUrl, removeButton, 
         )}
         title={filename}
       >
-        <img src={imageUrl} alt={filename} className="block w-full h-full object-cover" loading="lazy" />
+        <img
+          src={imageUrl}
+          alt={filename}
+          className="block w-full h-full object-cover"
+          loading="lazy"
+          onError={handleImgError}
+        />
         {removeButton}
       </div>
     )

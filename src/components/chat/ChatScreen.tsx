@@ -1170,7 +1170,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     // AttachmentAdapter uploads on send and threads the media:// ref through
     // onNew. Used by drag-drop and image paste.
     for (const file of files) {
-      void composerRuntime.addAttachment(file)
+      composerRuntime.addAttachment(file).catch((err: unknown) => {
+        addToast({
+          message: err instanceof Error ? err.message : `Could not attach "${file.name}"`,
+          variant: 'error',
+        })
+      })
     }
   }
 
@@ -1395,12 +1400,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       <ComposerPrimitive.Root
         className="flex items-end gap-2 flex-1"
         onSubmit={(e) => {
-          // Block submission while streaming — slash commands are handled via
-          // handleKeyDown, and normal sends must wait for the turn to complete.
-          // Attachments flow natively through the attachment adapter + onNew, so
-          // there is no custom upload branch here: the default composer submit
-          // (composer.send) carries text + attachments identically for Enter and
-          // the Send button.
+          // Block Enter-submit while streaming; slash-menu Enter is handled in handleKeyDown.
           if (isStreaming) {
             e.preventDefault()
           }

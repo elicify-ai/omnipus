@@ -24,9 +24,11 @@ import type {
 
 import { createSession, uploadFiles } from "@/lib/api";
 import { useSessionStore } from "@/store/session";
+import { useUiStore } from "@/store/ui";
+import { isImageAttachment } from "@/components/chat/AttachmentCard";
 
 /** A resolved upload: the agent-facing media ref plus display metadata. */
-export interface ResolvedUpload {
+export interface ResolvedUpload { // not-wire-format: internal client-side upload state (media ref + display metadata) drained by onNew; never serialized across the gateway/SPA boundary
   ref: string;
   url: string;
   filename: string;
@@ -36,6 +38,11 @@ export interface ResolvedUpload {
 // attachment.id -> resolved upload. Populated in send(), drained by onNew via
 // takeResolvedUpload(). A Map (not message content) is used because our backend
 // resolves media:// refs itself; AssistantUI's attachment content is inert here.
+//
+// Capped at MAX_RESOLVED_UPLOADS entries (evict oldest on overflow) to prevent
+// unbounded growth when onNew never drains an entry (e.g. partial multi-file
+// failure or navigating away before sending).
+const MAX_RESOLVED_UPLOADS = 50;
 const resolvedUploads = new Map<string, ResolvedUpload>();
 
 /** Pull (and remove) the resolved upload for a completed attachment id. */
@@ -43,6 +50,16 @@ export function takeResolvedUpload(id: string): ResolvedUpload | undefined {
   const r = resolvedUploads.get(id);
   if (r) resolvedUploads.delete(id);
   return r;
+}
+
+/** Stash a resolved upload, evicting the oldest entry if the cap is reached. */
+function stashResolvedUpload(id: string, upload: ResolvedUpload): void {
+  if (resolvedUploads.size >= MAX_RESOLVED_UPLOADS) {
+    // Map iteration order is insertion order — delete the first (oldest) key.
+    const oldestKey = resolvedUploads.keys().next().value;
+    if (oldestKey !== undefined) resolvedUploads.delete(oldestKey);
+  }
+  resolvedUploads.set(id, upload);
 }
 
 // Ensure a session exists before uploading. send() runs once per attachment and
@@ -65,12 +82,10 @@ async function ensureSession(): Promise<string> {
   return sessionEnsure;
 }
 
-function attachmentType(mime: string): "image" | "file" {
-  return mime.startsWith("image/") ? "image" : "file";
-}
-
 // Accept images plus the document formats the backend can extract (docextract)
-// or render natively (PDF). Mirrors docextract's supported set.
+// or render natively (PDF). Roughly tracks docextract's supported set; note
+// `.log` relies on the browser sending a text/* MIME (docextract has no .log
+// extension rule), so a .log labelled application/octet-stream won't extract.
 const ACCEPT = [
   "image/*",
   "application/pdf",
@@ -92,7 +107,7 @@ export const omnipusAttachmentAdapter = {
     // Defer the upload to send() — registering here only tracks the pending file.
     return {
       id: `att-${Date.now()}-${counter++}-${file.name}`,
-      type: attachmentType(file.type),
+      type: isImageAttachment(file.name, file.type) ? "image" : "file",
       name: file.name,
       contentType: file.type || "application/octet-stream",
       file,
@@ -101,30 +116,60 @@ export const omnipusAttachmentAdapter = {
   },
 
   async send(attachment): Promise<CompleteAttachment> {
-    const sessionId = await ensureSession();
-    const { files } = await uploadFiles(sessionId, [attachment.file]);
-    const uploaded = files.find((f) => f.name === attachment.name) ?? files[0];
-    if (!uploaded || uploaded.path.length === 0) {
-      throw new Error(`Upload failed for "${attachment.name}"`);
+    // CompleteAttachment with no ref stashed — used when upload/registration
+    // fails so the composer doesn't throw and lose the user's typed text.
+    const failedComplete: CompleteAttachment = {
+      ...attachment,
+      status: { type: "complete" },
+      content: [],
+    };
+
+    let sessionId: string;
+    try {
+      sessionId = await ensureSession();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      useUiStore.getState().addToast({ message: `Could not send "${attachment.name}": ${msg}`, variant: "error" });
+      return failedComplete;
     }
 
-    const ref = typeof uploaded.ref === "string" ? uploaded.ref : "";
-    if (ref) {
-      resolvedUploads.set(attachment.id, {
-        ref,
-        // URL uses the server-sanitized name, but display uses the ORIGINAL
-        // filename (the server appends a uniqueness suffix, e.g.
-        // report_1780….docx, which is ugly in the chat).
-        url: `/api/v1/uploads/${sessionId}/${uploaded.name}`,
-        filename: attachment.name,
-        contentType: uploaded.content_type,
-      });
-    } else {
-      // Path uploaded but media-store registration failed: the agent cannot see
-      // it inline. Surface rather than silently drop — throw so the composer
-      // marks the attachment errored instead of sending a file the agent ignores.
-      throw new Error(`"${attachment.name}" could not be registered for the agent — re-attach and try again`);
+    let uploadResult: Awaited<ReturnType<typeof uploadFiles>>;
+    try {
+      uploadResult = await uploadFiles(sessionId, [attachment.file]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      useUiStore.getState().addToast({ message: `Upload failed for "${attachment.name}": ${msg}`, variant: "error" });
+      return failedComplete;
     }
+
+    // We pass a single-element array, so files[0] is this attachment's result.
+    const uploaded = uploadResult.files[0];
+    if (!uploaded || !uploaded.path) {
+      useUiStore.getState().addToast({ message: `Upload failed for "${attachment.name}" — no path returned.`, variant: "error" });
+      return failedComplete;
+    }
+
+    const ref = typeof uploaded.ref === "string" ? uploaded.ref : undefined;
+    if (!ref) {
+      // File was saved but media-store registration failed — the agent cannot
+      // see it inline. Toast and return without stashing so onNew skips the ref
+      // while the user's typed text still sends.
+      useUiStore.getState().addToast({
+        message: `"${attachment.name}" could not be registered for the agent — re-attach and try again.`,
+        variant: "error",
+      });
+      return failedComplete;
+    }
+
+    stashResolvedUpload(attachment.id, {
+      ref,
+      // URL uses the server-sanitized name, but display uses the ORIGINAL
+      // filename (the server appends a uniqueness suffix, e.g.
+      // report_1780….docx, which is ugly in the chat).
+      url: `/api/v1/uploads/${sessionId}/${uploaded.name}`,
+      filename: attachment.name,
+      contentType: uploaded.content_type,
+    });
 
     return {
       ...attachment,

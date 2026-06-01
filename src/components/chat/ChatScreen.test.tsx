@@ -11,6 +11,11 @@ import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 
+// Static import: vi.mock() calls are hoisted before this import, so all mocks
+// are in place when the module resolves. This avoids per-test dynamic import
+// contention that caused intermittent timeouts under full-suite parallel load.
+import { OmnipusComposer } from './ChatScreen'
+
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 vi.mock('@assistant-ui/react', () => {
@@ -158,7 +163,6 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
       useChatStore.setState({ isStreaming: true })
     })
 
-    const { OmnipusComposer } = await import('./ChatScreen')
     render(<OmnipusComposer />)
 
     const input = screen.getByTestId('composer-input')
@@ -182,7 +186,6 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
       useChatStore.setState({ isStreaming: true })
     })
 
-    const { OmnipusComposer } = await import('./ChatScreen')
     render(<OmnipusComposer />)
 
     const input = screen.getByTestId('composer-input')
@@ -205,7 +208,6 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
       useChatStore.setState({ isStreaming: false })
     })
 
-    const { OmnipusComposer } = await import('./ChatScreen')
     render(<OmnipusComposer />)
 
     const input = screen.getByTestId('composer-input')
@@ -228,7 +230,6 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
       useChatStore.setState({ isStreaming: true })
     })
 
-    const { OmnipusComposer } = await import('./ChatScreen')
     render(<OmnipusComposer />)
 
     const input = screen.getByTestId('composer-input')

@@ -5,8 +5,21 @@ vi.mock('@/lib/api', () => ({
   createSession: vi.fn(),
 }))
 
+vi.mock('@/store/ui', () => ({
+  useUiStore: {
+    getState: vi.fn(() => ({ addToast: vi.fn() })),
+  },
+}))
+
+vi.mock('@/components/chat/AttachmentCard', () => ({
+  isImageAttachment: vi.fn((filename: string, contentType?: string) =>
+    (contentType ?? '').startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(filename)
+  ),
+}))
+
 import * as api from '@/lib/api'
 import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 import { omnipusAttachmentAdapter, takeResolvedUpload } from './attachment-adapter'
 
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
@@ -15,8 +28,15 @@ function mkFile(name: string, type: string): File {
   return new File(['data'], name, { type })
 }
 
+function getAddToast() {
+  return vi.mocked(useUiStore.getState)().addToast as ReturnType<typeof vi.fn>
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
+  // Re-wire the mock so each test gets a fresh spy.
+  const addToast = vi.fn()
+  vi.mocked(useUiStore.getState).mockReturnValue({ addToast } as never)
   useSessionStore.setState({ activeSessionId: 'sess_existing', activeAgentId: 'jim', activeAgentType: null })
 })
 
@@ -56,23 +76,36 @@ describe('omnipusAttachmentAdapter', () => {
     expect(takeResolvedUpload(pending.id)).toBeUndefined()
   })
 
-  it('send() throws (not silently drops) when registration yields no media ref', async () => {
+  it('send() toasts (not throws) when registration yields no media ref', async () => {
     vi.mocked(api.uploadFiles).mockResolvedValue({
       files: [{ name: 'x.docx', path: 'uploads/sess_existing/x.docx', size: 10, content_type: DOCX }],
     } as never)
 
     const pending = await omnipusAttachmentAdapter.add({ file: mkFile('x.docx', DOCX) })
-    await expect(omnipusAttachmentAdapter.send(pending)).rejects.toThrow(/could not be registered/)
+    // Must NOT throw — resolves to a CompleteAttachment with no stashed ref.
+    const complete = await omnipusAttachmentAdapter.send(pending)
+    expect(complete.status).toEqual({ type: 'complete' })
+    // No ref was stashed.
     expect(takeResolvedUpload(pending.id)).toBeUndefined()
+    // User was informed via a toast.
+    expect(getAddToast()).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'error', message: expect.stringMatching(/could not be registered/) })
+    )
   })
 
-  it('send() throws when the upload returns no usable path', async () => {
+  it('send() toasts (not throws) when the upload returns no usable path', async () => {
     vi.mocked(api.uploadFiles).mockResolvedValue({
       files: [{ name: 'x.docx', path: '', size: 0, content_type: DOCX }],
     } as never)
 
     const pending = await omnipusAttachmentAdapter.add({ file: mkFile('x.docx', DOCX) })
-    await expect(omnipusAttachmentAdapter.send(pending)).rejects.toThrow(/Upload failed/)
+    // Must NOT throw.
+    const complete = await omnipusAttachmentAdapter.send(pending)
+    expect(complete.status).toEqual({ type: 'complete' })
+    expect(takeResolvedUpload(pending.id)).toBeUndefined()
+    expect(getAddToast()).toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'error', message: expect.stringMatching(/Upload failed/) })
+    )
   })
 
   it('send() auto-creates a session when none is active, then uploads against it (#252)', async () => {
@@ -100,5 +133,27 @@ describe('omnipusAttachmentAdapter', () => {
     await omnipusAttachmentAdapter.remove({ ...pending, status: { type: 'complete' }, content: [] } as never)
 
     expect(takeResolvedUpload(pending.id)).toBeUndefined()
+  })
+
+  it('resolvedUploads map is capped: oldest entry evicted when limit is exceeded', async () => {
+    // Fill the map to the cap (50) using successful sends, then add one more and
+    // confirm the oldest entry was evicted.
+    const CAP = 50
+
+    // We need real attachment ids — use add() to generate them.
+    const pendings = []
+    for (let i = 0; i < CAP + 1; i++) {
+      vi.mocked(api.uploadFiles).mockResolvedValue({
+        files: [{ name: `f${i}.docx`, path: `uploads/sess_existing/f${i}.docx`, size: 1, content_type: DOCX, ref: `media://r${i}` }],
+      } as never)
+      const p = await omnipusAttachmentAdapter.add({ file: mkFile(`f${i}.docx`, DOCX) })
+      await omnipusAttachmentAdapter.send(p)
+      pendings.push(p)
+    }
+
+    // The first entry (index 0) should have been evicted to make room for index CAP.
+    expect(takeResolvedUpload(pendings[0].id)).toBeUndefined()
+    // The last entry should still be present.
+    expect(takeResolvedUpload(pendings[CAP].id)?.ref).toBe(`media://r${CAP}`)
   })
 })

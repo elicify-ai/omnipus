@@ -623,3 +623,176 @@ describe('VirtualizedMessageList', () => {
     vi.stubGlobal('cancelAnimationFrame', originalCaf)
   })
 })
+
+// ── VirtualUserMessageRow media rendering (finding 7) ────────────────────────
+
+describe('VirtualUserMessageRow media rendering', () => {
+  // Uses the PlainMessageList fallback (ResizeObserver removed) so we get stable
+  // DOM rendering without needing virtualizer layout tricks.
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(globalThis as any).ResizeObserver = undefined
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    // Re-stub ResizeObserver for subsequent test suites.
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    })
+  })
+
+  function seedSingleUserMessage(msg: ChatMessage): void {
+    useChatStore.setState((s) => ({
+      ...s,
+      messages: [msg],
+      isStreaming: false,
+      isReplaying: false,
+      replayCompletedForSession: SID,
+    }))
+    useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'agent-1' })
+  }
+
+  it('renders an <img> for an image media attachment', async () => {
+    const msg: ChatMessage = {
+      id: 'msg_img',
+      role: 'user',
+      content: 'look at this',
+      timestamp: new Date().toISOString(),
+      status: 'done',
+      media: [
+        {
+          type: 'image',
+          url: 'http://example.com/screenshot.png',
+          filename: 'screenshot.png',
+          contentType: 'image/png',
+        },
+      ],
+    }
+    seedSingleUserMessage(msg)
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+    warnSpy.mockRestore()
+
+    // AttachmentCard renders an <img> for image media.
+    const img = container.querySelector('img[alt="screenshot.png"]')
+    expect(img).toBeTruthy()
+    expect(img?.getAttribute('src')).toBe('http://example.com/screenshot.png')
+  })
+
+  it('renders the type label for a non-image file media attachment', async () => {
+    const msg: ChatMessage = {
+      id: 'msg_file',
+      role: 'user',
+      content: 'see attached',
+      timestamp: new Date().toISOString(),
+      status: 'done',
+      media: [
+        {
+          type: 'file',
+          url: 'http://example.com/report.pdf',
+          filename: 'report.pdf',
+          contentType: 'application/pdf',
+        },
+      ],
+    }
+    seedSingleUserMessage(msg)
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+    warnSpy.mockRestore()
+
+    // AttachmentCard renders the type label for non-image files.
+    expect(container.querySelector('img')).toBeFalsy()
+    const pdfLabel = container.querySelector('[data-message-role="user"]')?.textContent
+    expect(pdfLabel).toContain('PDF')
+  })
+
+  it('renders both image and file when media contains both', async () => {
+    const msg: ChatMessage = {
+      id: 'msg_mixed',
+      role: 'user',
+      content: 'mixed attachments',
+      timestamp: new Date().toISOString(),
+      status: 'done',
+      media: [
+        {
+          type: 'image',
+          url: 'http://example.com/photo.jpg',
+          filename: 'photo.jpg',
+          contentType: 'image/jpeg',
+        },
+        {
+          type: 'file',
+          url: 'http://example.com/data.xlsx',
+          filename: 'data.xlsx',
+          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        },
+      ],
+    }
+    seedSingleUserMessage(msg)
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+    warnSpy.mockRestore()
+
+    // Image renders as <img>.
+    expect(container.querySelector('img[alt="photo.jpg"]')).toBeTruthy()
+    // File renders with type label.
+    const userRow = container.querySelector('[data-message-role="user"]')
+    expect(userRow?.textContent).toContain('Excel')
+  })
+
+  it('attachment-only message (empty content) renders cards but no empty text bubble', async () => {
+    // A message with no text content — only a media attachment. The text bubble
+    // must NOT appear (it would be an empty rounded rectangle).
+    const msg: ChatMessage = {
+      id: 'msg_attach_only',
+      role: 'user',
+      content: '',
+      timestamp: new Date().toISOString(),
+      status: 'done',
+      media: [
+        {
+          type: 'image',
+          url: 'http://example.com/shot.png',
+          filename: 'shot.png',
+          contentType: 'image/png',
+        },
+      ],
+    }
+    seedSingleUserMessage(msg)
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+    warnSpy.mockRestore()
+
+    // The attachment card (image) renders.
+    expect(container.querySelector('img[alt="shot.png"]')).toBeTruthy()
+
+    // The text bubble div has a known class: rounded-xl px-4 py-3 text-sm.
+    // With empty content the component conditionally skips it.
+    const bubbles = container.querySelectorAll('.rounded-xl.px-4.py-3.text-sm')
+    expect(bubbles.length).toBe(0)
+  })
+})

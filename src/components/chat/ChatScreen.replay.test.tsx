@@ -9,6 +9,11 @@ import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 
+// Static import: vi.mock() calls are hoisted before this import, so all mocks
+// are in place when the module resolves. This avoids per-test dynamic import
+// contention that caused intermittent timeouts under full-suite parallel load.
+import { OmnipusComposer } from './ChatScreen'
+
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 // Mock AssistantUI primitives — ChatScreen uses ThreadPrimitive, ComposerPrimitive, etc.
@@ -158,7 +163,6 @@ describe('ChatScreen_Replay_SendDisabled (TDD row 22)', () => {
       useChatStore.setState({ isReplaying: true })
     })
 
-    const { OmnipusComposer } = await import('./ChatScreen')
     render(<OmnipusComposer />)
 
     const sendButton = screen.getByTestId('chat-send')
@@ -172,7 +176,6 @@ describe('ChatScreen_Replay_SendDisabled (TDD row 22)', () => {
       useConnectionStore.setState({ isConnected: true })
     })
 
-    const { OmnipusComposer } = await import('./ChatScreen')
     render(<OmnipusComposer />)
 
     const sendButton = screen.getByTestId('chat-send')
@@ -184,7 +187,6 @@ describe('ChatScreen_Replay_SendDisabled (TDD row 22)', () => {
       useChatStore.setState({ isReplaying: true })
     })
 
-    const { OmnipusComposer } = await import('./ChatScreen')
     render(<OmnipusComposer />)
 
     const input = screen.getByTestId('composer-input')
@@ -196,7 +198,6 @@ describe('ChatScreen_Replay_SendDisabled (TDD row 22)', () => {
       useChatStore.setState({ isReplaying: true })
     })
 
-    const { OmnipusComposer } = await import('./ChatScreen')
     render(<OmnipusComposer />)
 
     expect(screen.getByTestId('chat-send')).toBeDisabled()

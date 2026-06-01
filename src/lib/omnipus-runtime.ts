@@ -8,6 +8,7 @@ import type { ChatMessage, MediaAttachment } from "@/store/chat";
 import type { AssistantMessage, ToolCall } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
 import { omnipusAttachmentAdapter, takeResolvedUpload } from "@/lib/attachment-adapter";
+import { isImageAttachment } from "@/components/chat/AttachmentCard";
 
 type StoreToolCall = ToolCall & { call_id: string }; // not-wire-format: internal Zustand store type enriching ToolCall with a required call_id; never emitted to the backend
 
@@ -238,14 +239,20 @@ export function useOmnipusRuntime() {
       const attachments: MediaAttachment[] = [];
       for (const att of message.attachments ?? []) {
         const resolved = takeResolvedUpload(att.id);
-        if (resolved?.ref) {
+        if (resolved) {
           mediaRefs.push(resolved.ref);
           attachments.push({
-            type: resolved.contentType.startsWith("image/") ? "image" : "file",
+            type: isImageAttachment(resolved.filename, resolved.contentType) ? "image" : "file",
             url: resolved.url,
             filename: resolved.filename,
             contentType: resolved.contentType,
           });
+        } else {
+          // send() returned a failedComplete for this attachment (upload or
+          // registration error) — the ref was never stashed. Warn so the user
+          // knows the file did not reach the agent.
+          console.warn(`[omnipus-runtime] Attachment "${att.name}" (id=${att.id}) had no resolved ref — it will not be sent to the agent.`);
+          addToast({ message: `Attachment "${att.name}" was not sent — it failed to upload or register.`, variant: "error" });
         }
       }
 
