@@ -2,7 +2,7 @@
 name: General Task / Todo
 about: A specific piece of work like doc, refactoring, or maintenance.
 title: "[Task]"
-labels: ''
+type: Task
 assignees: ''
 
 ---
