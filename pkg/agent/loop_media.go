@@ -143,25 +143,45 @@ func resolveMediaRefs(
 }
 
 // pdfCapableModel returns true for models known to support native PDF document
-// blocks (base64 application/pdf content). The list is conservative — any
-// model not on it gets the text-extraction fallback rather than risking an
-// API error.
+// blocks (base64 application/pdf content). Any model that returns false gets the
+// text-extraction fallback, which works for every model.
 //
-// Allow-list substrings (case-insensitive match against the full model string):
+// The allow-list is deliberately CONSERVATIVE. The failure modes are asymmetric:
+// a false negative merely sends extracted text (slightly less rich, but always
+// works), whereas a false positive sends a native PDF block to a model whose
+// upstream provider rejects it with a hard HTTP 400 — which aborts the whole
+// turn with an empty reply. When in doubt, prefer text.
 //
-//	Anthropic: claude-3, claude-4, sonnet, opus (all Claude 3+ family)
+// Known exclusions (matched first, before the allow-list):
+//
+//   - Claude *Haiku* — OpenRouter routes Haiku via Amazon Bedrock, which returns
+//     "'claude-3-5-haiku-...' does not support PDF input." (verified 2026-06-01).
+//     Only Claude Sonnet/Opus (3.5+) and Claude 4 reliably accept PDF.
+//
+// Allow-list substrings (case-insensitive, matched against the full model id):
+//
+//	Anthropic: claude-3.5-sonnet / claude-3-7-sonnet / sonnet-4 / opus-4 / claude-4
 //	OpenAI:    gpt-4o, gpt-4.1, o1-, o3-
 //	Google:    gemini-1.5, gemini-2
 func pdfCapableModel(model string) bool {
 	lower := strings.ToLower(model)
-	capablePrefixes := []string{
-		// Anthropic Claude 3+ family (all variants support PDF natively)
-		"claude-3",
-		"claude-4",
-		"sonnet",
-		"opus",
-		"anthropic/claude-3",
-		"anthropic/claude-4",
+
+	// Exclusions take precedence: these match an allow-list substring but their
+	// upstream provider rejects PDF input, so they MUST fall back to text.
+	for _, deny := range []string{"haiku"} {
+		if strings.Contains(lower, deny) {
+			return false
+		}
+	}
+
+	capableSubstrings := []string{
+		// Anthropic — only Sonnet/Opus 3.5+ and Claude 4 accept PDF. Bare
+		// "claude-3" is intentionally NOT listed (it matched Haiku and the
+		// original Claude 3 models that lack PDF support).
+		"claude-3.5-sonnet", "claude-3-5-sonnet",
+		"claude-3.7-sonnet", "claude-3-7-sonnet",
+		"claude-sonnet-4", "claude-opus-4", "claude-4",
+		"sonnet-4", "opus-4",
 		// OpenAI GPT-4o and 4.1 family
 		"gpt-4o",
 		"gpt-4.1",
@@ -178,12 +198,65 @@ func pdfCapableModel(model string) bool {
 		"google/gemini-1.5",
 		"google/gemini-2",
 	}
-	for _, prefix := range capablePrefixes {
-		if strings.Contains(lower, prefix) {
+	for _, sub := range capableSubstrings {
+		if strings.Contains(lower, sub) {
 			return true
 		}
 	}
 	return false
+}
+
+// downgradePDFMediaToText converts any native PDF data URL in each message's
+// Media array back into extracted text injected into Content. It is the recovery
+// path for providers that reject native PDF blocks at request time: text input
+// works for every model, so the caller downgrades and retries once instead of
+// failing the turn. Mutates messages in place; returns true if at least one PDF
+// block was downgraded.
+func downgradePDFMediaToText(messages []providers.Message) bool {
+	const pdfPrefix = "data:application/pdf;base64,"
+	const fallbackName = "attachment.pdf"
+	anyChanged := false
+
+	for i := range messages {
+		if len(messages[i].Media) == 0 {
+			continue
+		}
+		kept := make([]string, 0, len(messages[i].Media))
+		var injections []string
+		msgChanged := false
+
+		for _, ref := range messages[i].Media {
+			if !strings.HasPrefix(ref, pdfPrefix) {
+				kept = append(kept, ref)
+				continue
+			}
+			msgChanged = true
+			data, decErr := base64.StdEncoding.DecodeString(ref[len(pdfPrefix):])
+			if decErr != nil {
+				injections = append(injections,
+					"\n\n[Attached PDF could not be decoded for text fallback]")
+				continue
+			}
+			text, ok, reason := docextract.ExtractBytes(data, "application/pdf", fallbackName)
+			if ok {
+				injections = append(injections, fmt.Sprintf(
+					"\n\n[Attached file %q]\n%s\n[End of attached file]", fallbackName, text))
+			} else {
+				injections = append(injections, fmt.Sprintf(
+					"\n\n[Attached file %q (application/pdf, %d bytes) — content could not be extracted: %s]",
+					fallbackName, len(data), reason))
+			}
+		}
+
+		if msgChanged {
+			messages[i].Media = kept
+			if len(injections) > 0 {
+				messages[i].Content = injectDocumentContent(messages[i].Content, injections)
+			}
+			anyChanged = true
+		}
+	}
+	return anyChanged
 }
 
 // isPDF returns true for files detected as PDF by MIME type or filename extension.

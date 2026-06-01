@@ -3914,6 +3914,34 @@ turnLoop:
 		maxRetries := 2
 		compactionAttemptedOnTimeout := false
 		contextCompressionFailed := false // C3: tracks that compression was tried but returned ok=false
+
+		// tryPDFTextFallback is the provider-agnostic safety net for native-PDF
+		// rejections. pdfCapableModel cannot perfectly track OpenRouter's
+		// per-route capabilities (e.g. Claude Haiku routed via Amazon Bedrock
+		// 400s on PDF input), and each provider phrases the rejection
+		// differently, so instead of matching error strings it triggers on the
+		// STRUCTURAL signal: a terminal failure on a request that carried a
+		// native PDF document block. It downgrades the PDF to extracted text —
+		// which every model accepts — and retries once. The turn was going to
+		// fail anyway, so this can only improve the outcome. Returns true when
+		// the retry succeeded (response/err are updated in place).
+		tryPDFTextFallback := func() bool {
+			if !downgradePDFMediaToText(callMessages) {
+				return false
+			}
+			logger.WarnCF(
+				"agent",
+				"provider rejected request carrying a native PDF block — retrying with extracted text",
+				map[string]any{
+					"agent_id": ts.agent.ID,
+					"model":    llmModel,
+					"error":    err.Error(),
+				},
+			)
+			response, err = callLLM(callMessages, providerToolDefs)
+			return err == nil
+		}
+
 		for retry := 0; retry <= maxRetries; retry++ {
 			response, err = callLLM(callMessages, providerToolDefs)
 			if err == nil {
@@ -3950,6 +3978,10 @@ turnLoop:
 			// so the error surfaces to the caller without redundant delay.
 			var exhaustedErr *providers.FallbackExhaustedError
 			if errors.As(err, &exhaustedErr) {
+				// All candidates failed — if the request carried a native PDF
+				// block, every provider may have rejected it. Degrade to text
+				// and try once more across the chain before surfacing.
+				tryPDFTextFallback()
 				break
 			}
 
@@ -3977,7 +4009,11 @@ turnLoop:
 					break
 				}
 				// Non-retriable, non-timeout, non-context errors: break immediately.
+				// First, if the request carried a native PDF block, try the
+				// provider-agnostic PDF→text fallback once — a terminal error
+				// here is very likely a PDF-input rejection.
 				if !isTimeoutError && !isContextError {
+					tryPDFTextFallback()
 					break
 				}
 			} else {
