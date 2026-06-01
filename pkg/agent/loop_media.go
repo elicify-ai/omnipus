@@ -260,23 +260,69 @@ func downgradePDFMediaToText(messages []providers.Message) bool {
 }
 
 // isImageInputRejection reports whether err is a provider rejecting image input
-// because the model has no vision (e.g. OpenRouter→Bedrock:
+// because the model has no vision capability (e.g. OpenRouter→Bedrock:
 // "'claude-3-5-haiku-...' does not support image input."). Unlike PDFs, images
 // have no text fallback, so the caller turns this into a friendly "switch to a
 // vision-capable model" message rather than surfacing a raw 400.
+//
+// The match is intentionally NARROW. It requires the error to express both the
+// image-input domain and a capability-absence phrase — "does not support image",
+// "image input is not supported", "no image support", etc. Errors that describe
+// a corrupt/oversized image, a content-moderation block, or generic provider
+// failures that happen to mention "image" are NOT matched. Specifically:
+//
+//   - "invalid image data", "corrupt image", "too large" → NOT matched
+//   - "content policy", "moderation", "safety" → NOT matched
+//   - "unable to process image" → NOT matched (ambiguous root cause)
+//
+// Capability-absence phrases that ARE matched (case-insensitive):
+//
+//	"does not support image"   – provider states the model lacks image support
+//	"image input"              – the specific Bedrock phrase ("does not support image input")
+//	"no image support"         – generic capability-absent form
+//	"not support image"        – grammatical variant ("model does not support image…")
+//	"image not supported"      – reversed subject/predicate form
+//	"image input not supported"– variant of the Bedrock phrase
 func isImageInputRejection(err error) bool {
 	if err == nil {
 		return false
 	}
 	lower := strings.ToLower(err.Error())
+
+	// Quick pre-filter: must mention "image" at all.
 	if !strings.Contains(lower, "image") {
 		return false
 	}
-	return strings.Contains(lower, "image input") ||
-		strings.Contains(lower, "does not support") ||
-		strings.Contains(lower, "not support") ||
-		strings.Contains(lower, "unsupported") ||
-		strings.Contains(lower, "not a valid")
+
+	// Explicit exclusions — these are NOT vision-capability errors.
+	for _, exclude := range []string{
+		"invalid image",
+		"corrupt",
+		"too large",
+		"moderation",
+		"content policy",
+		"safety",
+		"unable to process",
+	} {
+		if strings.Contains(lower, exclude) {
+			return false
+		}
+	}
+
+	// Capability-absence phrases. Each requires both the "image" domain and an
+	// explicit statement that the model/provider lacks vision support.
+	capabilityPhrases := []string{
+		"image input", // also covers "does not support image input", "image input not supported"
+		"no image support",
+		"not support image", // also covers "does not support image"
+		"image not supported",
+	}
+	for _, phrase := range capabilityPhrases {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 // isPDF returns true for files detected as PDF by MIME type or filename extension.

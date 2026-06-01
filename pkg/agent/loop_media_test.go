@@ -5,15 +5,19 @@
 package agent
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/media"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 )
@@ -321,20 +325,45 @@ func TestDowngradePDFMediaToText_NoPDF(t *testing.T) {
 
 // TestIsImageInputRejection covers the detector that converts a provider's
 // "model can't view images" 400 into a friendly switch-models message.
+// The match must be narrow: real image errors (corrupt data, oversized files,
+// content-moderation blocks) must NOT be mistaken for capability-absence errors.
 func TestIsImageInputRejection(t *testing.T) {
+	// These errors indicate the model/provider lacks vision capability.
 	hits := []string{
 		"API request failed: Status: 400 ... 'claude-3-5-haiku-20241022' does not support image input.",
 		"this model does not support image input",
-		"image is not supported by this model",
-		"unsupported content: image",
+		"does not support image processing",
+		"image input is not supported by this model",
+		"no image support available for this model",
+		"model does not support image: use a vision-capable model",
+		"image not supported",
+		"image input not supported",
 	}
+
+	// These errors must NOT be treated as capability-absence errors.
+	// Returning true for any of these would mask the true failure cause.
 	misses := []string{
+		// nil and unrelated errors
 		"",
 		"rate limit exceeded",
 		"context length exceeded",
 		"'claude-3-5-haiku' does not support PDF input.", // PDF, not image
 		"invalid api key",
+		// Corrupt / malformed image data — real provider errors, not capability gaps
+		"invalid image data provided",
+		"invalid image: the file is not a valid JPEG",
+		"image data is corrupt or unreadable",
+		// Oversized image — infrastructure limit, not a vision-capability error
+		"image file too large: maximum size is 5MB",
+		"image is too large to process",
+		// Content moderation / safety — must surface to the user as-is
+		"content moderation: image rejected",
+		"image blocked by safety policy",
+		"content policy violation in image",
+		// Generic processing failure — ambiguous root cause, do not mask
+		"unable to process image at this time",
 	}
+
 	for _, m := range hits {
 		assert.Truef(t, isImageInputRejection(fmt.Errorf("%s", m)), "expected image-rejection for %q", m)
 	}
@@ -342,4 +371,169 @@ func TestIsImageInputRejection(t *testing.T) {
 		assert.Falsef(t, isImageInputRejection(fmt.Errorf("%s", m)), "did NOT expect image-rejection for %q", m)
 	}
 	assert.False(t, isImageInputRejection(nil))
+}
+
+// imageRejectionProvider is a test provider that always returns a
+// vision-capability-absent error so the loop's image-rejection handler fires.
+type imageRejectionProvider struct {
+	model string
+}
+
+func (p *imageRejectionProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	return nil, fmt.Errorf("API error: '%s' does not support image input.", p.model)
+}
+
+func (p *imageRejectionProvider) GetDefaultModel() string {
+	return p.model
+}
+
+// TestAgentLoop_ImageRejection_FriendlyMessage verifies that when the provider
+// returns a vision-capability-absent error the loop:
+//
+//	(a) returns a friendly assistant message — not a raw error,
+//	(b) the message mentions the model name and the inability to view images,
+//	(c) the turn ends with TurnEndStatusCompleted (not error),
+//	(d) no EventKindError event is emitted.
+//
+// Traces to: sprint/258 review finding #2 (loop.go image→friendly-message has no test).
+func TestAgentLoop_ImageRejection_FriendlyMessage(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-imgrej-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	const modelName = "anthropic/claude-3-5-haiku"
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         modelName,
+				MaxTokens:         4096,
+				MaxToolIterations: 3,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &imageRejectionProvider{model: modelName}
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+
+	sub := al.SubscribeEvents(32)
+	defer al.UnsubscribeEvents(sub.ID)
+
+	defaultAgent := al.registry.GetDefaultAgent()
+	require.NotNil(t, defaultAgent, "default agent must exist")
+
+	response, loopErr := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
+		SessionKey:      "img-rej-test",
+		Channel:         "cli",
+		ChatID:          "direct",
+		UserMessage:     "What is in this image?",
+		DefaultResponse: defaultResponse,
+		EnableSummary:   false,
+		SendResponse:    false,
+	})
+
+	// (a) The loop must succeed — image rejection is handled, not propagated.
+	require.NoError(t, loopErr, "image rejection must not cause a loop error")
+
+	// (b) The response must describe the inability to view images and name the model
+	// (or a recognizable substring of it — the loop uses the resolved model name,
+	// which may omit the provider prefix, e.g. "claude-3-5-haiku" from
+	// "anthropic/claude-3-5-haiku").
+	assert.True(t, strings.Contains(response, "can't view images") ||
+		strings.Contains(response, "cannot view images") ||
+		strings.Contains(response, "I can't view"),
+		"response must mention inability to view images, got: %q", response)
+	// Extract the trailing part after the last "/" so "anthropic/claude-3-5-haiku"
+	// becomes "claude-3-5-haiku" — the loop uses the resolved (abbreviated) name.
+	shortModel := modelName
+	if idx := strings.LastIndex(modelName, "/"); idx >= 0 {
+		shortModel = modelName[idx+1:]
+	}
+	assert.Contains(t, response, shortModel,
+		"response must name the offending model so the user knows which one to switch, got: %q", response)
+
+	events := collectEventStream(sub.C)
+
+	// (c) Turn must end as completed, not error.
+	turnEndEvt, hasTurnEnd := findEvent(events, EventKindTurnEnd)
+	require.True(t, hasTurnEnd, "TurnEnd event must be emitted")
+	turnEndPayload, ok := turnEndEvt.Payload.(TurnEndPayload)
+	require.True(t, ok, "TurnEnd payload must be TurnEndPayload, got %T", turnEndEvt.Payload)
+	assert.Equal(t, TurnEndStatusCompleted, turnEndPayload.Status,
+		"turn must end as completed, not error")
+
+	// (d) No error event must be emitted.
+	_, hasErrorEvt := findEvent(events, EventKindError)
+	assert.False(t, hasErrorEvt, "no EventKindError must be emitted when image rejection is handled gracefully")
+}
+
+// TestAgentLoop_NonImageError_PropagatesAsError verifies the negative case:
+// a non-image error (e.g. "rate limit exceeded") still causes an error turn and
+// is NOT swallowed by the image-rejection handler.
+//
+// Traces to: sprint/258 review finding #2 (negative test case).
+func TestAgentLoop_NonImageError_PropagatesAsError(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-nonimg-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 3,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	// Provider always returns a rate-limit error — must NOT be handled as an image rejection.
+	rateLimitErr := fmt.Errorf("rate limit exceeded: too many requests per minute")
+	provider := &failFirstMockProvider{
+		failures:  999, // never succeeds
+		failError: rateLimitErr,
+	}
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+
+	sub := al.SubscribeEvents(32)
+	defer al.UnsubscribeEvents(sub.ID)
+
+	defaultAgent := al.registry.GetDefaultAgent()
+	require.NotNil(t, defaultAgent, "default agent must exist")
+
+	_, loopErr := al.runAgentLoop(context.Background(), defaultAgent, processOptions{
+		SessionKey:      "nonimg-err-test",
+		Channel:         "cli",
+		ChatID:          "direct",
+		UserMessage:     "Hello",
+		DefaultResponse: defaultResponse,
+		EnableSummary:   false,
+		SendResponse:    false,
+	})
+
+	// The loop must surface the error — it is not an image-capability error.
+	require.Error(t, loopErr, "non-image error must propagate as a loop error")
+
+	events := collectEventStream(sub.C)
+
+	// An EventKindError must have been emitted.
+	_, hasErrorEvt := findEvent(events, EventKindError)
+	assert.True(t, hasErrorEvt, "EventKindError must be emitted for a non-image LLM error")
+
+	// The turn must end with error status.
+	turnEndEvt, hasTurnEnd := findEvent(events, EventKindTurnEnd)
+	require.True(t, hasTurnEnd, "TurnEnd event must be emitted even on error")
+	turnEndPayload, ok := turnEndEvt.Payload.(TurnEndPayload)
+	require.True(t, ok, "TurnEnd payload must be TurnEndPayload, got %T", turnEndEvt.Payload)
+	assert.Equal(t, TurnEndStatusError, turnEndPayload.Status,
+		"turn must end as error for a non-image LLM failure")
 }

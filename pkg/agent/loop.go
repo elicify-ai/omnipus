@@ -4218,11 +4218,16 @@ turnLoop:
 			}
 			// Friendly degradation for non-vision models. A user attached an image
 			// to a model that can't view images, so the provider returned a raw
-			// "does not support image input" 400. Images have no text fallback
-			// (unlike PDFs), and the tool-result image-strip above only covers
-			// agent-generated images — so instead of surfacing the raw error,
-			// synthesize a clear, actionable assistant reply and fall through to
-			// the normal emit path (streamed/published like any other response).
+			// 400 whose message specifically indicates a missing vision capability
+			// (e.g. "'claude-3-5-haiku-...' does not support image input.").
+			// isImageInputRejection uses a narrow match: errors about corrupt
+			// images, oversized files, or content-moderation blocks are NOT
+			// intercepted here and fall through to the normal error path.
+			// Images have no text fallback (unlike PDFs), and the tool-result
+			// image-strip above only covers agent-generated images — so instead
+			// of surfacing the raw error, synthesize a clear, actionable
+			// assistant reply and fall through to the normal emit path
+			// (streamed/published like any other response).
 			if isImageInputRejection(err) {
 				logger.WarnCF("agent", "model rejected image input — returning guidance instead of error",
 					map[string]any{"agent_id": ts.agent.ID, "model": llmModel, "error": err.Error()})
