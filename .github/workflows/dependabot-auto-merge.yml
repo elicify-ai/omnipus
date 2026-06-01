@@ -4,9 +4,26 @@ name: Dependabot auto-merge
 # Anything semver-minor or higher requires a human reviewer (intentional —
 # minor-version drift across the dependency tree has bitten us before).
 #
-# Triggered on Dependabot PRs; uses GitHub's own metadata action to read
-# the semver class, then uses `gh pr merge --auto` to enable auto-merge.
-# Auto-merge waits for required status checks before completing.
+# WHY THIS NEEDS A GITHUB APP TOKEN:
+# Branch protection requires 1 approving review. The default GITHUB_TOKEN
+# (the github-actions[bot]) is FORBIDDEN by GitHub from approving PRs
+# ("GitHub Actions is not permitted to approve pull requests"), so the old
+# self-approve step failed on every run and nothing ever auto-merged.
+# The fix is to approve + enable auto-merge using a GitHub App installation
+# token, whose review DOES satisfy the required-review rule.
+#
+# ONE-TIME SETUP (until done, this workflow is a graceful no-op — it will
+# NOT fail, it just won't auto-merge):
+#   1. Create a GitHub App (org-owned) with repo permissions:
+#        Contents: Read & write, Pull requests: Read & write.
+#      Install it on elicify-ai/omnipus.
+#   2. Add repository VARIABLE  AUTOMERGE_APP_ID         = <the app's App ID>
+#   3. Add repository SECRET    AUTOMERGE_APP_PRIVATE_KEY = <the app's .pem>
+#   4. Ensure "Allow auto-merge" is enabled in repo Settings → General.
+#
+# ALTERNATIVE (no app/secret): instead of the above, exempt Dependabot from
+# the required-review rule via a branch ruleset bypass and delete the approve
+# step — native auto-merge then completes on green CI alone.
 
 on:
   pull_request:
@@ -27,18 +44,30 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Approve the patch update so branch-protection's
-      # "required approving review count: 1" requirement is satisfied.
-      - name: Approve patch-level updates
-        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
-        run: gh pr review --approve "$PR_URL"
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Mint an App installation token whose review satisfies branch protection.
+      # Skipped (leaving outputs.token empty) when the App isn't configured yet,
+      # so the job stays green instead of failing like the old self-approve did.
+      - name: Generate GitHub App token
+        id: app-token
+        if: vars.AUTOMERGE_APP_ID != '' && steps.meta.outputs.update-type == 'version-update:semver-patch'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.AUTOMERGE_APP_ID }}
+          private-key: ${{ secrets.AUTOMERGE_APP_PRIVATE_KEY }}
 
-      - name: Enable auto-merge for patch-level updates
-        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
-        run: gh pr merge --auto --squash "$PR_URL"
+      # Approve + enable auto-merge for patch updates, using the App token.
+      # Only runs when the App token was successfully minted.
+      - name: Approve and enable auto-merge (patch updates)
+        if: steps.app-token.outputs.token != ''
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      - name: Note when auto-merge is not configured
+        if: vars.AUTOMERGE_APP_ID == '' && steps.meta.outputs.update-type == 'version-update:semver-patch'
+        run: |
+          echo "::notice::Patch-level Dependabot PR detected, but auto-merge is not configured."
+          echo "::notice::Set the AUTOMERGE_APP_ID variable + AUTOMERGE_APP_PRIVATE_KEY secret to enable (see workflow header)."
