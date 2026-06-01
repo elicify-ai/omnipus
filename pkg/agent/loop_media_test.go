@@ -318,3 +318,28 @@ func TestDowngradePDFMediaToText_NoPDF(t *testing.T) {
 	assert.Equal(t, img, msgs[0].Media[0])
 	assert.Equal(t, "hi", msgs[0].Content)
 }
+
+// TestIsImageInputRejection covers the detector that converts a provider's
+// "model can't view images" 400 into a friendly switch-models message.
+func TestIsImageInputRejection(t *testing.T) {
+	hits := []string{
+		"API request failed: Status: 400 ... 'claude-3-5-haiku-20241022' does not support image input.",
+		"this model does not support image input",
+		"image is not supported by this model",
+		"unsupported content: image",
+	}
+	misses := []string{
+		"",
+		"rate limit exceeded",
+		"context length exceeded",
+		"'claude-3-5-haiku' does not support PDF input.", // PDF, not image
+		"invalid api key",
+	}
+	for _, m := range hits {
+		assert.Truef(t, isImageInputRejection(fmt.Errorf("%s", m)), "expected image-rejection for %q", m)
+	}
+	for _, m := range misses {
+		assert.Falsef(t, isImageInputRejection(fmt.Errorf("%s", m)), "did NOT expect image-rejection for %q", m)
+	}
+	assert.False(t, isImageInputRejection(nil))
+}

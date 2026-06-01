@@ -259,6 +259,26 @@ func downgradePDFMediaToText(messages []providers.Message) bool {
 	return anyChanged
 }
 
+// isImageInputRejection reports whether err is a provider rejecting image input
+// because the model has no vision (e.g. OpenRouter→Bedrock:
+// "'claude-3-5-haiku-...' does not support image input."). Unlike PDFs, images
+// have no text fallback, so the caller turns this into a friendly "switch to a
+// vision-capable model" message rather than surfacing a raw 400.
+func isImageInputRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	if !strings.Contains(lower, "image") {
+		return false
+	}
+	return strings.Contains(lower, "image input") ||
+		strings.Contains(lower, "does not support") ||
+		strings.Contains(lower, "not support") ||
+		strings.Contains(lower, "unsupported") ||
+		strings.Contains(lower, "not a valid")
+}
+
 // isPDF returns true for files detected as PDF by MIME type or filename extension.
 func isPDF(mime, filename string) bool {
 	if mime == "application/pdf" {

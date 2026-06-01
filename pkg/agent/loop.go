@@ -4216,6 +4216,28 @@ turnLoop:
 			if errors.Is(err, context.DeadlineExceeded) {
 				return turnResult{}, fmt.Errorf("turn timed out")
 			}
+			// Friendly degradation for non-vision models. A user attached an image
+			// to a model that can't view images, so the provider returned a raw
+			// "does not support image input" 400. Images have no text fallback
+			// (unlike PDFs), and the tool-result image-strip above only covers
+			// agent-generated images — so instead of surfacing the raw error,
+			// synthesize a clear, actionable assistant reply and fall through to
+			// the normal emit path (streamed/published like any other response).
+			if isImageInputRejection(err) {
+				logger.WarnCF("agent", "model rejected image input — returning guidance instead of error",
+					map[string]any{"agent_id": ts.agent.ID, "model": llmModel, "error": err.Error()})
+				response = &providers.LLMResponse{
+					Content: fmt.Sprintf(
+						"I can't view images with the current model (%s). To work with images, switch this "+
+							"agent to a model that supports image input, then try again.",
+						llmModel,
+					),
+				}
+				err = nil
+				// fall through to the normal post-LLM handling below.
+			}
+		}
+		if err != nil {
 			turnStatus = TurnEndStatusError
 			al.emitEvent(
 				EventKindError,
