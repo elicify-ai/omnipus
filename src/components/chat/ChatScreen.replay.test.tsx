@@ -45,6 +45,17 @@ vi.mock('@assistant-ui/react', () => {
           'aria-label': ariaLabel,
           'aria-disabled': ariaDisabled,
         }, children),
+      AddAttachment: ({ disabled, children, className }: { disabled?: boolean; children?: React.ReactNode; className?: string }) =>
+        React.createElement('button', { type: 'button', disabled, className, 'data-testid': 'add-attachment' }, children),
+      Attachments: () => null,
+    },
+    AttachmentPrimitive: {
+      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
+        React.createElement('div', { className }, children),
+      Name: () => null,
+      Remove: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
+        React.createElement('button', { type: 'button', className }, children),
+      Thumb: () => null,
     },
     MessagePartPrimitive: {
       InProgress: () => null,
@@ -59,6 +70,7 @@ vi.mock('@assistant-ui/react', () => {
     useComposerRuntime: () => ({
       getState: () => ({ text: '' }),
       setText: vi.fn(),
+      addAttachment: vi.fn(),
     }),
     useMessage: () => ({
       id: 'msg_1',

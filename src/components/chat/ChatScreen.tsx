@@ -6,6 +6,7 @@ import {
   ThreadPrimitive,
   MessagePrimitive,
   ComposerPrimitive,
+  AttachmentPrimitive,
   ActionBarPrimitive,
   AuiIf,
   useComposerRuntime,
@@ -38,11 +39,11 @@ import { MarkdownText } from './markdown-text'
 import { SubagentBlock } from './SubagentBlock'
 import { Button } from '@/components/ui/button'
 import { useChatStore } from '@/store/chat'
-import type { ChatMessage, MediaAttachment } from '@/store/chat'
+import type { ChatMessage } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
-import { fetchAgents, fetchSessionMessages, createSession, uploadFiles, isApiError } from '@/lib/api'
+import { fetchAgents, fetchSessionMessages, createSession, isApiError } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 
@@ -947,23 +948,26 @@ function composerPlaceholder(
 
 const HARMFUL_EXTENSIONS = ['.exe', '.bat', '.cmd', '.sh', '.ps1', '.dll', '.sys', '.msi', '.scr', '.com']
 
-/** Renders an image thumbnail for a pending file, revoking the object URL on unmount to prevent memory leaks. */
-function FilePreviewThumbnail({ file }: { file: File }) {
-  const [url, setUrl] = useState<string | null>(null)
-
-  useEffect(() => {
-    const objectUrl = URL.createObjectURL(file)
-    setUrl(objectUrl)
-    return () => URL.revokeObjectURL(objectUrl)
-  }, [file])
-
-  if (!url) return null
-  // Defense-in-depth: URL.createObjectURL always returns a blob: URL with an
-  // opaque UUID, so the value can never carry an HTML/javascript payload.
-  // CodeQL's data-flow analysis cannot prove that, so make the safety
-  // explicit — refuse to render anything that isn't a blob: URL.
-  if (!url.startsWith('blob:')) return null
-  return <img src={url} className="w-8 h-8 rounded object-cover" alt={file.name} />
+/**
+ * Renders one pending composer attachment as a chip, using the native
+ * AttachmentPrimitive context provided by ComposerPrimitive.Attachments.
+ * Replaces the old custom pending-file chip + FilePreviewThumbnail.
+ */
+function ComposerAttachmentChip() {
+  return (
+    <AttachmentPrimitive.Root className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-xs">
+      <File size={14} className="text-[var(--color-muted)] shrink-0" />
+      <span className="truncate max-w-[140px]">
+        <AttachmentPrimitive.Name />
+      </span>
+      <AttachmentPrimitive.Remove
+        className="text-[var(--color-muted)] hover:text-[var(--color-error)]"
+        aria-label="Remove attachment"
+      >
+        <X size={12} />
+      </AttachmentPrimitive.Remove>
+    </AttachmentPrimitive.Root>
+  )
 }
 
 // Exported for unit testing (TDD row 22).
@@ -981,8 +985,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const appendMessage = useChatStore((s) => s.appendMessage)
   const setActiveSession = useSessionStore((s) => s.setActiveSession)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
-  const activeSessionId = useSessionStore((s) => s.activeSessionId)
-  const sendMessage = useChatStore((s) => s.sendMessage)
   const addToast = useUiStore((s) => s.addToast)
   const composerRuntime = useComposerRuntime()
   const queryClient = useQueryClient()
@@ -1008,8 +1010,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const [inputValue, setInputValue] = useState('')
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashHighlight, setSlashHighlight] = useState(0)
-  const [pendingFiles, setPendingFiles] = useState<File[]>([])
-  const [isUploading, setIsUploading] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   // EC-15 / FR-21: stop button label progression:
   //   'stop'     — idle, button shows Stop icon
@@ -1026,7 +1026,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // isStreaming just went false (done frame arrived) but the user pressed Escape
   // intending to cancel a turn they just observed streaming.
   const streamingStartedAt = useRef<number>(0)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   // Tracks whether we already warned for the current large-input threshold crossing,
   // so we only fire one toast per paste/input event that exceeds 1MB.
   const hasWarnedLargeInput = useRef(false)
@@ -1037,7 +1036,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // also disable, not just the Send button. Letting the user type into an input
   // that can't dispatch is misleading; the "Connection lost" banner alone is
   // easy to miss when the textarea looks fully interactive.
-  const inputEnabled = !agentRemoved && !isReplaying && !isUploading && !(reconnectPhase === 'gave_up') && isConnected
+  const inputEnabled = !agentRemoved && !isReplaying && !(reconnectPhase === 'gave_up') && isConnected
 
   // FR-3a: during streaming, show the slash menu ONLY if at least one command
   // with availableWhileStreaming:true matches the current input prefix.
@@ -1141,7 +1140,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       )
       if (!doubleConfirmed) return
     }
-    setPendingFiles((prev) => [...prev, ...files])
+    // Hand each file to the native composer attachment system; the
+    // AttachmentAdapter uploads on send and threads the media:// ref through
+    // onNew. Used by drag-drop and image paste.
+    for (const file of files) {
+      void composerRuntime.addAttachment(file)
+    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -1244,116 +1248,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // the closure capture of stopLabel is fresh for the 'stopping' guard.
   }, [stopLabel, cancelStream])
 
-  async function handleSendWithFiles(text: string) {
-    if (pendingFiles.length === 0) {
-      sendMessage(text)
-      return
-    }
-
-    // #252: uploading before the first message used to error "no active
-    // session". Auto-create a session first, then upload + send against it.
-    let sessionId = activeSessionId
-    if (!sessionId || sessionId === '__pending') {
-      if (!activeAgentId) {
-        addToast({ message: 'Select an agent before sending files', variant: 'error' })
-        return
-      }
-      try {
-        const created = await createSession(activeAgentId)
-        setActiveSession(created.id, created.agent_id, null)
-        queryClient.invalidateQueries({ queryKey: ['sessions'] })
-        sessionId = created.id
-      } catch (err) {
-        // #253: never lose the user's text — leave the composer untouched.
-        addToast({
-          message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Could not start a session for upload',
-          variant: 'error',
-        })
-        return
-      }
-    }
-
-    setIsUploading(true)
-    try {
-      const { files: uploaded } = await uploadFiles(sessionId, pendingFiles)
-
-      // #4 (sprint258 review): model upload result as a paired structure so
-      // the visible attachment and the agent-accessible ref are always derived
-      // from the same predicate. A file without a valid path cannot be
-      // referenced in the message body — surface "not available" so the user
-      // knows to re-attach, rather than silently sending a broken link.
-      //
-      // A file may have a valid path but no ref (registration failed). In that
-      // case we still include it in the file list body text so the agent sees
-      // the filename, but we do NOT add it to mediaRefs (agent cannot
-      // access it as a multimodal content block). The attachment is shown
-      // to the user only when the paired ref is present so display and
-      // agent-accessible content are always consistent.
-      const unavailable = pendingFiles.filter(
-        (file) => !uploaded.some((u) => u.name === file.name && u.path.length > 0),
-      )
-      if (unavailable.length > 0) {
-        addToast({
-          message: `Attachment not available: ${unavailable.map((f) => f.name).join(', ')} — could not register with session. Re-attach and try again.`,
-          variant: 'error',
-        })
-      }
-
-      // Build paired (attachment, ref) structures from the uploaded files that
-      // have a usable path. Both the visible bubble attachment and the agent
-      // media:// ref are derived from the same source object — a file without
-      // a ref is excluded from the display attachment list so no attachment is
-      // visible to the user without a corresponding agent-accessible ref.
-      interface UploadPair {
-        attachment: MediaAttachment
-        ref: string
-      }
-      const availablePairs: UploadPair[] = uploaded
-        .filter((f) => f.path.length > 0 && typeof f.ref === 'string' && f.ref.length > 0)
-        .map((f) => ({
-          attachment: {
-            type: f.content_type.startsWith('image/') ? 'image' : 'file',
-            url: `/api/v1/uploads/${sessionId}/${f.name}`,
-            filename: f.name,
-            contentType: f.content_type,
-          } as MediaAttachment,
-          ref: f.ref as string,
-        }))
-
-      // Fix #1: when ALL uploads failed (no path-bearing file at all), send
-      // plain text if the user typed something — do NOT clear pendingFiles so
-      // the user can re-attach after seeing the toast.
-      const anyPathUploaded = uploaded.some((f) => f.path.length > 0)
-      if (!anyPathUploaded) {
-        if (!text.trim()) {
-          // Nothing to send at all.
-          return
-        }
-        // Send text-only; keep pendingFiles so user can retry the attach.
-        sendMessage(text)
-        return
-      }
-
-      // The backend (resolveMediaRefs) extracts and injects document content
-      // from the refs into the agent context — no path text needed in the body.
-      const mediaRefs = availablePairs.map((p) => p.ref)
-      const attachments = availablePairs.map((p) => p.attachment)
-      sendMessage(text, { mediaRefs, attachments })
-      setPendingFiles([])
-    } catch (err) {
-      // #253: surface the failure and KEEP the pending files + restore the
-      // typed text so the user can retry — never silently lose their turn.
-      composerRuntime.setText(text)
-      setInputValue(text)
-      addToast({
-        message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Upload failed — your message was kept, please retry',
-        variant: 'error',
-      })
-    } finally {
-      setIsUploading(false)
-    }
-  }
-
   return (
     <div
       className="relative"
@@ -1452,80 +1346,43 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         </div>
       )}
 
-      {/* Pending file previews */}
-      {pendingFiles.length > 0 && (
-        <div className="flex flex-wrap gap-2 px-2 pb-2">
-          {pendingFiles.map((file, i) => (
-            <div
-              key={`${file.name}-${file.size}-${file.lastModified}`}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-xs"
-            >
-              {file.type.startsWith('image/') ? (
-                <FilePreviewThumbnail file={file} />
-              ) : (
-                <File size={14} className="text-[var(--color-muted)]" />
-              )}
-              <span className="truncate max-w-[120px]">{file.name}</span>
-              <button
-                type="button"
-                onClick={() => setPendingFiles((prev) => prev.filter((_, j) => j !== i))}
-                className="text-[var(--color-muted)] hover:text-[var(--color-error)]"
-                aria-label={`Remove ${file.name}`}
-              >
-                <X size={12} />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Hidden file input */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        data-testid="file-input"
-        className="hidden"
-        onChange={(e) => {
-          const files = Array.from(e.target.files ?? [])
-          if (files.length) handleFilesSelected(files)
-          e.target.value = ''
-        }}
-      />
+      {/* Pending attachments — native AssistantUI composer attachments. Shows a
+          chip for each attached file (via paperclip, drag-drop, or paste); the
+          AttachmentAdapter (src/lib/attachment-adapter.ts) uploads them on send
+          and threads the media:// ref into our transport via onNew. */}
+      <div className="flex flex-wrap gap-2 px-2 empty:hidden [&:has(*)]:pb-2">
+        <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />
+      </div>
 
       <div className="flex items-end gap-2 px-2 py-2">
-        {/* Paperclip button */}
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={!isConnected || isStreaming || isUploading || isReplaying || reconnectPhase === 'gave_up'}
+        {/* Attach button — native; opens the file picker scoped to the adapter's
+            accept list. Replaces the old custom paperclip + hidden <input>. */}
+        <ComposerPrimitive.AddAttachment
+          disabled={!isConnected || isStreaming || isReplaying || reconnectPhase === 'gave_up'}
           className="shrink-0 w-11 h-11 rounded-xl flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           aria-label="Attach file"
           title="Attach file"
         >
           <Paperclip size={16} />
-        </button>
+        </ComposerPrimitive.AddAttachment>
 
       <ComposerPrimitive.Root
         className="flex items-end gap-2 flex-1"
         onSubmit={(e) => {
           // Block submission while streaming — slash commands are handled via
           // handleKeyDown, and normal sends must wait for the turn to complete.
+          // Attachments flow natively through the attachment adapter + onNew, so
+          // there is no custom upload branch here: the default composer submit
+          // (composer.send) carries text + attachments identically for Enter and
+          // the Send button.
           if (isStreaming) {
             e.preventDefault()
-            return
           }
-          if (pendingFiles.length === 0) return // Let AssistantUI handle the standard send path
-          e.preventDefault()
-          const text = composerRuntime.getState().text.trim()
-          composerRuntime.setText('')
-          setInputValue('')
-          void handleSendWithFiles(text)
         }}
       >
         <ComposerPrimitive.Input
           data-testid="chat-input"
-          placeholder={agentRemoved ? 'Agent has been removed — this session is read-only' : composerPlaceholder(isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow', isStreaming || isUploading, isReplaying, activeAgentName, reconnectPhase === 'gave_up')}
+          placeholder={agentRemoved ? 'Agent has been removed — this session is read-only' : composerPlaceholder(isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow', isStreaming, isReplaying, activeAgentName, reconnectPhase === 'gave_up')}
           // FR-3a: the slash menu must be reachable mid-stream, which means the
           // textarea has to accept keystrokes during streaming. Submission is
           // blocked elsewhere: the Send button has its own `!isStreaming` gate
@@ -1541,7 +1398,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             'flex-1 resize-none rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-2.5 text-sm text-[var(--color-secondary)] outline-none',
             'placeholder:text-[var(--color-muted)] min-h-[24px] max-h-[200px] leading-6 overflow-hidden',
             'focus:border-[var(--color-accent)]/50 focus:ring-1 focus:ring-[var(--color-accent)]/20',
-            (!inputEnabled || isStreaming || isUploading) && 'opacity-60 cursor-not-allowed',
+            (!inputEnabled || isStreaming) && 'opacity-60 cursor-not-allowed',
           )}
           aria-label="Message input"
           onChange={(e) => {
@@ -1584,7 +1441,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           }}
         />
 
-        {isStreaming || isUploading || stopLabel === 'stopping' ? (
+        {isStreaming || stopLabel === 'stopping' ? (
           <button
             type="button"
             data-testid="stop-btn"
@@ -1603,7 +1460,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               setStopLabel('stopping')
               cancelStream()
             }}
-            disabled={isUploading}
             className={cn(
               'shrink-0 rounded-xl flex items-center justify-center transition-colors',
               stopLabel === 'stopping'
@@ -1613,8 +1469,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
                 : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-wait',
             )}
-            aria-label={isUploading ? 'Uploading...' : stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
-            title={isUploading ? 'Uploading files...' : 'Stop (Escape)'}
+            aria-label={stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
+            title="Stop (Escape)"
           >
             <Stop size={15} weight="fill" />
             {stopLabel === 'stopping' && <span>Stopping...</span>}
@@ -1623,6 +1479,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           // FR-I-014: also disabled during replay so user cannot send out-of-order.
           // Fix 3: when reconnecting (fast or slow), allow send — messages go to
           // the outbound queue and drain automatically on reconnect.
+          //
+          // Native ComposerPrimitive.Send: calls composer.send() → onNew, which
+          // now carries text AND attachments. Send and Enter both go through
+          // composer.send(), so they are identical. Send auto-disables when the
+          // composer is empty (no text and no attachments) via the runtime's
+          // canSend, so no manual empty-check is needed here.
           <ComposerPrimitive.Send
             disabled={!inputEnabled || isReplaying}
             data-testid="chat-send"

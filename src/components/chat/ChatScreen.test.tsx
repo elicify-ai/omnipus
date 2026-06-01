@@ -51,6 +51,19 @@ vi.mock('@assistant-ui/react', () => {
           'data-testid': testId ?? 'chat-send',
           'aria-label': ariaLabel,
         }, children),
+      AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
+        disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
+      }) =>
+        React.createElement('button', { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment' }, children),
+      Attachments: () => null,
+    },
+    AttachmentPrimitive: {
+      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
+        React.createElement('div', { className }, children),
+      Name: () => null,
+      Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
+        React.createElement('button', { type: 'button', className, 'aria-label': ariaLabel }, children),
+      Thumb: () => null,
     },
     MessagePartPrimitive: { InProgress: () => null },
     ActionBarPrimitive: {
@@ -65,6 +78,7 @@ vi.mock('@assistant-ui/react', () => {
     useComposerRuntime: vi.fn(() => ({
       getState: () => ({ text: '' }),
       setText: vi.fn(),
+      addAttachment: vi.fn(),
     })),
     useMessage: () => ({
       id: 'msg_1',
@@ -232,117 +246,10 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
   })
 })
 
-// ── Fix #1: all uploads fail with text → send text-only, keep pendingFiles ────
-
-describe('Fix #1 — all uploads fail with text', () => {
-  it('sends plain text (no "Attached files:" suffix) and keeps pendingFiles when all uploads lack a path', async () => {
-    // BDD: Given pending files and typed text,
-    //   When all uploaded files come back with empty path (registration failed),
-    //   Then sendMessage is called with just the text (no file list appended),
-    //   And an "Attachment not available" toast is shown.
-    //
-    // Traces to: ChatScreen.tsx handleSendWithFiles — Fix #1 (sprint258fix2).
-    // This test FAILS on the pre-fix code that appended "\n\nAttached files: "
-    // when available.length === 0 but text was non-empty.
-
-    const assistantUi = await import('@assistant-ui/react')
-    const setTextMock = vi.fn()
-    // Override useComposerRuntime for this test so it returns non-empty text,
-    // simulating a user who typed a message before attaching.
-    vi.mocked(assistantUi.useComposerRuntime).mockReturnValue({
-      getState: () => ({ text: 'hello world' } as never),
-      setText: setTextMock,
-    } as never)
-
-    const api = await import('@/lib/api')
-    const uploadFilesMock = vi.mocked(api.uploadFiles)
-
-    // All uploaded files have empty path — registration failed.
-    uploadFilesMock.mockResolvedValue({
-      files: [{ name: 'broken.png', path: '', size: 10, content_type: 'image/png' }],
-    } as never)
-
-    // Spy on the connection's send method — sendMessage in the chat store
-    // ultimately calls connection.send(). If the message text contains
-    // "Attached files:", the test fails.
-    const sendMock = vi.fn().mockReturnValue(true)
-
-    act(() => {
-      useSessionStore.setState({ activeSessionId: 'sess_f1', activeAgentId: 'general-assistant', activeAgentType: null })
-      useConnectionStore.setState({
-        connection: { send: sendMock, disconnect: vi.fn(), connect: vi.fn() } as never,
-        isConnected: true,
-      })
-    })
-
-    const { OmnipusComposer } = await import('./ChatScreen')
-    render(<OmnipusComposer />)
-
-    // Attach a file so pendingFiles is non-empty, triggering handleSendWithFiles
-    const fileInput = screen.getByTestId('file-input') as HTMLInputElement
-    const file = new File(['BROKEN'], 'broken.png', { type: 'image/png' })
-    act(() => {
-      fireEvent.change(fileInput, { target: { files: [file] } })
-    })
-
-    // Submit the composer
-    const form = screen.getByTestId('composer-form')
-    await act(async () => {
-      fireEvent.submit(form)
-      await Promise.resolve()
-    })
-    await act(async () => { await Promise.resolve(); await Promise.resolve() })
-
-    // The WS send must have been called — this proves sendMessage ran.
-    expect(sendMock).toHaveBeenCalled()
-
-    // The payload sent must contain just the user text — no "Attached files:" suffix.
-    const wsFrame = sendMock.mock.calls[0]?.[0] as { content?: string }
-    const sentContent = typeof wsFrame === 'object' ? JSON.stringify(wsFrame) : String(wsFrame)
-    expect(sentContent).toContain('hello world')
-    expect(sentContent).not.toContain('Attached files:')
-  })
-})
-
-// ── #252: upload before first message auto-creates a session ───────────────────
-
-describe('#252 — image upload before first message', () => {
-  it('auto-creates a session when uploading with no active session, then uploads against it', async () => {
-    const api = await import('@/lib/api')
-    const createSessionMock = vi.mocked(api.createSession)
-    const uploadFilesMock = vi.mocked(api.uploadFiles)
-    createSessionMock.mockResolvedValue({ id: 'sess_new_252', agent_id: 'general-assistant' } as any)
-    uploadFilesMock.mockResolvedValue({
-      files: [{ name: 'pic.png', path: 'uploads/sess_new_252/pic.png', size: 7, content_type: 'image/png', ref: 'media://r252' }],
-    } as any)
-
-    // No active session — this is the #252 condition.
-    act(() => {
-      useSessionStore.setState({ activeSessionId: null, activeAgentId: 'general-assistant', activeAgentType: null })
-      useConnectionStore.setState({ connection: { send: vi.fn().mockReturnValue(true), disconnect: vi.fn(), connect: vi.fn() } as any, isConnected: true })
-    })
-
-    const { OmnipusComposer } = await import('./ChatScreen')
-    render(<OmnipusComposer />)
-
-    // Attach a (non-harmful) image via the hidden file input.
-    const fileInput = screen.getByTestId('file-input') as HTMLInputElement
-    const file = new File(['PNGDATA'], 'pic.png', { type: 'image/png' })
-    act(() => {
-      fireEvent.change(fileInput, { target: { files: [file] } })
-    })
-
-    // Submit the composer with a pending file present.
-    const form = screen.getByTestId('composer-form')
-    await act(async () => {
-      fireEvent.submit(form)
-      await Promise.resolve()
-    })
-    // Allow the async createSession→upload chain to settle.
-    await act(async () => { await Promise.resolve(); await Promise.resolve() })
-
-    // #252: a session must have been minted instead of erroring "no active session".
-    expect(createSessionMock).toHaveBeenCalledWith('general-assistant')
-    expect(uploadFilesMock).toHaveBeenCalledWith('sess_new_252', [file])
-  })
-})
+// NOTE: the former "Fix #1 — all uploads fail" and "#252 — upload before first
+// message" tests were removed when the hand-rolled upload bridge
+// (handleSendWithFiles + the hidden file-input) was replaced by the native
+// AssistantUI AttachmentAdapter. The equivalent behaviors — session
+// auto-creation on first upload, and surfacing a failed registration rather
+// than silently dropping the file — now live in src/lib/attachment-adapter.ts
+// and are covered by src/lib/attachment-adapter.test.ts.

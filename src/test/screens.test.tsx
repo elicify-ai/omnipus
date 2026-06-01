@@ -95,6 +95,14 @@ vi.mock('@assistant-ui/react', async () => {
       Root: passthrough,
       Input: passthroughFwd,
       Send: passthroughFwd,
+      AddAttachment: passthroughFwd,
+      Attachments: () => null,
+    },
+    AttachmentPrimitive: {
+      Root: passthrough,
+      Name: () => null,
+      Remove: passthroughFwd,
+      Thumb: () => null,
     },
     ActionBarPrimitive: {
       Root: passthrough,
@@ -109,6 +117,7 @@ vi.mock('@assistant-ui/react', async () => {
       setText: vi.fn(),
       getText: vi.fn(),
       getState: () => ({ text: '' }),
+      addAttachment: vi.fn(),
     }),
     useMessage: () => ({
       content: [],

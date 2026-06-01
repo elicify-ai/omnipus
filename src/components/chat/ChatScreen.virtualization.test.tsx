@@ -52,6 +52,17 @@ vi.mock('@assistant-ui/react', () => {
         disabled?: boolean; children?: React.ReactNode; className?: string; 'data-testid'?: string
       }) =>
         React.createElement('button', { type: 'button', disabled, className, 'data-testid': testId ?? 'chat-send' }, children),
+      AddAttachment: ({ disabled, children, className }: { disabled?: boolean; children?: React.ReactNode; className?: string }) =>
+        React.createElement('button', { type: 'button', disabled, className, 'data-testid': 'add-attachment' }, children),
+      Attachments: () => null,
+    },
+    AttachmentPrimitive: {
+      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
+        React.createElement('div', { className }, children),
+      Name: () => null,
+      Remove: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
+        React.createElement('button', { type: 'button', className }, children),
+      Thumb: () => null,
     },
     MessagePartPrimitive: { InProgress: () => null },
     ActionBarPrimitive: {
@@ -62,6 +73,7 @@ vi.mock('@assistant-ui/react', () => {
     useComposerRuntime: () => ({
       getState: () => ({ text: '' }),
       setText: vi.fn(),
+      addAttachment: vi.fn(),
     }),
     useMessage: () => ({
       id: 'msg_streaming',
