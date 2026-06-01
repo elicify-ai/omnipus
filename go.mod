@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.20
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.53.1
 	github.com/bwmarrin/discordgo v0.29.0
-	github.com/caarlos0/env/v11 v11.4.0
+	github.com/caarlos0/env/v11 v11.4.1
 	github.com/chromedp/chromedp v0.15.1
 	github.com/creack/pty v1.1.24
 	github.com/ergochat/irc-go v0.6.0
