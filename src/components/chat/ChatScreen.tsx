@@ -7,6 +7,7 @@ import {
   MessagePrimitive,
   ComposerPrimitive,
   AttachmentPrimitive,
+  useAttachment,
   ActionBarPrimitive,
   AuiIf,
   useComposerRuntime,
@@ -23,7 +24,6 @@ import {
   ListChecks,
   Paperclip,
   File,
-  X,
   WifiSlash,
   ArrowClockwise,
   Clock,
@@ -44,6 +44,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { fetchAgents, fetchSessionMessages, createSession, isApiError } from '@/lib/api'
+import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
 import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 
@@ -374,15 +375,32 @@ function VirtualUserMessageRow({ message }: { message: ChatMessage }) {
       <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
         <User size={14} weight="bold" />
       </div>
-      <div className="flex flex-col items-end gap-1 max-w-[85%] min-w-0">
-        <div className={cn(
-          "rounded-xl px-4 py-3 text-sm leading-relaxed rounded-tr-sm",
-          isError
-            ? "bg-[var(--color-error)]/10 border border-[var(--color-error)]/30 text-[var(--color-secondary)]"
-            : "bg-[var(--color-surface-2)] text-[var(--color-secondary)]"
-        )}>
-          <p className="whitespace-pre-wrap break-words">{message.content}</p>
-        </div>
+      <div className="flex flex-col items-end gap-1.5 max-w-[85%] min-w-0">
+        {/* Attachments the user sent — image thumbnails + colour-coded file
+            cards, shown above the text like ChatGPT. */}
+        {message.media && message.media.length > 0 && (
+          <div className="flex flex-wrap gap-2 justify-end">
+            {message.media.map((m, i) => (
+              <AttachmentCard
+                key={`${m.url}-${i}`}
+                filename={m.filename}
+                contentType={m.contentType}
+                imageUrl={m.type === 'image' ? m.url : undefined}
+                className={m.type === 'image' ? 'max-w-[200px] max-h-[200px]' : undefined}
+              />
+            ))}
+          </div>
+        )}
+        {message.content.trim().length > 0 && (
+          <div className={cn(
+            "rounded-xl px-4 py-3 text-sm leading-relaxed rounded-tr-sm",
+            isError
+              ? "bg-[var(--color-error)]/10 border border-[var(--color-error)]/30 text-[var(--color-secondary)]"
+              : "bg-[var(--color-surface-2)] text-[var(--color-secondary)]"
+          )}>
+            <p className="whitespace-pre-wrap break-words">{message.content}</p>
+          </div>
+        )}
         {/* #253(b): show error + Retry when message failed to send */}
         <UserMessageRetryButton message={message} />
       </div>
@@ -949,24 +967,32 @@ function composerPlaceholder(
 const HARMFUL_EXTENSIONS = ['.exe', '.bat', '.cmd', '.sh', '.ps1', '.dll', '.sys', '.msi', '.scr', '.com']
 
 /**
- * Renders one pending composer attachment as a chip, using the native
- * AttachmentPrimitive context provided by ComposerPrimitive.Attachments.
- * Replaces the old custom pending-file chip + FilePreviewThumbnail.
+ * Renders one pending composer attachment as a ChatGPT-style card — an image
+ * preview (from the local File) or a colour-coded, type-specific file card —
+ * via the native useAttachment() context that ComposerPrimitive.Attachments
+ * provides. Removal uses the native AttachmentPrimitive.Remove.
  */
 function ComposerAttachmentChip() {
+  const attachment = useAttachment()
+  const file = attachment.file
+  const contentType = attachment.contentType ?? file?.type
+  const imageUrl = useFilePreview(file, contentType)
+
   return (
-    <AttachmentPrimitive.Root className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-xs">
-      <File size={14} className="text-[var(--color-muted)] shrink-0" />
-      <span className="truncate max-w-[140px]">
-        <AttachmentPrimitive.Name />
-      </span>
-      <AttachmentPrimitive.Remove
-        className="text-[var(--color-muted)] hover:text-[var(--color-error)]"
-        aria-label="Remove attachment"
-      >
-        <X size={12} />
-      </AttachmentPrimitive.Remove>
-    </AttachmentPrimitive.Root>
+    <AttachmentCard
+      filename={attachment.name}
+      contentType={contentType}
+      imageUrl={imageUrl}
+      className={cn('group', imageUrl && 'w-16 h-16')}
+      removeButton={
+        <AttachmentPrimitive.Remove
+          className="absolute -top-1.5 -right-1.5 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+          aria-label={`Remove ${attachment.name}`}
+        >
+          <AttachmentRemoveX />
+        </AttachmentPrimitive.Remove>
+      }
+    />
   )
 }
 

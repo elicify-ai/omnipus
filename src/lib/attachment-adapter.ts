@@ -112,8 +112,11 @@ export const omnipusAttachmentAdapter = {
     if (ref) {
       resolvedUploads.set(attachment.id, {
         ref,
+        // URL uses the server-sanitized name, but display uses the ORIGINAL
+        // filename (the server appends a uniqueness suffix, e.g.
+        // report_1780….docx, which is ugly in the chat).
         url: `/api/v1/uploads/${sessionId}/${uploaded.name}`,
-        filename: uploaded.name,
+        filename: attachment.name,
         contentType: uploaded.content_type,
       });
     } else {
