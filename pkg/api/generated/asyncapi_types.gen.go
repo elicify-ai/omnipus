@@ -164,6 +164,21 @@ type MessageFrame struct {
 	Type      string   `json:"type"`
 }
 
+// NotificationFrame — Server → client. A notification raised for the recipient user (e.g. a scheduled run failed). Delivered only to that user's connections; the SPA adds it to the header notification center (#264).
+type NotificationFrame struct {
+	AgentId          *string `json:"agent_id,omitempty"`
+	Body             *string `json:"body,omitempty"`
+	CreatedAtMs      int     `json:"created_at_ms"`
+	Id               string  `json:"id"`
+	NotificationType string  `json:"notification_type"`
+	Read             bool    `json:"read"`
+	ScheduleId       *string `json:"schedule_id,omitempty"`
+	SessionId        *string `json:"session_id,omitempty"`
+	Severity         string  `json:"severity"`
+	Title            string  `json:"title"`
+	Type             string  `json:"type"`
+}
+
 // PingFrame — Client → server heartbeat.
 type PingFrame struct {
 	Type string `json:"type"`
@@ -406,4 +421,5 @@ const (
 	WsFrameTypeDevicePairingRequest     WsFrameType = "device_pairing_request"
 	WsFrameTypeWhatsappPairing          WsFrameType = "whatsapp_pairing"
 	WsFrameTypeWhatsappPairingSubscribe WsFrameType = "whatsapp_pairing_subscribe"
+	WsFrameTypeNotification             WsFrameType = "notification"
 )

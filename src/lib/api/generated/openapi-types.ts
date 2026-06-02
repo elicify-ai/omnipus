@@ -1714,6 +1714,148 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/schedules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List schedules
+         * @description Returns all schedules visible to the authenticated user (#264).
+         */
+        get: operations["listSchedules"];
+        put?: never;
+        /**
+         * Create a schedule
+         * @description Creates a schedule owned by the given agent. The owner must be an agent the caller is permitted to use (403 otherwise).
+         */
+        post: operations["createSchedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/schedules/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** Get a schedule */
+        get: operations["getSchedule"];
+        /** Update a schedule */
+        put: operations["updateSchedule"];
+        post?: never;
+        /** Delete a schedule */
+        delete: operations["deleteSchedule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/schedules/{id}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a schedule now
+         * @description Fires the schedule immediately, respecting the overlap guard and concurrency cap (#264).
+         */
+        post: operations["runSchedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/schedules/{id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Toggle a schedule's enabled state
+         * @description Flips enabled (pause/resume) and returns the updated schedule (#264).
+         */
+        post: operations["pauseSchedule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the authenticated user's notifications */
+        get: operations["listNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark all of the user's notifications read */
+        post: operations["markAllNotificationsRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/notifications/{id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark one notification read */
+        post: operations["markNotificationRead"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -4980,6 +5122,219 @@ export interface components {
              * @example file not found: /home/user/missing.txt
              */
             error?: string;
+        };
+        /**
+         * ScheduleTrigger
+         * @description When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
+         */
+        ScheduleTrigger: {
+            /** @enum {string} */
+            kind: "at" | "every" | "cron";
+            /** @description Cron expression (5/6 fields). Required when kind=cron. */
+            cron_expr?: string;
+            /**
+             * Format: int64
+             * @description Interval in milliseconds. Required when kind=every.
+             */
+            every_ms?: number;
+            /**
+             * Format: int64
+             * @description Unix epoch milliseconds for a one-shot run. Required when kind=at.
+             */
+            at_ms?: number;
+        };
+        /**
+         * ScheduleRunRecord
+         * @description One execution of a schedule (#264). The last 20 are retained inline on a Schedule; full history is reachable via the linked session_id.
+         */
+        ScheduleRunRecord: {
+            /**
+             * Format: int64
+             * @description Unix epoch milliseconds when the run started.
+             */
+            ran_at_ms: number;
+            /**
+             * @description ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+             * @enum {string}
+             */
+            status: "ok" | "error" | "skipped" | "timeout";
+            /** @description Failure reason when status is error or timeout. */
+            error?: string;
+            /** @description The scheduled session this run executed in (links to the transcript). */
+            session_id?: string;
+            /**
+             * Format: int64
+             * @description Wall-clock duration of the run in milliseconds.
+             */
+            duration_ms?: number;
+        };
+        /**
+         * ScheduleState
+         * @description Runtime state of a schedule (#264). All fields are server-maintained.
+         */
+        ScheduleState: {
+            /**
+             * Format: int64
+             * @description Unix epoch milliseconds of the next computed run, if enabled.
+             */
+            next_run_at_ms?: number;
+            /**
+             * Format: int64
+             * @description Unix epoch milliseconds of the most recent run.
+             */
+            last_run_at_ms?: number;
+            /** @description Status of the most recent run (ok/error/skipped/timeout), empty if never run. */
+            last_status?: string;
+            /** @description Error from the most recent failed run. */
+            last_error?: string;
+            /** @description Number of consecutive failed runs; resets to 0 after a success. */
+            consecutive_failures?: number;
+            /** @description True while a run of this schedule is currently in progress (overlap guard). */
+            running?: boolean;
+        };
+        /**
+         * Schedule
+         * @description A scheduled instruction for an agent (#264) — the wire projection of a cron job. When it fires, the owning agent runs the message in the chosen session mode under guardrails. Read model returned by the /schedules endpoints.
+         */
+        Schedule: {
+            /** @description Stable schedule id (the underlying cron job id). */
+            id: string;
+            name: string;
+            /** @description When false, the scheduler does not fire it (paused). */
+            enabled: boolean;
+            /** @description The agent that runs this schedule. Pinned; never falls back to the default agent. */
+            owner_agent_id: string;
+            /** @description Username that created the schedule (for notification routing). */
+            created_by?: string;
+            trigger: components["schemas"]["ScheduleTrigger"];
+            /** @description The instruction delivered to the agent (deliver=false) or sent to the channel (deliver=true). */
+            message: string;
+            /** @description true = send the message straight to the channel (no agent turn); false = the owning agent processes it (autonomy). */
+            deliver: boolean;
+            /**
+             * @description isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
+             * @enum {string}
+             */
+            session_mode: "isolated" | "continue" | "main";
+            /** @description Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default. */
+            timeout_seconds: number;
+            /** @description For continue/main modes, the persistent session id this schedule runs in. */
+            session_id?: string;
+            /** @description Channel for deliver=true sends and the run's outbound context. */
+            channel?: string;
+            /** @description Chat/peer id within the channel for deliver=true sends. */
+            chat_id?: string;
+            state: components["schemas"]["ScheduleState"];
+            /** @description The most recent runs (newest first), capped at 20. */
+            runs?: components["schemas"]["ScheduleRunRecord"][];
+            /** Format: int64 */
+            created_at_ms: number;
+            /** Format: int64 */
+            updated_at_ms: number;
+        };
+        /**
+         * ScheduleCreate
+         * @description Request body to create a schedule (#264). The owner must be an agent the caller is permitted to use (AuthorizeAgentAccess). Omitted optional fields take their documented defaults.
+         */
+        ScheduleCreate: {
+            name: string;
+            owner_agent_id: string;
+            trigger: components["schemas"]["ScheduleTrigger"];
+            message: string;
+            /** @description Default false (agent processes it). */
+            deliver?: boolean;
+            /**
+             * @description Default isolated.
+             * @enum {string}
+             */
+            session_mode?: "isolated" | "continue" | "main";
+            /** @description Per-run deadline; default 0 = use the global default. */
+            timeout_seconds?: number;
+            /** @description Default true. */
+            enabled?: boolean;
+            channel?: string;
+            chat_id?: string;
+        };
+        /**
+         * ScheduleUpdate
+         * @description Request body to update a schedule (#264). All fields optional; only provided fields are changed. Changing owner_agent_id is re-authorized.
+         */
+        ScheduleUpdate: {
+            name?: string;
+            owner_agent_id?: string;
+            trigger?: components["schemas"]["ScheduleTrigger"];
+            message?: string;
+            deliver?: boolean;
+            /** @enum {string} */
+            session_mode?: "isolated" | "continue" | "main";
+            timeout_seconds?: number;
+            enabled?: boolean;
+            channel?: string;
+            chat_id?: string;
+        };
+        /**
+         * ScheduleList
+         * @description List of schedules (#264).
+         */
+        ScheduleList: {
+            schedules: components["schemas"]["Schedule"][];
+        };
+        /**
+         * ScheduleRunResult
+         * @description Result of a run-now request (#264).
+         */
+        ScheduleRunResult: {
+            schedule_id: string;
+            /**
+             * @description skipped when the schedule's previous run is still in progress or the lane is full.
+             * @enum {string}
+             */
+            status: "ok" | "error" | "skipped" | "timeout";
+            /** @description The session the run executed in, when one was created. */
+            session_id?: string;
+            error?: string;
+        };
+        /**
+         * Notification
+         * @description A user-facing notification (#264) surfaced in the header notification center. Currently raised on scheduled-run failures, but the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+         */
+        Notification: {
+            id: string;
+            /**
+             * @description The event class. Extensible; consumers must tolerate unknown values.
+             * @enum {string}
+             */
+            type: "schedule_failed";
+            title: string;
+            /** @description Optional detail (e.g. the failure reason). */
+            body?: string;
+            /** @enum {string} */
+            severity: "info" | "warning" | "error";
+            /** @description Per-user read state. */
+            read: boolean;
+            /** Format: int64 */
+            created_at_ms: number;
+            /**
+             * Format: int64
+             * @description Set when a coalesced notification is updated (e.g. repeated schedule failure).
+             */
+            updated_at_ms?: number;
+            /** @description Click-through target when the notification concerns a schedule. */
+            schedule_id?: string;
+            /** @description Click-through target when the notification concerns a run's session. */
+            session_id?: string;
+            /** @description The agent the notification concerns. */
+            agent_id?: string;
+        };
+        /**
+         * NotificationList
+         * @description The authenticated user's notifications plus the unread count (#264).
+         */
+        NotificationList: {
+            /** @description Newest first. */
+            notifications: components["schemas"]["Notification"][];
+            /** @description Number of unread notifications for the badge. */
+            unread_count: number;
         };
     };
     responses: {
@@ -8611,6 +8966,243 @@ export interface operations {
             };
         };
     };
+    listSchedules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Schedules. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleList"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    createSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleCreate"];
+            };
+        };
+        responses: {
+            /** @description Schedule created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Schedule"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Schedule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Schedule"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    updateSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated schedule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Schedule"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. No response body. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    runSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Run result. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScheduleRunResult"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    pauseSchedule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Updated schedule. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Schedule"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    listNotifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Notifications + unread count. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationList"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    markAllNotificationsRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All marked read. No response body. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    markNotificationRead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Marked read. No response body. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
 }
 
 // ── Named type re-exports from components.schemas ────────────────────────────
@@ -8737,3 +9329,13 @@ export type RetentionUpdateRequest = components["schemas"]["RetentionUpdateReque
 export type McpToolsListResponse = components["schemas"]["McpToolsListResponse"];
 export type McpToolCallRequest = components["schemas"]["McpToolCallRequest"];
 export type McpToolCallResponse = components["schemas"]["McpToolCallResponse"];
+export type ScheduleTrigger = components["schemas"]["ScheduleTrigger"];
+export type ScheduleRunRecord = components["schemas"]["ScheduleRunRecord"];
+export type ScheduleState = components["schemas"]["ScheduleState"];
+export type Schedule = components["schemas"]["Schedule"];
+export type ScheduleCreate = components["schemas"]["ScheduleCreate"];
+export type ScheduleUpdate = components["schemas"]["ScheduleUpdate"];
+export type ScheduleList = components["schemas"]["ScheduleList"];
+export type ScheduleRunResult = components["schemas"]["ScheduleRunResult"];
+export type Notification = components["schemas"]["Notification"];
+export type NotificationList = components["schemas"]["NotificationList"];

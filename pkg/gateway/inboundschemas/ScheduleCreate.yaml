@@ -1,0 +1,45 @@
+title: ScheduleCreate
+description: >
+  Request body to create a schedule (#264). The owner must be an agent the
+  caller is permitted to use (AuthorizeAgentAccess). Omitted optional fields take
+  their documented defaults.
+type: object
+required:
+  - name
+  - owner_agent_id
+  - trigger
+  - message
+additionalProperties: false
+properties:
+  name:
+    type: string
+    minLength: 1
+  owner_agent_id:
+    type: string
+    minLength: 1
+  trigger:
+    $ref: ./ScheduleTrigger.yaml
+  message:
+    type: string
+    minLength: 1
+  deliver:
+    type: boolean
+    description: Default false (agent processes it).
+  session_mode:
+    type: string
+    enum:
+      - isolated
+      - continue
+      - main
+    description: Default isolated.
+  timeout_seconds:
+    type: integer
+    minimum: 0
+    description: Per-run deadline; default 0 = use the global default.
+  enabled:
+    type: boolean
+    description: Default true.
+  channel:
+    type: string
+  chat_id:
+    type: string
