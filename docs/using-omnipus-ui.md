@@ -10,11 +10,11 @@ Everything here is "how do I _do X_" — find the section you need and skim. Eac
 
 ## A tour of the screen
 
-The left sidebar is how you move around the app. **Chat** is where you talk to your agents — it's the home screen. **Command Center** is a dashboard of tasks, activity, and daily cost. **Agents** shows the roster of your five teammates (and any custom ones you build). **Skills & Tools** is where you install new skills, connect chat apps, and see what your agents can do. **Settings** (near the bottom) covers providers, security, your profile, and more. **Sign out** sits at the very bottom.
+The left sidebar is how you move around the app. **Chat** is where you talk to your agents — it's the home screen. **Command Center** is a dashboard of tasks, activity, and daily cost. **Agents** shows the roster of your five teammates (and any custom ones you build). **Channels** is where you connect chat apps (Telegram, Discord, Slack, and more) and choose which agent answers each. **Skills & Tools** is where you install new skills, connect MCP servers, and see what your agents can do. **Settings** (near the bottom) covers providers, security, your profile, and more. **Sign out** sits at the very bottom.
 
 On a wide screen, you can pin the sidebar open so it stays put: press **Cmd+B** (Mac) or **Ctrl+B** (Windows/Linux). Press it again to collapse it back to icons and reclaim space.
 
-![The Omnipus sidebar with Chat, Command Center, Agents, and Skills & Tools](marketing/screenshots/03-sidebar.png)
+![The Omnipus sidebar showing Chat, Command Center, Agents, Channels, and Skills & Tools](marketing/screenshots/sidebar-with-channels.png)
 *The sidebar is your map. Pin it open with Cmd/Ctrl+B.*
 
 ---
@@ -150,6 +150,11 @@ The **Agents** page shows your roster as a grid of cards. Click any agent to ope
 ![The agents roster grid](marketing/screenshots/04-agents-roster.png)
 *Your team at a glance. Click a card to open a profile.*
 
+**The default agent.** One agent carries a gold star ★ — it's the **default**: the agent that answers incoming messages that don't have a more specific rule (for example, a Telegram DM when you haven't pinned that channel to a particular agent). On a fresh install, **Mia** is the default. To change it, hover any other agent's card and click **Set as default** — the star moves, and only one agent is ever the default.
+
+![The Agents roster with Mia marked as the default agent (gold star)](marketing/screenshots/agents-default-agent.png)
+*Mia is the default agent (★). Hover another card and click "Set as default" to change it.*
+
 On a profile you can always change the **Model** (which LLM powers that agent) and **Model settings** — things like temperature, max length, and top-p, plus rate limits.
 
 For the **five core agents** (Mia, Jim, Ava, Ray, Max), their identity is **locked** — you can't change who they are or rename them — but you *can* swap their model and tune those settings to taste. Custom agents you create are fully yours to edit.
@@ -165,19 +170,48 @@ For the **five core agents** (Mia, Jim, Ava, Ray, Max), their identity is **lock
 
 ---
 
+## Channels
+
+The **Channels** page is where you connect Omnipus to chat apps — Telegram, Discord, Slack, WhatsApp, Matrix, and more — so you can talk to your agents from the tools you already use. It's a single scrolling list, one card per channel, showing the transport it uses and whether it's enabled.
+
+![The Channels page listing Telegram, Discord, Slack, WhatsApp and more](marketing/screenshots/channels-screen.png)
+*Every channel in one place. Each card shows its status and a Configure / Enable action.*
+
+Each card has two actions:
+
+- **Configure** — opens a panel to enter the channel's connection details and choose which agent answers it.
+- **Enable / Disable** — turns the channel on or off. (Web Chat — the in-app chat — is always on and has no Configure button.)
+
+Clicking **Configure** opens a slide-over with two sections:
+
+| Section | What it's for |
+|---------|--------------|
+| **Connection** | The channel's credentials and transport settings — e.g. a Telegram **Bot Token**, an allow-list of who may message the bot, a proxy or custom API URL. Each channel's [setup page](chat-apps.md) tells you exactly where to get these values. Secrets are stored encrypted (in `credentials.json`), never in plain config. |
+| **Routing** | **Default agent** — which agent handles inbound messages on *this* channel. Leave it on **"(Global default)"** to use your globally-configured default agent (see [Managing agents](#managing-agents)), or pick a specific agent to dedicate this channel to it. |
+
+![The Configure panel for Telegram, showing Connection fields and the Routing section with a Default agent selector](marketing/screenshots/channel-configure-routing.png)
+*Configure a channel's connection and choose which agent answers it — all in one panel.*
+
+When you're done, click **Save & Enable** to save the settings and turn the channel on (or **Save** to keep it off for now). **Test** checks that the required fields are filled in.
+
+> **Which agent answers?** Routing resolves from most-specific to least: a per-user/peer rule, then a per-channel **Default agent** (set here), and finally your global **default agent** (the ★ on the Agents page). For the full set of routing rules — including per-user and per-group bindings — see [Routing](routing.md). For step-by-step credentials for each chat app, see [Connecting chat apps](chat-apps.md).
+
+---
+
 ## Skills & Tools page
 
-The **Skills & Tools** page is where you expand what your agents can do. It has four tabs:
+The **Skills & Tools** page is where you expand what your agents can do. It has three tabs:
 
 | Tab | What it's for |
 |-----|--------------|
 | **Installed Skills** | The skills currently available to your agents. **Install a skill** here by searching for one and adding it; from then on agents can use it. |
 | **MCP Servers** | Connect external tool servers that add capabilities. |
-| **Channels** | Connect chat apps (Telegram, Discord, Slack, and more). **Enable a channel** here, then follow its setup. Channel details live in [Connecting chat apps](chat-apps.md). |
 | **Built-in Tools** | The tools that ship with Omnipus (files, web search, messaging, and so on), so you can see what's available out of the box. |
 
+> Connecting chat apps moved to its own **[Channels](#channels)** page (see below) — it's no longer a tab here.
+
 ![The Skills & Tools page](marketing/screenshots/09-skills-tools.png)
-*Four tabs: Installed Skills, MCP Servers, Channels, and Built-in Tools.*
+*Three tabs: Installed Skills, MCP Servers, and Built-in Tools.*
 
 For more on what skills are and how to pick good ones, see the [Skills guide](skills.md).
 
@@ -214,7 +248,6 @@ The **Settings** page is organized into tabs.
 | **Security** | Protections and safety controls for the app. |
 | **Gateway** | Settings for the server that runs the web app and API. |
 | **Data** | Your data, storage, and exports. |
-| **Routing** | How requests get matched to the right agent or model. (See [Routing](routing.md).) |
 | **Profile** | Your own account details, plus **"What should the agents know about you?"** (see below). |
 | **About** | Version and app info. |
 

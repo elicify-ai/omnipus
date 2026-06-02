@@ -6,6 +6,8 @@
 
 Talk to your Omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, LINE, WeCom, Weixin, Feishu, Slack, IRC, OneBot, or Google Chat.
 
+> **In the web app:** the **Channels** page (sidebar → Channels) lists every channel — enable/disable each one, open **Configure** to enter its connection details, and pick the **Default agent** that answers it. See [Using the web app → Channels](using-omnipus-ui.md#channels). The per-channel pages below tell you where to obtain each channel's credentials (bot tokens, app secrets, etc.).
+
 > **Note**: Channels that rely on HTTP callbacks share a single Gateway HTTP server (`gateway.host`:`gateway.port`, default `127.0.0.1:18790`). Socket/stream-based channels such as Feishu, DingTalk, and WeCom do not rely on the shared webhook server for inbound delivery.
 
 | Channel              | Difficulty         | Description                                           | Documentation                                                                                                    |
