@@ -125,6 +125,8 @@ channels:
         $ref: '#/components/messages/ExecApprovalResponseAckFrame'
       DevicePairingRequestFrame:
         $ref: '#/components/messages/DevicePairingRequestFrame'
+      WhatsAppPairingFrame:
+        $ref: '#/components/messages/WhatsAppPairingFrame'
       ExecApprovalExpiredFrame:
         $ref: '#/components/messages/ExecApprovalExpiredFrame'
 

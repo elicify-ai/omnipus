@@ -1,0 +1,40 @@
+title: WhatsAppPairingFrame
+description: >
+  Server → client. Emitted by the WhatsApp native/QR channel during linked-device
+  pairing so the SPA can render the QR code and live status in the browser instead
+  of requiring the operator to read the gateway terminal (#283). Fields map to the
+  generated WhatsAppPairingFrame type in pkg/api/generated/.
+type: object
+required:
+  - type
+  - channel_id
+  - status
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: whatsapp_pairing
+  channel_id:
+    type: string
+    minLength: 1
+    description: The channel emitting the pairing event (e.g. "whatsapp_native").
+  status:
+    type: string
+    enum:
+      - waiting
+      - code
+      - linked
+      - timeout
+      - error
+    description: >
+      Pairing lifecycle: waiting (connecting to WhatsApp), code (a QR is available to
+      scan), linked (device successfully paired), timeout (the displayed QR expired
+      and a fresh one follows), error (pairing failed — see message).
+  qr:
+    type: string
+    description: >
+      The QR payload to render (whatsmeow linked-device pairing code). Present when
+      status is "code"; empty otherwise. Never logged or persisted.
+  message:
+    type: string
+    description: Optional human-readable detail, e.g. the error reason when status is "error".
