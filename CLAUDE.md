@@ -145,6 +145,11 @@ When filing or triaging GitHub issues, follow `docs/internal/issue-and-board-con
 - **Labels are cross-cutting only**: `priority:*` (one), `area:*` (one+), plus `security`/`tech-debt`/`test-coverage`/`documentation`. The `type:*` labels are **PR/changelog only** (release-drafter) — never put them on issues.
 - **Board #3 automation does the rote work**: new issues auto-add as `Backlog`; closing auto-sets `Done`. Do **not** manually add issues to the board or hand-set initial/`Done` status. You do set **Sprint** (single-select) and promote Status as work proceeds.
 - **Bundle related work** under an **Epic** with real sub-issues (`addSubIssue`); sprints are an Epic + its sub-issues sharing one Sprint value.
+- **Every PR MUST close its issues via keyword (mandatory).** A PR that resolves issues MUST list a closing keyword **per issue** in the **PR description** (not just commit messages) — e.g. `Closes #264, closes #289, closes #283`. This is non-negotiable: the only acceptable reason an issue stays open after its fix merges is that the work genuinely isn't done. Rules that bite us:
+  - **Repeat the keyword for each issue.** `Closes #1, #2` only closes `#1`. Write `Closes #1, closes #2`. Keywords: `close[s|d]` / `fix[es|ed]` / `resolve[s|d]`.
+  - **Auto-close only fires when the PR merges into the *default* branch (`main`).** A PR merged into a non-default base (e.g. a release/hotfix branch) links but does **not** close — the closure happens when that branch later merges to `main`, and only if the keywords ride along in that merge's PR body. Target `main` whenever you want the issues closed on merge.
+  - **Put keywords in the PR *description*, not only commit messages.** On squash-merge, commit-message keywords are unreliable; the PR body is what GitHub honors. (This is why Sprint #258 / PR #292 left 8 issues open despite shipping their fixes.)
+  - If a PR can't use auto-close (non-`main` base), it MUST still reference every issue it resolves, and whoever merges is responsible for closing them with a comment citing the PR.
 
 ## Subagent Workflow
 
