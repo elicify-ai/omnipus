@@ -1,4 +1,4 @@
-> Back to [README](../../../README.md)
+> Back to [Channels](../channels.md)
 
 # Telegram
 
@@ -91,4 +91,4 @@ At startup Telegram registers Omnipus's built-in bot commands automatically via 
 
 **Message length.** The channel enforces a 4000-character soft limit before sending, with an additional overflow-split guard at Telegram's 4096-character API hard limit. Long messages are split at natural break points (newlines, spaces, code-block boundaries).
 
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../../pkg/channels/README.md).
+For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).

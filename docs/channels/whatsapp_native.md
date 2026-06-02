@@ -1,10 +1,10 @@
-> Back to [README](../../../README.md)
+> Back to [Channels](../channels.md)
 
 # WhatsApp Native (whatsmeow)
 
 This document covers **native mode** — the transport used when `use_native: true`. Omnipus connects directly to WhatsApp servers using the [whatsmeow](https://github.com/tulir/whatsmeow) library in-process. No external bridge process is required. Session state is stored in a local SQLite database via `modernc.org/sqlite` (pure Go, no CGo).
 
-For the external bridge mode, see [docs/channels/whatsapp/README.md](../whatsapp/README.md). Set `use_native: false` (or omit the field) to select that mode instead.
+For the external bridge mode, see [docs/channels/whatsapp.md](whatsapp.md). Set `use_native: false` (or omit the field) to select that mode instead.
 
 ## Build requirement
 
@@ -72,4 +72,4 @@ Both bridge mode and native mode share the `WhatsAppConfig` struct. Fields relev
 - **Chat ID format.** For outbound messages the `chat_id` field accepts either a bare phone number (e.g. `15551234567`) or a full JID (e.g. `15551234567@s.whatsapp.net`). For groups, use the group JID (e.g. `12345678-1234567890@g.us`).
 - **No credential ref.** Session credentials are managed entirely by whatsmeow in `store.db`. The Omnipus credential store is not used for WhatsApp authentication.
 
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../../pkg/channels/README.md).
+For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).

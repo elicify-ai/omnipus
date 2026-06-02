@@ -1,4 +1,4 @@
-> Back to [README](../../../README.md)
+> Back to [Channels](../channels.md)
 
 # DingTalk
 
@@ -49,4 +49,4 @@ DingTalk (钉钉) is Alibaba's enterprise communication platform. Omnipus connec
 - **Outbound.** Replies use the per-session webhook URL provided by the DingTalk platform in each incoming event; no additional send API key is needed beyond `client_id` / `client_secret_ref`.
 - **Group chats.** Use `group_trigger.mention_only: true` or `group_trigger.prefixes` to avoid the bot responding to every message in a group.
 
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../../pkg/channels/README.md).
+For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).

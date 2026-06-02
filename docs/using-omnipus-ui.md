@@ -89,7 +89,7 @@ Agents can also send files **back** to you. Ask Jim to write something to a file
 
 The web app is **text-first** — you type, the agent replies in text.
 
-If you'd rather talk, connect a chat channel that supports voice. On channels like **Telegram**, you can send a voice message and Omnipus will transcribe it to text for the agent automatically. That's a great option from your phone when typing is awkward. See [Connecting chat apps](chat-apps.md) to set one up.
+If you'd rather talk, connect a chat channel that supports voice. On channels like **Telegram**, you can send a voice message and Omnipus will transcribe it to text for the agent automatically. That's a great option from your phone when typing is awkward. See [Connecting chat apps](channels.md) to set one up.
 
 ---
 
@@ -172,29 +172,12 @@ For the **five core agents** (Mia, Jim, Ava, Ray, Max), their identity is **lock
 
 ## Channels
 
-The **Channels** page is where you connect Omnipus to chat apps — Telegram, Discord, Slack, WhatsApp, Matrix, and more — so you can talk to your agents from the tools you already use. It's a single scrolling list, one card per channel, showing the transport it uses and whether it's enabled.
+The **Channels** page connects Omnipus to chat apps — Telegram, Discord, Slack, WhatsApp, Matrix, and more — as a single scrolling list, one card per channel. **Configure** opens a panel to enter the channel's credentials and pick its **Default agent** (which agent answers messages there); **Enable / Disable** turns it on or off. (Web Chat is always on.)
 
 ![The Channels page listing Telegram, Discord, Slack, WhatsApp and more](marketing/screenshots/channels-screen.png)
-*Every channel in one place. Each card shows its status and a Configure / Enable action.*
+*One card per channel — Configure to connect it and choose which agent answers.*
 
-Each card has two actions:
-
-- **Configure** — opens a panel to enter the channel's connection details and choose which agent answers it.
-- **Enable / Disable** — turns the channel on or off. (Web Chat — the in-app chat — is always on and has no Configure button.)
-
-Clicking **Configure** opens a slide-over with two sections:
-
-| Section | What it's for |
-|---------|--------------|
-| **Connection** | The channel's credentials and transport settings — e.g. a Telegram **Bot Token**, an allow-list of who may message the bot, a proxy or custom API URL. Each channel's [setup page](chat-apps.md) tells you exactly where to get these values. Secrets are stored encrypted (in `credentials.json`), never in plain config. |
-| **Routing** | **Default agent** — which agent handles inbound messages on *this* channel. Leave it on **"(Global default)"** to use your globally-configured default agent (see [Managing agents](#managing-agents)), or pick a specific agent to dedicate this channel to it. |
-
-![The Configure panel for Telegram, showing Connection fields and the Routing section with a Default agent selector](marketing/screenshots/channel-configure-routing.png)
-*Configure a channel's connection and choose which agent answers it — all in one panel.*
-
-When you're done, click **Save & Enable** to save the settings and turn the channel on (or **Save** to keep it off for now). **Test** checks that the required fields are filled in.
-
-> **Which agent answers?** Routing resolves from most-specific to least: a per-user/peer rule, then a per-channel **Default agent** (set here), and finally your global **default agent** (the ★ on the Agents page). For the full set of routing rules — including per-user and per-group bindings — see [Routing](routing.md). For step-by-step credentials for each chat app, see [Connecting chat apps](chat-apps.md).
+→ Full step-by-step, with per-platform credentials, routing, and screenshots: **[Channels](channels.md)**.
 
 ---
 
@@ -272,6 +255,6 @@ In **Settings → Profile** there's a box labelled **"What should the agents kno
 
 **[Using Omnipus from the command line](using-omnipus-cli.md)** — the terminal half of this guide.
 
-**[Connecting chat apps](chat-apps.md)** — use your agents from Telegram, Discord, Slack, and more.
+**[Connecting chat apps](channels.md)** — use your agents from Telegram, Discord, Slack, and more.
 
 **[Skills](skills.md)** — find, install, and get the most out of skills.

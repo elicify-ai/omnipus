@@ -332,7 +332,7 @@ omnipus auth weixin
 omnipus auth wecom
 ```
 
-For connecting full chat platforms (Telegram, Slack, Discord, and more), see [Chat apps](chat-apps.md).
+For connecting full chat platforms (Telegram, Slack, Discord, and more), see [Chat apps](channels.md).
 
 ---
 

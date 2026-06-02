@@ -39,8 +39,7 @@ New to Omnipus? Read these in order.
 | Channel-to-agent routing & handoff | [routing.md](routing.md) |
 | Session history & event stream | [observability.md](observability.md) |
 | Skills (ClawHub installs, SKILL.md format) | [skills.md](skills.md) |
-| Channels (15 chat platforms) | [../pkg/channels/README.md](../pkg/channels/README.md) |
-| Chat-apps configuration | [chat-apps.md](chat-apps.md) |
+| Channels — set up chat platforms & route them to agents | [channels.md](channels.md) |
 | Hooks (subprocess + in-process) | [hooks/README.md](hooks/README.md) |
 | Antigravity provider | [ANTIGRAVITY_USAGE.md](ANTIGRAVITY_USAGE.md) |
 

@@ -72,7 +72,7 @@ Tell them once in Settings → Profile ("be concise", "I use Python", your timez
 
 Use the web app, the terminal, or wire your agents into Telegram, Discord, Slack, WhatsApp, and 10 other chat platforms — voice notes and images included.
 
-→ [Chat apps](docs/chat-apps.md)
+→ [Channels](docs/channels.md)
 
 ### You stay in control
 
@@ -105,7 +105,7 @@ Pick from 35+ AI providers — including fully-local options like Ollama.
 
 **Full audit trail** — every tool call, LLM request, and agent event lands in a replayable on-disk transcript that feeds the UI, subprocess hooks, and a tamper-evident audit log. → [Session transcript](docs/observability.md#session-transcript)
 
-**14 in-process chat channels and 35+ LLM providers** — with fallback chains, multi-key rotation, streaming, and vision. → [Registered channels](pkg/channels/README.md#10-registered-channels) · [Providers](docs/providers.md#providers)
+**14 in-process chat channels and 35+ LLM providers** — with fallback chains, multi-key rotation, streaming, and vision. → [Channels](docs/channels.md) · [Providers](docs/providers.md#providers)
 
 **Channel-to-agent routing** — binds inbound messages to specific agents by channel, account, guild, team, or peer. → [Inbound bindings](docs/routing.md#inbound-bindings)
 
@@ -314,34 +314,14 @@ It applies the same end-state mutations as the SPA wizard — config, credential
 
 ## Documentation
 
-User-facing guides, grouped by what you're trying to do:
+**[→ Full documentation index](docs/README.md)** — every guide, grouped by what you're trying to do.
 
-| Topic | Where to go |
-|---|---|
-| **▶ Start here — your first 10 minutes** | [docs/getting-started.md](docs/getting-started.md) |
-| **How Omnipus works (plain English)** | [docs/concepts.md](docs/concepts.md) |
-| **Using the web app** | [docs/using-omnipus-ui.md](docs/using-omnipus-ui.md) |
-| **Using the terminal / CLI** | [docs/using-omnipus-cli.md](docs/using-omnipus-cli.md) |
-| **Full documentation index** | [docs/README.md](docs/README.md) |
-| **Memory system** | [docs/memory.md](docs/memory.md) |
-| **Channel-to-agent routing** | [docs/routing.md](docs/routing.md) |
-| **Session history & event stream** | [docs/observability.md](docs/observability.md) |
-| **Skills & MCP** | [docs/skills.md](docs/skills.md) · [docs/tools_configuration.md](docs/tools_configuration.md) |
-| **Channels (per-channel guides)** | [pkg/channels/README.md](pkg/channels/README.md) |
-| **Hooks (subprocess + in-process)** | [docs/hooks/README.md](docs/hooks/README.md) |
-| **Tools reference (full catalog)** | [docs/tools-reference.md](docs/tools-reference.md) |
-| **LLM providers** | [docs/providers.md](docs/providers.md) |
-| **Sandbox: config & status** | [docs/operations/sandbox-config.md](docs/operations/sandbox-config.md) |
-| **Sandbox: known limitations** | [docs/operations/sandbox-limitations.md](docs/operations/sandbox-limitations.md) |
-| **Reverse proxy & TLS** | [docs/operations/reverse-proxy.md](docs/operations/reverse-proxy.md) |
-| **Docker** | [docs/docker.md](docs/docker.md) |
-| **Credential vault** | [docs/credential_encryption.md](docs/credential_encryption.md) |
-| **Configuration reference** | [docs/configuration.md](docs/configuration.md) |
-| **Platform support** | [docs/operations/platform-support.md](docs/operations/platform-support.md) |
-| **Troubleshooting** | [docs/troubleshooting.md](docs/troubleshooting.md) |
-| **Debug & log spelunking** | [docs/debug.md](docs/debug.md) |
+New here? Start with:
 
-Browse the full index at [docs/README.md](docs/README.md).
+- [Your first 10 minutes](docs/getting-started.md) — install → first chat → handoff → build an agent
+- [How Omnipus works](docs/concepts.md) — agents, sessions, memory, channels, skills (plain English)
+- [Using the web app](docs/using-omnipus-ui.md) · [Using the terminal](docs/using-omnipus-cli.md)
+- [Channels](docs/channels.md) — connect Telegram / Discord / Slack / … and choose which agent answers each
 
 ---
 

@@ -1,4 +1,4 @@
-> Back to [README](../../../README.md)
+> Back to [Channels](../channels.md)
 
 # WeCom
 
@@ -150,4 +150,4 @@ Fields can be overridden via environment variables. The parent block uses the pr
 - Check whether `allow_from` is blocking the sender.
 - Check that `channels.wecom.bot_id` and `channels.wecom.secret_ref` are set and non-empty, and that the referenced credential exists in the store.
 
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../../pkg/channels/README.md).
+For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).

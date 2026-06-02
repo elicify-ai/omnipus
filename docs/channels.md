@@ -1,30 +1,47 @@
-# Chat Apps Configuration
+# Channels
 
-> Back to [README](../README.md)
+> Back to [docs index](README.md)
 
-## Chat Apps
+Talk to your Omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, LINE, WeCom, Weixin, Feishu, Slack, IRC, OneBot, or Google Chat. **The web app is the primary way to set channels up.** Editing `config.json` by hand (shown in each [per-platform section](#per-platform-credentials)) is an optional alternative for headless or automated deployments.
 
-Talk to your Omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, LINE, WeCom, Weixin, Feishu, Slack, IRC, OneBot, or Google Chat.
+## Configure a channel in the app
 
-> **In the web app:** the **Channels** page (sidebar → Channels) lists every channel — enable/disable each one, open **Configure** to enter its connection details, and pick the **Default agent** that answers it. See [Using the web app → Channels](using-omnipus-ui.md#channels). The per-channel pages below tell you where to obtain each channel's credentials (bot tokens, app secrets, etc.).
+Open **Channels** in the sidebar. Every channel is a card showing its transport and status, with **Configure** and **Enable / Disable** actions.
+
+![The Channels page — one card per channel with Configure and Enable/Disable](marketing/screenshots/channels-screen.png)
+
+Click **Configure** on the channel you want. The panel has two parts:
+
+1. **Connection** — paste the channel's credentials (e.g. a Telegram **Bot Token**) and any transport options (allow-list, proxy, custom API URL). The [per-platform sections below](#per-platform-credentials) tell you exactly where to get each value. Secrets are stored encrypted in `credentials.json`, never in plain config.
+2. **Routing → Default agent** — choose which agent answers messages on this channel. Leave it on **"(Global default)"** to use your [global default agent](using-omnipus-ui.md#managing-agents) (the ★ on the Agents page), or pick a specific agent to dedicate the channel to it.
+
+![The Configure panel — Connection fields plus the Routing "Default agent" selector](marketing/screenshots/channel-configure-routing.png)
+
+Click **Save & Enable** to connect the channel and start routing — no file editing required.
+
+> Which agent answers is resolved most-specific-first: per-user → per-guild/team → this channel's default → the global default. For the full model see **[Routing](routing.md)**.
+
+## Per-platform credentials
+
+Each platform's section below tells you where to obtain the credentials you paste into **Configure** (bot tokens, app secrets, webhooks, etc.). Each section also shows the equivalent **`config.json`** snippet — the manual alternative for headless/automated setups.
 
 > **Note**: Channels that rely on HTTP callbacks share a single Gateway HTTP server (`gateway.host`:`gateway.port`, default `127.0.0.1:18790`). Socket/stream-based channels such as Feishu, DingTalk, and WeCom do not rely on the shared webhook server for inbound delivery.
 
 | Channel              | Difficulty         | Description                                           | Documentation                                                                                                    |
 | -------------------- | ------------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **Telegram**         | ⭐ Easy            | Recommended, voice-to-text, long polling (no public IP needed) | [Docs](channels/telegram/README.md)                                                                  |
-| **Discord**          | ⭐ Easy            | Socket Mode, group/DM support, rich bot ecosystem     | [Docs](channels/discord/README.md)                                                                           |
-| **WhatsApp**         | ⭐ Easy            | Native (QR scan) or Bridge URL                        | [Docs](channels/whatsapp/README.md) / [Native](channels/whatsapp_native/README.md)                              |
+| **Telegram**         | ⭐ Easy            | Recommended, voice-to-text, long polling (no public IP needed) | [Docs](channels/telegram.md)                                                                  |
+| **Discord**          | ⭐ Easy            | Socket Mode, group/DM support, rich bot ecosystem     | [Docs](channels/discord.md)                                                                           |
+| **WhatsApp**         | ⭐ Easy            | Native (QR scan) or Bridge URL                        | [Docs](channels/whatsapp.md) / [Native](channels/whatsapp_native.md)                              |
 | **Weixin**           | ⭐ Easy            | Native QR scan (Tencent iLink API)                    | [Docs](#weixin)                                                                            |
-| **Slack**            | ⭐ Easy            | **Socket Mode** (no public IP needed), enterprise     | [Docs](channels/slack/README.md)                                                                             |
-| **Matrix**           | ⭐⭐ Medium        | Federated protocol, self-hosting supported            | [Docs](channels/matrix/README.md)                                                                            |
-| **QQ**               | ⭐⭐ Medium        | Official bot API, Chinese community                   | [Docs](channels/qq/README.md)                                                                                |
-| **DingTalk**         | ⭐⭐ Medium        | Stream mode (no public IP needed), enterprise         | [Docs](channels/dingtalk/README.md)                                                                          |
-| **LINE**             | ⭐⭐⭐ Advanced    | HTTPS Webhook required                                | [Docs](channels/line/README.md)                                                                              |
-| **WeCom (企业微信)** | ⭐⭐⭐ Advanced    | Official AI Bot over WebSocket, streaming + media     | [Docs](channels/wecom/README.md) |
-| **Feishu (飞书)**    | ⭐⭐⭐ Advanced    | Enterprise collaboration, feature-rich                | [Docs](channels/feishu/README.md)                                                                            |
-| **IRC**              | ⭐⭐ Medium        | Server + TLS configuration                            | [Docs](channels/irc/README.md)                                                                                  |
-| **OneBot**           | ⭐⭐ Medium        | NapCat/Go-CQHTTP compatible, community ecosystem      | [Docs](channels/onebot/README.md)                                                                            |
+| **Slack**            | ⭐ Easy            | **Socket Mode** (no public IP needed), enterprise     | [Docs](channels/slack.md)                                                                             |
+| **Matrix**           | ⭐⭐ Medium        | Federated protocol, self-hosting supported            | [Docs](channels/matrix.md)                                                                            |
+| **QQ**               | ⭐⭐ Medium        | Official bot API, Chinese community                   | [Docs](channels/qq.md)                                                                                |
+| **DingTalk**         | ⭐⭐ Medium        | Stream mode (no public IP needed), enterprise         | [Docs](channels/dingtalk.md)                                                                          |
+| **LINE**             | ⭐⭐⭐ Advanced    | HTTPS Webhook required                                | [Docs](channels/line.md)                                                                              |
+| **WeCom (企业微信)** | ⭐⭐⭐ Advanced    | Official AI Bot over WebSocket, streaming + media     | [Docs](channels/wecom.md) |
+| **Feishu (飞书)**    | ⭐⭐⭐ Advanced    | Enterprise collaboration, feature-rich                | [Docs](channels/feishu.md)                                                                            |
+| **IRC**              | ⭐⭐ Medium        | Server + TLS configuration                            | [Docs](channels/irc.md)                                                                                  |
+| **OneBot**           | ⭐⭐ Medium        | NapCat/Go-CQHTTP compatible, community ecosystem      | [Docs](channels/onebot.md)                                                                            |
 
 <a id="telegram"></a>
 <details>
@@ -303,7 +320,7 @@ Use your preferred homeserver (e.g. `https://matrix.org` or self-hosted), create
 omnipus start
 ```
 
-For full options (`device_id`, `join_on_invite`, `group_trigger`, `placeholder`, `reasoning_channel_id`), see [Matrix Channel Configuration Guide](channels/matrix/README.md).
+For full options (`device_id`, `join_on_invite`, `group_trigger`, `placeholder`, `reasoning_channel_id`), see [Matrix Channel Configuration Guide](channels/matrix.md).
 
 </details>
 
@@ -360,7 +377,7 @@ omnipus start
 
 Omnipus exposes WeCom as a single AI Bot channel over WebSocket. No public webhook callback URL is required.
 
-See [WeCom Configuration Guide](channels/wecom/README.md) for the full configuration reference and migration notes.
+See [WeCom Configuration Guide](channels/wecom.md) for the full configuration reference and migration notes.
 
 **Quick Setup - Recommended**
 
@@ -435,7 +452,7 @@ omnipus start
 
 Open Feishu, search for your bot name, and start chatting. You can also add the bot to a group — use `group_trigger.mention_only: true` to only respond when @mentioned.
 
-For full options, see [Feishu Channel Configuration Guide](channels/feishu/README.md).
+For full options, see [Feishu Channel Configuration Guide](channels/feishu.md).
 
 </details>
 
