@@ -115,6 +115,29 @@ type Manager struct {
 	streamFallback    bus.StreamDelegate // optional fallback for channels not in m.channels (e.g., webchat WebSocket)
 	failedChannels    []ChannelInitError // enabled channels that failed to start
 	cancelInterceptor CancelInterceptor  // set after construction via SetCancelInterceptor; may be nil
+
+	// pairingObserver, if set before StartAll, is wired into every channel that
+	// implements PairingObservable so linked-device pairing updates (QR/status)
+	// reach the SPA (#283). channelID is the channel name (e.g. "whatsapp_native").
+	pairingObserver func(channelID string, status PairingStatus, qr, message string)
+}
+
+// SetPairingObserver registers a callback to receive linked-device pairing
+// updates (QR/status) from all PairingObservable channels and propagates it to
+// channels already initialized — mirroring SetCancelInterceptor, since the
+// channels map is populated during NewManager (#283).
+func (m *Manager) SetPairingObserver(fn func(channelID string, status PairingStatus, qr, message string)) {
+	m.mu.Lock()
+	m.pairingObserver = fn
+	for name, ch := range m.channels {
+		if obs, ok := ch.(PairingObservable); ok {
+			chName := name
+			obs.SetPairingObserver(func(status PairingStatus, qr, message string) {
+				fn(chName, status, qr, message)
+			})
+		}
+	}
+	m.mu.Unlock()
 }
 
 type asyncTask struct {
@@ -425,6 +448,16 @@ func (m *Manager) initChannel(name, displayName string) error {
 	if m.cancelInterceptor != nil {
 		if setter, ok := ch.(interface{ SetCancelInterceptor(ci CancelInterceptor) }); ok {
 			setter.SetCancelInterceptor(m.cancelInterceptor)
+		}
+	}
+	// Inject pairing observer (#283) so QR/status updates reach the SPA. Capture
+	// the channel name so the observer can tag which channel emitted.
+	if m.pairingObserver != nil {
+		if obs, ok := ch.(PairingObservable); ok {
+			chName := name
+			obs.SetPairingObserver(func(status PairingStatus, qr, message string) {
+				m.pairingObserver(chName, status, qr, message)
+			})
 		}
 	}
 	m.channels[name] = ch

@@ -68,3 +68,46 @@ type PlaceholderRecorder interface {
 type CommandRegistrarCapable interface {
 	RegisterCommands(ctx context.Context, defs []commands.Definition) error
 }
+
+// PairingStatus is a linked-device pairing lifecycle state. The values mirror
+// the WhatsAppPairingFrame.status contract enum exactly; a typed constant set
+// keeps the channel→gateway→SPA boundary from drifting by a stray string literal
+// (#283). The full set is asserted against the wire contract by a drift test in
+// pkg/gateway.
+type PairingStatus string
+
+const (
+	// PairingStatusWaiting is reserved for a pre-QR connecting state. It is not
+	// currently emitted; the SPA renders its initial prompt from the absence of
+	// any pairing state.
+	PairingStatusWaiting PairingStatus = "waiting"
+	// PairingStatusCode means a QR code is available to scan (qr is set).
+	PairingStatusCode PairingStatus = "code"
+	// PairingStatusLinked means the device paired successfully.
+	PairingStatusLinked PairingStatus = "linked"
+	// PairingStatusTimeout means the displayed QR expired; a fresh one follows.
+	PairingStatusTimeout PairingStatus = "timeout"
+	// PairingStatusError means pairing failed; message carries the reason.
+	PairingStatusError PairingStatus = "error"
+)
+
+// AllPairingStatuses is the authoritative set of pairing statuses, kept next to
+// the constants so adding one here is the single edit a new status needs. The
+// pkg/gateway drift test asserts this set equals the contract enum.
+var AllPairingStatuses = []PairingStatus{
+	PairingStatusWaiting,
+	PairingStatusCode,
+	PairingStatusLinked,
+	PairingStatusTimeout,
+	PairingStatusError,
+}
+
+// PairingObservable is implemented by channels that produce linked-device
+// pairing updates (a QR code to scan + status transitions) and can report them
+// to an observer. The gateway wires the observer at boot so the SPA can render
+// the QR in-browser instead of requiring the gateway terminal (#283).
+//
+// qr is non-empty only when status == PairingStatusCode.
+type PairingObservable interface {
+	SetPairingObserver(fn func(status PairingStatus, qr, message string))
+}

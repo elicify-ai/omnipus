@@ -7,7 +7,8 @@ import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay }
 import { queryClient } from '@/lib/queryClient'
 import type { Message, ToolCall } from '@/lib/api'
 import type { WsReceiveFrame, WsExecApprovalRequestFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
-import type { ToolResultRef, TruncatedResult } from '@/lib/api/generated/asyncapi-types'
+import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame } from '@/lib/api/generated/asyncapi-types'
+import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { registerSyncChatForeground } from '@/store/session'
 
@@ -2231,6 +2232,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
               return { sessionsById, ...bucketToForeground(fg) }
             })
           }, 60_000)
+          break
+        }
+        case 'whatsapp_pairing': {
+          // #283: global (not session-tied) — record QR/status for the Channels
+          // config panel. Accessed via getState() at frame time (not a hook
+          // subscription) so chatStore stays decoupled from the pairing store.
+          useWhatsAppPairingStore
+            .getState()
+            .apply(frame as WhatsAppPairingFrame)
           break
         }
 

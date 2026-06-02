@@ -4,6 +4,7 @@ import { useChatStore, getMessages, makeBucketMessages, MAX_MESSAGES_PER_SESSION
 import type { SessionChatState } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
+import { useWhatsAppPairingStore } from './whatsappPairing'
 
 // test_chat_store (test #22)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: User sends message and receives streaming response
@@ -2045,5 +2046,24 @@ describe('eviction-leak regression — tool_call_result burst triggers eviction 
         `textAtToolCallStart has a dangling entry for "${callId}" not in toolCallOrder`,
       ).toBe(true)
     }
+  })
+})
+
+describe('chat store — whatsapp_pairing routing (#283)', () => {
+  it('handleFrame(whatsapp_pairing) routes the QR to the pairing store', () => {
+    act(() => {
+      useWhatsAppPairingStore.setState({ byChannel: {} })
+      useChatStore.getState().handleFrame({
+        type: 'whatsapp_pairing',
+        channel_id: 'whatsapp_native',
+        status: 'code',
+        qr: 'QR-ROUTED',
+      })
+    })
+    expect(useWhatsAppPairingStore.getState().byChannel['whatsapp_native']).toEqual({
+      status: 'code',
+      qr: 'QR-ROUTED',
+      message: '',
+    })
   })
 })

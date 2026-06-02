@@ -94,7 +94,23 @@ func (b *EventBus) Emit(evt Event) {
 			if evt.Kind < eventKindCount {
 				b.dropped[evt.Kind].Add(1)
 			}
-			logger.DebugCF("eventbus", "event dropped, subscriber buffer full", map[string]any{"event_kind": evt.Kind})
+			// Most kinds are high-frequency and lossy by design, so a drop is
+			// debug-level. Pairing frames are low-frequency and state-critical —
+			// a dropped QR leaves the SPA blank until the next refresh — so
+			// surface those at warn (#283).
+			if evt.Kind == EventKindWhatsAppPairing {
+				logger.WarnCF(
+					"eventbus",
+					"dropped WhatsApp pairing frame (subscriber buffer full); QR may be delayed in the SPA",
+					map[string]any{"event_kind": evt.Kind},
+				)
+			} else {
+				logger.DebugCF(
+					"eventbus",
+					"event dropped, subscriber buffer full",
+					map[string]any{"event_kind": evt.Kind},
+				)
+			}
 		}
 	}
 }
