@@ -9,11 +9,11 @@ tag-template: 'v$RESOLVED_VERSION'
 categories:
   - title: '🚀 Features'
     labels:
-      - 'enhancement'
+      - 'type:feature'
       - 'type:performance'
   - title: '🐛 Bug fixes'
     labels:
-      - 'bug'
+      - 'type:fix'
   - title: '🔐 Security'
     labels:
       - 'security'
@@ -43,11 +43,11 @@ version-resolver:
       - 'type:breaking-change'
   minor:
     labels:
-      - 'enhancement'
+      - 'type:feature'
       - 'security'
   patch:
     labels:
-      - 'bug'
+      - 'type:fix'
       - 'documentation'
       - 'dependencies'
       - 'test-coverage'
@@ -88,10 +88,10 @@ autolabeler:
     title:
       - '/^security[:(]/i'
       - '/security:/i'
-  - label: 'bug'
+  - label: 'type:fix'
     title:
       - '/^fix[:(]/i'
-  - label: 'enhancement'
+  - label: 'type:feature'
     title:
       - '/^feat[:(]/i'
   - label: 'documentation'
