@@ -70,10 +70,22 @@ type WhatsAppNativeChannel struct {
 	pairingObserver func(status, qr, message string)
 }
 
+// Pairing status values mirror the WhatsAppPairingFrame.status contract enum
+// (waiting/code/linked/timeout/error). Centralized so the emit sites can't drift
+// from the wire contract by a typo (#283). "waiting" is reserved for a future
+// pre-QR state and is not currently emitted; the SPA renders its initial prompt
+// from the absence of any pairing state.
+const (
+	pairingStatusCode    = "code"
+	pairingStatusLinked  = "linked"
+	pairingStatusTimeout = "timeout"
+	pairingStatusError   = "error"
+)
+
 // SetPairingObserver installs a callback that receives WhatsApp linked-device
-// pairing updates (status one of waiting/code/linked/timeout/error; qr set only
-// when status=="code"). Satisfies channels.PairingObservable. Safe to call
-// before Start; the QR goroutine reads it under mu.
+// pairing updates (status one of code/linked/timeout/error; qr set only when
+// status=="code"). Satisfies channels.PairingObservable. Safe to call before
+// Start; the QR goroutine reads it under mu.
 func (c *WhatsAppNativeChannel) SetPairingObserver(fn func(status, qr, message string)) {
 	c.mu.Lock()
 	c.pairingObserver = fn
@@ -81,13 +93,78 @@ func (c *WhatsAppNativeChannel) SetPairingObserver(fn func(status, qr, message s
 }
 
 // emitPairing invokes the pairing observer if one is set (best-effort; never
-// blocks the QR loop). qr is non-empty only for status=="code".
+// blocks the QR loop). qr is non-empty only for status=="code". When no observer
+// is wired but a QR is ready, warn so an unwired/regressed bridge is visible
+// rather than a silently blank SPA panel (#283); the gateway terminal still
+// shows the code as a fallback.
 func (c *WhatsAppNativeChannel) emitPairing(status, qr, message string) {
 	c.mu.Lock()
 	obs := c.pairingObserver
 	c.mu.Unlock()
-	if obs != nil {
-		obs(status, qr, message)
+	if obs == nil {
+		if status == pairingStatusCode {
+			logger.WarnCF(
+				"whatsapp",
+				"QR code ready but no pairing observer wired; SPA will not show it (use the gateway terminal)",
+				nil,
+			)
+		}
+		return
+	}
+	obs(status, qr, message)
+}
+
+// handleQREvent renders a whatsmeow QR-channel event to the terminal/log and
+// forwards it to the SPA via emitPairing (#283). repairing only changes the log
+// wording (initial login vs. re-pairing after an unlink). Shared by both QR
+// loops so re-pairing surfaces to the SPA identically to first-time login.
+func (c *WhatsAppNativeChannel) handleQREvent(evt whatsmeow.QRChannelItem, repairing bool) {
+	if evt.Event == "code" {
+		scanMsg := "Scan this QR code with WhatsApp (Linked Devices):"
+		if repairing {
+			scanMsg = "Scan QR code to re-pair WhatsApp (Linked Devices):"
+		}
+		logger.InfoCF("whatsapp", scanMsg, nil)
+		qrterminal.GenerateWithConfig(evt.Code, qrterminal.Config{
+			Level:      qrterminal.L,
+			Writer:     os.Stdout,
+			HalfBlocks: true,
+		})
+		// Structured log for headless / WebUI consumption (US-2.5).
+		logger.InfoCF("whatsapp", "QR code available", map[string]any{
+			"event": "whatsapp.qr_code",
+			"code":  evt.Code,
+		})
+		c.emitPairing(pairingStatusCode, evt.Code, "")
+		return
+	}
+
+	logger.InfoCF("whatsapp", "WhatsApp login event", map[string]any{"event": evt.Event})
+	status, message := mapQRLifecycle(evt.Event)
+	c.emitPairing(status, "", message)
+}
+
+// mapQRLifecycle maps a non-"code" whatsmeow QR event to an SPA pairing status
+// and a human-readable, actionable message. Known err-* events get specific
+// guidance; unknown events are logged at warn so whatsmeow vocabulary drift is
+// visible rather than silently coerced into an opaque raw-enum dump (#283).
+func mapQRLifecycle(event string) (status, message string) {
+	switch event {
+	case "success":
+		return pairingStatusLinked, ""
+	case "timeout":
+		return pairingStatusTimeout, "the QR code expired before it was scanned"
+	case "err-scanned-without-multidevice":
+		return pairingStatusError, "enable multi-device in WhatsApp, then scan the code again"
+	case "err-client-outdated":
+		return pairingStatusError, "the gateway's WhatsApp client is outdated and must be updated"
+	default:
+		logger.WarnCF(
+			"whatsapp",
+			"unhandled whatsmeow QR event mapped to pairing error",
+			map[string]any{"event": event},
+		)
+		return pairingStatusError, fmt.Sprintf("pairing failed (%s)", event)
 	}
 }
 
@@ -219,32 +296,7 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 					if !ok {
 						return
 					}
-					if evt.Event == "code" {
-						logger.InfoCF("whatsapp", "Scan this QR code with WhatsApp (Linked Devices):", nil)
-						qrterminal.GenerateWithConfig(evt.Code, qrterminal.Config{
-							Level:      qrterminal.L,
-							Writer:     os.Stdout,
-							HalfBlocks: true,
-						})
-						// Emit structured log for headless / WebUI consumption (US-2.5)
-						logger.InfoCF("whatsapp", "QR code available", map[string]any{
-							"event": "whatsapp.qr_code",
-							"code":  evt.Code,
-						})
-						// #283: surface the QR to the SPA (live, no terminal needed).
-						c.emitPairing("code", evt.Code, "")
-					} else {
-						logger.InfoCF("whatsapp", "WhatsApp login event", map[string]any{"event": evt.Event})
-						// #283: map whatsmeow QR lifecycle events to SPA pairing status.
-						switch evt.Event {
-						case "success":
-							c.emitPairing("linked", "", "")
-						case "timeout":
-							c.emitPairing("timeout", "", "the QR code expired before it was scanned")
-						default:
-							c.emitPairing("error", "", evt.Event)
-						}
-					}
+					c.handleQREvent(evt, false)
 				}
 			}
 		}()
@@ -571,20 +623,7 @@ func (c *WhatsAppNativeChannel) handleLoggedOut() {
 			if !ok {
 				return
 			}
-			if evt.Event == "code" {
-				logger.InfoCF("whatsapp", "Scan QR code to re-pair WhatsApp (Linked Devices):", nil)
-				qrterminal.GenerateWithConfig(evt.Code, qrterminal.Config{
-					Level:      qrterminal.L,
-					Writer:     os.Stdout,
-					HalfBlocks: true,
-				})
-				logger.InfoCF("whatsapp", "QR code available", map[string]any{
-					"event": "whatsapp.qr_code",
-					"code":  evt.Code,
-				})
-			} else {
-				logger.InfoCF("whatsapp", "WhatsApp re-pairing event", map[string]any{"event": evt.Event})
-			}
+			c.handleQREvent(evt, true)
 		}
 	}
 }

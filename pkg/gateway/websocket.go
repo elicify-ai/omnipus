@@ -83,6 +83,9 @@ type replayFrameDecoder struct { // not-wire-format: decode-only test assertion 
 	PolicyRule        string  `json:"policy_rule,omitempty"`
 	RetryAfterSeconds float64 `json:"retry_after_seconds,omitempty"`
 	AgentID           string  `json:"agent_id,omitempty"`
+	// whatsapp_pairing fields (#283)
+	ChannelID string `json:"channel_id,omitempty"`
+	QR        string `json:"qr,omitempty"`
 	// media frame fields
 	Parts []map[string]any `json:"parts,omitempty"`
 	// subagent span fields (FR-H-004, FR-H-005)

@@ -34,7 +34,8 @@ properties:
     type: string
     description: >
       The QR payload to render (whatsmeow linked-device pairing code). Present when
-      status is "code"; empty otherwise. Never logged or persisted.
+      status is "code"; empty otherwise. Transient pairing secret — the SPA holds it
+      only while the config panel is open and never persists it.
   message:
     type: string
     description: Optional human-readable detail, e.g. the error reason when status is "error".

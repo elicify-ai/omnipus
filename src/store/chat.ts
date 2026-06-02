@@ -2236,7 +2236,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
         }
         case 'whatsapp_pairing': {
           // #283: global (not session-tied) — record QR/status for the Channels
-          // config panel. Imported lazily-by-reference to avoid a store cycle.
+          // config panel. Accessed via getState() at frame time (not a hook
+          // subscription) so chatStore stays decoupled from the pairing store.
           useWhatsAppPairingStore
             .getState()
             .apply(frame as WhatsAppPairingFrame)
