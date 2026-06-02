@@ -222,7 +222,7 @@ type AgentLoop struct {
 	// recaps both complete and finish writing before shutdown returns — leaving
 	// them detached races the temp-dir cleanup in tests. recapMu+closing gate
 	// scheduling so a recap can never be Added after the drain begins (no
-	// WaitGroup Add-after-Wait). Recaps are not cancelled; each self-bounds at
+	// WaitGroup Add-after-Wait). Recaps are not canceled; each self-bounds at
 	// 60s and shares the 70s graceful-shutdown budget with the active-turn wait.
 	recapMu sync.Mutex
 	closing bool

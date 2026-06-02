@@ -158,7 +158,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	}
 
 	// Self-bounded at 60s. On graceful shutdown, AgentLoop.Close() waits for this
-	// goroutine to finish (recapWG) rather than cancelling it, so the recap runs
+	// goroutine to finish (recapWG) rather than canceling it, so the recap runs
 	// to completion within the 70s shutdown budget (#265).
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

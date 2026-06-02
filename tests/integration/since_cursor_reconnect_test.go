@@ -39,6 +39,7 @@ import (
 //
 // Traces to: spa-streaming-refactor.md Phase 2D, T1
 func TestSinceCursor_IncrementalReplay(t *testing.T) {
+	skipOnMacOSAPFSCleanupRace(t)
 	gw := startIntegrationGateway(t)
 
 	// ── Step 1: Seed a two-turn transcript with known timestamps ──────────────
@@ -160,6 +161,7 @@ func TestSinceCursor_IncrementalReplay(t *testing.T) {
 //
 // Traces to: spa-streaming-refactor.md Phase 2D, T1 (negative case)
 func TestSinceCursor_FullReplayWithoutSince(t *testing.T) {
+	skipOnMacOSAPFSCleanupRace(t)
 	gw := startIntegrationGateway(t)
 
 	sessionID := createSession(t, gw)
@@ -247,6 +249,7 @@ func TestSinceCursor_FullReplayWithoutSince(t *testing.T) {
 //
 // Traces to: spa-streaming-refactor.md Phase 2D, T1 (boundary semantic)
 func TestSinceCursor_CursorAtExactBoundary(t *testing.T) {
+	skipOnMacOSAPFSCleanupRace(t)
 	gw := startIntegrationGateway(t)
 
 	sessionID := createSession(t, gw)
@@ -334,6 +337,7 @@ func TestSinceCursor_CursorAtExactBoundary(t *testing.T) {
 //
 // Traces to: spa-streaming-refactor.md Phase 2D, T1 (edge case: empty window)
 func TestSinceCursor_FutureCursorProducesEmptyReplay(t *testing.T) {
+	skipOnMacOSAPFSCleanupRace(t)
 	gw := startIntegrationGateway(t)
 
 	sessionID := createSession(t, gw)
@@ -410,6 +414,7 @@ func TestSinceCursor_FutureCursorProducesEmptyReplay(t *testing.T) {
 //
 // Traces to: spa-streaming-refactor.md Phase 2D, T1 (differentiation)
 func TestSinceCursor_DifferentInputsDifferentOutputs(t *testing.T) {
+	skipOnMacOSAPFSCleanupRace(t)
 	gw := startIntegrationGateway(t)
 
 	sessionID := createSession(t, gw)

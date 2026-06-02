@@ -1758,7 +1758,10 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			slog.Error("updateAgent: live model apply failed; running agent still on previous model",
 				"agent_id", id, "model", newModel, "error", err)
 			if reloadWarning == "" {
-				reloadWarning = fmt.Sprintf("model saved to config but could not be applied to the running agent (still serving the previous model): %v", err)
+				reloadWarning = fmt.Sprintf(
+					"model saved to config but could not be applied to the running agent (still serving the previous model): %v",
+					err,
+				)
 			}
 		}
 	}

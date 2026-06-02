@@ -33,6 +33,8 @@ import (
 //
 // Traces to: #254 stale media store (BLOCKER)
 func TestUploadMediaRef_StoreSwapResolves(t *testing.T) {
+	skipOnMacOSAPFSCleanupRace(t)
+
 	mock := mockLLMServer(t, "ok")
 	gw := testutil.StartTestGateway(t,
 		testutil.WithAPIBase(mock.URL),
@@ -71,6 +73,8 @@ func TestUploadMediaRef_StoreSwapResolves(t *testing.T) {
 //	When a random bogus ref is resolved
 //	Then it gets 404
 func TestUploadMediaRef_UnknownRefDropped(t *testing.T) {
+	skipOnMacOSAPFSCleanupRace(t)
+
 	mock := mockLLMServer(t, "ok")
 	gw := testutil.StartTestGateway(t,
 		testutil.WithAPIBase(mock.URL),

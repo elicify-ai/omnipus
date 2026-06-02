@@ -225,10 +225,14 @@ func (r *DevServerRegistry) Register(
 // Caps mirror Register: ErrPerAgentCap (1 dev server per agent) and
 // GatewayCapError (cfg.Sandbox.MaxConcurrentDevServers).
 //
-// This replaces the previous web_serve behaviour of always auto-picking
+// This replaces the previous web_serve behavior of always auto-picking
 // PortRange[0], which made every concurrent dev server collide on one port
 // (#255).
-func (r *DevServerRegistry) ReservePort(agentID string, wantPort, lo, hi int32, maxConcurrent int) (string, int32, error) {
+func (r *DevServerRegistry) ReservePort(
+	agentID string,
+	wantPort, lo, hi int32,
+	maxConcurrent int,
+) (string, int32, error) {
 	if agentID == "" {
 		return "", 0, errors.New("dev_servers: agentID is required")
 	}

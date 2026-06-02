@@ -28,8 +28,18 @@ func TestApplyAgentModel_SwitchesInPlacePreservingInstance(t *testing.T) {
 			},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "local", Model: "openai/qwen", APIBase: "http://127.0.0.1:1", APIKeyRef: "LOOP_APPLY_LOCAL_KEY"},
-			{ModelName: "deepseek", Model: "openrouter/deepseek", APIBase: "http://127.0.0.1:1", APIKeyRef: "LOOP_APPLY_REMOTE_KEY"},
+			{
+				ModelName: "local",
+				Model:     "openai/qwen",
+				APIBase:   "http://127.0.0.1:1",
+				APIKeyRef: "LOOP_APPLY_LOCAL_KEY",
+			},
+			{
+				ModelName: "deepseek",
+				Model:     "openrouter/deepseek",
+				APIBase:   "http://127.0.0.1:1",
+				APIKeyRef: "LOOP_APPLY_REMOTE_KEY",
+			},
 		},
 	}
 
