@@ -7,8 +7,10 @@ import {
   Play,
   Lightning,
   Warning,
-  Info,
+  CheckCircle,
+  Clock,
 } from '@phosphor-icons/react'
+import { QRCodeSVG } from 'qrcode.react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -28,6 +30,7 @@ import {
 } from '@/lib/api'
 import { getChannelFields, type ChannelField } from '@/lib/channel-fields'
 import { useUiStore } from '@/store/ui'
+import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 
 interface ChannelConfigPanelProps {
   channelId: string
@@ -69,15 +72,52 @@ function PasswordField({
   )
 }
 
+// WhatsAppNativeNotice renders the live linked-device pairing QR + status in the
+// browser (#283), fed by the whatsapp_pairing WS frame. The native channel emits
+// under channel_id "whatsapp_native". Replaces the old "check the gateway
+// terminal" text — no terminal access required.
 function WhatsAppNativeNotice() {
+  const pairing = useWhatsAppPairingStore((s) => s.byChannel['whatsapp_native'])
+  const status = pairing?.status
+
   return (
     <div className="space-y-2 mt-1">
-      <div className="flex gap-2 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]">
-        <Info size={14} className="text-[var(--color-accent)] shrink-0 mt-0.5" weight="fill" />
-        <p className="text-xs text-[var(--color-secondary)]">
-          After enabling, check the gateway terminal for a QR code. Scan it with{' '}
-          <span className="font-medium">WhatsApp → Linked Devices → Link a Device</span>.
-        </p>
+      <div className="flex flex-col items-center gap-3 p-4 rounded-lg bg-[var(--color-surface-1)] border border-[var(--color-border)]">
+        {status === 'code' && pairing?.qr ? (
+          <>
+            {/* QR must sit on a light background to scan reliably in dark mode. */}
+            <div className="rounded-md bg-white p-3">
+              <QRCodeSVG value={pairing.qr} size={184} level="L" />
+            </div>
+            <p className="text-xs text-[var(--color-secondary)] text-center">
+              Scan with{' '}
+              <span className="font-medium">WhatsApp → Linked Devices → Link a Device</span>. The code
+              refreshes automatically.
+            </p>
+          </>
+        ) : status === 'linked' ? (
+          <div className="flex items-center gap-2 text-[var(--color-success)]">
+            <CheckCircle size={16} weight="fill" />
+            <p className="text-xs font-medium">Linked successfully.</p>
+          </div>
+        ) : status === 'timeout' ? (
+          <div className="flex items-center gap-2 text-[var(--color-muted)]">
+            <Clock size={14} />
+            <p className="text-xs">The QR code expired — a fresh one will appear shortly…</p>
+          </div>
+        ) : status === 'error' ? (
+          <div className="flex items-center gap-2 text-[var(--color-error)]">
+            <Warning size={14} weight="fill" />
+            <p className="text-xs">Pairing error: {pairing?.message || 'unknown'}.</p>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-[var(--color-muted)]">
+            <Clock size={14} />
+            <p className="text-xs text-center">
+              Enable and save, then a QR code will appear here to scan with WhatsApp.
+            </p>
+          </div>
+        )}
       </div>
       <div className="flex gap-2 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-error)]/30">
         <Warning size={14} className="text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" />
