@@ -1929,6 +1929,64 @@ func (a *restAPI) storeCredential(refName, apiKey string) (string, error) {
 	return refName, nil
 }
 
+// channelCredKey is the credential-store key for a channel's secret field. The
+// format is opaque to readers (channel constructors resolve secrets via the
+// config <field>_ref, never by reconstructing this key); it exists so the
+// producer side has a single definition.
+func channelCredKey(channelID, field string) string {
+	return "channel_" + channelID + "_" + field
+}
+
+// removeStoredCredential removes refName from the credential store. A missing
+// entry is not an error — clearing a never-set secret is legitimate. (Distinct
+// from the deleteCredential REST handler, which writes an HTTP response.)
+func (a *restAPI) removeStoredCredential(refName string) error {
+	store := a.credStore
+	if store == nil {
+		store = credentials.NewStore(a.credentialsStorePath())
+		if err := credentials.Unlock(store); err != nil {
+			return fmt.Errorf("credential store locked: %w", err)
+		}
+	}
+	if err := store.Delete(refName); err != nil {
+		var nf *credentials.NotFoundError
+		if errors.As(err, &nf) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// credentialRefResolves reports whether refName names a non-empty secret in the
+// credential store. Used by testChannel (#289). The returned error is non-nil
+// only for store-access faults (locked / wrong master key / I/O) — distinct from
+// a genuinely absent secret, which returns (false, nil). The caller MUST surface
+// a store fault separately rather than reporting the field as "missing", or
+// "Test" would tell the user to re-enter a secret that is already correct.
+func (a *restAPI) credentialRefResolves(refName string) (bool, error) {
+	refName = strings.TrimSpace(refName)
+	if refName == "" {
+		return false, nil // genuinely not configured
+	}
+	store := a.credStore
+	if store == nil {
+		store = credentials.NewStore(a.credentialsStorePath())
+		if err := credentials.Unlock(store); err != nil {
+			return false, fmt.Errorf("credential store locked: %w", err)
+		}
+	}
+	v, err := store.Get(refName)
+	if err != nil {
+		var nf *credentials.NotFoundError
+		if errors.As(err, &nf) {
+			return false, nil // truly absent
+		}
+		return false, err // locked / wrong key / I/O — surface to the caller
+	}
+	return strings.TrimSpace(v) != "", nil
+}
+
 // safeUpdateConfigJSON reads config.json, applies a mutation function on the raw JSON map,
 // and writes it back atomically. This preserves SecureStrings (API keys) that would be
 // destroyed by config.SaveConfig's JSON round-trip through the Go struct.
@@ -4272,17 +4330,25 @@ var channelRequiredFields = map[string][]string{
 	"whatsapp": {},
 }
 
-// redactChannelConfig returns a copy of cfg with sensitive fields replaced by "[configured]"
-// (if non-empty) or "" (if empty).
+// redactChannelConfig returns a copy of cfg with sensitive fields replaced by a
+// "[configured]" marker (never the real secret). Post-#289 the secret lives in
+// the credential store and config holds only <field>_ref, so the marker is
+// driven by the presence of the ref — this preserves the UI's
+// secret-already-set indicator (the inline field is no longer present).
 func redactChannelConfig(channelID string, cfg map[string]any) map[string]any {
 	out := make(map[string]any, len(cfg))
 	for k, v := range cfg {
 		out[k] = v
 	}
 	for _, field := range channelSensitiveFields[channelID] {
+		// A set <field>_ref means a credential is stored → mark configured.
+		if ref, _ := out[field+"_ref"].(string); strings.TrimSpace(ref) != "" {
+			out[field] = "[configured]"
+			continue
+		}
+		// Legacy/pre-scrub inline value (should be transient): mask, never echo.
 		if v, ok := out[field]; ok {
-			s, _ := v.(string)
-			if s != "" {
+			if s, _ := v.(string); s != "" {
 				out[field] = "[configured]"
 			} else {
 				out[field] = ""
@@ -4316,6 +4382,43 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	// Remove reserved fields that must not be set here.
 	delete(updates, "enabled")
 
+	// SEC-23 / #289: route secret fields into the encrypted credential store and
+	// persist only their <field>_ref in config.json. Every channel constructor
+	// reads its secret via the *_ref (e.g. token_ref); an inline plaintext secret
+	// is both a plaintext-at-rest violation AND unreadable by the constructor —
+	// so a UI-configured token-based channel would never start.
+	var clearedRefs []string // credentials to delete AFTER the config write commits
+	for _, field := range channelSensitiveFields[channelID] {
+		raw, present := updates[field]
+		if !present {
+			continue
+		}
+		delete(updates, field) // never persist the inline plaintext
+		refField := field + "_ref"
+		refName := channelCredKey(channelID, field)
+		secret, isStr := raw.(string)
+		if !isStr && raw != nil {
+			// A non-string, non-null secret (e.g. {"token": 123}) would collapse to
+			// "" and be misread as a clear — reject it instead of silently revoking.
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("%s must be a string", field))
+			return
+		}
+		if strings.TrimSpace(secret) == "" {
+			// Clearing: drop the ref now, but delete the stored credential only
+			// AFTER the config write commits (below). Deleting first would strand
+			// the channel pointing at a missing credential if the config write fails.
+			updates[refField] = ""
+			clearedRefs = append(clearedRefs, refName)
+			continue
+		}
+		if _, err := a.storeCredential(refName, secret); err != nil {
+			slog.Error("rest: store channel credential", "channel", channelID, "field", field, "error", err)
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not store %s credential: %v", field, err))
+			return
+		}
+		updates[refField] = refName
+	}
+
 	var updatedCh map[string]any
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		channels, _ := m["channels"].(map[string]any)
@@ -4330,6 +4433,12 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		for k, v := range updates {
 			ch[k] = v
 		}
+		// Invariant (#289/SEC-23): a known secret field is never stored inline in
+		// config.json — it lives only in the credential store via its <field>_ref.
+		// This also scrubs any stale plaintext left by the pre-#289 blind merge.
+		for _, field := range channelSensitiveFields[channelID] {
+			delete(ch, field)
+		}
 		channels[channelID] = ch
 		updatedCh = ch
 		return nil
@@ -4337,6 +4446,15 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		slog.Error("rest: configure channel", "channel", channelID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
+	}
+
+	// Config (with cleared refs) is durable now — delete the now-unreferenced
+	// credentials. A failure here only leaves an orphaned encrypted blob (the ref
+	// is already gone), so log rather than fail the already-committed request.
+	for _, refName := range clearedRefs {
+		if err := a.removeStoredCredential(refName); err != nil {
+			slog.Error("rest: delete cleared channel credential", "channel", channelID, "ref", refName, "error", err)
+		}
 	}
 	jsonOK(w, redactChannelConfig(channelID, updatedCh))
 }
@@ -4352,13 +4470,37 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 	}
 
 	required := channelRequiredFields[channelID]
+	sensitive := make(map[string]bool, len(channelSensitiveFields[channelID]))
+	for _, f := range channelSensitiveFields[channelID] {
+		sensitive[f] = true
+	}
 	var missing []string
 	for _, field := range required {
-		if v, vOk := chCfg[field].(string); vOk {
-			if v == "" {
+		if sensitive[field] {
+			// #289: a secret required field is satisfied by its <field>_ref
+			// resolving in the credential store, NOT by an inline value — the
+			// secret never lives in config.json. Checking the inline field here
+			// (the old behavior) made "Test" report success for channels that
+			// could never activate.
+			ref, _ := chCfg[field+"_ref"].(string)
+			ok, err := a.credentialRefResolves(ref)
+			if err != nil {
+				// Store fault (locked / wrong key / I/O) — distinct from a missing
+				// secret. Reporting it as "missing" would tell the user to re-enter
+				// a credential that is already correct, so surface it as its own state.
+				slog.Error("rest: channel test credential check", "channel", channelID, "field", field, "error", err)
+				jsonOK(w, gen.ChannelTestResponse{
+					Success: false,
+					Message: "credential store unavailable — unlock it (set OMNIPUS_MASTER_KEY) and retry",
+				})
+				return
+			}
+			if !ok {
 				missing = append(missing, field)
 			}
-		} else {
+			continue
+		}
+		if v, vOk := chCfg[field].(string); !vOk || v == "" {
 			missing = append(missing, field)
 		}
 	}
