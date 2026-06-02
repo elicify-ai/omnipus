@@ -45,6 +45,36 @@ This feature finishes that model: a scheduled job **wakes its owning agent** in 
 
 ---
 
+## Revision 3 — Wiring fixes (round-2 grill: REVISE → implementation-ready)
+
+> Round-2 `/grill-spec` retired all 5 round-1 criticals but found the Rev-2 fixes don't connect into a working call path. These wiring decisions make them connect. This block is authoritative over Rev-2 where more specific.
+
+**W-1 — Dedicated scheduled entry point (fixes J-1/J-2 owner-pinning + J-1 abort).** `ProcessDirectWithChannel` (`loop.go:2899-2920`) sets neither `agent_id` metadata nor `SessionID`, so it never hits the priority-1 explicit-agent route, the `agentSessionKey` namespacing collapses to `agent:<owner>:chat:<ch>:<chat>` (collides across isolated runs), and there is no cancellable turn. **Add a new `AgentLoop.ProcessScheduled(ctx, ownerAgentID, sessionID string, content, channel, chatID string) (string, error)`** that:
+- requires a **concrete pre-created `sessionID`** (so `transcriptSessionID` is set, the turn registers under it via `GetActiveTurnHookForSession`, `RequestCancel(CancelScope{SessionID})` works, AND `agentSessionKey` yields the per-owner `agent:<owner>:session:<id>` key);
+- routes to `ownerAgentID` **directly** (look up the agent, run the loop pinned to it) **without** going through the human priority-1 path at `loop.go:3128-3135` — it MUST NOT read/write/delete the `sessionActiveAgent` handoff map (a scheduled run must never disturb a human's in-flight agent switch in that session);
+- returns `(string, error)` so a failed run is a failure, not a stringified-success.
+
+**W-2 — Session id is created by the scheduler BEFORE the run (fixes J-1 abort + J-3 main).** Add `UnifiedStore.GetOrCreateScheduledSession(id string, ownerAgentID string) (*UnifiedMeta, error)` (get-or-create by deterministic id; `NewSession` today only mints fresh ULIDs). Session id per mode, all `SessionType=scheduled`, owner = `ActiveAgentID`:
+- `isolated` → mint a fresh id each run (`NewSession(SessionTypeScheduled, …, owner)`).
+- `continue` → a stable per-schedule id persisted on the `CronJob` (`SessionID` field); get-or-create.
+- `main` → a **reserved deterministic id** `sched-main-<ownerAgentID>`; get-or-create. **This collapses `main` into "continue with a reserved shared id"** — no heartbeat/`processSystemMessage` dependency (which forces `GetDefaultAgent()` at `loop.go:3299` and could not run as the owner). The message is framed as a system-style note in the owner's reserved session. `wake=next-heartbeat` timing stays deferred.
+
+**W-3 — Lane registers with the shutdown drain (fixes J-4).** Each scheduled run executes inside the same `activeRequests` accounting the agent loop uses (increment on lane dispatch, decrement on completion) so `WaitForActiveRequests()` covers it. `CronService.Stop()` must **cancel the lane context and block (bounded) on in-flight runs**; today it returns immediately (`service.go:111-124`) and is called before the drain (`shutdown.go:66,89`). Correct budget figure: **~65s** (`shutdown.go:71`), which wins over the 300s run timeout — on shutdown, in-flight scheduled runs are cancelled.
+
+**W-4 — ExecuteJob/adapter (fixes m-1).** `JobHandler` is **already** `(string,error)` and `executeJobByID` already records errors; the defect is the gateway adapter swallowing the error (`gateway.go:1781`) + `ExecuteJob`'s `string`-only return. Make `ExecuteJob` return `(string,error)` and the adapter propagate it.
+
+**W-5 — Clock seam is for `checkJobs`, not the timer (fixes m-2).** Inject `now func() time.Time` used by `checkJobs`/state math; expose an exported `RunDueJobs(now)` (or `Tick(now)`) that tests call **synchronously** to fire due jobs deterministically. Leave `runLoop`'s real `time.NewTimer`/`Reset` as production-only (do not fake timers) — tests bypass the loop and drive `RunDueJobs` directly. Zero wall-clock sleeps.
+
+**W-6 — Authz uses the existing primitive (corrects M-4 framing).** "Owner restricted to agents the caller may use" = the existing `config.AuthorizeAgentAccess(user, agent)` (owner-OR-admin, `agent_ownership.go:34-49`). Call it at schedule create/update to validate the chosen owner. Not a new ACL.
+
+**W-7 — Notification ownership (fills the headless gap).** Per-user identity exists (`User.Username` in REST auth; `wsConn.userID` at `websocket.go:149,517`). A failed scheduled run creates a notification for: (a) the schedule's **`created_by`** user (store it on the `CronJob`), and (b) the owning agent's **owner user** (`config` agent ownership `OwnerUsername`) if different. If neither resolvable, notify **all admins**. The live `notification` WS frame is filtered per-connection by `wsConn.userID` (reuse the #283 per-connection-interest pattern).
+
+**W-8 — Migration nil-default (fixes M-5).** On load, backfill empty `owner` with the current default agent id **only if one exists**; if there is **no default agent**, leave `owner` empty, **skip firing** that job, and log a warning (do not alert-spam). The backfill is **persisted once** and is idempotent (only fills empties).
+
+**Net new primitives introduced by this revision (small, bounded):** `ProcessScheduled`, `GetOrCreateScheduledSession`, the cron `Clock`/`RunDueJobs` seam, `CronService.Stop()` blocking drain, and the Notifications entity + `notification` WS frame. Everything else reuses existing code.
+
+---
+
 ## Available Reference Patterns
 
 > No `docs/reference/go-implementation/` library applies. The authoritative external reference is the **OpenClaw automation model** (cron session modes, heartbeat, guardrails), which Omnipus already partially mirrors. Internal reference patterns reused:
