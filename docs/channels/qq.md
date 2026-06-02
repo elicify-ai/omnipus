@@ -1,4 +1,4 @@
-> Back to [README](../../../README.md)
+> Back to [Channels](../channels.md)
 
 # QQ
 
@@ -57,4 +57,4 @@ Omnipus connects to QQ via the official QQ Bot Open Platform API using a persist
 
 **Group chats.** The QQ Bot API requires an @-mention in group chats for the bot to receive the message. `group_trigger.mention_only` is therefore the effective default for group interactions regardless of its value; `group_trigger.prefixes` applies to the content after the @-mention is stripped.
 
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../../pkg/channels/README.md).
+For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).

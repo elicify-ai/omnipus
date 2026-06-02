@@ -1,5 +1,7 @@
 # Omnipus Channel System
 
+> **Setting up a channel as a user? → [docs/channels.md](../../docs/channels.md).** This page is a **contributor / architecture reference** for the channel *system internals* (code structure, with file:line citations) — not a setup guide.
+
 > **Scope**: `pkg/channels/`, `pkg/bus/`, `pkg/media/`, `pkg/identity/`
 
 This document describes the channel system as it exists in the current codebase. Every concrete claim cites the file and line range it was verified against.

@@ -1,4 +1,4 @@
-> Back to [README](../../../README.md)
+> Back to [Channels](../channels.md)
 
 # Weixin (WeChat Personal)
 
@@ -60,4 +60,4 @@ omnipus start
 
 **Rate limits.** Avoid high-frequency automated broadcasts; WeChat anti-spam systems may restrict accounts that send messages at excessive rates.
 
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../../pkg/channels/README.md).
+For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).

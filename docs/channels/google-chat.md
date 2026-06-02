@@ -1,4 +1,4 @@
-> Back to [README](../../../README.md)
+> Back to [Channels](../channels.md)
 
 # Google Chat
 
@@ -122,4 +122,4 @@ When neither is set, the bot responds to all messages in group spaces (permissiv
 - **Webhook-mode `webhook_url` is a bearer secret.** The URL contains a `?key=…` query parameter that grants posting rights to the space. Do not commit it to `config.json` in plain text — store the URL itself in the credential store and reference it via `_ref` patterns (the field name follows the convention used elsewhere; see your config for the exact key).
 - **Bot-mode signature verification runs inside the channel**, not in the shared gateway mux. The implementation parses the `Google-Signature` header, fetches Google's JWKS (with caching), verifies RSA-SHA256 over the request body, and rejects on mismatch. If you front the bot endpoint with a reverse proxy, **do not strip the `Google-Signature` header** — that breaks verification. The shared gateway mux does no HMAC/signature enforcement of its own; see `pkg/channels/README.md` §12.4.
 
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../../pkg/channels/README.md).
+For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).
