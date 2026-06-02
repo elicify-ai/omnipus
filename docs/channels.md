@@ -2,23 +2,28 @@
 
 > Back to [docs index](README.md)
 
-Talk to your Omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, LINE, WeCom, Weixin, Feishu, Slack, IRC, OneBot, or Google Chat. This is the one place for everything about channels: setting them up in the app, the per-platform credentials, and which agent answers each one.
+Talk to your Omnipus through Telegram, Discord, WhatsApp, Matrix, QQ, DingTalk, LINE, WeCom, Weixin, Feishu, Slack, IRC, OneBot, or Google Chat. **The web app is the primary way to set channels up.** Editing `config.json` by hand (shown in each [per-platform section](#per-platform-credentials)) is an optional alternative for headless or automated deployments.
 
-## 1. In the app
+## Configure a channel in the app
 
-The **Channels** page (sidebar → **Channels**) lists every channel as a card. For each one you can:
+Open **Channels** in the sidebar. Every channel is a card showing its transport and status, with **Configure** and **Enable / Disable** actions.
 
-- **Enable / Disable** it,
-- open **Configure** to enter its connection details (bot token, allow-list, transport options), and
-- pick its **Default agent** under **Routing** — the agent that answers messages arriving on that channel ("(Global default)" inherits the [global default agent](using-omnipus-ui.md#managing-agents)).
+![The Channels page — one card per channel with Configure and Enable/Disable](marketing/screenshots/channels-screen.png)
 
-See the walkthrough with screenshots: **[Using the web app → Channels](using-omnipus-ui.md#channels)**.
+Click **Configure** on the channel you want. The panel has two parts:
 
-For the full routing model — per-user / per-guild / per-team bindings and the default-agent fallback — see **[Routing](routing.md)**.
+1. **Connection** — paste the channel's credentials (e.g. a Telegram **Bot Token**) and any transport options (allow-list, proxy, custom API URL). The [per-platform sections below](#per-platform-credentials) tell you exactly where to get each value. Secrets are stored encrypted in `credentials.json`, never in plain config.
+2. **Routing → Default agent** — choose which agent answers messages on this channel. Leave it on **"(Global default)"** to use your [global default agent](using-omnipus-ui.md#managing-agents) (the ★ on the Agents page), or pick a specific agent to dedicate the channel to it.
 
-## 2. Per-platform setup
+![The Configure panel — Connection fields plus the Routing "Default agent" selector](marketing/screenshots/channel-configure-routing.png)
 
-The table below links each platform's page, which tells you where to obtain its credentials (bot tokens, app secrets, webhooks, etc.).
+Click **Save & Enable** to connect the channel and start routing — no file editing required.
+
+> Which agent answers is resolved most-specific-first: per-user → per-guild/team → this channel's default → the global default. For the full model see **[Routing](routing.md)**.
+
+## Per-platform credentials
+
+Each platform's section below tells you where to obtain the credentials you paste into **Configure** (bot tokens, app secrets, webhooks, etc.). Each section also shows the equivalent **`config.json`** snippet — the manual alternative for headless/automated setups.
 
 > **Note**: Channels that rely on HTTP callbacks share a single Gateway HTTP server (`gateway.host`:`gateway.port`, default `127.0.0.1:18790`). Socket/stream-based channels such as Feishu, DingTalk, and WeCom do not rely on the shared webhook server for inbound delivery.
 
