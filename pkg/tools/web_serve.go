@@ -33,6 +33,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
@@ -545,6 +546,10 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 	probeAddr := fmt.Sprintf("127.0.0.1:%d", exposePort)
 	probeConn, probeErr := net.DialTimeout("tcp", probeAddr, 50*time.Millisecond)
 	if probeErr != nil {
+		// The child spawned but never bound a reachable loopback port. Kill it so
+		// we don't leak an orphaned dev-server process (the reap goroutine logs
+		// its exit; Unregister here is idempotent with the reap's own Unregister).
+		_ = cmd.Process.Signal(syscall.SIGTERM)
 		t.devReg.Unregister(token)
 		return &ToolResult{
 			IsError: true,

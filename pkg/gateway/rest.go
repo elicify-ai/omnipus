@@ -269,11 +269,7 @@ func writeJSON(w http.ResponseWriter, code int, body any) {
 	buf, err := json.Marshal(body)
 	if err != nil {
 		slog.Error("rest: json encode failed", "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		if encErr := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: "internal server error"}); encErr != nil {
-			slog.Debug("rest: write fallback error response failed", "error", encErr)
-		}
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -295,6 +291,9 @@ func jsonOK(w http.ResponseWriter, body any) { writeJSON(w, http.StatusOK, body)
 // Content-Type and the response is served as text/plain (#96).
 func jsonCreated(w http.ResponseWriter, body any) { writeJSON(w, http.StatusCreated, body) }
 
+// jsonErr writes an ErrorResponse with the given status. Like writeJSON it sets
+// Content-Type before WriteHeader so error bodies are never served as text/plain
+// (#96). It does not call writeJSON to avoid recursion on a marshal failure.
 func jsonErr(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -1751,10 +1750,15 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// TriggerReload already rebuilt the instance with the new model.
 	if req.Model != nil && newModel != "" && !needsReload {
 		if _, err := a.agentLoop.ApplyAgentModel(id, newModel); err != nil {
-			slog.Warn("updateAgent: live model apply failed; model is persisted and will apply on next reload",
+			// Error, not Warn: a live-apply failure means the running agent keeps
+			// serving the OLD model despite a 200 response. The cause (bad model
+			// config, provider init / API-key failure, no candidates) typically
+			// recurs on the next reload too, so this is not reliably "applies
+			// later" — surface it loudly and in the response so it is not silent.
+			slog.Error("updateAgent: live model apply failed; running agent still on previous model",
 				"agent_id", id, "model", newModel, "error", err)
 			if reloadWarning == "" {
-				reloadWarning = fmt.Sprintf("model saved but could not be applied to the running agent: %v", err)
+				reloadWarning = fmt.Sprintf("model saved to config but could not be applied to the running agent (still serving the previous model): %v", err)
 			}
 		}
 	}
@@ -4716,11 +4720,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		slog.Warn("rest: upload: encode response failed", "error", err)
-	}
+	jsonCreated(w, resp)
 }
 
 // HandleServeUpload serves uploaded files for display in chat.

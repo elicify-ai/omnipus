@@ -298,11 +298,11 @@ func (g *TestGateway) Close() {
 	}
 
 	// #265: no caller-side drain hold-off needed. RunContext only returns after
-	// omnipusGracefulShutdown → agentLoop.Close(), which now synchronously
-	// drains in-flight session-end recap goroutines (recapCancel + recapWG.Wait)
-	// before returning. Session-store / cost / audit writes are therefore all
-	// complete by the time g.done fires, so t.TempDir's RemoveAll no longer
-	// races them.
+	// omnipusGracefulShutdown → agentLoop.Close(), which now drains in-flight
+	// session-end recap goroutines (recapWG.Wait) before tearing down the
+	// registry / stores / audit logger. Session-store / cost / audit writes are
+	// therefore all complete by the time g.done fires, so t.TempDir's RemoveAll
+	// no longer races them.
 
 	// Surface any boot error that occurred after the gateway became ready.
 	if p := g.bootErr.Load(); p != nil && *p != nil {

@@ -301,10 +301,20 @@ func (r *DevServerRegistry) ReservePort(agentID string, wantPort, lo, hi int32, 
 func (r *DevServerRegistry) ConfirmReservation(token string, pid int, command string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if e, ok := r.entries[token]; ok {
-		e.PID = pid
-		e.Command = command
+	e, ok := r.entries[token]
+	if !ok {
+		// The reservation is gone (released after a spawn failure, or evicted by
+		// the janitor between ReservePort and here). The child this pid belongs
+		// to is now untracked by the registry — surface it so a leaked dev-server
+		// process is at least visible. The caller (web_serve) only confirms a
+		// token it just reserved and has not released, so in practice this fires
+		// only on the rare expiry race.
+		slog.Warn("dev_servers: ConfirmReservation for unknown token; child PID is now untracked",
+			"pid", pid)
+		return
 	}
+	e.PID = pid
+	e.Command = command
 }
 
 // portAvailable reports whether a loopback TCP port can currently be bound. The

@@ -43,8 +43,17 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	al.cancelIdleTicker(sessionID)
 
 	// Track the recap goroutine so Close() can drain it before shutdown — its
-	// LAST_SESSION.md / retro writes must not outlive the gateway (#265).
+	// LAST_SESSION.md / retro writes must not outlive the gateway (#265). Gate
+	// the Add under recapMu against Close()'s drain: once shutdown has begun we
+	// skip scheduling (the session is re-recapped on next start by
+	// BootstrapRecapPass) rather than risk a WaitGroup Add-after-Wait.
+	al.recapMu.Lock()
+	if al.closing {
+		al.recapMu.Unlock()
+		return
+	}
 	al.recapWG.Add(1)
+	al.recapMu.Unlock()
 	go func() {
 		defer al.recapWG.Done()
 		al.runRecap(sessionID, trigger)

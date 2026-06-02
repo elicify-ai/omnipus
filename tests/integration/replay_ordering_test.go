@@ -447,7 +447,6 @@ func TestReplay_ToolCallPairsEmitted(t *testing.T) {
 //
 // Traces to: Bug-3 (assistant text lost when WS disconnects before LLM reply)
 func TestReplay_AssistantTextSurvivesDisconnect(t *testing.T) {
-
 	// Use a slow LLM (200 ms delay) so we can reliably disconnect before the
 	// server produces its first token.
 	const llmDelay = 200 * time.Millisecond

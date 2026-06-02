@@ -215,14 +215,17 @@ type AgentLoop struct {
 	// LoadOrStore ensures only one goroutine triggers recap per session.
 	claimedCloseSessions sync.Map // sessionID (string) → true
 
-	// recapWG tracks in-flight session-end recap goroutines (CloseSession →
-	// runRecap), which write LAST_SESSION.md / retro files in the background.
-	// Close() waits on it so those writes finish before shutdown returns —
-	// leaving them detached races the temp-dir cleanup in tests (#265). We do
-	// NOT cancel in-flight recaps: each recap LLM call already self-bounds at
-	// 60s, comfortably inside the 70s graceful-shutdown budget, so the wait is
-	// bounded while still letting the recap complete its full summary rather
-	// than degrading to the heuristic fallback.
+	// Session-end recap drain (#265). Recap goroutines (CloseSession → runRecap)
+	// write LAST_SESSION.md / retro files and emit audit entries in the
+	// background. Close() drains them (recapWG.Wait) BEFORE it tears down the
+	// registry, session stores, and audit logger they write through, so the
+	// recaps both complete and finish writing before shutdown returns — leaving
+	// them detached races the temp-dir cleanup in tests. recapMu+closing gate
+	// scheduling so a recap can never be Added after the drain begins (no
+	// WaitGroup Add-after-Wait). Recaps are not cancelled; each self-bounds at
+	// 60s and shares the 70s graceful-shutdown budget with the active-turn wait.
+	recapMu sync.Mutex
+	closing bool
 	recapWG sync.WaitGroup
 
 	// stopCancel is the CancelFunc created by Run to support Stop(). When
@@ -1790,6 +1793,16 @@ func (al *AgentLoop) WaitForActiveRequests() {
 
 // Close releases resources held by agent session stores. Call after Stop.
 func (al *AgentLoop) Close() {
+	// #265: stop scheduling new recaps, then drain the in-flight ones FIRST —
+	// while the registry, session stores, memory stores, and audit logger they
+	// write through are all still live (the teardown below closes them). A recap
+	// caught mid-flight completes its summary and finishes writing before we
+	// proceed, so nothing writes after Close() returns to race temp-dir cleanup.
+	al.recapMu.Lock()
+	al.closing = true
+	al.recapMu.Unlock()
+	al.recapWG.Wait()
+
 	// Cancel all active session workers and wait for them to drain (5 s budget).
 	// stopSessionWorkers is idempotent — safe to call here even if Run() has
 	// already called it on context-cancellation, because workers cancel their
@@ -1835,19 +1848,6 @@ func (al *AgentLoop) Close() {
 		al.idleTickers.Delete(k)
 		return true
 	})
-
-	// #265: wait for in-flight session-end recap goroutines to finish before
-	// shutdown returns. They write LAST_SESSION.md / retro files and emit audit
-	// entries in the background; if Close() returns while one is still running,
-	// the writes race the process/temp-dir teardown (the source of the
-	// tests/integration cleanup flake). We let each recap COMPLETE rather than
-	// cancelling it — its LLM call self-bounds at 60s, inside the 70s graceful
-	// shutdown budget, so the wait is bounded while the recap still produces its
-	// full summary (cancelling would degrade it to the heuristic fallback and,
-	// because that writes a retro, BootstrapRecapPass would then skip re-recapping
-	// it on next start). Waited here while the audit logger is still open (recap
-	// emits audit entries) and before the cost/audit close below.
-	al.recapWG.Wait()
 
 	// SEC-26: Persist the accumulated daily cost so the next startup can
 	// restore it via LoadIntoRegistry, preventing double-counting on restarts.
