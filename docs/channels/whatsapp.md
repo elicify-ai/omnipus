@@ -1,10 +1,10 @@
-> Back to [README](../../../README.md)
+> Back to [Channels](../channels.md)
 
 # WhatsApp (bridge mode)
 
 This document covers **bridge mode** — the transport used when `use_native: false` (the default). Omnipus connects to an external WhatsApp bridge process over a persistent WebSocket connection (`BridgeURL`). The bridge is responsible for maintaining the WhatsApp session; Omnipus only sends and receives JSON-encoded message frames over that WebSocket.
 
-For the in-process whatsmeow mode, see [docs/channels/whatsapp_native/README.md](../whatsapp_native/README.md). Set `use_native: true` to select that mode instead.
+For the in-process whatsmeow mode, see [docs/channels/whatsapp_native.md](whatsapp_native.md). Set `use_native: true` to select that mode instead.
 
 ## Configuration
 
@@ -54,4 +54,4 @@ For the in-process whatsmeow mode, see [docs/channels/whatsapp_native/README.md]
 - **Message length.** Outbound messages are capped at 65 536 characters by the base channel layer. WhatsApp itself imposes its own limits on the bridge side.
 - **Group chat trigger.** Group trigger and `allow_from` filtering applies to inbound messages before they reach the agent. The bridge must populate the `chat` field with the group JID and `from` with the sender JID for group routing to work correctly.
 
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../../pkg/channels/README.md).
+For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).

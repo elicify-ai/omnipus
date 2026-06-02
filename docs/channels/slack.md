@@ -1,4 +1,4 @@
-> Back to [README](../../../README.md)
+> Back to [Channels](../channels.md)
 
 # Slack
 
@@ -66,4 +66,4 @@ Omnipus connects to Slack using [Socket Mode](https://api.slack.com/apis/socket-
 - **Message length.** Slack caps individual messages at 40 000 characters; longer responses are automatically split.
 - **Group chats.** Use `group_trigger.mention_only: true` so the bot only responds in channels when directly @-mentioned.
 
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../../pkg/channels/README.md).
+For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).

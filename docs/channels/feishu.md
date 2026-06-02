@@ -1,4 +1,4 @@
-> Back to [README](../../../README.md)
+> Back to [Channels](../channels.md)
 
 # Feishu
 
@@ -65,4 +65,4 @@ Feishu (international name: Lark) is a ByteDance enterprise collaboration platfo
 
 **Token cache invalidation.** The channel detects Feishu error code `99991663` (invalid tenant token) and invalidates the SDK token cache immediately, avoiding the default ~2-hour stale-token window.
 
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../../pkg/channels/README.md).
+For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).

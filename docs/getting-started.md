@@ -122,7 +122,7 @@ When she's done, it shows up in your roster alongside the others.
 
 ## 8. Where to go next
 
-**Connect a chat channel** (talk to your agents from Telegram, Discord, and more): **[chat-apps.md](chat-apps.md)**
+**Connect a chat channel** (talk to your agents from Telegram, Discord, and more): **[channels.md](channels.md)**
 
 **Prefer the terminal?** **[Using the CLI](using-omnipus-cli.md)**
 

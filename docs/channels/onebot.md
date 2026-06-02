@@ -1,4 +1,4 @@
-> Back to [README](../../../README.md)
+> Back to [Channels](../channels.md)
 
 # OneBot
 
@@ -68,4 +68,4 @@ Note: `group_trigger_prefix` (legacy flat array) is still accepted and migrated 
 - Duplicate message suppression (ring buffer, last 1024 message IDs)
 - Automatic reconnect with configurable interval
 
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../../pkg/channels/README.md).
+For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).
