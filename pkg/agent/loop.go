@@ -272,6 +272,13 @@ type processOptions struct {
 	SkipInitialSteeringPoll bool                  // If true, skip the steering poll at loop start (used by Continue)
 	TranscriptSessionID     string                // Session ID for transcript tool call recording (empty = disabled)
 	TranscriptStore         *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
+
+	// AutoDenyAsk, when true, makes every `ask`-policy tool call auto-DENIED
+	// without ever requesting human approval (issue #264, FR-009). Scheduled
+	// runs are headless — there is no operator to approve, so blocking on an
+	// approval prompt would stall the run forever. Only ProcessScheduled sets
+	// this; interactive paths leave it false so `ask` keeps prompting.
+	AutoDenyAsk bool
 }
 
 type continuationTarget struct {
@@ -2949,6 +2956,85 @@ func (al *AgentLoop) ProcessHeartbeat(
 	})
 }
 
+// ProcessScheduled runs a fired schedule's message as ownerAgentID against the
+// concrete pre-created sessionID (issue #264, W-1). It is the dedicated headless
+// entry point for the cron → agent fire path and deliberately differs from the
+// human message path:
+//
+//   - It pins ownerAgentID directly via runAgentLoop — it does NOT consult
+//     routing or the sessionActiveAgent handoff map, so a human switching agents
+//     in this session cannot hijack the scheduled run, and a missing/disabled
+//     owner is a hard error (never a default-agent fallback, the core #264 bug).
+//   - It passes the concrete sessionID as TranscriptSessionID so the turn
+//     registers under it (GetActiveTurnHookForSession matches by
+//     transcriptSessionID) and RequestCancel(CancelScope{SessionID}) can abort
+//     it on a caller-imposed deadline. The session key is the per-owner
+//     "agent:<owner>:session:<id>" form, collision-free across isolated runs.
+//   - It sets AutoDenyAsk so any `ask`-policy tool call is denied without
+//     blocking for approval (FR-009) — no operator is present.
+//
+// The caller (the Wave-2 gateway runner) resolves the owner + picks the session
+// per session_mode and supplies a concrete sessionID; it imposes the deadline on
+// ctx and calls RequestCancel on timeout. ProcessScheduled only guarantees
+// owner-pinning, cancellability, and prompt return.
+//
+// Returns the agent's reply and a non-nil error on run failure. An aborted
+// (canceled/deadline) run returns a context-derived error promptly.
+func (al *AgentLoop) ProcessScheduled(
+	ctx context.Context,
+	ownerAgentID, sessionID, content, channel, chatID string,
+) (string, error) {
+	if ownerAgentID == "" {
+		return "", fmt.Errorf("owner unavailable: empty agent id")
+	}
+	if sessionID == "" {
+		return "", fmt.Errorf("scheduled run requires a concrete session id")
+	}
+
+	if err := al.ensureHooksInitialized(ctx); err != nil {
+		return "", err
+	}
+	if err := al.ensureMCPInitialized(ctx); err != nil {
+		return "", err
+	}
+
+	// Owner pinning (FR-001): a missing or disabled agent is not registered,
+	// so GetAgent returns ok=false. NEVER fall back to GetDefaultAgent.
+	agent, ok := al.GetRegistry().GetAgent(ownerAgentID)
+	if !ok || agent == nil {
+		return "", fmt.Errorf("owner unavailable: agent %q not found or disabled", ownerAgentID)
+	}
+
+	// Per-owner session key (collision-free across isolated runs). Built here
+	// rather than via agentSessionKey because we bypass resolveMessageRoute.
+	sessionKey := fmt.Sprintf("agent:%s:session:%s", ownerAgentID, sessionID)
+
+	// Resolve the transcript store for the concrete session so tool calls are
+	// recorded and the turn registers under transcriptSessionID == sessionID
+	// (which is what RequestCancel(CancelScope{SessionID}) matches against).
+	transcriptStore := al.ResolveSessionStore(sessionID)
+	if transcriptStore == nil {
+		logger.WarnCF(
+			"agent",
+			"scheduled run: session store not found for session id — tool calls will not be recorded",
+			map[string]any{"session_id": sessionID, "owner": ownerAgentID},
+		)
+	}
+
+	return al.runAgentLoop(ctx, agent, processOptions{
+		SessionKey:          sessionKey,
+		Channel:             channel,
+		ChatID:              chatID,
+		UserMessage:         content,
+		DefaultResponse:     defaultResponse,
+		EnableSummary:       true,
+		SendResponse:        false,
+		TranscriptSessionID: sessionID,
+		TranscriptStore:     transcriptStore,
+		AutoDenyAsk:         true, // FR-009: headless — auto-deny ask-policy tools
+	})
+}
+
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, *AgentInstance, error) {
 	// Add message preview to log (show full content for error messages)
 	var logContent string
@@ -4727,6 +4813,37 @@ turnLoop:
 				continue
 			}
 			if toctouPolicy == "ask" {
+				// Headless auto-deny (issue #264, FR-009): a scheduled run has no
+				// operator to approve, so any `ask`-policy tool is denied without
+				// ever issuing an approval request — the run must never stall.
+				if ts.opts.AutoDenyAsk {
+					const denialReason = "auto-denied: ask-policy tool not allowed in a headless scheduled run"
+					denyMsg := fmt.Sprintf(`{"error":"permission_denied","message":"User denied tool execution.","tool":%q,"reason":%q}`, toolName, denialReason)
+					al.emitPolicyDenyAudit(ts, toolName, "ask", denialReason)
+					deniedMsg := providers.Message{
+						Role:       "tool",
+						Content:    denyMsg,
+						ToolCallID: tc.ID,
+					}
+					messages = append(messages, deniedMsg)
+					if !ts.opts.NoHistory {
+						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
+						ts.recordPersistedMessage(deniedMsg)
+					}
+					al.emitEvent(
+						EventKindToolExecSkipped,
+						ts.eventMeta("runTurn", "turn.tool.skipped"),
+						ToolExecSkippedPayload{
+							Tool:   toolName,
+							Reason: fmt.Sprintf("permission_denied (ask auto-denied: %s)", denialReason),
+						},
+					)
+					if shouldAbort, _ := al.recordSyntheticDeny(ts); shouldAbort {
+						turnStatus = TurnEndStatusAborted
+						return al.abortTurn(ts)
+					}
+					continue
+				}
 				// ask-policy: pause and request human approval (FR-011).
 				approver := al.loadToolApprover()
 				approved, denialReason := approver.RequestApproval(turnCtx, PolicyApprovalReq{
