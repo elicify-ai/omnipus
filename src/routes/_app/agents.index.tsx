@@ -1,17 +1,32 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Robot } from '@phosphor-icons/react'
 import { AgentCard } from '@/components/agents/AgentCard'
 import { CreateAgentModal } from '@/components/agents/CreateAgentModal'
 import { Button } from '@/components/ui/button'
 import { useUiStore } from '@/store/ui'
-import { fetchAgents } from '@/lib/api'
+import { fetchAgents, updateAgent, isApiError } from '@/lib/api'
 
 function AgentsScreen() {
-  const { openCreateAgentModal } = useUiStore()
+  const { openCreateAgentModal, addToast } = useUiStore()
+  const queryClient = useQueryClient()
+
   const { data: agents = [], isLoading, isError, refetch } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
+  })
+
+  const { mutate: doSetDefault } = useMutation({
+    mutationFn: (agentId: string) => updateAgent(agentId, { default: true }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+      addToast({ message: 'Default agent updated', variant: 'success' })
+    },
+    onError: (err: unknown) =>
+      addToast({
+        message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to set default',
+        variant: 'error',
+      }),
   })
 
   return (
@@ -69,7 +84,11 @@ function AgentsScreen() {
           }`}
         >
           {agents.map((agent) => (
-            <AgentCard key={agent.id} agent={agent} />
+            <AgentCard
+              key={agent.id}
+              agent={agent}
+              onSetDefault={() => doSetDefault(agent.id)}
+            />
           ))}
         </div>
       )}

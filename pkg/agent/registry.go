@@ -46,9 +46,13 @@ func NewAgentRegistry(
 	// Always register the default/system agent. This handles messages that
 	// don't target a specific custom agent (e.g., system agent in webchat,
 	// unrouted channel messages). Uses the default workspace.
+	// Note: Default is intentionally false here — this sentinel is found via the
+	// DefaultAgentID fallback in GetDefaultAgent (priority 3), not via the
+	// routing-default flag (priority 1). Setting it true would shadow any
+	// per-agent Default=true flag (e.g. Mia's) and break F3.
 	defaultAgent := &config.AgentConfig{
 		ID:      DefaultAgentID,
-		Default: true,
+		Default: false,
 	}
 	defaultInstance := NewAgentInstance(defaultAgent, &cfg.Agents.Defaults, cfg, provider)
 	// The default "main" agent is a core agent (it runs system.* tools seeded by the registry).
@@ -186,23 +190,47 @@ func (r *AgentRegistry) Close() {
 }
 
 // GetDefaultAgent returns the default agent instance.
-// If a defaultAgentOverride is set (from config.Agents.Defaults.DefaultAgentID),
-// that agent is returned when it exists. Otherwise "main" is preferred; if absent,
-// the agent with the lexicographically first ID is returned for deterministic
-// selection regardless of map iteration order (M10).
+//
+// Resolution order (canonical — matches channel routing's resolveDefaultAgentID):
+//  1. An agent whose config has Default==true (the per-agent routing-default
+//     flag set by SeedConfig / the Agents-screen "star"). Deterministic: if
+//     multiple agents somehow carry Default==true (operator error — F11 repairs
+//     this at boot), the one with the lexicographically smallest ID wins.
+//  2. The configurable override from config.Agents.Defaults.DefaultAgentID,
+//     when the named agent exists in the registry.
+//  3. The built-in "main" sentinel agent.
+//  4. The lexicographically first registered agent (deterministic fallback, M10).
 func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	// Check configurable override first.
+
+	// Priority 1: agent explicitly marked as the routing default.
+	// Collect all matching IDs and sort for deterministic selection when
+	// operator misconfiguration leaves multiple agents with Default==true.
+	var defaultIDs []string
+	for id, ag := range r.agents {
+		if ag.IsRoutingDefault {
+			defaultIDs = append(defaultIDs, id)
+		}
+	}
+	if len(defaultIDs) > 0 {
+		sort.Strings(defaultIDs)
+		return r.agents[defaultIDs[0]]
+	}
+
+	// Priority 2: explicit override from config.Agents.Defaults.DefaultAgentID.
 	if r.defaultAgentOverride != "" {
 		if agent, ok := r.agents[r.defaultAgentOverride]; ok {
 			return agent
 		}
 	}
+
+	// Priority 3: the "main" built-in sentinel.
 	if agent, ok := r.agents[DefaultAgentID]; ok {
 		return agent
 	}
-	// Collect and sort IDs so we always pick the same agent.
+
+	// Priority 4: lexicographically first registered agent (M10).
 	ids := make([]string, 0, len(r.agents))
 	for id := range r.agents {
 		ids = append(ids, id)

@@ -38,6 +38,7 @@ import { z } from 'zod'
 //     (different field names: uptime_seconds vs uptime); cannot validate without false negatives.
 
 import {
+  ChannelRouting as ChannelRoutingSchema,
   LoginResponse as LoginResponseSchema,
   ProbeProviderResponse as ProbeProviderResponseSchema,
   Agent as AgentSchema,
@@ -251,6 +252,7 @@ import type {
   McpServerToolsResponse,
   AgentUpdateRequest,
   AgentCreateRequest,
+  ChannelRouting,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -332,6 +334,7 @@ export type {
   McpServerToolsResponse,
   AgentUpdateRequest,
   AgentCreateRequest,
+  ChannelRouting,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -1239,6 +1242,25 @@ export function testChannel(id: string): Promise<ChannelTestResponse> {
   return request<ChannelTestResponse>(`/channels/${encodeURIComponent(id)}/test`, {
     method: 'POST',
   }, ChannelTestResponseSchema as ZodType<ChannelTestResponse>)
+}
+
+// ChannelRouting — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/ChannelRouting.yaml.
+
+export function getChannelRouting(id: string): Promise<ChannelRouting> {
+  return request<ChannelRouting>(
+    `/channels/${encodeURIComponent(id)}/routing`,
+    undefined,
+    ChannelRoutingSchema as ZodType<ChannelRouting>,
+  )
+}
+
+export function setChannelRouting(id: string, body: ChannelRouting): Promise<ChannelRouting> {
+  return request<ChannelRouting>(
+    `/channels/${encodeURIComponent(id)}/routing`,
+    { method: 'PUT', body: JSON.stringify(body) },
+    ChannelRoutingSchema as ZodType<ChannelRouting>,
+  )
 }
 
 // ── Skills ────────────────────────────────────────────────────────────────────

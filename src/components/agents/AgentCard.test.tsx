@@ -99,3 +99,61 @@ describe('AgentCard — navigation (test #12)', () => {
     })
   })
 })
+
+// ── sprint/258 default-star tests ─────────────────────────────────────────────
+// Traces to: sprint/258-jun-2026 — AgentCard default star + "Set as default" button.
+
+describe('AgentCard — default star (sprint/258)', () => {
+  it('renders a filled star icon when agent.default is true', () => {
+    // Content test: the star aria-label is present when default=true.
+    render(<AgentCard agent={makeAgent({ default: true })} />)
+    // AgentCard renders <Star aria-label="Default agent"> when agent.default is true.
+    expect(screen.getByLabelText('Default agent')).toBeInTheDocument()
+  })
+
+  it('does NOT render the default star when agent.default is false', () => {
+    // Differentiation test: absence of star when not default.
+    render(<AgentCard agent={makeAgent({ default: false })} />)
+    expect(screen.queryByLabelText('Default agent')).not.toBeInTheDocument()
+  })
+
+  it('does NOT render the default star when agent.default is undefined', () => {
+    // Edge case: missing default field behaves same as false.
+    render(<AgentCard agent={makeAgent({ default: undefined })} />)
+    expect(screen.queryByLabelText('Default agent')).not.toBeInTheDocument()
+  })
+
+  it('renders "Set as default" button when agent is not default and onSetDefault is provided', () => {
+    // Content test: the "Set as default" button appears on non-default agents when callback provided.
+    const onSetDefault = vi.fn()
+    render(<AgentCard agent={makeAgent({ default: false })} onSetDefault={onSetDefault} />)
+    expect(
+      screen.getByRole('button', { name: /set general assistant as default agent/i }),
+    ).toBeInTheDocument()
+  })
+
+  it('does NOT render "Set as default" button when agent.default is true', () => {
+    // Differentiation test: already-default agent does not show the "Set as default" button.
+    const onSetDefault = vi.fn()
+    render(<AgentCard agent={makeAgent({ default: true })} onSetDefault={onSetDefault} />)
+    expect(
+      screen.queryByRole('button', { name: /set .* as default/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('calls onSetDefault callback when "Set as default" button is clicked', () => {
+    // Content test: clicking the button invokes the provided callback.
+    const onSetDefault = vi.fn()
+    render(<AgentCard agent={makeAgent({ default: false, id: 'jim', name: 'Jim' })} onSetDefault={onSetDefault} />)
+    fireEvent.click(screen.getByRole('button', { name: /set Jim as default agent/i }))
+    expect(onSetDefault).toHaveBeenCalledOnce()
+  })
+
+  it('does NOT render "Set as default" button when onSetDefault is not provided', () => {
+    // Edge case: no callback → no button (prevents orphan UI element).
+    render(<AgentCard agent={makeAgent({ default: false })} />)
+    expect(
+      screen.queryByRole('button', { name: /set .* as default/i }),
+    ).not.toBeInTheDocument()
+  })
+})

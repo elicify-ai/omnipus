@@ -28,6 +28,7 @@
 
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
+import { assistantMessages } from './fixtures/selectors'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
@@ -129,129 +130,85 @@ test(
 // ── (b) Failed send → error bubble + Retry ────────────────────────────────────
 
 test(
-  '(b) failed send shows user bubble with status:error and reachable Retry button',
+  '(b) one-shot send failure marks the message status:error and Retry resends it on the live socket',
   async ({ page }) => {
-    test.setTimeout(60_000)
+    // Two real-LLM round-trips (the first establishes the session, the retried
+    // second one recovers), so allow a generous budget under suite load.
+    test.setTimeout(150_000)
 
-    // Step 1: Install the failing WebSocket stub via addInitScript so it runs
-    // before ANY page JavaScript — the real WS constructor is never reached,
-    // making the failure deterministic regardless of timing.
-    //
-    // The stub accepts a new connection (readyState=OPEN) and lets the `auth`
-    // handshake frame succeed — so the SPA reaches the connected state and enables
-    // the input — but throws on the actual `message` send. That is the realistic
-    // #253 scenario (connected, then a send fails) and exercises the WsConnection
-    // .send() try/catch that converts the throw into a failed send → no-loss
-    // recovery (kept user bubble, status:'error', Retry). We store the real
-    // constructor on window.__real_WebSocket so the restore step can swap it back.
-    await page.addInitScript(() => {
-      const realWebSocket = window.WebSocket
-      ;(window as unknown as Record<string, unknown>).__real_WebSocket = realWebSocket
+    // Distinctive marker carried in the 2nd message so the wrapper can fail
+    // EXACTLY that one send() and nothing else (auth, ping, msg #1, the retry).
+    const FAIL_MARKER = 'ONESHOT_SEND_FAILURE_TRIGGER'
 
-      class FailSendWebSocket extends EventTarget {
-        static CONNECTING = 0
-        static OPEN = 1
-        static CLOSING = 2
-        static CLOSED = 3
-
-        readyState = 1 // OPEN — the SPA checks readyState before calling send()
-        url: string
-        protocol = ''
-        extensions = ''
-        bufferedAmount = 0
-        binaryType: BinaryType = 'blob'
-
-        // onXxx properties are used by the SPA connection layer
-        onopen: ((ev: Event) => void) | null = null
-        onclose: ((ev: CloseEvent) => void) | null = null
-        onerror: ((ev: Event) => void) | null = null
-        onmessage: ((ev: MessageEvent) => void) | null = null
-
-        constructor(url: string) {
-          super()
-          this.url = url
-          // Fire onopen asynchronously so the SPA marks the connection live.
-          // Without this the SPA would sit in CONNECTING state and never attempt
-          // to send — we want it to believe it's connected so send() is called.
-          Promise.resolve().then(() => {
-            const ev = new Event('open')
-            if (this.onopen) this.onopen(ev)
-            this.dispatchEvent(ev)
-          })
-        }
-
-        send(data?: string): void {
-          // Let the auth handshake succeed so the SPA marks the connection live
-          // (onopen → auth → onConnected → input enabled). Only the message send
-          // fails — the realistic #253 case. The SPA's WsConnection.send() catches
-          // this throw, returns false, and the store marks the user message
-          // status:'error' with a reachable Retry.
-          try {
-            if (data && (JSON.parse(data) as { type?: string }).type === 'auth') return
-          } catch {
-            // non-JSON payload — fall through to the throw below
+    // Realistic #253 model: WRAP the real WebSocket rather than replacing it. The
+    // socket genuinely connects to the gateway and a real session is created — we
+    // only make ONE later send() throw (a transient hiccup on an OPEN socket).
+    // This exercises WsConnection.send()'s try/catch → failed-send recovery
+    // (kept bubble, status:'error', Retry) without the artificial "first send with
+    // no session → reconnect → empty replay" state that a fully-faked socket
+    // produced. The one-shot is armed via window.__failOnceMatch right before the
+    // 2nd send and consumes itself on the throw, so Retry resends successfully on
+    // the same healthy socket.
+    await page.addInitScript((marker: string) => {
+      const RealWebSocket = window.WebSocket
+      // Disarmed until the test arms it right before the 2nd message.
+      ;(window as unknown as Record<string, unknown>).__failOnceMatch = null
+      void marker
+      class OneShotFailWebSocket extends RealWebSocket {
+        send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
+          const w = window as unknown as { __failOnceMatch?: string | null }
+          if (w.__failOnceMatch && typeof data === 'string' && data.includes(w.__failOnceMatch)) {
+            w.__failOnceMatch = null // one-shot — consume so the Retry resend passes
+            throw new Error('stubbed one-shot OPEN-socket send failure (#253)')
           }
-          throw new Error('WebSocket send failed (stubbed for test)')
-        }
-
-        close(): void {
-          this.readyState = 3
-          const ev = new CloseEvent('close', { wasClean: true, code: 1000 })
-          if (this.onclose) this.onclose(ev)
-          this.dispatchEvent(ev)
+          super.send(data)
         }
       }
+      window.WebSocket = OneShotFailWebSocket as unknown as typeof WebSocket
+    }, FAIL_MARKER)
 
-      window.WebSocket = FailSendWebSocket as unknown as typeof WebSocket
-    })
-
-    // Step 2: Navigate — the stub is already in place, so the WS the SPA opens
-    // will be the FailSendWebSocket from the moment the page loads.
     await page.goto(`${BASE_URL}/`)
     await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
 
     const chatInput = page.locator('[data-testid="chat-input"]').first()
     await expect(chatInput).toBeEnabled({ timeout: 15_000 })
 
-    // Step 3: Send a message — the stub's send() throws, so the SPA MUST mark
-    // the user message status:'error'. No conditional escape hatch.
-    await chatInput.fill('this message should fail to send')
+    // Step 1: Send a normal first message so a REAL session is established (the
+    // gateway mints a session_id, history exists, the socket is live). Wait for
+    // the turn to finish — assistant reply rendered AND the composer re-enabled —
+    // before inducing the failure on the second send.
+    await chatInput.fill('Reply with just the single word: ready.')
+    await chatInput.press('Enter')
+    await expect(page.locator('[data-message-role="assistant"]').first()).toBeVisible({
+      timeout: 90_000,
+    })
+    await expect(chatInput).toBeEnabled({ timeout: 90_000 })
+
+    // Step 2: Arm the one-shot, then send the second message. Its send() throws
+    // exactly once → WsConnection.send() catches the throw and reports the send as
+    // failed → the store keeps the user bubble and marks it status:'error'.
+    await page.evaluate((marker: string) => {
+      ;(window as unknown as Record<string, unknown>).__failOnceMatch = marker
+    }, FAIL_MARKER)
+    await chatInput.fill(`second message ${FAIL_MARKER}`)
     await chatInput.press('Enter')
 
-    // Step 4: UNCONDITIONAL assertions — the error state MUST appear.
-    // If this fails, the #253 send-failure handling is broken.
-    const userMsg = page.locator('[data-message-role="user"][data-status="error"]')
-    await expect(userMsg).toBeVisible({ timeout: 10_000 })
-
+    // Step 3: The failed message MUST surface as an error bubble with a Retry.
+    // If this fails, the #253 OPEN-socket send-failure handling is broken.
+    const erroredMsg = page.locator('[data-message-role="user"][data-status="error"]')
+    await expect(erroredMsg).toBeVisible({ timeout: 15_000 })
     const retryBtn = page.locator('[data-testid="user-message-retry"]').first()
     await expect(retryBtn).toBeVisible({ timeout: 5_000 })
 
-    // Step 5: Restore the real WebSocket so the Retry click can reconnect and
-    // resend successfully, proving the recovery path also works.
-    await page.evaluate(() => {
-      const w = window as unknown as {
-        __real_WebSocket?: typeof WebSocket
-        WebSocket: typeof WebSocket
-      }
-      if (w.__real_WebSocket) {
-        w.WebSocket = w.__real_WebSocket
-        delete w.__real_WebSocket
-      }
-    })
-
-    // Step 6: Click Retry and assert the user message error state is cleared
-    // (the message was resent). We wait for the error attribute to disappear or
-    // for the message to be replaced by a non-error bubble.
+    // Step 4: Click Retry. handleRetry() (#253(c)) RESENDS the original content as
+    // a new message — it intentionally leaves the old errored bubble in place, so
+    // recovery is NOT proven by the error bubble vanishing. The one-shot is already
+    // consumed, so the resend goes out on the SAME healthy, still-OPEN socket within
+    // the existing session and SUCCEEDS — proven by a second COMPLETED assistant
+    // reply arriving (msg #1 → 1 reply, resent #2 → 2). No reconnect, no
+    // missing-session replay hang. The composer also stays usable throughout.
     await retryBtn.click()
-
-    // After Retry the send goes out on the now-real WS. The user message bubble
-    // should either: (a) lose data-status="error", or (b) a new user message
-    // without status:error appears. Either outcome proves Retry fired.
-    await expect(page.locator('[data-testid="user-message-retry"]').first()).not.toBeVisible({
-      timeout: 10_000,
-    })
-
-    // The input must still be reachable so the user can continue chatting.
-    await expect(chatInput).toBeEnabled({ timeout: 10_000 })
+    await expect(assistantMessages(page)).toHaveCount(2, { timeout: 90_000 })
+    await expect(chatInput).toBeEnabled({ timeout: 90_000 })
   },
 )

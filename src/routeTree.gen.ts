@@ -18,6 +18,7 @@ import { Route as AppSkillsRouteImport } from './routes/_app/skills'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppPoliciesRouteImport } from './routes/_app/policies'
 import { Route as AppCommandCenterRouteImport } from './routes/_app/command-center'
+import { Route as AppChannelsRouteImport } from './routes/_app/channels'
 import { Route as AppAgentsRouteImport } from './routes/_app/agents'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents.index'
 import { Route as AppSessionsSessionIdRouteImport } from './routes/_app/sessions.$sessionId'
@@ -67,6 +68,11 @@ const AppCommandCenterRoute = AppCommandCenterRouteImport.update({
   path: '/command-center',
   getParentRoute: () => AppRoute,
 } as any)
+const AppChannelsRoute = AppChannelsRouteImport.update({
+  id: '/channels',
+  path: '/channels',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAgentsRoute = AppAgentsRouteImport.update({
   id: '/agents',
   path: '/agents',
@@ -94,6 +100,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
   '/agents': typeof AppAgentsRouteWithChildren
+  '/channels': typeof AppChannelsRoute
   '/command-center': typeof AppCommandCenterRoute
   '/policies': typeof AppPoliciesRoute
   '/settings': typeof AppSettingsRoute
@@ -106,6 +113,7 @@ export interface FileRoutesByTo {
   '/landing': typeof LandingRoute
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
+  '/channels': typeof AppChannelsRoute
   '/command-center': typeof AppCommandCenterRoute
   '/policies': typeof AppPoliciesRoute
   '/settings': typeof AppSettingsRoute
@@ -122,6 +130,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/onboarding': typeof OnboardingRoute
   '/_app/agents': typeof AppAgentsRouteWithChildren
+  '/_app/channels': typeof AppChannelsRoute
   '/_app/command-center': typeof AppCommandCenterRoute
   '/_app/policies': typeof AppPoliciesRoute
   '/_app/settings': typeof AppSettingsRoute
@@ -139,6 +148,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/onboarding'
     | '/agents'
+    | '/channels'
     | '/command-center'
     | '/policies'
     | '/settings'
@@ -151,6 +161,7 @@ export interface FileRouteTypes {
     | '/landing'
     | '/login'
     | '/onboarding'
+    | '/channels'
     | '/command-center'
     | '/policies'
     | '/settings'
@@ -166,6 +177,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/onboarding'
     | '/_app/agents'
+    | '/_app/channels'
     | '/_app/command-center'
     | '/_app/policies'
     | '/_app/settings'
@@ -248,6 +260,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppCommandCenterRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/channels': {
+      id: '/_app/channels'
+      path: '/channels'
+      fullPath: '/channels'
+      preLoaderRoute: typeof AppChannelsRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/agents': {
       id: '/_app/agents'
       path: '/agents'
@@ -295,6 +314,7 @@ const AppAgentsRouteWithChildren = AppAgentsRoute._addFileChildren(
 
 interface AppRouteChildren {
   AppAgentsRoute: typeof AppAgentsRouteWithChildren
+  AppChannelsRoute: typeof AppChannelsRoute
   AppCommandCenterRoute: typeof AppCommandCenterRoute
   AppPoliciesRoute: typeof AppPoliciesRoute
   AppSettingsRoute: typeof AppSettingsRoute
@@ -305,6 +325,7 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppAgentsRoute: AppAgentsRouteWithChildren,
+  AppChannelsRoute: AppChannelsRoute,
   AppCommandCenterRoute: AppCommandCenterRoute,
   AppPoliciesRoute: AppPoliciesRoute,
   AppSettingsRoute: AppSettingsRoute,

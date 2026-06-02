@@ -141,7 +141,9 @@ function readJsonl<T>(filePath: string): T[] {
 /**
  * Switch the agent picker to Jim (who generates long inline prose) and send
  * a prompt that reliably produces multi-second streaming output.
- * Returns when streaming has started (stop button is visible).
+ * Returns once a message is ACTIVELY streaming (stop button visible AND the live
+ * streaming-message anchor is present) — so a subsequent cancel always has an
+ * incomplete message to mark interrupted.
  */
 async function triggerLongStreamingTurn(page: Page): Promise<void> {
   const input = chatInput(page)
@@ -154,14 +156,39 @@ async function triggerLongStreamingTurn(page: Page): Promise<void> {
   await page.getByRole('menuitem', { name: /Jim/i }).click()
   await expect(picker).toContainText(/Jim/i, { timeout: 5_000 })
 
+  // Forbid tools and demand inline prose: on a bare "write 500 words" prompt,
+  // glm-5v-turbo intermittently shortcuts to the write_file TOOL (Jim has it on
+  // default_policy:allow), which ends the turn instantly with zero inline stream
+  // and no cancellable window. Forcing long inline prose keeps stop-btn live for
+  // several seconds so Stop/Escape/cancel land mid-stream.
   await input.fill(
-    'Write exactly 500 words about renewable energy. Start now and continue for the full 500 words.',
+    'Do not use any tools. Reply only with inline prose, no files. Write a detailed ' +
+      '700-word essay about renewable energy, beginning immediately and continuing ' +
+      'without stopping until you reach 700 words.',
   )
   await input.press('Enter')
 
-  // Wait for the stop button to appear — confirms streaming has started.
+  // Wait for the stop button (request in-flight)…
   const stopBtn = page.locator('[data-testid="stop-btn"]')
   await expect(stopBtn).toBeVisible({ timeout: 30_000 })
+
+  // …AND for the assistant to have actually STREAMED real text. The stop button
+  // (and even the streaming-message placeholder) appear BEFORE the first token; a
+  // cancel fired in that gap aborts the turn with zero tokens and removes the empty
+  // message, so nothing is ever marked "(interrupted)" (observed T23 flake: token
+  // count 0, empty thread). Waiting until the live streaming message has accumulated
+  // a substantial chunk of text (well beyond the short agent label) guarantees there
+  // is a real, incomplete message to interrupt. The 700-word prompt ensures the
+  // stream keeps going for seconds afterwards, so the cancel lands comfortably
+  // mid-stream.
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('[data-testid="streaming-message-anchor"]')
+      const text = (el?.textContent ?? '').replace(/\s+/g, ' ').trim()
+      return text.length > 80
+    },
+    { timeout: 30_000 },
+  )
 }
 
 // ── T21: Web stop button cancels turn within 5 seconds (US-1.1, SC-1) ─────────
@@ -263,17 +290,32 @@ test(
 
     await triggerLongStreamingTurn(page)
 
-    // MessageInput.tsx handles Escape on the textarea aria-label="Message input"
-    // when isStreaming === true. The textarea is disabled during streaming but
-    // keyboard events still fire. Press Escape on the page directly.
+    // triggerLongStreamingTurn only returns once stop-btn is visible, i.e.
+    // isStreaming is already true and ChatScreen's document-level Escape handler
+    // is armed. Press Escape IMMEDIATELY — do NOT waitForTimeout first: with the
+    // real model a turn can finish within a few hundred ms, and the prior
+    // waitForTimeout(500)+2s re-assert raced that close and failed. Mirror the
+    // immediate stop-action used by the passing T21/T22.
+    const stopBtn = page.locator('[data-testid="stop-btn"]')
+    await expect(stopBtn).toBeVisible({ timeout: 5_000 })
+
+    // ChatScreen registers a document-level 'keydown' listener for Escape.
     await page.keyboard.press('Escape')
 
     // Assert cancel behavior.
-    const stopBtn = page.locator('[data-testid="stop-btn"]')
     await expect(stopBtn).not.toBeVisible({ timeout: 5_000 })
     await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
-    const interruptedLabels = page.locator('text=(interrupted)')
-    await expect(interruptedLabels.first()).toBeVisible({ timeout: 5_000 })
+
+    // The interrupted marker (data-testid="interrupted-marker") is rendered per
+    // message INSIDE the virtualized list, so for an off-screen/just-cancelled row
+    // it is present in the DOM but visibility:hidden until the virtualizer scrolls
+    // to it — asserting toBeVisible races that and flakes ("unexpected value
+    // 'hidden'"). The functional cancel is already proven above (stop-btn gone +
+    // input re-enabled); here we assert the message reached the interrupted STATE
+    // by checking the marker is attached to the DOM (it only renders for messages
+    // with status === 'interrupted').
+    const interruptedMarker = page.locator('[data-testid="interrupted-marker"]')
+    await expect(interruptedMarker.first()).toBeAttached({ timeout: 5_000 })
   },
 )
 
@@ -307,8 +349,9 @@ test(
     //
     // Why Mia (default), NOT Jim: file-level "switch to Jim" comment applies
     // to T22/T23/T25/T26 (cancel during inline prose — needs Jim's long
-    // streaming). T24's cancel window comes from the SUBAGENT's 3× read_file
-    // loop, so the parent's prose behaviour is irrelevant. Jim has 16 default
+    // streaming). T24's cancel window comes from the SUBAGENT running long enough
+    // (it streams a multi-hundred-word inline essay), so the parent's prose
+    // behaviour is irrelevant. Jim has 16 default
     // tools with overlapping action options (spawn, subagent, workspace.shell,
     // workspace.shell_bg) that push glm-5v-turbo into extended thinking when
     // asked to spawn. Mia has 7 cleaner tools and reliably emits spawn in
@@ -325,11 +368,16 @@ test(
 
     // Trigger a turn that uses the spawn tool. The prompt must be explicit enough
     // to overcome GLM-5v-turbo's tendency to reply in prose on short prompts.
+    // The subagent task must keep the subagent (and thus the parent turn)
+    // RUNNING for several seconds so a Stop click lands while it's live. The old
+    // task (read_file /etc/hostname ×3) was rejected instantly by the sandbox
+    // ("path escapes workspace", duration 0), so the subagent finished in ~4.5s
+    // before Stop could fire. A long inline essay streams for several seconds.
     await input.fill(
       [
         'Call the `spawn` tool exactly once, now, with these arguments:',
         '  label: "cancel cascade test"',
-        '  task: "You are a subagent. Call read_file with path=\\"/etc/hostname\\" three times, pausing briefly between calls. After all three calls, reply with the word \\"done\\"."',
+        '  task: "You are a subagent. Do not use any tools. Write a detailed 600-word essay about renewable energy as continuous inline prose, writing without stopping until you reach 600 words."',
         'Do not reply in prose. Call the spawn tool immediately.',
       ].join('\n'),
     )

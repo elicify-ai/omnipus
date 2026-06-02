@@ -219,6 +219,12 @@ func SeedConfig(cfg *config.Config) bool {
 		}
 		enabled := true
 		dp, policies, seedProfile := coreAgentSeed(ca.ID)
+		// Mia is the default agent on fresh installs: she appears first in the
+		// All() list and is the friendliest entry-point for new users.
+		// Only set Default=true on the fresh-seed path (here). The re-enforcement
+		// loop above intentionally does NOT touch the Default field on existing
+		// entries so operator choices survive config reload.
+		isDefault := ca.ID == IDMia
 		cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
 			ID:             string(ca.ID),
 			Name:           ca.Name,
@@ -228,6 +234,7 @@ func SeedConfig(cfg *config.Config) bool {
 			Type:           config.AgentTypeCore,
 			Locked:         true,
 			Enabled:        &enabled,
+			Default:        isDefault,
 			SandboxProfile: seedProfile,
 			Tools: &config.AgentToolsCfg{
 				Builtin: config.AgentBuiltinToolsCfg{

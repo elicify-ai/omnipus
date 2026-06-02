@@ -173,3 +173,9 @@ properties:
     $ref: './AgentRateLimits.yaml'
   stats:
     $ref: './AgentStats.yaml'
+  default:
+    type: boolean
+    description: >
+      Whether this agent is the global default that handles inbound messages
+      with no more-specific routing rule. At most one agent is default.
+    example: false

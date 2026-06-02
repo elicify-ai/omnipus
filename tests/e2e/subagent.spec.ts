@@ -335,7 +335,10 @@ test(
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 });
 
     // Best-effort: IF a SubagentBlock appeared, verify basic UI behavior.
-    const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]');
+    // Use .first(): a natural-language prompt is non-deterministic and glm-5v-turbo
+    // sometimes spawns more than one subagent, which would make a bare locator
+    // strict-mode-fail on isVisible(). We only care whether >=1 block appeared.
+    const collapsedBlock = page.locator('[data-testid="subagent-collapsed"]').first();
     // Scoped catch — only swallow stale-locator errors, rethrow others.
     const spawnOccurred = await collapsedBlock.isVisible({ timeout: 5_000 }).catch((err: unknown) => {
       if (err instanceof Error && (err.message.includes('Element is not attached') || err.message.includes('locator handle is stale'))) return false;

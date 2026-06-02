@@ -1606,7 +1606,11 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   } = useQuery({
     queryKey: ['messages', activeSessionId],
     queryFn: () => fetchSessionMessages(activeSessionId!),
-    enabled: !!activeSessionId,
+    // '__pending' is the optimistic-send sentinel (store/chat.ts) used before the
+    // real session_id arrives over WS — it has no server-side history, so fetching
+    // it 404s (spurious console errors + a historyError that tears down the composer).
+    // Mirror the same guard used in attachment-adapter.ts.
+    enabled: !!activeSessionId && activeSessionId !== '__pending',
     gcTime: 0,
     // Never re-fetch on window focus — the WebSocket delivers live updates
     refetchOnWindowFocus: false,

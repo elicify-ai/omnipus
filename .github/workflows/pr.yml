@@ -401,6 +401,17 @@ jobs:
         # agents.defaults.model_name must match one provider entry's model_name.
         # dev_mode_bypass unblocks onboarding endpoints that require bearer auth
         # before an admin account exists (CLAUDE.md "Build & E2E Testing").
+        #
+        # IMPORTANT — do NOT add any "tools": {"spawn": {"enabled": false}} or any
+        # other tools.<name>.enabled=false entry here. migrateDeprecatedToolEnableFlags
+        # (pkg/config/migration.go) converts those into sandbox.tool_policies deny
+        # entries at config-load time, which would deny spawn for ALL agents and break
+        # T24 (cancel cascade) and the handoff/subagent E2E tests.
+        # Instead, tool policies are set explicitly under sandbox.tool_policies below.
+        #
+        # sandbox.audit_log must be true at BOOT (it is restart-gated) for T26.
+        # sandbox.tool_policies.spawn = "allow" is explicit so no migration run can
+        # override it (an existing "allow" policy is never downgraded by the migrator).
         run: |
           set -euo pipefail
           cat > /tmp/omnipus-e2e/config.json <<'EOF'
@@ -411,7 +422,10 @@ jobs:
               "dev_mode_bypass": true
             },
             "sandbox": {
-              "audit_log": true
+              "audit_log": true,
+              "tool_policies": {
+                "spawn": "allow"
+              }
             },
             "agents": {
               "defaults": {

@@ -289,6 +289,10 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 	}
 }
 
+// boolPtr returns a pointer to b. Used wherever an API response field requires
+// *bool but the source value is a plain bool.
+func boolPtr(b bool) *bool { return &b }
+
 // jsonSessionDetail writes a response that conforms to the gen.SessionDetail wire
 // shape: { session, messages, agent_removed? }.
 // The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize via
@@ -1121,6 +1125,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		ag.Model = &model
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 		ag.Soul = soul
+		ag.Default = boolPtr(ac.Default)
 		agents = append(agents, ag)
 	}
 
@@ -1166,6 +1171,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			ag.Soul = soul
 			ag.Heartbeat = heartbeat
 			ag.Instructions = instructions
+			ag.Default = boolPtr(ac.Default)
 			jsonOK(w, ag)
 			return
 		}
@@ -1582,6 +1588,14 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					}
 					agentMap["rate_limits"] = rlMap
 				}
+				// Default flag: single-default invariant.
+				// If req.Default is set, handle two sub-cases:
+				//   true  → mark this agent as default; clear Default on all others.
+				//   false → clear Default on this agent only; leave others unchanged.
+				// If req.Default is nil (absent), leave all Default flags unchanged.
+				if req.Default != nil {
+					agentMap["default"] = *req.Default
+				}
 				if req.ToolsCfg != nil {
 					tcMap := map[string]any{}
 					if req.ToolsCfg.Builtin != nil {
@@ -1609,6 +1623,23 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					agentMap["tools_cfg"] = tcMap
 				}
 				break
+			}
+		}
+		// Single-default invariant: when setting default=true on this agent,
+		// clear default on every OTHER agent in the list.
+		if req.Default != nil && *req.Default {
+			for _, entry := range list {
+				agentMap, ok := entry.(map[string]any)
+				if !ok {
+					continue
+				}
+				if agentMap["id"] == id {
+					continue // already set above
+				}
+				// Clear default on every other agent. Delete the key so config
+				// stays minimal (omitempty in Go struct); false and missing are
+				// equivalent to the router but missing is cleaner JSON.
+				delete(agentMap, "default")
 			}
 		}
 		// Heartbeat fields are top-level in config.json.
@@ -1742,6 +1773,16 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	ag.Instructions = instructions
 	if reloadWarning != "" {
 		ag.Warning = &reloadWarning
+	}
+	// Populate Default from the live config after the write (handles both the
+	// req.Default=true case and the leave-unchanged case).
+	if liveCfg := a.agentLoop.GetConfig(); liveCfg != nil {
+		for _, ac := range liveCfg.Agents.List {
+			if ac.ID == agentID {
+				ag.Default = boolPtr(ac.Default)
+				break
+			}
+		}
 	}
 	// Override defaults with request values when provided.
 	if req.TimeoutSeconds != nil {
@@ -3863,7 +3904,8 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 // --- Channels ---
 
 // HandleChannels handles GET /api/v1/channels, GET /api/v1/channels/{id},
-// PUT /api/v1/channels/{id}/enable|disable|configure, and POST /api/v1/channels/{id}/test.
+// PUT /api/v1/channels/{id}/enable|disable|configure, POST /api/v1/channels/{id}/test,
+// and GET/PUT /api/v1/channels/{id}/routing.
 func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	sub := strings.TrimPrefix(path, "/api/v1/channels")
@@ -3913,6 +3955,15 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			a.testChannel(w, channelID)
+		case "routing":
+			switch r.Method {
+			case http.MethodGet:
+				a.getChannelRouting(w, channelID)
+			case http.MethodPut:
+				a.setChannelRouting(w, r, channelID)
+			default:
+				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			}
 		default:
 			jsonErr(w, http.StatusNotFound, "unknown channel action")
 		}
@@ -4005,6 +4056,159 @@ var validChannelIDs = map[string]bool{
 	"feishu": true, "dingtalk": true, "wecom": true, "weixin": true,
 	"line": true, "qq": true, "onebot": true, "irc": true,
 	"matrix": true,
+}
+
+// channelWildcardIdx returns the index of the channel-wildcard AgentBinding
+// for the given channelID in the bindings slice, or -1 if not found.
+// A channel-wildcard binding has Match.Channel equal to channelID (compared
+// case-insensitively), Match.AccountID=="*", and no Peer/Guild/Team qualifiers.
+func channelWildcardIdx(bindings []config.AgentBinding, channelID string) int {
+	for i, b := range bindings {
+		if strings.ToLower(b.Match.Channel) != channelID {
+			continue
+		}
+		if b.Match.AccountID != "*" {
+			continue
+		}
+		if b.Match.Peer != nil || b.Match.GuildID != "" || b.Match.TeamID != "" {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+// isChannelWildcardRaw reports whether a raw binding match-map represents the
+// channel-wildcard entry for channelID. A match is:
+//   - match["channel"] equal to channelID (compared case-insensitively)
+//   - match["account_id"] == "*"
+//   - no "peer", "guild_id", or "team_id" keys present
+func isChannelWildcardRaw(matchMap map[string]any, channelID string) bool {
+	ch, _ := matchMap["channel"].(string)
+	acc, _ := matchMap["account_id"].(string)
+	_, hasPeer := matchMap["peer"]
+	_, hasGuild := matchMap["guild_id"]
+	_, hasTeam := matchMap["team_id"]
+	return strings.ToLower(ch) == channelID && acc == "*" && !hasPeer && !hasGuild && !hasTeam
+}
+
+// getChannelRouting handles GET /api/v1/channels/{id}/routing.
+// Returns the channel-wildcard AgentBinding for the given channel, or null agent ID
+// if none exists.
+func (a *restAPI) getChannelRouting(w http.ResponseWriter, channelID string) {
+	cfg := a.agentLoop.GetConfig()
+	idx := channelWildcardIdx(cfg.Bindings, channelID)
+	var resp gen.ChannelRouting
+	if idx >= 0 {
+		id := cfg.Bindings[idx].AgentID
+		resp.DefaultAgentId = &id
+	}
+	jsonOK(w, resp)
+}
+
+// setChannelRouting handles PUT /api/v1/channels/{id}/routing.
+// Upserts (or removes) the channel-wildcard AgentBinding for the given channel.
+func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, channelID string) {
+	var req gen.SetChannelRoutingJSONRequestBody
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "ChannelRouting", &req, validateEnabled) {
+		return
+	}
+
+	cfg := a.agentLoop.GetConfig()
+
+	// Validate the agent ID when non-empty.
+	if req.DefaultAgentId != nil && *req.DefaultAgentId != "" {
+		agentID := *req.DefaultAgentId
+		found := false
+		for _, ac := range cfg.Agents.List {
+			if ac.ID == agentID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
+			return
+		}
+	}
+
+	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+		// Read the bindings array from the raw JSON map.
+		rawBindings, _ := m["bindings"].([]any)
+
+		if req.DefaultAgentId == nil || *req.DefaultAgentId == "" {
+			// Remove the channel-wildcard binding for this channel if it exists.
+			filtered := make([]any, 0, len(rawBindings))
+			for _, entry := range rawBindings {
+				bMap, ok := entry.(map[string]any)
+				if !ok {
+					filtered = append(filtered, entry)
+					continue
+				}
+				matchMap, _ := bMap["match"].(map[string]any)
+				if matchMap == nil {
+					filtered = append(filtered, entry)
+					continue
+				}
+				if isChannelWildcardRaw(matchMap, channelID) {
+					// This is the wildcard binding to remove — skip it.
+					continue
+				}
+				filtered = append(filtered, entry)
+			}
+			if len(filtered) == 0 {
+				delete(m, "bindings")
+			} else {
+				m["bindings"] = filtered
+			}
+			return nil
+		}
+
+		// Upsert: replace or append the channel-wildcard binding.
+		newBinding := map[string]any{
+			"agent_id": *req.DefaultAgentId,
+			"match": map[string]any{
+				"channel":    channelID,
+				"account_id": "*",
+			},
+		}
+		replaced := false
+		for i, entry := range rawBindings {
+			bMap, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			matchMap, _ := bMap["match"].(map[string]any)
+			if matchMap == nil {
+				continue
+			}
+			if isChannelWildcardRaw(matchMap, channelID) {
+				rawBindings[i] = newBinding
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			rawBindings = append(rawBindings, newBinding)
+		}
+		m["bindings"] = rawBindings
+		return nil
+	}); err != nil {
+		slog.Error("rest: save config for channel routing", "channel_id", channelID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		return
+	}
+
+	// Return the resulting routing state.
+	liveCfg := a.agentLoop.GetConfig()
+	idx := channelWildcardIdx(liveCfg.Bindings, channelID)
+	var resp gen.ChannelRouting
+	if idx >= 0 {
+		id := liveCfg.Bindings[idx].AgentID
+		resp.DefaultAgentId = &id
+	}
+	jsonOK(w, resp)
 }
 
 func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, enabled bool) {

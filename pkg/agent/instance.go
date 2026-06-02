@@ -57,6 +57,13 @@ type AgentInstance struct {
 	// construction; never mutated after creation.
 	AgentType string
 
+	// IsRoutingDefault records whether this agent was marked Default=true in
+	// its AgentConfig at construction time. Used by GetDefaultAgent to make the
+	// per-agent routing-default flag the single canonical source of truth (F3),
+	// so SPA WebSocket chat and channel routing both converge on the same agent.
+	// Read-only after construction.
+	IsRoutingDefault bool
+
 	// toolPolicy holds the per-agent tool policy snapshot used by
 	// FilterToolsByPolicy at LLM-call assembly time (FR-003, FR-020, FR-041).
 	// Populated at construction from config.AgentConfig.Tools.
@@ -260,6 +267,7 @@ func NewAgentInstance(
 			resolvedAgentType = "custom"
 		}
 	}
+	isRoutingDefault := agentCfg != nil && agentCfg.Default
 	inst := &AgentInstance{
 		ID:                        agentID,
 		Name:                      agentName,
@@ -285,6 +293,7 @@ func NewAgentInstance(
 		LightProvider:             lightProvider,
 		TimeoutSeconds:            timeoutSeconds,
 		AgentType:                 resolvedAgentType,
+		IsRoutingDefault:          isRoutingDefault,
 	}
 	if agentCfg != nil && agentCfg.Tools != nil {
 		inst.toolPolicy.Store(agentToolsCfgToPolicy(agentCfg.Tools))
@@ -339,8 +348,13 @@ func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentD
 	if agentCfg != nil && strings.TrimSpace(agentCfg.Workspace) != "" {
 		return expandHome(strings.TrimSpace(agentCfg.Workspace))
 	}
-	// Use the configured default workspace (respects OMNIPUS_HOME)
-	if agentCfg == nil || agentCfg.Default || agentCfg.ID == "" || routing.NormalizeAgentID(agentCfg.ID) == "main" {
+	// Use the configured default workspace (respects OMNIPUS_HOME) for the
+	// legacy "main" agent identity. The agentCfg.Default flag means "this agent
+	// is the routing default for inbound messages" — it does NOT mean "share the
+	// workspace". A routing-default agent (e.g. Mia with Default=true) must still
+	// get its own per-agent workspace (FUNC-11). Only the literal "main" sentinel
+	// identity falls back to the shared default workspace.
+	if agentCfg == nil || agentCfg.ID == "" || routing.NormalizeAgentID(agentCfg.ID) == routing.DefaultAgentID {
 		return expandHome(defaults.Workspace)
 	}
 	// Per-agent isolated workspace (FUNC-11). Each custom agent gets its own

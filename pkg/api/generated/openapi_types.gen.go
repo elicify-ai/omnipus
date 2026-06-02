@@ -2397,6 +2397,9 @@ type Agent struct {
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
 
+	// Default Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default.
+	Default *bool `json:"default,omitempty"`
+
 	// Description Short description of the agent's purpose.
 	Description *string `json:"description,omitempty"`
 
@@ -2865,6 +2868,9 @@ type AgentUpdateRequest struct {
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
 
+	// Default Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default. Omitting this field leaves the flag unchanged.
+	Default *bool `json:"default,omitempty"`
+
 	// Description New description. Rejected on locked agents. Empty string removes it.
 	Description *string `json:"description,omitempty"`
 
@@ -3176,6 +3182,12 @@ type ChannelEntryTransport string
 
 // ChannelId Stable identifier for a built-in channel.
 type ChannelId string
+
+// ChannelRouting Routing configuration for a single communication channel. Controls which agent handles inbound messages arriving on this channel.
+type ChannelRouting struct {
+	// DefaultAgentId ID of the agent that handles this channel's inbound messages. Omitted or empty means fall back to the global default agent.
+	DefaultAgentId *string `json:"default_agent_id,omitempty"`
+}
 
 // ChannelTestResponse Response from POST /api/v1/channels/{id}/test. Returns whether required credentials are configured.
 type ChannelTestResponse struct {
@@ -5071,6 +5083,9 @@ type RegisterAdminJSONRequestBody = RegisterAdminRequest
 
 // ConfigureChannelJSONRequestBody defines body for ConfigureChannel for application/json ContentType.
 type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
+
+// SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
+type SetChannelRoutingJSONRequestBody = ChannelRouting
 
 // PostChatJSONRequestBody defines body for PostChat for application/json ContentType.
 type PostChatJSONRequestBody = SseChatRequest

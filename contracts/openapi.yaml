@@ -280,6 +280,8 @@ components:
       $ref: ./components/schemas/ChannelEnabledResponse.yaml
     ChannelTestResponse:
       $ref: ./components/schemas/ChannelTestResponse.yaml
+    ChannelRouting:
+      $ref: ./components/schemas/ChannelRouting.yaml
     BackupCreateResponse:
       $ref: ./components/schemas/BackupCreateResponse.yaml
     OnboardingStatusResponse:
@@ -2313,6 +2315,87 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /channels/{id}/routing:
+    get:
+      operationId: getChannelRouting
+      summary: Get channel routing configuration
+      description: >
+        Returns the routing configuration for the specified channel, including
+        which agent handles its inbound messages.
+      tags:
+      - Channels
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Channel ID.
+        schema:
+          type: string
+        example: telegram
+      responses:
+        '200':
+          description: Channel routing configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelRouting'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Channel ID not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    put:
+      operationId: setChannelRouting
+      summary: Set channel routing configuration
+      description: >
+        Sets the routing configuration for the specified channel. The
+        default_agent_id field controls which agent handles inbound messages
+        arriving on this channel. Omit it or leave it empty to fall back to the
+        global default agent.
+      tags:
+      - Channels
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Channel ID.
+        schema:
+          type: string
+        example: telegram
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChannelRouting'
+      responses:
+        '200':
+          description: Updated channel routing configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelRouting'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Channel ID not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
   /config/gateway/rotate-token:
     post:
       operationId: rotateGatewayToken
