@@ -2028,6 +2028,20 @@ func (al *AgentLoop) emitEvent(kind EventKind, meta EventMeta, payload any) {
 	al.eventBus.Emit(evt)
 }
 
+// EmitWhatsAppPairing publishes a WhatsApp native/QR pairing update (QR code or
+// status) onto the event bus so every connected SPA WebSocket client receives a
+// whatsapp_pairing frame (#283). Safe to call from a channel's own goroutine —
+// the bus drops to a full subscriber rather than blocking. Wired into the
+// WhatsApp native channel at gateway boot via SetPairingObserver.
+func (al *AgentLoop) EmitWhatsAppPairing(channelID, status, qr, message string) {
+	al.emitEvent(EventKindWhatsAppPairing, EventMeta{Source: "channel"}, WhatsAppPairingPayload{
+		ChannelID: channelID,
+		Status:    status,
+		QR:        qr,
+		Message:   message,
+	})
+}
+
 func cloneEventArguments(args map[string]any) map[string]any {
 	if len(args) == 0 {
 		return nil

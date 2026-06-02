@@ -66,6 +66,9 @@ const (
 	EventKindBackgroundProcessKill
 	// EventKindRateLimit is emitted when an agent LLM or tool call is denied by a rate limit (SEC-26).
 	EventKindRateLimit
+	// EventKindWhatsAppPairing is emitted when the WhatsApp native channel produces
+	// a linked-device pairing update (QR code or status) to surface in the SPA (#283).
+	EventKindWhatsAppPairing
 
 	eventKindCount
 )
@@ -98,6 +101,7 @@ var eventKindNames = [...]string{
 	"compaction_retry",
 	"background_process_kill",
 	"rate_limit",
+	"whatsapp_pairing",
 }
 
 // String returns the stable string form of an EventKind.
@@ -444,4 +448,14 @@ type RateLimitPayload struct {
 	AgentID           string  `json:"agent_id,omitempty"`
 	ChatID            string  `json:"chat_id,omitempty"`
 	Tool              string  `json:"tool,omitempty"`
+}
+
+// WhatsAppPairingPayload carries a WhatsApp native/QR linked-device pairing
+// update for the SPA (#283). Status is one of waiting/code/linked/timeout/error;
+// QR is populated only when Status == "code".
+type WhatsAppPairingPayload struct {
+	ChannelID string `json:"channel_id"`
+	Status    string `json:"status"`
+	QR        string `json:"qr,omitempty"`
+	Message   string `json:"message,omitempty"`
 }
