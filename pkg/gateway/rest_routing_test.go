@@ -258,26 +258,34 @@ func TestChannelRouting_PutCreatesBinding(t *testing.T) {
 //	When PUT /api/v1/channels/telegram/routing with {"default_agent_id": null},
 //	Then response is 200 and default_agent_id is null,
 //	And a subsequent GET also returns null.
-func TestChannelRouting_PutNullRemovesBinding(t *testing.T) {
+//
+// assertRemoveBindingViaPut creates a telegram channel-wildcard binding, then
+// PUTs removeBody (a "remove" payload such as `{"default_agent_id": null}` or
+// `{"default_agent_id": ""}`) and asserts the binding is gone: the PUT returns
+// 200 with a null default_agent_id, and a subsequent GET also returns null.
+func assertRemoveBindingViaPut(t *testing.T, removeBody string) {
+	t.Helper()
 	api, _ := newChannelRoutingTestAPI(t)
 
 	// First create a binding.
-	body := `{"default_agent_id": "bot-agent"}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/routing", strings.NewReader(body))
+	r := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/channels/telegram/routing",
+		strings.NewReader(`{"default_agent_id": "bot-agent"}`),
+	)
 	api.HandleChannels(w, r)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	// Now remove it with null.
-	body2 := `{"default_agent_id": null}`
+	// Now remove it.
 	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/routing", strings.NewReader(body2))
+	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/routing", strings.NewReader(removeBody))
 	api.HandleChannels(w2, r2)
-	require.Equal(t, http.StatusOK, w2.Code, "PUT null must return 200")
+	require.Equal(t, http.StatusOK, w2.Code, "PUT remove-value must return 200")
 
 	var resp gen.ChannelRouting
 	require.NoError(t, json.NewDecoder(w2.Body).Decode(&resp))
-	assert.Nil(t, resp.DefaultAgentId, "PUT null must return null default_agent_id")
+	assert.Nil(t, resp.DefaultAgentId, "PUT remove-value must return null default_agent_id")
 
 	// GET must also show null.
 	w3 := httptest.NewRecorder()
@@ -286,7 +294,11 @@ func TestChannelRouting_PutNullRemovesBinding(t *testing.T) {
 	require.Equal(t, http.StatusOK, w3.Code)
 	var resp3 gen.ChannelRouting
 	require.NoError(t, json.NewDecoder(w3.Body).Decode(&resp3))
-	assert.Nil(t, resp3.DefaultAgentId, "GET after PUT-null must return null")
+	assert.Nil(t, resp3.DefaultAgentId, "GET after remove-value PUT must return null")
+}
+
+func TestChannelRouting_PutNullRemovesBinding(t *testing.T) {
+	assertRemoveBindingViaPut(t, `{"default_agent_id": null}`)
 }
 
 // TestChannelRouting_PutUnknownAgentReturnsError verifies that setting a
@@ -666,32 +678,5 @@ func TestChannelRouting_BindingWinsOverNoGlobalDefault(t *testing.T) {
 //
 // Traces to: sprint/258-jun-2026 — channel routing, empty string treated as remove.
 func TestChannelRouting_PutEmptyStringTreatedAsRemove(t *testing.T) {
-	api, _ := newChannelRoutingTestAPI(t)
-
-	// First create a binding.
-	body := `{"default_agent_id": "bot-agent"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/routing", strings.NewReader(body))
-	api.HandleChannels(w, r)
-	require.Equal(t, http.StatusOK, w.Code)
-
-	// Now remove with empty string.
-	body2 := `{"default_agent_id": ""}`
-	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/routing", strings.NewReader(body2))
-	api.HandleChannels(w2, r2)
-	require.Equal(t, http.StatusOK, w2.Code, "PUT empty-string default_agent_id must return 200")
-
-	var resp gen.ChannelRouting
-	require.NoError(t, json.NewDecoder(w2.Body).Decode(&resp))
-	assert.Nil(t, resp.DefaultAgentId, "empty-string default_agent_id must remove binding (return null)")
-
-	// GET must also show null.
-	w3 := httptest.NewRecorder()
-	r3 := httptest.NewRequest(http.MethodGet, "/api/v1/channels/telegram/routing", nil)
-	api.HandleChannels(w3, r3)
-	require.Equal(t, http.StatusOK, w3.Code)
-	var resp3 gen.ChannelRouting
-	require.NoError(t, json.NewDecoder(w3.Body).Decode(&resp3))
-	assert.Nil(t, resp3.DefaultAgentId, "GET after empty-string PUT must return null")
+	assertRemoveBindingViaPut(t, `{"default_agent_id": ""}`)
 }

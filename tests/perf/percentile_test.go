@@ -5,10 +5,7 @@
 
 package perf
 
-import (
-	"math"
-	"testing"
-)
+import "math"
 
 // computePercentile returns the p-th percentile (0–100) of a sorted float64 slice.
 // The slice must be sorted ascending before calling.
@@ -24,25 +21,4 @@ func computePercentile(sorted []float64, p float64) float64 {
 	}
 	frac := rank - float64(lo)
 	return sorted[lo]*(1-frac) + sorted[hi]*frac
-}
-
-// logLatencyDistribution prints min/p50/p95/p99/max to the test log.
-//
-
-//nolint:unused // called from !cgo-tagged benchmark files; visible to linter only under CGO_ENABLED=1
-func logLatencyDistribution(t testing.TB, label string, sorted []float64) {
-	t.Helper()
-	if len(sorted) == 0 {
-		t.Logf("%s distribution: empty", label)
-		return
-	}
-	t.Logf("%s distribution (n=%d): min=%.2f ms  p50=%.2f ms  p95=%.2f ms  p99=%.2f ms  max=%.2f ms",
-		label,
-		len(sorted),
-		sorted[0],
-		computePercentile(sorted, 50),
-		computePercentile(sorted, 95),
-		computePercentile(sorted, 99),
-		sorted[len(sorted)-1],
-	)
 }
