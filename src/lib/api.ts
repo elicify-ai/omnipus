@@ -103,6 +103,8 @@ import {
   Schedule as ScheduleSchema,
   ScheduleList as ScheduleListSchema,
   ScheduleRunResult as ScheduleRunResultSchema,
+  // #264 Notifications (contract-first #8):
+  NotificationList as NotificationListSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -263,6 +265,8 @@ import type {
   ScheduleUpdate,
   ScheduleList,
   ScheduleRunResult,
+  // #264 Notifications (contract-first #8):
+  NotificationList,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -1218,6 +1222,28 @@ export function runSchedule(id: string): Promise<ScheduleRunResult> {
 
 export function pauseSchedule(id: string): Promise<Schedule> {
   return request<Schedule>(`/schedules/${encodeURIComponent(id)}/pause`, { method: 'POST' }, ScheduleSchema as ZodType<Schedule>)
+}
+
+// ── #264 Notifications ────────────────────────────────────────────────────────
+//
+// Header notification center. The REST surface seeds the store on mount and the
+// `notification` WS frame keeps it live. NotificationList wire type is re-exported
+// from generated openapi-types (contract-first #8); see
+// contracts/components/schemas/Notification*.yaml.
+
+export function fetchNotifications(): Promise<NotificationList> {
+  // GET /notifications → { notifications: Notification[], unread_count }.
+  return request<NotificationList>('/notifications', undefined, NotificationListSchema as ZodType<NotificationList>)
+}
+
+export function markNotificationRead(id: string): Promise<void> {
+  // POST /notifications/{id}/read — void response.
+  return request<void>(`/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' })
+}
+
+export function markAllNotificationsRead(): Promise<void> {
+  // POST /notifications/read-all — void response.
+  return request<void>('/notifications/read-all', { method: 'POST' })
 }
 
 // ── Gateway Status ────────────────────────────────────────────────────────────
