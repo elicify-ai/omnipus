@@ -457,6 +457,17 @@ operations:
     messages:
       - $ref: '#/channels/chat/messages/DevicePairingRequestFrame'
 
+  receiveWhatsAppPairing:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      The WhatsApp native/QR channel published a pairing update (a QR code to scan
+      or a status change). The SPA renders the QR and live waiting → linked status
+      (#283).
+    messages:
+      - $ref: '#/channels/chat/messages/WhatsAppPairingFrame'
+
   receiveExecApprovalExpired:
     action: receive
     channel:
@@ -722,6 +733,14 @@ components:
       payload:
         $ref: '#/components/schemas/DevicePairingRequestFrame'
 
+    WhatsAppPairingFrame:
+      name: WhatsAppPairingFrame
+      title: whatsapp_pairing
+      summary: WhatsApp pairing QR / status (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/WhatsAppPairingFrame'
+
     ExecApprovalExpiredFrame:
       name: ExecApprovalExpiredFrame
       title: exec_approval_expired
@@ -768,6 +787,7 @@ components:
         - session_close_ack
         - exec_approval_response_ack
         - device_pairing_request
+        - whatsapp_pairing
 
     AuthFrame:
       title: AuthFrame
@@ -1745,6 +1765,37 @@ components:
         device_name:
           type: string
         session_id:
+          type: string
+
+    WhatsAppPairingFrame:
+      title: WhatsAppPairingFrame
+      description: >
+        Server → client WhatsApp native/QR pairing update (QR code + live status)
+        so the SPA can pair in-browser without the gateway terminal (#283).
+      type: object
+      required:
+        - type
+        - channel_id
+        - status
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: whatsapp_pairing
+        channel_id:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum:
+            - waiting
+            - code
+            - linked
+            - timeout
+            - error
+        qr:
+          type: string
+        message:
           type: string
 
     SessionCloseFrame:

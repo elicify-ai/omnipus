@@ -351,6 +351,15 @@ type TruncatedResult struct {
 	Preview           string `json:"preview"`
 }
 
+// WhatsAppPairingFrame — Server → client WhatsApp native/QR pairing update (QR code + live status) so the SPA can pair in-browser without the gateway terminal (#283).
+type WhatsAppPairingFrame struct {
+	ChannelId string  `json:"channel_id"`
+	Message   *string `json:"message,omitempty"`
+	Qr        *string `json:"qr,omitempty"`
+	Status    string  `json:"status"`
+	Type      string  `json:"type"`
+}
+
 // WsFrameType — Enum of all WebSocket frame type discriminator strings.
 type WsFrameType string
 
@@ -388,4 +397,5 @@ const (
 	WsFrameTypeSessionCloseAck         WsFrameType = "session_close_ack"
 	WsFrameTypeExecApprovalResponseAck WsFrameType = "exec_approval_response_ack"
 	WsFrameTypeDevicePairingRequest    WsFrameType = "device_pairing_request"
+	WsFrameTypeWhatsappPairing         WsFrameType = "whatsapp_pairing"
 )

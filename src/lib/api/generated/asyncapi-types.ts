@@ -38,7 +38,8 @@ export type WsFrameType =
   | "pong"
   | "session_close_ack"
   | "exec_approval_response_ack"
-  | "device_pairing_request";
+  | "device_pairing_request"
+  | "whatsapp_pairing";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -325,6 +326,14 @@ export interface DevicePairingRequestFrame {
   session_id?: string;
 }
 
+export interface WhatsAppPairingFrame {
+  type: "whatsapp_pairing";
+  channel_id: string;
+  status: "waiting" | "code" | "linked" | "timeout" | "error";
+  qr?: string;
+  message?: string;
+}
+
 export interface SessionCloseFrame {
   type: "session_close";
   session_id: string;
@@ -370,6 +379,7 @@ export type WsFrame =
   | SessionCloseAckFrame
   | ExecApprovalResponseAckFrame
   | DevicePairingRequestFrame
+  | WhatsAppPairingFrame
   | SessionCloseFrame
   | ExecApprovalExpiredFrame;
 
@@ -416,4 +426,5 @@ export type ServerFrame =
   | SessionCloseAckFrame
   | ExecApprovalResponseAckFrame
   | DevicePairingRequestFrame
+  | WhatsAppPairingFrame
   | ExecApprovalExpiredFrame;
