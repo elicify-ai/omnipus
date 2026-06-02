@@ -317,6 +317,15 @@ Review for:
 
 Be constructive and specific. "This could have a race condition if two goroutines call this concurrently — consider using a mutex here" is better than "this looks wrong".
 
+### Agent-assisted review gate (7 reviewers)
+
+When work is done with Claude Code, a **7-reviewer quality gate** runs over the change **after each completed feature and again on the whole epic** before the final merge — all seven must be clean or every finding deferred with a tracked issue:
+
+1–6. The `pr-review-toolkit` agents — code-reviewer, code-simplifier, comment-analyzer, pr-test-analyzer, silent-failure-hunter, type-design-analyzer.
+7. An **architect pass via the `/grill-code` skill** — correctness, security, error handling, testing quality, observability, overcomplexity, and spec/task compliance where a spec exists.
+
+See `CLAUDE.md` → "Review pipeline — the 7-reviewer quality gate" for the canonical definition.
+
 ---
 
 ## Communication

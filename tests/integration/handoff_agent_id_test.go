@@ -173,8 +173,6 @@ func writeMockToolCallStream(w http.ResponseWriter, toolName, argsJSON string) {
 //
 // Traces to: Round-2 Bug 1 — post-handoff agent_id labeling
 func TestPostHandoff_ToolCallEntriesCarryNewAgentID(t *testing.T) {
-	skipOnMacOSAPFSCleanupRace(t)
-
 	// Boot a gateway with a mock LLM that performs a handoff sequence.
 	mock := mockLLMHandoffThenToolCall(t)
 	gw := testutil.StartTestGateway(t,

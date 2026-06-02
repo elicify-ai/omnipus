@@ -215,6 +215,19 @@ type AgentLoop struct {
 	// LoadOrStore ensures only one goroutine triggers recap per session.
 	claimedCloseSessions sync.Map // sessionID (string) → true
 
+	// Session-end recap drain (#265). Recap goroutines (CloseSession → runRecap)
+	// write LAST_SESSION.md / retro files and emit audit entries in the
+	// background. Close() drains them (recapWG.Wait) BEFORE it tears down the
+	// registry, session stores, and audit logger they write through, so the
+	// recaps both complete and finish writing before shutdown returns — leaving
+	// them detached races the temp-dir cleanup in tests. recapMu+closing gate
+	// scheduling so a recap can never be Added after the drain begins (no
+	// WaitGroup Add-after-Wait). Recaps are not canceled; each self-bounds at
+	// 60s and shares the 70s graceful-shutdown budget with the active-turn wait.
+	recapMu sync.Mutex
+	closing bool
+	recapWG sync.WaitGroup
+
 	// stopCancel is the CancelFunc created by Run to support Stop(). When
 	// Stop() is called it cancels this func so the Run select wakes
 	// immediately without waiting for the next message or ticker. Stored
@@ -1569,7 +1582,13 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 
 			// System messages are handled inline in a goroutine (no scope).
 			if msg.Channel == "system" {
+				// Track in activeRequests so graceful shutdown's
+				// WaitForActiveRequests drains this turn before teardown —
+				// otherwise its cost.json / session-context writes can outlive
+				// RunContext and race temp-dir cleanup (#265, macOS APFS).
+				al.activeRequests.Add(1)
 				go func() {
+					defer al.activeRequests.Done()
 					defer func() {
 						if r := recover(); r != nil {
 							logger.ErrorCF("agent", "Panic in system-message goroutine",
@@ -1596,7 +1615,10 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			if !ok {
 				// Unroutable — fall through to the original single-shot path so
 				// channels with no configured agent still get an error reply.
+				// Tracked in activeRequests so shutdown drains it (#265).
+				al.activeRequests.Add(1)
 				go func() {
+					defer al.activeRequests.Done()
 					defer func() {
 						if r := recover(); r != nil {
 							logger.ErrorCF("agent", "Panic in unroutable-message goroutine",
@@ -1780,6 +1802,16 @@ func (al *AgentLoop) WaitForActiveRequests() {
 
 // Close releases resources held by agent session stores. Call after Stop.
 func (al *AgentLoop) Close() {
+	// #265: stop scheduling new recaps, then drain the in-flight ones FIRST —
+	// while the registry, session stores, memory stores, and audit logger they
+	// write through are all still live (the teardown below closes them). A recap
+	// caught mid-flight completes its summary and finishes writing before we
+	// proceed, so nothing writes after Close() returns to race temp-dir cleanup.
+	al.recapMu.Lock()
+	al.closing = true
+	al.recapMu.Unlock()
+	al.recapWG.Wait()
+
 	// Cancel all active session workers and wait for them to drain (5 s budget).
 	// stopSessionWorkers is idempotent — safe to call here even if Run() has
 	// already called it on context-cancellation, because workers cancel their
@@ -2344,6 +2376,60 @@ func (al *AgentLoop) MutateConfig(fn func(*config.Config) error) error {
 // GetTaskStore returns the shared TaskStore (may be nil in tests).
 func GetTaskStore(al *AgentLoop) *taskstore.TaskStore {
 	return al.taskStore
+}
+
+// ApplyAgentModel switches a live agent instance to a new primary model in
+// place — rebuilding its provider, candidate chain, and thinking level under
+// the instance lock WITHOUT recreating the instance. This preserves the agent's
+// in-memory conversation state and avoids a config hot-reload that would drop
+// the WebSocket (#73). The new model must already be persisted to config (the
+// REST handler writes config.json first) so resolution observes it. Returns the
+// previous primary model. Shared by the switch_model tool and the
+// PUT /api/v1/agents/{id} model-change path.
+func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "", fmt.Errorf("model is required")
+	}
+	agent, ok := al.registry.GetAgent(agentID)
+	if !ok {
+		return "", fmt.Errorf("agent %q not found", agentID)
+	}
+
+	al.mu.RLock()
+	cfg := al.cfg
+	al.mu.RUnlock()
+
+	modelCfg, err := resolvedModelConfig(cfg, model, agent.Workspace)
+	if err != nil {
+		return "", err
+	}
+	nextProvider, _, err := providers.CreateProviderFromConfig(modelCfg)
+	if err != nil {
+		return "", fmt.Errorf("failed to initialize model %q: %w", model, err)
+	}
+	nextCandidates := resolveModelCandidates(cfg, cfg.Agents.Defaults.Provider, modelCfg.Model, agent.Fallbacks)
+	if len(nextCandidates) == 0 {
+		return "", fmt.Errorf("model %q did not resolve to any provider candidates", model)
+	}
+
+	agent.mu.Lock()
+	oldModel := agent.Model
+	oldProvider := agent.Provider
+	agent.Model = model
+	agent.Provider = nextProvider
+	agent.Candidates = nextCandidates
+	agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
+	agent.mu.Unlock()
+
+	// Close the previous provider if it holds resources (e.g. a stateful
+	// session) and is actually being replaced.
+	if oldProvider != nil && oldProvider != nextProvider {
+		if stateful, ok := oldProvider.(providers.StatefulProvider); ok {
+			stateful.Close()
+		}
+	}
+	return oldModel, nil
 }
 
 // GetTaskExecutor returns the shared TaskExecutor (may be nil in tests).
@@ -5993,37 +6079,9 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			return m, resolvedCandidateProvider(c, cfg.Agents.Defaults.Provider)
 		}
 		rt.SwitchModel = func(value string) (string, error) {
-			value = strings.TrimSpace(value)
-			modelCfg, err := resolvedModelConfig(cfg, value, agent.Workspace)
-			if err != nil {
-				return "", err
-			}
-
-			nextProvider, _, err := providers.CreateProviderFromConfig(modelCfg)
-			if err != nil {
-				return "", fmt.Errorf("failed to initialize model %q: %w", value, err)
-			}
-
-			nextCandidates := resolveModelCandidates(cfg, cfg.Agents.Defaults.Provider, modelCfg.Model, agent.Fallbacks)
-			if len(nextCandidates) == 0 {
-				return "", fmt.Errorf("model %q did not resolve to any provider candidates", value)
-			}
-
-			agent.mu.Lock()
-			oldModel := agent.Model
-			oldProvider := agent.Provider
-			agent.Model = value
-			agent.Provider = nextProvider
-			agent.Candidates = nextCandidates
-			agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
-			agent.mu.Unlock()
-
-			if oldProvider != nil && oldProvider != nextProvider {
-				if stateful, ok := oldProvider.(providers.StatefulProvider); ok {
-					stateful.Close()
-				}
-			}
-			return oldModel, nil
+			// Shared in-place model switch (#73): same path as the
+			// PUT /api/v1/agents/{id} model change.
+			return al.ApplyAgentModel(agent.ID, value)
 		}
 
 		rt.ClearHistory = func() error {

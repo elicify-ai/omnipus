@@ -180,25 +180,20 @@ The lead (you) orchestrates all work by spawning specialized subagents via the A
 - **Full-stack features:** frontend-lead + backend-lead (parallel) → qa-lead
 - **Design questions:** architect
 
-### Review pipeline (run after implementation subagents complete)
+### Review pipeline — the 7-reviewer quality gate (MANDATORY)
 
-**Step 1 — Project-specific reviews (in parallel):**
-- Go files changed → `architect` for cross-cutting concerns
-- Frontend files changed → `architect` for integration coherence
-- Security files changed → `architect` for threat model review
+**This gate runs twice: after EACH completed feature (before its PR merges to its base branch) AND again on the WHOLE epic diff before the final `→ main` PR.** All seven must be clean (or every finding explicitly deferred with a tracked issue) before merging. This is a hard release rule, on par with Hard Constraint #7.
 
-**Step 2 — PR-review-toolkit (run ALL 6 in parallel, always):**
+**The 7 reviewers:**
 1. `pr-review-toolkit:code-reviewer` — CLAUDE.md compliance, bugs, quality
 2. `pr-review-toolkit:code-simplifier` — simplify for clarity and maintainability
 3. `pr-review-toolkit:comment-analyzer` — verify comment accuracy
 4. `pr-review-toolkit:pr-test-analyzer` — test coverage quality
 5. `pr-review-toolkit:silent-failure-hunter` — find silent failures, bad error handling
 6. `pr-review-toolkit:type-design-analyzer` — type/interface design quality
+7. **Architect pass via the `/grill-code` skill** — correctness, security, error handling, testing quality, observability, overcomplexity, and (when a spec/tasks exist) spec compliance + task completeness. Run `/grill-code` over the change as the 7th reviewer.
 
-**Step 3 — Resolve findings:**
-- Fix issues found by reviews (spawn the relevant implementing subagent to fix)
-- Re-run failed reviews after fixes
-- Only create PR when all reviews pass
+Run reviewers 1–6 in parallel; run the `/grill-code` architect pass (7) as its own read-only audit. **Resolve findings:** fix (spawn the relevant implementing subagent) or defer-with-issue; re-run any failed reviewer after fixes. Only open/merge the PR when all seven pass.
 
 ## Quality Gates
 

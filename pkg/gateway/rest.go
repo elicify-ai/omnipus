@@ -259,19 +259,21 @@ func (a *restAPI) adminWrap(h http.HandlerFunc) http.HandlerFunc {
 	)
 }
 
-func jsonOK(w http.ResponseWriter, body any) {
+// writeJSON marshals body and writes it with the given status code. The
+// Content-Type is set BEFORE WriteHeader so it is honored regardless of status
+// — once WriteHeader is called the header map is flushed and later Set calls are
+// silently ignored, which is how 201 responses were leaking out as text/plain
+// (#96). All JSON-returning handlers must route through this (or jsonOK /
+// jsonCreated, which wrap it) rather than calling w.WriteHeader themselves.
+func writeJSON(w http.ResponseWriter, code int, body any) {
 	buf, err := json.Marshal(body)
 	if err != nil {
 		slog.Error("rest: json encode failed", "error", err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		errMsg := "internal server error"
-		if encErr := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: errMsg}); encErr != nil {
-			slog.Debug("rest: write fallback error response failed", "error", encErr)
-		}
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
 	if _, err := w.Write(buf); err != nil {
 		slog.Debug("rest: write response body failed", "error", err)
 		return
@@ -281,6 +283,17 @@ func jsonOK(w http.ResponseWriter, body any) {
 	}
 }
 
+// jsonOK writes body as a 200 OK JSON response.
+func jsonOK(w http.ResponseWriter, body any) { writeJSON(w, http.StatusOK, body) }
+
+// jsonCreated writes body as a 201 Created JSON response. Use this instead of
+// `w.WriteHeader(http.StatusCreated); jsonOK(w, ...)` — that ordering drops the
+// Content-Type and the response is served as text/plain (#96).
+func jsonCreated(w http.ResponseWriter, body any) { writeJSON(w, http.StatusCreated, body) }
+
+// jsonErr writes an ErrorResponse with the given status. Like writeJSON it sets
+// Content-Type before WriteHeader so error bodies are never served as text/plain
+// (#96). It does not call writeJSON to avoid recursion on a marshal failure.
 func jsonErr(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -689,8 +702,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create session: %v", err))
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, unifiedMetaToGenSession(meta))
+	jsonCreated(w, unifiedMetaToGenSession(meta))
 }
 
 // --- Agents ---
@@ -1346,8 +1358,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if createReloadWarning != "" {
 		ag.Warning = &createReloadWarning
 	}
-	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, ag)
+	jsonCreated(w, ag)
 }
 
 // deleteAgent handles DELETE /api/v1/agents/{id}.
@@ -1727,6 +1738,31 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		if err := a.agentLoop.TriggerReload(); err != nil {
 			slog.Error("config reload after agent update failed", "error", err)
 			reloadWarning = fmt.Sprintf("config reload failed: %v", err)
+		}
+	}
+
+	// #73: a model-only change is intentionally config-only (no reload above, so
+	// the WebSocket and conversation context survive). But persisting to config +
+	// SwapConfig does NOT touch the already-constructed agent instance — its
+	// cached provider/model would keep serving the OLD model until a restart.
+	// Apply the change in place so it takes effect on the next turn while the
+	// live session context is preserved. Skip when needsReload fired, since
+	// TriggerReload already rebuilt the instance with the new model.
+	if req.Model != nil && newModel != "" && !needsReload {
+		if _, err := a.agentLoop.ApplyAgentModel(id, newModel); err != nil {
+			// Error, not Warn: a live-apply failure means the running agent keeps
+			// serving the OLD model despite a 200 response. The cause (bad model
+			// config, provider init / API-key failure, no candidates) typically
+			// recurs on the next reload too, so this is not reliably "applies
+			// later" — surface it loudly and in the response so it is not silent.
+			slog.Error("updateAgent: live model apply failed; running agent still on previous model",
+				"agent_id", id, "model", newModel, "error", err)
+			if reloadWarning == "" {
+				reloadWarning = fmt.Sprintf(
+					"model saved to config but could not be applied to the running agent (still serving the previous model): %v",
+					err,
+				)
+			}
 		}
 	}
 	// Re-read the files so the response reflects what was just persisted.
@@ -2925,8 +2961,7 @@ func (a *restAPI) createTask(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save task: %v", err))
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, t)
+	jsonCreated(w, t)
 }
 
 func (a *restAPI) updateTask(w http.ResponseWriter, r *http.Request, id string) {
@@ -3621,8 +3656,7 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		Status:    gen.McpServerStatusDisconnected,
 		ToolCount: 0,
 	}
-	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, resp)
+	jsonCreated(w, resp)
 }
 
 func (a *restAPI) deleteMCPServer(w http.ResponseWriter, id string) {
@@ -4689,11 +4723,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		slog.Warn("rest: upload: encode response failed", "error", err)
-	}
+	jsonCreated(w, resp)
 }
 
 // HandleServeUpload serves uploaded files for display in chat.
