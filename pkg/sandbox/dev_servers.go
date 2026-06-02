@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"sync"
 	"syscall"
@@ -210,6 +211,113 @@ func (r *DevServerRegistry) Register(
 		"pid", pid,
 	)
 	return reg, nil
+}
+
+// ReservePort atomically selects and reserves a loopback port for agentID,
+// inserting a placeholder registration (PID 0) under the registry lock so that
+// concurrent callers cannot pick the same port. The caller MUST follow up with
+// ConfirmReservation(token, pid, command) once the child has spawned, or
+// Unregister(token) if the spawn (or bind probe) fails.
+//
+// wantPort > 0 reserves that exact port if it is free; wantPort == 0
+// auto-selects the lowest free port in [lo, hi], skipping ports already held by
+// the registry. "Free" means not currently registered AND bindable on loopback.
+// Caps mirror Register: ErrPerAgentCap (1 dev server per agent) and
+// GatewayCapError (cfg.Sandbox.MaxConcurrentDevServers).
+//
+// This replaces the previous web_serve behaviour of always auto-picking
+// PortRange[0], which made every concurrent dev server collide on one port
+// (#255).
+func (r *DevServerRegistry) ReservePort(agentID string, wantPort, lo, hi int32, maxConcurrent int) (string, int32, error) {
+	if agentID == "" {
+		return "", 0, errors.New("dev_servers: agentID is required")
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Per-agent cap: 1 active.
+	for _, e := range r.entries {
+		if e.AgentID == agentID {
+			return "", 0, ErrPerAgentCap
+		}
+	}
+	// Per-gateway cap.
+	if maxConcurrent > 0 && len(r.entries) >= maxConcurrent {
+		return "", 0, GatewayCapError{
+			Current:        len(r.entries),
+			Max:            maxConcurrent,
+			EarliestExpiry: r.earliestExpiryLocked(),
+		}
+	}
+
+	used := make(map[int32]bool, len(r.entries))
+	for _, e := range r.entries {
+		used[e.Port] = true
+	}
+
+	var port int32
+	switch {
+	case wantPort > 0:
+		if used[wantPort] || !portAvailable(wantPort) {
+			return "", 0, fmt.Errorf("dev_servers: port %d is not available", wantPort)
+		}
+		port = wantPort
+	default:
+		for p := lo; p <= hi; p++ {
+			if used[p] {
+				continue
+			}
+			if portAvailable(p) {
+				port = p
+				break
+			}
+		}
+		if port == 0 {
+			return "", 0, fmt.Errorf("dev_servers: no free port available in range [%d, %d]", lo, hi)
+		}
+	}
+
+	token, err := generateDevServerToken()
+	if err != nil {
+		return "", 0, fmt.Errorf("dev_servers: token generation: %w", err)
+	}
+	now := time.Now()
+	r.entries[token] = &DevServerRegistration{
+		AgentID:      agentID,
+		Token:        token,
+		Port:         port,
+		PID:          0, // populated by ConfirmReservation once the child spawns
+		CreatedAt:    now,
+		LastActivity: now,
+	}
+	slog.Info("dev_servers: reserved", "agent_id", agentID, "port", port)
+	return token, port, nil
+}
+
+// ConfirmReservation attaches the spawned child's PID and command to a prior
+// ReservePort reservation. It is a no-op if the token is unknown — e.g. the
+// reservation was already released via Unregister after a spawn failure.
+func (r *DevServerRegistry) ConfirmReservation(token string, pid int, command string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.entries[token]; ok {
+		e.PID = pid
+		e.Command = command
+	}
+}
+
+// portAvailable reports whether a loopback TCP port can currently be bound. The
+// probe is advisory — the child binds shortly after — but combined with the
+// in-registry reservation it prevents both stale-port reuse and concurrent
+// same-port selection.
+func portAvailable(port int32) bool {
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	_ = ln.Close()
+	return true
 }
 
 // Lookup returns the registration matching token, or nil if the token is

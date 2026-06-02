@@ -33,7 +33,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/audit"
@@ -141,8 +140,6 @@ type WebServeTool struct {
 	// minDuration / maxDuration clamp static-mode registration lifetimes.
 	minDuration time.Duration
 	maxDuration time.Duration
-	// runMu guards the dev-mode validate-then-register path.
-	runMu sync.Mutex
 }
 
 // NewWebServeTool constructs the unified web_serve tool for a given agent.
@@ -448,25 +445,21 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 		return ErrorResult(fmt.Sprintf("path rejected: %v", err))
 	}
 
-	// Parse the port argument.
-	var exposePort int32
+	// Resolve the port: an explicit port (validated against the range) or 0 to
+	// auto-select a free one from the range inside ReservePort.
+	var wantPort int32
 	if portRaw, ok := args["port"]; ok && portRaw != nil {
 		p, parseErr := normalisePort(portRaw)
 		if parseErr != nil {
 			return ErrorResult(fmt.Sprintf("invalid port: %v", parseErr))
 		}
-		exposePort = p
-	} else {
-		// Auto-pick from the configured range.
-		exposePort = t.devCfg.PortRange[0]
-	}
-
-	// Port range check.
-	if exposePort < t.devCfg.PortRange[0] || exposePort > t.devCfg.PortRange[1] {
-		return ErrorResult(fmt.Sprintf(
-			"port out of allowed range [%d, %d]",
-			t.devCfg.PortRange[0], t.devCfg.PortRange[1],
-		))
+		if p < t.devCfg.PortRange[0] || p > t.devCfg.PortRange[1] {
+			return ErrorResult(fmt.Sprintf(
+				"port out of allowed range [%d, %d]",
+				t.devCfg.PortRange[0], t.devCfg.PortRange[1],
+			))
+		}
+		wantPort = p
 	}
 
 	agentID := t.agentID
@@ -477,16 +470,27 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 		return ErrorResult("web_serve: missing agent id in context")
 	}
 
-	// Per-agent cap pre-check.
-	t.runMu.Lock()
-	existing := t.devReg.LookupByAgent(agentID)
-	t.runMu.Unlock()
-	if existing != nil {
-		return ErrorResult(fmt.Sprintf(
-			"dev server already running on this agent; previous registration expires at %s",
-			existing.CreatedAt.Add(sandbox.HardTimeout).UTC().Format(time.RFC3339),
-		))
+	// Atomically reserve a free port (and a registry slot) BEFORE spawning so
+	// concurrent dev servers can never collide on one port (#255 — the old code
+	// always auto-picked PortRange[0]). The reservation is confirmed with the
+	// child PID on success, or released via Unregister on any failure below.
+	token, exposePort, reserveErr := t.devReg.ReservePort(
+		agentID, wantPort, t.devCfg.PortRange[0], t.devCfg.PortRange[1], int(t.devCfg.MaxConcurrent),
+	)
+	if reserveErr != nil {
+		var capErr sandbox.GatewayCapError
+		if errors.As(reserveErr, &capErr) {
+			return ErrorResult(fmt.Sprintf(
+				"too many concurrent dev servers (%d/%d); earliest expiry at %s",
+				capErr.Current, capErr.Max, capErr.EarliestExpiry.UTC().Format(time.RFC3339),
+			))
+		}
+		if errors.Is(reserveErr, sandbox.ErrPerAgentCap) {
+			return ErrorResult("dev server already running on this agent")
+		}
+		return ErrorResult(fmt.Sprintf("web_serve: %v", reserveErr))
 	}
+	startedAt := time.Now()
 
 	// Build env: PORT + HOST force the dev server to bind loopback only.
 	envSlice := []string{
@@ -496,44 +500,19 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 
 	// HIGH-6: audit BEFORE spawning (fail-closed option).
 	if auditErr := t.auditDevStart(ctx, agentID, command, exposePort); auditErr != nil {
+		t.devReg.Unregister(token)
 		return auditErr
 	}
 
-	// Spawn the background child.
+	// Spawn the background child. Release the reservation if the spawn fails.
 	cmd, spawnErr := t.spawnDevChild(command, absDir, envSlice, exposePort)
 	if spawnErr != nil {
+		t.devReg.Unregister(token)
 		return ErrorResult(fmt.Sprintf("web_serve: failed to start dev server: %v", spawnErr))
 	}
 
-	// Register. Kill orphan if registration fails.
-	reg, regErr := t.devReg.Register(agentID, exposePort, cmd.Process.Pid, command, int(t.devCfg.MaxConcurrent))
-	if regErr != nil {
-		_ = cmd.Process.Signal(syscall.SIGTERM)
-		orphanPid := cmd.Process.Pid
-		go func() {
-			waitErr := cmd.Wait()
-			exitCode := -1
-			if waitErr == nil {
-				exitCode = 0
-			} else if ee, ok := waitErr.(*exec.ExitError); ok {
-				exitCode = ee.ExitCode()
-			}
-			slog.Info("web_serve: orphaned child exited (registration failed)",
-				"agent_id", agentID, "pid", orphanPid, "exit_code", exitCode, "error", waitErr)
-		}()
-
-		var capErr sandbox.GatewayCapError
-		if errors.As(regErr, &capErr) {
-			return ErrorResult(fmt.Sprintf(
-				"too many concurrent dev servers (%d/%d); earliest expiry at %s",
-				capErr.Current, capErr.Max, capErr.EarliestExpiry.UTC().Format(time.RFC3339),
-			))
-		}
-		if errors.Is(regErr, sandbox.ErrPerAgentCap) {
-			return ErrorResult("dev server already running on this agent")
-		}
-		return ErrorResult(fmt.Sprintf("web_serve: registration failed: %v", regErr))
-	}
+	// Attach the child PID to the reservation.
+	t.devReg.ConfirmReservation(token, cmd.Process.Pid, command)
 
 	// Reap goroutine: log exit outcome and clean up registration.
 	bgPid := cmd.Process.Pid
@@ -546,9 +525,9 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 			exitCode = ee.ExitCode()
 		}
 		slog.Info("web_serve: dev server exited",
-			"agent_id", agentID, "pid", bgPid, "token", reg.Token,
+			"agent_id", agentID, "pid", bgPid, "token", token,
 			"exit_code", exitCode, "error", waitErr)
-		t.devReg.Unregister(reg.Token)
+		t.devReg.Unregister(token)
 	}()
 
 	// Brief startup grace so the dev server binds before the first request.
@@ -566,7 +545,7 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 	probeAddr := fmt.Sprintf("127.0.0.1:%d", exposePort)
 	probeConn, probeErr := net.DialTimeout("tcp", probeAddr, 50*time.Millisecond)
 	if probeErr != nil {
-		t.devReg.Unregister(reg.Token)
+		t.devReg.Unregister(token)
 		return &ToolResult{
 			IsError: true,
 			ForLLM: fmt.Sprintf(
@@ -577,14 +556,14 @@ func (t *WebServeTool) executeDev(ctx context.Context, rawPath, command string, 
 	}
 	_ = probeConn.Close()
 
-	path := fmt.Sprintf("/preview/%s/%s/", agentID, reg.Token)
+	path := fmt.Sprintf("/preview/%s/%s/", agentID, token)
 	// Build the URL by concatenating the base URL and the path. The base
 	// URL is constructed upstream with a scheme (http/https), so the simple
 	// concat is the canonical builder here; sandbox.BuildDevURL's dead first
 	// line has been removed (H3/A4).
 	url := t.gatewayPreviewBaseURL + path
 
-	deadline := reg.CreatedAt.Add(sandbox.HardTimeout).UTC().Format(time.RFC3339)
+	deadline := startedAt.Add(sandbox.HardTimeout).UTC().Format(time.RFC3339)
 	summary := fmt.Sprintf(
 		"web_serve: dev server started. URL: %s. Command: %s. Port: %d. Token expires after 30 min idle / 4 h hard cap.",
 		url,
