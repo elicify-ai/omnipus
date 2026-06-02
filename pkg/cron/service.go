@@ -755,6 +755,104 @@ func (cs *CronService) AddJob(
 	return &job, nil
 }
 
+// GetJob returns a copy of the job with the given id, or (zero,false) if no
+// such job exists.
+func (cs *CronService) GetJob(jobID string) (CronJob, bool) {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID == jobID {
+			return cs.store.Jobs[i], true
+		}
+	}
+	return CronJob{}, false
+}
+
+// RunNow fires a single job immediately through the same bounded lane the
+// scheduler uses, respecting the overlap guard (FR-008) and the concurrency cap
+// (FR-007), and blocks until that run completes. It returns:
+//   - status "ok"      + session id when the run succeeded,
+//   - status "error"   + the error  when the run failed,
+//   - status "skipped" + nil        when the overlap guard skipped it,
+//   - status "timeout" + the error  when the run hit its deadline.
+//
+// Unlike the async lane dispatch used by RunDueJobs, RunNow is synchronous so
+// the REST run-now endpoint can return the outcome to the caller. It is the
+// thin primitive the spec asks for ("add RunNow ONLY IF none exists"). The
+// overlap/owner-missing checks live in executeJobByID, so RunNow reuses it and
+// inspects the resulting CronJobState to classify the outcome.
+func (cs *CronService) RunNow(jobID string) (status string, sessionID string, err error) {
+	cs.mu.RLock()
+	exists := false
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID == jobID {
+			exists = true
+			break
+		}
+	}
+	laneCtx := cs.laneCtx
+	sem := cs.laneSem
+	cs.mu.RUnlock()
+	if !exists {
+		return "", "", fmt.Errorf("job not found")
+	}
+	if laneCtx == nil {
+		laneCtx = context.Background()
+	}
+
+	// Snapshot the run-count so we can detect whether executeJobByID actually
+	// ran (vs. skipped by the overlap/owner guard before recording a record).
+	beforeLen, beforeLast := cs.runStateSnapshot(jobID)
+
+	// Acquire a lane slot (queues when the cap is reached, FR-007).
+	select {
+	case sem <- struct{}{}:
+	case <-laneCtx.Done():
+		return "skipped", "", nil
+	}
+	cs.laneWG.Add(1)
+	func() {
+		defer cs.laneWG.Done()
+		defer func() { <-sem }()
+		cs.executeJobByID(laneCtx, jobID)
+	}()
+
+	afterLen, afterRec := cs.runStateSnapshot(jobID)
+	if afterLen == beforeLen {
+		// No new run record appended → the overlap guard (or owner-missing
+		// guard) skipped the run.
+		_ = beforeLast
+		return "skipped", "", nil
+	}
+	switch afterRec.Status {
+	case "error":
+		errOut := afterRec.Error
+		if errOut == "" {
+			errOut = "run failed"
+		}
+		return "error", afterRec.SessionID, fmt.Errorf("%s", errOut)
+	default:
+		return "ok", afterRec.SessionID, nil
+	}
+}
+
+// runStateSnapshot returns the current history length and most-recent run record
+// for a job (used by RunNow to detect whether a run was appended).
+func (cs *CronService) runStateSnapshot(jobID string) (int, CronRunRecord) {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID == jobID {
+			h := cs.store.Jobs[i].State.History
+			if len(h) == 0 {
+				return 0, CronRunRecord{}
+			}
+			return len(h), h[len(h)-1]
+		}
+	}
+	return 0, CronRunRecord{}
+}
+
 func (cs *CronService) UpdateJob(job *CronJob) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()

@@ -37,9 +37,11 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
+	"github.com/dapicom-ai/omnipus/pkg/cron"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 	"github.com/dapicom-ai/omnipus/pkg/media"
+	"github.com/dapicom-ai/omnipus/pkg/notifications"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
 	providers_pkg "github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
@@ -126,6 +128,15 @@ type restAPI struct {
 	// Mirrors the same field on AgentLoop for runtime tool coercion.
 	// Latch (2) — REST enforcement.
 	allowGodMode bool
+
+	// cronService backs the /api/v1/schedules CRUD + run-now + pause endpoints
+	// (#264). Schedules are a contract-first projection over cron.CronJob.
+	// Nil in test setups that do not exercise schedules.
+	cronService *cron.CronService
+
+	// notifStore backs /api/v1/notifications (#264). Per-user, file-based.
+	// Nil in test setups that do not exercise notifications.
+	notifStore *notifications.Store
 }
 
 // --- CORS / JSON helpers ---
@@ -2510,6 +2521,13 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/agents/", a.withAuth(a.HandleAgents))
 	cm.RegisterHTTPHandler("/api/v1/config/gateway/rotate-token", a.withAuth(a.rotateGatewayToken))
 	cm.RegisterHTTPHandler("/api/v1/activity", a.withAuth(a.HandleActivity))
+
+	// Schedules CRUD + run-now + pause (#264).
+	cm.RegisterHTTPHandler("/api/v1/schedules", a.withAuth(a.HandleSchedules))
+	cm.RegisterHTTPHandler("/api/v1/schedules/", a.withAuth(a.HandleSchedules))
+	// Header notification center (#264).
+	cm.RegisterHTTPHandler("/api/v1/notifications", a.withAuth(a.HandleNotifications))
+	cm.RegisterHTTPHandler("/api/v1/notifications/", a.withAuth(a.HandleNotifications))
 
 	// Settings endpoints (Wave 4).
 	// GET /api/v1/audit-log — admin-only: audit log contains every admin

@@ -1,0 +1,288 @@
+// Package notifications implements a file-based, per-user notification store
+// for the scheduled-agent-autonomy feature (#264). Each notification belongs to
+// a single recipient (a username). On failure of a scheduled run, the gateway
+// creates a notification for the schedule's creator and the owning agent's
+// owner, coalescing repeated failures of the same schedule into one item so a
+// flapping schedule does not spam the bell.
+//
+// Storage layout: one JSON file per recipient under
+// $OMNIPUS_HOME/notifications/<recipient>.json, written atomically via
+// fileutil.WriteFileAtomic (temp + rename). Retention keeps the most recent
+// notificationCap items per user.
+package notifications
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+)
+
+// Severity values mirror the Notification.severity contract enum.
+const (
+	SeverityInfo    = "info"
+	SeverityWarning = "warning"
+	SeverityError   = "error"
+)
+
+// Type values mirror the Notification.type contract enum.
+const (
+	TypeScheduleFailed = "schedule_failed"
+)
+
+// notificationCap is the per-user retention bound (keep the most recent N).
+const notificationCap = 50
+
+// Notification is the internal record. It carries every wire field plus the
+// Recipient (username) that scopes per-user storage and the live WS push.
+type Notification struct {
+	Recipient   string `json:"recipient"`
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	Title       string `json:"title"`
+	Body        string `json:"body,omitempty"`
+	Severity    string `json:"severity"`
+	Read        bool   `json:"read"`
+	CreatedAtMs int64  `json:"created_at_ms"`
+	UpdatedAtMs int64  `json:"updated_at_ms,omitempty"`
+	ScheduleID  string `json:"schedule_id,omitempty"`
+	SessionID   string `json:"session_id,omitempty"`
+	AgentID     string `json:"agent_id,omitempty"`
+}
+
+// Store is a per-user file-backed notification store.
+type Store struct {
+	dir string
+	mu  sync.Mutex
+}
+
+// NewStore returns a store rooted at dir (e.g. $OMNIPUS_HOME/notifications). The
+// directory is created lazily on the first write.
+func NewStore(dir string) *Store {
+	return &Store{dir: dir}
+}
+
+// userFile returns the JSON path for a recipient. The recipient is sanitized to
+// a filesystem-safe token so a malicious username cannot path-escape.
+func (s *Store) userFile(recipient string) string {
+	return filepath.Join(s.dir, sanitize(recipient)+".json")
+}
+
+// sanitize maps a username to a filesystem-safe token, replacing any character
+// outside [A-Za-z0-9._-] with '_'. Empty input maps to "_".
+func sanitize(name string) string {
+	if name == "" {
+		return "_"
+	}
+	b := make([]byte, 0, len(name))
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
+			c == '.', c == '_', c == '-':
+			b = append(b, c)
+		default:
+			b = append(b, '_')
+		}
+	}
+	return string(b)
+}
+
+// loadLocked reads a recipient's notifications. A missing file is an empty list.
+// Caller must hold s.mu.
+func (s *Store) loadLocked(recipient string) ([]Notification, error) {
+	data, err := os.ReadFile(s.userFile(recipient))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var list []Notification
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, fmt.Errorf("notifications: corrupt store for %q: %w", recipient, err)
+	}
+	return list, nil
+}
+
+// saveLocked writes a recipient's notifications atomically. Caller holds s.mu.
+func (s *Store) saveLocked(recipient string, list []Notification) error {
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+		return fmt.Errorf("notifications: mkdir: %w", err)
+	}
+	data, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return err
+	}
+	return fileutil.WriteFileAtomic(s.userFile(recipient), data, 0o600)
+}
+
+// Create adds a notification for n.Recipient. If an UNREAD notification for the
+// same (ScheduleID, Recipient) already exists, it is updated in place (title /
+// body / session / severity refreshed, UpdatedAtMs bumped) instead of appending
+// a new row — this coalesces a flapping schedule into a single bell item
+// (Ambiguity #6). The persisted record (new or coalesced) is returned so the
+// caller can push it live over the WS.
+func (s *Store) Create(n Notification) (Notification, error) {
+	if n.Recipient == "" {
+		return Notification{}, fmt.Errorf("notifications: empty recipient")
+	}
+	now := time.Now().UnixMilli()
+	if n.CreatedAtMs == 0 {
+		n.CreatedAtMs = now
+	}
+	if n.Severity == "" {
+		n.Severity = SeverityError
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	list, err := s.loadLocked(n.Recipient)
+	if err != nil {
+		return Notification{}, err
+	}
+
+	// Coalesce: find an existing UNREAD notification for the same schedule.
+	if n.ScheduleID != "" {
+		for i := range list {
+			if !list[i].Read && list[i].ScheduleID == n.ScheduleID {
+				list[i].Title = n.Title
+				list[i].Body = n.Body
+				list[i].Severity = n.Severity
+				list[i].Type = n.Type
+				list[i].SessionID = n.SessionID
+				list[i].AgentID = n.AgentID
+				list[i].UpdatedAtMs = now
+				updated := list[i]
+				if err := s.saveLocked(n.Recipient, list); err != nil {
+					return Notification{}, err
+				}
+				return updated, nil
+			}
+		}
+	}
+
+	if n.ID == "" {
+		n.ID = generateID()
+	}
+	list = append(list, n)
+	list = retain(list)
+	if err := s.saveLocked(n.Recipient, list); err != nil {
+		return Notification{}, err
+	}
+	return n, nil
+}
+
+// ListForUser returns a recipient's notifications, newest first.
+func (s *Store) ListForUser(username string) ([]Notification, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, err := s.loadLocked(username)
+	if err != nil {
+		return nil, err
+	}
+	sortNewestFirst(list)
+	return list, nil
+}
+
+// UnreadCount returns the number of unread notifications for a recipient.
+func (s *Store) UnreadCount(username string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, err := s.loadLocked(username)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for i := range list {
+		if !list[i].Read {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// MarkRead marks a single notification read. Idempotent: marking an already-read
+// (or missing) id is a no-op that returns nil.
+func (s *Store) MarkRead(username, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, err := s.loadLocked(username)
+	if err != nil {
+		return err
+	}
+	changed := false
+	for i := range list {
+		if list[i].ID == id && !list[i].Read {
+			list[i].Read = true
+			list[i].UpdatedAtMs = time.Now().UnixMilli()
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return s.saveLocked(username, list)
+}
+
+// MarkAllRead marks every notification for a recipient read. Idempotent.
+func (s *Store) MarkAllRead(username string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, err := s.loadLocked(username)
+	if err != nil {
+		return err
+	}
+	changed := false
+	now := time.Now().UnixMilli()
+	for i := range list {
+		if !list[i].Read {
+			list[i].Read = true
+			list[i].UpdatedAtMs = now
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return s.saveLocked(username, list)
+}
+
+// retain trims to the most recent notificationCap entries by CreatedAtMs.
+func retain(list []Notification) []Notification {
+	if len(list) <= notificationCap {
+		return list
+	}
+	sortNewestFirst(list)
+	kept := make([]Notification, notificationCap)
+	copy(kept, list[:notificationCap])
+	return kept
+}
+
+// sortNewestFirst sorts in place by CreatedAtMs descending, breaking ties by ID
+// so the order is deterministic.
+func sortNewestFirst(list []Notification) {
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].CreatedAtMs != list[j].CreatedAtMs {
+			return list[i].CreatedAtMs > list[j].CreatedAtMs
+		}
+		return list[i].ID > list[j].ID
+	})
+}
+
+func generateID() string {
+	b := make([]byte, 12)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("ntf_%d", time.Now().UnixNano())
+	}
+	return "ntf_" + hex.EncodeToString(b)
+}

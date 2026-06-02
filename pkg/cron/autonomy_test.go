@@ -438,3 +438,68 @@ func seedStore(t *testing.T, path string, jobs []CronJob) {
 		t.Fatal(err)
 	}
 }
+
+// TestRunNow_DispatchesThroughLane verifies RunNow fires a single job
+// synchronously through the lane and returns the run outcome (#264).
+func TestRunNow_DispatchesThroughLane(t *testing.T) {
+	clk := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	cs, _ := newAutonomyService(t, clk)
+	runner := &recordingRunner{result: "sess-rn"}
+	cs.SetRunner(runner)
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer cs.Stop()
+
+	job := addDueJob(t, cs, "mia")
+
+	status, sessionID, err := cs.RunNow(job.ID)
+	if err != nil {
+		t.Fatalf("RunNow: %v", err)
+	}
+	if status != "ok" {
+		t.Fatalf("status = %q, want ok", status)
+	}
+	if sessionID != "sess-rn" {
+		t.Fatalf("sessionID = %q, want sess-rn", sessionID)
+	}
+	if calls := runner.calls(); len(calls) != 1 || calls[0] != job.ID {
+		t.Fatalf("runner calls = %v, want [%s]", calls, job.ID)
+	}
+}
+
+// TestRunNow_PropagatesError verifies a failed run is returned as status=error.
+func TestRunNow_PropagatesError(t *testing.T) {
+	clk := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	cs, _ := newAutonomyService(t, clk)
+	runner := &recordingRunner{err: fmt.Errorf("kaboom")}
+	cs.SetRunner(runner)
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer cs.Stop()
+
+	job := addDueJob(t, cs, "mia")
+	status, _, err := cs.RunNow(job.ID)
+	if status != "error" {
+		t.Fatalf("status = %q, want error", status)
+	}
+	if err == nil {
+		t.Fatal("expected error from RunNow")
+	}
+}
+
+// TestRunNow_NotFound returns an error for an unknown id.
+func TestRunNow_NotFound(t *testing.T) {
+	clk := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	cs, _ := newAutonomyService(t, clk)
+	cs.SetRunner(&recordingRunner{result: "x"})
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer cs.Stop()
+
+	if _, _, err := cs.RunNow("missing"); err == nil {
+		t.Fatal("expected error for missing job")
+	}
+}

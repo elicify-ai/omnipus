@@ -70,6 +70,10 @@ const (
 	// EventKindWhatsAppPairing is emitted when the WhatsApp native channel produces
 	// a linked-device pairing update (QR code or status) to surface in the SPA (#283).
 	EventKindWhatsAppPairing
+	// EventKindNotification is emitted when a user-facing notification is raised
+	// (e.g. a scheduled run failed). Delivered live only to the recipient user's
+	// WebSocket connections (#264).
+	EventKindNotification
 
 	eventKindCount
 )
@@ -103,6 +107,7 @@ var eventKindNames = [...]string{
 	"background_process_kill",
 	"rate_limit",
 	"whatsapp_pairing",
+	"notification",
 }
 
 // String returns the stable string form of an EventKind.
@@ -449,6 +454,30 @@ type RateLimitPayload struct {
 	AgentID           string  `json:"agent_id,omitempty"`
 	ChatID            string  `json:"chat_id,omitempty"`
 	Tool              string  `json:"tool,omitempty"`
+}
+
+// NotificationAdminBroadcast is the sentinel Recipient value used when a
+// notification could not be routed to a specific user and must reach every
+// admin connection instead (W-7 fallback).
+const NotificationAdminBroadcast = "*admin*"
+
+// NotificationPayload carries a user-facing notification for the live WS push
+// (#264). It is delivered ONLY to connections whose userID equals Recipient
+// (or, when Recipient == NotificationAdminBroadcast, to admin-role connections).
+type NotificationPayload struct {
+	// Recipient is the username the notification is for, or
+	// NotificationAdminBroadcast to fan out to all admins.
+	Recipient        string `json:"recipient"`
+	ID               string `json:"id"`
+	NotificationType string `json:"notification_type"`
+	Title            string `json:"title"`
+	Body             string `json:"body,omitempty"`
+	Severity         string `json:"severity"`
+	Read             bool   `json:"read"`
+	CreatedAtMs      int64  `json:"created_at_ms"`
+	ScheduleID       string `json:"schedule_id,omitempty"`
+	SessionID        string `json:"session_id,omitempty"`
+	AgentID          string `json:"agent_id,omitempty"`
 }
 
 // WhatsAppPairingPayload carries a WhatsApp native/QR linked-device pairing

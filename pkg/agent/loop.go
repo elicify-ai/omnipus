@@ -2049,6 +2049,15 @@ func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.Pairi
 	})
 }
 
+// EmitNotification publishes a user-facing notification onto the event bus so
+// the recipient's SPA WebSocket connections receive a notification frame (#264).
+// The WS forwarder filters delivery by Recipient (==wsConn.userID), so the
+// payload is not broadcast to every authenticated tab. Safe to call from any
+// goroutine — the bus drops to a full subscriber rather than blocking.
+func (al *AgentLoop) EmitNotification(p NotificationPayload) {
+	al.emitEvent(EventKindNotification, EventMeta{Source: "schedule"}, p)
+}
+
 func cloneEventArguments(args map[string]any) map[string]any {
 	if len(args) == 0 {
 		return nil
