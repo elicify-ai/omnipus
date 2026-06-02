@@ -2136,6 +2136,28 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				rateF.Tool = &tool
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeRateLimit), rateF)
+		case agent.EventKindWhatsAppPairing:
+			// #283: WhatsApp linked-device pairing (QR + status). Not tied to a
+			// chatID, so every connection forwards it (the SPA Channels screen is
+			// where it renders).
+			p, ok := evt.Payload.(agent.WhatsAppPairingPayload)
+			if !ok {
+				continue
+			}
+			pairF := generated.WhatsAppPairingFrame{
+				Type:      string(generated.WsFrameTypeWhatsappPairing),
+				ChannelId: p.ChannelID,
+				Status:    p.Status,
+			}
+			if p.QR != "" {
+				qr := p.QR
+				pairF.Qr = &qr
+			}
+			if p.Message != "" {
+				msg := p.Message
+				pairF.Message = &msg
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeWhatsappPairing), pairF)
 		}
 	}
 }

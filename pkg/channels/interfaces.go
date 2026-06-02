@@ -68,3 +68,14 @@ type PlaceholderRecorder interface {
 type CommandRegistrarCapable interface {
 	RegisterCommands(ctx context.Context, defs []commands.Definition) error
 }
+
+// PairingObservable is implemented by channels that produce linked-device
+// pairing updates (a QR code to scan + status transitions) and can report them
+// to an observer. The gateway wires the observer at boot so the SPA can render
+// the QR in-browser instead of requiring the gateway terminal (#283).
+//
+// status is one of: "waiting", "code", "linked", "timeout", "error".
+// qr is non-empty only when status == "code".
+type PairingObservable interface {
+	SetPairingObserver(fn func(status, qr, message string))
+}

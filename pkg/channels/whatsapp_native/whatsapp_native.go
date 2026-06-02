@@ -63,6 +63,32 @@ type WhatsAppNativeChannel struct {
 	reconnecting bool
 	stopping     atomic.Bool    // set once Stop begins; prevents new wg.Add calls
 	wg           sync.WaitGroup // tracks background goroutines (QR handler, reconnect)
+
+	// pairingObserver, if set, receives linked-device pairing updates (QR code +
+	// status) so the gateway can surface them in the SPA (#283). Wired at boot
+	// via SetPairingObserver; guarded by mu.
+	pairingObserver func(status, qr, message string)
+}
+
+// SetPairingObserver installs a callback that receives WhatsApp linked-device
+// pairing updates (status one of waiting/code/linked/timeout/error; qr set only
+// when status=="code"). Satisfies channels.PairingObservable. Safe to call
+// before Start; the QR goroutine reads it under mu.
+func (c *WhatsAppNativeChannel) SetPairingObserver(fn func(status, qr, message string)) {
+	c.mu.Lock()
+	c.pairingObserver = fn
+	c.mu.Unlock()
+}
+
+// emitPairing invokes the pairing observer if one is set (best-effort; never
+// blocks the QR loop). qr is non-empty only for status=="code".
+func (c *WhatsAppNativeChannel) emitPairing(status, qr, message string) {
+	c.mu.Lock()
+	obs := c.pairingObserver
+	c.mu.Unlock()
+	if obs != nil {
+		obs(status, qr, message)
+	}
 }
 
 // NewWhatsAppNativeChannel creates a WhatsApp channel that uses whatsmeow for connection.
@@ -205,8 +231,19 @@ func (c *WhatsAppNativeChannel) Start(ctx context.Context) error {
 							"event": "whatsapp.qr_code",
 							"code":  evt.Code,
 						})
+						// #283: surface the QR to the SPA (live, no terminal needed).
+						c.emitPairing("code", evt.Code, "")
 					} else {
 						logger.InfoCF("whatsapp", "WhatsApp login event", map[string]any{"event": evt.Event})
+						// #283: map whatsmeow QR lifecycle events to SPA pairing status.
+						switch evt.Event {
+						case "success":
+							c.emitPairing("linked", "", "")
+						case "timeout":
+							c.emitPairing("timeout", "", "the QR code expired before it was scanned")
+						default:
+							c.emitPairing("error", "", evt.Event)
+						}
 					}
 				}
 			}
