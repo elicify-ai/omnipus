@@ -259,19 +259,25 @@ func (a *restAPI) adminWrap(h http.HandlerFunc) http.HandlerFunc {
 	)
 }
 
-func jsonOK(w http.ResponseWriter, body any) {
+// writeJSON marshals body and writes it with the given status code. The
+// Content-Type is set BEFORE WriteHeader so it is honored regardless of status
+// — once WriteHeader is called the header map is flushed and later Set calls are
+// silently ignored, which is how 201 responses were leaking out as text/plain
+// (#96). All JSON-returning handlers must route through this (or jsonOK /
+// jsonCreated, which wrap it) rather than calling w.WriteHeader themselves.
+func writeJSON(w http.ResponseWriter, code int, body any) {
 	buf, err := json.Marshal(body)
 	if err != nil {
 		slog.Error("rest: json encode failed", "error", err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		errMsg := "internal server error"
-		if encErr := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: errMsg}); encErr != nil {
+		if encErr := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: "internal server error"}); encErr != nil {
 			slog.Debug("rest: write fallback error response failed", "error", encErr)
 		}
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
 	if _, err := w.Write(buf); err != nil {
 		slog.Debug("rest: write response body failed", "error", err)
 		return
@@ -280,6 +286,14 @@ func jsonOK(w http.ResponseWriter, body any) {
 		slog.Debug("rest: write newline failed", "error", err)
 	}
 }
+
+// jsonOK writes body as a 200 OK JSON response.
+func jsonOK(w http.ResponseWriter, body any) { writeJSON(w, http.StatusOK, body) }
+
+// jsonCreated writes body as a 201 Created JSON response. Use this instead of
+// `w.WriteHeader(http.StatusCreated); jsonOK(w, ...)` — that ordering drops the
+// Content-Type and the response is served as text/plain (#96).
+func jsonCreated(w http.ResponseWriter, body any) { writeJSON(w, http.StatusCreated, body) }
 
 func jsonErr(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
@@ -689,8 +703,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create session: %v", err))
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, unifiedMetaToGenSession(meta))
+	jsonCreated(w, unifiedMetaToGenSession(meta))
 }
 
 // --- Agents ---
@@ -1346,8 +1359,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if createReloadWarning != "" {
 		ag.Warning = &createReloadWarning
 	}
-	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, ag)
+	jsonCreated(w, ag)
 }
 
 // deleteAgent handles DELETE /api/v1/agents/{id}.
@@ -2925,8 +2937,7 @@ func (a *restAPI) createTask(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save task: %v", err))
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, t)
+	jsonCreated(w, t)
 }
 
 func (a *restAPI) updateTask(w http.ResponseWriter, r *http.Request, id string) {
@@ -3621,8 +3632,7 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		Status:    gen.McpServerStatusDisconnected,
 		ToolCount: 0,
 	}
-	w.WriteHeader(http.StatusCreated)
-	jsonOK(w, resp)
+	jsonCreated(w, resp)
 }
 
 func (a *restAPI) deleteMCPServer(w http.ResponseWriter, id string) {
