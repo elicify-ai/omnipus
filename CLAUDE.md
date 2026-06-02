@@ -120,6 +120,16 @@ Use this sequence when implementing features:
 5. Implement in Plan Mode first, then switch to normal mode
 6. Use `/grill-code` to verify spec compliance after implementation
 
+## Issue & Project Board Conventions
+
+When filing or triaging GitHub issues, follow `docs/internal/issue-and-board-conventions.md` — this applies to the lead and every subagent. The essentials:
+
+- **Type is the "kind" axis** (exactly one): **Bug / Feature / Task / Epic** — set the org-level Issue Type, not a label. The `bug`/`enhancement` labels are **retired/deleted**; never recreate them.
+- **`gh` has no `--type` flag** — set the Type via GraphQL `updateIssueIssueType` after `gh issue create` (or use the issue templates in the UI, which set `type:` automatically). Type IDs and the exact recipe are in the doc.
+- **Labels are cross-cutting only**: `priority:*` (one), `area:*` (one+), plus `security`/`tech-debt`/`test-coverage`/`documentation`. The `type:*` labels are **PR/changelog only** (release-drafter) — never put them on issues.
+- **Board #3 automation does the rote work**: new issues auto-add as `Backlog`; closing auto-sets `Done`. Do **not** manually add issues to the board or hand-set initial/`Done` status. You do set **Sprint** (single-select) and promote Status as work proceeds.
+- **Bundle related work** under an **Epic** with real sub-issues (`addSubIssue`); sprints are an Epic + its sub-issues sharing one Sprint value.
+
 ## Subagent Workflow
 
 The lead (you) orchestrates all work by spawning specialized subagents via the Agent tool. There are no agent teams — you spawn subagents directly, give them focused tasks, and review their output.

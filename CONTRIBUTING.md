@@ -56,6 +56,8 @@ You can refer to "Omnipus" in articles, integrations ("Omnipus-compatible"), and
 
 For substantial new features, please open an issue first to discuss the design before writing code. This prevents wasted effort and ensures alignment with the project's direction. Check `ROADMAP.md` to understand which release phase your work targets.
 
+Always file via the issue templates — they set the issue **Type** (Bug / Feature / Task) automatically. How issues are classified (Types vs. labels, priorities, milestones, the project board, and sprint/epic bundling) is documented in `docs/internal/issue-and-board-conventions.md`; maintainers and automated agents follow it when triaging.
+
 ---
 
 ## Getting Started
