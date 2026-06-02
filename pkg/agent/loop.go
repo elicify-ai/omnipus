@@ -1582,7 +1582,13 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 
 			// System messages are handled inline in a goroutine (no scope).
 			if msg.Channel == "system" {
+				// Track in activeRequests so graceful shutdown's
+				// WaitForActiveRequests drains this turn before teardown —
+				// otherwise its cost.json / session-context writes can outlive
+				// RunContext and race temp-dir cleanup (#265, macOS APFS).
+				al.activeRequests.Add(1)
 				go func() {
+					defer al.activeRequests.Done()
 					defer func() {
 						if r := recover(); r != nil {
 							logger.ErrorCF("agent", "Panic in system-message goroutine",
@@ -1609,7 +1615,10 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			if !ok {
 				// Unroutable — fall through to the original single-shot path so
 				// channels with no configured agent still get an error reply.
+				// Tracked in activeRequests so shutdown drains it (#265).
+				al.activeRequests.Add(1)
 				go func() {
+					defer al.activeRequests.Done()
 					defer func() {
 						if r := recover(); r != nil {
 							logger.ErrorCF("agent", "Panic in unroutable-message goroutine",

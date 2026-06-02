@@ -47,7 +47,6 @@ import (
 //
 // Traces to: Bug-5 (replay frame ordering preserved)
 func TestReplayOrdering_ToolCallStartBeforeResult(t *testing.T) {
-	skipOnMacOSAPFSCleanupRace(t)
 	gw := startIntegrationGateway(t)
 
 	// Create a session via REST API.
@@ -187,7 +186,6 @@ func TestReplayOrdering_EarlierTurnBeforeLaterTurn(t *testing.T) {
 // Traces to: Bug-5 (replay frame ordering) — multi-cycle disconnect/reconnect
 // Traces to: review-pr-test-analyzer.md — "Disconnect → reconnect → disconnect → reconnect"
 func TestReplayOrdering_DisconnectReconnectDisconnectReconnect(t *testing.T) {
-	skipOnMacOSAPFSCleanupRace(t)
 	gw := startIntegrationGateway(t)
 	sessionID := createSession(t, gw)
 	seedTwoTurnTranscript(t, gw, sessionID)
@@ -347,7 +345,6 @@ func TestReplayOrdering_LateLiveFrameDuringDrain(t *testing.T) {
 //
 // Traces to: Bug-2 (replay omits tool_call_start / tool_call_result pairs)
 func TestReplay_ToolCallPairsEmitted(t *testing.T) {
-	skipOnMacOSAPFSCleanupRace(t)
 	gw := startIntegrationGateway(t)
 	sessionID := createSession(t, gw)
 
@@ -450,7 +447,6 @@ func TestReplay_ToolCallPairsEmitted(t *testing.T) {
 //
 // Traces to: Bug-3 (assistant text lost when WS disconnects before LLM reply)
 func TestReplay_AssistantTextSurvivesDisconnect(t *testing.T) {
-	skipOnMacOSAPFSCleanupRace(t)
 
 	// Use a slow LLM (200 ms delay) so we can reliably disconnect before the
 	// server produces its first token.

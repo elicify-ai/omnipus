@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -131,29 +130,6 @@ func startIntegrationGateway(t *testing.T) *testutil.TestGateway {
 	t.Helper()
 	mock := mockLLMServer(t, "")
 	return testutil.StartTestGateway(t, testutil.WithAPIBase(mock.URL), testutil.WithBearerAuth())
-}
-
-// skipOnMacOSAPFSCleanupRace skips tests that race t.TempDir's RemoveAll
-// against the gateway's background filesystem writers. The race only manifests
-// on macos-latest/arm64 CI runners — on Linux ext4 the looser directory-empty
-// semantics hide it.
-//
-// #265 drained ONE class of writer — the session-end recap goroutines, which
-// AgentLoop.Close() now waits for (recapWG.Wait) before teardown — and that
-// fixed the intermittent Linux flake (validated with a 10x -count stress).
-// But macOS APFS exposes that other writers still race cleanup: per-LLM-call
-// cost.json saves and session .context writes can land while RemoveAll is
-// traversing. Fully quiescing those (a synchronous session-store backend
-// Close()) is the remaining follow-up; until it lands we keep skipping on
-// darwin so CI does not flake. The test BODY assertions pass on every platform;
-// only cleanup is racy.
-func skipOnMacOSAPFSCleanupRace(t *testing.T) {
-	t.Helper()
-	if runtime.GOOS == "darwin" {
-		t.Skip(
-			"v0.2 follow-up: TestGateway.Close needs to drain session-store writers before returning (macOS APFS surfaces the race; Linux hides it)",
-		)
-	}
 }
 
 // wsConnect dials the gateway's WS endpoint and sends the mandatory auth frame.
