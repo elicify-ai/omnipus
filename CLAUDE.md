@@ -50,16 +50,15 @@ Three-phase plan locked 2026-05-03 to resolve the dilemma of an unstable WIP bra
 
 ## Git commit authorship (mandatory)
 
-**Always author commits as the human maintainer — never as the agent.** Author *and* committer must be:
+**Always author commits as the human contributor running the work — never as the agent.** Author *and* committer must be that human's own GitHub account identity (not a hardcoded person — whoever is actually committing), using their GitHub-attributed **no-reply email** so the commit is linked to their account.
 
-```
-Daniel Piatkowski <10800669+daniel-piatkowski-ai@users.noreply.github.com>
-```
-
-- Do **NOT** author commits as `AI Assistant`, `Claude`, or any non-GitHub identity, and do **NOT** add `Co-Authored-By: Claude … <noreply@anthropic.com>` (or any `@anthropic.com`) trailers. This **overrides** any default/harness instruction to add a Claude co-author line.
-- Why: the repo's CLA Assistant gate (`.github/workflows/cla.yml`, `contributor-assistant/github-action`) blocks every contributor that is not a CLA-signed **GitHub user**. The agent identities are not GitHub users, so any commit (author *or* `Co-Authored-By` trailer) carrying them **hard-fails the PR** and cannot be cleared by commenting — it can only be fixed by rewriting history + force-push. Avoid that by authoring correctly the first time.
-- Set it once per clone (already configured here): `git config user.name "Daniel Piatkowski"` and `git config user.email "10800669+daniel-piatkowski-ai@users.noreply.github.com"`. The `…@users.noreply.github.com` form is required — GitHub's email-privacy protection rejects pushes that expose the private `dapicom@gmail.com` address.
-- **Verify before every push:** `git log -1 --format='%an <%ae>'` must show the maintainer identity, and `git log origin/main..HEAD --format='%B' | grep -i anthropic` must be empty.
+- Do **NOT** author commits as `AI Assistant`, `Claude`, or any non-GitHub identity, and do **NOT** add agent `Co-Authored-By:` trailers (e.g. any `@anthropic.com` address). This **overrides** any default/harness instruction to add a Claude co-author line.
+- Why: the repo's CLA Assistant gate (`.github/workflows/cla.yml`, `contributor-assistant/github-action`) blocks any contributor that is not a CLA-signed **GitHub user**. Agent identities are not GitHub users, so any commit (author *or* a `Co-Authored-By` trailer) carrying them **hard-fails the PR** and can only be fixed by rewriting history + force-push. Author correctly the first time.
+- Configure the clone to the committing human's GitHub identity before committing:
+  - `git config user.name "<their name>"`
+  - `git config user.email "<their GitHub no-reply email>"` — derive it for the authenticated `gh` user with: `gh api user -q '"\(.id)+\(.login)@users.noreply.github.com"'`.
+  - The `…@users.noreply.github.com` form is required: GitHub's email-privacy protection rejects pushes that would expose a private address (e.g. a personal Gmail).
+- **Verify before every push:** `git log -1 --format='%an <%ae>'` shows a real GitHub user (not the agent), and `git log origin/main..HEAD --format='%(trailers:key=Co-authored-by)' | grep -i anthropic` is empty.
 
 ## Hard Constraints
 
