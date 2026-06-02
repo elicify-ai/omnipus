@@ -23,7 +23,6 @@ import (
 // Traces to: WebSocket-heartbeat fix (server-side pong response).
 // This is the integration-level counterpart of TestServerRespondsToAppLayerPing.
 func TestIdleHeartbeat(t *testing.T) {
-	skipOnMacOSAPFSCleanupRace(t)
 	gw := startIntegrationGateway(t)
 	conn := wsConnect(t, gw)
 

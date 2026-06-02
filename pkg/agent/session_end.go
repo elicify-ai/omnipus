@@ -42,7 +42,13 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	// Cancel any outstanding idle ticker for this session.
 	al.cancelIdleTicker(sessionID)
 
-	go al.runRecap(sessionID, trigger)
+	// Track the recap goroutine so Close() can drain it before shutdown — its
+	// LAST_SESSION.md / retro writes must not outlive the gateway (#265).
+	al.recapWG.Add(1)
+	go func() {
+		defer al.recapWG.Done()
+		al.runRecap(sessionID, trigger)
+	}()
 }
 
 // runRecap performs the session-end LLM summarisation and persists the result.
@@ -142,6 +148,9 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 		},
 	}
 
+	// Self-bounded at 60s. On graceful shutdown, AgentLoop.Close() waits for this
+	// goroutine to finish (recapWG) rather than cancelling it, so the recap runs
+	// to completion within the 70s shutdown budget (#265).
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
