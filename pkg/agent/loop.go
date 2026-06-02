@@ -2033,7 +2033,7 @@ func (al *AgentLoop) emitEvent(kind EventKind, meta EventMeta, payload any) {
 // whatsapp_pairing frame (#283). Safe to call from a channel's own goroutine —
 // the bus drops to a full subscriber rather than blocking. Wired into the
 // WhatsApp native channel at gateway boot via SetPairingObserver.
-func (al *AgentLoop) EmitWhatsAppPairing(channelID, status, qr, message string) {
+func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.PairingStatus, qr, message string) {
 	al.emitEvent(EventKindWhatsAppPairing, EventMeta{Source: "channel"}, WhatsAppPairingPayload{
 		ChannelID: channelID,
 		Status:    status,

@@ -34,9 +34,12 @@ func TestPairingObserver(t *testing.T) {
 		t.Fatal("unexpected concrete type")
 	}
 
-	type update struct{ status, qr, message string }
+	type update struct {
+		status      channels.PairingStatus
+		qr, message string
+	}
 	var got []update
-	obs.SetPairingObserver(func(status, qr, message string) {
+	obs.SetPairingObserver(func(status channels.PairingStatus, qr, message string) {
 		got = append(got, update{status, qr, message})
 	})
 

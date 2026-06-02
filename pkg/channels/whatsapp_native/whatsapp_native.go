@@ -67,26 +67,14 @@ type WhatsAppNativeChannel struct {
 	// pairingObserver, if set, receives linked-device pairing updates (QR code +
 	// status) so the gateway can surface them in the SPA (#283). Wired at boot
 	// via SetPairingObserver; guarded by mu.
-	pairingObserver func(status, qr, message string)
+	pairingObserver func(status channels.PairingStatus, qr, message string)
 }
 
-// Pairing status values mirror the WhatsAppPairingFrame.status contract enum
-// (waiting/code/linked/timeout/error). Centralized so the emit sites can't drift
-// from the wire contract by a typo (#283). "waiting" is reserved for a future
-// pre-QR state and is not currently emitted; the SPA renders its initial prompt
-// from the absence of any pairing state.
-const (
-	pairingStatusCode    = "code"
-	pairingStatusLinked  = "linked"
-	pairingStatusTimeout = "timeout"
-	pairingStatusError   = "error"
-)
-
 // SetPairingObserver installs a callback that receives WhatsApp linked-device
-// pairing updates (status one of code/linked/timeout/error; qr set only when
-// status=="code"). Satisfies channels.PairingObservable. Safe to call before
-// Start; the QR goroutine reads it under mu.
-func (c *WhatsAppNativeChannel) SetPairingObserver(fn func(status, qr, message string)) {
+// pairing updates (qr set only when status==channels.PairingStatusCode).
+// Satisfies channels.PairingObservable. Safe to call before Start; the QR
+// goroutine reads it under mu.
+func (c *WhatsAppNativeChannel) SetPairingObserver(fn func(status channels.PairingStatus, qr, message string)) {
 	c.mu.Lock()
 	c.pairingObserver = fn
 	c.mu.Unlock()
@@ -97,12 +85,12 @@ func (c *WhatsAppNativeChannel) SetPairingObserver(fn func(status, qr, message s
 // is wired but a QR is ready, warn so an unwired/regressed bridge is visible
 // rather than a silently blank SPA panel (#283); the gateway terminal still
 // shows the code as a fallback.
-func (c *WhatsAppNativeChannel) emitPairing(status, qr, message string) {
+func (c *WhatsAppNativeChannel) emitPairing(status channels.PairingStatus, qr, message string) {
 	c.mu.Lock()
 	obs := c.pairingObserver
 	c.mu.Unlock()
 	if obs == nil {
-		if status == pairingStatusCode {
+		if status == channels.PairingStatusCode {
 			logger.WarnCF(
 				"whatsapp",
 				"QR code ready but no pairing observer wired; SPA will not show it (use the gateway terminal)",
@@ -135,7 +123,7 @@ func (c *WhatsAppNativeChannel) handleQREvent(evt whatsmeow.QRChannelItem, repai
 			"event": "whatsapp.qr_code",
 			"code":  evt.Code,
 		})
-		c.emitPairing(pairingStatusCode, evt.Code, "")
+		c.emitPairing(channels.PairingStatusCode, evt.Code, "")
 		return
 	}
 
@@ -148,23 +136,23 @@ func (c *WhatsAppNativeChannel) handleQREvent(evt whatsmeow.QRChannelItem, repai
 // and a human-readable, actionable message. Known err-* events get specific
 // guidance; unknown events are logged at warn so whatsmeow vocabulary drift is
 // visible rather than silently coerced into an opaque raw-enum dump (#283).
-func mapQRLifecycle(event string) (status, message string) {
+func mapQRLifecycle(event string) (status channels.PairingStatus, message string) {
 	switch event {
 	case "success":
-		return pairingStatusLinked, ""
+		return channels.PairingStatusLinked, ""
 	case "timeout":
-		return pairingStatusTimeout, "the QR code expired before it was scanned"
+		return channels.PairingStatusTimeout, "the QR code expired before it was scanned"
 	case "err-scanned-without-multidevice":
-		return pairingStatusError, "enable multi-device in WhatsApp, then scan the code again"
+		return channels.PairingStatusError, "enable multi-device in WhatsApp, then scan the code again"
 	case "err-client-outdated":
-		return pairingStatusError, "the gateway's WhatsApp client is outdated and must be updated"
+		return channels.PairingStatusError, "the gateway's WhatsApp client is outdated and must be updated"
 	default:
 		logger.WarnCF(
 			"whatsapp",
 			"unhandled whatsmeow QR event mapped to pairing error",
 			map[string]any{"event": event},
 		)
-		return pairingStatusError, fmt.Sprintf("pairing failed (%s)", event)
+		return channels.PairingStatusError, fmt.Sprintf("pairing failed (%s)", event)
 	}
 }
 

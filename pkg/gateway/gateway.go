@@ -1033,9 +1033,11 @@ func setupAndStartServices(
 	runningServices.ChannelManager.SetCancelInterceptor(agentLoop)
 	// #283: bridge WhatsApp native pairing (QR/status) → agent event bus so the
 	// per-connection WS forwarder broadcasts a whatsapp_pairing frame to the SPA.
-	runningServices.ChannelManager.SetPairingObserver(func(channelID, status, qr, message string) {
-		agentLoop.EmitWhatsAppPairing(channelID, status, qr, message)
-	})
+	runningServices.ChannelManager.SetPairingObserver(
+		func(channelID string, status channels.PairingStatus, qr, message string) {
+			agentLoop.EmitWhatsAppPairing(channelID, status, qr, message)
+		},
+	)
 
 	if transcriber := voice.DetectTranscriber(cfg, runningServices.bundle); transcriber != nil {
 		agentLoop.SetTranscriber(transcriber)

@@ -6,10 +6,10 @@ import "testing"
 // recording the observer the manager installs so the test can fire it (#283).
 type mockPairingChannel struct {
 	mockChannel
-	observer func(status, qr, message string)
+	observer func(status PairingStatus, qr, message string)
 }
 
-func (m *mockPairingChannel) SetPairingObserver(fn func(status, qr, message string)) {
+func (m *mockPairingChannel) SetPairingObserver(fn func(status PairingStatus, qr, message string)) {
 	m.observer = fn
 }
 
@@ -25,9 +25,13 @@ func TestManagerSetPairingObserver_TagsChannelID(t *testing.T) {
 	m.channels["whatsapp_native"] = wa
 	m.channels["other"] = other
 
-	type got struct{ channelID, status, qr, message string }
+	type got struct {
+		channelID   string
+		status      PairingStatus
+		qr, message string
+	}
 	var updates []got
-	m.SetPairingObserver(func(channelID, status, qr, message string) {
+	m.SetPairingObserver(func(channelID string, status PairingStatus, qr, message string) {
 		updates = append(updates, got{channelID, status, qr, message})
 	})
 

@@ -2150,7 +2150,7 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			pairF := generated.WhatsAppPairingFrame{
 				Type:      string(generated.WsFrameTypeWhatsappPairing),
 				ChannelId: p.ChannelID,
-				Status:    p.Status,
+				Status:    string(p.Status),
 			}
 			if p.QR != "" {
 				qr := p.QR

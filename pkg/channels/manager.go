@@ -119,20 +119,20 @@ type Manager struct {
 	// pairingObserver, if set before StartAll, is wired into every channel that
 	// implements PairingObservable so linked-device pairing updates (QR/status)
 	// reach the SPA (#283). channelID is the channel name (e.g. "whatsapp_native").
-	pairingObserver func(channelID, status, qr, message string)
+	pairingObserver func(channelID string, status PairingStatus, qr, message string)
 }
 
 // SetPairingObserver registers a callback to receive linked-device pairing
 // updates (QR/status) from all PairingObservable channels and propagates it to
 // channels already initialized — mirroring SetCancelInterceptor, since the
 // channels map is populated during NewManager (#283).
-func (m *Manager) SetPairingObserver(fn func(channelID, status, qr, message string)) {
+func (m *Manager) SetPairingObserver(fn func(channelID string, status PairingStatus, qr, message string)) {
 	m.mu.Lock()
 	m.pairingObserver = fn
 	for name, ch := range m.channels {
 		if obs, ok := ch.(PairingObservable); ok {
 			chName := name
-			obs.SetPairingObserver(func(status, qr, message string) {
+			obs.SetPairingObserver(func(status PairingStatus, qr, message string) {
 				fn(chName, status, qr, message)
 			})
 		}
@@ -455,7 +455,7 @@ func (m *Manager) initChannel(name, displayName string) error {
 	if m.pairingObserver != nil {
 		if obs, ok := ch.(PairingObservable); ok {
 			chName := name
-			obs.SetPairingObserver(func(status, qr, message string) {
+			obs.SetPairingObserver(func(status PairingStatus, qr, message string) {
 				m.pairingObserver(chName, status, qr, message)
 			})
 		}

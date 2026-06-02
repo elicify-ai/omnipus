@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/dapicom-ai/omnipus/pkg/channels"
 	"github.com/dapicom-ai/omnipus/pkg/session"
 )
 
@@ -451,11 +452,11 @@ type RateLimitPayload struct {
 }
 
 // WhatsAppPairingPayload carries a WhatsApp native/QR linked-device pairing
-// update for the SPA (#283). Status is one of waiting/code/linked/timeout/error;
-// QR is populated only when Status == "code".
+// update for the SPA (#283). QR is populated only when
+// Status == channels.PairingStatusCode.
 type WhatsAppPairingPayload struct {
-	ChannelID string `json:"channel_id"`
-	Status    string `json:"status"`
-	QR        string `json:"qr,omitempty"`
-	Message   string `json:"message,omitempty"`
+	ChannelID string                 `json:"channel_id"`
+	Status    channels.PairingStatus `json:"status"`
+	QR        string                 `json:"qr,omitempty"`
+	Message   string                 `json:"message,omitempty"`
 }
