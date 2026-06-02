@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -297,17 +298,18 @@ func (g *TestGateway) Close() {
 		return
 	}
 
-	// Drain hold-off — RunContext returning does NOT guarantee every
-	// background goroutine that touches the session store, cost tracker, or
-	// audit logger has finished its final write/rename. On macOS APFS and
-	// some Linux runners, t.TempDir's RemoveAll fires immediately after this
-	// returns and races those writers ("directory not empty" / cost.json
-	// rename misses). Wait for the sessions/ subtree to stop changing for a
-	// short window before yielding to the caller — drain is best-effort and
-	// capped, never blocks the test on its own. A proper fix wires the
-	// session-store backend's Close into omnipusGracefulShutdown (tracked
-	// as v0.2).
-	waitForHomeDirStability(g.homeDir, 200*time.Millisecond, 3*time.Second)
+	// #265: deterministic cleanup-race safety net for macOS APFS. The shutdown
+	// fixes (recap drain + tracking the system/unroutable turn goroutines +
+	// stopping heartbeat/cron before the drain) drain the writers — confirmed on
+	// Linux (no post-close writes). But on the slower macOS runner a straggler
+	// write can still land just after RunContext returns and race t.TempDir's
+	// RemoveAll ("directory not empty"). Wait until the sessions subtree is stable
+	// for a short settle window before yielding to the test's RemoveAll. This is
+	// bounded and, on Linux where there is nothing in flight, returns on the first
+	// stable scan (~one settle window). Earlier fixed-sleep attempts failed
+	// because they ran WITHOUT the shutdown drains above (writers never stopped);
+	// with the residual now bounded, quiescence is reached well inside the budget.
+	waitForSessionsQuiescent(g.homeDir, 150*time.Millisecond, 3*time.Second)
 
 	// Surface any boot error that occurred after the gateway became ready.
 	if p := g.bootErr.Load(); p != nil && *p != nil {
@@ -317,47 +319,46 @@ func (g *TestGateway) Close() {
 	}
 }
 
-// waitForHomeDirStability polls homeDir/sessions until two consecutive scans
-// produce the same (file-count, total-size) snapshot, or the budget elapses.
-// Caller-side hold-off for the documented gateway-shutdown drain race; see
-// TestGateway.Close. Pure read-only — never errors, never blocks beyond budget.
-func waitForHomeDirStability(homeDir string, settleWindow, budget time.Duration) {
+// waitForSessionsQuiescent blocks until the homeDir/sessions subtree produces two
+// consecutive identical (path,size,mtime) snapshots `settle` apart, or `budget`
+// elapses. Pure read-only; never errors. Used by Close to avoid the macOS APFS
+// RemoveAll-vs-late-write race (#265). On Linux (nothing in flight post-Close) it
+// returns after the first settle window.
+func waitForSessionsQuiescent(homeDir string, settle, budget time.Duration) {
 	if homeDir == "" {
 		return
 	}
-	sessionsDir := filepath.Join(homeDir, "sessions")
+	sessions := filepath.Join(homeDir, "sessions")
 	deadline := time.Now().Add(budget)
-	var prevCount, prevSize int64 = -1, -1
+	prev := ""
 	stableSince := time.Time{}
 	for time.Now().Before(deadline) {
-		var count, size int64
-		_ = filepath.WalkDir(sessionsDir, func(_ string, d os.DirEntry, err error) error {
+		var sb strings.Builder
+		_ = filepath.WalkDir(sessions, func(p string, d os.DirEntry, err error) error {
 			if err != nil {
-				return err
+				return nil //nolint:nilerr // best-effort read-only scan; ignore transient walk errors
 			}
 			if d.IsDir() {
 				return nil
 			}
-			info, infoErr := d.Info()
-			if infoErr != nil {
-				return infoErr
+			if fi, e := d.Info(); e == nil {
+				fmt.Fprintf(&sb, "%s:%d:%d;", p, fi.Size(), fi.ModTime().UnixNano())
 			}
-			count++
-			size += info.Size()
 			return nil
 		})
-		if count == prevCount && size == prevSize {
+		sig := sb.String()
+		if sig == prev {
 			if stableSince.IsZero() {
 				stableSince = time.Now()
 			}
-			if time.Since(stableSince) >= settleWindow {
+			if time.Since(stableSince) >= settle {
 				return
 			}
 		} else {
+			prev = sig
 			stableSince = time.Time{}
-			prevCount, prevSize = count, size
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
 }
 

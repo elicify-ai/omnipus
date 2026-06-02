@@ -1,0 +1,126 @@
+package agent
+
+import (
+	"testing"
+
+	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/providers"
+)
+
+// TestApplyAgentModel_SwitchesInPlacePreservingInstance guards #73: a model
+// change must update the LIVE agent instance (model + provider + candidates)
+// without replacing the instance, so the in-memory conversation context is
+// preserved and the change takes effect on the next turn — no hot-reload, no
+// WebSocket drop.
+func TestApplyAgentModel_SwitchesInPlacePreservingInstance(t *testing.T) {
+	t.Setenv("LOOP_APPLY_LOCAL_KEY", "local-key")
+	t.Setenv("LOOP_APPLY_REMOTE_KEY", "remote-key")
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				Provider:          "openai",
+				ModelName:         "local",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+		Providers: []*config.ModelConfig{
+			{
+				ModelName: "local",
+				Model:     "openai/qwen",
+				APIBase:   "http://127.0.0.1:1",
+				APIKeyRef: "LOOP_APPLY_LOCAL_KEY",
+			},
+			{
+				ModelName: "deepseek",
+				Model:     "openrouter/deepseek",
+				APIBase:   "http://127.0.0.1:1",
+				APIKeyRef: "LOOP_APPLY_REMOTE_KEY",
+			},
+		},
+	}
+
+	provider, _, err := providers.CreateProvider(cfg)
+	if err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
+
+	before := al.GetRegistry().GetDefaultAgent()
+	if before == nil {
+		t.Fatal("no default agent")
+	}
+	id := before.ID
+	if before.Model != "local" {
+		t.Fatalf("initial model = %q, want local", before.Model)
+	}
+	beforeProvider := before.Provider
+
+	old, err := al.ApplyAgentModel(id, "deepseek")
+	if err != nil {
+		t.Fatalf("ApplyAgentModel: %v", err)
+	}
+	if old != "local" {
+		t.Errorf("returned previous model = %q, want local", old)
+	}
+
+	after, ok := al.GetRegistry().GetAgent(id)
+	if !ok {
+		t.Fatal("agent vanished after ApplyAgentModel")
+	}
+	if after != before {
+		t.Error("agent instance was replaced — in-memory conversation context would be lost (#73)")
+	}
+	if after.Model != "deepseek" {
+		t.Errorf("model after switch = %q, want deepseek", after.Model)
+	}
+	if after.Provider == beforeProvider {
+		t.Error("provider was not switched to the new model's provider")
+	}
+}
+
+// TestApplyAgentModel_UnknownModelRejectedNoMutation confirms an invalid model
+// is rejected and leaves the instance untouched (no half-applied state).
+func TestApplyAgentModel_UnknownModelRejectedNoMutation(t *testing.T) {
+	t.Setenv("LOOP_APPLY2_KEY", "k")
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				Provider:          "openai",
+				ModelName:         "local",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+		Providers: []*config.ModelConfig{
+			{ModelName: "local", Model: "openai/qwen", APIBase: "http://127.0.0.1:1", APIKeyRef: "LOOP_APPLY2_KEY"},
+		},
+	}
+
+	provider, _, err := providers.CreateProvider(cfg)
+	if err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
+	id := al.GetRegistry().GetDefaultAgent().ID
+
+	if _, err := al.ApplyAgentModel(id, "does-not-exist"); err == nil {
+		t.Fatal("expected error for unknown model, got nil")
+	}
+	after, _ := al.GetRegistry().GetAgent(id)
+	if after.Model != "local" {
+		t.Errorf("model = %q after failed switch; want unchanged 'local'", after.Model)
+	}
+
+	if _, err := al.ApplyAgentModel(id, "   "); err == nil {
+		t.Error("expected error for empty model")
+	}
+	if _, err := al.ApplyAgentModel("no-such-agent", "local"); err == nil {
+		t.Error("expected error for unknown agent id")
+	}
+}

@@ -109,10 +109,29 @@ gh api graphql -f query='mutation{addSubIssue(input:{issueId:"'"$PARENT"'",subIs
 
 Sprints are tracked this way: a Sprint epic with its work items as sub-issues, all assigned to the same **Sprint** field value.
 
+## Closing issues via PRs (mandatory)
+
+**Every PR that resolves issues MUST auto-close them on merge via closing keywords.** Issues do not get closed by hand after a fix ships — the PR closes them. The only acceptable reason an issue stays open after its fixing PR merges is that the work genuinely isn't complete.
+
+Put the keywords in the **PR description** (the body), with **one keyword per issue**:
+
+```
+Closes #264, closes #289, closes #283
+```
+
+Three rules that GitHub enforces — get any of them wrong and the issues silently stay open:
+
+1. **One keyword per issue.** `Closes #264, #289` closes only `#264`; the rest are merely linked. Repeat the keyword: `Closes #264, closes #289`. Valid keywords: `close` / `closes` / `closed`, `fix` / `fixes` / `fixed`, `resolve` / `resolves` / `resolved`.
+2. **Auto-close fires only when the PR merges into the *default* branch (`main`).** A PR merged into a non-default base (a release or `hotfix/*` branch) **links but does not close**. Closure then happens when that branch later merges to `main` — and only if the closing keywords are present in *that* merge's PR body. If you want the issues closed on this merge, target `main`.
+3. **Keywords belong in the PR *description*, not only commit messages.** On **squash-merge** the commit-message keywords are unreliable; only the PR body is honored. (Real example: Sprint #258 / PR #292 shipped fixes for 8 issues but left them all open because the squash-merge omitted body-level keywords — they had to be closed manually afterward.)
+
+If a PR genuinely can't auto-close (e.g. it must merge into a non-`main` base), it MUST still reference every issue it resolves, and whoever performs the eventual `main` merge is responsible for ensuring the keywords carry through — or closing the issues manually with a comment citing the PR.
+
 ## Quick don't-list
 
 - ❌ Don't use `bug` / `enhancement` labels — they're retired; set the **Type**.
 - ❌ Don't put `type:*` labels on issues — those are PR/changelog only.
 - ❌ Don't manually add issues to the board or set initial/`Done` status — automation does it.
 - ❌ Don't encode "kind" in both a label and the Type — Type is authoritative.
+- ❌ Don't open a PR that resolves issues without `Closes #N` (one keyword per issue) in the **PR body** — and remember auto-close only fires on merge to `main`.
 - ✅ Do set: Type (exactly one), a priority label, an area label, and a milestone when confident.
