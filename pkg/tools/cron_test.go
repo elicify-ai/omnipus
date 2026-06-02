@@ -219,8 +219,8 @@ func TestCronTool_ExecuteJobPublishesErrorWhenExecDisabled(t *testing.T) {
 	job.Payload.To = "direct"
 	job.Payload.Command = "df -h"
 
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob() = %q, want ok", got)
+	if _, err := tool.ExecuteJob(context.Background(), job); err == nil {
+		t.Fatal("ExecuteJob() expected an error when command execution is disabled")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

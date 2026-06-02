@@ -1777,8 +1777,7 @@ func setupCronTool(
 
 	if cronTool != nil {
 		cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
-			result := cronTool.ExecuteJob(context.Background(), job)
-			return result, nil
+			return cronTool.ExecuteJob(context.Background(), job)
 		})
 	}
 
