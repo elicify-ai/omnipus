@@ -1741,6 +1741,23 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			reloadWarning = fmt.Sprintf("config reload failed: %v", err)
 		}
 	}
+
+	// #73: a model-only change is intentionally config-only (no reload above, so
+	// the WebSocket and conversation context survive). But persisting to config +
+	// SwapConfig does NOT touch the already-constructed agent instance — its
+	// cached provider/model would keep serving the OLD model until a restart.
+	// Apply the change in place so it takes effect on the next turn while the
+	// live session context is preserved. Skip when needsReload fired, since
+	// TriggerReload already rebuilt the instance with the new model.
+	if req.Model != nil && newModel != "" && !needsReload {
+		if _, err := a.agentLoop.ApplyAgentModel(id, newModel); err != nil {
+			slog.Warn("updateAgent: live model apply failed; model is persisted and will apply on next reload",
+				"agent_id", id, "model", newModel, "error", err)
+			if reloadWarning == "" {
+				reloadWarning = fmt.Sprintf("model saved but could not be applied to the running agent: %v", err)
+			}
+		}
+	}
 	// Re-read the files so the response reflects what was just persisted.
 	soul, heartbeat, instructions := readAgentFiles(workspace)
 	// Build the response from defaults, then override with request values.

@@ -2369,6 +2369,60 @@ func GetTaskStore(al *AgentLoop) *taskstore.TaskStore {
 	return al.taskStore
 }
 
+// ApplyAgentModel switches a live agent instance to a new primary model in
+// place — rebuilding its provider, candidate chain, and thinking level under
+// the instance lock WITHOUT recreating the instance. This preserves the agent's
+// in-memory conversation state and avoids a config hot-reload that would drop
+// the WebSocket (#73). The new model must already be persisted to config (the
+// REST handler writes config.json first) so resolution observes it. Returns the
+// previous primary model. Shared by the switch_model tool and the
+// PUT /api/v1/agents/{id} model-change path.
+func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "", fmt.Errorf("model is required")
+	}
+	agent, ok := al.registry.GetAgent(agentID)
+	if !ok {
+		return "", fmt.Errorf("agent %q not found", agentID)
+	}
+
+	al.mu.RLock()
+	cfg := al.cfg
+	al.mu.RUnlock()
+
+	modelCfg, err := resolvedModelConfig(cfg, model, agent.Workspace)
+	if err != nil {
+		return "", err
+	}
+	nextProvider, _, err := providers.CreateProviderFromConfig(modelCfg)
+	if err != nil {
+		return "", fmt.Errorf("failed to initialize model %q: %w", model, err)
+	}
+	nextCandidates := resolveModelCandidates(cfg, cfg.Agents.Defaults.Provider, modelCfg.Model, agent.Fallbacks)
+	if len(nextCandidates) == 0 {
+		return "", fmt.Errorf("model %q did not resolve to any provider candidates", model)
+	}
+
+	agent.mu.Lock()
+	oldModel := agent.Model
+	oldProvider := agent.Provider
+	agent.Model = model
+	agent.Provider = nextProvider
+	agent.Candidates = nextCandidates
+	agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
+	agent.mu.Unlock()
+
+	// Close the previous provider if it holds resources (e.g. a stateful
+	// session) and is actually being replaced.
+	if oldProvider != nil && oldProvider != nextProvider {
+		if stateful, ok := oldProvider.(providers.StatefulProvider); ok {
+			stateful.Close()
+		}
+	}
+	return oldModel, nil
+}
+
 // GetTaskExecutor returns the shared TaskExecutor (may be nil in tests).
 func GetTaskExecutor(al *AgentLoop) *TaskExecutor {
 	return al.taskExecutor
@@ -6016,37 +6070,9 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			return m, resolvedCandidateProvider(c, cfg.Agents.Defaults.Provider)
 		}
 		rt.SwitchModel = func(value string) (string, error) {
-			value = strings.TrimSpace(value)
-			modelCfg, err := resolvedModelConfig(cfg, value, agent.Workspace)
-			if err != nil {
-				return "", err
-			}
-
-			nextProvider, _, err := providers.CreateProviderFromConfig(modelCfg)
-			if err != nil {
-				return "", fmt.Errorf("failed to initialize model %q: %w", value, err)
-			}
-
-			nextCandidates := resolveModelCandidates(cfg, cfg.Agents.Defaults.Provider, modelCfg.Model, agent.Fallbacks)
-			if len(nextCandidates) == 0 {
-				return "", fmt.Errorf("model %q did not resolve to any provider candidates", value)
-			}
-
-			agent.mu.Lock()
-			oldModel := agent.Model
-			oldProvider := agent.Provider
-			agent.Model = value
-			agent.Provider = nextProvider
-			agent.Candidates = nextCandidates
-			agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
-			agent.mu.Unlock()
-
-			if oldProvider != nil && oldProvider != nextProvider {
-				if stateful, ok := oldProvider.(providers.StatefulProvider); ok {
-					stateful.Close()
-				}
-			}
-			return oldModel, nil
+			// Shared in-place model switch (#73): same path as the
+			// PUT /api/v1/agents/{id} model change.
+			return al.ApplyAgentModel(agent.ID, value)
 		}
 
 		rt.ClearHistory = func() error {
