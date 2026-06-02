@@ -30,6 +30,7 @@ import {
 } from '@/lib/api'
 import { getChannelFields, type ChannelField } from '@/lib/channel-fields'
 import { useUiStore } from '@/store/ui'
+import { useConnectionStore } from '@/store/connection'
 import { useWhatsAppPairingStore, type WhatsAppPairingState } from '@/store/whatsappPairing'
 
 interface ChannelConfigPanelProps {
@@ -135,11 +136,34 @@ function WhatsAppPairingBody({ pairing }: { pairing?: WhatsAppPairingState }) {
 function WhatsAppNativeNotice() {
   const pairing = useWhatsAppPairingStore((s) => s.byChannel['whatsapp_native'])
   const clear = useWhatsAppPairingStore((s) => s.clear)
+  const isConnected = useConnectionStore((s) => s.isConnected)
 
-  // Drop the QR/pairing secret from the store when this notice unmounts (the
-  // config panel closed) so it doesn't linger in memory past the pairing flow
-  // (#283).
-  useEffect(() => () => clear('whatsapp_native'), [clear])
+  // #283 (Option B): tell the gateway this connection is viewing WhatsApp
+  // pairing so the QR is delivered only here, not broadcast to every admin tab.
+  // Re-subscribe whenever the socket (re)connects while the panel is open —
+  // per-connection interest is lost across a reconnect.
+  useEffect(() => {
+    if (!isConnected) return
+    useConnectionStore.getState().connection?.send({
+      type: 'whatsapp_pairing_subscribe',
+      channel_id: 'whatsapp_native',
+      active: true,
+    })
+  }, [isConnected])
+
+  // On unmount (panel closed): unsubscribe and drop the QR/pairing secret from
+  // the store so it doesn't linger in memory past the pairing flow (#283).
+  useEffect(
+    () => () => {
+      useConnectionStore.getState().connection?.send({
+        type: 'whatsapp_pairing_subscribe',
+        channel_id: 'whatsapp_native',
+        active: false,
+      })
+      clear('whatsapp_native')
+    },
+    [clear],
+  )
 
   return (
     <div className="space-y-2 mt-1">

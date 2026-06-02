@@ -360,42 +360,50 @@ type WhatsAppPairingFrame struct {
 	Type      string  `json:"type"`
 }
 
+// WhatsAppPairingSubscribeFrame — Client → server. Registers or clears this connection's interest in a channel's whatsapp_pairing frames so the QR is delivered only to the operator viewing that channel's pairing UI (#283).
+type WhatsAppPairingSubscribeFrame struct {
+	Active    bool   `json:"active"`
+	ChannelId string `json:"channel_id"`
+	Type      string `json:"type"`
+}
+
 // WsFrameType — Enum of all WebSocket frame type discriminator strings.
 type WsFrameType string
 
 // Defines values for WsFrameType.
 const (
-	WsFrameTypeAuth                    WsFrameType = "auth"
-	WsFrameTypeMessage                 WsFrameType = "message"
-	WsFrameTypeCancel                  WsFrameType = "cancel"
-	WsFrameTypeExecApprovalResponse    WsFrameType = "exec_approval_response"
-	WsFrameTypePing                    WsFrameType = "ping"
-	WsFrameTypeAttachSession           WsFrameType = "attach_session"
-	WsFrameTypeDevicePairingResponse   WsFrameType = "device_pairing_response"
-	WsFrameTypeSessionClose            WsFrameType = "session_close"
-	WsFrameTypeSessionStarted          WsFrameType = "session_started"
-	WsFrameTypeToken                   WsFrameType = "token"
-	WsFrameTypeDone                    WsFrameType = "done"
-	WsFrameTypeError                   WsFrameType = "error"
-	WsFrameTypeToolCallStart           WsFrameType = "tool_call_start"
-	WsFrameTypeToolCallResult          WsFrameType = "tool_call_result"
-	WsFrameTypeSubagentStart           WsFrameType = "subagent_start"
-	WsFrameTypeSubagentEnd             WsFrameType = "subagent_end"
-	WsFrameTypeExecApprovalRequest     WsFrameType = "exec_approval_request"
-	WsFrameTypeExecApprovalExpired     WsFrameType = "exec_approval_expired"
-	WsFrameTypeTaskStatusChanged       WsFrameType = "task_status_changed"
-	WsFrameTypeReplayMessage           WsFrameType = "replay_message"
-	WsFrameTypeRateLimit               WsFrameType = "rate_limit"
-	WsFrameTypeMedia                   WsFrameType = "media"
-	WsFrameTypeAgentSwitched           WsFrameType = "agent_switched"
-	WsFrameTypeToolApprovalRequired    WsFrameType = "tool_approval_required"
-	WsFrameTypeSessionState            WsFrameType = "session_state"
-	WsFrameTypeSystemOverload          WsFrameType = "system_overload"
-	WsFrameTypeReplayWarning           WsFrameType = "replay_warning"
-	WsFrameTypeCancelStage             WsFrameType = "cancel_stage"
-	WsFrameTypePong                    WsFrameType = "pong"
-	WsFrameTypeSessionCloseAck         WsFrameType = "session_close_ack"
-	WsFrameTypeExecApprovalResponseAck WsFrameType = "exec_approval_response_ack"
-	WsFrameTypeDevicePairingRequest    WsFrameType = "device_pairing_request"
-	WsFrameTypeWhatsappPairing         WsFrameType = "whatsapp_pairing"
+	WsFrameTypeAuth                     WsFrameType = "auth"
+	WsFrameTypeMessage                  WsFrameType = "message"
+	WsFrameTypeCancel                   WsFrameType = "cancel"
+	WsFrameTypeExecApprovalResponse     WsFrameType = "exec_approval_response"
+	WsFrameTypePing                     WsFrameType = "ping"
+	WsFrameTypeAttachSession            WsFrameType = "attach_session"
+	WsFrameTypeDevicePairingResponse    WsFrameType = "device_pairing_response"
+	WsFrameTypeSessionClose             WsFrameType = "session_close"
+	WsFrameTypeSessionStarted           WsFrameType = "session_started"
+	WsFrameTypeToken                    WsFrameType = "token"
+	WsFrameTypeDone                     WsFrameType = "done"
+	WsFrameTypeError                    WsFrameType = "error"
+	WsFrameTypeToolCallStart            WsFrameType = "tool_call_start"
+	WsFrameTypeToolCallResult           WsFrameType = "tool_call_result"
+	WsFrameTypeSubagentStart            WsFrameType = "subagent_start"
+	WsFrameTypeSubagentEnd              WsFrameType = "subagent_end"
+	WsFrameTypeExecApprovalRequest      WsFrameType = "exec_approval_request"
+	WsFrameTypeExecApprovalExpired      WsFrameType = "exec_approval_expired"
+	WsFrameTypeTaskStatusChanged        WsFrameType = "task_status_changed"
+	WsFrameTypeReplayMessage            WsFrameType = "replay_message"
+	WsFrameTypeRateLimit                WsFrameType = "rate_limit"
+	WsFrameTypeMedia                    WsFrameType = "media"
+	WsFrameTypeAgentSwitched            WsFrameType = "agent_switched"
+	WsFrameTypeToolApprovalRequired     WsFrameType = "tool_approval_required"
+	WsFrameTypeSessionState             WsFrameType = "session_state"
+	WsFrameTypeSystemOverload           WsFrameType = "system_overload"
+	WsFrameTypeReplayWarning            WsFrameType = "replay_warning"
+	WsFrameTypeCancelStage              WsFrameType = "cancel_stage"
+	WsFrameTypePong                     WsFrameType = "pong"
+	WsFrameTypeSessionCloseAck          WsFrameType = "session_close_ack"
+	WsFrameTypeExecApprovalResponseAck  WsFrameType = "exec_approval_response_ack"
+	WsFrameTypeDevicePairingRequest     WsFrameType = "device_pairing_request"
+	WsFrameTypeWhatsappPairing          WsFrameType = "whatsapp_pairing"
+	WsFrameTypeWhatsappPairingSubscribe WsFrameType = "whatsapp_pairing_subscribe"
 )

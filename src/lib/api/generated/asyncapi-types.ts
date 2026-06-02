@@ -39,7 +39,8 @@ export type WsFrameType =
   | "session_close_ack"
   | "exec_approval_response_ack"
   | "device_pairing_request"
-  | "whatsapp_pairing";
+  | "whatsapp_pairing"
+  | "whatsapp_pairing_subscribe";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -339,6 +340,12 @@ export interface SessionCloseFrame {
   session_id: string;
 }
 
+export interface WhatsAppPairingSubscribeFrame {
+  type: "whatsapp_pairing_subscribe";
+  channel_id: string;
+  active: boolean;
+}
+
 export interface ExecApprovalExpiredFrame {
   type: "exec_approval_expired";
   id: string;
@@ -381,6 +388,7 @@ export type WsFrame =
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
   | SessionCloseFrame
+  | WhatsAppPairingSubscribeFrame
   | ExecApprovalExpiredFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
@@ -393,12 +401,13 @@ export type ClientFrame =
   | PingFrame
   | AttachSessionFrame
   | DevicePairingResponseFrame
-  | SessionCloseFrame;
+  | SessionCloseFrame
+  | WhatsAppPairingSubscribeFrame;
 
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close"] as const
+export const ClientFrameTypes = ["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close", "whatsapp_pairing_subscribe"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 

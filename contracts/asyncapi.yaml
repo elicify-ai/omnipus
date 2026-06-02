@@ -78,6 +78,8 @@ channels:
         $ref: '#/components/messages/DevicePairingResponseFrame'
       SessionCloseFrame:
         $ref: '#/components/messages/SessionCloseFrame'
+      WhatsAppPairingSubscribeFrame:
+        $ref: '#/components/messages/WhatsAppPairingSubscribeFrame'
       # ── Server → client ───────────────────────────────────────────────────────
       SessionStartedFrame:
         $ref: '#/components/messages/SessionStartedFrame'
@@ -220,6 +222,18 @@ operations:
       fires CloseSession on the agent loop, and responds with session_close_ack.
     messages:
       - $ref: '#/channels/chat/messages/SessionCloseFrame'
+
+  sendWhatsAppPairingSubscribe:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Start or stop receiving whatsapp_pairing (QR/status) frames for a channel
+      on THIS connection. The SPA sends active:true when an operator opens a
+      channel's pairing UI and active:false when they leave, so the QR pairing
+      secret is delivered only to the connection that is watching it (#283).
+    messages:
+      - $ref: '#/channels/chat/messages/WhatsAppPairingSubscribeFrame'
 
   # ── Server → client (action: receive from SPA perspective) ──────────────────
 
@@ -547,6 +561,14 @@ components:
       payload:
         $ref: '#/components/schemas/SessionCloseFrame'
 
+    WhatsAppPairingSubscribeFrame:
+      name: WhatsAppPairingSubscribeFrame
+      title: whatsapp_pairing_subscribe
+      summary: Subscribe/unsubscribe this connection to a channel's pairing frames (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/WhatsAppPairingSubscribeFrame'
+
     # ── Server → client messages ───────────────────────────────────────────────
 
     SessionStartedFrame:
@@ -788,6 +810,7 @@ components:
         - exec_approval_response_ack
         - device_pairing_request
         - whatsapp_pairing
+        - whatsapp_pairing_subscribe
 
     AuthFrame:
       title: AuthFrame
@@ -1813,6 +1836,28 @@ components:
         session_id:
           type: string
           minLength: 1
+
+    WhatsAppPairingSubscribeFrame:
+      title: WhatsAppPairingSubscribeFrame
+      description: >
+        Client → server. Registers or clears this connection's interest in a
+        channel's whatsapp_pairing frames so the QR is delivered only to the
+        operator viewing that channel's pairing UI (#283).
+      type: object
+      required:
+        - type
+        - channel_id
+        - active
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: whatsapp_pairing_subscribe
+        channel_id:
+          type: string
+          minLength: 1
+        active:
+          type: boolean
 
     ExecApprovalExpiredFrame:
       title: ExecApprovalExpiredFrame

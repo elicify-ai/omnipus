@@ -175,6 +175,38 @@ type wsConn struct {
 	// gives ~300× headroom for legitimate clients while bounding amplification
 	// if a buggy or malicious client floods pings.
 	lastPongSentUnixNano atomic.Int64
+
+	// pairingSubs tracks which channels this connection wants whatsapp_pairing
+	// (QR/status) frames for, so the QR secret is delivered only to the operator
+	// viewing that channel's pairing UI rather than every admin tab (#283,
+	// Option B). Guarded by pairingSubsMu; written by the inbound read loop and
+	// read by the event forwarder. Nil until the first subscribe.
+	pairingSubsMu sync.Mutex
+	pairingSubs   map[string]struct{}
+}
+
+// setPairingInterest registers (active) or clears this connection's interest in
+// channelID's whatsapp_pairing frames (#283, Option B).
+func (c *wsConn) setPairingInterest(channelID string, active bool) {
+	c.pairingSubsMu.Lock()
+	defer c.pairingSubsMu.Unlock()
+	if active {
+		if c.pairingSubs == nil {
+			c.pairingSubs = make(map[string]struct{})
+		}
+		c.pairingSubs[channelID] = struct{}{}
+		return
+	}
+	delete(c.pairingSubs, channelID)
+}
+
+// wantsPairing reports whether this connection has subscribed to channelID's
+// whatsapp_pairing frames (#283, Option B). Safe on a nil map.
+func (c *wsConn) wantsPairing(channelID string) bool {
+	c.pairingSubsMu.Lock()
+	defer c.pairingSubsMu.Unlock()
+	_, ok := c.pairingSubs[channelID]
+	return ok
 }
 
 func (c *wsConn) close() {
@@ -750,6 +782,25 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 				continue
 			}
 			h.handleDevicePairingResponse(f.DeviceId, f.Decision)
+		case string(generated.WsFrameTypeWhatsappPairingSubscribe):
+			// #283 (Option B): scope whatsapp_pairing frames to the connection(s)
+			// viewing a channel's pairing UI so the QR secret isn't broadcast to
+			// every admin tab. active=true subscribes this conn; false clears it.
+			var f generated.WhatsAppPairingSubscribeFrame
+			if err := json.Unmarshal(data, &f); err != nil {
+				slog.Warn("ws: malformed whatsapp_pairing_subscribe frame", "error", err)
+				wc.inboundDropped.Add(1)
+				continue
+			}
+			if f.ChannelId == "" {
+				wc.inboundDropped.Add(1)
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "whatsapp_pairing_subscribe requires channel_id",
+				})
+				continue
+			}
+			wc.setPairingInterest(f.ChannelId, f.Active)
 		default:
 			slog.Debug("ws: unknown frame type ignored", "type", peek.Type, "chat_id", chatID)
 		}
@@ -773,6 +824,8 @@ func wsFrameSchemaName(frameType string) string {
 		return "DevicePairingResponseFrame"
 	case string(generated.WsFrameTypeSessionClose):
 		return "SessionCloseFrame"
+	case string(generated.WsFrameTypeWhatsappPairingSubscribe):
+		return "WhatsAppPairingSubscribeFrame"
 	case string(generated.WsFrameTypePing):
 		return "PingFrame"
 	default:
@@ -2141,10 +2194,14 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			sendConnGenFrame(wc, string(generated.WsFrameTypeRateLimit), rateF)
 		case agent.EventKindWhatsAppPairing:
 			// #283: WhatsApp linked-device pairing (QR + status). Not tied to a
-			// chatID, so every connection forwards it (the SPA Channels screen is
-			// where it renders).
+			// chatID. Delivered only to connections that subscribed to this
+			// channel's pairing UI (Option B), so the QR pairing secret isn't
+			// broadcast to every authenticated admin tab.
 			p, ok := evt.Payload.(agent.WhatsAppPairingPayload)
 			if !ok {
+				continue
+			}
+			if !wc.wantsPairing(p.ChannelID) {
 				continue
 			}
 			pairF := generated.WhatsAppPairingFrame{
