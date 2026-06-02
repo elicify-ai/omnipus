@@ -52,6 +52,7 @@ export interface MessageFrame {
   content: string;
   session_id?: string;
   agent_id?: string;
+  media?: Array<string>;
 }
 
 export interface CancelFrame {

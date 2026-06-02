@@ -6,6 +6,8 @@ import {
   ThreadPrimitive,
   MessagePrimitive,
   ComposerPrimitive,
+  AttachmentPrimitive,
+  useAttachment,
   ActionBarPrimitive,
   AuiIf,
   useComposerRuntime,
@@ -22,7 +24,6 @@ import {
   ListChecks,
   Paperclip,
   File,
-  X,
   WifiSlash,
   ArrowClockwise,
   Clock,
@@ -42,7 +43,8 @@ import type { ChatMessage } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
-import { fetchAgents, fetchSessionMessages, createSession, uploadFiles, isApiError } from '@/lib/api'
+import { fetchAgents, fetchSessionMessages, createSession, isApiError } from '@/lib/api'
+import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
 import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 
@@ -329,22 +331,78 @@ function InterruptedMessageMarkers() {
 // ── Standalone message row components (virtualizer) ──────────────────────────
 // Render ChatMessage from props (no AssistantUI context) for use by the virtualizer.
 
+/** Inline retry button for user messages that failed to send (#253b). */
+function UserMessageRetryButton({ message }: { message: ChatMessage }) {
+  const sendMessage = useChatStore((s) => s.sendMessage)
+  const isStreaming = useChatStore((s) => s.isStreaming)
+
+  if (message.status !== 'error' || isStreaming) return null
+
+  function handleRetry() {
+    // #253(c): resend the original user message content.
+    sendMessage(message.content)
+  }
+
+  return (
+    <div className="flex items-center justify-end gap-2 mt-1">
+      <span className="text-[10px] text-[var(--color-error)]">Send failed</span>
+      <button
+        type="button"
+        data-testid="user-message-retry"
+        onClick={handleRetry}
+        aria-label="Retry — resend this message"
+        className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+        title="Retry — resend this message"
+      >
+        <ArrowCounterClockwise size={11} />
+        <span>Retry</span>
+      </button>
+    </div>
+  )
+}
+
 /** Standalone user message row for the virtualizer. */
 function VirtualUserMessageRow({ message }: { message: ChatMessage }) {
+  const isError = message.status === 'error'
   return (
     <div
       data-testid="user-message"
       data-message-role="user"
       data-message-id={message.id}
+      data-status={message.status}
       className="group flex gap-3 px-4 py-3 flex-row-reverse"
     >
       <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
         <User size={14} weight="bold" />
       </div>
-      <div className="flex flex-col items-end gap-1 max-w-[85%] min-w-0">
-        <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm">
-          <p className="whitespace-pre-wrap break-words">{message.content}</p>
-        </div>
+      <div className="flex flex-col items-end gap-1.5 max-w-[85%] min-w-0">
+        {/* Attachments the user sent — image thumbnails + colour-coded file
+            cards, shown above the text like ChatGPT. */}
+        {message.media && message.media.length > 0 && (
+          <div className="flex flex-wrap gap-2 justify-end">
+            {message.media.map((m, i) => (
+              <AttachmentCard
+                key={`${m.url}-${i}`}
+                filename={m.filename}
+                contentType={m.contentType}
+                imageUrl={m.type === 'image' ? m.url : undefined}
+                className={m.type === 'image' ? 'max-w-[200px] max-h-[200px]' : undefined}
+              />
+            ))}
+          </div>
+        )}
+        {message.content.trim().length > 0 && (
+          <div className={cn(
+            "rounded-xl px-4 py-3 text-sm leading-relaxed rounded-tr-sm",
+            isError
+              ? "bg-[var(--color-error)]/10 border border-[var(--color-error)]/30 text-[var(--color-secondary)]"
+              : "bg-[var(--color-surface-2)] text-[var(--color-secondary)]"
+          )}>
+            <p className="whitespace-pre-wrap break-words">{message.content}</p>
+          </div>
+        )}
+        {/* #253(b): show error + Retry when message failed to send */}
+        <UserMessageRetryButton message={message} />
       </div>
     </div>
   )
@@ -586,12 +644,70 @@ function VirtualizedMessageListInner({
 }) {
   const isStreaming = useChatStore((s) => s.isStreaming)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
 
   // Separate the live streaming message from completed history.
   const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
   const historicalMessages = hasStreamingMessage ? messages.slice(0, messages.length - 1) : messages
 
+  // ── Stick-to-bottom tracking (ChatGPT/Claude-style) ─────────────────────────
+  // wasAtBottomRef = "auto-follow is active". It is SUSPENDED only by a genuine
+  // USER scroll gesture that moves away from the bottom (wheel up, touch drag,
+  // keyboard nav, scrollbar drag) and RESUMED whenever the viewport reaches the
+  // bottom again. This distinction is essential: content-growth reflows (a
+  // streamed token, a tool-call block, an inline image) and our own programmatic
+  // re-pin ALSO fire 'scroll' events, and those must NEVER suspend auto-follow.
+  // The earlier implementation set wasAtBottom = (distance < threshold) on EVERY
+  // scroll, so a transient large distance from a tool-call/image render flipped
+  // it false and stuck the view ~600px above the bottom (the reported bug,
+  // reproduced in a live browser). We therefore only honor a suspend while a real
+  // user-input gesture is in progress — the in-house equivalent of
+  // use-stick-to-bottom's user-vs-programmatic scroll discrimination.
   const wasAtBottomRef = useRef(true)
+  const userGestureUntilRef = useRef(0)
+  const pointerDownRef = useRef(false)
+
+  const SCROLL_THRESHOLD = 50
+
+  // A real user input opens a short window (wheel/touch/key) — or holds, for a
+  // pointer/scrollbar drag — during which a scroll away from the bottom is
+  // attributed to the user rather than to content growth.
+  const markUserGesture = useCallback(() => {
+    userGestureUntilRef.current = performance.now() + 300
+  }, [])
+  const onPointerDown = useCallback(() => {
+    pointerDownRef.current = true
+    markUserGesture()
+  }, [markUserGesture])
+
+  // Clear the pointer-drag flag on release anywhere (the pointer may leave the
+  // list before release).
+  useEffect(() => {
+    const up = () => {
+      pointerDownRef.current = false
+    }
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+    return () => {
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+    }
+  }, [])
+
+  const onScroll = useCallback(() => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (dist < SCROLL_THRESHOLD) {
+      // Reached the bottom (by any means) → resume / keep following.
+      wasAtBottomRef.current = true
+    } else if (pointerDownRef.current || performance.now() < userGestureUntilRef.current) {
+      // Away from the bottom due to an ACTIVE user gesture → suspend following.
+      wasAtBottomRef.current = false
+    }
+    // else: away from the bottom due to content growth or a programmatic scroll
+    // → leave wasAtBottomRef unchanged; the ResizeObserver re-pins to the bottom.
+  }, [])
 
   const virtualizer = useVirtualizer({
     count: historicalMessages.length,
@@ -601,17 +717,44 @@ function VirtualizedMessageListInner({
     // measureElement default (getBoundingClientRect().height) is correct; no override needed.
   })
 
-  // Capture wasAtBottom BEFORE the render that triggered this layout effect,
-  // then scroll to bottom if the user was already there.
+  // Content-agnostic stick-to-bottom. A single ResizeObserver on the content
+  // wrapper fires on ANY height change anywhere in the transcript — streamed
+  // tokens, tool-call blocks, tool results, inline images/media, expanding or
+  // collapsing detail, AND the virtualizer's own row remeasures — without us
+  // having to enumerate each signal (the previous implementation only watched
+  // messages.length + streaming text length, so tool calls / images in the live
+  // turn never triggered a re-pin — the reported bug). On any such change we
+  // re-pin to the bottom, but ONLY when the user is already at the bottom
+  // (wasAtBottomRef, maintained by onScroll): if they've scrolled up to read
+  // history we must not yank them down, and we resume sticking the moment they
+  // scroll back. This matches ChatGPT/Claude and is the same approach
+  // assistant-ui's Viewport uses (use-stick-to-bottom); we keep it inline
+  // because our list is custom-virtualized, not rendered by ThreadPrimitive
+  // .Viewport. ResizeObserver is guaranteed defined here — the parent
+  // feature-detects it and falls back to PlainMessageList otherwise.
   useLayoutEffect(() => {
     const el = scrollContainerRef.current
-    if (!el) return
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-    wasAtBottomRef.current = distanceFromBottom < 50
-    if (wasAtBottomRef.current && messages.length > 0) {
-      el.scrollTop = el.scrollHeight
+    const content = contentRef.current
+    if (!el || !content) return undefined
+    const pinIfAtBottom = () => {
+      if (wasAtBottomRef.current) el.scrollTop = el.scrollHeight
     }
-  }, [messages.length, isStreaming])
+    // Pin once on mount (opening a session jumps to the latest message).
+    const initialRaf = requestAnimationFrame(pinIfAtBottom)
+    // Re-pin on every subsequent content-size change. rAF defers the read until
+    // the browser has committed the new layout so scrollHeight is final.
+    let rafId = 0
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(rafId)
+      rafId = requestAnimationFrame(pinIfAtBottom)
+    })
+    ro.observe(content)
+    return () => {
+      cancelAnimationFrame(initialRaf)
+      cancelAnimationFrame(rafId)
+      ro.disconnect()
+    }
+  }, [])
 
   const virtualItems = virtualizer.getVirtualItems()
 
@@ -627,8 +770,14 @@ function VirtualizedMessageListInner({
       data-testid="virtualized-message-list"
       className="flex-1 overflow-y-auto pt-4 pb-2"
       style={{ position: 'relative' }}
+      onScroll={onScroll}
+      onWheel={markUserGesture}
+      onTouchStart={markUserGesture}
+      onTouchMove={markUserGesture}
+      onKeyDown={markUserGesture}
+      onPointerDown={onPointerDown}
     >
-      <div className="max-w-4xl mx-auto w-full">
+      <div ref={contentRef} className="max-w-4xl mx-auto w-full">
         <div
           style={{
             height: `${virtualizer.getTotalSize()}px`,
@@ -817,23 +966,34 @@ function composerPlaceholder(
 
 const HARMFUL_EXTENSIONS = ['.exe', '.bat', '.cmd', '.sh', '.ps1', '.dll', '.sys', '.msi', '.scr', '.com']
 
-/** Renders an image thumbnail for a pending file, revoking the object URL on unmount to prevent memory leaks. */
-function FilePreviewThumbnail({ file }: { file: File }) {
-  const [url, setUrl] = useState<string | null>(null)
+/**
+ * Renders one pending composer attachment as a ChatGPT-style card — an image
+ * preview (from the local File) or a colour-coded, type-specific file card —
+ * via the native useAttachment() context that ComposerPrimitive.Attachments
+ * provides. Removal uses the native AttachmentPrimitive.Remove.
+ */
+function ComposerAttachmentChip() {
+  const attachment = useAttachment()
+  const file = attachment.file
+  const contentType = attachment.contentType ?? file?.type
+  const imageUrl = useFilePreview(file, contentType)
 
-  useEffect(() => {
-    const objectUrl = URL.createObjectURL(file)
-    setUrl(objectUrl)
-    return () => URL.revokeObjectURL(objectUrl)
-  }, [file])
-
-  if (!url) return null
-  // Defense-in-depth: URL.createObjectURL always returns a blob: URL with an
-  // opaque UUID, so the value can never carry an HTML/javascript payload.
-  // CodeQL's data-flow analysis cannot prove that, so make the safety
-  // explicit — refuse to render anything that isn't a blob: URL.
-  if (!url.startsWith('blob:')) return null
-  return <img src={url} className="w-8 h-8 rounded object-cover" alt={file.name} />
+  return (
+    <AttachmentCard
+      filename={attachment.name}
+      contentType={contentType}
+      imageUrl={imageUrl}
+      className={cn('group', imageUrl && 'w-16 h-16')}
+      removeButton={
+        <AttachmentPrimitive.Remove
+          className="absolute -top-1.5 -right-1.5 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+          aria-label={`Remove ${attachment.name}`}
+        >
+          <AttachmentRemoveX />
+        </AttachmentPrimitive.Remove>
+      }
+    />
+  )
 }
 
 // Exported for unit testing (TDD row 22).
@@ -851,8 +1011,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const appendMessage = useChatStore((s) => s.appendMessage)
   const setActiveSession = useSessionStore((s) => s.setActiveSession)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
-  const activeSessionId = useSessionStore((s) => s.activeSessionId)
-  const sendMessage = useChatStore((s) => s.sendMessage)
   const addToast = useUiStore((s) => s.addToast)
   const composerRuntime = useComposerRuntime()
   const queryClient = useQueryClient()
@@ -878,8 +1036,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const [inputValue, setInputValue] = useState('')
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashHighlight, setSlashHighlight] = useState(0)
-  const [pendingFiles, setPendingFiles] = useState<File[]>([])
-  const [isUploading, setIsUploading] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   // EC-15 / FR-21: stop button label progression:
   //   'stop'     — idle, button shows Stop icon
@@ -896,7 +1052,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // isStreaming just went false (done frame arrived) but the user pressed Escape
   // intending to cancel a turn they just observed streaming.
   const streamingStartedAt = useRef<number>(0)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   // Tracks whether we already warned for the current large-input threshold crossing,
   // so we only fire one toast per paste/input event that exceeds 1MB.
   const hasWarnedLargeInput = useRef(false)
@@ -907,7 +1062,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // also disable, not just the Send button. Letting the user type into an input
   // that can't dispatch is misleading; the "Connection lost" banner alone is
   // easy to miss when the textarea looks fully interactive.
-  const inputEnabled = !agentRemoved && !isReplaying && !isUploading && !(reconnectPhase === 'gave_up') && isConnected
+  const inputEnabled = !agentRemoved && !isReplaying && !(reconnectPhase === 'gave_up') && isConnected
 
   // FR-3a: during streaming, show the slash menu ONLY if at least one command
   // with availableWhileStreaming:true matches the current input prefix.
@@ -1011,7 +1166,17 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       )
       if (!doubleConfirmed) return
     }
-    setPendingFiles((prev) => [...prev, ...files])
+    // Hand each file to the native composer attachment system; the
+    // AttachmentAdapter uploads on send and threads the media:// ref through
+    // onNew. Used by drag-drop and image paste.
+    for (const file of files) {
+      composerRuntime.addAttachment(file).catch((err: unknown) => {
+        addToast({
+          message: err instanceof Error ? err.message : `Could not attach "${file.name}"`,
+          variant: 'error',
+        })
+      })
+    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -1114,31 +1279,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // the closure capture of stopLabel is fresh for the 'stopping' guard.
   }, [stopLabel, cancelStream])
 
-  async function handleSendWithFiles(text: string) {
-    if (pendingFiles.length === 0) {
-      sendMessage(text)
-      return
-    }
-    if (!activeSessionId) {
-      addToast({ message: 'No active session — cannot upload files', variant: 'error' })
-      return
-    }
-    setIsUploading(true)
-    try {
-      const { files: uploaded } = await uploadFiles(activeSessionId, pendingFiles)
-      const fileList = uploaded.map((f) => `[${f.name}](${f.path})`).join(', ')
-      sendMessage(text ? `${text}\n\nAttached files: ${fileList}` : `Attached files: ${fileList}`)
-      setPendingFiles([])
-    } catch (err) {
-      addToast({
-        message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Upload failed',
-        variant: 'error',
-      })
-    } finally {
-      setIsUploading(false)
-    }
-  }
-
   return (
     <div
       className="relative"
@@ -1237,79 +1377,38 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         </div>
       )}
 
-      {/* Pending file previews */}
-      {pendingFiles.length > 0 && (
-        <div className="flex flex-wrap gap-2 px-2 pb-2">
-          {pendingFiles.map((file, i) => (
-            <div
-              key={`${file.name}-${file.size}-${file.lastModified}`}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)] text-xs"
-            >
-              {file.type.startsWith('image/') ? (
-                <FilePreviewThumbnail file={file} />
-              ) : (
-                <File size={14} className="text-[var(--color-muted)]" />
-              )}
-              <span className="truncate max-w-[120px]">{file.name}</span>
-              <button
-                type="button"
-                onClick={() => setPendingFiles((prev) => prev.filter((_, j) => j !== i))}
-                className="text-[var(--color-muted)] hover:text-[var(--color-error)]"
-                aria-label={`Remove ${file.name}`}
-              >
-                <X size={12} />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Hidden file input */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        className="hidden"
-        onChange={(e) => {
-          const files = Array.from(e.target.files ?? [])
-          if (files.length) handleFilesSelected(files)
-          e.target.value = ''
-        }}
-      />
+      {/* Pending attachments — native AssistantUI composer attachments. Shows a
+          chip for each attached file (via paperclip, drag-drop, or paste); the
+          AttachmentAdapter (src/lib/attachment-adapter.ts) uploads them on send
+          and threads the media:// ref into our transport via onNew. */}
+      <div className="flex flex-wrap gap-2 px-2 empty:hidden [&:has(*)]:pb-2">
+        <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />
+      </div>
 
       <div className="flex items-end gap-2 px-2 py-2">
-        {/* Paperclip button */}
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={!isConnected || isStreaming || isUploading || isReplaying || reconnectPhase === 'gave_up'}
+        {/* Attach button — native; opens the file picker scoped to the adapter's
+            accept list. Replaces the old custom paperclip + hidden <input>. */}
+        <ComposerPrimitive.AddAttachment
+          disabled={!isConnected || isStreaming || isReplaying || reconnectPhase === 'gave_up'}
           className="shrink-0 w-11 h-11 rounded-xl flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           aria-label="Attach file"
           title="Attach file"
         >
           <Paperclip size={16} />
-        </button>
+        </ComposerPrimitive.AddAttachment>
 
       <ComposerPrimitive.Root
         className="flex items-end gap-2 flex-1"
         onSubmit={(e) => {
-          // Block submission while streaming — slash commands are handled via
-          // handleKeyDown, and normal sends must wait for the turn to complete.
+          // Block Enter-submit while streaming; slash-menu Enter is handled in handleKeyDown.
           if (isStreaming) {
             e.preventDefault()
-            return
           }
-          if (pendingFiles.length === 0) return // Let AssistantUI handle the standard send path
-          e.preventDefault()
-          const text = composerRuntime.getState().text.trim()
-          composerRuntime.setText('')
-          setInputValue('')
-          void handleSendWithFiles(text)
         }}
       >
         <ComposerPrimitive.Input
           data-testid="chat-input"
-          placeholder={agentRemoved ? 'Agent has been removed — this session is read-only' : composerPlaceholder(isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow', isStreaming || isUploading, isReplaying, activeAgentName, reconnectPhase === 'gave_up')}
+          placeholder={agentRemoved ? 'Agent has been removed — this session is read-only' : composerPlaceholder(isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow', isStreaming, isReplaying, activeAgentName, reconnectPhase === 'gave_up')}
           // FR-3a: the slash menu must be reachable mid-stream, which means the
           // textarea has to accept keystrokes during streaming. Submission is
           // blocked elsewhere: the Send button has its own `!isStreaming` gate
@@ -1325,7 +1424,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             'flex-1 resize-none rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-2.5 text-sm text-[var(--color-secondary)] outline-none',
             'placeholder:text-[var(--color-muted)] min-h-[24px] max-h-[200px] leading-6 overflow-hidden',
             'focus:border-[var(--color-accent)]/50 focus:ring-1 focus:ring-[var(--color-accent)]/20',
-            (!inputEnabled || isStreaming || isUploading) && 'opacity-60 cursor-not-allowed',
+            (!inputEnabled || isStreaming) && 'opacity-60 cursor-not-allowed',
           )}
           aria-label="Message input"
           onChange={(e) => {
@@ -1368,7 +1467,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           }}
         />
 
-        {isStreaming || isUploading || stopLabel === 'stopping' ? (
+        {isStreaming || stopLabel === 'stopping' ? (
           <button
             type="button"
             data-testid="stop-btn"
@@ -1387,7 +1486,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               setStopLabel('stopping')
               cancelStream()
             }}
-            disabled={isUploading}
             className={cn(
               'shrink-0 rounded-xl flex items-center justify-center transition-colors',
               stopLabel === 'stopping'
@@ -1397,8 +1495,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
                 : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-wait',
             )}
-            aria-label={isUploading ? 'Uploading...' : stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
-            title={isUploading ? 'Uploading files...' : 'Stop (Escape)'}
+            aria-label={stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
+            title="Stop (Escape)"
           >
             <Stop size={15} weight="fill" />
             {stopLabel === 'stopping' && <span>Stopping...</span>}
@@ -1407,6 +1505,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           // FR-I-014: also disabled during replay so user cannot send out-of-order.
           // Fix 3: when reconnecting (fast or slow), allow send — messages go to
           // the outbound queue and drain automatically on reconnect.
+          //
+          // Native ComposerPrimitive.Send: calls composer.send() → onNew, which
+          // now carries text AND attachments. Send and Enter both go through
+          // composer.send(), so they are identical. Send auto-disables when the
+          // composer is empty (no text and no attachments) via the runtime's
+          // canSend, so no manual empty-check is needed here.
           <ComposerPrimitive.Send
             disabled={!inputEnabled || isReplaying}
             data-testid="chat-send"
@@ -1502,7 +1606,11 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   } = useQuery({
     queryKey: ['messages', activeSessionId],
     queryFn: () => fetchSessionMessages(activeSessionId!),
-    enabled: !!activeSessionId,
+    // '__pending' is the optimistic-send sentinel (store/chat.ts) used before the
+    // real session_id arrives over WS — it has no server-side history, so fetching
+    // it 404s (spurious console errors + a historyError that tears down the composer).
+    // Mirror the same guard used in attachment-adapter.ts.
+    enabled: !!activeSessionId && activeSessionId !== '__pending',
     gcTime: 0,
     // Never re-fetch on window focus — the WebSocket delivers live updates
     refetchOnWindowFocus: false,

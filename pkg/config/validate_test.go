@@ -224,3 +224,110 @@ func TestConfigValidator_MissingDir_NoResults(t *testing.T) {
 	assert.False(t, abort)
 	assert.Empty(t, results)
 }
+
+// --- F11: RepairMultipleDefaults ---
+
+// TestRepairMultipleDefaults_NoOp verifies that a config with at most one
+// Default=true is untouched.
+//
+// BDD: Given a config with zero Default=true agents,
+//
+//	When RepairMultipleDefaults is called,
+//	Then no agent's Default flag changes.
+//
+// Traces to: pkg/config/validate.go — RepairMultipleDefaults (F11).
+func TestRepairMultipleDefaults_NoOp(t *testing.T) {
+	cfg := &Config{
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{ID: "alpha", Default: false},
+				{ID: "beta", Default: false},
+			},
+		},
+	}
+	RepairMultipleDefaults(cfg)
+
+	for _, a := range cfg.Agents.List {
+		if a.Default {
+			t.Errorf("agent %q: Default changed to true unexpectedly", a.ID)
+		}
+	}
+}
+
+// TestRepairMultipleDefaults_SingleDefault_Unchanged verifies that a config
+// with exactly one Default=true is unchanged.
+//
+// BDD: Given a config with exactly one Default=true agent ("mia"),
+//
+//	When RepairMultipleDefaults is called,
+//	Then "mia".Default remains true and no other agent changes.
+//
+// Traces to: pkg/config/validate.go — RepairMultipleDefaults (F11).
+func TestRepairMultipleDefaults_SingleDefault_Unchanged(t *testing.T) {
+	cfg := &Config{
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{ID: "alpha", Default: false},
+				{ID: "mia", Default: true},
+			},
+		},
+	}
+	RepairMultipleDefaults(cfg)
+
+	var defaults []string
+	for _, a := range cfg.Agents.List {
+		if a.Default {
+			defaults = append(defaults, a.ID)
+		}
+	}
+	require.Len(t, defaults, 1, "exactly one Default=true must remain after repair")
+	assert.Equal(t, "mia", defaults[0])
+}
+
+// TestRepairMultipleDefaults_MultiDefault_KeepsFirst verifies that when
+// multiple agents are marked Default=true, only the first (in list order) is
+// retained and the others are cleared.
+//
+// BDD: Given a config with three Default=true agents ("alpha", "mia", "gamma"),
+//
+//	When RepairMultipleDefaults is called,
+//	Then "alpha".Default remains true;
+//	And "mia".Default and "gamma".Default are false;
+//	And total Default=true count is 1.
+//
+// Traces to: pkg/config/validate.go — RepairMultipleDefaults (F11).
+func TestRepairMultipleDefaults_MultiDefault_KeepsFirst(t *testing.T) {
+	cfg := &Config{
+		Agents: AgentsConfig{
+			List: []AgentConfig{
+				{ID: "alpha", Default: true},
+				{ID: "mia", Default: true},
+				{ID: "gamma", Default: true},
+			},
+		},
+	}
+	RepairMultipleDefaults(cfg)
+
+	var kept []string
+	var cleared []string
+	for _, a := range cfg.Agents.List {
+		if a.Default {
+			kept = append(kept, a.ID)
+		} else {
+			cleared = append(cleared, a.ID)
+		}
+	}
+
+	require.Len(t, kept, 1, "exactly one Default=true must remain after repair")
+	assert.Equal(t, "alpha", kept[0], "first agent in list order must be kept as default")
+	assert.ElementsMatch(t, []string{"mia", "gamma"}, cleared, "remaining agents must have Default cleared")
+}
+
+// TestRepairMultipleDefaults_NilConfig_NoPanic verifies that a nil config
+// is handled safely.
+//
+// Traces to: pkg/config/validate.go — RepairMultipleDefaults nil guard (F11).
+func TestRepairMultipleDefaults_NilConfig_NoPanic(t *testing.T) {
+	// Must not panic.
+	RepairMultipleDefaults(nil)
+}

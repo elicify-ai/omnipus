@@ -328,4 +328,25 @@ func TestResolveAgentWorkspace_OMNIPUSHome(t *testing.T) {
 			t.Errorf("path traversal not guarded: got %q, expected prefix %q", got, safeBase)
 		}
 	})
+
+	// F2: a routing-default agent (Default=true) must still get its own
+	// per-agent workspace under agents/{id}/, not the shared default workspace.
+	t.Run("routing_default_gets_own_workspace", func(t *testing.T) {
+		tmpHome := t.TempDir()
+		t.Setenv("OMNIPUS_HOME", tmpHome)
+
+		// Default=true means "routing default" — it must NOT redirect to shared workspace.
+		agentCfg := &config.AgentConfig{ID: "mia", Default: true}
+		got := resolveAgentWorkspace(agentCfg, defaults)
+
+		want := filepath.Join(tmpHome, "agents", "mia")
+		if got != want {
+			t.Errorf("Default=true agent workspace: got %q, want %q (must be per-agent, not shared)", got, want)
+		}
+
+		// The shared workspace must NOT be returned.
+		if got == defaults.Workspace {
+			t.Errorf("Default=true agent must not receive the shared default workspace %q", defaults.Workspace)
+		}
+	})
 }

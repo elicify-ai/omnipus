@@ -33,7 +33,7 @@ type AgentConfig struct {
 	Provider providers.LLMProvider
 	// Handler is the system tool handler (RBAC + rate limit + audit).
 	Handler *SystemToolHandler
-	// ToolList is the ordered list of all 35 system tools.
+	// ToolList is the ordered list of all 41 system tools.
 	ToolList []tools.Tool
 	// IsCloudProvider controls whether tool schemas are summarized (US-5).
 	IsCloudProvider bool

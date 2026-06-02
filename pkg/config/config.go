@@ -1705,9 +1705,15 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 
 	migrateProviderFields(cfg)
 	// Post-refactor: tools.<name>.enabled is deprecated. If the loaded config
-	// carries explicit false values, warn once so operators know their flag has
-	// no effect and should migrate to security.tool_policies for "deny".
-	cfg.Tools.warnDeprecatedEnableFlags()
+	// carries explicit false values, translate them idempotently into
+	// security.tool_policies deny entries so operator intent is enforced
+	// by the policy engine rather than silently ignored (issue #237).
+	migrateDeprecatedToolEnableFlags(cfg, data)
+
+	// Enforce at-most-one Default=true invariant across cfg.Agents.List.
+	// Hand-edited configs may contain multiple defaults; repair them now so the
+	// registry's GetDefaultAgent sees a clean canonical state (F11).
+	RepairMultipleDefaults(cfg)
 
 	// Apply defaults and validate bounds for all security-relevant fields
 	// (FR-001, FR-002a, numeric sandbox fields, AuthMismatchLogLevel).
@@ -2057,23 +2063,28 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 // mismatches (the UI would show a tool as enabled via policy while the
 // infrastructure flag silently kept it out of the agent's registry).
 //
-// For the rare case of "globally disable tool X", set its entry in
-// security.tool_policies to "deny".
+// For the case of "globally disable tool X", set its entry in
+// security.tool_policies to "deny". Configs that still carry
+// tools.<name>.enabled=false are migrated automatically at load time by
+// migrateDeprecatedToolEnableFlags (migration.go); the operator-disabled
+// tool is translated to a "deny" policy entry so intent is honored.
 //
 // Sub-structs in ToolsConfig (e.g. Browser.MaxTabs, Exec.TimeoutSeconds)
 // are retained — they carry non-enable configuration like timeouts and
 // limits that the tools still read at runtime.
 
-// deprecatedEnableFlagsWarnOnce ensures the deprecation warning fires at most once
-// per process lifetime, even when multiple config files are loaded (e.g. hot-reload).
+// deprecatedEnableFlagsWarnOnce is retained for tests that exercise
+// warnDeprecatedEnableFlags directly. The authoritative migration path is
+// migrateDeprecatedToolEnableFlags in migration.go, wired by loadConfigInternal.
 var deprecatedEnableFlagsWarnOnce sync.Once
 
-// warnDeprecatedEnableFlags emits a single warning per boot if a loaded
-// config still carries any tools.<name>.enabled field set to false. Users
-// relying on the flag are quietly migrated to policy-based disablement.
+// warnDeprecatedEnableFlags is a legacy helper retained for tests; it is no
+// longer called by loadConfigInternal. The replacement is
+// migrateDeprecatedToolEnableFlags (migration.go), which also translates the
+// flags into security.tool_policies deny entries rather than merely warning.
 //
-// The warning fires at most once per process (sync.Once guard) and is emitted
-// via slog.Warn so that tests can intercept it by replacing the default slog handler.
+// Callers outside this package should use migrateDeprecatedToolEnableFlags
+// instead. This method will be removed in a future release.
 func (t *ToolsConfig) warnDeprecatedEnableFlags() {
 	if t == nil {
 		return
@@ -2101,8 +2112,6 @@ func (t *ToolsConfig) warnDeprecatedEnableFlags() {
 	}
 	var disabled []string
 	for _, d := range deprecated {
-		// The flag is deprecated; a false value indicates an operator
-		// tried to disable the tool via the legacy path. Surface once.
 		if !d.enabled {
 			disabled = append(disabled, d.name)
 		}

@@ -4,7 +4,7 @@
 
 // Package sysagent implements the Omnipus built-in system agent per BRD
 // Appendix D. It uses the user's configured LLM provider and exposes the
-// 35 system.* tools for managing agents, channels, providers, skills,
+// 41 system.* tools for managing agents, channels, providers, skills,
 // config, diagnostics, and more. These tools are now ordinary builtins
 // on the central registry, governed by per-agent policy (FR-045).
 //
@@ -44,12 +44,14 @@ type ToolPermission struct {
 // Derived from BRD Appendix D §D.5.3 and §D.5.4.
 var toolPermissions = map[string]ToolPermission{
 	// Agent management — destructive require admin.
-	"system.agent.create":     {MinRole: RoleOperator},
-	"system.agent.update":     {MinRole: RoleOperator},
-	"system.agent.delete":     {MinRole: RoleAdmin},
-	"system.agent.list":       {MinRole: RoleViewer},
-	"system.agent.activate":   {MinRole: RoleOperator},
-	"system.agent.deactivate": {MinRole: RoleOperator},
+	"system.agent.create":         {MinRole: RoleOperator},
+	"system.agent.update":         {MinRole: RoleOperator},
+	"system.agent.delete":         {MinRole: RoleAdmin},
+	"system.agent.list":           {MinRole: RoleViewer},
+	"system.agent.activate":       {MinRole: RoleOperator},
+	"system.agent.deactivate":     {MinRole: RoleOperator},
+	"system.agent.read_metadata":  {MinRole: RoleViewer},
+	"system.agent.write_metadata": {MinRole: RoleOperator},
 
 	// Project management.
 	"system.project.create": {MinRole: RoleOperator},
@@ -85,6 +87,7 @@ var toolPermissions = map[string]ToolPermission{
 	"system.provider.configure": {MinRole: RoleOperator},
 	"system.provider.list":      {MinRole: RoleViewer},
 	"system.provider.test":      {MinRole: RoleViewer},
+	"system.models.list":        {MinRole: RoleViewer},
 
 	// Pin management.
 	"system.pin.list":   {MinRole: RoleViewer},

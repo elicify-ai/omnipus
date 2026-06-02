@@ -3,7 +3,7 @@
 > **SUPERSEDED — Historical context only.**
 > This appendix describes the original design intent for an `omnipus-system` agent. That design was never implemented. The "system agent" fiction was formally retired by the **central tool registry redesign** (completed 2026-04-28).
 >
-> The 35 `system.*` tools described here are ordinary builtins registered on the central `BuiltinRegistry` at boot. There is no distinct `omnipus-system` agent at runtime. Per-agent `ToolPolicyCfg` (allow/ask/deny) governs which agents can call which tools.
+> The 41 `system.*` tools described here are ordinary builtins registered on the central `BuiltinRegistry` at boot. There is no distinct `omnipus-system` agent at runtime. Per-agent `ToolPolicyCfg` (allow/ask/deny) governs which agents can call which tools.
 >
 > - Canonical contract: `docs/internal/specs/tool-registry-redesign-spec.md`
 > - Current as-is state: `docs/internal/architecture/AS-IS-architecture.md` (§§3, 9)
@@ -186,7 +186,7 @@ The Omnipus agent can diagnose and fix common issues:
 
 ## D.4 System Tools
 
-The Omnipus agent has access to 35 system tools that are exclusively available to it. These tools are NOT available to user agents, not exposed via MCP, and not configurable in tool allow/deny lists. All system tool invocations are logged to the audit trail (SEC-15).
+The Omnipus agent has access to 41 system tools that are exclusively available to it. These tools are NOT available to user agents, not exposed via MCP, and not configurable in tool allow/deny lists. All system tool invocations are logged to the audit trail (SEC-15).
 
 ### D.4.1 Tool Overview
 
@@ -510,7 +510,7 @@ The Omnipus agent prompt is compiled into the Go binary as a constant string. It
 
 The prompt is substantial (estimated 10-15K tokens) but loaded only when the user opens an Omnipus session. It does not consume context in user agent sessions.
 
-**Schema redaction for cloud providers:** When the system agent uses a cloud LLM provider (Anthropic, OpenAI, DeepSeek, etc.), the full 35-tool schema is sent to the provider's API. This exposes the complete system tool API surface to the cloud provider. To reduce this exposure:
+**Schema redaction for cloud providers:** When the system agent uses a cloud LLM provider (Anthropic, OpenAI, DeepSeek, etc.), the full 41-tool schema is sent to the provider's API. This exposes the complete system tool API surface to the cloud provider. To reduce this exposure:
 
 1. **Summarized schemas for cloud providers:** When the configured LLM is a cloud provider, system tool schemas are sent in a summarized form — tool name, one-line description, and parameter names only. Full descriptions, examples, and detailed parameter schemas are omitted. This reduces the prompt from ~10-15K tokens to ~2-3K tokens and limits the information exposed.
 2. **Full schemas for local providers:** When the configured LLM is a local provider (Ollama, Nemotron, etc.), full tool schemas are sent, as data does not leave the user's network.

@@ -33,8 +33,10 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -308,4 +310,49 @@ func emitOrStderr(auditLog AuditEmitter, event, severity string, fields map[stri
 		sb.WriteString(fmt.Sprintf(" %s=%v", k, fields[k]))
 	}
 	fmt.Fprintln(os.Stderr, sb.String())
+}
+
+// RepairMultipleDefaults enforces the invariant that at most one agent in
+// cfg.Agents.List may carry Default==true. If more than one is found, all but
+// the first (in list order) have their Default flag cleared in-place, and a
+// structured warning is logged so operators can detect and fix their config.
+//
+// Called during load-time validation so that operator-edited configs are
+// repaired automatically rather than producing undefined GetDefaultAgent
+// behavior at runtime. The PUT path separately enforces at-most-one, but
+// configs written outside the API (hand-edited JSON) bypass that guard.
+//
+// This function mutates cfg.Agents.List in-place. It is idempotent: calling
+// it on an already-valid config is a no-op.
+func RepairMultipleDefaults(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	// Collect indices of agents marked as default, sorted by list position
+	// for deterministic "keep first" behavior.
+	var defaultIdxs []int
+	for i, a := range cfg.Agents.List {
+		if a.Default {
+			defaultIdxs = append(defaultIdxs, i)
+		}
+	}
+	if len(defaultIdxs) <= 1 {
+		return // zero or one default — invariant already satisfied
+	}
+	// Sort is redundant (we iterated in order) but makes the invariant
+	// explicit and safe against future refactors.
+	sort.Ints(defaultIdxs)
+
+	// Collect the IDs of agents being demoted for the warning message.
+	demotedIDs := make([]string, 0, len(defaultIdxs)-1)
+	for _, idx := range defaultIdxs[1:] {
+		demotedIDs = append(demotedIDs, cfg.Agents.List[idx].ID)
+		cfg.Agents.List[idx].Default = false
+	}
+
+	slog.Warn("config: multiple agents have Default=true; keeping first, clearing rest",
+		"kept_agent_id", cfg.Agents.List[defaultIdxs[0]].ID,
+		"cleared_agent_ids", demotedIDs,
+		"total_defaults_found", len(defaultIdxs),
+	)
 }

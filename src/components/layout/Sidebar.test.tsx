@@ -65,10 +65,11 @@ describe('Sidebar — overlay rendering when open', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />)
 
-    // All 5 nav item labels must be present.
+    // All nav item labels must be present (now 6 items including Channels).
     expect(screen.getByText('Chat')).toBeTruthy()
     expect(screen.getByText('Command Center')).toBeTruthy()
     expect(screen.getByText('Agents')).toBeTruthy()
+    expect(screen.getByText('Channels')).toBeTruthy()
     expect(screen.getByText('Skills & Tools')).toBeTruthy()
     expect(screen.getByText('Settings')).toBeTruthy()
   })
@@ -127,5 +128,34 @@ describe('Sidebar — pinned mode rendering', () => {
     // We now verify that pinned sidebar content is present in the document.
     expect(container.querySelector('aside')).not.toBeNull()
     expect(container.querySelector('nav[aria-label="Main navigation"]')).not.toBeNull()
+  })
+})
+
+// ── sprint/258 — Channels nav item ────────────────────────────────────────────
+// Traces to: sprint/258-jun-2026 — Sidebar "Channels" nav item + /channels route.
+
+describe('Sidebar — Channels nav item (sprint/258)', () => {
+  it('renders a "Channels" nav link pointing to /channels', () => {
+    // Content test: the Channels item is present and links to the correct route.
+    //
+    // Note: The Sidebar.test.tsx Link mock renders <a href={to}> where to="/channels".
+    // In the real app, TanStack Router HashRouter renders "/#/channels" — the mock
+    // uses the plain route path. We assert on href="/channels" to match the mock.
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    const { container } = render(<Sidebar />)
+
+    // The label text must be "Channels".
+    expect(screen.getByText('Channels')).toBeTruthy()
+
+    // The anchor element must have href="/channels" (mock renders to= as href).
+    const link = container.querySelector('a[href="/channels"]') as HTMLAnchorElement | null
+    expect(link).not.toBeNull()
+  })
+
+  it('Channels link is NOT rendered when sidebar is closed', () => {
+    // Differentiation test: nav items only appear in the open sidebar.
+    act(() => { useSidebarStore.setState({ isOpen: false, isPinned: false }) })
+    render(<Sidebar />)
+    expect(screen.queryByText('Channels')).toBeNull()
   })
 })

@@ -1,0 +1,14 @@
+title: ChannelRouting
+description: >
+  Routing configuration for a single communication channel.
+  Controls which agent handles inbound messages arriving on this channel.
+type: object
+required: []
+additionalProperties: false
+properties:
+  default_agent_id:
+    type: string
+    description: >
+      ID of the agent that handles this channel's inbound messages.
+      Omitted or empty means fall back to the global default agent.
+    example: "550e8400-e29b-41d4-a716-446655440000"

@@ -54,9 +54,10 @@ var ErrAlreadyActive = errors.New("agent already active on this session")
 // It implements SessionStore so the agent loop works unchanged, and adds
 // UI-oriented methods (NewSession, AppendTranscript, ReadTranscript, etc.).
 type UnifiedStore struct {
-	mu      sync.Mutex
-	baseDir string // {workspace}/sessions/
-	backend *memory.JSONLStore
+	mu       sync.Mutex
+	baseDir  string // {workspace}/sessions/
+	homePath string // ~/.omnipus/ — uploads cascade-delete root (home-rooted per rest.go:4352)
+	backend  *memory.JSONLStore
 }
 
 // BaseDir returns the root directory of this store.
@@ -78,7 +79,24 @@ func validateSessionID(id string) error {
 // It migrates legacy flat JSONL files if any are found.
 // The agentID is no longer baked into the store — callers pass it per-operation
 // (e.g., NewSession receives creatingAgentID).
+//
+// The uploads cascade-delete path is derived as filepath.Dir(baseDir)/uploads,
+// which is correct when baseDir is directly under the home directory (e.g.,
+// <home>/sessions). For per-agent stores whose baseDir is deeper in the tree
+// (e.g., <home>/agents/<id>/sessions), use NewUnifiedStoreWithHome so that
+// upload files are found at the correct <home>/uploads/<sessionID> path.
 func NewUnifiedStore(baseDir string) (*UnifiedStore, error) {
+	return NewUnifiedStoreWithHome(baseDir, filepath.Dir(filepath.Clean(baseDir)))
+}
+
+// NewUnifiedStoreWithHome creates a UnifiedStore rooted at baseDir whose
+// upload files live under homePath/uploads/<sessionID>.
+//
+// Use this constructor when baseDir is not a direct child of homePath (e.g.,
+// per-agent stores at <home>/agents/<id>/sessions). The homePath ensures that
+// cascade-deletes on DeleteSession, ClearAll, and RetentionSweep always remove
+// files from the correct location regardless of the store's baseDir depth.
+func NewUnifiedStoreWithHome(baseDir, homePath string) (*UnifiedStore, error) {
 	if err := os.MkdirAll(baseDir, 0o700); err != nil {
 		return nil, fmt.Errorf("unified_store: create base dir %q: %w", baseDir, err)
 	}
@@ -92,12 +110,25 @@ func NewUnifiedStore(baseDir string) (*UnifiedStore, error) {
 	}
 
 	us := &UnifiedStore{
-		baseDir: baseDir,
-		backend: store,
+		baseDir:  baseDir,
+		homePath: homePath,
+		backend:  store,
 	}
 
 	us.migrateLegacy()
 	return us, nil
+}
+
+// uploadsRoot returns the root directory for upload files associated with
+// sessions in this store. Uploads are always home-rooted at
+// <homePath>/uploads/ (matching rest.go:4352) regardless of the store's
+// baseDir depth in the directory tree.
+func (us *UnifiedStore) uploadsRoot() string {
+	if us.homePath != "" {
+		return filepath.Join(us.homePath, "uploads")
+	}
+	// Fallback: derive from baseDir (correct only for stores directly under home).
+	return filepath.Join(filepath.Dir(filepath.Clean(us.baseDir)), "uploads")
 }
 
 // migrateLegacy scans for old flat JSONL files and wraps each in a session directory.
@@ -585,6 +616,9 @@ func (us *UnifiedStore) Close() error {
 }
 
 // DeleteSession removes a single session directory from the store.
+// It also cascade-deletes the corresponding uploads directory
+// (~/.omnipus/uploads/{sessionID}/) when it exists; failure to remove uploads
+// is logged but does not fail the operation — the session data is gone either way.
 // Returns an error if the session does not exist or cannot be removed.
 func (us *UnifiedStore) DeleteSession(sessionID string) error {
 	if err := validateSessionID(sessionID); err != nil {
@@ -605,6 +639,15 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 	}
 	contextFile := filepath.Join(us.baseDir, ".context", sessionID+".jsonl")
 	os.Remove(contextFile) // best-effort, ignore error if file does not exist
+
+	// Cascade-delete uploads that were associated with this session.
+	// Uploads are always home-rooted at <homePath>/uploads/<sessionID> regardless
+	// of the store's baseDir depth (ADR-017 D5, N-B fix).
+	uploadsDir := filepath.Join(us.uploadsRoot(), sessionID)
+	if rmErr := os.RemoveAll(uploadsDir); rmErr != nil && !os.IsNotExist(rmErr) {
+		slog.Warn("unified_store: delete session: cascade-delete uploads failed",
+			"session_id", sessionID, "uploads_dir", uploadsDir, "error", rmErr)
+	}
 	return nil
 }
 
@@ -622,6 +665,7 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 		return 0, fmt.Errorf("unified_store: clear all: read dir: %w", err)
 	}
 
+	uploadsRoot := us.uploadsRoot()
 	removed := 0
 	for _, entry := range entries {
 		if !entry.IsDir() || entry.Name() == ".context" {
@@ -634,6 +678,12 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 		}
 		contextFile := filepath.Join(us.baseDir, ".context", entry.Name()+".jsonl")
 		os.Remove(contextFile) // best-effort, ignore error if file does not exist
+		// Cascade-delete uploads for this session.
+		uploadsDir := filepath.Join(uploadsRoot, entry.Name())
+		if rmErr := os.RemoveAll(uploadsDir); rmErr != nil && !os.IsNotExist(rmErr) {
+			slog.Warn("unified_store: clear all: cascade-delete uploads failed",
+				"session_id", entry.Name(), "error", rmErr)
+		}
 		removed++
 	}
 	return removed, nil

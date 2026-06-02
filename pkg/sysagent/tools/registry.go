@@ -8,17 +8,22 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
-// AllTools returns all 35 system tools as a flat slice.
+// AllTools returns all system tools as a flat slice.
 // The slice preserves the canonical tool ordering from BRD Appendix D §D.4.1.
+// Two additional tools (agent.read_metadata, agent.write_metadata) are included
+// per issue #240 to provide the deterministic, self-validating accessors for
+// agent metadata files.
 func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 	return []tools.Tool{
-		// Agent management (6)
+		// Agent management (8: 6 original + 2 metadata accessors from issue #240)
 		NewAgentCreateTool(d),
 		NewAgentUpdateTool(d),
 		NewAgentDeleteTool(d),
 		NewAgentListTool(d),
 		NewAgentActivateTool(d),
 		NewAgentDeactivateTool(d),
+		NewAgentReadMetadataTool(d),
+		NewAgentWriteMetadataTool(d),
 
 		// Project management (4)
 		NewProjectCreateTool(d),
@@ -73,7 +78,7 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 	}
 }
 
-// BuildRegistry creates a ToolRegistry containing all 35 system tools.
+// BuildRegistry creates a ToolRegistry containing all 41 system tools.
 // Use this registry as the backing store for the SystemToolHandler.
 func BuildRegistry(d *Deps, navCb NavigateCallback) *tools.ToolRegistry {
 	reg := tools.NewToolRegistry()

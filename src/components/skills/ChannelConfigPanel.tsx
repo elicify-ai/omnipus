@@ -15,7 +15,17 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { fetchChannelConfig, configureChannel, enableChannel, testChannel, isApiError } from '@/lib/api'
+import { SmartSelect } from '@/components/ui/smart-select'
+import {
+  fetchChannelConfig,
+  configureChannel,
+  enableChannel,
+  testChannel,
+  getChannelRouting,
+  setChannelRouting,
+  fetchAgents,
+  isApiError,
+} from '@/lib/api'
 import { getChannelFields, type ChannelField } from '@/lib/channel-fields'
 import { useUiStore } from '@/store/ui'
 
@@ -100,6 +110,41 @@ export function ChannelConfigPanel({
     queryKey: ['channel-config', channelId],
     queryFn: () => fetchChannelConfig(channelId),
     enabled: open,
+  })
+
+  const isWebchat = channelId === 'webchat'
+
+  const { data: agents = [], isError: agentsError } = useQuery({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+    enabled: open && !isWebchat,
+  })
+
+  const { data: routing, isError: routingError } = useQuery({
+    queryKey: ['channel-routing', channelId],
+    queryFn: () => getChannelRouting(channelId),
+    enabled: open && !isWebchat,
+  })
+
+  const [selectedAgentId, setSelectedAgentId] = useState<string>('__none__')
+
+  useEffect(() => {
+    if (routing === undefined) return
+    setSelectedAgentId(routing.default_agent_id ?? '__none__')
+  }, [routing])
+
+  const { mutate: doSaveRouting } = useMutation({
+    mutationFn: (agentId: string | undefined) =>
+      setChannelRouting(channelId, { default_agent_id: agentId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['channel-routing', channelId] })
+      addToast({ message: 'Routing saved', variant: 'success' })
+    },
+    onError: (err: unknown) => {
+      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Routing save failed', variant: 'error' })
+      // Revert the optimistic select by resyncing from server
+      queryClient.invalidateQueries({ queryKey: ['channel-routing', channelId] })
+    },
   })
 
   // Populate form when config loads — skip if user has unsaved edits
@@ -269,6 +314,48 @@ export function ChannelConfigPanel({
                 )}
               </div>
             ))}
+
+            {/* Routing — hidden for webchat (no agent-routing concept) */}
+            {!isWebchat && (
+              <div className="pt-2 border-t border-[var(--color-border)] space-y-3">
+                <h3 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
+                  Routing
+                </h3>
+                {routingError ? (
+                  <p className="text-xs text-[var(--color-error)]">
+                    Couldn&apos;t load routing — save may overwrite current setting.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-medium text-[var(--color-secondary)]">
+                      Default agent
+                    </Label>
+                    {agentsError ? (
+                      <p className="text-xs text-[var(--color-error)]">
+                        Couldn&apos;t load agent list.
+                      </p>
+                    ) : (
+                      <SmartSelect
+                        value={selectedAgentId}
+                        onValueChange={(v) => {
+                          const next = v === '__none__' ? undefined : v
+                          setSelectedAgentId(v)
+                          doSaveRouting(next)
+                        }}
+                        placeholder="(Global default)"
+                        items={[
+                          { value: '__none__', label: '(Global default)' },
+                          ...agents.map((a) => ({ value: a.id, label: a.name })),
+                        ]}
+                      />
+                    )}
+                    <p className="text-[10px] text-[var(--color-muted)] leading-relaxed">
+                      Which agent handles inbound messages on this channel. &quot;(Global default)&quot; falls back to the globally-configured default agent.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Test result */}
             {testResult && (

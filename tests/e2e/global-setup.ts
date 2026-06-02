@@ -31,6 +31,132 @@ function preflightCheck(): void {
 }
 
 /**
+ * Validate or seed the gateway config.json in OMNIPUS_HOME before the test
+ * suite runs.
+ *
+ * Two concerns that are restart-gated (only take effect when the gateway BOOTS):
+ *
+ * 1. sandbox.audit_log — must be true at boot for T26. The audit subsystem creates
+ *    ~/.omnipus/system/audit.jsonl only when cfg.Sandbox.AuditLog=true at startup
+ *    (pkg/agent/loop.go:346). Toggling via REST mid-run has no effect.
+ *
+ * 2. tools.spawn.enabled:false — migrateDeprecatedToolEnableFlags (pkg/config/migration.go)
+ *    converts this into a GLOBAL sandbox.tool_policies["spawn"]="deny" at config-load
+ *    time, denying spawn for ALL agents. This breaks T24 (cancel cascade) and the
+ *    handoff/subagent E2E tests. The fix is to have sandbox.tool_policies.spawn="allow"
+ *    explicitly, which is never downgraded by the migrator, and to ensure the legacy
+ *    tools.spawn.enabled=false key is absent.
+ *
+ * Strategy:
+ *   - If config.json is absent from OMNIPUS_HOME, write a minimal correct config.
+ *     This is the fast path for local dev: developer sets OMNIPUS_HOME, runs playwright,
+ *     and the config is seeded correctly the first time.
+ *   - If config.json exists but has tools.spawn.enabled:false or lacks sandbox.audit_log,
+ *     fail loudly with an actionable error instead of silently producing confusing T24/T26
+ *     failures 10 minutes into the test run.
+ *
+ * Note: OMNIPUS_HOME must exist before this function runs. The CI workflow creates
+ * it with `mkdir -p` before calling `cat > config.json`. For local dev the developer
+ * must set OMNIPUS_HOME before running `npx playwright test`.
+ */
+function validateOrSeedGatewayConfig(): void {
+  const omnipusHome =
+    process.env.OMNIPUS_HOME ||
+    (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '/tmp/omnipus-e2e-test');
+
+  if (!fs.existsSync(omnipusHome)) {
+    // OMNIPUS_HOME does not exist — the gateway cannot start without it.
+    // Fail fast so the developer sees a clear error before a timeout spiral.
+    throw new Error(
+      `[E2E preflight] OMNIPUS_HOME directory does not exist: ${omnipusHome}\n` +
+      'Create it and write a config.json before starting the gateway:\n\n' +
+      `  mkdir -p ${omnipusHome}\n` +
+      `  cat > ${omnipusHome}/config.json <<'EOF'\n` +
+      '  {\n' +
+      '    "version": 1,\n' +
+      '    "gateway": { "port": 6060, "dev_mode_bypass": true },\n' +
+      '    "sandbox": { "audit_log": true, "tool_policies": { "spawn": "allow" } }\n' +
+      '  }\n' +
+      '  EOF\n\n' +
+      'Then start the gateway:\n' +
+      '  OMNIPUS_BEARER_TOKEN="" ./omnipus gateway --allow-empty &\n' +
+      'See tests/e2e/README.md for the full local-run checklist.',
+    );
+  }
+
+  const configPath = path.join(omnipusHome, 'config.json');
+
+  if (!fs.existsSync(configPath)) {
+    // Config absent — write a minimal correct config so the NEXT gateway start is correct.
+    // (The current gateway run may already be in flight without these settings — warn.)
+    const minimalConfig = {
+      version: 1,
+      gateway: { port: 6060, dev_mode_bypass: true },
+      sandbox: {
+        audit_log: true,
+        tool_policies: { spawn: 'allow' },
+      },
+    };
+    fs.writeFileSync(configPath, JSON.stringify(minimalConfig, null, 2), { mode: 0o600 });
+    console.warn(
+      `[E2E global-setup] config.json was absent — wrote minimal config to ${configPath}.\n` +
+      'IMPORTANT: sandbox.audit_log and tool_policies.spawn are restart-gated. If the gateway\n' +
+      'is already running without these settings, T24 and T26 will fail. Restart the gateway\n' +
+      'and re-run the suite.',
+    );
+    return;
+  }
+
+  // Config exists — validate for the two known blockers.
+  let cfg: Record<string, unknown>;
+  try {
+    cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+  } catch {
+    // Unparseable config — let the gateway handle it; don't block tests.
+    return;
+  }
+
+  const errors: string[] = [];
+
+  // Check 1: tools.spawn.enabled:false — the legacy deprecation trap.
+  // migrateDeprecatedToolEnableFlags reads raw JSON to detect EXPLICIT false values,
+  // so we check the parsed object here to give a user-friendly error.
+  const tools = cfg.tools as Record<string, { enabled?: boolean }> | undefined;
+  if (tools?.spawn?.enabled === false) {
+    errors.push(
+      'config.json has "tools": {"spawn": {"enabled": false}}.\n' +
+      'migrateDeprecatedToolEnableFlags (pkg/config/migration.go) converts this into\n' +
+      'sandbox.tool_policies["spawn"]="deny" at config-load time, breaking T24 (cancel\n' +
+      'cascade) and handoff/subagent E2E tests.\n' +
+      'FIX: remove the tools.spawn key entirely and add:\n' +
+      '  "sandbox": { "tool_policies": { "spawn": "allow" } }',
+    );
+  }
+
+  // Check 2: sandbox.audit_log must be true for T26.
+  const sandbox = cfg.sandbox as { audit_log?: boolean; tool_policies?: Record<string, string> } | undefined;
+  if (!sandbox?.audit_log) {
+    errors.push(
+      'config.json is missing sandbox.audit_log:true.\n' +
+      'sandbox.audit_log is restart-gated — the audit subsystem (audit.jsonl) is only\n' +
+      'created at boot when this flag is true. T26 will fail without it.\n' +
+      'FIX: add "sandbox": { "audit_log": true } to config.json and restart the gateway.',
+    );
+  }
+
+  if (errors.length > 0) {
+    throw new Error(
+      `[E2E preflight] Gateway config has ${errors.length} blocker(s) for T24/T26:\n\n` +
+      errors.map((e, i) => `  [${i + 1}] ${e}`).join('\n\n') +
+      '\n\n' +
+      `Config path: ${configPath}\n` +
+      'See .github/workflows/pr.yml "Seed gateway config" step for the canonical config.\n' +
+      'See tests/e2e/README.md for the full local-run checklist.',
+    );
+  }
+}
+
+/**
  * Global setup: seed admin + provider via REST and write the auth storage
  * state file directly — no browser-rendered login flow required.
  *
@@ -64,6 +190,10 @@ function preflightCheck(): void {
 async function globalSetup(): Promise<void> {
   // T0.4: Run preflight checks before any browser/gateway interaction.
   preflightCheck();
+
+  // Validate or seed the gateway config.json for T24 (spawn allow) and T26 (audit_log).
+  // This must run before onboardViaAPI so a misconfigured gateway is caught early.
+  validateOrSeedGatewayConfig();
 
   const baseURL = process.env.OMNIPUS_URL || 'http://localhost:6060';
 

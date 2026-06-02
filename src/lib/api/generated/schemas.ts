@@ -109,6 +109,7 @@ type Agent = {
   model_params?: AgentModelParams | undefined;
   rate_limits?: AgentRateLimits | undefined;
   stats?: AgentStats | undefined;
+  default?: boolean | undefined;
 };
 type AgentToolsCfg = Partial<{
   builtin: Partial<{
@@ -200,6 +201,7 @@ type AgentUpdateRequest = Partial<{
     max_cost_per_day: number;
   }>;
   tools_cfg: AgentToolsCfg;
+  default: boolean;
 }>;
 type ChannelEntry = {
   id: ChannelId;
@@ -282,6 +284,7 @@ type UploadedFile = {
   path: string;
   size: number;
   content_type: string;
+  ref?: string | undefined;
 };
 type ActivityEventsResponse = {
   events: Array<ActivityEvent>;
@@ -644,6 +647,7 @@ export const Agent: z.ZodType<Agent> = z
     model_params: AgentModelParams.optional(),
     rate_limits: AgentRateLimits.optional(),
     stats: AgentStats.optional(),
+    default: z.boolean().optional(),
   })
   .passthrough();
 export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
@@ -717,6 +721,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
       .partial()
       .passthrough(),
     tools_cfg: AgentToolsCfg,
+    default: z.boolean(),
   })
   .partial();
 export const AgentOwnershipUpdateRequest = z
@@ -1048,6 +1053,9 @@ export const ChannelEnabledResponse: z.ZodType<ChannelEnabledResponse> =
 export const ChannelTestResponse = z
   .object({ success: z.boolean(), message: z.string() })
   .passthrough();
+export const ChannelRouting = z
+  .object({ default_agent_id: z.string() })
+  .partial();
 export const RotateTokenResponse: z.ZodType<RotateTokenResponse> = z.object({
   token: BearerToken.min(72)
     .max(72)
@@ -1136,6 +1144,7 @@ export const UploadedFile: z.ZodType<UploadedFile> = z.object({
   path: z.string(),
   size: z.number().int().gte(0),
   content_type: z.string(),
+  ref: z.string().optional(),
 });
 export const UploadFilesResponse: z.ZodType<UploadFilesResponse> = z
   .object({ files: z.array(UploadedFile) })
@@ -1991,6 +2000,82 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Channel ID not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/channels/:id/routing",
+    alias: "getChannelRouting",
+    description: `Returns the routing configuration for the specified channel, including which agent handles its inbound messages.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.object({ default_agent_id: z.string() }).partial(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Channel ID not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/channels/:id/routing",
+    alias: "setChannelRouting",
+    description: `Sets the routing configuration for the specified channel. The default_agent_id field controls which agent handles inbound messages arriving on this channel. Omit it or leave it empty to fall back to the global default agent.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ default_agent_id: z.string() }).partial(),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.object({ default_agent_id: z.string() }).partial(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Channel ID not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -4338,6 +4423,7 @@ export const MessageFrame = z
     content: z.string().min(1).max(5242880),
     session_id: z.string().min(1).max(128).optional(),
     agent_id: z.string().min(1).max(128).optional(),
+    media: z.array(z.string().min(1).max(256)).max(16).optional(),
   })
   .strict();
 

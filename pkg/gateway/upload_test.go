@@ -19,7 +19,85 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/media"
 )
+
+// TestHandleUpload_RegistersMediaRef is the #254 regression test: an uploaded
+// file must be registered in the media store and its media:// ref returned in
+// the response so the SPA can thread it into the message frame's "media" array.
+// Without the fix the response carries no ref and the agent never sees the file.
+func TestHandleUpload_RegistersMediaRef(t *testing.T) {
+	api := newUploadTestAPI(t)
+	api.mediaStore = media.NewFileMediaStore()
+	sessionID := "media-ref-session"
+
+	body, ct := buildMultipart(t, sessionID, map[string]string{"pic.png": "PNGDATA"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+	req.Header.Set("Content-Type", ct)
+	rr := httptest.NewRecorder()
+
+	api.HandleUpload(rr, req)
+
+	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
+	var resp gen.UploadFilesResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Len(t, resp.Files, 1)
+
+	// #254: ref must be present and a media:// URI.
+	require.NotNil(t, resp.Files[0].Ref, "uploaded file must carry a media:// ref")
+	assert.True(t, strings.HasPrefix(*resp.Files[0].Ref, "media://"),
+		"ref must be a media:// URI, got %q", *resp.Files[0].Ref)
+
+	// The ref must resolve back to the file on disk.
+	localPath, err := api.mediaStore.Resolve(*resp.Files[0].Ref)
+	require.NoError(t, err, "media store must resolve the ref")
+	data, err := os.ReadFile(localPath)
+	require.NoError(t, err)
+	assert.Equal(t, "PNGDATA", string(data))
+}
+
+// TestHandleUpload_UsesAgentLoopStore verifies the stale-store fix:
+// when the agent loop has a store set (simulating post-restartServices state),
+// HandleUpload registers the ref in the AGENT LOOP's store, not a.mediaStore.
+// This is the key invariant — the agent loop always resolves via GetMediaStore().
+//
+// Traces to: #254 stale media store (BLOCKER)
+func TestHandleUpload_UsesAgentLoopStore(t *testing.T) {
+	api := newUploadTestAPI(t)
+
+	// agentLoopStore simulates the store that restartServices installed.
+	agentLoopStore := media.NewFileMediaStore()
+	api.agentLoop.SetMediaStore(agentLoopStore)
+
+	// a.mediaStore is set to a DIFFERENT (old) store to detect if upload
+	// uses the stale reference. After the fix, the agentLoopStore must be used.
+	staleStore := media.NewFileMediaStore()
+	api.mediaStore = staleStore
+
+	sessionID := "agent-loop-store-session"
+	body, ct := buildMultipart(t, sessionID, map[string]string{"doc.txt": "content"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+	req.Header.Set("Content-Type", ct)
+	rr := httptest.NewRecorder()
+
+	api.HandleUpload(rr, req)
+
+	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
+	var resp gen.UploadFilesResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
+	require.Len(t, resp.Files, 1)
+	require.NotNil(t, resp.Files[0].Ref, "must have a ref")
+
+	ref := *resp.Files[0].Ref
+
+	// The ref must resolve in the AGENT LOOP store (the current store).
+	_, errAgentLoop := agentLoopStore.Resolve(ref)
+	assert.NoError(t, errAgentLoop, "ref must resolve in agent loop's store (the live store)")
+
+	// The ref must NOT resolve in the stale store.
+	_, errStale := staleStore.Resolve(ref)
+	assert.Error(t, errStale, "ref must NOT resolve in the stale a.mediaStore")
+}
 
 // newUploadTestAPI returns a restAPI wired to a temp directory for upload tests.
 func newUploadTestAPI(t *testing.T) *restAPI {

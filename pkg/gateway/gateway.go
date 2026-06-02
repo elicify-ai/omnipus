@@ -665,7 +665,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// Wire system.* tool dependencies into the agent loop (FR-001, FR-002).
 	// Called after SetReloadFunc so the reload trigger is available to system
 	// tools that trigger hot-reload (e.g., system.agent.create).
-	// WireSysagentDeps immediately registers all 35 system.* tools on every agent
+	// WireSysagentDeps immediately registers all 41 system.* tools on every agent
 	// in the current registry and stashes deps for re-application on hot-reload.
 	sysAgentDeps := &systools.Deps{
 		Home:         homePath,
@@ -1573,6 +1573,20 @@ func restartServices(
 	}
 	fmt.Println("  ✓ Heartbeat service restarted")
 
+	// N-D fix: build and wire the NEW store BEFORE stopping the old one so that
+	// any upload whose scheduleSave fires in the narrow window between the Stop
+	// and the SetMediaStore calls writes into the new (live) store rather than
+	// being silently dropped by the stopped store.
+	//
+	// Order:
+	//   1. Create new store (inactive; Start() below begins the cleanup goroutine).
+	//   2. Swap the agent-loop pointer so new uploads land in the new store.
+	//   3. Flush the old store (pending debounced saves) and stop its goroutines.
+	//
+	// The old store is retained via oldStore until after Stop() completes so the
+	// GC does not reclaim it while the debounced save goroutine may still be
+	// running.
+	oldStore := runningServices.MediaStore
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  cfg.Tools.MediaCleanup.Enabled,
 		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
@@ -1587,7 +1601,14 @@ func restartServices(
 		}
 		fms.Start()
 	}
+	// Swap the live pointer first so uploads arriving after this point use the
+	// new store (closes the N-D reload-swap window).
 	al.SetMediaStore(runningServices.MediaStore)
+	// Now flush and stop the old store. Stop() is idempotent and safe to call
+	// even if the cleanup goroutine was never started (N3 lifecycle fix).
+	if oldFMS, ok := oldStore.(*media.FileMediaStore); ok {
+		oldFMS.Stop()
+	}
 
 	al.SetChannelManager(runningServices.ChannelManager)
 	runningServices.ChannelManager.SetCancelInterceptor(al)

@@ -70,9 +70,16 @@ Within a binding, criteria are matched in this order (`pkg/routing/route.go::Res
 | `binding.team` | Slack team ID match |
 | `binding.account` | Channel account ID match (e.g. a specific bot account) |
 | `binding.channel` | Channel-level wildcard (`*` or the channel name only) |
-| `default` | No binding matched — route to the gateway-default agent |
+| `default` | No binding matched — route to the **default agent** (see [The default agent](#the-default-agent)) |
 
-The default-agent fall-back triggers a `WARN` log line if you have custom agents but none of them is marked default — Omnipus then routes to `main` and surfaces the misconfiguration loud and clear (`pkg/routing/route.go:243-263`).
+## The default agent
+
+The **default agent** handles any message that has no more-specific binding. Exactly one agent is the default: the one whose config carries `default: true`. On a fresh install this is **Mia**.
+
+- **From the UI:** on the **Agents** page, hover an agent card and click **Set as default** — the gold ★ moves to it. To override the default for a single channel, use **Channels → Configure → Routing → Default agent** (leave it on "(Global default)" to inherit the global default). See [Using the web app](using-omnipus-ui.md#channels).
+- **From config / API:** mark one agent `"default": true` under `agents.list[]`, add a channel-wildcard binding (`account_id: "*"`) under `gateway.bindings[]`, or `PUT /api/v1/channels/{id}/routing` with `{ "default_agent_id": "<id>" }`.
+
+If **no** agent is marked default, Omnipus falls back to the **first enabled agent** in the roster (not a hardcoded name) and emits a `WARN` so the misconfiguration is visible (`pkg/routing/route.go::resolveDefaultAgentID`).
 
 ## Wildcards
 
@@ -86,7 +93,7 @@ Each channel config also accepts `allow_from`, `dm_policy`, and `group_policy` t
 
 ### One bot, one agent (simple)
 
-A single Telegram bot. All messages go to Mia. Bindings can be empty — the gateway defaults to the `main` agent if no bindings match.
+A single Telegram bot. All messages go to Mia. Bindings can be empty — the gateway routes to the **default agent** (Mia on a fresh install) when no bindings match.
 
 ### One bot, per-user routing
 

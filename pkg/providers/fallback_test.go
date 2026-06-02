@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -520,6 +521,156 @@ func TestResolveCandidatesWithLookup_AliasWithoutProtocolUsesDefaultProvider(t *
 	}
 	if candidates[0].Model != "glm-5" {
 		t.Fatalf("model = %q, want glm-5", candidates[0].Model)
+	}
+}
+
+// TestFallback_SecondCandidate_GetsFreshBudget_AfterPrimaryTimesOut verifies the
+// fix for issue #235: when the primary candidate times out and exhausts the parent
+// context deadline, fallback candidates must receive a fresh per-candidate budget
+// rather than inheriting the already-expired parent deadline.
+//
+// Pre-fix: the second candidate received the expired parent ctx, so
+// time.Until(deadline) was ≤0 and the stub returned DeadlineExceeded in ~1ms,
+// causing FallbackExhaustedError — both the remaining-positive and err-nil
+// assertions fail (red).
+//
+// Post-fix: the second candidate gets its own fresh context detached from the
+// expired parent deadline, so remaining is positive and the stub succeeds (green).
+func TestFallback_SecondCandidate_GetsFreshBudget_AfterPrimaryTimesOut(t *testing.T) {
+	ct := NewCooldownTracker()
+	// 50ms per-candidate budget — enough for prov2 to run after prov1 times out.
+	fc := NewFallbackChainWithTimeout(ct, 50*time.Millisecond)
+
+	// Parent deadline of 30ms — the primary will consume it entirely.
+	parentCtx, parentCancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer parentCancel()
+
+	candidates := []FallbackCandidate{
+		{Provider: "prov1", Model: "modelA"},
+		{Provider: "prov2", Model: "modelB"},
+	}
+
+	var fallbackRemaining time.Duration
+
+	run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+		if model == "modelA" {
+			// Block until this attempt's per-candidate ctx is done, simulating a
+			// timeout that consumes the full parent deadline.
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		// modelB (fallback): record how much budget is left in the attempt ctx.
+		if d, ok := ctx.Deadline(); ok {
+			fallbackRemaining = time.Until(d)
+		}
+		time.Sleep(5 * time.Millisecond) // simulate real work
+		return &LLMResponse{Content: "ok-from-fallback", FinishReason: "stop"}, nil
+	}
+
+	result, err := fc.Execute(parentCtx, candidates, run)
+	if err != nil {
+		t.Fatalf("expected success from fallback candidate, got error: %v", err)
+	}
+	if result.Model != "modelB" {
+		t.Errorf("expected result from modelB, got %q", result.Model)
+	}
+	if result.Response == nil || result.Response.Content != "ok-from-fallback" {
+		t.Errorf("expected content ok-from-fallback, got %v", result.Response)
+	}
+	if fallbackRemaining <= 5*time.Millisecond {
+		t.Errorf("fallback candidate should have received a positive budget (≥5ms), got %v", fallbackRemaining)
+	}
+}
+
+// TestFallback_UserCancel_StillAbortsImmediately verifies that canceling the
+// original ctx during the primary attempt still aborts the whole chain and does
+// not advance to the second candidate — even with per-candidate budgeting active.
+func TestFallback_UserCancel_StillAbortsImmediately(t *testing.T) {
+	ct := NewCooldownTracker()
+	fc := NewFallbackChainWithTimeout(ct, 50*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	candidates := []FallbackCandidate{
+		{Provider: "prov1", Model: "modelA"},
+		{Provider: "prov2", Model: "modelB"},
+	}
+
+	reached2 := false
+	run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+		if model == "modelA" {
+			cancel() // user aborts
+			return nil, context.Canceled
+		}
+		reached2 = true
+		return &LLMResponse{Content: "should not reach here", FinishReason: "stop"}, nil
+	}
+
+	_, err := fc.Execute(ctx, candidates, run)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+	if reached2 {
+		t.Error("chain must not advance to candidate 2 after user cancellation")
+	}
+}
+
+// TestFallback_FairSplitFloor verifies that when many candidates compete for a
+// small parent deadline, each candidate receives at least minCandidateBudget
+// rather than a sub-second slice from naive division.
+//
+// Setup: 10 candidates, parent deadline of 2s (200ms per candidate via naive
+// fair-split). minCandidateBudget is 5s, so every candidate must receive ≥5s.
+// We inspect the deadline the first candidate receives; because the floor is
+// applied before we even run the first attempt, the budget must be ≥5s.
+func TestFallback_FairSplitFloor_EnforcesMinimumBudget(t *testing.T) {
+	ct := NewCooldownTracker()
+	// perCandidateTimeout = 30s (well above floor) — the floor governs here
+	fc := NewFallbackChainWithTimeout(ct, 30*time.Second)
+
+	// Parent deadline: 2s total / 10 candidates = 200ms naive share (below 5s floor).
+	parentCtx, parentCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer parentCancel()
+
+	const numCandidates = 10
+	candidates := make([]FallbackCandidate, numCandidates)
+	for i := range candidates {
+		candidates[i] = FallbackCandidate{
+			Provider: "prov",
+			Model:    fmt.Sprintf("model-%d", i),
+		}
+	}
+
+	var firstCandidateBudget time.Duration
+	callCount := 0
+
+	run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
+		callCount++
+		if callCount == 1 {
+			// Record how much budget the first candidate got.
+			if d, ok := ctx.Deadline(); ok {
+				firstCandidateBudget = time.Until(d)
+			}
+			// Return a retriable error to advance to the next candidate.
+			return nil, errors.New("rate limit exceeded")
+		}
+		// All other candidates succeed immediately.
+		return &LLMResponse{Content: "ok", FinishReason: "stop"}, nil
+	}
+
+	result, err := fc.Execute(parentCtx, candidates, run)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected a successful result")
+	}
+
+	// The first candidate must have received at least minCandidateBudget (5s),
+	// not the naive 200ms from 2s/10 candidates.
+	if firstCandidateBudget < minCandidateBudget-100*time.Millisecond {
+		t.Errorf("first candidate budget = %v, want >= minCandidateBudget (%v); "+
+			"fair-split floor is not being applied", firstCandidateBudget, minCandidateBudget)
 	}
 }
 

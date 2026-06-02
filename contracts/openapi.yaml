@@ -181,7 +181,47 @@ components:
     ActivityEvent:
       $ref: ./components/schemas/ActivityEvent.yaml
     UploadedFile:
-      $ref: ./components/schemas/UploadedFile.yaml
+      type: object
+      description: >
+        Metadata for a single successfully uploaded file, as returned in the
+        POST /upload response body's "files" array. Callers use the path field
+        to construct the /api/v1/uploads/{session_id}/{filename} download URL.
+      required:
+        - name
+        - path
+        - size
+        - content_type
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Sanitised filename as stored on disk.
+          example: "screenshot.png"
+        path:
+          type: string
+          description: >
+            Relative path within the uploads directory for constructing a download URL.
+            Format: "uploads/{session_id}/{filename}".
+          example: "uploads/550e8400-e29b-41d4-a716-446655440000/screenshot.png"
+        size:
+          type: integer
+          format: int64
+          description: File size in bytes.
+          minimum: 0
+          example: 204800
+        content_type:
+          type: string
+          description: Detected MIME type of the uploaded file.
+          example: "image/png"
+        ref:
+          type: string
+          description: >
+            media:// ref registered for this file in the media store. Present when
+            the server could register the file (always, for now). The SPA echoes
+            this ref back in the message frame's "media" array so the agent loop can
+            thread the file into the LLM content array as a multimodal content block.
+            Empty if registration failed (the file is still downloadable via path).
+          example: "media://550e8400-e29b-41d4-a716-446655440000"
     SandboxConfigUpdate:
       $ref: ./components/schemas/SandboxConfigUpdate.yaml
     Task:
@@ -240,6 +280,8 @@ components:
       $ref: ./components/schemas/ChannelEnabledResponse.yaml
     ChannelTestResponse:
       $ref: ./components/schemas/ChannelTestResponse.yaml
+    ChannelRouting:
+      $ref: ./components/schemas/ChannelRouting.yaml
     BackupCreateResponse:
       $ref: ./components/schemas/BackupCreateResponse.yaml
     OnboardingStatusResponse:
@@ -249,7 +291,19 @@ components:
     ToolApprovalResponse:
       $ref: ./components/schemas/ToolApprovalResponse.yaml
     UploadFilesResponse:
-      $ref: ./components/schemas/UploadFilesResponse.yaml
+      title: UploadFilesResponse
+      description: >
+        Response from POST /api/v1/upload (HTTP 201).
+        Returns the list of uploaded files with their metadata.
+      type: object
+      required:
+        - files
+      properties:
+        files:
+          type: array
+          description: Uploaded file metadata entries.
+          items:
+            $ref: '#/components/schemas/UploadedFile'
     TaskAcceptedResponse:
       $ref: ./components/schemas/TaskAcceptedResponse.yaml
     AgentOwnerUpdateResponse:
@@ -2261,6 +2315,87 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /channels/{id}/routing:
+    get:
+      operationId: getChannelRouting
+      summary: Get channel routing configuration
+      description: >
+        Returns the routing configuration for the specified channel, including
+        which agent handles its inbound messages.
+      tags:
+      - Channels
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Channel ID.
+        schema:
+          type: string
+        example: telegram
+      responses:
+        '200':
+          description: Channel routing configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelRouting'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Channel ID not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    put:
+      operationId: setChannelRouting
+      summary: Set channel routing configuration
+      description: >
+        Sets the routing configuration for the specified channel. The
+        default_agent_id field controls which agent handles inbound messages
+        arriving on this channel. Omit it or leave it empty to fall back to the
+        global default agent.
+      tags:
+      - Channels
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Channel ID.
+        schema:
+          type: string
+        example: telegram
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChannelRouting'
+      responses:
+        '200':
+          description: Updated channel routing configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChannelRouting'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Channel ID not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
   /config/gateway/rotate-token:
     post:
       operationId: rotateGatewayToken

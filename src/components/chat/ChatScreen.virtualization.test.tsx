@@ -52,6 +52,17 @@ vi.mock('@assistant-ui/react', () => {
         disabled?: boolean; children?: React.ReactNode; className?: string; 'data-testid'?: string
       }) =>
         React.createElement('button', { type: 'button', disabled, className, 'data-testid': testId ?? 'chat-send' }, children),
+      AddAttachment: ({ disabled, children, className }: { disabled?: boolean; children?: React.ReactNode; className?: string }) =>
+        React.createElement('button', { type: 'button', disabled, className, 'data-testid': 'add-attachment' }, children),
+      Attachments: () => null,
+    },
+    AttachmentPrimitive: {
+      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
+        React.createElement('div', { className }, children),
+      Name: () => null,
+      Remove: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
+        React.createElement('button', { type: 'button', className }, children),
+      Thumb: () => null,
     },
     MessagePartPrimitive: { InProgress: () => null },
     ActionBarPrimitive: {
@@ -62,6 +73,7 @@ vi.mock('@assistant-ui/react', () => {
     useComposerRuntime: () => ({
       getState: () => ({ text: '' }),
       setText: vi.fn(),
+      addAttachment: vi.fn(),
     }),
     useMessage: () => ({
       id: 'msg_streaming',
@@ -196,6 +208,44 @@ function patchScrollContainer(el: Element, opts: { clientHeight: number; scrollH
   Object.defineProperty(el, 'scrollTop', { configurable: true, writable: true, value: opts.scrollTop })
 }
 
+// ── Capturing ResizeObserver stub ──────────────────────────────────────────────
+// jsdom has no ResizeObserver. The production stick-to-bottom relies on one
+// observing the content wrapper, so the tests must (a) make ResizeObserver
+// defined (so the component takes the virtualized path, not the PlainMessageList
+// fallback) and (b) be able to fire the observer callback to simulate a content-
+// height change — which is exactly what re-pins the scroll in production. We
+// record every observer + the elements it watches so a test can fire only the
+// callback watching a given element (the virtualizer registers its own observers
+// internally, which we don't want to drive).
+type RoRecord = { cb: ResizeObserverCallback; els: Element[] }
+let resizeObservers: RoRecord[] = []
+class CapturingResizeObserver {
+  private rec: RoRecord
+  constructor(cb: ResizeObserverCallback) {
+    this.rec = { cb, els: [] }
+    resizeObservers.push(this.rec)
+  }
+  observe(el: Element) { this.rec.els.push(el) }
+  unobserve(el: Element) { this.rec.els = this.rec.els.filter((e) => e !== el) }
+  disconnect() { this.rec.els = []; resizeObservers = resizeObservers.filter((r) => r !== this.rec) }
+}
+/** Fire the ResizeObserver callback(s) observing `el` (default: all). */
+function fireResize(el?: Element): void {
+  for (const rec of [...resizeObservers]) {
+    if (el && !rec.els.includes(el)) continue
+    try {
+      rec.cb([], {} as ResizeObserver)
+    } catch {
+      // The virtualizer's own observer may not tolerate a synthetic empty entry
+      // list; we only care about the component's stick-to-bottom observer.
+    }
+  }
+}
+/** The content wrapper the stick-to-bottom ResizeObserver watches. */
+function contentWrapperOf(scrollEl: Element): Element | null {
+  return scrollEl.querySelector('.max-w-4xl')
+}
+
 // ── Import the component under test ───────────────────────────────────────────
 // Import after mocks are set up.
 import { ChatScreen } from './ChatScreen'
@@ -213,12 +263,11 @@ describe('VirtualizedMessageList', () => {
       connectionError: null,
       connection: null,
     })
-    // Patch ResizeObserver (not in jsdom).
-    vi.stubGlobal('ResizeObserver', class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    })
+    // Capturing ResizeObserver (jsdom lacks it). Being defined also makes the
+    // component take the virtualized path. resizeObservers is reset each test so
+    // fireResize() only drives the current render's observers.
+    resizeObservers = []
+    vi.stubGlobal('ResizeObserver', CapturingResizeObserver)
   })
 
   afterEach(() => {
@@ -337,12 +386,12 @@ describe('VirtualizedMessageList', () => {
       container = result.container
     })
 
-    const scrollEl = container.querySelector('[data-testid="virtualized-message-list"]') as HTMLElement | null
-    if (!scrollEl) {
-      // In jsdom without layout, the component may not render the scroll container.
-      // The test is a structural check — skip gracefully.
-      return
-    }
+    const scrollElOrNull = container.querySelector('[data-testid="virtualized-message-list"]') as HTMLElement | null
+    // #251: hard assertion — if the scroll container is absent the virtualizer is broken.
+    // jsdom supports DOM but not layout; the scroll container MUST be in the DOM regardless.
+    expect(scrollElOrNull).not.toBeNull()
+    // Non-null assertion after the hard expect above: TypeScript cannot narrow from expect().
+    const scrollEl = scrollElOrNull!
 
     // Simulate being at the bottom (within 50px).
     patchScrollContainer(scrollEl, { clientHeight: 600, scrollHeight: 1600, scrollTop: 1000 })
@@ -353,5 +402,397 @@ describe('VirtualizedMessageList', () => {
     patchScrollContainer(scrollEl, { clientHeight: 600, scrollHeight: 1600, scrollTop: 200 })
     const distanceFromBottomMid = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight
     expect(distanceFromBottomMid).toBeGreaterThanOrEqual(50)
+  })
+
+  // ── Regression tests for issue #251: auto-scroll during token streaming ────────
+
+  /**
+   * Helper: seed the store with N completed messages plus a final streaming assistant message.
+   * Sets isStreaming=true on both the bucket and foreground selectors.
+   */
+  function seedStreamingStore(completedCount: number): ChatMessage[] {
+    const completed = makeMessages(completedCount)
+    const streamingMsg: ChatMessage = {
+      id: 'msg_streaming',
+      role: 'assistant',
+      content: 'Partial response...',
+      timestamp: new Date().toISOString(),
+      status: 'streaming',
+      isStreaming: true,
+    }
+    const allMessages = [...completed, streamingMsg]
+    const bucket = makeBucketMessages(allMessages)
+    useChatStore.setState((s) => ({
+      ...s,
+      sessionsById: {
+        [SID]: {
+          ...((s.sessionsById ?? {})[SID] ?? {}),
+          ...bucket,
+          isStreaming: true,
+          isReplaying: false,
+          replayCompletedForSession: SID,
+          toolCalls: {},
+          toolCallOrder: [],
+          textAtToolCallStart: {},
+          pendingApprovals: [],
+          sessionTokens: 0,
+          sessionCost: 0,
+          rateLimitEvent: null,
+          lastUserMessageAt: null,
+          cancelStage: null,
+          lastReceivedEventTime: null,
+          spanByParentCallId: {},
+          trimmedCount: 0,
+        },
+      },
+      messages: allMessages,
+      isStreaming: true,
+      isReplaying: false,
+      replayCompletedForSession: SID,
+    }))
+    useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'agent-1' })
+    return allMessages
+  }
+
+  it('re-pins to bottom on a content-height change while the user is at the bottom', async () => {
+    // BDD:
+    //   Given: a live chat where the user is pinned to the bottom (within 50px)
+    //   When: the transcript content grows (tokens, tool call, image — anything)
+    //   Then: the scroll container re-pins to the bottom
+    //
+    // Regression test for issue #251. The fix drives a ResizeObserver on the
+    // content wrapper, so ANY content-height change re-pins — not just the
+    // enumerated [messages.length, streamingContentLength] signals the old
+    // implementation watched. Here we drive the observer directly (the
+    // mechanism), independent of what caused the resize.
+    const originalRaf = globalThis.requestAnimationFrame
+    const originalCaf = globalThis.cancelAnimationFrame
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { cb(0); return 0 })
+    vi.stubGlobal('cancelAnimationFrame', (_id: number) => {})
+
+    seedStreamingStore(10)
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    const scrollEl = container.querySelector('[data-testid="virtualized-message-list"]') as HTMLElement | null
+    // Hard assertion — no vacuous skip. If the virtualized list didn't render,
+    // the regression guard must fail, not silently pass.
+    expect(scrollEl).not.toBeNull()
+    const content = contentWrapperOf(scrollEl!)
+    expect(content).not.toBeNull()
+
+    // Step 1: user at the bottom (distanceFromBottom = 0). Fire scroll so the
+    // onScroll handler records wasAtBottom=true.
+    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 1600, scrollTop: 1000 })
+    await act(async () => {
+      scrollEl!.dispatchEvent(new Event('scroll', { bubbles: true }))
+    })
+
+    // Step 2: content grows to 2400 (scrollTop not yet followed).
+    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 2400, scrollTop: 1000 })
+
+    // Step 3: the content wrapper resizes — drive the observer directly.
+    await act(async () => {
+      fireResize(content!)
+    })
+
+    // Re-pinned to the new bottom.
+    expect(scrollEl!.scrollTop).toBe(scrollEl!.scrollHeight)
+
+    vi.stubGlobal('requestAnimationFrame', originalRaf)
+    vi.stubGlobal('cancelAnimationFrame', originalCaf)
+  })
+
+  it('re-pins on a NON-text content change (tool call / image render) — the #251 gap', async () => {
+    // This is the specific bug: a tool-call block or image renders in the live
+    // turn, growing the transcript height WITHOUT changing messages.length or the
+    // streaming text length. The old signal-based effect never fired for this, so
+    // the new content sat below the viewport. The ResizeObserver fix re-pins
+    // regardless of WHAT changed, so we assert the re-pin WITHOUT any store/
+    // message mutation — purely a resize.
+    const originalRaf = globalThis.requestAnimationFrame
+    const originalCaf = globalThis.cancelAnimationFrame
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { cb(0); return 0 })
+    vi.stubGlobal('cancelAnimationFrame', (_id: number) => {})
+
+    seedStreamingStore(10)
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    const scrollEl = container.querySelector('[data-testid="virtualized-message-list"]') as HTMLElement | null
+    expect(scrollEl).not.toBeNull()
+    const content = contentWrapperOf(scrollEl!)
+    expect(content).not.toBeNull()
+
+    // User at the bottom.
+    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 1600, scrollTop: 1000 })
+    await act(async () => {
+      scrollEl!.dispatchEvent(new Event('scroll', { bubbles: true }))
+    })
+
+    // A tool-call pill + image render: height jumps to 3000. No store mutation.
+    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 3000, scrollTop: 1000 })
+    await act(async () => {
+      fireResize(content!)
+    })
+
+    // Re-pinned even though nothing about the message list "signals" changed.
+    expect(scrollEl!.scrollTop).toBe(3000)
+
+    vi.stubGlobal('requestAnimationFrame', originalRaf)
+    vi.stubGlobal('cancelAnimationFrame', originalCaf)
+  })
+
+  it('suspends ONLY on a user gesture, never on content-growth scrolls; resumes at bottom', async () => {
+    // BDD — the live-browser bug + the correct ChatGPT/Claude behavior:
+    //   1. A scroll event caused by CONTENT GROWTH (no user gesture) that leaves
+    //      the viewport temporarily far from the bottom must NOT suspend
+    //      auto-follow — the ResizeObserver still re-pins. (This is the exact bug
+    //      reproduced in a live browser: a tool-call/image render fired a scroll
+    //      with a large distance and the old code flipped wasAtBottom=false,
+    //      sticking the view ~600px above the bottom.)
+    //   2. A scroll away from the bottom DURING a real user gesture (wheel/touch/
+    //      key/pointer) DOES suspend — don't fight the user reading history.
+    //   3. Returning to the bottom resumes auto-follow.
+
+    const originalRaf = globalThis.requestAnimationFrame
+    const originalCaf = globalThis.cancelAnimationFrame
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { cb(0); return 0 })
+    vi.stubGlobal('cancelAnimationFrame', (_id: number) => {})
+
+    seedStreamingStore(10)
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+
+    const scrollEl = container.querySelector('[data-testid="virtualized-message-list"]') as HTMLElement | null
+    expect(scrollEl).not.toBeNull()
+    const content = contentWrapperOf(scrollEl!)
+    expect(content).not.toBeNull()
+
+    // Establish "at the bottom".
+    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 1600, scrollTop: 1000 })
+    await act(async () => {
+      scrollEl!.dispatchEvent(new Event('scroll', { bubbles: true }))
+    })
+
+    // (1) CONTENT GROWTH leaves us far from the bottom (scrollTop lags) and fires
+    // a scroll — but with NO user gesture. Auto-follow must survive and re-pin.
+    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 3000, scrollTop: 1000 })
+    await act(async () => {
+      scrollEl!.dispatchEvent(new Event('scroll', { bubbles: true })) // distance = 1400, no gesture
+      fireResize(content!)
+    })
+    expect(scrollEl!.scrollTop).toBe(3000) // re-pinned despite the large-distance scroll
+
+    // (2) USER scrolls up (wheel gesture) → suspend.
+    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 3000, scrollTop: 200 })
+    await act(async () => {
+      scrollEl!.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -300 }))
+      scrollEl!.dispatchEvent(new Event('scroll', { bubbles: true })) // distance = 2200, gesture active
+    })
+    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 3600, scrollTop: 200 })
+    await act(async () => {
+      fireResize(content!)
+    })
+    expect(scrollEl!.scrollTop).toBe(200) // NOT re-pinned — user is reading history
+
+    // (3) USER scrolls back to the bottom → resume; next growth re-pins.
+    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 3600, scrollTop: 3000 })
+    await act(async () => {
+      scrollEl!.dispatchEvent(new Event('scroll', { bubbles: true })) // distance = 0 → resume
+    })
+    patchScrollContainer(scrollEl!, { clientHeight: 600, scrollHeight: 4200, scrollTop: 3000 })
+    await act(async () => {
+      fireResize(content!)
+    })
+    expect(scrollEl!.scrollTop).toBe(4200) // re-pinned
+
+    vi.stubGlobal('requestAnimationFrame', originalRaf)
+    vi.stubGlobal('cancelAnimationFrame', originalCaf)
+  })
+})
+
+// ── VirtualUserMessageRow media rendering (finding 7) ────────────────────────
+
+describe('VirtualUserMessageRow media rendering', () => {
+  // Uses the PlainMessageList fallback (ResizeObserver removed) so we get stable
+  // DOM rendering without needing virtualizer layout tricks.
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(globalThis as any).ResizeObserver = undefined
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    // Re-stub ResizeObserver for subsequent test suites.
+    vi.stubGlobal('ResizeObserver', class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    })
+  })
+
+  function seedSingleUserMessage(msg: ChatMessage): void {
+    useChatStore.setState((s) => ({
+      ...s,
+      messages: [msg],
+      isStreaming: false,
+      isReplaying: false,
+      replayCompletedForSession: SID,
+    }))
+    useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'agent-1' })
+  }
+
+  it('renders an <img> for an image media attachment', async () => {
+    const msg: ChatMessage = {
+      id: 'msg_img',
+      role: 'user',
+      content: 'look at this',
+      timestamp: new Date().toISOString(),
+      status: 'done',
+      media: [
+        {
+          type: 'image',
+          url: 'http://example.com/screenshot.png',
+          filename: 'screenshot.png',
+          contentType: 'image/png',
+        },
+      ],
+    }
+    seedSingleUserMessage(msg)
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+    warnSpy.mockRestore()
+
+    // AttachmentCard renders an <img> for image media.
+    const img = container.querySelector('img[alt="screenshot.png"]')
+    expect(img).toBeTruthy()
+    expect(img?.getAttribute('src')).toBe('http://example.com/screenshot.png')
+  })
+
+  it('renders the type label for a non-image file media attachment', async () => {
+    const msg: ChatMessage = {
+      id: 'msg_file',
+      role: 'user',
+      content: 'see attached',
+      timestamp: new Date().toISOString(),
+      status: 'done',
+      media: [
+        {
+          type: 'file',
+          url: 'http://example.com/report.pdf',
+          filename: 'report.pdf',
+          contentType: 'application/pdf',
+        },
+      ],
+    }
+    seedSingleUserMessage(msg)
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+    warnSpy.mockRestore()
+
+    // AttachmentCard renders the type label for non-image files.
+    expect(container.querySelector('img')).toBeFalsy()
+    const pdfLabel = container.querySelector('[data-message-role="user"]')?.textContent
+    expect(pdfLabel).toContain('PDF')
+  })
+
+  it('renders both image and file when media contains both', async () => {
+    const msg: ChatMessage = {
+      id: 'msg_mixed',
+      role: 'user',
+      content: 'mixed attachments',
+      timestamp: new Date().toISOString(),
+      status: 'done',
+      media: [
+        {
+          type: 'image',
+          url: 'http://example.com/photo.jpg',
+          filename: 'photo.jpg',
+          contentType: 'image/jpeg',
+        },
+        {
+          type: 'file',
+          url: 'http://example.com/data.xlsx',
+          filename: 'data.xlsx',
+          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        },
+      ],
+    }
+    seedSingleUserMessage(msg)
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+    warnSpy.mockRestore()
+
+    // Image renders as <img>.
+    expect(container.querySelector('img[alt="photo.jpg"]')).toBeTruthy()
+    // File renders with type label.
+    const userRow = container.querySelector('[data-message-role="user"]')
+    expect(userRow?.textContent).toContain('Excel')
+  })
+
+  it('attachment-only message (empty content) renders cards but no empty text bubble', async () => {
+    // A message with no text content — only a media attachment. The text bubble
+    // must NOT appear (it would be an empty rounded rectangle).
+    const msg: ChatMessage = {
+      id: 'msg_attach_only',
+      role: 'user',
+      content: '',
+      timestamp: new Date().toISOString(),
+      status: 'done',
+      media: [
+        {
+          type: 'image',
+          url: 'http://example.com/shot.png',
+          filename: 'shot.png',
+          contentType: 'image/png',
+        },
+      ],
+    }
+    seedSingleUserMessage(msg)
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(<ChatScreen />)
+      container = result.container
+    })
+    warnSpy.mockRestore()
+
+    // The attachment card (image) renders.
+    expect(container.querySelector('img[alt="shot.png"]')).toBeTruthy()
+
+    // The text bubble div has a known class: rounded-xl px-4 py-3 text-sm.
+    // With empty content the component conditionally skips it.
+    const bubbles = container.querySelectorAll('.rounded-xl.px-4.py-3.text-sm')
+    expect(bubbles.length).toBe(0)
   })
 })

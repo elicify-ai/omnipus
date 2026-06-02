@@ -5,6 +5,7 @@ import {
   ChatCircle,
   Gauge,
   Robot,
+  PlugsConnected,
   PuzzlePiece,
   Gear,
   PushPin,
@@ -21,6 +22,7 @@ const NAV_ITEMS = [
   { to: '/', label: 'Chat', Icon: ChatCircle },
   { to: '/command-center', label: 'Command Center', Icon: Gauge },
   { to: '/agents', label: 'Agents', Icon: Robot },
+  { to: '/channels', label: 'Channels', Icon: PlugsConnected },
   { to: '/skills', label: 'Skills & Tools', Icon: PuzzlePiece },
 ] as const
 

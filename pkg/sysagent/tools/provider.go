@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
@@ -73,27 +74,95 @@ func (t *ProviderConfigureTool) Execute(_ context.Context, args map[string]any) 
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
 	apiKey, _ := args["api_key"].(string)
+	apiBase, _ := args["api_base"].(string)
 	if cloudProviders[name] && apiKey == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT",
 			fmt.Sprintf("api_key is required for cloud provider %q", name),
 			"Provide your API key for this provider",
 		))
 	}
-	// Store API key encrypted (write-only per D.4.8).
+
+	// The credential store is the single source of truth; a provider's key is
+	// resolved through its config entry's APIKeyRef (looked up in credentials.json
+	// and injected to the environment at boot/reload). The ref name follows the
+	// onboarding convention "<provider>_API_KEY". If the provider already has a
+	// config entry carrying a ref, we update the key under that same ref so we
+	// don't strand the existing reference.
+	ref := name + "_API_KEY"
+	for _, p := range t.deps.GetCfg().Providers {
+		if p == nil {
+			continue
+		}
+		if providerNameOf(p) == name && p.APIKeyRef != "" {
+			ref = p.APIKeyRef
+			break
+		}
+	}
+
 	if apiKey != "" {
-		credKey := fmt.Sprintf("provider.%s.api_key", name)
-		if err := t.deps.CredStore.Set(credKey, apiKey); err != nil {
+		if err := t.deps.CredStore.Set(ref, apiKey); err != nil {
 			return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
 				"Failed to store API key: "+err.Error(),
 				"Check that the credential store is unlocked",
 			))
 		}
 	}
+
+	// Wire the config so the stored key is actually referenced (not orphaned):
+	// set APIKeyRef on the provider's entries and persist. Without this the key
+	// sat in the store unreferenced — never injected, never resolved.
+	if err := t.deps.WithConfig(func(cfg *config.Config) error {
+		wired := false
+		for _, p := range cfg.Providers {
+			if p == nil || providerNameOf(p) != name {
+				continue
+			}
+			if apiKey != "" && p.APIKeyRef == "" {
+				p.APIKeyRef = ref
+			}
+			if apiBase != "" {
+				p.APIBase = apiBase
+			}
+			wired = true
+		}
+		if !wired {
+			np := &config.ModelConfig{Provider: name, ModelName: name, Model: name}
+			if apiKey != "" {
+				np.APIKeyRef = ref
+			}
+			if apiBase != "" {
+				np.APIBase = apiBase
+			}
+			cfg.Providers = append(cfg.Providers, np)
+		}
+		return nil
+	}); err != nil {
+		return tools.ErrorResult(errorJSON("CONFIG_SAVE_FAILED",
+			"Stored the key but failed to wire it into config: "+err.Error(),
+			"The provider key is saved; retry to finish configuring it",
+		))
+	}
+
+	// Apply immediately: re-injects provider credentials into the environment and
+	// rebuilds the agent loop so the provider is usable without a restart.
+	if t.deps.ReloadFunc != nil {
+		_ = t.deps.ReloadFunc()
+	}
+
 	return tools.NewToolResult(successJSON(map[string]any{
 		"name":             name,
 		"status":           "connected",
 		"models_available": []string{},
 	}))
+}
+
+// providerNameOf returns a provider entry's canonical name — the explicit
+// Provider field, or the prefix of its "provider/model" reference.
+func providerNameOf(p *config.ModelConfig) string {
+	if p.Provider != "" {
+		return p.Provider
+	}
+	return providerFromModelRef(p.Model)
 }
 
 // ---- system.provider.list ----
@@ -165,10 +234,18 @@ func (t *ProviderTestTool) Execute(_ context.Context, args map[string]any) *tool
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
-	// Actual connection test requires a live LLM provider instance.
-	// Return ok/not-configured based on whether credentials exist.
-	credKey := fmt.Sprintf("provider.%s.api_key", name)
-	_, err := t.deps.CredStore.Get(credKey)
+	// Actual connection test requires a live LLM provider instance. Report
+	// ok/not-configured based on whether the key resolves the canonical way:
+	// the provider's config entry APIKeyRef, falling back to the conventional
+	// <provider>_API_KEY ref (used by both onboarding and provider.configure).
+	ref := name + "_API_KEY"
+	for _, p := range t.deps.GetCfg().Providers {
+		if p != nil && providerNameOf(p) == name && p.APIKeyRef != "" {
+			ref = p.APIKeyRef
+			break
+		}
+	}
+	_, err := t.deps.CredStore.Get(ref)
 	if err != nil && !localProviders[name] {
 		return tools.NewToolResult(successJSON(map[string]any{
 			"name":          name,
@@ -235,18 +312,28 @@ func (t *ModelsListTool) Execute(_ context.Context, args map[string]any) *tools.
 		if name == "" {
 			name = providerFromModelRef(p.Model)
 		}
-		if name == "" || providersSeen[name] != nil {
+		if name == "" {
 			continue
 		}
 		if filterProvider != "" && name != filterProvider {
 			continue
 		}
-		// Resolve API key.
+		// The credential store (referenced by APIKeyRef) is the single source of
+		// truth for a provider's key; APIKey() returns the value boot-injected
+		// into the environment from that same ref. A provider name can appear in
+		// config multiple times — seed scaffolding entries carry an empty
+		// APIKeyRef while the onboarded/configured entry carries the ref. We must
+		// therefore select the entry that actually resolves a key rather than the
+		// first one encountered (the previous bug: the keyless seed entry won and
+		// models.list reported "no API key configured").
 		apiKey := p.APIKey()
 		if apiKey == "" && p.APIKeyRef != "" && t.deps.CredStore != nil {
 			if v, err := t.deps.CredStore.Get(p.APIKeyRef); err == nil {
 				apiKey = v
 			}
+		}
+		if existing := providersSeen[name]; existing != nil && (existing.apiKey != "" || apiKey == "") {
+			continue
 		}
 		providersSeen[name] = &providerInfo{name: name, apiKey: apiKey}
 	}

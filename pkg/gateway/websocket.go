@@ -141,7 +141,7 @@ type wsConn struct {
 	closeOnce      sync.Once
 	droppedTokens  atomic.Int32
 	droppedFrames  atomic.Int32    // non-critical outbound frames dropped due to backpressure
-	inboundDropped atomic.Int32    // inbound frames dropped due to schema validation failure (Part B)
+	inboundDropped atomic.Int32    // inbound items dropped: schema validation failures + invalid/oversized media refs
 	role           config.UserRole // RBAC role resolved at auth time
 	userID         string          // username resolved at auth time; used for session_state scoping (FR-073)
 
@@ -420,6 +420,21 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		delete(h.sessionIDs, chatID)
 		h.mu.Unlock()
 		wc.close()
+
+		// Emit observability counters at connection teardown so operators can
+		// act on them (e.g. alert when a client is sending many invalid refs).
+		if dropped := wc.inboundDropped.Load(); dropped > 0 {
+			slog.Warn("ws: connection closed with dropped inbound items",
+				"chat_id", chatID,
+				"inbound_dropped", dropped,
+			)
+		}
+		if mediaDropped := h.agentLoop.GetMediaRefsDropped(); mediaDropped > 0 {
+			slog.Info("ws: agent loop media-ref drop counter at connection close",
+				"chat_id", chatID,
+				"media_refs_dropped_total", mediaDropped,
+			)
+		}
 	}()
 
 	go h.writePump(wc)
@@ -621,7 +636,7 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 			if f.SessionId != nil {
 				sessionID = *f.SessionId
 			}
-			h.handleChatMessage(ctx, chatID, sessionID, f.Content, agentID, wc)
+			h.handleChatMessage(ctx, chatID, sessionID, f.Content, agentID, f.Media, wc)
 		case string(generated.WsFrameTypeCancel):
 			var f generated.CancelFrame
 			if err := json.Unmarshal(data, &f); err != nil {
@@ -770,6 +785,7 @@ func (h *WSHandler) handleChatMessage(
 	frameSessionID string,
 	content string,
 	agentID string,
+	mediaRefs []string,
 	wc *wsConn,
 ) {
 	targetAgentID := agentID
@@ -901,12 +917,56 @@ func (h *WSHandler) handleChatMessage(
 		}
 	}
 
+	// #254: thread client-supplied media refs into the inbound message so the
+	// agent loop resolves them into multimodal content blocks. Only accept
+	// Hard-cap inbound media to prevent resource exhaustion. Refs beyond
+	// maxInboundMediaRefs and refs exceeding maxInboundRefLen are dropped and
+	// counted against the inbound-dropped counter.
+	const maxInboundMediaRefs = 16
+	const maxInboundRefLen = 256
+
+	var acceptedMedia []string
+	for i, ref := range mediaRefs {
+		if i >= maxInboundMediaRefs {
+			wc.inboundDropped.Add(1)
+			slog.Warn("ws: media array exceeds cap — dropping remaining refs",
+				"chat_id", chatID, "session_id", sessionID,
+				"dropped_from_index", i, "total_supplied", len(mediaRefs))
+			break
+		}
+		if len(ref) > maxInboundRefLen {
+			wc.inboundDropped.Add(1)
+			slog.Warn("ws: dropping oversized ref in message frame",
+				"chat_id", chatID, "session_id", sessionID,
+				"ref_prefix", ref[:32])
+			continue
+		}
+		// Accept only well-formed media:// refs (non-empty ID validated by
+		// ParseMediaRef — rejects bare "media://" with empty ID, non-prefixed
+		// strings, raw paths, and HTTP URLs that a buggy channel might emit).
+		// Non-matching strings are a client error or smuggling attempt — drop
+		// and count them via the inboundDropped counter.
+		if _, err := media.ParseMediaRef(ref); err == nil {
+			acceptedMedia = append(acceptedMedia, ref)
+		} else {
+			wc.inboundDropped.Add(1)
+			truncated := ref
+			if len(truncated) > 64 {
+				truncated = truncated[:64] + "…"
+			}
+			slog.Warn("ws: dropping invalid media:// ref in message frame",
+				"chat_id", chatID, "session_id", sessionID,
+				"ref_prefix", truncated)
+		}
+	}
+
 	msg := bus.InboundMessage{
 		Channel:   "webchat",
 		SenderID:  "webchat_user",
 		ChatID:    chatID,
 		Content:   content,
 		SessionID: sessionID,
+		Media:     acceptedMedia,
 	}
 	if agentID != "" {
 		if err := validateEntityID(agentID); err != nil {

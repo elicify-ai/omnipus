@@ -13,7 +13,8 @@ import (
 // The old_text must exist exactly in the file.
 type EditFileTool struct {
 	BaseTool
-	fs fileSystem
+	fs        fileSystem
+	workspace string
 }
 
 // NewEditFileTool creates a new EditFileTool with optional directory restriction.
@@ -22,7 +23,10 @@ func NewEditFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.Re
 	if len(allowPaths) > 0 {
 		patterns = allowPaths[0]
 	}
-	return &EditFileTool{fs: buildFs(workspace, restrict, patterns)}
+	return &EditFileTool{
+		fs:        buildFs(workspace, restrict, patterns),
+		workspace: workspace,
+	}
 }
 
 func (t *EditFileTool) Name() string {
@@ -62,6 +66,15 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("path is required")
 	}
 
+	// Metadata guard: reject edits to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
+	// via generic file tools — callers must use agent.write_metadata instead.
+	// Skipped only for static tools that have no agent workspace concept.
+	if t.workspace != "" {
+		if denied := guardMetadataPath(t.workspace, path, "write"); denied != nil {
+			return denied
+		}
+	}
+
 	oldText, ok := args["old_text"].(string)
 	if !ok {
 		return ErrorResult("old_text is required")
@@ -80,7 +93,8 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 type AppendFileTool struct {
 	BaseTool
-	fs fileSystem
+	fs        fileSystem
+	workspace string
 }
 
 func NewAppendFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.Regexp) *AppendFileTool {
@@ -88,7 +102,10 @@ func NewAppendFileTool(workspace string, restrict bool, allowPaths ...[]*regexp.
 	if len(allowPaths) > 0 {
 		patterns = allowPaths[0]
 	}
-	return &AppendFileTool{fs: buildFs(workspace, restrict, patterns)}
+	return &AppendFileTool{
+		fs:        buildFs(workspace, restrict, patterns),
+		workspace: workspace,
+	}
 }
 
 func (t *AppendFileTool) Name() string {
@@ -122,6 +139,15 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]any) *Tool
 	path, ok := args["path"].(string)
 	if !ok {
 		return ErrorResult("path is required")
+	}
+
+	// Metadata guard: reject appends to agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
+	// via generic file tools — callers must use agent.write_metadata instead.
+	// Skipped only for static tools that have no agent workspace concept.
+	if t.workspace != "" {
+		if denied := guardMetadataPath(t.workspace, path, "write"); denied != nil {
+			return denied
+		}
 	}
 
 	content, ok := args["content"].(string)

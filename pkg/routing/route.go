@@ -250,17 +250,34 @@ func (r *RouteResolver) resolveDefaultAgentID() string {
 	if len(agents) == 0 {
 		return DefaultAgentID
 	}
+	// Primary: use the agent explicitly marked as default, but only if it is
+	// active. A disabled default must not receive messages — fall through to the
+	// first-enabled-agent fallback so routing never silently drops inbound work.
 	for _, a := range agents {
-		if a.Default {
+		if a.Default && a.IsActive() {
 			id := strings.TrimSpace(a.ID)
 			if id != "" {
 				return NormalizeAgentID(id)
 			}
 		}
 	}
-	// No agent is marked as default even though custom agents exist. Log once so
-	// operators can detect misconfigured setups; unrouted messages will go to "main".
-	logger.WarnCF("routing", "Custom agents configured but none marked as default; routing falls back to main",
+	// Fallback: no agent is marked as default. Pick the first enabled agent so
+	// inbound messages are never silently dropped. Log a warning so operators can
+	// detect misconfigured setups.
+	for _, a := range agents {
+		if a.IsActive() {
+			id := strings.TrimSpace(a.ID)
+			if id == "" {
+				continue
+			}
+			normalized := NormalizeAgentID(id)
+			logger.WarnCF("routing", "No agent marked as default; falling back to first enabled agent",
+				map[string]any{"fallback_agent_id": normalized, "custom_agent_count": len(agents)})
+			return normalized
+		}
+	}
+	// All agents disabled or have empty IDs — last resort is the DefaultAgentID constant.
+	logger.WarnCF("routing", "No enabled agent found; routing falls back to built-in default",
 		map[string]any{"custom_agent_count": len(agents)})
 	return DefaultAgentID
 }

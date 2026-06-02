@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package systools implements the 35 exclusive system.* tools for the
+// Package systools implements the 41 exclusive system.* tools for the
 // Omnipus system agent per BRD Appendix D §D.4.
 package systools
 

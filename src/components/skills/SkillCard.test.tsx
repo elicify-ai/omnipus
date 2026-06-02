@@ -25,11 +25,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkills: vi.fn(),
     fetchMcpServers: vi.fn(),
     fetchTools: vi.fn(),
-    fetchChannels: vi.fn(),
   }
 })
 
-import { fetchSkills, fetchMcpServers, fetchTools, fetchChannels } from '@/lib/api'
+import { fetchSkills, fetchMcpServers, fetchTools } from '@/lib/api'
 import { Route } from '@/routes/_app/skills'
 
 const SkillsScreen = (Route as any).component as React.ComponentType
@@ -77,7 +76,6 @@ beforeEach(() => {
     { name: 'web_search', scope: 'general', category: 'web', description: 'Search the web', source: 'builtin' },
     { name: 'file.read', scope: 'general', category: 'fs', description: 'Read a file', source: 'builtin' },
   ])
-  vi.mocked(fetchChannels).mockResolvedValue([])
 })
 
 describe('SkillsScreen — installed skills tab (test #19)', () => {
@@ -87,7 +85,6 @@ describe('SkillsScreen — installed skills tab (test #19)', () => {
     await screen.findByText('Skills & Tools')
     expect(screen.getByText('Installed Skills')).toBeInTheDocument()
     expect(screen.getByText('MCP Servers')).toBeInTheDocument()
-    expect(screen.getByText('Channels')).toBeInTheDocument()
     expect(screen.getByText('Built-in Tools')).toBeInTheDocument()
   })
 

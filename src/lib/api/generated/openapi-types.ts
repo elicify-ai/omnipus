@@ -952,6 +952,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/channels/{id}/routing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get channel routing configuration
+         * @description Returns the routing configuration for the specified channel, including which agent handles its inbound messages.
+         */
+        get: operations["getChannelRouting"];
+        /**
+         * Set channel routing configuration
+         * @description Sets the routing configuration for the specified channel. The default_agent_id field controls which agent handles inbound messages arriving on this channel. Omit it or leave it empty to fall back to the global default agent.
+         */
+        put: operations["setChannelRouting"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/config/gateway/rotate-token": {
         parameters: {
             query?: never;
@@ -2439,6 +2463,11 @@ export interface components {
             model_params?: components["schemas"]["AgentModelParams"];
             rate_limits?: components["schemas"]["AgentRateLimits"];
             stats?: components["schemas"]["AgentStats"];
+            /**
+             * @description Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default.
+             * @example false
+             */
+            default?: boolean;
         };
         /**
          * AgentModelParams
@@ -2835,6 +2864,11 @@ export interface components {
                 max_cost_per_day?: number;
             };
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
+            /**
+             * @description Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default. Omitting this field leaves the flag unchanged.
+             * @example false
+             */
+            default?: boolean;
         };
         /** @description Minimal session summary as returned by GET /agents/{id}/sessions. Maps to the AgentSession interface in src/lib/api.ts. This is the same underlying session.UnifiedMeta object, but the SPA consumes it through the AgentSession interface which reads id, title, created_at, and updated_at directly. */
         AgentSession: {
@@ -3633,6 +3667,11 @@ export interface components {
              * @example image/png
              */
             content_type: string;
+            /**
+             * @description media:// ref registered for this file in the media store. Present when the server could register the file (always, for now). The SPA echoes this ref back in the message frame's "media" array so the agent loop can thread the file into the LLM content array as a multimodal content block. Empty if registration failed (the file is still downloadable via path).
+             * @example media://550e8400-e29b-41d4-a716-446655440000
+             */
+            ref?: string;
         };
         /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode, allowed_paths, and default_profile are restart-gated (the response includes requires_restart=true when any of these change). ssrf.allow_internal and shell_deny_patterns are hot-reloaded. */
         SandboxConfigUpdate: {
@@ -4450,6 +4489,17 @@ export interface components {
              * @example channel "telegram" is configured
              */
             message: string;
+        };
+        /**
+         * ChannelRouting
+         * @description Routing configuration for a single communication channel. Controls which agent handles inbound messages arriving on this channel.
+         */
+        ChannelRouting: {
+            /**
+             * @description ID of the agent that handles this channel's inbound messages. Omitted or empty means fall back to the global default agent.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            default_agent_id?: string;
         };
         /**
          * BackupCreateResponse
@@ -7034,6 +7084,85 @@ export interface operations {
             };
         };
     };
+    getChannelRouting: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Channel ID.
+                 * @example telegram
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Channel routing configuration. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelRouting"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Channel ID not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    setChannelRouting: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Channel ID.
+                 * @example telegram
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelRouting"];
+            };
+        };
+        responses: {
+            /** @description Updated channel routing configuration. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelRouting"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            /** @description Channel ID not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
     rotateGatewayToken: {
         parameters: {
             query?: never;
@@ -8579,6 +8708,7 @@ export type RetentionUpdateResponse = components["schemas"]["RetentionUpdateResp
 export type AgentToolsResponse = components["schemas"]["AgentToolsResponse"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
+export type ChannelRouting = components["schemas"]["ChannelRouting"];
 export type BackupCreateResponse = components["schemas"]["BackupCreateResponse"];
 export type OnboardingStatusResponse = components["schemas"]["OnboardingStatusResponse"];
 export type OperationResult = components["schemas"]["OperationResult"];

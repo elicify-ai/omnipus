@@ -5,7 +5,6 @@ import { ProvidersSection } from '@/components/settings/ProvidersSection'
 import { SecuritySection } from '@/components/settings/SecuritySection'
 import { GatewaySection } from '@/components/settings/GatewaySection'
 import { DataSection } from '@/components/settings/DataSection'
-import { RoutingSection } from '@/components/settings/RoutingSection'
 import { ProfileSection } from '@/components/settings/ProfileSection'
 import { AboutSection } from '@/components/settings/AboutSection'
 import { UsersSection } from '@/components/settings/UsersSection'
@@ -49,7 +48,6 @@ function SettingsScreen() {
             <TabsTrigger data-testid="settings-tab-security" value="security">Security</TabsTrigger>
             <TabsTrigger value="gateway">Gateway</TabsTrigger>
             <TabsTrigger value="data">Data</TabsTrigger>
-            <TabsTrigger value="routing">Routing</TabsTrigger>
             <TabsTrigger value="profile">Profile</TabsTrigger>
             {isAdmin && <TabsTrigger value="devices">Devices</TabsTrigger>}
             {showAccessTab && <TabsTrigger value="access">Access</TabsTrigger>}
@@ -70,10 +68,6 @@ function SettingsScreen() {
 
           <TabsContent value="data">
             <DataSection />
-          </TabsContent>
-
-          <TabsContent value="routing">
-            <RoutingSection />
           </TabsContent>
 
           <TabsContent value="profile">

@@ -4,9 +4,11 @@
 import { useExternalStoreRuntime } from "@assistant-ui/react";
 import type { ThreadMessageLike, AppendMessage } from "@assistant-ui/react";
 import { useChatStore } from "@/store/chat";
-import type { ChatMessage } from "@/store/chat";
-import type { ToolCall } from "@/lib/api";
+import type { ChatMessage, MediaAttachment } from "@/store/chat";
+import type { AssistantMessage, ToolCall } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
+import { omnipusAttachmentAdapter, takeResolvedUpload } from "@/lib/attachment-adapter";
+import { isImageAttachment } from "@/components/chat/AttachmentCard";
 
 type StoreToolCall = ToolCall & { call_id: string }; // not-wire-format: internal Zustand store type enriching ToolCall with a required call_id; never emitted to the backend
 
@@ -169,7 +171,10 @@ function buildContentParts(
   }
 }
 
-function buildMessageStatus(msg: ChatMessage): ThreadMessageLike["status"] {
+// buildMessageStatus is only ever called for assistant messages (see convertMessage below).
+// Tightening the parameter to AssistantMessage makes the role-narrowing real at the call
+// site and removes the dead user/system arms that were typed but never reachable.
+function buildMessageStatus(msg: AssistantMessage & { isStreaming?: boolean }): ThreadMessageLike["status"] {
   if (msg.isStreaming) return { type: "running" };
   if (msg.status === "error") return { type: "incomplete", reason: "error" };
   if (msg.status === "interrupted") return { type: "incomplete", reason: "cancelled" };
@@ -213,14 +218,57 @@ export function useOmnipusRuntime() {
       const isLastAssistant = lastAssistantIdx >= 0 && messages[lastAssistantIdx].id === msg.id;
       return convertMessage(msg, toolCalls, toolCallOrder, textAtToolCallStart, isLastAssistant);
     },
+    adapters: {
+      // Native attachment handling — uploads files to /api/v1/uploads and yields
+      // a media:// ref, which onNew threads into our WS transport. Replaces the
+      // old hand-rolled upload bridge in ChatScreen.
+      attachments: omnipusAttachmentAdapter,
+    },
     onNew: async (message: AppendMessage) => {
-      const textPart = message.content.find((p) => p.type === "text");
-      if (!textPart) {
-        console.warn("[omnipus-runtime] Message received without text content — skipping. Content types:", message.content.map((p) => p.type));
-        addToast({ message: "Could not send — message contained no text content.", variant: "error" });
+      // message.content carries ONLY the user's typed text (AssistantUI keeps
+      // attachments separate in message.attachments — verified in
+      // base-composer-runtime-core). Join all text parts to be safe.
+      const text = message.content
+        .filter((p): p is { type: "text"; text: string } => p.type === "text")
+        .map((p) => p.text)
+        .join("\n");
+
+      // Pull the media:// refs (and display metadata) the attachment adapter
+      // stashed during send(), keyed by attachment id.
+      const mediaRefs: string[] = [];
+      const attachments: MediaAttachment[] = [];
+      for (const att of message.attachments ?? []) {
+        const resolved = takeResolvedUpload(att.id);
+        if (resolved) {
+          mediaRefs.push(resolved.ref);
+          attachments.push({
+            type: isImageAttachment(resolved.filename, resolved.contentType) ? "image" : "file",
+            url: resolved.url,
+            filename: resolved.filename,
+            contentType: resolved.contentType,
+          });
+        } else {
+          // send() returned a failedComplete for this attachment (upload or
+          // registration error) — the ref was never stashed. Warn so the user
+          // knows the file did not reach the agent.
+          console.warn(`[omnipus-runtime] Attachment "${att.name}" (id=${att.id}) had no resolved ref — it will not be sent to the agent.`);
+          addToast({ message: `Attachment "${att.name}" was not sent — it failed to upload or register.`, variant: "error" });
+        }
+      }
+
+      // Attachment-only messages (no typed text) are valid — send as long as we
+      // have either text or at least one resolved attachment.
+      if (!text.trim() && mediaRefs.length === 0) {
+        console.warn("[omnipus-runtime] Message received with no text and no attachments — skipping.");
+        addToast({ message: "Could not send — message had no text or attachments.", variant: "error" });
         return;
       }
-      sendMessage(textPart.text);
+
+      if (mediaRefs.length > 0) {
+        sendMessage(text, { mediaRefs, attachments });
+      } else {
+        sendMessage(text);
+      }
     },
     onCancel: async () => { cancelStream() },
   });

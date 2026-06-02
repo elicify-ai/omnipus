@@ -37,6 +37,17 @@ export default defineConfig({
     // triggers TanStack router plugin transform across all route files — this can
     // take 20–30s on a cold run. Raise hookTimeout to prevent spurious timeouts.
     hookTimeout: 60000,
+    // #7 (pre-existing fix): react-shiki and other node_modules import CSS files as
+    // side effects. css:false suppresses processing but not the extension check that
+    // throws "Unknown file extension .css". Redirect all .css imports to an empty
+    // stub so tests don't crash on third-party stylesheet side effects.
+    server: {
+      deps: {
+        // Inline react-shiki so the CSS import is handled by the module resolver
+        // below rather than the external module loader which cannot handle .css files.
+        inline: ['react-shiki'],
+      },
+    },
   },
   build: {
     outDir: 'dist/spa',

@@ -30,7 +30,7 @@ type SystemToolHandler struct {
 
 // HandlerConfig groups the dependencies for a SystemToolHandler.
 type HandlerConfig struct {
-	// Registry holds the 35 registered system tools.
+	// Registry holds the 41 registered system tools.
 	Registry *tools.ToolRegistry
 	// Audit is the audit logger (SEC-15).
 	Audit *audit.Logger

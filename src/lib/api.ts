@@ -38,6 +38,7 @@ import { z } from 'zod'
 //     (different field names: uptime_seconds vs uptime); cannot validate without false negatives.
 
 import {
+  ChannelRouting as ChannelRoutingSchema,
   LoginResponse as LoginResponseSchema,
   ProbeProviderResponse as ProbeProviderResponseSchema,
   Agent as AgentSchema,
@@ -251,6 +252,7 @@ import type {
   McpServerToolsResponse,
   AgentUpdateRequest,
   AgentCreateRequest,
+  ChannelRouting,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -332,6 +334,7 @@ export type {
   McpServerToolsResponse,
   AgentUpdateRequest,
   AgentCreateRequest,
+  ChannelRouting,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -612,17 +615,51 @@ function rawToSession(raw: RawSession): Session {
   }
 }
 
-export interface Message { // not-wire-format: SPA-internal chat message shape. The status enum diverges from the wire Message schema ('streaming'/'done' vs wire's 'ok'/'error'). The tool_calls field references the SPA-internal ToolCall (params field) rather than the wire ToolCall (parameters field). This type is NOT the same as the generated Message schema.
+// ── Role-discriminated Message union (#3) ─────────────────────────────────────
+//
+// Each role declares exactly the statuses that are legal for it:
+//   user      — 'done' (normal) | 'error' (failed send, retriable via UserMessageRetryButton)
+//   assistant — 'streaming' | 'done' | 'error' | 'interrupted'
+//   system    — 'done' (informational banners; no error/streaming states)
+//
+// Using a discriminated union means that `(role:'user', status:'error')` is
+// representable AND handled: TypeScript exhausts the union in switch/if blocks
+// so adding a new role or status without updating renderers becomes a type error.
+//
+// Consumers that accept any message use the union alias `Message` (unchanged
+// surface area). Narrowing by role gives the role-specific status set.
+
+interface MessageBase { // not-wire-format
   id: string
   session_id?: string
-  role: 'user' | 'assistant' | 'system'
   content: string
   timestamp: string
   tokens?: number
   cost?: number
+}
+
+export interface UserMessage extends MessageBase { // not-wire-format: SPA-internal user message. Status 'error' means the WS send failed; Retry button re-sends the content.
+  role: 'user'
+  /** 'done' — delivered to gateway. 'error' — WS send failed; show Retry. */
+  status?: 'done' | 'error'
+  tool_calls?: never
+}
+
+export interface AssistantMessage extends MessageBase { // not-wire-format: SPA-internal assistant message. Status diverges from wire ('streaming'/'done' vs wire 'ok'/'error'). tool_calls uses params (not wire parameters). NOT the same as the generated Message schema.
+  role: 'assistant'
+  /** 'streaming' — turn in progress. 'done' — complete. 'error' — agent error. 'interrupted' — user cancelled. */
   status?: 'streaming' | 'done' | 'error' | 'interrupted'
   tool_calls?: ToolCall[]
 }
+
+export interface SystemMessage extends MessageBase { // not-wire-format: SPA-internal system/banner message.
+  role: 'system'
+  status?: 'done'
+  tool_calls?: never
+}
+
+/** Union of all SPA-internal message shapes. Discriminate on `role`. */ // not-wire-format
+export type Message = UserMessage | AssistantMessage | SystemMessage
 
 export interface ToolCall { // not-wire-format: SPA-internal tool call shape. Uses 'params' for the input parameters while the wire ToolCall schema uses 'parameters'. The status enum also differs (SPA adds 'running'; wire uses 'pending'/'denied'). This type is intentionally different from the generated ToolCall schema.
   id: string
@@ -776,18 +813,49 @@ function rawToToolCall(raw: RawToolCall): ToolCall {
 }
 
 function rawToMessage(raw: RawMessage): Message {
+  const role = raw.role ?? 'assistant'
+  const baseStatus = raw.status === 'ok' ? ('done' as const) : raw.status
+  // #3: construct the correct discriminated variant based on role.
+  // Tool calls only appear on assistant messages per the wire schema, so the
+  // cast here is correct and the compiler accepts it once role is narrowed.
+  if (role === 'user') {
+    return {
+      id: raw.id,
+      session_id: undefined,
+      role: 'user',
+      content: raw.content ?? raw.summary ?? '',
+      timestamp: raw.timestamp,
+      tokens: raw.tokens,
+      cost: raw.cost,
+      status: (baseStatus === 'done' || baseStatus === 'error') ? baseStatus : 'done',
+    } satisfies UserMessage
+  }
+  if (role === 'system') {
+    return {
+      id: raw.id,
+      session_id: undefined,
+      role: 'system',
+      content: raw.content ?? raw.summary ?? '',
+      timestamp: raw.timestamp,
+      tokens: raw.tokens,
+      cost: raw.cost,
+      status: 'done',
+    } satisfies SystemMessage
+  }
+  // role === 'assistant' (default)
   return {
     id: raw.id,
     session_id: undefined,
-    role: raw.role ?? 'assistant',
+    role: 'assistant',
     content: raw.content ?? raw.summary ?? '',
     timestamp: raw.timestamp,
     tokens: raw.tokens,
     cost: raw.cost,
-    // Wire status 'ok' maps to SPA 'done'. 'error' and 'interrupted' are direct.
-    status: raw.status === 'ok' ? 'done' : raw.status,
+    // Wire status is 'ok'→'done' | 'error' | 'interrupted'. 'streaming' is SPA-only
+    // (never on persisted wire messages) so this branch guards for undefined only.
+    status: (baseStatus === 'done' || baseStatus === 'error' || baseStatus === 'interrupted') ? baseStatus : 'done',
     tool_calls: raw.tool_calls?.map(rawToToolCall),
-  }
+  } satisfies AssistantMessage
 }
 
 export async function fetchSessions(agentId?: string, type?: Session['type']): Promise<Session[]> {
@@ -1174,6 +1242,25 @@ export function testChannel(id: string): Promise<ChannelTestResponse> {
   return request<ChannelTestResponse>(`/channels/${encodeURIComponent(id)}/test`, {
     method: 'POST',
   }, ChannelTestResponseSchema as ZodType<ChannelTestResponse>)
+}
+
+// ChannelRouting — re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/ChannelRouting.yaml.
+
+export function getChannelRouting(id: string): Promise<ChannelRouting> {
+  return request<ChannelRouting>(
+    `/channels/${encodeURIComponent(id)}/routing`,
+    undefined,
+    ChannelRoutingSchema as ZodType<ChannelRouting>,
+  )
+}
+
+export function setChannelRouting(id: string, body: ChannelRouting): Promise<ChannelRouting> {
+  return request<ChannelRouting>(
+    `/channels/${encodeURIComponent(id)}/routing`,
+    { method: 'PUT', body: JSON.stringify(body) },
+    ChannelRoutingSchema as ZodType<ChannelRouting>,
+  )
 }
 
 // ── Skills ────────────────────────────────────────────────────────────────────

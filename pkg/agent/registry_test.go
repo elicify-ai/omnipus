@@ -105,16 +105,86 @@ func TestAgentRegistry_GetAgent_Normalize(t *testing.T) {
 }
 
 func TestAgentRegistry_GetDefaultAgent(t *testing.T) {
+	// F3: GetDefaultAgent must return the Default=true-flagged agent over
+	// DefaultAgentID/"main" — the per-agent routing-default flag is canonical.
 	cfg := testCfg([]config.AgentConfig{
 		{ID: "alpha"},
-		{ID: "beta", Default: true},
+		{ID: "mia", Default: true},
 	})
 	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
 
-	// GetDefaultAgent first checks for "main", then returns any
 	agent := registry.GetDefaultAgent()
 	if agent == nil {
 		t.Fatal("expected a default agent")
+	}
+	// Mia is flagged Default=true; she must win over "main".
+	if agent.ID != "mia" {
+		t.Errorf("GetDefaultAgent = %q, want %q (Default=true agent must take priority over main)", agent.ID, "mia")
+	}
+	if !agent.IsRoutingDefault {
+		t.Errorf("winning agent must have IsRoutingDefault=true")
+	}
+}
+
+// TestAgentRegistry_GetDefaultAgent_FallsBackToMain verifies that when no
+// agent is marked Default=true, GetDefaultAgent falls back to "main" (F3
+// fallback path).
+func TestAgentRegistry_GetDefaultAgent_FallsBackToMain(t *testing.T) {
+	cfg := testCfg([]config.AgentConfig{
+		{ID: "alpha"},
+		{ID: "beta"},
+	})
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+
+	agent := registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected a default agent")
+	}
+	if agent.ID != "main" {
+		t.Errorf("GetDefaultAgent fallback = %q, want %q (must fall back to main when no Default=true)",
+			agent.ID, "main")
+	}
+}
+
+// TestAgentRegistry_GetDefaultAgent_DefaultAgentIDOverride verifies that when
+// no agent is marked Default=true but DefaultAgentID is set, the override is
+// respected (F3 second-priority fallback).
+func TestAgentRegistry_GetDefaultAgent_DefaultAgentIDOverride(t *testing.T) {
+	cfg := testCfg([]config.AgentConfig{
+		{ID: "alpha"},
+		{ID: "beta"},
+	})
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+	// Simulate config.Agents.Defaults.DefaultAgentID being set.
+	registry.SetDefaultAgentOverride("beta")
+
+	agent := registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected a default agent")
+	}
+	if agent.ID != "beta" {
+		t.Errorf("GetDefaultAgent with override = %q, want %q", agent.ID, "beta")
+	}
+}
+
+// TestAgentRegistry_GetDefaultAgent_RoutingDefaultOverridesOverride verifies
+// that a Default=true agent takes priority even over the DefaultAgentID string
+// override set via SetDefaultAgentOverride.
+func TestAgentRegistry_GetDefaultAgent_RoutingDefaultOverridesOverride(t *testing.T) {
+	cfg := testCfg([]config.AgentConfig{
+		{ID: "mia", Default: true},
+		{ID: "beta"},
+	})
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+	// Even with an explicit override pointing to "beta", Mia wins.
+	registry.SetDefaultAgentOverride("beta")
+
+	agent := registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected a default agent")
+	}
+	if agent.ID != "mia" {
+		t.Errorf("GetDefaultAgent = %q, want %q (Default=true must beat SetDefaultAgentOverride)", agent.ID, "mia")
 	}
 }
 

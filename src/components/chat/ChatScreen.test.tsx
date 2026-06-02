@@ -11,6 +11,11 @@ import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 
+// Static import: vi.mock() calls are hoisted before this import, so all mocks
+// are in place when the module resolves. This avoids per-test dynamic import
+// contention that caused intermittent timeouts under full-suite parallel load.
+import { OmnipusComposer } from './ChatScreen'
+
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 vi.mock('@assistant-ui/react', () => {
@@ -29,8 +34,8 @@ vi.mock('@assistant-ui/react', () => {
       Parts: () => null,
     },
     ComposerPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
+      Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
+        React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
       Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur }: {
         disabled?: boolean; placeholder?: string; className?: string;
         onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
@@ -51,6 +56,19 @@ vi.mock('@assistant-ui/react', () => {
           'data-testid': testId ?? 'chat-send',
           'aria-label': ariaLabel,
         }, children),
+      AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
+        disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
+      }) =>
+        React.createElement('button', { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment' }, children),
+      Attachments: () => null,
+    },
+    AttachmentPrimitive: {
+      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
+        React.createElement('div', { className }, children),
+      Name: () => null,
+      Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
+        React.createElement('button', { type: 'button', className, 'aria-label': ariaLabel }, children),
+      Thumb: () => null,
     },
     MessagePartPrimitive: { InProgress: () => null },
     ActionBarPrimitive: {
@@ -59,10 +77,14 @@ vi.mock('@assistant-ui/react', () => {
       Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
     },
     AuiIf: () => null,
-    useComposerRuntime: () => ({
+    // useComposerRuntime is vi.fn() so tests that need text can override the
+    // return value with mockImplementation/mockReturnValue per test.
+    // The default returns empty text — matching the original behavior.
+    useComposerRuntime: vi.fn(() => ({
       getState: () => ({ text: '' }),
       setText: vi.fn(),
-    }),
+      addAttachment: vi.fn(),
+    })),
     useMessage: () => ({
       id: 'msg_1',
       role: 'assistant',
@@ -141,7 +163,6 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
       useChatStore.setState({ isStreaming: true })
     })
 
-    const { OmnipusComposer } = await import('./ChatScreen')
     render(<OmnipusComposer />)
 
     const input = screen.getByTestId('composer-input')
@@ -165,7 +186,6 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
       useChatStore.setState({ isStreaming: true })
     })
 
-    const { OmnipusComposer } = await import('./ChatScreen')
     render(<OmnipusComposer />)
 
     const input = screen.getByTestId('composer-input')
@@ -188,7 +208,6 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
       useChatStore.setState({ isStreaming: false })
     })
 
-    const { OmnipusComposer } = await import('./ChatScreen')
     render(<OmnipusComposer />)
 
     const input = screen.getByTestId('composer-input')
@@ -211,7 +230,6 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
       useChatStore.setState({ isStreaming: true })
     })
 
-    const { OmnipusComposer } = await import('./ChatScreen')
     render(<OmnipusComposer />)
 
     const input = screen.getByTestId('composer-input')
@@ -228,3 +246,11 @@ describe('T15: slash menu — /cancel available during streaming (FR-3a)', () =>
     expect(screen.queryByText('/cancel')).not.toBeInTheDocument()
   })
 })
+
+// NOTE: the former "Fix #1 — all uploads fail" and "#252 — upload before first
+// message" tests were removed when the hand-rolled upload bridge
+// (handleSendWithFiles + the hidden file-input) was replaced by the native
+// AssistantUI AttachmentAdapter. The equivalent behaviors — session
+// auto-creation on first upload, and surfacing a failed registration rather
+// than silently dropping the file — now live in src/lib/attachment-adapter.ts
+// and are covered by src/lib/attachment-adapter.test.ts.

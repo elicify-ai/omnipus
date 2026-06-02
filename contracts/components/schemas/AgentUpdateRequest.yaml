@@ -148,3 +148,10 @@ properties:
         example: 5.0
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
+  default:
+    type: boolean
+    description: >
+      Whether this agent is the global default that handles inbound messages
+      with no more-specific routing rule. At most one agent is default.
+      Omitting this field leaves the flag unchanged.
+    example: false
