@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FloppyDisk, CaretDown } from '@phosphor-icons/react'
+import { FloppyDisk } from '@phosphor-icons/react'
 import {
   Sheet,
   SheetContent,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -299,10 +300,6 @@ export function ScheduleFormSheet({
   const [form, setForm] = useState<FormState>(() => initialState(schedule, defaultOwnerAgentId))
   // Inline server validation error for the trigger (AC3b).
   const [triggerServerError, setTriggerServerError] = useState<string | null>(null)
-  // Advanced section open/closed state (React state so content is conditionally rendered,
-  // making it testable without depending on CSS visibility).
-  // TODO #319: swap for <AdvancedDisclosure> after Wave 0
-  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   // Re-initialise form when the sheet opens with a different schedule.
   useEffect(() => {
@@ -483,102 +480,86 @@ export function ScheduleFormSheet({
           </p>
 
           {/* ── Advanced options ─────────────────────────────────────────────── */}
-          {/* TODO #319: swap for <AdvancedDisclosure> after Wave 0 */}
-          <div>
-            <button
-              type="button"
-              aria-expanded={advancedOpen}
-              aria-controls="schedule-advanced-options"
-              onClick={() => setAdvancedOpen((v) => !v)}
-              className="flex items-center gap-1.5 cursor-pointer text-xs font-medium text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors select-none"
-            >
-              <CaretDown
-                size={12}
-                className={`transition-transform ${advancedOpen ? 'rotate-180' : ''}`}
-              />
-              Advanced options
-            </button>
-            {advancedOpen && (
-              <div id="schedule-advanced-options" className="pt-4 space-y-4">
-                {/* Delivery */}
+          <AdvancedDisclosure title="Advanced options" summary="Delivery, timeout, session mode">
+            <div className="space-y-4">
+              {/* Delivery */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-xs font-medium text-[var(--color-secondary)]">
+                    Send result directly to channel
+                  </Label>
+                  <p className="text-[10px] text-[var(--color-muted)] mt-0.5">
+                    Off — your agent processes the message. On — sends the message straight to the channel.
+                  </p>
+                </div>
+                <Switch
+                  checked={form.deliver}
+                  onCheckedChange={(checked) => setValue('deliver', checked)}
+                  aria-label="Send directly to channel"
+                />
+              </div>
+
+              {/* Session mode — D18 (US-A3) */}
+              {isLegacyMain ? (
+                /* AC (US-A3): legacy 'main' schedule → read-only notice; mode not re-selectable */
+                <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
+                  <p className="text-xs text-[var(--color-muted)]">
+                    Session mode:{' '}
+                    <span className="text-[var(--color-secondary)]">Main chat (legacy — read-only)</span>
+                  </p>
+                  <p className="text-[10px] text-[var(--color-muted)] mt-1">
+                    This schedule uses a legacy session mode. Edit other fields freely; the session mode cannot be changed here.
+                  </p>
+                </div>
+              ) : (
+                /* AC3 (US-A3): "keep the full thread" opt-in → session_mode:'continue' */
                 <div className="flex items-center justify-between">
                   <div>
-                    <Label className="text-xs font-medium text-[var(--color-secondary)]">
-                      Send result directly to channel
+                    <Label
+                      htmlFor="schedule-keep-thread"
+                      className="text-xs font-medium text-[var(--color-secondary)]"
+                    >
+                      Also keep the full conversation thread across runs
                     </Label>
                     <p className="text-[10px] text-[var(--color-muted)] mt-0.5">
-                      Off — your agent processes the message. On — sends the message straight to the channel.
+                      Off — each run is a fresh conversation (recommended). On — the agent continues from where it left off.
                     </p>
                   </div>
                   <Switch
-                    checked={form.deliver}
-                    onCheckedChange={(checked) => setValue('deliver', checked)}
-                    aria-label="Send directly to channel"
+                    id="schedule-keep-thread"
+                    checked={form.sessionMode === 'continue'}
+                    onCheckedChange={(checked) =>
+                      setValue('sessionMode', checked ? 'continue' : 'isolated')
+                    }
+                    aria-label="Keep the full conversation thread across runs"
                   />
                 </div>
+              )}
 
-                {/* Session mode — D18 (US-A3) */}
-                {isLegacyMain ? (
-                  /* AC (US-A3): legacy 'main' schedule → read-only notice; mode not re-selectable */
-                  <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
-                    <p className="text-xs text-[var(--color-muted)]">
-                      Session mode:{' '}
-                      <span className="text-[var(--color-secondary)]">Main chat (legacy — read-only)</span>
-                    </p>
-                    <p className="text-[10px] text-[var(--color-muted)] mt-1">
-                      This schedule uses a legacy session mode. Edit other fields freely; the session mode cannot be changed here.
-                    </p>
-                  </div>
-                ) : (
-                  /* AC3 (US-A3): "keep the full thread" opt-in → session_mode:'continue' */
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <Label
-                        htmlFor="schedule-keep-thread"
-                        className="text-xs font-medium text-[var(--color-secondary)]"
-                      >
-                        Also keep the full conversation thread across runs
-                      </Label>
-                      <p className="text-[10px] text-[var(--color-muted)] mt-0.5">
-                        Off — each run is a fresh conversation (recommended). On — the agent continues from where it left off.
-                      </p>
-                    </div>
-                    <Switch
-                      id="schedule-keep-thread"
-                      checked={form.sessionMode === 'continue'}
-                      onCheckedChange={(checked) =>
-                        setValue('sessionMode', checked ? 'continue' : 'isolated')
-                      }
-                      aria-label="Keep the full conversation thread across runs"
-                    />
-                  </div>
-                )}
+              {/* Timeout */}
+              <Field label="Run timeout (seconds)" htmlFor="schedule-timeout">
+                <Input
+                  id="schedule-timeout"
+                  type="number"
+                  min={0}
+                  value={form.timeoutSeconds}
+                  onChange={(e) => setValue('timeoutSeconds', e.target.value)}
+                  placeholder="Leave blank to use the global default"
+                  className="text-xs"
+                />
+              </Field>
 
-                {/* Timeout */}
-                <Field label="Run timeout (seconds)" htmlFor="schedule-timeout">
-                  <Input
-                    id="schedule-timeout"
-                    type="number"
-                    min={0}
-                    value={form.timeoutSeconds}
-                    onChange={(e) => setValue('timeoutSeconds', e.target.value)}
-                    placeholder="Leave blank to use the global default"
-                    className="text-xs"
-                  />
-                </Field>
-
-                {/* Active toggle */}
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs font-medium text-[var(--color-secondary)]">Active</Label>
-                  <Switch
-                    checked={form.enabled}
-                    onCheckedChange={(checked) => setValue('enabled', checked)}
-                    aria-label="Active"
-                  />
-                </div>
+              {/* Active toggle */}
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-medium text-[var(--color-secondary)]">Active</Label>
+                <Switch
+                  checked={form.enabled}
+                  onCheckedChange={(checked) => setValue('enabled', checked)}
+                  aria-label="Active"
+                />
               </div>
-            )}
-          </div>
+            </div>
+          </AdvancedDisclosure>
 
           {/* Actions */}
           <div className="pt-2 border-t border-[var(--color-border)]">

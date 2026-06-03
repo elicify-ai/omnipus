@@ -31,6 +31,7 @@ import {
   isApiError,
 } from '@/lib/api'
 import { getChannelFields, type ChannelField } from '@/lib/channel-fields'
+import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useWhatsAppPairingStore, type WhatsAppPairingState } from '@/store/whatsappPairing'
@@ -129,10 +130,10 @@ function PasswordField({
   )
 }
 
-// HelperText renders the helpText and optional helpLink for a channel field.
+// HelperLink renders the helpText and optional helpLink for a channel field.
+// LOCAL component — single consumer (ChannelConfigPanel); see spec §2, M-11.
 // Rendered as a one-liner under the input.
-// TODO #323: extract HelperLink + AdvancedDisclosure after Wave 0
-function FieldHelper({ field }: { field: ChannelField }) {
+function HelperLink({ field }: { field: ChannelField }) {
   if (!field.helpText && !field.helpLink) return null
   return (
     <p id={`help-${field.key}`} className="text-[10px] text-[var(--color-muted)] leading-relaxed">
@@ -465,7 +466,7 @@ function ChannelFieldRow({
         />
       )}
 
-      <FieldHelper field={field} />
+      <HelperLink field={field} />
     </div>
   )
 }
@@ -805,10 +806,20 @@ export function ChannelConfigPanel({
               />
             ))}
 
-            {/* Advanced fields — collapsed under a disclosure (#323 will extract this) */}
-            {/* TODO #323: extract HelperLink + AdvancedDisclosure after Wave 0 */}
+            {/* Advanced fields — collapsed under the shared AdvancedDisclosure (#323). */}
             {advancedFields.length > 0 && (
-              <AdvancedSection fields={advancedFields} getValue={getValue} setValue={setValue} />
+              <AdvancedDisclosure>
+                <div className="space-y-4">
+                  {advancedFields.map((field) => (
+                    <ChannelFieldRow
+                      key={field.key}
+                      field={field}
+                      getValue={getValue}
+                      setValue={setValue}
+                    />
+                  ))}
+                </div>
+              </AdvancedDisclosure>
             )}
 
             {/* WhatsApp is always native (whatsmeow): show the live linked-device
@@ -936,47 +947,3 @@ export function ChannelConfigPanel({
   )
 }
 
-// AdvancedSection renders advanced fields under a collapsed disclosure.
-// TODO #323: replace with AdvancedDisclosure primitive after Wave 0
-function AdvancedSection({
-  fields,
-  getValue,
-  setValue,
-}: {
-  fields: ChannelField[]
-  getValue: (key: string) => unknown
-  setValue: (key: string, value: unknown) => void
-}) {
-  const [open, setOpen] = useState(false)
-
-  return (
-    <div className="border-t border-[var(--color-border)] pt-3">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors w-full text-left"
-        aria-expanded={open}
-      >
-        <span className="text-[10px] leading-none">{open ? '▾' : '▸'}</span>
-        <span className="font-medium">Advanced</span>
-        {!open && (
-          <span className="ml-1 text-[10px] text-[var(--color-muted)]">
-            ({fields.length} {fields.length === 1 ? 'option' : 'options'})
-          </span>
-        )}
-      </button>
-      {open && (
-        <div className="mt-3 space-y-4">
-          {fields.map((field) => (
-            <ChannelFieldRow
-              key={field.key}
-              field={field}
-              getValue={getValue}
-              setValue={setValue}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
