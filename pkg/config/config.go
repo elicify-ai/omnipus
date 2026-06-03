@@ -959,18 +959,20 @@ type WeixinConfig struct {
 }
 
 type GoogleChatConfig struct {
-	Enabled            bool                `json:"enabled"                        yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_ENABLED"`
-	Mode               string              `json:"mode"                           yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_MODE"` // "webhook" | "bot"
-	WebhookURL         SecureString        `json:"webhook_url,omitzero"           yaml:"webhook_url,omitempty"          env:"OMNIPUS_CHANNELS_GOOGLECHAT_WEBHOOK_URL"`
-	ServiceAccountFile string              `json:"service_account_file,omitempty" yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_SERVICE_ACCOUNT_FILE"`
-	ServiceAccountJSON SecureString        `json:"service_account_json,omitzero"  yaml:"service_account_json,omitempty" env:"OMNIPUS_CHANNELS_GOOGLECHAT_SERVICE_ACCOUNT_JSON"`
-	Space              string              `json:"space"                          yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_SPACE"`
-	BotUser            string              `json:"bot_user"                       yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_BOT_USER"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"                     yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_ALLOW_FROM"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"        yaml:"-"`
-	Typing             TypingConfig        `json:"typing,omitempty"               yaml:"-"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"          yaml:"-"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"           yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_REASONING_CHANNEL_ID"`
+	Enabled               bool                `json:"enabled"                            yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_ENABLED"`
+	Mode                  string              `json:"mode"                               yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_MODE"` // "webhook" | "bot"
+	WebhookURL            SecureString        `json:"webhook_url,omitzero"               yaml:"webhook_url,omitempty"          env:"OMNIPUS_CHANNELS_GOOGLECHAT_WEBHOOK_URL"`
+	WebhookURLRef         string              `json:"webhook_url_ref,omitempty"          yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_WEBHOOK_URL_REF"`
+	ServiceAccountFile    string              `json:"service_account_file,omitempty"     yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_SERVICE_ACCOUNT_FILE"`
+	ServiceAccountJSON    SecureString        `json:"service_account_json,omitzero"      yaml:"service_account_json,omitempty" env:"OMNIPUS_CHANNELS_GOOGLECHAT_SERVICE_ACCOUNT_JSON"`
+	ServiceAccountJSONRef string              `json:"service_account_json_ref,omitempty" yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_SERVICE_ACCOUNT_JSON_REF"`
+	Space                 string              `json:"space"                              yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_SPACE"`
+	BotUser               string              `json:"bot_user"                           yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_BOT_USER"`
+	AllowFrom             FlexibleStringSlice `json:"allow_from"                         yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_ALLOW_FROM"`
+	GroupTrigger          GroupTriggerConfig  `json:"group_trigger,omitempty"            yaml:"-"`
+	Typing                TypingConfig        `json:"typing,omitempty"                   yaml:"-"`
+	Placeholder           PlaceholderConfig   `json:"placeholder,omitempty"              yaml:"-"`
+	ReasoningChannelID    string              `json:"reasoning_channel_id"               yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_REASONING_CHANNEL_ID"`
 }
 
 type IRCConfig struct {

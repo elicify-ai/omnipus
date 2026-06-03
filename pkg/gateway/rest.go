@@ -4595,7 +4595,7 @@ var channelSensitiveFields = map[gen.ChannelId][]string{
 	gen.Irc:        {"password", "nickserv_password", "sasl_password"},
 	gen.Weixin:     {"token"},
 	gen.Whatsapp:   {},
-	gen.GoogleChat: {"service_account_json"},
+	gen.GoogleChat: {"webhook_url", "service_account_json"},
 }
 
 // channelRequiredFields maps channel IDs to fields that must be non-empty for the channel to work.

@@ -112,6 +112,8 @@ func ResolveAll(cfg *config.Config, store *Store) (map[string]string, []error) {
 		ch.LINE.ChannelAccessTokenRef,
 		ch.WeCom.SecretRef,
 		ch.Weixin.TokenRef,
+		ch.GoogleChat.WebhookURLRef,
+		ch.GoogleChat.ServiceAccountJSONRef,
 		ch.IRC.PasswordRef,
 		ch.IRC.NickServPasswordRef,
 		ch.IRC.SASLPasswordRef,
