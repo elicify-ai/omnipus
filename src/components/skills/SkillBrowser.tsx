@@ -1,14 +1,26 @@
+/**
+ * SkillBrowser — Install-from-file modal for SKILL.md packages.
+ *
+ * Changes from the original:
+ *  - Install flow now shows a capabilities + "unverified" notice confirm step
+ *    before actually installing (US-E4 / #340).
+ *  - Non-hash errors are surfaced as a toast instead of being silently swallowed.
+ *  - Hash-mismatch still shows the dedicated inline dialog (unchanged).
+ */
+
 import { useRef, useState } from 'react'
-import { CloudSlash, UploadSimple } from '@phosphor-icons/react'
+import { CloudSlash, UploadSimple, Warning, ShieldWarning } from '@phosphor-icons/react'
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { installSkillFromFile } from '@/lib/api'
+import { useUiStore } from '@/store/ui'
 
 interface SkillBrowserProps {
   open: boolean
@@ -20,27 +32,75 @@ interface HashMismatchError {
   got?: string
 }
 
+interface PendingInstall {
+  file: File
+  text: string
+  /** Detected capabilities extracted from SKILL.md frontmatter (best-effort). */
+  capabilities: string[]
+}
+
+/**
+ * Best-effort capability extraction from SKILL.md content.
+ * Looks for a `capabilities:` YAML list in the frontmatter block.
+ * Returns an empty array if nothing is found — the confirm step still shows.
+ */
+function extractCapabilities(text: string): string[] {
+  // Match capabilities list in YAML frontmatter (--- ... ---)
+  const frontmatter = text.match(/^---\n([\s\S]*?)\n---/)
+  if (!frontmatter) return []
+  const block = frontmatter[1]
+  // Match `capabilities:` followed by list items
+  const capMatch = block.match(/capabilities:\s*\n((?:\s*-[^\n]+\n?)*)/)
+  if (!capMatch) return []
+  return capMatch[1]
+    .split('\n')
+    .map((l) => l.replace(/^\s*-\s*/, '').trim())
+    .filter(Boolean)
+}
+
 export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const { addToast } = useUiStore()
+
   const [hashMismatch, setHashMismatch] = useState<HashMismatchError | null>(null)
   const [isInstalling, setIsInstalling] = useState(false)
+  const [pendingInstall, setPendingInstall] = useState<PendingInstall | null>(null)
 
   async function handleFileSelected(file: File) {
+    // Read the file content first, then show the confirm step
+    let text: string
+    try {
+      text = await file.text()
+    } catch {
+      addToast({ message: 'Could not read the selected file.', variant: 'error' })
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      return
+    }
+    const capabilities = extractCapabilities(text)
+    setPendingInstall({ file, text, capabilities })
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  async function handleConfirmInstall() {
+    if (!pendingInstall) return
+    const { text, file } = pendingInstall
+    setPendingInstall(null)
     setIsInstalling(true)
     try {
-      const text = await file.text()
       await installSkillFromFile(text, file.name)
+      addToast({ message: `Skill "${file.name}" installed successfully.`, variant: 'success' })
     } catch (err: unknown) {
-      // Check for hash mismatch error (409 or error message containing "hash mismatch")
       const msg = err instanceof Error ? err.message : String(err)
       if (msg.includes('hash mismatch') || msg.includes('409')) {
         let expected: string | undefined
         let got: string | undefined
         try {
-          // Try to parse JSON from the error message (format: "409: {...}")
           const jsonStart = msg.indexOf('{')
           if (jsonStart !== -1) {
-            const parsed = JSON.parse(msg.slice(jsonStart)) as { expected?: string; got?: string }
+            const parsed = JSON.parse(msg.slice(jsonStart)) as {
+              expected?: string
+              got?: string
+            }
             expected = parsed.expected
             got = parsed.got
           }
@@ -48,11 +108,15 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
           // ignore parse failures
         }
         setHashMismatch({ expected, got })
+      } else {
+        // Surface all other errors as a toast (no more silent swallow)
+        addToast({
+          message: `Failed to install skill: ${msg || 'Unknown error'}`,
+          variant: 'error',
+        })
       }
-      // For other errors, silently ignore in this minimal implementation
     } finally {
       setIsInstalling(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
     }
   }
 
@@ -69,7 +133,8 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
             <CloudSlash size={40} weight="thin" className="text-[var(--color-border)]" />
             <p className="text-sm text-[var(--color-muted)]">ClawHub registry not yet available</p>
             <p className="text-xs text-[var(--color-muted)]">
-              Install skills manually by placing a <span className="font-mono">SKILL.md</span> file in your skills directory.
+              Install skills manually by placing a{' '}
+              <span className="font-mono">SKILL.md</span> file in your skills directory.
             </p>
 
             {/* Install from file */}
@@ -97,13 +162,97 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
         </DialogContent>
       </Dialog>
 
+      {/* Install confirmation dialog — shows capabilities + unverified notice */}
+      <Dialog
+        open={pendingInstall !== null}
+        onOpenChange={(o) => {
+          if (!o) setPendingInstall(null)
+        }}
+      >
+        <DialogContent data-testid="skill-install-confirm-dialog" className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Install skill</DialogTitle>
+            <DialogDescription>
+              Review this skill before installing. Unverified skills run on your server
+              and can access tools allowed by your agent policy.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            {/* Unverified notice */}
+            <div
+              className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2.5"
+              data-testid="unverified-notice"
+            >
+              <ShieldWarning size={15} weight="fill" className="text-amber-400 mt-0.5 shrink-0" />
+              <div className="text-xs text-amber-300 leading-relaxed">
+                <span className="font-semibold">Unverified skill.</span> This skill has not been
+                reviewed or signed by the Omnipus team. Only install skills you trust.
+              </div>
+            </div>
+
+            {/* File name */}
+            <div className="text-xs text-[var(--color-muted)]">
+              File:{' '}
+              <span className="font-mono text-[var(--color-secondary)]">
+                {pendingInstall?.file.name}
+              </span>
+            </div>
+
+            {/* Capabilities */}
+            {pendingInstall && pendingInstall.capabilities.length > 0 ? (
+              <div className="space-y-1">
+                <p className="text-xs font-medium text-[var(--color-secondary)]">
+                  Declared capabilities
+                </p>
+                <ul className="space-y-0.5">
+                  {pendingInstall.capabilities.map((cap) => (
+                    <li
+                      key={cap}
+                      className="flex items-center gap-1.5 text-xs text-[var(--color-muted)]"
+                    >
+                      <Warning size={11} className="text-amber-400 shrink-0" />
+                      {cap}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--color-muted)]">
+                No capabilities declared in this skill file.
+              </p>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPendingInstall(null)}
+              disabled={isInstalling}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              data-testid="confirm-install-btn"
+              onClick={() => void handleConfirmInstall()}
+              disabled={isInstalling}
+            >
+              {isInstalling ? 'Installing...' : 'Install skill'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Hash mismatch dialog (#109) */}
       <Dialog open={hashMismatch !== null} onOpenChange={() => setHashMismatch(null)}>
         <DialogContent data-testid="skill-hash-mismatch-dialog" className="max-w-md">
           <DialogHeader>
             <DialogTitle>Integrity check failed</DialogTitle>
             <DialogDescription>
-              The skill file could not be installed because its hash does not match the expected value.
+              The skill file could not be installed because its hash does not match the expected
+              value.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 text-sm">

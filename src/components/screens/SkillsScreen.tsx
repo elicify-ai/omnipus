@@ -10,6 +10,7 @@ import {
   MagnifyingGlass,
   CaretDown,
   CaretUp,
+  ArrowRight,
 } from '@phosphor-icons/react'
 import { SkeletonList, EmptyState, ErrorState } from '@/components/shared/ListStates'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -32,6 +33,7 @@ import {
   deleteSkill,
   deleteMcpServer,
   isApiError,
+  type ToolRegistryEntry,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { SkillBrowser } from '@/components/skills/SkillBrowser'
@@ -46,7 +48,6 @@ export function SkillsScreen() {
   const [confirmDeleteSkill, setConfirmDeleteSkill] = useState<string | null>(null)
   const [confirmDeleteMcp, setConfirmDeleteMcp] = useState<string | null>(null)
   const [expandedMcp, setExpandedMcp] = useState<string | null>(null)
-  const [expandedTool, setExpandedTool] = useState<string | null>(null)
 
   const { data: rawSkills = [], isLoading: skillsLoading, isError: skillsError } = useQuery({
     queryKey: ['skills'],
@@ -252,7 +253,7 @@ export function SkillsScreen() {
           )}
         </TabsContent>
 
-        {/* Built-in tools */}
+        {/* Built-in tools — read-only by-category overview (US-E2 / #338) */}
         <TabsContent value="builtins">
           {toolsError ? (
             <ErrorState message="Could not load tools." />
@@ -261,44 +262,7 @@ export function SkillsScreen() {
           ) : tools.length === 0 ? (
             <EmptyState icon={<Wrench size={40} weight="thin" />} message="No tools available." />
           ) : (
-            <div className="space-y-1.5">
-              {tools.map((tool) => {
-                const isExpanded = expandedTool === tool.name
-                return (
-                  <div
-                    key={tool.name}
-                    className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setExpandedTool(isExpanded ? null : tool.name)}
-                      className="flex items-center gap-3 px-4 py-3 w-full text-left hover:bg-[var(--color-surface-2)] transition-colors"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-xs text-[var(--color-secondary)]">{tool.name}</span>
-                          <Badge variant="muted" className="text-[10px]">{tool.category}</Badge>
-                        </div>
-                      </div>
-                      {isExpanded ? (
-                        <CaretUp size={12} className="text-[var(--color-muted)] shrink-0" />
-                      ) : (
-                        <CaretDown size={12} className="text-[var(--color-muted)] shrink-0" />
-                      )}
-                    </button>
-                    {isExpanded && (
-                      <div className="px-4 pb-3 border-t border-[var(--color-border)]">
-                        <p className="text-xs text-[var(--color-muted)] mt-2">{tool.description}</p>
-                        <div className="flex items-center gap-2 mt-2">
-                          <span className="text-[10px] text-[var(--color-muted)]">Status:</span>
-                          <Badge variant="success" className="text-[10px]">enabled</Badge>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
+            <ToolsOverview tools={tools} />
           )}
         </TabsContent>
       </Tabs>
@@ -367,6 +331,94 @@ export function SkillsScreen() {
       </AlertDialog>
 
     </div>
+    </div>
+  )
+}
+
+/**
+ * Category display names for the by-category overview.
+ * Raw `system.*` scope tools are excluded; the rest are grouped by category.
+ * Editing happens in Settings → Security.
+ */
+const CATEGORY_DESCRIPTIONS: Record<string, string> = {
+  workspace: 'Read, write, and search files; run commands in agent workspaces',
+  browser: 'Navigate, click, and screenshot web pages in a headless browser',
+  web: 'Search the web and fetch content from URLs',
+  system: 'Access system-level information and gateway management',
+  tasks: 'Create, update, and list tasks in the task board',
+  memory: 'Store and recall information across sessions',
+  message: 'Send messages and notifications to users',
+  session: 'Manage and query agent sessions',
+  skill: 'Install and manage skills',
+  general: 'General-purpose tools',
+}
+
+function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
+  // Exclude system-scope tools (not shown to end users)
+  const visible = tools.filter((t) => t.scope !== 'system')
+
+  // Group by category
+  const grouped = visible.reduce<Record<string, ToolRegistryEntry[]>>((acc, tool) => {
+    const cat = tool.category || 'general'
+    if (!acc[cat]) acc[cat] = []
+    acc[cat].push(tool)
+    return acc
+  }, {})
+
+  const categories = Object.keys(grouped).sort()
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-[var(--color-muted)]">
+        What your agents can do — grouped by capability area. Individual tool
+        permissions are managed in{' '}
+        <a
+          href="/settings?tab=security"
+          className="inline-flex items-center gap-0.5 text-[var(--color-accent)] hover:opacity-80 underline"
+          data-testid="manage-permissions-link"
+        >
+          Settings → Security
+          <ArrowRight size={11} />
+        </a>
+        . No tool identifier prefixes (e.g. <span className="font-mono">system.*</span>) are shown here.
+      </p>
+
+      {categories.length === 0 ? (
+        <EmptyState
+          icon={<Wrench size={40} weight="thin" />}
+          message="No tools available."
+        />
+      ) : (
+        <div className="space-y-2">
+          {categories.map((cat) => {
+            const catTools = grouped[cat]
+            const description =
+              CATEGORY_DESCRIPTIONS[cat] ??
+              `${catTools.length} tool${catTools.length !== 1 ? 's' : ''} in this category`
+            return (
+              <div
+                key={cat}
+                className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-3"
+                data-testid={`tool-category-${cat}`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <span className="text-sm font-medium text-[var(--color-secondary)] capitalize">
+                      {cat}
+                    </span>
+                    <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                      {description}
+                    </p>
+                  </div>
+                  <Badge variant="muted" className="text-[10px] shrink-0">
+                    {catTools.length} tool{catTools.length !== 1 ? 's' : ''}
+                  </Badge>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
