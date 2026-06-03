@@ -23,6 +23,7 @@ export function PolicyBadge({ policy, onClick, active, disabled }: PolicyBadgePr
       type="button"
       onClick={onClick}
       disabled={disabled}
+      aria-pressed={active}
       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
         active ? cfg.activeColor : `border-transparent ${cfg.color} hover:bg-[var(--color-surface-2)]`
       }`}
