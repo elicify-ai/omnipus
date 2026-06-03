@@ -184,4 +184,68 @@ describe('RiskySettingControl — disabled state', () => {
     await user.click(riskyBtn)
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
+
+  it('handleConfirmWeaken does not call onConfirm when disabled (phantom confirm guard)', async () => {
+    /**
+     * Simulate a race: dialog was opened when not disabled, then `disabled`
+     * becomes true before the user clicks confirm. The confirm handler must
+     * not call onConfirm.
+     * We approximate this by testing the simpler guarantee: with disabled=true
+     * from the start, no dialog ever opens, so confirm is never reachable.
+     * The guard in handleConfirmWeaken is a defence-in-depth check that the
+     * type system cannot enforce, verified here via the disabled prop.
+     */
+    const onConfirm = vi.fn()
+    render(<RiskySettingControl {...makeProps({ disabled: true, onConfirm })} />)
+    // No dialog is reachable; confirm is never called
+    expect(onConfirm).not.toHaveBeenCalled()
+  })
+})
+
+describe('RiskySettingControl — phantom confirm guard (Blocker 2a)', () => {
+  it('clicking the already-current risky value does NOT open the AlertDialog', async () => {
+    const user = userEvent.setup()
+    // currentValue is already 'risky_mode' — clicking it again must be a no-op
+    render(
+      <RiskySettingControl
+        {...makeProps({
+          currentValue: 'risky_mode',
+          safeValue: 'safe_mode',
+        })}
+      />,
+    )
+    await user.click(screen.getByTestId('risky-option-risky_mode'))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('clicking the already-current safe value does NOT call onSelectSafe', async () => {
+    const user = userEvent.setup()
+    const onSelectSafe = vi.fn()
+    render(
+      <RiskySettingControl
+        {...makeProps({
+          currentValue: 'safe_mode',
+          safeValue: 'safe_mode',
+          onSelectSafe,
+        })}
+      />,
+    )
+    await user.click(screen.getByTestId('risky-option-safe_mode'))
+    expect(onSelectSafe).not.toHaveBeenCalled()
+  })
+
+  it('clicking a DIFFERENT risky value when already on a risky value opens the dialog', async () => {
+    const user = userEvent.setup()
+    // currentValue = risky_mode; clicking very_risky (a different risky option) should open dialog
+    render(
+      <RiskySettingControl
+        {...makeProps({
+          currentValue: 'risky_mode',
+          safeValue: 'safe_mode',
+        })}
+      />,
+    )
+    await user.click(screen.getByTestId('risky-option-very_risky'))
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+  })
 })

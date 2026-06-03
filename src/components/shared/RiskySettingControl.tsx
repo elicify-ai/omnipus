@@ -102,17 +102,21 @@ export function RiskySettingControl<T extends string>({
 
   const isCurrentRisky = currentValue !== safeValue
 
-  function handleOptionClick(value: T) {
+  function handleOptionClick(clickedValue: T) {
     if (disabled) return
-    if (value === safeValue) {
-      onSelectSafe(value)
+    // Clicking the already-current (persisted) value is a no-op — it is not a
+    // new safe selection nor a new risky weakening. Do NOT open the dialog.
+    if (clickedValue === currentValue) return
+    if (clickedValue === safeValue) {
+      onSelectSafe(clickedValue)
     } else {
       // Open the dialog — do NOT apply the value yet.
-      setPendingRiskyValue(value)
+      setPendingRiskyValue(clickedValue)
     }
   }
 
   function handleConfirmWeaken() {
+    if (disabled) return
     if (pendingRiskyValue !== null) {
       onConfirm(pendingRiskyValue)
     }
