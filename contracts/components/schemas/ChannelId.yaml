@@ -13,7 +13,6 @@ enum:
   - weixin
   - line
   - qq
-  - onebot
   - irc
   - matrix
-  - maixcam
+  - google-chat

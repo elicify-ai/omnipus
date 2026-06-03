@@ -4114,9 +4114,9 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 		{
 			Id:              "whatsapp",
 			Name:            "WhatsApp",
-			Transport:       "bridge",
+			Transport:       "native",
 			Enabled:         ch.WhatsApp.Enabled,
-			Description:     "WhatsApp via bridge or native",
+			Description:     "WhatsApp (native, whatsmeow)",
 			NativeAvailable: boolPtr(whatsappnative.NativeAvailable),
 		},
 		{
@@ -4149,15 +4149,15 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 		},
 		{Id: "line", Name: "LINE", Transport: "webhook", Enabled: ch.LINE.Enabled, Description: "LINE Messaging API"},
 		{Id: "qq", Name: "QQ", Transport: "websocket", Enabled: ch.QQ.Enabled, Description: "QQ via napcat"},
-		{
-			Id:          "onebot",
-			Name:        "OneBot",
-			Transport:   "websocket",
-			Enabled:     ch.OneBot.Enabled,
-			Description: "OneBot v11 protocol",
-		},
 		{Id: "irc", Name: "IRC", Transport: "tcp", Enabled: ch.IRC.Enabled, Description: "Internet Relay Chat"},
 		{Id: "matrix", Name: "Matrix", Transport: "http", Enabled: ch.Matrix.Enabled, Description: "Matrix protocol"},
+		{
+			Id:          "google-chat",
+			Name:        "Google Chat",
+			Transport:   "webhook",
+			Enabled:     ch.GoogleChat.Enabled,
+			Description: "Google Chat (webhook or service account)",
+		},
 	}
 
 	// Overlay degraded state from the runtime channel manager. Channels that
@@ -4228,8 +4228,8 @@ func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.Chan
 var validChannelIDs = map[string]bool{
 	"telegram": true, "discord": true, "slack": true, "whatsapp": true,
 	"feishu": true, "dingtalk": true, "wecom": true, "weixin": true,
-	"line": true, "qq": true, "onebot": true, "irc": true,
-	"matrix": true,
+	"line": true, "qq": true, "irc": true,
+	"matrix": true, "google-chat": true,
 }
 
 // channelWildcardIdx returns the index of the channel-wildcard AgentBinding
@@ -4414,36 +4414,36 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 // channelSensitiveFields maps channel IDs to their secret/credential field names.
 // These are redacted in GET responses (replaced with "[configured]" if set).
 var channelSensitiveFields = map[string][]string{
-	"telegram": {"token"},
-	"discord":  {"token"},
-	"slack":    {"bot_token", "app_token"},
-	"feishu":   {"app_secret", "encrypt_key", "verification_token"},
-	"matrix":   {"access_token", "crypto_passphrase"},
-	"line":     {"channel_secret", "channel_access_token"},
-	"dingtalk": {"client_secret"},
-	"qq":       {"app_secret"},
-	"wecom":    {"secret"},
-	"onebot":   {"access_token"},
-	"irc":      {"password", "nickserv_password", "sasl_password"},
-	"weixin":   {"token"},
-	"whatsapp": {},
+	"telegram":    {"token"},
+	"discord":     {"token"},
+	"slack":       {"bot_token", "app_token"},
+	"feishu":      {"app_secret", "encrypt_key", "verification_token"},
+	"matrix":      {"access_token", "crypto_passphrase"},
+	"line":        {"channel_secret", "channel_access_token"},
+	"dingtalk":    {"client_secret"},
+	"qq":          {"app_secret"},
+	"wecom":       {"secret"},
+	"irc":         {"password", "nickserv_password", "sasl_password"},
+	"weixin":      {"token"},
+	"whatsapp":    {},
+	"google-chat": {"service_account_json"},
 }
 
 // channelRequiredFields maps channel IDs to fields that must be non-empty for the channel to work.
 var channelRequiredFields = map[string][]string{
-	"telegram": {"token"},
-	"discord":  {"token"},
-	"slack":    {"bot_token"},
-	"feishu":   {"app_id", "app_secret"},
-	"matrix":   {"homeserver", "user_id", "access_token"},
-	"line":     {"channel_secret", "channel_access_token"},
-	"dingtalk": {"client_id", "client_secret"},
-	"qq":       {"app_id", "app_secret"},
-	"wecom":    {"bot_id", "secret"},
-	"onebot":   {"ws_url"},
-	"irc":      {"server", "nick"},
-	"weixin":   {"token"},
-	"whatsapp": {},
+	"telegram":    {"token"},
+	"discord":     {"token"},
+	"slack":       {"bot_token"},
+	"feishu":      {"app_id", "app_secret"},
+	"matrix":      {"homeserver", "user_id", "access_token"},
+	"line":        {"channel_secret", "channel_access_token"},
+	"dingtalk":    {"client_id", "client_secret"},
+	"qq":          {"app_id", "app_secret"},
+	"wecom":       {"bot_id", "secret"},
+	"irc":         {"server", "nick"},
+	"weixin":      {"token"},
+	"whatsapp":    {},
+	"google-chat": {},
 }
 
 // redactChannelConfig returns a copy of cfg with sensitive fields replaced by a
@@ -4648,9 +4648,9 @@ func countEnabledChannels(cfg *config.Config) int {
 		ch.Weixin.Enabled,
 		ch.LINE.Enabled,
 		ch.QQ.Enabled,
-		ch.OneBot.Enabled,
 		ch.IRC.Enabled,
 		ch.Matrix.Enabled,
+		ch.GoogleChat.Enabled,
 	} {
 		if enabled {
 			count++

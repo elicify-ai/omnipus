@@ -3155,7 +3155,7 @@ export interface components {
          * @description Stable identifier for a built-in channel.
          * @enum {string}
          */
-        ChannelId: "webchat" | "telegram" | "discord" | "slack" | "whatsapp" | "feishu" | "dingtalk" | "wecom" | "weixin" | "line" | "qq" | "onebot" | "irc" | "matrix" | "maixcam";
+        ChannelId: "webchat" | "telegram" | "discord" | "slack" | "whatsapp" | "feishu" | "dingtalk" | "wecom" | "weixin" | "line" | "qq" | "irc" | "matrix" | "google-chat";
         /**
          * ChannelEntry
          * @description A communication channel entry returned by GET /api/v1/channels.

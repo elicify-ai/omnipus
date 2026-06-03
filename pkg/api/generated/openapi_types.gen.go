@@ -531,21 +531,20 @@ func (e AuditEntryDecision) Valid() bool {
 
 // Defines values for ChannelEnabledResponseId.
 const (
-	ChannelEnabledResponseIdDingtalk ChannelEnabledResponseId = "dingtalk"
-	ChannelEnabledResponseIdDiscord  ChannelEnabledResponseId = "discord"
-	ChannelEnabledResponseIdFeishu   ChannelEnabledResponseId = "feishu"
-	ChannelEnabledResponseIdIrc      ChannelEnabledResponseId = "irc"
-	ChannelEnabledResponseIdLine     ChannelEnabledResponseId = "line"
-	ChannelEnabledResponseIdMaixcam  ChannelEnabledResponseId = "maixcam"
-	ChannelEnabledResponseIdMatrix   ChannelEnabledResponseId = "matrix"
-	ChannelEnabledResponseIdOnebot   ChannelEnabledResponseId = "onebot"
-	ChannelEnabledResponseIdQq       ChannelEnabledResponseId = "qq"
-	ChannelEnabledResponseIdSlack    ChannelEnabledResponseId = "slack"
-	ChannelEnabledResponseIdTelegram ChannelEnabledResponseId = "telegram"
-	ChannelEnabledResponseIdWebchat  ChannelEnabledResponseId = "webchat"
-	ChannelEnabledResponseIdWecom    ChannelEnabledResponseId = "wecom"
-	ChannelEnabledResponseIdWeixin   ChannelEnabledResponseId = "weixin"
-	ChannelEnabledResponseIdWhatsapp ChannelEnabledResponseId = "whatsapp"
+	ChannelEnabledResponseIdDingtalk   ChannelEnabledResponseId = "dingtalk"
+	ChannelEnabledResponseIdDiscord    ChannelEnabledResponseId = "discord"
+	ChannelEnabledResponseIdFeishu     ChannelEnabledResponseId = "feishu"
+	ChannelEnabledResponseIdGoogleChat ChannelEnabledResponseId = "google-chat"
+	ChannelEnabledResponseIdIrc        ChannelEnabledResponseId = "irc"
+	ChannelEnabledResponseIdLine       ChannelEnabledResponseId = "line"
+	ChannelEnabledResponseIdMatrix     ChannelEnabledResponseId = "matrix"
+	ChannelEnabledResponseIdQq         ChannelEnabledResponseId = "qq"
+	ChannelEnabledResponseIdSlack      ChannelEnabledResponseId = "slack"
+	ChannelEnabledResponseIdTelegram   ChannelEnabledResponseId = "telegram"
+	ChannelEnabledResponseIdWebchat    ChannelEnabledResponseId = "webchat"
+	ChannelEnabledResponseIdWecom      ChannelEnabledResponseId = "wecom"
+	ChannelEnabledResponseIdWeixin     ChannelEnabledResponseId = "weixin"
+	ChannelEnabledResponseIdWhatsapp   ChannelEnabledResponseId = "whatsapp"
 )
 
 // Valid indicates whether the value is a known member of the ChannelEnabledResponseId enum.
@@ -557,15 +556,13 @@ func (e ChannelEnabledResponseId) Valid() bool {
 		return true
 	case ChannelEnabledResponseIdFeishu:
 		return true
+	case ChannelEnabledResponseIdGoogleChat:
+		return true
 	case ChannelEnabledResponseIdIrc:
 		return true
 	case ChannelEnabledResponseIdLine:
 		return true
-	case ChannelEnabledResponseIdMaixcam:
-		return true
 	case ChannelEnabledResponseIdMatrix:
-		return true
-	case ChannelEnabledResponseIdOnebot:
 		return true
 	case ChannelEnabledResponseIdQq:
 		return true
@@ -588,21 +585,20 @@ func (e ChannelEnabledResponseId) Valid() bool {
 
 // Defines values for ChannelEntryId.
 const (
-	ChannelEntryIdDingtalk ChannelEntryId = "dingtalk"
-	ChannelEntryIdDiscord  ChannelEntryId = "discord"
-	ChannelEntryIdFeishu   ChannelEntryId = "feishu"
-	ChannelEntryIdIrc      ChannelEntryId = "irc"
-	ChannelEntryIdLine     ChannelEntryId = "line"
-	ChannelEntryIdMaixcam  ChannelEntryId = "maixcam"
-	ChannelEntryIdMatrix   ChannelEntryId = "matrix"
-	ChannelEntryIdOnebot   ChannelEntryId = "onebot"
-	ChannelEntryIdQq       ChannelEntryId = "qq"
-	ChannelEntryIdSlack    ChannelEntryId = "slack"
-	ChannelEntryIdTelegram ChannelEntryId = "telegram"
-	ChannelEntryIdWebchat  ChannelEntryId = "webchat"
-	ChannelEntryIdWecom    ChannelEntryId = "wecom"
-	ChannelEntryIdWeixin   ChannelEntryId = "weixin"
-	ChannelEntryIdWhatsapp ChannelEntryId = "whatsapp"
+	ChannelEntryIdDingtalk   ChannelEntryId = "dingtalk"
+	ChannelEntryIdDiscord    ChannelEntryId = "discord"
+	ChannelEntryIdFeishu     ChannelEntryId = "feishu"
+	ChannelEntryIdGoogleChat ChannelEntryId = "google-chat"
+	ChannelEntryIdIrc        ChannelEntryId = "irc"
+	ChannelEntryIdLine       ChannelEntryId = "line"
+	ChannelEntryIdMatrix     ChannelEntryId = "matrix"
+	ChannelEntryIdQq         ChannelEntryId = "qq"
+	ChannelEntryIdSlack      ChannelEntryId = "slack"
+	ChannelEntryIdTelegram   ChannelEntryId = "telegram"
+	ChannelEntryIdWebchat    ChannelEntryId = "webchat"
+	ChannelEntryIdWecom      ChannelEntryId = "wecom"
+	ChannelEntryIdWeixin     ChannelEntryId = "weixin"
+	ChannelEntryIdWhatsapp   ChannelEntryId = "whatsapp"
 )
 
 // Valid indicates whether the value is a known member of the ChannelEntryId enum.
@@ -614,15 +610,13 @@ func (e ChannelEntryId) Valid() bool {
 		return true
 	case ChannelEntryIdFeishu:
 		return true
+	case ChannelEntryIdGoogleChat:
+		return true
 	case ChannelEntryIdIrc:
 		return true
 	case ChannelEntryIdLine:
 		return true
-	case ChannelEntryIdMaixcam:
-		return true
 	case ChannelEntryIdMatrix:
-		return true
-	case ChannelEntryIdOnebot:
 		return true
 	case ChannelEntryIdQq:
 		return true
@@ -675,21 +669,20 @@ func (e ChannelEntryTransport) Valid() bool {
 
 // Defines values for ChannelId.
 const (
-	Dingtalk ChannelId = "dingtalk"
-	Discord  ChannelId = "discord"
-	Feishu   ChannelId = "feishu"
-	Irc      ChannelId = "irc"
-	Line     ChannelId = "line"
-	Maixcam  ChannelId = "maixcam"
-	Matrix   ChannelId = "matrix"
-	Onebot   ChannelId = "onebot"
-	Qq       ChannelId = "qq"
-	Slack    ChannelId = "slack"
-	Telegram ChannelId = "telegram"
-	Webchat  ChannelId = "webchat"
-	Wecom    ChannelId = "wecom"
-	Weixin   ChannelId = "weixin"
-	Whatsapp ChannelId = "whatsapp"
+	Dingtalk   ChannelId = "dingtalk"
+	Discord    ChannelId = "discord"
+	Feishu     ChannelId = "feishu"
+	GoogleChat ChannelId = "google-chat"
+	Irc        ChannelId = "irc"
+	Line       ChannelId = "line"
+	Matrix     ChannelId = "matrix"
+	Qq         ChannelId = "qq"
+	Slack      ChannelId = "slack"
+	Telegram   ChannelId = "telegram"
+	Webchat    ChannelId = "webchat"
+	Wecom      ChannelId = "wecom"
+	Weixin     ChannelId = "weixin"
+	Whatsapp   ChannelId = "whatsapp"
 )
 
 // Valid indicates whether the value is a known member of the ChannelId enum.
@@ -701,15 +694,13 @@ func (e ChannelId) Valid() bool {
 		return true
 	case Feishu:
 		return true
+	case GoogleChat:
+		return true
 	case Irc:
 		return true
 	case Line:
 		return true
-	case Maixcam:
-		return true
 	case Matrix:
-		return true
-	case Onebot:
 		return true
 	case Qq:
 		return true

@@ -782,7 +782,6 @@ type ChannelsConfig struct {
 	Slack      SlackConfig      `json:"slack"       yaml:"slack,omitempty"`
 	Matrix     MatrixConfig     `json:"matrix"      yaml:"matrix,omitempty"`
 	LINE       LINEConfig       `json:"line"        yaml:"line,omitempty"`
-	OneBot     OneBotConfig     `json:"onebot"      yaml:"onebot,omitempty"`
 	WeCom      WeComConfig      `json:"wecom"       yaml:"wecom,omitempty"       envPrefix:"OMNIPUS_CHANNELS_WECOM_"`
 	Weixin     WeixinConfig     `json:"weixin"      yaml:"weixin,omitempty"`
 	IRC        IRCConfig        `json:"irc"         yaml:"irc,omitempty"`
@@ -827,7 +826,6 @@ type StreamingConfig struct {
 type WhatsAppConfig struct {
 	Enabled            bool                `json:"enabled"                 yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_ENABLED"`
 	BridgeURL          string              `json:"bridge_url"              yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_BRIDGE_URL"`
-	UseNative          bool                `json:"use_native"              yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_USE_NATIVE"`
 	SessionStorePath   string              `json:"session_store_path"      yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_SESSION_STORE_PATH"`
 	AllowFrom          FlexibleStringSlice `json:"allow_from"              yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_ALLOW_FROM"`
 	ReasoningChannelID string              `json:"reasoning_channel_id"    yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_REASONING_CHANNEL_ID"`
@@ -934,19 +932,6 @@ type LINEConfig struct {
 	Typing                TypingConfig        `json:"typing,omitempty"                   yaml:"-"`
 	Placeholder           PlaceholderConfig   `json:"placeholder,omitempty"              yaml:"-"`
 	ReasoningChannelID    string              `json:"reasoning_channel_id"               yaml:"-"`
-}
-
-type OneBotConfig struct {
-	Enabled            bool                `json:"enabled"                    yaml:"-" env:"OMNIPUS_CHANNELS_ONEBOT_ENABLED"`
-	WSUrl              string              `json:"ws_url"                     yaml:"-" env:"OMNIPUS_CHANNELS_ONEBOT_WS_URL"`
-	AccessTokenRef     string              `json:"access_token_ref,omitempty" yaml:"-" env:"OMNIPUS_CHANNELS_ONEBOT_ACCESS_TOKEN_REF"`
-	ReconnectInterval  int                 `json:"reconnect_interval"         yaml:"-" env:"OMNIPUS_CHANNELS_ONEBOT_RECONNECT_INTERVAL"`
-	GroupTriggerPrefix []string            `json:"group_trigger_prefix"       yaml:"-" env:"OMNIPUS_CHANNELS_ONEBOT_GROUP_TRIGGER_PREFIX"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"                 yaml:"-" env:"OMNIPUS_CHANNELS_ONEBOT_ALLOW_FROM"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"    yaml:"-"`
-	Typing             TypingConfig        `json:"typing,omitempty"           yaml:"-"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"      yaml:"-"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"       yaml:"-"`
 }
 
 type WeComGroupConfig struct {
@@ -1818,12 +1803,6 @@ func (c *Config) migrateChannelConfigs() {
 	// Discord: mention_only -> group_trigger.mention_only
 	if c.Channels.Discord.MentionOnly && !c.Channels.Discord.GroupTrigger.MentionOnly {
 		c.Channels.Discord.GroupTrigger.MentionOnly = true
-	}
-
-	// OneBot: group_trigger_prefix -> group_trigger.prefixes
-	if len(c.Channels.OneBot.GroupTriggerPrefix) > 0 &&
-		len(c.Channels.OneBot.GroupTrigger.Prefixes) == 0 {
-		c.Channels.OneBot.GroupTrigger.Prefixes = c.Channels.OneBot.GroupTriggerPrefix
 	}
 }
 

@@ -225,10 +225,9 @@ type ChannelId =
   | "weixin"
   | "line"
   | "qq"
-  | "onebot"
   | "irc"
   | "matrix"
-  | "maixcam";
+  | "google-chat";
 type DoctorResult = {
   score: number;
   issues: Array<DoctorIssue>;
@@ -1116,10 +1115,9 @@ export const ChannelId = z.enum([
   "weixin",
   "line",
   "qq",
-  "onebot",
   "irc",
   "matrix",
-  "maixcam",
+  "google-chat",
 ]);
 export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   id: ChannelId,

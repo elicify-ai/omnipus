@@ -79,7 +79,6 @@ func DefaultConfig() *Config {
 			WhatsApp: WhatsAppConfig{
 				Enabled:          false,
 				BridgeURL:        "ws://localhost:3001",
-				UseNative:        false,
 				SessionStorePath: "",
 				AllowFrom:        FlexibleStringSlice{},
 			},
@@ -144,12 +143,6 @@ func DefaultConfig() *Config {
 				WebhookPath:  "/webhook/line",
 				AllowFrom:    FlexibleStringSlice{},
 				GroupTrigger: GroupTriggerConfig{MentionOnly: true},
-			},
-			OneBot: OneBotConfig{
-				Enabled:           false,
-				WSUrl:             "ws://127.0.0.1:3001",
-				ReconnectInterval: 5,
-				AllowFrom:         FlexibleStringSlice{},
 			},
 			WeCom: WeComConfig{
 				Enabled:             false,
