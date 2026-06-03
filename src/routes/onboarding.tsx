@@ -49,6 +49,24 @@ const AVAILABLE_PROVIDERS = [
   { id: 'cerebras', display_name: 'Cerebras' },
 ]
 
+// Popular providers surfaced first in the onboarding selection grid to reduce
+// decision overload (Hick's law). Providers not listed here keep their original
+// order via a stable sort (see sortProvidersByPriority).
+const PROVIDER_PRIORITY = ['openai', 'anthropic', 'openrouter']
+
+// Stable sort that moves PROVIDER_PRIORITY entries to the front (in priority
+// order) and leaves every other provider in its original relative position.
+export function sortProvidersByPriority<T extends { id: string }>(list: T[]): T[] {
+  const rank = (id: string) => {
+    const i = PROVIDER_PRIORITY.indexOf(id)
+    return i === -1 ? PROVIDER_PRIORITY.length : i
+  }
+  return list
+    .map((p, index) => ({ p, index }))
+    .sort((a, b) => rank(a.p.id) - rank(b.p.id) || a.index - b.index)
+    .map(({ p }) => p)
+}
+
 const WELCOME_FEATURES = [
   { Icon: ShieldCheck, text: 'Kernel-level sandboxing — agents operate in security boundaries by default' },
   { Icon: Lightning, text: 'Zero-IPC channels — Discord, Slack, Telegram compiled into the binary' },
@@ -566,6 +584,8 @@ function ProviderStep({
   selectedModel: string
   onSelectModel: (model: string) => void
 }) {
+  // Order the rendered provider list with the popular providers first (stable).
+  const orderedProviders = sortProvidersByPriority(providers)
   // Build providerGroups for the ModelSelector — single group in onboarding (one provider at a time)
   const providerDef = providers.find((p) => p.id === selectedProvider)
   const providerGroups: ModelGroup[] =
@@ -582,11 +602,14 @@ function ProviderStep({
         <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
           Omnipus needs an AI provider to power your agents.
         </p>
+        <p className="text-xs mt-1" style={{ color: 'var(--color-muted)' }}>
+          Not sure? OpenAI or OpenRouter are good starting points.
+        </p>
       </div>
 
       {/* Provider selection grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        {providers.map((p) => (
+        {orderedProviders.map((p) => (
           <button
             key={p.id}
             type="button"
