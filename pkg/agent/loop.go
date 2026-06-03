@@ -281,6 +281,37 @@ type processOptions struct {
 	AutoDenyAsk bool
 }
 
+// ScheduledJobInfo carries the schedule/job identity that ProcessScheduled
+// callers inject into the run context via WithScheduledJobContext. The
+// auto-deny path reads it so the emitted audit entry names the responsible
+// schedule (F-13 / O-3 observability requirement, issue #342).
+type ScheduledJobInfo struct {
+	JobID   string
+	JobName string
+}
+
+// scheduledJobContextKey is the unexported context key for ScheduledJobInfo.
+type scheduledJobContextKey struct{}
+
+// WithScheduledJobContext returns a child context carrying the schedule
+// identity. Call this in the cron fire path (pkg/gateway/schedules.go
+// RunScheduled) before calling ProcessScheduled so the auto-deny audit entry
+// can include the job id and name.
+func WithScheduledJobContext(ctx context.Context, jobID, jobName string) context.Context {
+	return context.WithValue(ctx, scheduledJobContextKey{}, ScheduledJobInfo{
+		JobID:   jobID,
+		JobName: jobName,
+	})
+}
+
+// scheduledJobContextFrom retrieves the ScheduledJobInfo from ctx, or returns
+// a zero-value struct when no info was injected (interactive / non-scheduled
+// runs). The boolean reports whether info was present.
+func scheduledJobContextFrom(ctx context.Context) (ScheduledJobInfo, bool) {
+	v, ok := ctx.Value(scheduledJobContextKey{}).(ScheduledJobInfo)
+	return v, ok
+}
+
 type continuationTarget struct {
 	SessionKey string
 	Channel    string
@@ -4846,6 +4877,11 @@ turnLoop:
 					const denialReason = "auto-denied: ask-policy tool not allowed in a headless scheduled run"
 					denyMsg := fmt.Sprintf(`{"error":"permission_denied","message":"User denied tool execution.","tool":%q,"reason":%q}`, toolName, denialReason)
 					al.emitPolicyDenyAudit(ts, toolName, "ask", denialReason)
+					// O-3 / F-13 / issue #342: emit a structured tool.policy.ask.denied
+					// audit entry so operators can identify which scheduled run
+					// silently skipped a tool. The schedule job id and name come from
+					// the context injected by the cron fire path (gateway RunScheduled).
+					al.emitScheduledAutoDenyAudit(turnCtx, ts, toolName, tc.ID)
 					deniedMsg := providers.Message{
 						Role:       "tool",
 						Content:    denyMsg,
@@ -6652,4 +6688,37 @@ func (al *AgentLoop) emitPolicyDenyAudit(ts *turnState, toolName, resolvedPolicy
 			"context":         context,
 		},
 	})
+}
+
+// emitScheduledAutoDenyAudit writes a tool.policy.ask.denied audit entry
+// for the headless scheduled-run auto-deny path (O-3 / F-13 / issue #342).
+// It emits using the structured EmitToolPolicyAskDenied helper with reason
+// AskDenyReasonScheduled so operators (and SIEM rules) can observe which
+// scheduled run skipped an ask-gated tool without any human having been
+// consulted.
+//
+// The schedule identity (job_id, job_name) is read from the run context via
+// scheduledJobContextFrom — the cron fire path injects it with
+// WithScheduledJobContext before calling ProcessScheduled. If no job info was
+// injected (e.g. in tests that call ProcessScheduled directly without the
+// context wrapper), the fields are omitted rather than emitting a misleading
+// empty value.
+func (al *AgentLoop) emitScheduledAutoDenyAudit(
+	ctx context.Context,
+	ts *turnState,
+	toolName, toolCallID string,
+) {
+	fields := map[string]any{
+		"agent_id":     ts.agentID,
+		"tool_name":    toolName,
+		"tool_call_id": toolCallID,
+		"session_id":   ts.sessionKey,
+		"turn_id":      ts.turnID,
+		"reason":       string(audit.AskDenyReasonScheduled),
+	}
+	if info, ok := scheduledJobContextFrom(ctx); ok && info.JobID != "" {
+		fields["schedule_job_id"] = info.JobID
+		fields["schedule_job_name"] = info.JobName
+	}
+	audit.Emit(ctx, al.auditLogger, audit.EventToolPolicyAskDenied, audit.SeverityWarn, fields)
 }

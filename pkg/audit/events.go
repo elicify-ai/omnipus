@@ -187,10 +187,18 @@ const (
 	// ask batch was denied or canceled, so this and every subsequent
 	// sibling call is auto-denied. FR-065.
 	AskDenyReasonBatchShortCircuit AskDenyReason = "batch_short_circuit"
+
+	// AskDenyReasonScheduled — the run is a headless cron/scheduled run with
+	// no operator present to approve. Any `ask`-policy tool is auto-denied
+	// immediately so the run never stalls waiting for human approval that can
+	// never arrive (F-13, FR-009, O-3). The audit entry carries the
+	// schedule_job_id and schedule_job_name fields so operators can later
+	// identify which schedule was responsible for the skip.
+	AskDenyReasonScheduled AskDenyReason = "scheduled"
 )
 
-// IsValidAskDenyReason reports whether `r` is one of the six enum values
-// defined by FR-047 + FR-065. Useful at API boundaries before logging.
+// IsValidAskDenyReason reports whether `r` is one of the known enum values
+// defined by FR-047 + FR-065 + F-13. Useful at API boundaries before logging.
 func IsValidAskDenyReason(r AskDenyReason) bool {
 	switch r {
 	case AskDenyReasonUser,
@@ -198,7 +206,8 @@ func IsValidAskDenyReason(r AskDenyReason) bool {
 		AskDenyReasonCancel,
 		AskDenyReasonRestart,
 		AskDenyReasonSaturated,
-		AskDenyReasonBatchShortCircuit:
+		AskDenyReasonBatchShortCircuit,
+		AskDenyReasonScheduled:
 		return true
 	}
 	return false
