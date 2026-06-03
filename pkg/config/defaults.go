@@ -526,6 +526,7 @@ func DefaultConfig() *Config {
 		Schedules: SchedulesConfig{
 			MaxConcurrentRuns: DefaultSchedulesMaxConcurrentRuns,
 			RunTimeoutSeconds: DefaultSchedulesRunTimeoutSeconds,
+			RetryBackoffMs:    append([]int64(nil), DefaultSchedulesRetryBackoffMs...),
 		},
 		Devices: DevicesConfig{
 			Enabled:    false,

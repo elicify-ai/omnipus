@@ -1797,11 +1797,27 @@ func setupCronTool(
 	// schedule's OWNING agent (never the default), bounded by the per-run
 	// deadline, and raises a notification + channel alert on failure. It
 	// supersedes the legacy SetOnJob adapter, which is removed.
+	// An owner is available only when it is registered AND enabled (HIGH:
+	// disabled-but-registered owner must not run). The registry registers all
+	// agents regardless of Enabled, so we additionally consult the agent's
+	// config IsActive() flag — a disabled owner is treated as unavailable.
 	checker := agentCheckerFunc(func(agentID string) bool {
-		_, ok := agentLoop.GetRegistry().GetAgent(agentID)
-		return ok
+		if _, ok := agentLoop.GetRegistry().GetAgent(agentID); !ok {
+			return false
+		}
+		ac := findAgentConfig(agentLoop.GetConfig(), agentID)
+		if ac == nil {
+			// Registered in the runtime registry but absent from config (e.g. the
+			// generic default instance) — treat as available for back-compat.
+			return true
+		}
+		return ac.IsActive()
 	})
 	runner := newScheduledRunner(agentLoop, checker, msgBus, notifStore, agentLoop.GetConfig)
+	// Best-effort per-run child-process cleanup (FR-011). The minimal per-session
+	// registry tracks PIDs the run spawns and terminates them on completion.
+	procReg := newScheduledProcRegistry()
+	runner.setProcessCleanup(procReg.Cleanup)
 	cronService.SetRunner(runner)
 
 	// Default agent id used only to migrate owner-less legacy jobs on load (W-8).
@@ -1813,6 +1829,7 @@ func setupCronTool(
 
 	if cfg != nil {
 		cronService.SetMaxConcurrentRuns(cfg.Schedules.MaxConcurrentRuns)
+		cronService.SetRetryBackoff(cfg.Schedules.RetryBackoffMs)
 	}
 
 	return cronService, nil

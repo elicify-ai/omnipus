@@ -1024,6 +1024,11 @@ type SchedulesConfig struct {
 	// RunTimeoutSeconds is the global per-run deadline applied to every scheduled
 	// run that does not set a per-schedule override (FR-003). Default 300.
 	RunTimeoutSeconds int `json:"run_timeout_seconds,omitempty" env:"OMNIPUS_SCHEDULES_RUN_TIMEOUT_SECONDS"`
+	// RetryBackoffMs is the transient-error retry backoff schedule (FR-010): the
+	// next fire after the Nth consecutive transient failure is offset by
+	// RetryBackoffMs[N] ms, capped at len(RetryBackoffMs) attempts before
+	// resuming normal cadence. Default [60000,120000,300000].
+	RetryBackoffMs []int64 `json:"retry_backoff_ms,omitempty"`
 }
 
 // Schedules config defaults (#264).
@@ -1034,6 +1039,10 @@ const (
 	DefaultSchedulesRunTimeoutSeconds = 300
 )
 
+// DefaultSchedulesRetryBackoffMs is the fallback transient-error retry backoff
+// schedule (FR-010): 1m, 2m, 5m offsets keyed by retry attempt.
+var DefaultSchedulesRetryBackoffMs = []int64{60000, 120000, 300000}
+
 // ApplyDefaults fills any unset/invalid field with its documented default
 // (FR-003/FR-007). Idempotent. Bounds-checked: non-positive values reset to
 // the default rather than being honored.
@@ -1043,6 +1052,9 @@ func (s *SchedulesConfig) ApplyDefaults() {
 	}
 	if s.RunTimeoutSeconds <= 0 {
 		s.RunTimeoutSeconds = DefaultSchedulesRunTimeoutSeconds
+	}
+	if len(s.RetryBackoffMs) == 0 {
+		s.RetryBackoffMs = append([]int64(nil), DefaultSchedulesRetryBackoffMs...)
 	}
 }
 

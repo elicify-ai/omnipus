@@ -9,7 +9,11 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +36,9 @@ type fakeExecutor struct {
 	reply   string
 	err     error
 	emitted []agent.NotificationPayload
+	// hangUntilCtxDone makes ProcessScheduled block until ctx is canceled,
+	// returning ctx.Err(). Used by the deadline/timeout test.
+	hangUntilCtxDone bool
 }
 
 type fakeCall struct {
@@ -40,8 +47,12 @@ type fakeCall struct {
 	content   string
 }
 
-func (f *fakeExecutor) ProcessScheduled(_ context.Context, owner, sessionID, content, _, _ string) (string, error) {
+func (f *fakeExecutor) ProcessScheduled(ctx context.Context, owner, sessionID, content, _, _ string) (string, error) {
 	f.calls = append(f.calls, fakeCall{owner: owner, sessionID: sessionID, content: content})
+	if f.hangUntilCtxDone {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
 	return f.reply, f.err
 }
 func (f *fakeExecutor) GetSessionStore() *session.UnifiedStore { return f.store }
@@ -53,6 +64,32 @@ func (f *fakeExecutor) EmitNotification(p agent.NotificationPayload) {
 type fakeChecker struct{ registered map[string]bool }
 
 func (c fakeChecker) IsRegistered(id string) bool { return c.registered[id] }
+
+// fakeCanceller records RequestCancel calls (for the timeout/force-abort test).
+type fakeCanceller struct {
+	mu       sync.Mutex
+	sessions []string
+}
+
+func (c *fakeCanceller) RequestCancel(
+	_ context.Context,
+	scope agent.CancelScope,
+	_ agent.CancelCanceller,
+	_ agent.CancelHooks,
+) (agent.CancelOutcome, error) {
+	c.mu.Lock()
+	c.sessions = append(c.sessions, scope.SessionID)
+	c.mu.Unlock()
+	return agent.CancelOutcome{Fired: true}, nil
+}
+
+func (c *fakeCanceller) calls() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]string, len(c.sessions))
+	copy(out, c.sessions)
+	return out
+}
 
 func newRunnerHarness(
 	t *testing.T,
@@ -156,23 +193,66 @@ func TestRunner_SessionMode_Isolated(t *testing.T) {
 	assert.Equal(t, session.SessionTypeScheduled, m.Type)
 }
 
-// TestRunner_SessionMode_Continue reuses one session id across runs and persists
-// it onto the job (W-2).
-func TestRunner_SessionMode_Continue(t *testing.T) {
+// TestRunner_SessionMode_Continue_ThroughLane is the real BLOCKER-5 test: it
+// drives the runner through cron's executeJobByID/RunNow (NOT a reused local
+// pointer), proving the continue session id minted on the first run is persisted
+// back onto the STORED job and reused on the second run. The previous test drove
+// RunScheduled with a reused *job and so could never catch the jobCopy bug.
+func TestRunner_SessionMode_Continue_ThroughLane(t *testing.T) {
 	cfg := baseConfig()
 	r := newRunnerOnly(t, cfg, map[string]bool{"mia": true})
 
-	job := &cron.CronJob{
-		ID: "j4", AgentID: "mia", SessionMode: cron.SessionModeContinue,
-		Payload: cron.CronPayload{Message: "standup"},
-	}
-	sid1, err := r.RunScheduled(context.Background(), job)
-	require.NoError(t, err)
-	assert.Equal(t, sid1, job.SessionID, "continue must persist its session id on the job")
+	cs := cron.NewCronService(filepath.Join(t.TempDir(), "jobs.json"), nil)
+	cs.SetRunner(r)
+	require.NoError(t, cs.Start())
+	defer cs.Stop()
 
-	sid2, err := r.RunScheduled(context.Background(), job)
+	job, err := cs.AddJobFull(cron.JobSpec{
+		Name:        "standup",
+		Schedule:    cron.CronSchedule{Kind: "every", EveryMS: i64Ptr(60000)},
+		Message:     "standup",
+		AgentID:     "mia",
+		SessionMode: cron.SessionModeContinue,
+	})
 	require.NoError(t, err)
-	assert.Equal(t, sid1, sid2, "continue must reuse the same session id")
+
+	// First run mints a continue session.
+	status1, sid1, err := cs.RunNow(job.ID)
+	require.NoError(t, err)
+	require.Equal(t, "ok", status1)
+	require.NotEmpty(t, sid1)
+
+	// The stored job must now carry the minted session id (BLOCKER 5).
+	stored, ok := cs.GetJob(job.ID)
+	require.True(t, ok)
+	assert.Equal(t, sid1, stored.SessionID, "continue session id must persist onto the stored job")
+
+	// Second run reuses the SAME session id (no fresh mint).
+	status2, sid2, err := cs.RunNow(job.ID)
+	require.NoError(t, err)
+	require.Equal(t, "ok", status2)
+	assert.Equal(t, sid1, sid2, "continue must reuse the same session id across runs")
+}
+
+// TestRunner_DisabledOwner_NoFallback asserts a registered-but-disabled owner is
+// rejected as unavailable with no default fallback (HIGH). The checker reports
+// availability = registered AND enabled; a disabled owner makes IsRegistered
+// false.
+func TestRunner_DisabledOwner_NoFallback(t *testing.T) {
+	cfg := baseConfig()
+	// "mia" is registered but the checker reports false (disabled).
+	r, exec, mb, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": false})
+	// Drain any outbound alert so PublishOutbound never blocks.
+	go func() {
+		for range mb.OutboundChan() {
+		}
+	}()
+
+	job := &cron.CronJob{ID: "jd", Name: "daily", AgentID: "mia", CreatedBy: "alice"}
+	sid, err := r.RunScheduled(context.Background(), job)
+	assert.Error(t, err)
+	assert.Empty(t, sid)
+	assert.Empty(t, exec.calls, "disabled owner must not run, and must not fall back")
 }
 
 // TestRunner_SessionMode_Main uses the reserved per-owner session id.
@@ -274,4 +354,88 @@ func TestRunner_Failure_NoRecipients_FallsBackToAdmin(t *testing.T) {
 
 	rootList, _ := notifs.ListForUser("root")
 	assert.Len(t, rootList, 1, "admin should be notified when no other recipient resolves")
+}
+
+// TestRunner_Timeout_ForceCancels asserts that a run exceeding its deadline is
+// force-aborted via RequestCancel(CancelScope{SessionID}) and that the returned
+// error is a context.DeadlineExceeded (so the cron lane records it as "timeout").
+func TestRunner_Timeout_ForceCancels(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Schedules.RunTimeoutSeconds = 0 // force per-schedule override below
+	r, exec, mb, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
+	exec.hangUntilCtxDone = true
+	canceller := &fakeCanceller{}
+	r.canceller = canceller // inject the force-abort surface
+	go func() {
+		for range mb.OutboundChan() {
+		}
+	}()
+
+	job := &cron.CronJob{
+		ID: "jt", Name: "slow", AgentID: "mia", CreatedBy: "alice",
+		SessionMode: cron.SessionModeIsolated, TimeoutSeconds: 1, // 1s deadline
+		Payload: cron.CronPayload{Message: "work"},
+	}
+
+	sid, err := r.RunScheduled(context.Background(), job)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.DeadlineExceeded), "timeout error must be DeadlineExceeded, got %v", err)
+	require.NotEmpty(t, sid)
+
+	// RequestCancel was called for the run's session.
+	calls := canceller.calls()
+	require.NotEmpty(t, calls, "RequestCancel must be called on deadline")
+	assert.Equal(t, sid, calls[0], "RequestCancel must target the run's session id")
+
+	// A deadline must NOT be classified as a transient (retryable) error.
+	assert.False(t, cron.IsTransient(err), "deadline must not be classified transient")
+}
+
+// TestRunner_ChildProcessCleanup_Invoked asserts the FR-011 best-effort cleanup
+// hook is invoked for the run's session on completion, with a fake tracked
+// process registry standing in for real child processes.
+func TestRunner_ChildProcessCleanup_Invoked(t *testing.T) {
+	cfg := baseConfig()
+	r := newRunnerOnly(t, cfg, map[string]bool{"mia": true})
+
+	var cleaned int32
+	var cleanedSession atomic.Value
+	r.setProcessCleanup(func(sessionID string) {
+		atomic.AddInt32(&cleaned, 1)
+		cleanedSession.Store(sessionID)
+	})
+
+	job := &cron.CronJob{
+		ID: "jc", AgentID: "mia", SessionMode: cron.SessionModeIsolated,
+		Payload: cron.CronPayload{Message: "spawn"},
+	}
+	sid, err := r.RunScheduled(context.Background(), job)
+	require.NoError(t, err)
+	require.NotEmpty(t, sid)
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&cleaned), "process cleanup must be invoked once on completion")
+	assert.Equal(t, sid, cleanedSession.Load(), "cleanup must be scoped to the run's session id")
+}
+
+// TestScheduledProcRegistry_TracksAndKills verifies the minimal per-session
+// process registry tracks PIDs and best-effort terminates them on Cleanup
+// (FR-011), using an injected fake kill.
+func TestScheduledProcRegistry_TracksAndKills(t *testing.T) {
+	reg := newScheduledProcRegistry()
+	var killed []int
+	reg.kill = func(pid int) error { killed = append(killed, pid); return nil }
+
+	reg.Track("sess-1", 111)
+	reg.Track("sess-1", 222)
+	reg.Track("sess-2", 333)
+	reg.Track("sess-1", 0) // ignored (invalid pid)
+	reg.Track("", 444)     // ignored (no session)
+
+	reg.Cleanup("sess-1")
+	assert.ElementsMatch(t, []int{111, 222}, killed, "Cleanup must terminate all tracked pids for the session")
+
+	// Cleanup is idempotent — a second call for the same session is a no-op.
+	killed = nil
+	reg.Cleanup("sess-1")
+	assert.Empty(t, killed, "second Cleanup for the same session must be a no-op")
 }

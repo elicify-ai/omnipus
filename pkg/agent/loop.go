@@ -3007,11 +3007,18 @@ func (al *AgentLoop) ProcessScheduled(
 		return "", err
 	}
 
-	// Owner pinning (FR-001): a missing or disabled agent is not registered,
-	// so GetAgent returns ok=false. NEVER fall back to GetDefaultAgent.
+	// Owner pinning (FR-001): a missing owner is a hard error — NEVER fall back
+	// to GetDefaultAgent. Note GetAgent registers ALL agents regardless of
+	// Enabled, so registration alone does not imply the owner is active; the
+	// config IsActive() check below rejects a disabled owner.
 	agent, ok := al.GetRegistry().GetAgent(ownerAgentID)
 	if !ok || agent == nil {
-		return "", fmt.Errorf("owner unavailable: agent %q not found or disabled", ownerAgentID)
+		return "", fmt.Errorf("owner unavailable: agent %q not found", ownerAgentID)
+	}
+	// Disabled-owner guard (FR-001): a registered-but-disabled agent must not
+	// run. The runtime registry keeps disabled agents, so consult config.
+	if ac := findAgentConfig(al.GetConfig(), ownerAgentID); ac != nil && !ac.IsActive() {
+		return "", fmt.Errorf("owner unavailable: agent %q is disabled", ownerAgentID)
 	}
 
 	// Per-owner session key (collision-free across isolated runs). Built here

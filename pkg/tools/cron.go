@@ -243,14 +243,15 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 	}
 
 	// Session mode defaults to isolated (FR-004).
-	sessionMode, _ := args["session_mode"].(string)
-	switch sessionMode {
-	case cron.SessionModeIsolated, cron.SessionModeContinue, cron.SessionModeMain:
-		// valid
-	case "":
+	sessionModeStr, _ := args["session_mode"].(string)
+	sessionMode := cron.SessionMode(sessionModeStr)
+	switch {
+	case sessionModeStr == "":
 		sessionMode = cron.SessionModeIsolated
+	case sessionMode.Valid():
+		// valid
 	default:
-		return ErrorResult(fmt.Sprintf("invalid session_mode %q (want isolated|continue|main)", sessionMode))
+		return ErrorResult(fmt.Sprintf("invalid session_mode %q (want isolated|continue|main)", sessionModeStr))
 	}
 
 	// Optional per-schedule timeout (FR-003).

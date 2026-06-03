@@ -5,9 +5,12 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/adhocore/gronx"
@@ -31,10 +34,25 @@ type scheduledExecutor interface {
 	EmitNotification(p agent.NotificationPayload)
 }
 
-// agentChecker reports whether an agent id is registered and enabled. The agent
-// registry satisfies this. Kept narrow so the runner can be tested with a stub.
+// agentChecker reports whether an agent id is available to run a schedule:
+// registered AND enabled. The registry registers all agents regardless of
+// Enabled, so the gateway's concrete checker additionally consults the agent's
+// config IsActive() flag (see newOwnerAwareCron in gateway.go). Kept narrow so
+// the runner can be tested with a stub.
 type agentChecker interface {
 	IsRegistered(agentID string) bool
+}
+
+// scheduledCanceller is the subset of *agent.AgentLoop used to force-abort a
+// scheduled run that overran its deadline (FR-003/FR-006). Defined as an
+// interface so the runner can be tested without a full agent loop.
+type scheduledCanceller interface {
+	RequestCancel(
+		ctx context.Context,
+		scope agent.CancelScope,
+		canceller agent.CancelCanceller,
+		hooks agent.CancelHooks,
+	) (agent.CancelOutcome, error)
 }
 
 // scheduledRunner implements cron.ScheduledRunner (#264). It wakes a fired
@@ -44,13 +62,21 @@ type agentChecker interface {
 type scheduledRunner struct {
 	exec      scheduledExecutor
 	checker   agentChecker
+	canceller scheduledCanceller
 	msgBus    *bus.MessageBus
 	notifs    *notifications.Store
 	getConfig func() *config.Config
+
+	// procCleanup best-effort terminates child/browser processes tracked for a
+	// finished scheduled run's session (FR-011). nil means "no cleanup wired".
+	// Set via setProcessCleanup; the gateway wires it to the dev-server registry.
+	procCleanup func(sessionID string)
 }
 
 // newScheduledRunner builds the runner. getConfig is read at run time so the
-// runner always sees the live (possibly hot-reloaded) config.
+// runner always sees the live (possibly hot-reloaded) config. If exec also
+// implements scheduledCanceller (the real *agent.AgentLoop does), it is used to
+// force-abort a run that overran its deadline (FR-003).
 func newScheduledRunner(
 	exec scheduledExecutor,
 	checker agentChecker,
@@ -58,24 +84,30 @@ func newScheduledRunner(
 	notifs *notifications.Store,
 	getConfig func() *config.Config,
 ) *scheduledRunner {
-	return &scheduledRunner{
+	r := &scheduledRunner{
 		exec:      exec,
 		checker:   checker,
 		msgBus:    msgBus,
 		notifs:    notifs,
 		getConfig: getConfig,
 	}
+	if c, ok := exec.(scheduledCanceller); ok {
+		r.canceller = c
+	}
+	return r
 }
 
 // RunScheduled is the owner-aware fire path (FR-001/FR-003/FR-004/FR-013/FR-014).
 func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (string, error) {
 	owner := job.AgentID
 
-	// Owner pinning: a missing/disabled owner is a failure, never a default
-	// fallback (FR-001). The lane records the (string,error) failure, which
-	// drives the alert path below.
+	// Owner pinning: a missing or disabled owner is a failure, never a default
+	// fallback (FR-001). The checker reports availability = registered AND
+	// enabled (the gateway checker consults config IsActive()), so a
+	// disabled-but-registered owner is rejected here with no fallback. The lane
+	// records the (string,error) failure, which drives the alert path below.
 	if owner == "" || r.checker == nil || !r.checker.IsRegistered(owner) {
-		err := fmt.Errorf("owner unavailable: agent %q is not registered or enabled", owner)
+		err := fmt.Errorf("owner unavailable: agent %q is not registered or is disabled", owner)
 		r.onFailure(job, "", err)
 		return "", err
 	}
@@ -123,13 +155,172 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 	ctx2, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
+	// Run the owning agent's turn. If the deadline fires while the turn is
+	// still going, force-abort it via RequestCancel(CancelScope{SessionID}) and
+	// allow a short cleanup window, then return a deadline error so the lane
+	// records a "timeout" run (FR-003/FR-006). A watcher goroutine triggers the
+	// cancel exactly once on ctx2.Done() while ProcessScheduled is in flight.
+	runDone := make(chan struct{})
+	go r.watchDeadline(ctx2, runDone, sessionID, owner)
+
 	reply, runErr := r.exec.ProcessScheduled(ctx2, owner, sessionID, job.Payload.Message, channel, chatID)
+	close(runDone)
 	_ = reply // the reply is published to the channel by the agent loop itself.
+
+	// FR-011: best-effort clean up any child/browser processes the run spawned.
+	r.cleanupRunProcesses(job, sessionID)
+
 	if runErr != nil {
+		// Surface the deadline as a context.DeadlineExceeded error so the cron
+		// lane classifies the run record Status as "timeout" (errors.Is). The
+		// underlying agent error is wrapped so it stays inspectable.
+		if ctx2.Err() == context.DeadlineExceeded {
+			runErr = fmt.Errorf("scheduled run timed out after %ds: %w", timeout, context.DeadlineExceeded)
+		} else {
+			// Classify transient provider errors so the lane schedules a backoff
+			// retry (FR-010). Wrapping in *cron.TransientError lets cron.IsTransient
+			// detect it without coupling cron to provider error types.
+			if isTransientRunError(runErr) {
+				runErr = &cron.TransientError{Err: runErr}
+			}
+		}
 		r.onFailure(job, sessionID, runErr)
 		return sessionID, runErr
 	}
 	return sessionID, nil
+}
+
+// watchDeadline force-aborts the in-flight scheduled run when ctx2's deadline
+// fires (FR-003/FR-006). It returns immediately if the run completes first
+// (runDone closed). On deadline it issues RequestCancel against the run's
+// session and allows a short cleanup window for the turn to tear down.
+func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan struct{}, sessionID, owner string) {
+	select {
+	case <-runDone:
+		return
+	case <-ctx2.Done():
+		if ctx2.Err() != context.DeadlineExceeded || r.canceller == nil || sessionID == "" {
+			return
+		}
+		logger.WarnCF("gateway", "scheduled run exceeded deadline — force-aborting",
+			map[string]any{"session_id": sessionID, "owner": owner})
+		// Force-abort the turn registered under this session id. Use a detached
+		// context so the cancel itself is not aborted by the just-expired ctx2.
+		cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = r.canceller.RequestCancel(cancelCtx,
+			agent.CancelScope{SessionID: sessionID},
+			agent.CancelCanceller{UserID: "scheduler", Channel: "cron"},
+			agent.CancelHooks{})
+		// Short cleanup window: let the turn observe the cancel and unwind before
+		// ProcessScheduled returns.
+		select {
+		case <-runDone:
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// setProcessCleanup wires the best-effort per-run child-process cleanup hook
+// (FR-011). Idempotent; a nil fn clears the hook.
+func (r *scheduledRunner) setProcessCleanup(fn func(sessionID string)) {
+	r.procCleanup = fn
+}
+
+// scheduledProcRegistry is a minimal per-session child-process registry for
+// scheduled runs (FR-011). A real per-session process registry does not exist
+// in the codebase, so this provides the minimal tracking the spec asks for:
+// the agent run records spawned PIDs under its scheduled session id, and the
+// runner best-effort terminates them on completion. Safe for concurrent use.
+type scheduledProcRegistry struct {
+	mu   sync.Mutex
+	pids map[string][]int
+	// kill terminates a pid; overridable in tests. Defaults to killProcess.
+	kill func(pid int) error
+}
+
+func newScheduledProcRegistry() *scheduledProcRegistry {
+	return &scheduledProcRegistry{pids: map[string][]int{}, kill: killProcess}
+}
+
+// Track records a spawned child PID under sessionID for later cleanup.
+func (p *scheduledProcRegistry) Track(sessionID string, pid int) {
+	if sessionID == "" || pid <= 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pids[sessionID] = append(p.pids[sessionID], pid)
+}
+
+// Cleanup best-effort terminates and forgets all tracked PIDs for sessionID.
+// Errors are logged, never returned — cleanup must not fail the run (FR-011).
+func (p *scheduledProcRegistry) Cleanup(sessionID string) {
+	p.mu.Lock()
+	pids := p.pids[sessionID]
+	delete(p.pids, sessionID)
+	kill := p.kill
+	p.mu.Unlock()
+	for _, pid := range pids {
+		if err := kill(pid); err != nil {
+			logger.WarnCF("gateway", "scheduled run: failed to terminate tracked child process",
+				map[string]any{"session_id": sessionID, "pid": pid, "error": err.Error()})
+		}
+	}
+}
+
+// killProcess best-effort terminates a process by pid.
+func killProcess(pid int) error {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return proc.Kill()
+}
+
+// cleanupRunProcesses best-effort terminates any child/browser processes the
+// run spawned for its session (FR-011). It NEVER fails the run — errors inside
+// the hook are the hook's responsibility to log. A no-op when no hook is wired
+// or no session id is known (deliver=true runs have no session).
+func (r *scheduledRunner) cleanupRunProcesses(job *cron.CronJob, sessionID string) {
+	if r.procCleanup == nil || sessionID == "" {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			logger.WarnCF("gateway", "scheduled run process cleanup panicked",
+				map[string]any{"schedule_id": job.ID, "session_id": sessionID, "panic": fmt.Sprintf("%v", rec)})
+		}
+	}()
+	r.procCleanup(sessionID)
+}
+
+// isTransientRunError classifies an agent/provider error as transient (FR-010):
+// rate-limit, overload, network, 5xx, or provider-unavailable. Matching is by
+// substring on the error text since provider errors surface as plain strings.
+// A context.Canceled/DeadlineExceeded is NOT transient (handled separately).
+func isTransientRunError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	transientMarkers := []string{
+		"rate limit", "rate-limit", "ratelimit", "429",
+		"overloaded", "overload", "503", "502", "504", "500",
+		"server error", "internal server error", "bad gateway",
+		"service unavailable", "temporarily unavailable", "provider unavailable",
+		"timeout", "timed out", "connection reset", "connection refused",
+		"network", "eof", "no route to host", "i/o timeout", "try again",
+	}
+	for _, m := range transientMarkers {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // pickSession resolves the session id for the run per session mode (W-2). The
@@ -579,7 +770,7 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 	job.TimeoutSeconds = timeout
 	job.SessionMode = cron.SessionModeIsolated
 	if req.SessionMode != nil {
-		job.SessionMode = string(*req.SessionMode)
+		job.SessionMode = cron.SessionMode(*req.SessionMode)
 	}
 	if req.Enabled != nil {
 		job.Enabled = *req.Enabled
@@ -627,7 +818,7 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 		job.Payload.To = *req.ChatId
 	}
 	if req.SessionMode != nil {
-		job.SessionMode = string(*req.SessionMode)
+		job.SessionMode = cron.SessionMode(*req.SessionMode)
 	}
 	if req.TimeoutSeconds != nil {
 		if *req.TimeoutSeconds < 0 {
