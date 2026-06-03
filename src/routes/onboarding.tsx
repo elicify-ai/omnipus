@@ -102,6 +102,30 @@ export function evaluatePasswordStrength(pw: string): PasswordStrength | null {
   }
 }
 
+// Maps a raw upstream probe error string (e.g. "upstream models: status 401")
+// to a plain-language, actionable message for the given provider. The raw
+// string is preserved separately by the caller behind a "Technical details"
+// disclosure so debugging info is never lost. Exported for unit testing.
+export function friendlyProbeError(raw: string, providerName: string): string {
+  const r = (raw || '').toLowerCase()
+  const has = (...codes: string[]) =>
+    codes.some((c) => new RegExp(`(^|[^0-9])${c}([^0-9]|$)`).test(r))
+  if (has('401', '403') || /unauthor|forbidden|invalid api key|invalid key|rejected/.test(r)) {
+    return `That API key was rejected by ${providerName}. Double-check you copied the full key and that it's active, then retry.`
+  }
+  if (has('429') || /rate.?limit|too many requests/.test(r)) {
+    return `Rate limited by ${providerName}. Wait a moment and retry.`
+  }
+  return `Couldn't reach ${providerName}. Check your connection and the key, then retry.`
+}
+
+// Eye show/hide toggle button: pads the hit area to a 44x44 mobile tap target
+// (touch min) without enlarging the 14px icon — the icon is centered in the
+// padded box. Collapses to a snug box on sm+ (pointer). Shared by every
+// password/key field in onboarding + login.
+const EYE_TOGGLE_CLASS =
+  'absolute right-1 sm:right-2.5 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 transition-colors'
+
 const stepVariants = {
   enter: (direction: number) => ({
     x: direction > 0 ? 36 : -36,
@@ -287,16 +311,25 @@ function OnboardingWizard() {
           progress. The dots themselves are decorative (aria-hidden); the
           progressbar role + valuenow/min/max + aria-label carry the semantics,
           and the sr-only line gives a plain-text "Step X of N" announcement. */}
-      <div
-        className="flex items-center gap-2 mb-12 z-10"
-        role="progressbar"
-        aria-valuenow={step}
-        aria-valuemin={1}
-        aria-valuemax={4}
-        aria-label={`Onboarding progress: step ${step} of 4`}
-      >
-        <span className="sr-only">Step {step} of 4</span>
-        {([1, 2, 3, 4] as Step[]).map((s) => (
+      <div className="flex flex-col items-center gap-2 mb-12 z-10">
+        {/* Visible step counter for sighted users — the dots alone are unlabeled. */}
+        <span
+          aria-hidden
+          className="text-xs font-medium tracking-wide"
+          style={{ color: 'var(--color-muted)' }}
+        >
+          Step {step} of 4
+        </span>
+        <div
+          className="flex items-center gap-2"
+          role="progressbar"
+          aria-valuenow={step}
+          aria-valuemin={1}
+          aria-valuemax={4}
+          aria-label={`Onboarding progress: step ${step} of 4`}
+        >
+          <span className="sr-only">Step {step} of 4</span>
+          {([1, 2, 3, 4] as Step[]).map((s) => (
           <motion.div
             key={s}
             aria-hidden
@@ -312,7 +345,8 @@ function OnboardingWizard() {
             transition={{ duration: 0.3, ease: 'easeInOut' }}
             className="h-2 rounded-full"
           />
-        ))}
+          ))}
+        </div>
       </div>
 
       {/* Animated step content */}
@@ -611,7 +645,7 @@ function ProviderStep({
                   <button
                     type="button"
                     onClick={onToggleShowKey}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 transition-colors"
+                    className={EYE_TOGGLE_CLASS}
                     style={{ color: 'var(--color-muted)' }}
                     aria-label={showKey ? 'Hide API key' : 'Show API key'}
                   >
@@ -623,11 +657,36 @@ function ProviderStep({
                 </p>
               </div>
 
-              {/* Connection feedback */}
+              {/* Connection feedback — friendly, actionable message at the display
+                  layer; the raw upstream string is preserved behind a collapsible
+                  "Technical details" disclosure. role="alert" + aria-live make the
+                  failure announced to screen readers (a11y). */}
               {testStatus === 'error' && (
-                <div data-testid="onboarding-error" className="flex items-start gap-2 text-sm" style={{ color: 'var(--color-error)' }}>
+                <div
+                  data-testid="onboarding-error"
+                  role="alert"
+                  aria-live="assertive"
+                  className="flex items-start gap-2 text-sm"
+                  style={{ color: 'var(--color-error)' }}
+                >
                   <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
-                  <span>{testError || 'Connection failed — check your key and try again'}</span>
+                  <div className="min-w-0 space-y-1">
+                    <span>
+                      <span className="sr-only">Error: </span>
+                      {friendlyProbeError(
+                        testError,
+                        providerDef?.display_name ?? 'the provider',
+                      )}
+                    </span>
+                    {testError && (
+                      <details className="text-xs" style={{ color: 'var(--color-muted)' }}>
+                        <summary className="cursor-pointer select-none">
+                          Technical details
+                        </summary>
+                        <p className="mt-1 font-mono break-words">{testError}</p>
+                      </details>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -696,20 +755,29 @@ function ProviderStep({
 
       {/* Navigation */}
       <div className="flex items-center gap-3 pt-2">
-        <Button variant="ghost" className="gap-1.5" onClick={onBack}>
+        <Button variant="ghost" className="gap-1.5 min-h-11 sm:min-h-0" onClick={onBack}>
           <ArrowLeft size={14} />
           Back
         </Button>
-        <Button
-          className="flex-1 gap-2 font-headline font-bold"
-          onClick={onContinue}
-          disabled={
-            testStatus !== 'success' || !selectedModel.trim()
-          }
-        >
-          Continue
-          <ArrowRight size={14} weight="bold" />
-        </Button>
+        {(() => {
+          // Until Connect succeeds AND a model is chosen, render Continue with a
+          // clearly-disabled ghost/outline treatment (not dimmed gold, which reads
+          // as enabled on touch). Once enabled it becomes the gold default CTA, so
+          // the Connect-then-Continue sequence is visually obvious. Scoped to the
+          // onboarding CTA — does NOT touch the global button.tsx disabled style.
+          const continueEnabled = testStatus === 'success' && !!selectedModel.trim()
+          return (
+            <Button
+              variant={continueEnabled ? 'default' : 'outline'}
+              className="flex-1 gap-2 font-headline font-bold"
+              onClick={onContinue}
+              disabled={!continueEnabled}
+            >
+              Continue
+              <ArrowRight size={14} weight="bold" />
+            </Button>
+          )
+        })()}
       </div>
     </div>
   )
@@ -817,7 +885,7 @@ function AdminCredentialsStep({
             <button
               type="button"
               onClick={onToggleShowPassword}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 transition-colors"
+              className={EYE_TOGGLE_CLASS}
               style={{ color: 'var(--color-muted)' }}
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
@@ -873,7 +941,7 @@ function AdminCredentialsStep({
             <button
               type="button"
               onClick={onToggleShowPassword}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 transition-colors"
+              className={EYE_TOGGLE_CLASS}
               style={{ color: 'var(--color-muted)' }}
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
@@ -893,7 +961,7 @@ function AdminCredentialsStep({
 
       {/* Navigation */}
       <div className="flex items-center gap-3 pt-2 w-full">
-        <Button variant="ghost" className="gap-1.5" onClick={onBack}>
+        <Button variant="ghost" className="gap-1.5 min-h-11 sm:min-h-0" onClick={onBack}>
           <ArrowLeft size={14} />
           Back
         </Button>

@@ -59,7 +59,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/test-avatar.svg' }))
 
 import { configureProvider, probeProvider, completeOnboardingTransaction } from '@/lib/api'
-import { evaluatePasswordStrength } from './onboarding'
+import { evaluatePasswordStrength, friendlyProbeError } from './onboarding'
 
 // Cache the dynamically imported component across all tests so the first import's
 // transform cost (~20s) only pays once and doesn't time out individual tests.
@@ -314,6 +314,102 @@ describe('OnboardingWizard — test connection', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /continue/i })).not.toBeDisabled()
     })
+  })
+})
+
+// =====================================================================
+// friendlyProbeError — maps raw upstream probe strings to plain-language,
+// actionable messages at the display layer. The raw string is preserved
+// separately (behind a "Technical details" disclosure) by the caller.
+// =====================================================================
+
+describe('friendlyProbeError', () => {
+  it('maps 401/403 (and auth-ish text) to a "key rejected" message naming the provider', () => {
+    for (const raw of [
+      'upstream models: status 401',
+      'status 403',
+      '401 unauthorized',
+      'invalid api key',
+      'request rejected',
+    ]) {
+      const msg = friendlyProbeError(raw, 'OpenAI')
+      expect(msg).toMatch(/rejected by OpenAI/i)
+      expect(msg).toMatch(/double-check/i)
+    }
+  })
+
+  it('maps 429 / rate-limit text to a "rate limited" message naming the provider', () => {
+    expect(friendlyProbeError('upstream models: status 429', 'Groq')).toMatch(
+      /rate limited by Groq/i
+    )
+    expect(friendlyProbeError('rate limit exceeded', 'Groq')).toMatch(/rate limited by Groq/i)
+  })
+
+  it('falls back to a generic "couldn\'t reach" message for network/timeout/unknown', () => {
+    for (const raw of ['network error', 'request timeout', 'dial tcp: connection refused', '']) {
+      const msg = friendlyProbeError(raw, 'Anthropic')
+      expect(msg).toMatch(/couldn.t reach Anthropic/i)
+    }
+  })
+
+  it('does not misclassify a 404/500 status as an auth error', () => {
+    expect(friendlyProbeError('status 404', 'OpenAI')).toMatch(/couldn.t reach OpenAI/i)
+    expect(friendlyProbeError('status 500', 'OpenAI')).toMatch(/couldn.t reach OpenAI/i)
+  })
+})
+
+// =====================================================================
+// Scenario: friendly probe error in the UI (display-layer mapping + a11y)
+// =====================================================================
+
+describe('OnboardingWizard — friendly probe error display', () => {
+  async function failConnect(rawError: string) {
+    vi.mocked(configureProvider).mockResolvedValue({} as never)
+    vi.mocked(probeProvider).mockResolvedValue({ success: false, error: rawError })
+    await renderWizard()
+    fireEvent.click(screen.getByRole('button', { name: /get started/i }))
+    await waitFor(() => screen.getByText(/connect a provider/i))
+    fireEvent.click(screen.getByRole('button', { name: 'Anthropic' }))
+    await waitFor(() => screen.getByLabelText('API Key'))
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-ant-test' } })
+    fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
+    await waitFor(() => screen.getByTestId('onboarding-error'))
+  }
+
+  it('renders a friendly message (not the raw upstream string) as the primary error', async () => {
+    await failConnect('upstream models: status 401')
+    // Primary, plain-language message naming the provider.
+    expect(screen.getByText(/rejected by Anthropic/i)).toBeInTheDocument()
+  })
+
+  it('keeps the raw upstream string available behind a Technical details disclosure', async () => {
+    await failConnect('upstream models: status 401')
+    expect(screen.getByText(/technical details/i)).toBeInTheDocument()
+    // Raw string is preserved (inside the <details>), not discarded.
+    expect(screen.getByText('upstream models: status 401')).toBeInTheDocument()
+  })
+
+  it('the probe error container is a live region announced to screen readers', async () => {
+    await failConnect('status 429')
+    const alert = screen.getByTestId('onboarding-error')
+    expect(alert).toHaveAttribute('role', 'alert')
+    expect(alert).toHaveAttribute('aria-live', 'assertive')
+    // Visually-hidden "Error:" prefix paired with the icon.
+    expect(alert.textContent).toMatch(/error:/i)
+  })
+})
+
+// =====================================================================
+// Scenario: visible step counter (sighted users)
+// =====================================================================
+
+describe('OnboardingWizard — visible step indicator', () => {
+  it('shows a visible "Step 1 of 4" counter alongside the progressbar', async () => {
+    await renderWizard()
+    // Two matches expected: the sr-only span inside the progressbar and the new
+    // visible aria-hidden counter. At least one must be present and visible-class.
+    const matches = screen.getAllByText(/step 1 of 4/i)
+    expect(matches.length).toBeGreaterThanOrEqual(2)
   })
 })
 
