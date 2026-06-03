@@ -338,18 +338,30 @@ export function ScheduleFormSheet({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agents, open])
 
+  // Is a legacy 'main' schedule being edited? (AC, US-A3: load in read-only/"legacy" form)
+  // Declared before useMutation so it can be closed over by mutationFn.
+  const isLegacyMain = isEdit && schedule?.session_mode === 'main'
+
   const { mutate: doSave, isPending: saving } = useMutation({
     mutationFn: () => {
       const trigger = buildTrigger(form)
       const timeout = form.timeoutSeconds === '' ? undefined : Number(form.timeoutSeconds)
+      // Fix 5: clear any stale server error on each save attempt so a retry
+      // doesn't show a stale inline error while the new request is in flight.
+      setTriggerServerError(null)
       if (isEdit && schedule) {
+        // Fix 1 (BLOCKER 1): legacy 'main' schedules must NOT have session_mode
+        // rewritten. The spec (§0/§3 US-A3 edge case) requires the stored 'main'
+        // value to be PRESERVED — OMIT session_mode from the update body entirely
+        // so the server keeps whatever is stored. The read-only notice in the UI
+        // prevents the user from selecting a new mode.
         const body: ScheduleUpdate = {
           name: form.name,
           owner_agent_id: form.ownerAgentId,
           trigger,
           message: form.message,
           deliver: form.deliver,
-          session_mode: form.sessionMode,
+          ...(isLegacyMain ? {} : { session_mode: form.sessionMode }),
           timeout_seconds: timeout,
           enabled: form.enabled,
         }
@@ -374,7 +386,9 @@ export function ScheduleFormSheet({
     },
     onError: (err: unknown) => {
       const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Save failed'
-      // Map trigger-related 4xx errors inline (AC3b).
+      // Map trigger-related 4xx errors inline (AC3b). The structured server error
+      // code/field would make this routing precise; a backend follow-up is needed
+      // to add that — for now we use a keyword heuristic on the message text.
       if (isApiError(err) && err.status && err.status >= 400 && err.status < 500) {
         const lc = msg.toLowerCase()
         if (lc.includes('cron') || lc.includes('trigger') || lc.includes('schedule') || lc.includes('interval')) {
@@ -386,18 +400,31 @@ export function ScheduleFormSheet({
     },
   })
 
+  // Fix 4: ensure the trigger is fully populated before allowing Save.
+  // buildTrigger can return {kind:'cron', cron_expr:undefined} when the user
+  // has chosen a repeat shape that requires a time/weekday/day but hasn't filled it in yet.
+  function isTriggerPopulated(): boolean {
+    const t = buildTrigger(form)
+    switch (t.kind) {
+      case 'at':
+        return true // at_ms is optional (server defaults to now); once without a time is valid
+      case 'every':
+        return t.every_ms != null && t.every_ms > 0
+      case 'cron':
+        return t.cron_expr != null && t.cron_expr.trim() !== ''
+    }
+  }
+
   // Is the custom cron structurally valid enough to allow Save?
   const customCronOk =
     form.friendlyMode !== 'custom' || isStructurallyValidCron(form.cronExpr)
-
-  // Is a legacy 'main' schedule being edited? (AC, US-A3: load in read-only/"legacy" form)
-  const isLegacyMain = isEdit && schedule?.session_mode === 'main'
 
   const canSave =
     form.ownerAgentId !== '' &&
     form.name.trim() !== '' &&
     form.message.trim() !== '' &&
     customCronOk &&
+    isTriggerPopulated() &&
     !saving
 
   return (
@@ -580,13 +607,29 @@ interface WhenSectionProps {
 
 /**
  * Friendly "When?" trigger section: Once / Repeat / Custom.
- * Switching between Repeat and Custom clears the other input (no silent carry-over, M-1).
+ * Switching modes clears the inputs that belong to the departed mode so there
+ * is no silent carry-over (M-1).
  */
 function WhenSection({ form, setValue, triggerServerError }: WhenSectionProps) {
   function setFriendlyMode(next: FriendlyMode) {
-    // Clear carry-over when switching modes (M-1: no silent carry-over).
-    if (next === 'custom' || next === 'repeat') {
+    // Fix 6: clear the inputs that belong to the mode being left (M-1).
+    // Switching TO custom  → clear cronExpr so the field starts blank.
+    // Switching TO repeat  → clear cronExpr (no carry-over from custom).
+    // Switching AWAY from repeat → reset repeat-specific fields to defaults so
+    //   a later switch back to repeat starts from a clean state.
+    if (next === 'custom') {
       setValue('cronExpr', '')
+    } else if (next === 'repeat') {
+      // Coming from custom: clear the raw cron so it doesn't linger in state.
+      setValue('cronExpr', '')
+    }
+    // When leaving repeat for once or custom, reset repeat fields to defaults
+    // so they don't silently carry over if the user returns to repeat.
+    if (form.friendlyMode === 'repeat' && next !== 'repeat') {
+      setValue('repeatShape', 'interval')
+      setValue('repeatTime', '09:00')
+      setValue('weekday', '1')
+      setValue('monthDay', '1')
     }
     setValue('friendlyMode', next)
   }

@@ -42,6 +42,12 @@ describe('isStructurallyValidCron — 5-field structural check', () => {
     expect(isStructurallyValidCron('0 0 * * 0')).toBe(true)
   })
 
+  it('accepts valid list and range atoms', () => {
+    expect(isStructurallyValidCron('0,30 9 * * *')).toBe(true)
+    expect(isStructurallyValidCron('0 9-17 * * 1-5')).toBe(true)
+    expect(isStructurallyValidCron('*/15 * * * *')).toBe(true)
+  })
+
   it('rejects fewer than 5 fields', () => {
     expect(isStructurallyValidCron('0 18 *')).toBe(false)
     expect(isStructurallyValidCron('0 18 * *')).toBe(false)
@@ -52,13 +58,35 @@ describe('isStructurallyValidCron — 5-field structural check', () => {
     expect(isStructurallyValidCron('0 18 * * * *')).toBe(false)
   })
 
-  it('rejects structurally invalid chars', () => {
+  it('rejects structurally invalid chars (letter-words)', () => {
     expect(isStructurallyValidCron('not a cron')).toBe(false)
     expect(isStructurallyValidCron('foo bar baz qux quux')).toBe(false)
   })
 
+  // Fix 3: tightened grammar rejects empty step/range/list tokens.
+  it('Fix 3: rejects empty step token "5-- * * * *"', () => {
+    expect(isStructurallyValidCron('5-- * * * *')).toBe(false)
+  })
+
+  it('Fix 3: rejects double-star "** * * * *"', () => {
+    expect(isStructurallyValidCron('** * * * *')).toBe(false)
+  })
+
+  it('Fix 3: rejects trailing comma ",, * * * *"', () => {
+    expect(isStructurallyValidCron(',, * * * *')).toBe(false)
+  })
+
+  it('Fix 3: rejects empty step denominator "*/  * * * *" (extra spaces become separate fields)', () => {
+    // "*/" followed by a space makes 6 tokens → rejected by field-count check.
+    expect(isStructurallyValidCron('*/ * * * *')).toBe(false)
+  })
+
+  it('Fix 3: rejects leading comma in a list field', () => {
+    expect(isStructurallyValidCron(',5 * * * *')).toBe(false)
+  })
+
   it('accepts semantically invalid but structurally valid cron (AC3b — client cannot detect)', () => {
-    // 99 99 * * * passes the structural check (5 fields, valid chars)
+    // 99 99 * * * passes the structural check (5 fields, valid structure)
     // but is semantically invalid (minute 99, hour 99 don't exist).
     // The server validates semantics; the client only does structural gating.
     expect(isStructurallyValidCron('99 99 * * *')).toBe(true)
@@ -162,6 +190,36 @@ describe('reverseParseCron — reverse parse (US-A2 M-1 AC5)', () => {
 
   it('invalid cron (too few fields) → null', () => {
     expect(reverseParseCron('0 9 *')).toBeNull()
+  })
+
+  // BLOCKER 2 regression tests — data-loss guard (fix: isPureInteger).
+  it('BLOCKER 2: step "*/15 9 * * *" → null (step in minute field drops "*/15" → Custom verbatim)', () => {
+    // Without the fix: parseInt("*/15") = NaN → already null (was protected by NaN check).
+    // But "*/5 9-17 * * 1-5" would have hour parsed as NaN too → already null.
+    // Real BLOCKER: "*/15 9 * * *" — minute is "*/15", parseInt = NaN → was already null (good).
+    // However the actual risky case is "0 09 * * *" (zero-padded hour).
+    const result = reverseParseCron('*/15 9 * * *')
+    expect(result).toBeNull()
+  })
+
+  it('BLOCKER 2: zero-padded hour "0 09 * * *" → null (round-trip would change "09"→"9")', () => {
+    // Without the fix: parseInt("09") = 9, timeStr = "09:00", buildRepeatCron produces
+    // "0 9 * * *", which does NOT equal "0 09 * * *" → stored value silently changed.
+    // With the fix: isPureInteger("09") = false → null → Custom view verbatim.
+    const result = reverseParseCron('0 09 * * *')
+    expect(result).toBeNull()
+  })
+
+  it('BLOCKER 2: zero-padded day-of-month "0 9 01 * *" → null (round-trip would change "01"→"1")', () => {
+    // Without the fix: domStr "01" passes /^\d{1,2}$/ → day=1, stored "01" round-trips as "1".
+    // With the fix: isPureInteger("01") = false → null → Custom view verbatim.
+    const result = reverseParseCron('0 9 01 * *')
+    expect(result).toBeNull()
+  })
+
+  it('BLOCKER 2: step in minute "*/5 * * * *" → null (opens Custom verbatim, not misread)', () => {
+    const result = reverseParseCron('*/5 * * * *')
+    expect(result).toBeNull()
   })
 })
 

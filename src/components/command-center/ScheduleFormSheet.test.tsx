@@ -327,6 +327,55 @@ describe('ScheduleFormSheet — #320 US-A2: friendly trigger + preview', () => {
     expect(screen.getByText(/Examples:/)).toBeInTheDocument()
   })
 
+  it('BLOCKER 2: zero-padded cron "0 09 * * *" opens Custom verbatim (no silent data-loss)', async () => {
+    // Without the BLOCKER 2 fix, "09" would be accepted and round-tripped as "9",
+    // changing the stored expression. With the fix, it falls through to Custom.
+    const zeroPaddedSchedule: Schedule = {
+      id: 's-padded',
+      name: 'Padded',
+      enabled: true,
+      owner_agent_id: 'mia',
+      trigger: { kind: 'cron', cron_expr: '0 09 * * *' },
+      message: 'Msg',
+      deliver: false,
+      session_mode: 'isolated',
+      timeout_seconds: 0,
+      state: {},
+      runs: [],
+      created_at_ms: 1000,
+      updated_at_ms: 2000,
+    }
+    renderForm({ schedule: zeroPaddedSchedule })
+    await screen.findByText('Edit schedule')
+    // Must open in Custom view with the expression verbatim.
+    await waitFor(() => expect(screen.getByPlaceholderText('0 18 * * *')).toBeInTheDocument())
+    const cronInput = screen.getByPlaceholderText('0 18 * * *') as HTMLInputElement
+    expect(cronInput.value).toBe('0 09 * * *')
+  })
+
+  it('BLOCKER 2: step cron "*/15 9 * * *" opens Custom verbatim', async () => {
+    const stepSchedule: Schedule = {
+      id: 's-step',
+      name: 'Step',
+      enabled: true,
+      owner_agent_id: 'mia',
+      trigger: { kind: 'cron', cron_expr: '*/15 9 * * *' },
+      message: 'Msg',
+      deliver: false,
+      session_mode: 'isolated',
+      timeout_seconds: 0,
+      state: {},
+      runs: [],
+      created_at_ms: 1000,
+      updated_at_ms: 2000,
+    }
+    renderForm({ schedule: stepSchedule })
+    await screen.findByText('Edit schedule')
+    await waitFor(() => expect(screen.getByPlaceholderText('0 18 * * *')).toBeInTheDocument())
+    const cronInput = screen.getByPlaceholderText('0 18 * * *') as HTMLInputElement
+    expect(cronInput.value).toBe('*/15 9 * * *')
+  })
+
   it('every 30min schedule re-hydrates to Repeat interval', async () => {
     const intervalSchedule: Schedule = {
       id: 's-interval',
@@ -453,7 +502,10 @@ describe('ScheduleFormSheet — #321 US-A3: session model (D18)', () => {
     expect(screen.queryByRole('switch', { name: /keep the full conversation thread/i })).not.toBeInTheDocument()
   })
 
-  it('AC (US-A3): legacy "main" schedule — save emits isolated (safe default, mode locked in UI)', async () => {
+  it('BLOCKER 1 (US-A3): legacy "main" schedule — save OMITS session_mode (not rewritten to isolated)', async () => {
+    // Spec §0 line 320 / §3 US-A3 edge case: a pre-existing 'main' schedule must not
+    // have its session_mode silently rewritten. OMIT the field from the update body
+    // so the server preserves whatever is stored.
     const mainSchedule: Schedule = {
       id: 's-main',
       name: 'Legacy Main',
@@ -474,8 +526,9 @@ describe('ScheduleFormSheet — #321 US-A3: session model (D18)', () => {
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
     await waitFor(() => expect(updateSchedule).toHaveBeenCalledTimes(1))
     const body = vi.mocked(updateSchedule).mock.calls[0][1]
-    // FormState maps 'main' → 'isolated'; the UI shows a read-only notice.
-    expect(body.session_mode).toBe('isolated')
+    // session_mode must be ABSENT from the update body — the server preserves 'main'.
+    // (If it were present and set to 'isolated', the server would overwrite the stored mode.)
+    expect(Object.prototype.hasOwnProperty.call(body, 'session_mode')).toBe(false)
   })
 
   it('reassurance line is visible on the primary form', async () => {
