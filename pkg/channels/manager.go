@@ -80,8 +80,12 @@ type channelWorker struct {
 }
 
 // ChannelInitError records an enabled channel that failed to construct.
+// Name is the registry identifier (e.g. "whatsapp_native") as passed to
+// recordChannelFailure; Channel is the human-readable display name
+// (e.g. "WhatsApp Native"). Both are populated on every failure.
 type ChannelInitError struct {
-	Channel string
+	Name    string // registry id, e.g. "whatsapp_native"
+	Channel string // human-readable display name, e.g. "WhatsApp Native"
 	Err     error
 }
 
@@ -348,6 +352,25 @@ func NewManager(
 	return m, nil
 }
 
+// NewManagerForTesting creates a minimal Manager with pre-seeded ChannelInitError
+// entries accessible via FailedChannels(). No real channels are constructed and
+// no MessageBus or MediaStore is required.
+//
+// This constructor exists so integration tests in external packages (e.g.
+// pkg/gateway) can inject degraded state into a Manager without needing a live
+// credential store, network connectivity, or a real channel factory.  Production
+// code should use NewManager; callers of this function must only appear in
+// _test.go files.
+func NewManagerForTesting(failed []ChannelInitError) *Manager {
+	m := &Manager{
+		channels:      make(map[string]Channel),
+		workers:       make(map[string]*channelWorker),
+		channelHashes: make(map[string]string),
+	}
+	m.failedChannels = append(m.failedChannels, failed...)
+	return m
+}
+
 // SetStreamFallback registers a fallback StreamDelegate for channels not managed
 // by the Manager (e.g., the webchat WebSocket handler).
 func (m *Manager) SetStreamFallback(d bus.StreamDelegate) {
@@ -484,7 +507,7 @@ func (m *Manager) initChannel(name, displayName string) error {
 
 // recordChannelFailure records a failed enabled-channel init and logs it.
 func (m *Manager) recordChannelFailure(name, displayName string, err error) {
-	m.failedChannels = append(m.failedChannels, ChannelInitError{Channel: displayName, Err: err})
+	m.failedChannels = append(m.failedChannels, ChannelInitError{Name: name, Channel: displayName, Err: err})
 	logger.ErrorCF("channels", "Enabled channel failed to initialize", map[string]any{
 		"channel": displayName,
 		"error":   err.Error(),
@@ -1416,14 +1439,33 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 		cancel()
 		return err
 	}
-	// Clear failed channels before re-init so that channels that previously
-	// failed but now succeed are no longer reported as degraded.
-	m.failedChannels = m.failedChannels[:0]
+	// Capture the current failure list before clearing so we can revert it if
+	// initChannels fails — preventing a false-positive degraded signal after a
+	// rolled-back reload.
+	oldFailed := append([]ChannelInitError(nil), m.failedChannels...)
+
+	// Scope the clear to only the channels being re-attempted (the added set).
+	// Entries for channels NOT in added are left intact so that an unchanged-but-
+	// still-failed channel continues to be reported as degraded. Entries in added
+	// are dropped here; initChannels will re-record a failure if they fail again.
+	addedNames := make(map[string]struct{}, len(added))
+	for _, n := range added {
+		addedNames[n] = struct{}{}
+	}
+	kept := m.failedChannels[:0]
+	for _, f := range m.failedChannels {
+		if _, inAdded := addedNames[f.Name]; !inAdded {
+			kept = append(kept, f)
+		}
+	}
+	m.failedChannels = kept
+
 	err = m.initChannels(cc)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("initChannels error: %v", err))
 		m.config = oldConfig
 		m.secrets = oldSecrets
+		m.failedChannels = oldFailed
 		cancel()
 		return err
 	}

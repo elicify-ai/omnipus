@@ -4,7 +4,7 @@
 
 This document covers **bridge mode** — the transport used when `use_native: false` (the default). Omnipus connects to an external WhatsApp bridge process over a persistent WebSocket connection (`BridgeURL`). The bridge is responsible for maintaining the WhatsApp session; Omnipus only sends and receives JSON-encoded message frames over that WebSocket.
 
-For the in-process whatsmeow mode, see [docs/channels/whatsapp_native.md](whatsapp_native.md). Set `use_native: true` to select that mode instead.
+For the in-process whatsmeow mode, see [docs/channels/whatsapp_native.md](whatsapp_native.md). Set `use_native: true` to select that mode instead — native mode now renders its pairing QR live in the **Channels → Configure** panel, so you can link a device without touching the logs.
 
 ## Configuration
 

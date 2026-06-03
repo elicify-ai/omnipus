@@ -183,17 +183,16 @@ jobs:
           rm -rf pkg/gateway/spa
           cp -r dist/spa pkg/gateway/spa
 
-      # Run govulncheck manually rather than golang/govulncheck-action@v1: the
-      # action hardcodes go-version-input="stable" (resolves to 1.26.3) AND sets
-      # GOTOOLCHAIN=local, which together pin the analyzed build to 1.26.3 and
-      # re-flag the crypto/x509 stdlib CVEs GO-2026-5037/5039 (fixed in 1.26.4) —
-      # ignoring go.mod. The manual run uses the job's Go with the default
-      # GOTOOLCHAIN=auto, so go.mod's `go 1.26.4` directive auto-fetches and uses
-      # the patched 1.26.4 toolchain for the analysis.
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Run Govulncheck
-        run: govulncheck -tags=goolm,stdjson ./...
+        uses: golang/govulncheck-action@v1
+        with:
+          go-package: ./...
+          # The action runs its OWN setup-go with go-version-input:stable and
+          # GOTOOLCHAIN=local, so it ignores both the job's Setup Go step and
+          # go.mod's toolchain. Pin it to the patched stdlib (go1.26.4 fixes
+          # GO-2026-5037 crypto/x509 and GO-2026-5039 net/textproto). Keep this
+          # in sync with the `go` directive in go.mod.
+          go-version-input: '1.26.4'
 
   test:
     name: Tests

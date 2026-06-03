@@ -3187,6 +3187,21 @@ export interface components {
              * @example Telegram Bot API
              */
             description: string;
+            /**
+             * @description WhatsApp only: whether the native (whatsmeow) transport is compiled into this binary. False on a lite build or an architecture where it is excluded. Omitted for channels to which it does not apply. When false, clients MUST NOT offer native mode (the QR pairing flow cannot work).
+             * @example true
+             */
+            native_available?: boolean;
+            /**
+             * @description True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential). The channel is NOT serving despite enabled=true.
+             * @example false
+             */
+            degraded?: boolean;
+            /**
+             * @description Human-readable reason the channel is degraded. Present only when degraded is true.
+             * @example whatsapp native is not compiled into this build
+             */
+            degraded_reason?: string;
         };
         /**
          * RetentionConfig

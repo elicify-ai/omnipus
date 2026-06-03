@@ -2218,11 +2218,12 @@ func (al *AgentLoop) getChannelManager() *channels.Manager {
 	return cm
 }
 
-// GetChannelManager returns the current channel manager (may be nil before
-// services start). Exported for the gateway's scheduled runner, which needs to
-// validate a deliver=true target channel is registered before publishing (M2).
-// It is set after construction via SetChannelManager, so callers must tolerate
-// nil and re-fetch at use time.
+// GetChannelManager returns the current channel manager under the read lock
+// (may be nil before channels start, e.g. during onboarding). Exported for
+// pkg/gateway: REST handlers inspect runtime channel state (e.g. FailedChannels),
+// and the scheduled runner validates that a deliver=true target channel is
+// registered before publishing (M2). Set after construction via
+// SetChannelManager, so callers must tolerate nil and re-fetch at use time.
 func (al *AgentLoop) GetChannelManager() *channels.Manager {
 	return al.getChannelManager()
 }

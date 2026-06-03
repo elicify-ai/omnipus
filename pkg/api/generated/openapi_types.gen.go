@@ -3494,6 +3494,12 @@ type ChannelEnabledResponseId string
 
 // ChannelEntry A communication channel entry returned by GET /api/v1/channels.
 type ChannelEntry struct {
+	// Degraded True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential). The channel is NOT serving despite enabled=true.
+	Degraded *bool `json:"degraded,omitempty"`
+
+	// DegradedReason Human-readable reason the channel is degraded. Present only when degraded is true.
+	DegradedReason *string `json:"degraded_reason,omitempty"`
+
 	// Description Short description of the channel.
 	Description string `json:"description"`
 
@@ -3505,6 +3511,9 @@ type ChannelEntry struct {
 
 	// Name Human-readable channel name.
 	Name string `json:"name"`
+
+	// NativeAvailable WhatsApp only: whether the native (whatsmeow) transport is compiled into this binary. False on a lite build or an architecture where it is excluded. Omitted for channels to which it does not apply. When false, clients MUST NOT offer native mode (the QR pairing flow cannot work).
+	NativeAvailable *bool `json:"native_available,omitempty"`
 
 	// Transport Transport mechanism used by this channel.
 	Transport ChannelEntryTransport `json:"transport"`

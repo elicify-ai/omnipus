@@ -34,6 +34,8 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/agent"
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/channels"
+	whatsappnative "github.com/dapicom-ai/omnipus/pkg/channels/whatsapp_native"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
@@ -4110,11 +4112,12 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 			Description: "Slack Socket Mode",
 		},
 		{
-			Id:          "whatsapp",
-			Name:        "WhatsApp",
-			Transport:   "bridge",
-			Enabled:     ch.WhatsApp.Enabled,
-			Description: "WhatsApp via bridge or native",
+			Id:              "whatsapp",
+			Name:            "WhatsApp",
+			Transport:       "bridge",
+			Enabled:         ch.WhatsApp.Enabled,
+			Description:     "WhatsApp via bridge or native",
+			NativeAvailable: boolPtr(whatsappnative.NativeAvailable),
 		},
 		{
 			Id:          "feishu",
@@ -4156,7 +4159,68 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 		{Id: "irc", Name: "IRC", Transport: "tcp", Enabled: ch.IRC.Enabled, Description: "Internet Relay Chat"},
 		{Id: "matrix", Name: "Matrix", Transport: "http", Enabled: ch.Matrix.Enabled, Description: "Matrix protocol"},
 	}
+
+	// Overlay degraded state from the runtime channel manager. Channels that
+	// failed to construct at startup are marked degraded=true with the init
+	// error as the reason. whatsapp_native failures map to the "whatsapp" entry
+	// because both transports share one list entry.
+	if mgr := a.agentLoop.GetChannelManager(); mgr != nil {
+		failed := mgr.FailedChannels()
+		applyDegradedOverlay(channels, failed)
+		// Warn for any failed channel whose (normalised) id has no matching entry
+		// in the channels list — these are dead channels that would otherwise be
+		// silently invisible to operators.
+		if len(failed) > 0 {
+			entryIDs := make(map[string]struct{}, len(channels))
+			for _, e := range channels {
+				entryIDs[string(e.Id)] = struct{}{}
+			}
+			for _, f := range failed {
+				id := f.Name
+				if id == "whatsapp_native" {
+					id = "whatsapp"
+				}
+				if _, matched := entryIDs[id]; !matched {
+					slog.Warn("channels: failed channel has no matching entry in channels list",
+						"registry_id", f.Name,
+						"channel", f.Channel,
+						"error", f.Err.Error(),
+					)
+				}
+			}
+		}
+	}
+
 	jsonOK(w, channels)
+}
+
+// applyDegradedOverlay marks entries in channelList as degraded when the
+// supplied failed list contains a matching registry id.  It is a pure function
+// extracted from HandleChannels so that it can be unit-tested without a full
+// REST stack.
+//
+// Normalisation rule: "whatsapp_native" maps to the list entry "whatsapp"
+// because both the bridge and native transports share a single ChannelEntry.
+func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.ChannelInitError) {
+	if len(failed) == 0 {
+		return
+	}
+	// Build a map of normalised registry-id → error reason.
+	degradedMap := make(map[string]string, len(failed))
+	for _, f := range failed {
+		id := f.Name
+		if id == "whatsapp_native" {
+			id = "whatsapp"
+		}
+		degradedMap[id] = f.Err.Error()
+	}
+	for i := range channelList {
+		if reason, ok := degradedMap[string(channelList[i].Id)]; ok {
+			r := reason
+			channelList[i].Degraded = boolPtr(true)
+			channelList[i].DegradedReason = &r
+		}
+	}
 }
 
 // validChannelIDs is the set of channel IDs that can be toggled via the API.
