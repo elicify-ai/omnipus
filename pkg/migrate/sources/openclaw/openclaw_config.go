@@ -632,7 +632,6 @@ type ChannelsConfig struct {
 
 type WhatsAppConfig struct {
 	Enabled   bool     `json:"enabled"`
-	BridgeURL string   `json:"bridge_url"`
 	AllowFrom []string `json:"allow_from"`
 }
 
@@ -801,12 +800,12 @@ func (c *OpenClawConfig) convertChannels(warnings *[]string) ChannelsConfig {
 
 	if c.Channels.WhatsApp != nil {
 		enabled := c.Channels.WhatsApp.Enabled == nil || *c.Channels.WhatsApp.Enabled
+		// BridgeURL is intentionally NOT migrated: WhatsApp is now always native
+		// (whatsmeow); the legacy bridge was removed, so a bridge_url in an
+		// OpenClaw config has no target field.
 		channels.WhatsApp = WhatsAppConfig{
 			Enabled:   enabled,
 			AllowFrom: c.Channels.WhatsApp.AllowFrom,
-		}
-		if c.Channels.WhatsApp.BridgeURL != nil {
-			channels.WhatsApp.BridgeURL = *c.Channels.WhatsApp.BridgeURL
 		}
 	}
 
@@ -990,8 +989,8 @@ func (c *OmnipusConfig) ToStandardConfig() *config.Config {
 func (c ChannelsConfig) ToStandardChannels() config.ChannelsConfig {
 	return config.ChannelsConfig{
 		WhatsApp: config.WhatsAppConfig{
-			Enabled:   c.WhatsApp.Enabled,
-			BridgeURL: c.WhatsApp.BridgeURL,
+			Enabled: c.WhatsApp.Enabled,
+			// BridgeURL dropped: WhatsApp is always native; the bridge was removed.
 		},
 		Telegram: config.TelegramConfig{
 			Enabled: c.Telegram.Enabled,

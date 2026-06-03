@@ -13,8 +13,9 @@ import (
 // NativeAvailable reports whether the native whatsmeow-based WhatsApp transport
 // was compiled into this binary. False in this stub (lite variant or
 // architectures where modernc.org/sqlite is unavailable). REST callers use this
-// to know they must restrict the UI to bridge mode and must NOT offer the
-// QR-pairing flow.
+// to know native WhatsApp is unavailable on this build/arch and must NOT offer
+// the QR-pairing flow. (The legacy bridge transport has been removed, so on this
+// build WhatsApp is simply unavailable.)
 const NativeAvailable = false
 
 // NewWhatsAppNativeChannel returns an error when native WhatsApp is not compiled in.
@@ -33,5 +34,5 @@ func NewWhatsAppNativeChannel(
 	bus *bus.MessageBus,
 	storePath string,
 ) (channels.Channel, error) {
-	return nil, fmt.Errorf("whatsapp native is not compiled into this build (lite variant, or an architecture where modernc.org/sqlite is unavailable such as mipsle/netbsd); use the default build on a supported target, or use bridge mode (use_native: false)")
+	return nil, fmt.Errorf("whatsapp native is not compiled into this build (lite variant, or an architecture where modernc.org/sqlite is unavailable such as mipsle/netbsd); WhatsApp requires the native build (the legacy bridge has been removed) — use the default build on a supported target")
 }

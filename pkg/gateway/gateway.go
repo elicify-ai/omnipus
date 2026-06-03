@@ -36,13 +36,11 @@ import (
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/googlechat"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/irc"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/line"
-	_ "github.com/dapicom-ai/omnipus/pkg/channels/onebot"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/qq"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/slack"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/telegram"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/wecom"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/weixin"
-	_ "github.com/dapicom-ai/omnipus/pkg/channels/whatsapp"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/whatsapp_native"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
@@ -167,7 +165,6 @@ func buildEnabledRefMap(cfg *config.Config) map[string]bool {
 		{ch.DingTalk.Enabled, []string{ch.DingTalk.ClientSecretRef}},
 		{ch.Matrix.Enabled, []string{ch.Matrix.AccessTokenRef, ch.Matrix.CryptoPassphraseRef}},
 		{ch.LINE.Enabled, []string{ch.LINE.ChannelSecretRef, ch.LINE.ChannelAccessTokenRef}},
-		{ch.OneBot.Enabled, []string{ch.OneBot.AccessTokenRef}},
 		{ch.WeCom.Enabled, []string{ch.WeCom.SecretRef}},
 		{ch.Weixin.Enabled, []string{ch.Weixin.TokenRef}},
 		{ch.IRC.Enabled, []string{ch.IRC.PasswordRef, ch.IRC.NickServPasswordRef, ch.IRC.SASLPasswordRef}},

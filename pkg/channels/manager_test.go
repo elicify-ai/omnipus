@@ -14,6 +14,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/credentials"
 )
 
 // mockChannel is a test double that delegates Send to a configurable function.
@@ -104,7 +105,7 @@ func TestSendWithRetry_Success(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 
 	if callCount != 1 {
 		t.Fatalf("expected 1 Send call, got %d", callCount)
@@ -131,7 +132,7 @@ func TestSendWithRetry_TemporaryThenSuccess(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 
 	if callCount != 3 {
 		t.Fatalf("expected 3 Send calls (2 failures + 1 success), got %d", callCount)
@@ -155,7 +156,7 @@ func TestSendWithRetry_PermanentFailure(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 
 	if callCount != 1 {
 		t.Fatalf("expected 1 Send call (no retry for permanent failure), got %d", callCount)
@@ -179,7 +180,7 @@ func TestSendWithRetry_NotRunning(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 
 	if callCount != 1 {
 		t.Fatalf("expected 1 Send call (no retry for ErrNotRunning), got %d", callCount)
@@ -207,7 +208,7 @@ func TestSendWithRetry_RateLimitRetry(t *testing.T) {
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
 	start := time.Now()
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 	elapsed := time.Since(start)
 
 	if callCount != 2 {
@@ -236,7 +237,7 @@ func TestSendWithRetry_MaxRetriesExhausted(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 
 	expected := maxRetries + 1 // initial attempt + maxRetries retries
 	if callCount != expected {
@@ -383,7 +384,7 @@ func TestSendWithRetry_UnknownError(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 
 	if callCount != 2 {
 		t.Fatalf("expected 2 Send calls (unknown error treated as temporary), got %d", callCount)
@@ -414,7 +415,7 @@ func TestSendWithRetry_ContextCancelled(t *testing.T) {
 		return fmt.Errorf("timeout: %w", ErrTemporary)
 	}
 
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 
 	// Should have called Send once, then noticed ctx canceled during backoff
 	if callCount != 1 {
@@ -571,7 +572,7 @@ func TestSendWithRetry_ExponentialBackoff(t *testing.T) {
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
 	start := time.Now()
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 	totalElapsed := time.Since(start)
 
 	// With maxRetries=3: attempts at 0, ~500ms, ~1.5s, ~3.5s
@@ -863,7 +864,7 @@ func TestSendWithRetry_PreSendEditsPlaceholder(t *testing.T) {
 	}
 
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"}
-	m.sendWithRetry(context.Background(), "test", w, msg)
+	m.sendWithRetry(context.Background(), "test", w, msg, false)
 
 	if sendCalled {
 		t.Fatal("expected Send to NOT be called when placeholder was edited")
@@ -929,73 +930,517 @@ func TestDispatcherMediaExitsOnCancel(t *testing.T) {
 	}
 }
 
-// --- TTL Janitor tests (Step 2) ---
+// --- Dispatch reliability hardening tests ---
 
-func TestTypingStopJanitorEviction(t *testing.T) {
-	m := newTestManager()
-
-	var stopCalled atomic.Bool
-	// Store a typing entry with a creation time far in the past
-	m.typingStops.Store("test:123", typingEntry{
-		stop:      func() { stopCalled.Store(true) },
-		createdAt: time.Now().Add(-10 * time.Minute), // well past typingStopTTL
-	})
-
-	// Run janitor with a short-lived context
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Manually trigger the janitor logic once by simulating a tick
-	go func() {
-		// Override janitor to run immediately
-		now := time.Now()
-		m.typingStops.Range(func(key, value any) bool {
-			if entry, ok := value.(typingEntry); ok {
-				if now.Sub(entry.createdAt) > typingStopTTL {
-					if _, loaded := m.typingStops.LoadAndDelete(key); loaded {
-						entry.stop()
-					}
-				}
-			}
-			return true
-		})
-		cancel()
-	}()
-
-	<-ctx.Done()
-
-	if !stopCalled.Load() {
-		t.Fatal("expected typing stop function to be called by janitor eviction")
-	}
-
-	// Verify entry was deleted
-	if _, loaded := m.typingStops.Load("test:123"); loaded {
-		t.Fatal("expected typing entry to be deleted after eviction")
+// newWorkerForTest builds a channelWorker around ch with a queue of the given
+// capacity and an unlimited rate limiter (so rate limiting never gates the test).
+func newWorkerForTest(ch Channel, queueCap int) *channelWorker {
+	return &channelWorker{
+		ch:         ch,
+		queue:      make(chan bus.OutboundMessage, queueCap),
+		mediaQueue: make(chan bus.OutboundMediaMessage, queueCap),
+		done:       make(chan struct{}),
+		mediaDone:  make(chan struct{}),
+		limiter:    rate.NewLimiter(rate.Inf, 1),
 	}
 }
 
-func TestPlaceholderJanitorEviction(t *testing.T) {
+// TestReload_RefreshesDispatchCtx_NewChannelCanSend asserts that after Reload,
+// the manager's dispatchCtx is a LIVE context (not the pre-reload canceled one),
+// so a channel registered after the reload can actually deliver an outbound
+// message. If newDispatchContext failed to refresh m.dispatchCtx, the worker
+// spun up by RegisterChannel would bind to a dead context and silently drop.
+func TestReload_RefreshesDispatchCtx_NewChannelCanSend(t *testing.T) {
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+	m := &Manager{
+		channels: make(map[string]Channel),
+		workers:  make(map[string]*channelWorker),
+		bus:      mb,
+	}
+
+	// Simulate the post-StartAll state: a canceled "old" dispatch context, as if
+	// a prior dispatch generation had been torn down.
+	oldCtx, oldCancel := context.WithCancel(context.Background())
+	m.dispatchTask = &asyncTask{cancel: oldCancel}
+	m.dispatchCtx = oldCtx
+	oldCancel() // the old generation is dead
+
+	// newDispatchContext is the helper both StartAll and Reload use; exercising it
+	// directly is the deterministic stand-in for a full Reload's ctx refresh.
+	dispatchCtx, cancel := m.newDispatchContext(context.Background())
+	defer cancel()
+	m.startDispatchers(dispatchCtx)
+
+	if m.dispatchCtx.Err() != nil {
+		t.Fatalf("dispatchCtx must be live after refresh, got err: %v", m.dispatchCtx.Err())
+	}
+
+	// Register a channel post-refresh; RegisterChannel spins its worker on
+	// m.dispatchCtx. With a live ctx the worker delivers; with the dead one it
+	// would return immediately and never send.
+	sent := make(chan bus.OutboundMessage, 1)
+	ch := &mockChannel{sendFn: func(_ context.Context, msg bus.OutboundMessage) error {
+		sent <- msg
+		return nil
+	}}
+	m.RegisterChannel("alpha", ch)
+
+	// Push a message directly onto the worker queue (the worker is what binds to
+	// the dispatch ctx); a dead ctx makes runWorker exit before consuming it.
+	m.mu.RLock()
+	w := m.workers["alpha"]
+	m.mu.RUnlock()
+	if w == nil {
+		t.Fatal("RegisterChannel must create a worker for the new channel")
+	}
+	w.queue <- bus.OutboundMessage{Channel: "alpha", ChatID: "c1", Content: "hi"}
+
+	select {
+	case got := <-sent:
+		if got.Content != "hi" {
+			t.Fatalf("unexpected content delivered: %q", got.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("new channel did not deliver — worker likely bound to a dead dispatchCtx")
+	}
+}
+
+// TestDispatchOutbound_ClosedQueueDuringShutdown_NoPanic pre-closes a worker
+// queue and cancels the dispatch context, then publishes to that channel. The
+// enqueue closure's send-on-closed-channel must be recover-guarded (safeEnqueue)
+// so dispatchOutbound returns cleanly with NO panic.
+func TestDispatchOutbound_ClosedQueueDuringShutdown_NoPanic(t *testing.T) {
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+
+	m := &Manager{
+		channels: make(map[string]Channel),
+		workers:  make(map[string]*channelWorker),
+		bus:      mb,
+	}
+
+	ch := &mockChannel{sendFn: func(_ context.Context, _ bus.OutboundMessage) error { return nil }}
+	w := newWorkerForTest(ch, 1)
+	m.channels["beta"] = ch
+	m.workers["beta"] = w
+
+	// Pre-close the worker queue: a send on it would panic without recover.
+	close(w.queue)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done) // if dispatchOutbound panicked, this never runs → timeout
+		m.dispatchOutbound(ctx)
+	}()
+
+	// Publish to the closed-queue channel. Even if ctx.Done() and the (closed)
+	// send case race, safeEnqueue must recover from any panic.
+	_ = mb.PublishOutbound(context.Background(), bus.OutboundMessage{
+		Channel: "beta", ChatID: "c1", Content: "boom",
+	})
+	cancel()
+
+	select {
+	case <-done:
+		// dispatchOutbound returned cleanly (no panic crashed the goroutine).
+	case <-time.After(2 * time.Second):
+		t.Fatal("dispatchOutbound did not return cleanly — likely panicked on send to closed queue")
+	}
+}
+
+// TestDispatchOutbound_QueueFull_PublishesDropNotice fills a worker's queue so
+// the next enqueue hits the default (backpressure) branch, and asserts a
+// user-facing drop notice is published back through the bus — and that it does
+// NOT block the dispatch loop (C1: the publish must be non-blocking).
+func TestDispatchOutbound_QueueFull_PublishesDropNotice(t *testing.T) {
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+
+	m := &Manager{
+		channels: make(map[string]Channel),
+		workers:  make(map[string]*channelWorker),
+		bus:      mb,
+	}
+
+	// Queue capacity 1, NO runWorker consuming it → it stays full after one msg.
+	ch := &mockChannel{sendFn: func(_ context.Context, _ bus.OutboundMessage) error { return nil }}
+	w := newWorkerForTest(ch, 1)
+	// Pre-fill the single queue slot so the next enqueue hits the backpressure
+	// (default) branch.
+	w.queue <- bus.OutboundMessage{Channel: "gamma", ChatID: "c1", Content: "filler"}
+
+	// Call the enqueue decision directly — no dispatcher goroutine, so there is no
+	// race over reading the published notice off the bus.
+	cont := m.enqueueOutbound(context.Background(), w,
+		bus.OutboundMessage{Channel: "gamma", ChatID: "c1", Content: "overflow"})
+
+	// C1: the loop must NOT block — enqueueOutbound returns true (keep dispatching)
+	// even though the slot was full, because the drop-notice publish is non-blocking.
+	if !cont {
+		t.Fatal("enqueueOutbound must return true (keep loop running) on a queue-full drop")
+	}
+
+	// The drop notice was published back onto the bus (non-blocking).
+	select {
+	case notice := <-mb.OutboundChan():
+		if !strings.HasPrefix(notice.Content, dropNoticePrefix) {
+			t.Fatalf("expected drop-notice sentinel prefix, got %q", notice.Content)
+		}
+		if notice.ChatID != "c1" || notice.Channel != "gamma" {
+			t.Fatalf("drop notice mis-addressed: %+v", notice)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a drop notice on the bus after a queue-full drop")
+	}
+}
+
+// TestDispatchOutbound_DropNotice_NotAmplified asserts the dropNoticePrefix guard:
+// when the message being dropped is ITSELF a drop notice, no second notice is
+// published (otherwise a saturated channel would amplify notices indefinitely).
+func TestDispatchOutbound_DropNotice_NotAmplified(t *testing.T) {
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+
+	m := &Manager{
+		channels: make(map[string]Channel),
+		workers:  make(map[string]*channelWorker),
+		bus:      mb,
+	}
+
+	ch := &mockChannel{sendFn: func(_ context.Context, _ bus.OutboundMessage) error { return nil }}
+	w := newWorkerForTest(ch, 1)
+	w.queue <- bus.OutboundMessage{Channel: "delta", ChatID: "c1", Content: "filler"} // fill it
+
+	// Drop a message that is ALREADY a drop notice; the prefix guard must suppress
+	// a second notice.
+	cont := m.enqueueOutbound(context.Background(), w, bus.OutboundMessage{
+		Channel: "delta", ChatID: "c1", Content: dropNoticePrefix + "[already dropped]",
+	})
+	if !cont {
+		t.Fatal("enqueueOutbound must keep the loop running on a dropped notice")
+	}
+
+	select {
+	case extra := <-mb.OutboundChan():
+		t.Fatalf("a drop notice must NOT be re-notified, but got: %q", extra.Content)
+	case <-time.After(200 * time.Millisecond):
+		// No amplification — correct.
+	}
+}
+
+// TestEnqueueOutbound_CtxDone_StopsLoop asserts that when the dispatch ctx is
+// canceled, enqueueOutbound returns false (stop the loop) rather than sending.
+func TestEnqueueOutbound_CtxDone_StopsLoop(t *testing.T) {
+	m := newTestManager()
+	ch := &mockChannel{sendFn: func(_ context.Context, _ bus.OutboundMessage) error { return nil }}
+	w := newWorkerForTest(ch, 1)
+	w.queue <- bus.OutboundMessage{Channel: "theta", ChatID: "c1", Content: "filler"} // full
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if m.enqueueOutbound(ctx, w, bus.OutboundMessage{Channel: "theta", ChatID: "c1", Content: "x"}) {
+		t.Fatal("enqueueOutbound must return false (stop loop) when ctx is done")
+	}
+}
+
+// TestRunWorker_StripsDropSentinel verifies the TrimPrefix in runWorker: the
+// internal dropNoticePrefix sentinel is stripped before the message reaches the
+// channel's Send, so the user only ever sees the human-readable notice text.
+func TestRunWorker_StripsDropSentinel(t *testing.T) {
 	m := newTestManager()
 
-	// Store a placeholder entry with a creation time far in the past
-	m.placeholders.Store("test:456", placeholderEntry{
-		id:        "msg_old",
-		createdAt: time.Now().Add(-20 * time.Minute), // well past placeholderTTL
-	})
+	got := make(chan string, 1)
+	ch := &mockChannel{sendFn: func(_ context.Context, msg bus.OutboundMessage) error {
+		got <- msg.Content
+		return nil
+	}}
+	w := newWorkerForTest(ch, 4)
 
-	// Simulate janitor logic
-	now := time.Now()
-	m.placeholders.Range(func(key, value any) bool {
-		if entry, ok := value.(placeholderEntry); ok {
-			if now.Sub(entry.createdAt) > placeholderTTL {
-				m.placeholders.Delete(key)
-			}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.runWorker(ctx, "eps", w)
+
+	w.queue <- bus.OutboundMessage{
+		Channel: "eps", ChatID: "c1", Content: dropNoticePrefix + "[message dropped: channel is overloaded, please retry]",
+	}
+
+	select {
+	case content := <-got:
+		if strings.Contains(content, dropNoticePrefix) {
+			t.Fatalf("sentinel must be stripped before Send, got %q", content)
 		}
-		return true
+		if content != "[message dropped: channel is overloaded, please retry]" {
+			t.Fatalf("unexpected delivered content: %q", content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runWorker did not deliver the stripped notice")
+	}
+}
+
+// TestSendWithRetry_TerminalFailure_PublishesUserNotice (H1) asserts that a text
+// send that exhausts retries / fails permanently publishes a short user-facing
+// notice (mirroring the media "[media delivery failed]" fallback) instead of
+// failing silently.
+func TestSendWithRetry_TerminalFailure_PublishesUserNotice(t *testing.T) {
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+
+	m := &Manager{
+		channels: make(map[string]Channel),
+		workers:  make(map[string]*channelWorker),
+		bus:      mb,
+	}
+
+	// Permanent failure → no retry, terminal path.
+	ch := &mockChannel{sendFn: func(_ context.Context, _ bus.OutboundMessage) error {
+		return ErrSendFailed
+	}}
+	w := newWorkerForTest(ch, 1)
+
+	m.sendWithRetry(context.Background(), "zeta", w,
+		bus.OutboundMessage{Channel: "zeta", ChatID: "c1", Content: "will fail"}, false)
+
+	select {
+	case notice := <-mb.OutboundChan():
+		if !strings.HasPrefix(notice.Content, dropNoticePrefix) {
+			t.Fatalf("expected sentinel-tagged user notice, got %q", notice.Content)
+		}
+		stripped := strings.TrimPrefix(notice.Content, dropNoticePrefix)
+		if stripped != "[message delivery failed]" {
+			t.Fatalf("unexpected fallback text: %q", stripped)
+		}
+		if notice.ChatID != "c1" {
+			t.Fatalf("fallback mis-addressed: %+v", notice)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("terminal text-send failure must publish a user-facing notice (H1) — none seen")
+	}
+}
+
+// TestSendWithRetry_FallbackNotAmplified guards the H1 fallback against its own
+// re-failure: a manager-injected notice that itself fails to send must NOT
+// publish yet another fallback. This drives the REAL async path through
+// runWorker (which strips the dropNoticePrefix sentinel and passes isNotice=true
+// to sendWithRetry) — exercising the strip-then-flag handoff, not bypassing it.
+func TestSendWithRetry_FallbackNotAmplified(t *testing.T) {
+	mb := bus.NewMessageBus()
+	defer mb.Close()
+
+	m := &Manager{
+		channels: make(map[string]Channel),
+		workers:  make(map[string]*channelWorker),
+		bus:      mb,
+	}
+
+	// Capture what the channel was actually asked to deliver; fail every send
+	// terminally so the notice's own delivery fails.
+	delivered := make(chan string, 4)
+	ch := &mockChannel{sendFn: func(_ context.Context, om bus.OutboundMessage) error {
+		delivered <- om.Content
+		return ErrSendFailed
+	}}
+	w := newWorkerForTest(ch, 4)
+	m.channels["eta"] = ch
+	m.workers["eta"] = w
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.runWorker(ctx, "eta", w)
+
+	// A manager-injected notice arrives on the worker queue with the sentinel
+	// prefix, exactly as notifyDrop -> dispatchOutbound delivers it.
+	w.queue <- bus.OutboundMessage{Channel: "eta", ChatID: "c1", Content: dropNoticePrefix + "[message delivery failed]"}
+
+	// runWorker must strip the sentinel before delivery.
+	select {
+	case got := <-delivered:
+		if got != "[message delivery failed]" {
+			t.Fatalf("sentinel not stripped before delivery: %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("notice was never delivered to the channel")
+	}
+
+	// The failed delivery of that notice must NOT produce another notice.
+	select {
+	case extra := <-mb.OutboundChan():
+		t.Fatalf("a failed drop-notice send must NOT publish another notice (amplification), got %q", extra.Content)
+	case <-time.After(300 * time.Millisecond):
+		// No amplification — correct.
+	}
+}
+
+// --- WhatsApp non-fatal boot tests (M1) ---
+
+// TestBootFatalError_WhatsAppNativeIsNonFatal asserts that a whatsapp_native
+// construction failure does NOT abort boot (bootFatalError returns nil), while a
+// failure of any other channel IS boot-fatal.
+func TestBootFatalError_WhatsAppNativeIsNonFatal(t *testing.T) {
+	// Only whatsapp_native failed → non-fatal → boot proceeds.
+	onlyWA := []ChannelInitError{
+		{
+			Name:    "whatsapp_native",
+			Channel: "WhatsApp Native",
+			Err:     errors.New("modernc.org/sqlite unavailable on this build"),
+		},
+	}
+	if err := bootFatalError(onlyWA); err != nil {
+		t.Fatalf("whatsapp_native failure must be non-fatal, got: %v", err)
+	}
+
+	// A non-whatsapp failure is still fatal.
+	withTelegram := []ChannelInitError{
+		{Name: "whatsapp_native", Channel: "WhatsApp Native", Err: errors.New("native unavailable")},
+		{Name: "telegram", Channel: "Telegram", Err: errors.New("bad token")},
+	}
+	err := bootFatalError(withTelegram)
+	if err == nil {
+		t.Fatal("a non-whatsapp channel failure must abort boot")
+	}
+	if !strings.Contains(err.Error(), "Telegram") {
+		t.Fatalf("fatal error must mention the failing non-whatsapp channel, got: %v", err)
+	}
+	// The whatsapp failure must NOT be folded into the fatal error.
+	if strings.Contains(err.Error(), "WhatsApp") {
+		t.Fatalf("whatsapp_native must be excluded from the boot-fatal error, got: %v", err)
+	}
+
+	// No failures → nil.
+	if err := bootFatalError(nil); err != nil {
+		t.Fatalf("no failures must yield nil, got: %v", err)
+	}
+}
+
+// TestRecordChannelFailure_SurfacedAsDegraded asserts that a recorded
+// whatsapp_native failure is surfaced via FailedChannels (degraded status) with
+// a message that tells the operator the native build is required — so even
+// though boot proceeds, the operator sees WHY WhatsApp is down.
+func TestRecordChannelFailure_SurfacedAsDegraded(t *testing.T) {
+	m := newTestManager()
+
+	// Mirror the wrapping initChannels applies to a whatsapp_native init failure.
+	wrapped := fmt.Errorf(
+		"WhatsApp requires the native build (bridge removed); unavailable on this build variant: %w",
+		errors.New("modernc.org/sqlite unavailable"))
+	m.recordChannelFailure("whatsapp_native", "WhatsApp Native", wrapped)
+
+	failed := m.FailedChannels()
+	if len(failed) != 1 {
+		t.Fatalf("expected 1 recorded failure, got %d", len(failed))
+	}
+	if failed[0].Name != "whatsapp_native" {
+		t.Fatalf("expected whatsapp_native recorded, got %q", failed[0].Name)
+	}
+	if !strings.Contains(failed[0].Err.Error(), "native build") {
+		t.Fatalf("degraded message must mention the native build requirement, got: %v", failed[0].Err)
+	}
+
+	// And the recorded whatsapp_native failure remains non-fatal for boot.
+	if err := bootFatalError(failed); err != nil {
+		t.Fatalf("recorded whatsapp_native failure must not be boot-fatal, got: %v", err)
+	}
+}
+
+// --- TTL Janitor tests (Step 2) ---
+
+// TestEvictStale_TypingStop verifies the typingStops arm of the real extracted
+// evictStale sweep: a past-TTL entry is deleted and its (idempotent) stop func
+// is invoked, while a fresh entry is left untouched.
+func TestEvictStale_TypingStop(t *testing.T) {
+	m := newTestManager()
+
+	var staleStopped, freshStopped atomic.Bool
+	m.typingStops.Store("stale:123", typingEntry{
+		stop:      func() { staleStopped.Store(true) },
+		createdAt: time.Now().Add(-10 * time.Minute), // well past typingStopTTL
+	})
+	m.typingStops.Store("fresh:123", typingEntry{
+		stop:      func() { freshStopped.Store(true) },
+		createdAt: time.Now(),
 	})
 
-	// Verify entry was deleted
-	if _, loaded := m.placeholders.Load("test:456"); loaded {
-		t.Fatal("expected placeholder entry to be deleted after eviction")
+	m.evictStale(time.Now())
+
+	if !staleStopped.Load() {
+		t.Fatal("expected stale typing stop func to be called by evictStale")
+	}
+	if _, loaded := m.typingStops.Load("stale:123"); loaded {
+		t.Fatal("expected stale typing entry to be deleted")
+	}
+	if freshStopped.Load() {
+		t.Fatal("fresh typing entry must NOT be evicted")
+	}
+	if _, loaded := m.typingStops.Load("fresh:123"); !loaded {
+		t.Fatal("fresh typing entry must be retained")
+	}
+}
+
+// TestEvictStale_ReactionUndo verifies the reactionUndos arm.
+func TestEvictStale_ReactionUndo(t *testing.T) {
+	m := newTestManager()
+
+	var undone atomic.Bool
+	m.reactionUndos.Store("stale:r", reactionEntry{
+		undo:      func() { undone.Store(true) },
+		createdAt: time.Now().Add(-10 * time.Minute),
+	})
+
+	m.evictStale(time.Now())
+
+	if !undone.Load() {
+		t.Fatal("expected stale reaction undo func to be called by evictStale")
+	}
+	if _, loaded := m.reactionUndos.Load("stale:r"); loaded {
+		t.Fatal("expected stale reaction entry to be deleted")
+	}
+}
+
+// TestEvictStale_Placeholder verifies the placeholders arm.
+func TestEvictStale_Placeholder(t *testing.T) {
+	m := newTestManager()
+
+	m.placeholders.Store("stale:ph", placeholderEntry{
+		id:        "msg_old",
+		createdAt: time.Now().Add(-20 * time.Minute),
+	})
+	m.placeholders.Store("fresh:ph", placeholderEntry{
+		id:        "msg_new",
+		createdAt: time.Now(),
+	})
+
+	m.evictStale(time.Now())
+
+	if _, loaded := m.placeholders.Load("stale:ph"); loaded {
+		t.Fatal("expected stale placeholder entry to be deleted")
+	}
+	if _, loaded := m.placeholders.Load("fresh:ph"); !loaded {
+		t.Fatal("fresh placeholder entry must be retained")
+	}
+}
+
+// TestEvictStale_StreamActive verifies the streamActive arm — the marker added
+// by streamer.Finalize that leaks if the agent errors before publishing an
+// outbound for the key.
+func TestEvictStale_StreamActive(t *testing.T) {
+	m := newTestManager()
+
+	m.streamActive.Store("stale:s", streamEntry{
+		createdAt: time.Now().Add(-20 * time.Minute),
+	})
+	m.streamActive.Store("fresh:s", streamEntry{
+		createdAt: time.Now(),
+	})
+
+	m.evictStale(time.Now())
+
+	if _, loaded := m.streamActive.Load("stale:s"); loaded {
+		t.Fatal("expected stale streamActive marker to be evicted")
+	}
+	if _, loaded := m.streamActive.Load("fresh:s"); !loaded {
+		t.Fatal("fresh streamActive marker must be retained")
 	}
 }
 
@@ -1133,7 +1578,7 @@ func TestManager_PlaceholderConsumedByResponse(t *testing.T) {
 		ChatID:  "chat-1",
 		Content: "Transcript: hello",
 	}
-	mgr.sendWithRetry(ctx, "mock", worker, msgTranscript)
+	mgr.sendWithRetry(ctx, "mock", worker, msgTranscript, false)
 
 	if mockCh.editedMessages != 1 {
 		t.Errorf("expected 1 edited message (placeholder consumed by transcript), got %d", mockCh.editedMessages)
@@ -1153,7 +1598,7 @@ func TestManager_PlaceholderConsumedByResponse(t *testing.T) {
 		ChatID:  "chat-1",
 		Content: "Final Answer",
 	}
-	mgr.sendWithRetry(ctx, "mock", worker, msgFinal)
+	mgr.sendWithRetry(ctx, "mock", worker, msgFinal, false)
 
 	if len(mockCh.sentMessages) != 1 {
 		t.Errorf("expected 1 normal message sent, got %d", len(mockCh.sentMessages))
@@ -1652,5 +2097,77 @@ func TestManager_Reload_ScopedClear_UnchangedFailedChannelRetained(t *testing.T)
 	}
 	if after[0].Name != "discord" {
 		t.Errorf("expected retained failure to be discord, got %q", after[0].Name)
+	}
+}
+
+// TestReload_NoRaceWithReaders is a deterministic -race regression test for the
+// Reload locking smell: Reload used to m.mu.Unlock() before running its
+// register/unregister deferFuncs, which mutate m.channels / m.workers with the
+// lock RELEASED, racing concurrent RLock readers (GetStatus / GetChannel /
+// GetEnabledChannels / SendMessage) and the restarted dispatch goroutines.
+//
+// The fix runs those mutations while still holding m.mu. With the old (buggy)
+// code this test fails under `go test -race` with a data race on m.channels;
+// with the fix it is race-clean.
+func TestReload_NoRaceWithReaders(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := &Manager{
+		channels:      make(map[string]Channel),
+		workers:       make(map[string]*channelWorker),
+		bus:           bus.NewMessageBus(),
+		config:        &config.Config{},
+		channelHashes: make(map[string]string),
+	}
+
+	// Seed a single mock channel and a non-empty hash so that a Reload with an
+	// empty (channel-less) config yields removed=["mock"], driving the
+	// unregisterChannelLocked deferFunc that the fix moved back under the lock.
+	ch := &mockChannel{sendFn: func(context.Context, bus.OutboundMessage) error { return nil }}
+	m.channels["mock"] = ch
+	m.channelHashes["mock"] = "seed-hash"
+
+	// StartAll spins up the worker goroutines (so unregisterChannelLocked's
+	// <-w.done / <-w.mediaDone drains complete after Reload cancels the context)
+	// plus the dispatch goroutines that RLock m.channels concurrently.
+	if err := m.StartAll(ctx); err != nil {
+		t.Fatalf("StartAll: %v", err)
+	}
+
+	// Hammer the RLock readers concurrently with the Reload write window.
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = m.GetStatus()
+					_, _ = m.GetChannel("mock")
+					_ = m.GetEnabledChannels()
+					_ = m.SendMessage(ctx, bus.OutboundMessage{
+						Channel: "mock", ChatID: "1", Content: "x",
+					})
+				}
+			}
+		}()
+	}
+
+	// Reload with an empty config removes "mock" — the path that previously
+	// mutated m.channels with the lock released.
+	if err := m.Reload(ctx, &config.Config{}, credentials.SecretBundle{}); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	close(stop)
+	readers.Wait()
+
+	if _, ok := m.GetChannel("mock"); ok {
+		t.Fatalf("expected mock channel to be removed after Reload")
 	}
 }

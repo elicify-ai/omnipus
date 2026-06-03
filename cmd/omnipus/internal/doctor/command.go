@@ -181,7 +181,6 @@ func checkDMPolicies(cfg *config.Config) []warning {
 		{"WhatsApp", "WARN-DM-003", ch.WhatsApp.Enabled, ch.WhatsApp.AllowFrom},
 		{"Slack", "WARN-DM-004", ch.Slack.Enabled, ch.Slack.AllowFrom},
 		{"LINE", "WARN-DM-005", ch.LINE.Enabled, ch.LINE.AllowFrom},
-		{"OneBot", "WARN-DM-006", ch.OneBot.Enabled, ch.OneBot.AllowFrom},
 		{"WeCom", "WARN-DM-007", ch.WeCom.Enabled, ch.WeCom.AllowFrom},
 		{"Feishu", "WARN-DM-008", ch.Feishu.Enabled, ch.Feishu.AllowFrom},
 	}

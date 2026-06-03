@@ -12,7 +12,11 @@ function ChannelsScreen() {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
-  const [configuringChannel, setConfiguringChannel] = useState<{ id: string; name: string; nativeAvailable?: boolean } | null>(null)
+  const [configuringChannel, setConfiguringChannel] = useState<{
+    id: string
+    name: string
+    nativeAvailable?: boolean
+  } | null>(null)
 
   const { data: channels = [], isLoading, isError } = useQuery({
     queryKey: ['channels'],

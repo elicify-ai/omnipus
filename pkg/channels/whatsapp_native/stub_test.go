@@ -18,7 +18,7 @@ import (
 // the stub return (nil, nil) would let initChannels register a dead channel that
 // silently never pairs.
 func TestStubReturnsError(t *testing.T) {
-	ch, err := NewWhatsAppNativeChannel(config.WhatsAppConfig{Enabled: true, UseNative: true}, nil, "")
+	ch, err := NewWhatsAppNativeChannel(config.WhatsAppConfig{Enabled: true}, nil, "")
 	if err == nil {
 		t.Fatal("expected an error from the WhatsApp native stub, got nil")
 	}

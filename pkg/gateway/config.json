@@ -107,19 +107,6 @@
       "reasoning_channel_id": "",
       "user_id": ""
     },
-    "onebot": {
-      "allow_from": null,
-      "enabled": false,
-      "group_trigger": {},
-      "group_trigger_prefix": null,
-      "placeholder": {
-        "enabled": false
-      },
-      "reasoning_channel_id": "",
-      "reconnect_interval": 0,
-      "typing": {},
-      "ws_url": ""
-    },
     "qq": {
       "allow_from": null,
       "app_id": "",
@@ -175,8 +162,7 @@
       "enabled": false,
       "group_trigger": {},
       "reasoning_channel_id": "",
-      "session_store_path": "",
-      "use_native": false
+      "session_store_path": ""
     }
   },
   "devices": {

@@ -559,7 +559,7 @@ func loadConfig(data []byte) (*Config, error) {
 // contains one of these keys will not cause a load error (the field is simply
 // ignored by the JSON unmarshaler), but we emit a structured Warn so operators
 // are aware the section is inert and can clean up their config file.
-var removedChannelKeys = []string{"maixcam", "teams"}
+var removedChannelKeys = []string{"maixcam", "teams", "onebot"}
 
 // warnRemovedChannelFields inspects the raw "channels" object in the JSON
 // config and emits a slog.Warn for any key that belongs to a removed channel.
