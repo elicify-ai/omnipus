@@ -685,7 +685,9 @@ func (m *Manager) initChannels(channels *config.ChannelsConfig) error {
 	}
 
 	if channels.GoogleChat.Enabled &&
-		(channels.GoogleChat.WebhookURL.String() != "" ||
+		(channels.GoogleChat.WebhookURLRef != "" ||
+			channels.GoogleChat.ServiceAccountJSONRef != "" ||
+			channels.GoogleChat.WebhookURL.String() != "" ||
 			channels.GoogleChat.ServiceAccountJSON.String() != "" ||
 			channels.GoogleChat.ServiceAccountFile != "") {
 		if err := m.initChannel("google-chat", "Google Chat"); err != nil {

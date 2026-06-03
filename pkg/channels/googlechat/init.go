@@ -9,7 +9,7 @@ import (
 
 func init() {
 	channels.RegisterFactory("google-chat",
-		func(cfg *config.Config, _ credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			return NewGoogleChatChannel(cfg.Channels.GoogleChat, b)
+		func(cfg *config.Config, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
+			return NewGoogleChatChannel(cfg.Channels.GoogleChat, secrets, b)
 		})
 }
