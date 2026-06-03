@@ -104,7 +104,7 @@ func TestSendWithRetry_Success(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 
 	if callCount != 1 {
 		t.Fatalf("expected 1 Send call, got %d", callCount)
@@ -131,7 +131,7 @@ func TestSendWithRetry_TemporaryThenSuccess(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 
 	if callCount != 3 {
 		t.Fatalf("expected 3 Send calls (2 failures + 1 success), got %d", callCount)
@@ -155,7 +155,7 @@ func TestSendWithRetry_PermanentFailure(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 
 	if callCount != 1 {
 		t.Fatalf("expected 1 Send call (no retry for permanent failure), got %d", callCount)
@@ -179,7 +179,7 @@ func TestSendWithRetry_NotRunning(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 
 	if callCount != 1 {
 		t.Fatalf("expected 1 Send call (no retry for ErrNotRunning), got %d", callCount)
@@ -207,7 +207,7 @@ func TestSendWithRetry_RateLimitRetry(t *testing.T) {
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
 	start := time.Now()
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 	elapsed := time.Since(start)
 
 	if callCount != 2 {
@@ -236,7 +236,7 @@ func TestSendWithRetry_MaxRetriesExhausted(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 
 	expected := maxRetries + 1 // initial attempt + maxRetries retries
 	if callCount != expected {
@@ -383,7 +383,7 @@ func TestSendWithRetry_UnknownError(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 
 	if callCount != 2 {
 		t.Fatalf("expected 2 Send calls (unknown error treated as temporary), got %d", callCount)
@@ -414,7 +414,7 @@ func TestSendWithRetry_ContextCancelled(t *testing.T) {
 		return fmt.Errorf("timeout: %w", ErrTemporary)
 	}
 
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 
 	// Should have called Send once, then noticed ctx canceled during backoff
 	if callCount != 1 {
@@ -571,7 +571,7 @@ func TestSendWithRetry_ExponentialBackoff(t *testing.T) {
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"}
 
 	start := time.Now()
-	m.sendWithRetry(ctx, "test", w, msg)
+	m.sendWithRetry(ctx, "test", w, msg, false)
 	totalElapsed := time.Since(start)
 
 	// With maxRetries=3: attempts at 0, ~500ms, ~1.5s, ~3.5s
@@ -863,7 +863,7 @@ func TestSendWithRetry_PreSendEditsPlaceholder(t *testing.T) {
 	}
 
 	msg := bus.OutboundMessage{Channel: "test", ChatID: "123", Content: "hello"}
-	m.sendWithRetry(context.Background(), "test", w, msg)
+	m.sendWithRetry(context.Background(), "test", w, msg, false)
 
 	if sendCalled {
 		t.Fatal("expected Send to NOT be called when placeholder was edited")
@@ -1200,7 +1200,7 @@ func TestSendWithRetry_TerminalFailure_PublishesUserNotice(t *testing.T) {
 	w := newWorkerForTest(ch, 1)
 
 	m.sendWithRetry(context.Background(), "zeta", w,
-		bus.OutboundMessage{Channel: "zeta", ChatID: "c1", Content: "will fail"})
+		bus.OutboundMessage{Channel: "zeta", ChatID: "c1", Content: "will fail"}, false)
 
 	select {
 	case notice := <-mb.OutboundChan():
@@ -1220,8 +1220,10 @@ func TestSendWithRetry_TerminalFailure_PublishesUserNotice(t *testing.T) {
 }
 
 // TestSendWithRetry_FallbackNotAmplified guards the H1 fallback against its own
-// re-failure: a send whose content is already a drop notice must NOT publish yet
-// another fallback when it fails.
+// re-failure: a manager-injected notice that itself fails to send must NOT
+// publish yet another fallback. This drives the REAL async path through
+// runWorker (which strips the dropNoticePrefix sentinel and passes isNotice=true
+// to sendWithRetry) — exercising the strip-then-flag handoff, not bypassing it.
 func TestSendWithRetry_FallbackNotAmplified(t *testing.T) {
 	mb := bus.NewMessageBus()
 	defer mb.Close()
@@ -1232,18 +1234,39 @@ func TestSendWithRetry_FallbackNotAmplified(t *testing.T) {
 		bus:      mb,
 	}
 
-	ch := &mockChannel{sendFn: func(_ context.Context, _ bus.OutboundMessage) error {
+	// Capture what the channel was actually asked to deliver; fail every send
+	// terminally so the notice's own delivery fails.
+	delivered := make(chan string, 4)
+	ch := &mockChannel{sendFn: func(_ context.Context, om bus.OutboundMessage) error {
+		delivered <- om.Content
 		return ErrSendFailed
 	}}
-	w := newWorkerForTest(ch, 1)
+	w := newWorkerForTest(ch, 4)
+	m.channels["eta"] = ch
+	m.workers["eta"] = w
 
-	// The message being sent is itself a (failed) drop notice.
-	m.sendWithRetry(context.Background(), "eta", w,
-		bus.OutboundMessage{Channel: "eta", ChatID: "c1", Content: dropNoticePrefix + "[message delivery failed]"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.runWorker(ctx, "eta", w)
 
+	// A manager-injected notice arrives on the worker queue with the sentinel
+	// prefix, exactly as notifyDrop -> dispatchOutbound delivers it.
+	w.queue <- bus.OutboundMessage{Channel: "eta", ChatID: "c1", Content: dropNoticePrefix + "[message delivery failed]"}
+
+	// runWorker must strip the sentinel before delivery.
+	select {
+	case got := <-delivered:
+		if got != "[message delivery failed]" {
+			t.Fatalf("sentinel not stripped before delivery: %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("notice was never delivered to the channel")
+	}
+
+	// The failed delivery of that notice must NOT produce another notice.
 	select {
 	case extra := <-mb.OutboundChan():
-		t.Fatalf("a failed drop-notice send must NOT publish another notice, got %q", extra.Content)
+		t.Fatalf("a failed drop-notice send must NOT publish another notice (amplification), got %q", extra.Content)
 	case <-time.After(300 * time.Millisecond):
 		// No amplification — correct.
 	}
@@ -1554,7 +1577,7 @@ func TestManager_PlaceholderConsumedByResponse(t *testing.T) {
 		ChatID:  "chat-1",
 		Content: "Transcript: hello",
 	}
-	mgr.sendWithRetry(ctx, "mock", worker, msgTranscript)
+	mgr.sendWithRetry(ctx, "mock", worker, msgTranscript, false)
 
 	if mockCh.editedMessages != 1 {
 		t.Errorf("expected 1 edited message (placeholder consumed by transcript), got %d", mockCh.editedMessages)
@@ -1574,7 +1597,7 @@ func TestManager_PlaceholderConsumedByResponse(t *testing.T) {
 		ChatID:  "chat-1",
 		Content: "Final Answer",
 	}
-	mgr.sendWithRetry(ctx, "mock", worker, msgFinal)
+	mgr.sendWithRetry(ctx, "mock", worker, msgFinal, false)
 
 	if len(mockCh.sentMessages) != 1 {
 		t.Errorf("expected 1 normal message sent, got %d", len(mockCh.sentMessages))

@@ -1120,7 +1120,11 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 				return
 			}
 			// Strip the internal drop-notice sentinel before delivery so the
-			// user only sees the human-readable notice text.
+			// user only sees the human-readable notice text. Capture whether this
+			// was a manager-injected notice first — once stripped, sendWithRetry
+			// can no longer detect it, so it relies on this flag to avoid a
+			// notice-of-a-failed-notice amplification loop.
+			isNotice := strings.HasPrefix(msg.Content, dropNoticePrefix)
 			msg.Content = strings.TrimPrefix(msg.Content, dropNoticePrefix)
 			maxLen := 0
 			if mlp, ok := w.ch.(MessageLengthProvider); ok {
@@ -1148,7 +1152,7 @@ func (m *Manager) runWorker(ctx context.Context, name string, w *channelWorker) 
 			for _, chunk := range chunks {
 				chunkMsg := msg
 				chunkMsg.Content = chunk
-				m.sendWithRetry(ctx, name, w, chunkMsg)
+				m.sendWithRetry(ctx, name, w, chunkMsg, isNotice)
 			}
 		case <-ctx.Done():
 			return
@@ -1169,7 +1173,20 @@ func splitByLength(content string, maxLen int) []string {
 //   - ErrNotRunning / ErrSendFailed: permanent, no retry
 //   - ErrRateLimit: fixed delay retry
 //   - ErrTemporary / unknown: exponential backoff retry
-func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWorker, msg bus.OutboundMessage) {
+//
+// sendWithRetry delivers msg, retrying transient errors. isNotice must be true
+// when msg is a manager-injected drop/failure notice (the dropNoticePrefix
+// sentinel is stripped before delivery, so the prefix can no longer be detected
+// from msg.Content here — the caller passes the flag instead). It gates the
+// terminal-failure fallback so a notice that itself fails to send does not
+// recurse into an unbounded notice storm.
+func (m *Manager) sendWithRetry(
+	ctx context.Context,
+	name string,
+	w *channelWorker,
+	msg bus.OutboundMessage,
+	isNotice bool,
+) {
 	// Rate limit: wait for token
 	if err := w.limiter.Wait(ctx); err != nil {
 		// ctx canceled, shutting down
@@ -1225,13 +1242,13 @@ func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWork
 		"retries": maxRetries,
 	})
 
-	// Surface a short user-facing notice so a failed text send is not silent —
-	// mirroring the media path's "[media delivery failed]" fallback. Guard
-	// against re-notifying our own fallback (the dropNoticePrefix sentinel marks
-	// manager-injected notices) so a fallback that itself fails to send does not
-	// recurse. The publish is non-blocking (see notifyDrop) to avoid stalling the
-	// worker when the bus is saturated.
-	if !strings.HasPrefix(msg.Content, dropNoticePrefix) {
+	// Surface a short user-facing notice so a failed text send is not silent.
+	// Guard against re-notifying our own fallback (isNotice marks manager-injected
+	// notices, whose dropNoticePrefix sentinel runWorker already stripped) so a
+	// fallback that itself fails to send does not recurse into a notice storm. The
+	// publish is non-blocking (see notifyDrop) to avoid stalling the worker when
+	// the bus is saturated.
+	if !isNotice {
 		m.notifyDrop(name, msg.ChatID, "[message delivery failed]")
 	}
 }
@@ -1813,14 +1830,18 @@ func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) erro
 	if mlp, ok := w.ch.(MessageLengthProvider); ok {
 		maxLen = mlp.MaxMessageLength()
 	}
+	// The direct send path does not carry manager-injected notices (those flow
+	// via notifyDrop -> bus -> runWorker), but detect the sentinel defensively so
+	// the no-amplification guard holds here too.
+	isNotice := strings.HasPrefix(msg.Content, dropNoticePrefix)
 	if maxLen > 0 && len([]rune(msg.Content)) > maxLen {
 		for _, chunk := range SplitMessage(msg.Content, maxLen) {
 			chunkMsg := msg
 			chunkMsg.Content = chunk
-			m.sendWithRetry(ctx, msg.Channel, w, chunkMsg)
+			m.sendWithRetry(ctx, msg.Channel, w, chunkMsg, isNotice)
 		}
 	} else {
-		m.sendWithRetry(ctx, msg.Channel, w, msg)
+		m.sendWithRetry(ctx, msg.Channel, w, msg, isNotice)
 	}
 	return nil
 }
