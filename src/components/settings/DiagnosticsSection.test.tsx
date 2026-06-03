@@ -52,17 +52,19 @@ describe('DiagnosticsSection — empty state', () => {
     renderSection()
 
     await waitFor(() => {
-      expect(screen.getByText(/no diagnostics run yet/i)).toBeInTheDocument()
+      // US-B4: updated copy "No security scan yet"
+      expect(screen.getByText(/no security scan yet/i)).toBeInTheDocument()
     })
   })
 
-  it('shows run diagnostics button in all states', async () => {
+  it('shows check-now button in all states', async () => {
     vi.mocked(fetchDoctorResults).mockResolvedValue(null)
 
     renderSection()
 
+    // US-B4: button now says "Check now" (plain language)
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /run diagnostics/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /check now/i })).toBeInTheDocument()
     })
   })
 })
@@ -148,8 +150,8 @@ describe('TestDiagnostics_ToastAfterRun', () => {
 
     renderSection()
 
-    await waitFor(() => screen.getByRole('button', { name: /run diagnostics/i }))
-    fireEvent.click(screen.getByRole('button', { name: /run diagnostics/i }))
+    await waitFor(() => screen.getByRole('button', { name: /check now/i }))
+    fireEvent.click(screen.getByRole('button', { name: /check now/i }))
 
     await waitFor(() => {
       expect(mockAddToast).toHaveBeenCalledWith(
@@ -227,13 +229,14 @@ describe('DiagnosticsSection — results display', () => {
     })
   })
 
-  it('displays the last run timestamp', async () => {
+  it('displays the last checked timestamp', async () => {
     vi.mocked(fetchDoctorResults).mockResolvedValue(fullResult)
 
     renderSection()
 
+    // US-B4: updated label "Last checked:" (was "Last run:")
     await waitFor(() => {
-      expect(screen.getByText(/last run:/i)).toBeInTheDocument()
+      expect(screen.getByText(/last checked:/i)).toBeInTheDocument()
     })
   })
 
@@ -261,7 +264,7 @@ describe('DiagnosticsSection — results display', () => {
     })
   })
 
-  it('shows all clear message when no issues', async () => {
+  it('shows all clear message when no issues (score=100)', async () => {
     vi.mocked(fetchDoctorResults).mockResolvedValue({
       score: 100,
       issues: [],
@@ -270,9 +273,11 @@ describe('DiagnosticsSection — results display', () => {
 
     renderSection()
 
+    // US-B4: all-clear panel content
     await waitFor(() => {
-      expect(screen.getByText(/no issues found/i)).toBeInTheDocument()
+      expect(screen.getByTestId('all-clear-panel')).toBeInTheDocument()
     })
+    expect(screen.getByTestId('all-clear-panel')).toHaveTextContent(/you're protected/i)
   })
 
   it('card title reads "Security Score"', async () => {
@@ -282,6 +287,31 @@ describe('DiagnosticsSection — results display', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Security Score')).toBeInTheDocument()
+    })
+  })
+
+  // US-B4: reassurance message
+  it('shows reassurance with issue count when issues exist', async () => {
+    vi.mocked(fetchDoctorResults).mockResolvedValue(fullResult)
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('score-reassurance')).toHaveTextContent(/3 things could be stronger/i)
+    })
+  })
+
+  it('shows "protected" reassurance with score=100 and no issues', async () => {
+    vi.mocked(fetchDoctorResults).mockResolvedValue({
+      score: 100,
+      issues: [],
+      checked_at: '2026-01-01T00:00:00Z',
+    })
+
+    renderSection()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('score-reassurance')).toHaveTextContent(/you're protected\./i)
     })
   })
 })
@@ -352,14 +382,30 @@ describe('DiagnosticsSection — issue card interaction', () => {
       expect(screen.queryByText(/kernel filesystem sandbox is disabled/i)).not.toBeInTheDocument()
     })
   })
+
+  // US-B4: action link navigates to in-place fix (data-testid)
+  it('action link has correct href for in-place fix navigation', async () => {
+    vi.mocked(fetchDoctorResults).mockResolvedValue(resultWithIssue)
+
+    renderSection()
+
+    await waitFor(() => screen.getByText('Landlock not enabled'))
+    fireEvent.click(screen.getByText('Landlock not enabled'))
+
+    await waitFor(() => {
+      const link = screen.getByTestId('issue-action-link-landlock-disabled')
+      expect(link).toHaveAttribute('href', 'https://docs.omnipus.ai/landlock')
+      expect(link).toHaveTextContent(/enable landlock/i)
+    })
+  })
 })
 
 // =====================================================================
-// Scenario: Run diagnostics button
+// Scenario: Run diagnostics button (US-B4: "Check now" label)
 // =====================================================================
 
 describe('DiagnosticsSection — run diagnostics', () => {
-  it('clicking Run diagnostics calls runDoctor API', async () => {
+  it('clicking "Check now" calls runDoctor API', async () => {
     vi.mocked(fetchDoctorResults).mockResolvedValue(null)
     vi.mocked(runDoctor).mockResolvedValue({
       score: 85,
@@ -369,9 +415,9 @@ describe('DiagnosticsSection — run diagnostics', () => {
 
     renderSection()
 
-    await waitFor(() => screen.getByRole('button', { name: /run diagnostics/i }))
+    await waitFor(() => screen.getByRole('button', { name: /check now/i }))
 
-    fireEvent.click(screen.getByRole('button', { name: /run diagnostics/i }))
+    fireEvent.click(screen.getByRole('button', { name: /check now/i }))
 
     await waitFor(() => {
       expect(runDoctor).toHaveBeenCalledOnce()
@@ -388,8 +434,8 @@ describe('DiagnosticsSection — run diagnostics', () => {
 
     renderSection()
 
-    await waitFor(() => screen.getByRole('button', { name: /run diagnostics/i }))
-    fireEvent.click(screen.getByRole('button', { name: /run diagnostics/i }))
+    await waitFor(() => screen.getByRole('button', { name: /check now/i }))
+    fireEvent.click(screen.getByRole('button', { name: /check now/i }))
 
     await waitFor(() => {
       expect(mockAddToast).toHaveBeenCalledWith(
@@ -410,8 +456,8 @@ describe('DiagnosticsSection — run diagnostics', () => {
 
     renderSection()
 
-    await waitFor(() => screen.getByRole('button', { name: /run diagnostics/i }))
-    fireEvent.click(screen.getByRole('button', { name: /run diagnostics/i }))
+    await waitFor(() => screen.getByRole('button', { name: /check now/i }))
+    fireEvent.click(screen.getByRole('button', { name: /check now/i }))
 
     await waitFor(() => {
       expect(screen.getByText('80')).toBeInTheDocument()
@@ -424,8 +470,8 @@ describe('DiagnosticsSection — run diagnostics', () => {
 
     renderSection()
 
-    await waitFor(() => screen.getByRole('button', { name: /run diagnostics/i }))
-    fireEvent.click(screen.getByRole('button', { name: /run diagnostics/i }))
+    await waitFor(() => screen.getByRole('button', { name: /check now/i }))
+    fireEvent.click(screen.getByRole('button', { name: /check now/i }))
 
     await waitFor(() => {
       expect(mockAddToast).toHaveBeenCalledWith(
@@ -434,17 +480,17 @@ describe('DiagnosticsSection — run diagnostics', () => {
     })
   })
 
-  it('run diagnostics button is disabled while running', async () => {
+  it('"Check now" button is disabled while running', async () => {
     vi.mocked(fetchDoctorResults).mockResolvedValue(null)
     vi.mocked(runDoctor).mockReturnValue(new Promise(() => {}))
 
     renderSection()
 
-    await waitFor(() => screen.getByRole('button', { name: /run diagnostics/i }))
-    fireEvent.click(screen.getByRole('button', { name: /run diagnostics/i }))
+    await waitFor(() => screen.getByRole('button', { name: /check now/i }))
+    fireEvent.click(screen.getByRole('button', { name: /check now/i }))
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /running/i })).toBeDisabled()
+      expect(screen.getByRole('button', { name: /checking/i })).toBeDisabled()
     })
   })
 })
