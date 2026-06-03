@@ -3791,6 +3791,14 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusUnprocessableEntity, "url is required for sse/http transport")
 			return
 		}
+		// Mirror SPA isValidUrlScheme: https always accepted; http only for
+		// loopback (localhost, 127.x.x.x, ::1). Any other http:// URL is
+		// rejected so the SPA validation cannot be bypassed via direct API call.
+		if !mcpURLSchemeValid(*req.Url) {
+			jsonErr(w, http.StatusUnprocessableEntity,
+				"url must use https, or http for loopback addresses only (localhost, 127.x.x.x, ::1)")
+			return
+		}
 	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
@@ -3859,6 +3867,36 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		ToolCount: 0,
 	}
 	jsonCreated(w, resp)
+}
+
+// mcpURLSchemeValid reports whether rawURL is acceptable for an sse/http MCP
+// server endpoint. It mirrors the SPA's isValidUrlScheme function
+// (src/components/skills/McpServerModal.tsx) so the contract described in
+// McpServerCreate.yaml is enforced server-side and cannot be bypassed via
+// direct API calls.
+//
+// Rules:
+//   - https:// is always accepted.
+//   - http:// is accepted only for loopback hosts: "localhost", any 127.x.x.x
+//     address, or "::1" / "[::1]".
+//   - Any other scheme (http:// to a public host, ws://, ftp://, etc.) is rejected.
+func mcpURLSchemeValid(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	switch parsed.Scheme {
+	case "https":
+		return true
+	case "http":
+		host := strings.ToLower(parsed.Hostname())
+		return host == "localhost" ||
+			strings.HasPrefix(host, "127.") ||
+			host == "::1" ||
+			host == "[::1]"
+	default:
+		return false
+	}
 }
 
 func (a *restAPI) deleteMCPServer(w http.ResponseWriter, id string) {
