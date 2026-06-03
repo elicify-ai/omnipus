@@ -22,10 +22,12 @@ import { ModelSelector } from '@/components/ui/model-selector'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useQuery } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
-import { createAgent, fetchProviders, isApiError } from '@/lib/api'
+import { createAgent, fetchProviders, fetchRegistryTools, isApiError } from '@/lib/api'
 import type { Agent, AgentCreateRequest, AgentToolsCfg } from '@/lib/api'
 import { AVATAR_COLORS } from '@/lib/constants'
-import { ToolsAndPermissions } from './ToolsAndPermissions'
+import { ToolPolicyEditor } from '@/components/shared/ToolPolicyEditor'
+import type { ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
+import { applyRolePreset } from '@/lib/toolPolicyPresets'
 
 const ICON_OPTIONS = [
   { name: 'Robot', component: Robot },
@@ -46,7 +48,50 @@ function getIconComponent(name: IconName) {
   return ICON_OPTIONS.find((o) => o.name === name)?.component ?? Robot
 }
 
-// Fallback model list when no providers are connected
+// ── CreateAgentToolsTab ────────────────────────────────────────────────────────
+//
+// #334 (US-D1): Renders the shared ToolPolicyEditor inside the Create-Agent
+// modal. Fetches the tool registry itself (no agentId → no per-agent tools
+// endpoint needed). Handles loading and error states inline.
+
+function CreateAgentToolsTab({
+  value,
+  onChange,
+}: {
+  value: ToolPolicyValue
+  onChange: (next: ToolPolicyValue) => void
+}) {
+  const { data: registryTools = [], isLoading, isError } = useQuery({
+    queryKey: ['registry-tools'],
+    queryFn: fetchRegistryTools,
+  })
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2 py-4">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="h-9 rounded-md bg-[var(--color-surface-2)] animate-pulse" />
+        ))}
+      </div>
+    )
+  }
+
+  if (isError) {
+    return (
+      <p className="text-xs text-[var(--color-error)] py-4">
+        Failed to load tool list. Check that the backend is running.
+      </p>
+    )
+  }
+
+  return (
+    <ToolPolicyEditor
+      tools={registryTools}
+      value={value}
+      onChange={onChange}
+    />
+  )
+}
 
 interface CreateAgentModalProps {
   /** Override modal open state (optional — defaults to Zustand store) */
@@ -84,9 +129,10 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
   const [temperature, setTemperature] = useState(1.0)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [nameError, setNameError] = useState('')
-  const [toolsState, setToolsState] = useState<AgentToolsCfg>({
-    builtin: { default_policy: 'allow' },
-  })
+
+  // #334 (US-D1): new agent defaults to Balanced (not default_policy:'allow').
+  const BALANCED_DEFAULT: ToolPolicyValue = applyRolePreset('balanced')
+  const [toolsPolicyValue, setToolsPolicyValue] = useState<ToolPolicyValue>(BALANCED_DEFAULT)
 
   const resetForm = () => {
     setName('')
@@ -97,7 +143,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
     setTemperature(1.0)
     setAdvancedOpen(false)
     setNameError('')
-    setToolsState({ builtin: { default_policy: 'allow' } })
+    setToolsPolicyValue(applyRolePreset('balanced'))
   }
 
   // Reset form state whenever the modal opens so stale values are not shown
@@ -134,6 +180,13 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
       setNameError('Name is required')
       return
     }
+    // Build the AgentToolsCfg wire shape from the ToolPolicyValue editor state.
+    const toolsCfg: AgentToolsCfg = {
+      builtin: {
+        default_policy: toolsPolicyValue.default_policy,
+        policies: toolsPolicyValue.policies,
+      },
+    }
     doCreate({
       name: name.trim(),
       description: description || undefined,
@@ -141,7 +194,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
       color,
       icon,
       model_params: { temperature },
-      tools_cfg: toolsState,
+      tools_cfg: toolsCfg,
     })
   }
 
@@ -309,11 +362,11 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
             </TabsContent>
 
             <TabsContent value="tools" className="flex-1 overflow-y-auto min-h-0 mt-0 pr-1">
-              <ToolsAndPermissions
-                agentId={null}
-                agentType="custom"
-                tools={toolsState}
-                onChange={setToolsState}
+              {/* #334 (US-D1): shared ToolPolicyEditor with Balanced default.
+                  Tool list from registry — new agent has no agentId yet. */}
+              <CreateAgentToolsTab
+                value={toolsPolicyValue}
+                onChange={setToolsPolicyValue}
               />
             </TabsContent>
           </Tabs>

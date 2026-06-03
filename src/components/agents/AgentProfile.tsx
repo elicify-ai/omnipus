@@ -463,6 +463,15 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
             <AccordionTrigger className="px-4 font-headline font-bold text-sm">
               <div className="flex items-center gap-2">
                 <span>Sandbox</span>
+                {/* #335 (US-D3): standing warning badge on accordion header when a widened profile is active */}
+                {(sandboxProfile === 'workspace+net' || sandboxProfile === 'off') && (
+                  <span
+                    data-testid="sandbox-accordion-widening-badge"
+                    className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/40"
+                  >
+                    Widened
+                  </span>
+                )}
                 <SandboxInfoTooltip />
               </div>
             </AccordionTrigger>
@@ -594,6 +603,7 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                   </div>
                 </div>
               )}
+              {/* #335 (US-D3): temperature/top-p under "Sampling parameters" with plain captions */}
               {canEdit && (
                 <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
                   <button
@@ -601,13 +611,14 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                     onClick={() => setAdvancedOpen((o) => !o)}
                     className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
                   >
-                    <span>Advanced parameters</span>
+                    <span>Sampling parameters</span>
                     {advancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
                   </button>
                   {advancedOpen && (
                     <div className="px-3 pb-3 space-y-4 border-t border-[var(--color-border)]">
                       <RangeField
                         label="Temperature"
+                        caption="Higher = more creative / less predictable (0–2, default 1)"
                         value={temperature}
                         min={0}
                         max={2}
@@ -617,6 +628,7 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                       />
                       <RangeField
                         label="Max tokens"
+                        caption="Maximum length of each reply"
                         value={maxTokens}
                         min={256}
                         max={32768}
@@ -626,6 +638,7 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                       />
                       <RangeField
                         label="Top P"
+                        caption="Nucleus sampling mass — 1.0 disables it (default 1)"
                         value={topP}
                         min={0}
                         max={1}
@@ -714,14 +727,15 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
             </AccordionTrigger>
             <AccordionContent>
               <div className="px-4 space-y-5">
-                {/* SOUL.md */}
+                {/* #335 (US-D3): relabeled SOUL.md → "Personality & instructions" */}
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
                     <Scroll size={13} className="text-[var(--color-accent)]" />
-                    <p className="text-xs font-medium text-[var(--color-secondary)]">SOUL.md</p>
+                    <p className="text-xs font-medium text-[var(--color-secondary)]">Personality &amp; instructions</p>
                   </div>
                   <p className="text-xs text-[var(--color-muted)]">
-                    The agent's personality and system prompt.
+                    Defines this agent's character, expertise, and behavioral guidelines.
+                    Stored as <span className="font-mono text-[11px]">SOUL.md</span> in the agent workspace.
                   </p>
                   <Textarea
                     value={soul}
@@ -756,11 +770,12 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
 
                 <Separator />
 
-                {/* HEARTBEAT.md */}
+                {/* #335 (US-D3): relabeled HEARTBEAT.md → "Background tasks / periodic instructions" */}
                 <div className="space-y-2">
-                  <p className="text-xs font-medium text-[var(--color-secondary)]">HEARTBEAT.md</p>
+                  <p className="text-xs font-medium text-[var(--color-secondary)]">Background tasks / periodic instructions</p>
                   <p className="text-xs text-[var(--color-muted)]">
-                    The agent's persistent context — goals, preferences, and working memory.
+                    Instructions the agent runs on a recurring schedule — check queues, summarize,
+                    or perform any background work. Stored as <span className="font-mono text-[11px]">HEARTBEAT.md</span>.
                   </p>
                   <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 space-y-3">
                     <div className="flex items-center justify-between">
@@ -802,11 +817,14 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                 {!isLocked && (
                   <div className="space-y-2">
                     <p className="text-xs font-medium text-[var(--color-secondary)]">Execution</p>
-                    <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
+                    {/* #335 (US-D3): plain captions for execution parameters */}
+                  <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
                       <div className="flex items-center gap-3">
                         <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
-                          Turn timeout (seconds)
-                          <span className="block text-[10px] text-[var(--color-muted)]/70">0 = no limit</span>
+                          Turn timeout
+                          <span className="block text-[10px] text-[var(--color-muted)]/70">
+                            Max seconds per turn. 0 = no limit.
+                          </span>
                         </label>
                         <Input
                           type="number"
@@ -817,7 +835,12 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                         />
                       </div>
                       <div className="flex items-center gap-3">
-                        <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Max tool iterations</label>
+                        <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                          Max tool calls per turn
+                          <span className="block text-[10px] text-[var(--color-muted)]/70">
+                            Stops runaway loops. Default: 50.
+                          </span>
+                        </label>
                         <Input
                           type="number"
                           min={1}
@@ -827,7 +850,12 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                         />
                       </div>
                       <div className="flex items-center gap-3">
-                        <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Message handling</label>
+                        <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                          Message handling
+                          <span className="block text-[10px] text-[var(--color-muted)]/70">
+                            How concurrent messages are processed.
+                          </span>
+                        </label>
                         <SmartSelect
                           value={steeringMode}
                           onValueChange={(v) => { markDirty(); setSteeringMode(v) }}
@@ -841,8 +869,10 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                       </div>
                       <div className="flex items-center justify-between py-1">
                         <div>
-                          <p className="text-sm text-[var(--color-secondary)]">Tool progress feedback</p>
-                          <p className="text-xs text-[var(--color-muted)]">Show tool call status while running</p>
+                          <p className="text-sm text-[var(--color-secondary)]">Show tool progress</p>
+                          <p className="text-xs text-[var(--color-muted)]">
+                            Echo tool results back to the agent as it works.
+                          </p>
                         </div>
                         <Switch
                           checked={toolFeedback}
@@ -869,9 +899,11 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
             </AccordionTrigger>
             <AccordionContent>
               <div className="px-4">
+                {/* #332 (US-D5 / B-2): isLocked=true → read-only editor, no writes */}
                 <ToolsAndPermissions
                   agentId={agentId}
                   agentType={agent.type}
+                  isLocked={isLocked}
                   tools={toolsCfg}
                   onChange={setToolsCfg}
                 />
@@ -1042,6 +1074,8 @@ function SessionRow({ session }: { session: AgentSession }) {
 
 interface RangeFieldProps {
   label: string
+  /** #335: plain language caption shown below the label */
+  caption?: string
   value: number
   min: number
   max: number
@@ -1050,11 +1084,16 @@ interface RangeFieldProps {
   format: (v: number) => string
 }
 
-function RangeField({ label, value, min, max, step, onChange, format }: RangeFieldProps) {
+function RangeField({ label, caption, value, min, max, step, onChange, format }: RangeFieldProps) {
   return (
     <div className="space-y-1 pt-3">
       <div className="flex items-center justify-between">
-        <span className="text-xs text-[var(--color-muted)]">{label}</span>
+        <div>
+          <span className="text-xs text-[var(--color-muted)]">{label}</span>
+          {caption && (
+            <p className="text-[10px] text-[var(--color-muted)]/70 leading-snug mt-0.5">{caption}</p>
+          )}
+        </div>
         <span className="text-xs font-mono text-[var(--color-secondary)]">{format(value)}</span>
       </div>
       <input
