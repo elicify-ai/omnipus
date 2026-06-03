@@ -327,22 +327,23 @@ func (cs *CronService) clockNowUnsafeMS() int64 {
 	return cs.clock.Now().UnixMilli()
 }
 
-func (cs *CronService) Start() error {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-
+// initRunStateUnsafe loads the store, migrates owners, recomputes next-run
+// times, and initializes the stop/wake channels + lane context. The caller must
+// hold cs.mu. It returns started=true only on a stopped→running transition (so
+// Start knows to launch the runLoop exactly once).
+func (cs *CronService) initRunStateUnsafe() (started bool, err error) {
 	if cs.running {
-		return nil
+		return false, nil
 	}
 
 	if err := cs.loadStore(); err != nil {
-		return fmt.Errorf("failed to load store: %w", err)
+		return false, fmt.Errorf("failed to load store: %w", err)
 	}
 	cs.migrateOwnersUnsafe()
 
 	cs.recomputeNextRuns()
 	if err := cs.saveStoreUnsafe(); err != nil {
-		return fmt.Errorf("failed to save store: %w", err)
+		return false, fmt.Errorf("failed to save store: %w", err)
 	}
 
 	cs.stopChan = make(chan struct{})
@@ -354,9 +355,33 @@ func (cs *CronService) Start() error {
 		cs.laneCtx, cs.laneCancel = context.WithCancel(context.Background())
 	}
 	cs.running = true
-	go cs.runLoop(cs.stopChan)
+	return true, nil
+}
 
+func (cs *CronService) Start() error {
+	cs.mu.Lock()
+	started, err := cs.initRunStateUnsafe()
+	stop := cs.stopChan
+	cs.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if started {
+		go cs.runLoop(stop)
+	}
 	return nil
+}
+
+// startNoLoop enables RunDueJobs/dispatch (running=true + lane initialized)
+// WITHOUT launching the real-time runLoop timer. Test-only: deterministic tests
+// drive RunDueJobs(now) directly with the injected fake Clock, whereas runLoop
+// uses real time.Now() and would otherwise busy-spin and race the fake-clock
+// dispatch (the spec intends tests to bypass the loop, W-5).
+func (cs *CronService) startNoLoop() error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	_, err := cs.initRunStateUnsafe()
+	return err
 }
 
 // Stop cancels the parallel lane context and blocks (bounded) on in-flight runs

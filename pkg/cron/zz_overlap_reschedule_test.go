@@ -27,7 +27,7 @@ func TestRecurringSurvivesOverlapSkip(t *testing.T) {
 		return "", nil
 	}}
 	cs.SetRunner(runner)
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()
@@ -67,7 +67,7 @@ func TestRecurringSurvivesOwnerMissingSkip(t *testing.T) {
 	cs, _ := newAutonomyService(t, clk)
 	runner := &recordingRunner{}
 	cs.SetRunner(runner)
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()
@@ -101,7 +101,7 @@ func TestPanicInRunRecordedAsError(t *testing.T) {
 		panic("kaboom in scheduled run")
 	}}
 	cs.SetRunner(runner)
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()
@@ -141,7 +141,7 @@ func TestBoundedStopReturnsOnTimeout(t *testing.T) {
 		return "", nil
 	}}
 	cs.SetRunner(runner)
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	addDueJob(t, cs, "mia")
@@ -169,7 +169,7 @@ func TestTimeoutClassifiedAsTimeoutStatus(t *testing.T) {
 		return "", context.DeadlineExceeded
 	}}
 	cs.SetRunner(runner)
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()
@@ -205,7 +205,7 @@ func TestTransientRetryBackoffAndReset(t *testing.T) {
 		return "sess-ok", nil
 	}}
 	cs.SetRunner(runner)
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()

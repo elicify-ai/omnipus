@@ -93,7 +93,7 @@ func TestRunDueJobs_FiresDueJob(t *testing.T) {
 	runner := &recordingRunner{result: "sess-1"}
 	cs.SetRunner(runner)
 
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()
@@ -150,7 +150,7 @@ func TestRunDueJobs_OverlapSkip(t *testing.T) {
 		}
 	})
 
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()
@@ -212,7 +212,7 @@ func TestRunDueJobs_ConcurrencyCapQueues(t *testing.T) {
 	}}
 	cs.SetRunner(runner)
 
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()
@@ -269,7 +269,7 @@ func TestMigration_NilDefaultSkipsFire(t *testing.T) {
 	runner := &recordingRunner{}
 	cs.SetRunner(runner)
 
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()
@@ -308,7 +308,7 @@ func TestRunOutcome_ErrorAndConsecutiveFailures(t *testing.T) {
 	}}
 	cs.SetRunner(runner)
 
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()
@@ -349,7 +349,7 @@ func TestRunOutcome_HistoryCappedAt20(t *testing.T) {
 	runner := &recordingRunner{result: ""}
 	cs.SetRunner(runner)
 
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()
@@ -386,7 +386,7 @@ func TestStop_DrainsInFlightRuns(t *testing.T) {
 	}}
 	cs.SetRunner(runner)
 
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	addDueJob(t, cs, "mia")
@@ -459,7 +459,7 @@ func TestRunNow_DispatchesThroughLane(t *testing.T) {
 	cs, _ := newAutonomyService(t, clk)
 	runner := &recordingRunner{result: "sess-rn"}
 	cs.SetRunner(runner)
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()
@@ -487,7 +487,7 @@ func TestRunNow_PropagatesError(t *testing.T) {
 	cs, _ := newAutonomyService(t, clk)
 	runner := &recordingRunner{err: fmt.Errorf("kaboom")}
 	cs.SetRunner(runner)
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()
@@ -514,7 +514,7 @@ func TestRunNow_SaturatedHistoryStillReportsError(t *testing.T) {
 	cs, _ := newAutonomyService(t, clk)
 	runner := &recordingRunner{err: fmt.Errorf("kaboom")}
 	cs.SetRunner(runner)
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()
@@ -564,7 +564,7 @@ func TestRunNow_NotFound(t *testing.T) {
 	clk := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	cs, _ := newAutonomyService(t, clk)
 	cs.SetRunner(&recordingRunner{result: "x"})
-	if err := cs.Start(); err != nil {
+	if err := cs.startNoLoop(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer cs.Stop()
