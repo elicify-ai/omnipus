@@ -36,15 +36,14 @@ import {
   POLICY_PRESETS,
   applyRolePreset,
   type RolePreset,
+  type ToolPolicyValue,
 } from '@/lib/toolPolicyPresets'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-export interface ToolPolicyValue {
-  default_policy: ToolPolicy
-  /** Sparse map: only tool ids that differ from default_policy. */
-  policies: Record<string, ToolPolicy>
-}
+// ToolPolicyValue is the single canonical type (HC#8) — re-exported so callers
+// that only import from this component get the same type.
+export type { ToolPolicyValue }
 
 export interface ToolPolicyEditorProps {
   /** Full tool list from GET /api/v1/tools. */
@@ -90,13 +89,44 @@ function detectActivePreset(value: ToolPolicyValue): RolePreset | null {
   return null
 }
 
-/** Group MCP tools by server prefix (the part before the first '.', if any). */
+/**
+ * Extract the MCP server name from a registered MCP tool name.
+ *
+ * The backend (pkg/tools/mcp_tool.go MCPTool.Name()) formats MCP tool names as:
+ *   mcp_<sanitizedServer>_<sanitizedTool>
+ * with an optional hash suffix when sanitization is lossy or the name exceeds
+ * 64 characters.
+ *
+ * The server name is always the segment immediately after the 'mcp_' prefix —
+ * i.e. everything between the first and second underscore (after 'mcp').
+ *
+ * We NEVER key on tool.category (two tools from the same server can carry
+ * different categories; two servers can share a category value).
+ *
+ * Falls back to the whole name when the 'mcp_' prefix is absent (should not
+ * happen in practice since source:'mcp' tools always go through MCPTool.Name()).
+ */
+function mcpServerFromToolName(toolName: string): string {
+  // Expected format: mcp_<server>_<tool>[_<hash>]
+  const MCP_PREFIX = 'mcp_'
+  if (!toolName.startsWith(MCP_PREFIX)) {
+    // Unexpected format — fall back gracefully.
+    return toolName.split('_')[0] || 'mcp'
+  }
+  const withoutPrefix = toolName.slice(MCP_PREFIX.length) // '<server>_<tool>...'
+  const firstUnderscore = withoutPrefix.indexOf('_')
+  if (firstUnderscore === -1) {
+    // Only server segment, no tool suffix — treat the whole thing as server.
+    return withoutPrefix || 'mcp'
+  }
+  return withoutPrefix.slice(0, firstUnderscore)
+}
+
+/** Group MCP tools by server name derived from the tool's registered name. */
 function groupMcpByServer(mcpTools: RegistryTool[]): Record<string, RegistryTool[]> {
   const servers: Record<string, RegistryTool[]> = {}
   for (const tool of mcpTools) {
-    // Use category as server name if available, else fall back to first
-    // segment of the tool name (MCP names are typically "server.toolname").
-    const serverName = tool.category || tool.name.split('.')[0] || 'MCP'
+    const serverName = mcpServerFromToolName(tool.name)
     if (!servers[serverName]) servers[serverName] = []
     servers[serverName].push(tool)
   }

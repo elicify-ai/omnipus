@@ -43,14 +43,20 @@ const BROWSER_TOOLS: RegistryTool[] = [
   makeTool({ name: 'browser.evaluate', category: 'browser', scope: 'core' }),
 ]
 
+/**
+ * MCP tools use the format mcp_<server>_<tool> (pkg/tools/mcp_tool.go MCPTool.Name()).
+ * Two tools from the same server ('myserver') carry DIFFERENT categories to verify
+ * that grouping is by server name derived from the tool name, NOT by category.
+ */
 const MCP_TOOLS: RegistryTool[] = [
-  makeTool({ name: 'mcp_server.search', category: 'search', source: 'mcp', scope: 'general' }),
-  makeTool({ name: 'mcp_server.fetch', category: 'web', source: 'mcp', scope: 'general' }),
+  // Both from server 'myserver' — different categories to exercise Blocker 1 fix
+  makeTool({ name: 'mcp_myserver_search', category: 'search', source: 'mcp', scope: 'general' }),
+  makeTool({ name: 'mcp_myserver_fetch', category: 'web', source: 'mcp', scope: 'general' }),
 ]
 
 const MCP_TOOL_NO_CATEGORY: RegistryTool = makeTool({
-  name: 'mcp_server.uncategorized',
-  // No explicit category to test the fallback grouping
+  // Tool from 'otherserver' — category is 'other' (unset fallback)
+  name: 'mcp_otherserver_uncategorized',
   category: 'other',
   source: 'mcp',
   scope: 'general',
@@ -299,20 +305,108 @@ describe('ToolPolicyEditor — MCP tools (F-G06 guard)', () => {
     expect(screen.queryByTestId('system-disclosure-wrapper')).not.toBeInTheDocument()
   })
 
-  it('MCP tools grouped per server — tools from the same server share a server disclosure', async () => {
+  /**
+   * Blocker 1 — MCP grouping must key on server name derived from the tool
+   * NAME (format: mcp_<server>_<tool>), NOT on category.
+   *
+   * (a) Same server, different categories → ONE disclosure.
+   * (b) Different servers, same category → TWO disclosures.
+   */
+  it('(Blocker 1a) same-server tools with different categories → ONE server disclosure', async () => {
     const user = userEvent.setup()
-    const sameServerTools: RegistryTool[] = [
-      makeTool({ name: 'my_server.tool_a', category: 'web', source: 'mcp', scope: 'general' }),
-      makeTool({ name: 'my_server.tool_b', category: 'web', source: 'mcp', scope: 'general' }),
-    ]
-    renderEditor(sameServerTools)
+    // mcp_myserver_search has category:'search'; mcp_myserver_fetch has category:'web'
+    // Both share server 'myserver' → must produce exactly ONE disclosure in the MCP section.
+    renderEditor(MCP_TOOLS)
     const mcpSection = screen.getByTestId('mcp-tools-section')
-    // Should be exactly one server disclosure (both tools share 'web' or 'my_server' category)
     const triggers = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')
     expect(triggers.length).toBe(1)
     // Expand and verify both tools are inside
     await user.click(triggers[0])
-    expect(screen.getByTestId('tool-row-my_server.tool_a')).toBeInTheDocument()
-    expect(screen.getByTestId('tool-row-my_server.tool_b')).toBeInTheDocument()
+    expect(screen.getByTestId('tool-row-mcp_myserver_search')).toBeInTheDocument()
+    expect(screen.getByTestId('tool-row-mcp_myserver_fetch')).toBeInTheDocument()
+  })
+
+  it('(Blocker 1b) different-server tools with the same category → TWO server disclosures', async () => {
+    // Two tools, same category 'web', but different servers (server1, server2)
+    const differentServerSameCategory: RegistryTool[] = [
+      makeTool({ name: 'mcp_server1_tool', category: 'web', source: 'mcp', scope: 'general' }),
+      makeTool({ name: 'mcp_server2_tool', category: 'web', source: 'mcp', scope: 'general' }),
+    ]
+    renderEditor(differentServerSameCategory)
+    const mcpSection = screen.getByTestId('mcp-tools-section')
+    // Must produce TWO disclosures (one per server), NOT one
+    const triggers = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')
+    expect(triggers.length).toBe(2)
+  })
+
+  it('MCP tools grouped per server — mcp_<server>_<tool> naming convention', async () => {
+    const user = userEvent.setup()
+    // Explicitly named per the real MCPTool.Name() format
+    const sameServerTools: RegistryTool[] = [
+      makeTool({ name: 'mcp_mysvr_tool_a', category: 'web', source: 'mcp', scope: 'general' }),
+      makeTool({ name: 'mcp_mysvr_tool_b', category: 'search', source: 'mcp', scope: 'general' }),
+    ]
+    renderEditor(sameServerTools)
+    const mcpSection = screen.getByTestId('mcp-tools-section')
+    const triggers = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')
+    expect(triggers.length).toBe(1)
+    await user.click(triggers[0])
+    expect(screen.getByTestId('tool-row-mcp_mysvr_tool_a')).toBeInTheDocument()
+    expect(screen.getByTestId('tool-row-mcp_mysvr_tool_b')).toBeInTheDocument()
+  })
+})
+
+describe('ToolPolicyEditor — glob-keyed policies (Blocker 4)', () => {
+  it('system.* glob key resolves correctly for system tools in the Advanced disclosure', async () => {
+    const user = userEvent.setup()
+    // Seeded privilege rail: default_policy='allow', system.*='deny'
+    const valueWithGlob: ToolPolicyValue = {
+      default_policy: 'allow',
+      policies: { 'system.*': 'deny' },
+    }
+    renderEditor(SYSTEM_TOOLS, valueWithGlob)
+    // Expand the system disclosure
+    const systemWrapper = screen.getByTestId('system-disclosure-wrapper')
+    const trigger = within(systemWrapper).getByTestId('advanced-disclosure-trigger')
+    await user.click(trigger)
+    // All three system tools should now be visible and resolved to 'deny'
+    // (because system.* matches system.config_read, system.config_write, system.policy_list)
+    const systemList = screen.getByTestId('system-tools-list')
+    for (const tool of SYSTEM_TOOLS) {
+      const row = within(systemList).getByTestId(`tool-row-${tool.name}`)
+      // The 'Deny' badge must be active (aria-pressed="true")
+      const denyBadge = within(row).getByRole('button', { name: /deny/i })
+      expect(denyBadge).toHaveAttribute('aria-pressed', 'true')
+    }
+  })
+
+  it('system.* glob does not affect non-system tools', () => {
+    const valueWithGlob: ToolPolicyValue = {
+      default_policy: 'allow',
+      policies: { 'system.*': 'deny' },
+    }
+    renderEditor(FILE_TOOLS, valueWithGlob)
+    // The category pill for 'file' should show 'Allow' (default), not 'Deny'
+    const pill = screen.getByTestId('category-pill-file')
+    expect(pill).toHaveTextContent('Allow')
+  })
+
+  it('exact key takes precedence over a glob key for the same tool', async () => {
+    const user = userEvent.setup()
+    const valueWithBoth: ToolPolicyValue = {
+      default_policy: 'allow',
+      // Glob denies all system.*, but system.config_read is explicitly allowed
+      policies: { 'system.*': 'deny', 'system.config_read': 'allow' },
+    }
+    renderEditor(SYSTEM_TOOLS, valueWithBoth)
+    const systemWrapper = screen.getByTestId('system-disclosure-wrapper')
+    await user.click(within(systemWrapper).getByTestId('advanced-disclosure-trigger'))
+    const systemList = screen.getByTestId('system-tools-list')
+    // system.config_read → allow (exact match wins)
+    const readRow = within(systemList).getByTestId('tool-row-system.config_read')
+    expect(within(readRow).getByRole('button', { name: /allow/i })).toHaveAttribute('aria-pressed', 'true')
+    // system.config_write → deny (glob applies)
+    const writeRow = within(systemList).getByTestId('tool-row-system.config_write')
+    expect(within(writeRow).getByRole('button', { name: /deny/i })).toHaveAttribute('aria-pressed', 'true')
   })
 })
