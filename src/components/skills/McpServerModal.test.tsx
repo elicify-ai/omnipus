@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
@@ -30,6 +30,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
+import { addMcpServer } from '@/lib/api'
 import { McpServerModal } from './McpServerModal'
 import { MCPServerPicker } from '@/components/agents/MCPServerPicker'
 
@@ -72,6 +73,29 @@ describe('McpServerModal — network mode (US-E1)', () => {
     expect(screen.getByTestId('submit-add')).not.toBeDisabled()
   })
 
+  it('network submit sends url field (not command) so the backend maps it to cfg.URL', async () => {
+    // Critical: the MCP manager (pkg/mcp/manager.go ConnectServer) reads cfg.URL for sse/http.
+    // The modal must POST {url: "...", transport: "sse"} — NOT {command: "...", transport: "sse"}.
+    renderModal()
+    const user = userEvent.setup()
+    await user.type(screen.getByPlaceholderText('my-mcp-server'), 'my-net-server')
+    await user.type(screen.getByTestId('network-url'), 'https://mcp.example.com/sse')
+    await user.click(screen.getByTestId('submit-add'))
+    await waitFor(() => {
+      expect(vi.mocked(addMcpServer)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'my-net-server',
+          url: 'https://mcp.example.com/sse',
+          transport: 'sse',
+        })
+      )
+      // command must NOT be present in the network payload
+      expect(vi.mocked(addMcpServer)).toHaveBeenCalledWith(
+        expect.not.objectContaining({ command: expect.any(String) })
+      )
+    })
+  })
+
   it('shows SSRF caution for an internal RFC1918 URL', async () => {
     renderModal()
     const user = userEvent.setup()
@@ -95,6 +119,28 @@ describe('McpServerModal — network mode (US-E1)', () => {
     renderModal()
     const user = userEvent.setup()
     await user.type(screen.getByTestId('network-url'), 'http://localhost:3000/mcp')
+    await waitFor(() => {
+      expect(screen.getByTestId('ssrf-caution')).toBeInTheDocument()
+    })
+  })
+
+  it('shows SSRF caution for IPv6 ULA address (fc00::/7)', async () => {
+    // userEvent.type cannot handle brackets in URL strings (treats them as key modifiers).
+    // Use fireEvent.change for raw IPv6 bracket notation.
+    renderModal()
+    fireEvent.change(screen.getByTestId('network-url'), {
+      target: { value: 'https://[fd12:3456::1]/mcp' },
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('ssrf-caution')).toBeInTheDocument()
+    })
+  })
+
+  it('shows SSRF caution for IPv6 link-local address (fe80::/10)', async () => {
+    renderModal()
+    fireEvent.change(screen.getByTestId('network-url'), {
+      target: { value: 'https://[fe80::1]/mcp' },
+    })
     await waitFor(() => {
       expect(screen.getByTestId('ssrf-caution')).toBeInTheDocument()
     })

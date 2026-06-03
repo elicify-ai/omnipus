@@ -19,7 +19,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { installSkillFromFile } from '@/lib/api'
+import { installSkillFromFile, isApiError } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
 interface SkillBrowserProps {
@@ -90,14 +90,16 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
       await installSkillFromFile(text, file.name)
       addToast({ message: `Skill "${file.name}" installed successfully.`, variant: 'success' })
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (msg.includes('hash mismatch') || msg.includes('409')) {
+      // Hash-mismatch: the backend returns a 409 whose body carries
+      // {"expected": "<sha>", "got": "<sha>"}. Branch on the ApiError type
+      // (status === 409) and parse err.body — NOT err.message, which only
+      // contains the generic userMessage ("This conflicts…").
+      if (isApiError(err) && err.status === 409) {
         let expected: string | undefined
         let got: string | undefined
         try {
-          const jsonStart = msg.indexOf('{')
-          if (jsonStart !== -1) {
-            const parsed = JSON.parse(msg.slice(jsonStart)) as {
+          if (err.body) {
+            const parsed = JSON.parse(err.body) as {
               expected?: string
               got?: string
             }
@@ -105,11 +107,17 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
             got = parsed.got
           }
         } catch {
-          // ignore parse failures
+          // Body wasn't JSON — show the dialog with blank hashes rather than
+          // misclassifying as a generic error.
         }
         setHashMismatch({ expected, got })
       } else {
         // Surface all other errors as a toast (no more silent swallow)
+        const msg = isApiError(err)
+          ? err.userMessage
+          : err instanceof Error
+          ? err.message
+          : String(err)
         addToast({
           message: `Failed to install skill: ${msg || 'Unknown error'}`,
           variant: 'error',

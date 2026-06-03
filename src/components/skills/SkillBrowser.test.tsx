@@ -28,7 +28,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-import { installSkillFromFile } from '@/lib/api'
+import { installSkillFromFile, ApiError } from '@/lib/api'
 import { SkillBrowser } from './SkillBrowser'
 
 const SKILL_MD_WITH_CAPS = `---
@@ -170,10 +170,13 @@ describe('SkillBrowser — error handling (US-E4, #340)', () => {
     })
   })
 
-  it('shows the hash-mismatch dialog (not a toast) for a hash error', async () => {
-    vi.mocked(installSkillFromFile).mockRejectedValue(
-      new Error('409: {"expected":"abc123","got":"def456"}')
-    )
+  it('shows the hash-mismatch dialog (not a toast) for a 409 ApiError with body', async () => {
+    // Use a realistic ApiError — the handler branches on isApiError && status===409
+    // and reads err.body (not err.message) for the JSON payload.
+    const hashError = new ApiError(409, 'This conflicts with the current state. Please refresh and try again.', {
+      body: '{"expected":"abc123","got":"def456"}',
+    })
+    vi.mocked(installSkillFromFile).mockRejectedValue(hashError)
     renderBrowser()
     const file = makeFile('my-skill.md', SKILL_MD_WITH_CAPS)
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
@@ -182,9 +185,12 @@ describe('SkillBrowser — error handling (US-E4, #340)', () => {
     await userEvent.click(screen.getByTestId('confirm-install-btn'))
     await waitFor(() => {
       expect(screen.getByTestId('skill-hash-mismatch-dialog')).toBeInTheDocument()
-      // toast should NOT have been called for hash errors
+      // The hash values from err.body must appear
+      expect(screen.getByText('abc123')).toBeInTheDocument()
+      expect(screen.getByText('def456')).toBeInTheDocument()
+      // toast must NOT be called — hash mismatches show the dialog, not a toast
       expect(addToast).not.toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'error', message: expect.stringContaining('409') })
+        expect.objectContaining({ variant: 'error' })
       )
     })
   })

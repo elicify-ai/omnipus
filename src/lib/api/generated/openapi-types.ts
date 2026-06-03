@@ -4023,7 +4023,7 @@ export interface components {
         };
         /**
          * McpServerCreate
-         * @description Request body for POST /mcp-servers. Adds a new MCP server to the gateway config.
+         * @description Request body for POST /mcp-servers. Adds a new MCP server to the gateway config. For stdio transport, `command` is required. For sse/http transport, `url` is required. Exactly one of `command` or `url` must be supplied depending on the transport.
          */
         McpServerCreate: {
             /**
@@ -4032,12 +4032,17 @@ export interface components {
              */
             name: string;
             /**
-             * @description Command to start the MCP server process (stdio transport).
+             * @description Command to start the MCP server process. Required when transport is "stdio". Must be omitted or empty when transport is "sse" or "http".
              * @example npx @modelcontextprotocol/server-everything
              */
-            command: string;
+            command?: string;
             /**
-             * @description Command-line arguments to pass to the server process.
+             * @description Endpoint URL for remote MCP servers. Required when transport is "sse" or "http". Must be an https:// URL (or http:// for loopback addresses only). Must be omitted when transport is "stdio".
+             * @example https://mcp.example.com/sse
+             */
+            url?: string;
+            /**
+             * @description Command-line arguments to pass to the server process. Only applicable for stdio transport.
              * @example [
              *       "--port",
              *       "3000"

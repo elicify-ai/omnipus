@@ -47,27 +47,42 @@ interface McpServerModalProps {
 type ConnectMode = 'local' | 'network'
 
 /**
- * Returns true if the hostname is a literal RFC1918, link-local, or loopback
- * address or a .local mDNS name. DNS is NOT resolved — this is a heuristic
- * only. The authoritative SSRF guard lives in the backend (F-G07).
+ * Best-effort literal-host heuristic: returns true when the URL's hostname
+ * looks like a private, loopback, link-local, or mDNS address.
+ *
+ * Scope and limitations:
+ * - Only inspects the literal hostname string — NO DNS resolution is performed.
+ *   A hostname like "internal.corp.example.com" is not flagged even if it
+ *   resolves to a private IP.
+ * - IPv6 coverage: loopback (::1), ULA (fc00::/7), link-local (fe80::/10),
+ *   and IPv4-mapped loopback (::ffff:127.x.x.x). Bracket notation is stripped.
+ * - This is a UI hint only. The backend (F-G07) is the authoritative SSRF guard
+ *   and must not be bypassed regardless of what this function returns.
  */
 function isInternalAddress(url: string): boolean {
   try {
     const parsed = new URL(url)
-    const host = parsed.hostname.toLowerCase()
+    // Strip surrounding brackets from IPv6 addresses (URL.hostname preserves them)
+    const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase()
     if (host === 'localhost' || host.endsWith('.local')) return true
-    // IPv4 loopback
+    // IPv4 loopback (127.0.0.0/8)
     if (/^127\./.test(host)) return true
-    // RFC1918
+    // RFC1918 private ranges
     if (/^10\./.test(host)) return true
     if (/^192\.168\./.test(host)) return true
     // 172.16.0.0/12
     const m = host.match(/^172\.(\d{1,3})\./)
     if (m && parseInt(m[1], 10) >= 16 && parseInt(m[1], 10) <= 31) return true
-    // Link-local
+    // IPv4 link-local (169.254.0.0/16)
     if (/^169\.254\./.test(host)) return true
-    // IPv6 loopback
-    if (host === '::1' || host === '[::1]') return true
+    // IPv6 loopback (::1)
+    if (host === '::1') return true
+    // IPv6 ULA (fc00::/7 — starts with fc or fd)
+    if (/^f[cd]/i.test(host)) return true
+    // IPv6 link-local (fe80::/10 — starts with fe8, fe9, fea, feb)
+    if (/^fe[89ab]/i.test(host)) return true
+    // IPv4-mapped IPv6 loopback (::ffff:127.x.x.x)
+    if (/^::ffff:127\./i.test(host)) return true
     return false
   } catch {
     return false
@@ -139,10 +154,11 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
           env: Object.keys(envObj).length > 0 ? envObj : undefined,
         })
       } else {
-        // Network: pass the URL as command (backend stores command for network servers)
+        // Network: send url field — backend stores it as cfg.URL so the MCP manager
+        // (pkg/mcp/manager.go ConnectServer) can connect via StreamableClientTransport.Endpoint.
         return addMcpServer({
           name: trimmedName,
-          command: url.trim(),
+          url: url.trim(),
           transport: 'sse',
         })
       }
