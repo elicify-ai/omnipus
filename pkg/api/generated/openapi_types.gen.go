@@ -1105,6 +1105,78 @@ func (e MessageType) Valid() bool {
 	}
 }
 
+// Defines values for NotificationSeverity.
+const (
+	NotificationSeverityError   NotificationSeverity = "error"
+	NotificationSeverityInfo    NotificationSeverity = "info"
+	NotificationSeverityWarning NotificationSeverity = "warning"
+)
+
+// Valid indicates whether the value is a known member of the NotificationSeverity enum.
+func (e NotificationSeverity) Valid() bool {
+	switch e {
+	case NotificationSeverityError:
+		return true
+	case NotificationSeverityInfo:
+		return true
+	case NotificationSeverityWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for NotificationType.
+const (
+	NotificationTypeScheduleFailed NotificationType = "schedule_failed"
+)
+
+// Valid indicates whether the value is a known member of the NotificationType enum.
+func (e NotificationType) Valid() bool {
+	switch e {
+	case NotificationTypeScheduleFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for NotificationListNotificationsSeverity.
+const (
+	NotificationListNotificationsSeverityError   NotificationListNotificationsSeverity = "error"
+	NotificationListNotificationsSeverityInfo    NotificationListNotificationsSeverity = "info"
+	NotificationListNotificationsSeverityWarning NotificationListNotificationsSeverity = "warning"
+)
+
+// Valid indicates whether the value is a known member of the NotificationListNotificationsSeverity enum.
+func (e NotificationListNotificationsSeverity) Valid() bool {
+	switch e {
+	case NotificationListNotificationsSeverityError:
+		return true
+	case NotificationListNotificationsSeverityInfo:
+		return true
+	case NotificationListNotificationsSeverityWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for NotificationListNotificationsType.
+const (
+	NotificationListNotificationsTypeScheduleFailed NotificationListNotificationsType = "schedule_failed"
+)
+
+// Valid indicates whether the value is a known member of the NotificationListNotificationsType enum.
+func (e NotificationListNotificationsType) Valid() bool {
+	switch e {
+	case NotificationListNotificationsTypeScheduleFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OnboardingCompleteResponseRole.
 const (
 	OnboardingCompleteResponseRoleAdmin OnboardingCompleteResponseRole = "admin"
@@ -1453,6 +1525,270 @@ func (e SandboxConfigUpdateMode) Valid() bool {
 	case SandboxConfigUpdateModeOff:
 		return true
 	case SandboxConfigUpdateModePermissive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduleRunsStatus.
+const (
+	ScheduleRunsStatusError   ScheduleRunsStatus = "error"
+	ScheduleRunsStatusOk      ScheduleRunsStatus = "ok"
+	ScheduleRunsStatusSkipped ScheduleRunsStatus = "skipped"
+	ScheduleRunsStatusTimeout ScheduleRunsStatus = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the ScheduleRunsStatus enum.
+func (e ScheduleRunsStatus) Valid() bool {
+	switch e {
+	case ScheduleRunsStatusError:
+		return true
+	case ScheduleRunsStatusOk:
+		return true
+	case ScheduleRunsStatusSkipped:
+		return true
+	case ScheduleRunsStatusTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduleSessionMode.
+const (
+	ScheduleSessionModeContinue ScheduleSessionMode = "continue"
+	ScheduleSessionModeIsolated ScheduleSessionMode = "isolated"
+	ScheduleSessionModeMain     ScheduleSessionMode = "main"
+)
+
+// Valid indicates whether the value is a known member of the ScheduleSessionMode enum.
+func (e ScheduleSessionMode) Valid() bool {
+	switch e {
+	case ScheduleSessionModeContinue:
+		return true
+	case ScheduleSessionModeIsolated:
+		return true
+	case ScheduleSessionModeMain:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduleTriggerKind.
+const (
+	ScheduleTriggerKindAt    ScheduleTriggerKind = "at"
+	ScheduleTriggerKindCron  ScheduleTriggerKind = "cron"
+	ScheduleTriggerKindEvery ScheduleTriggerKind = "every"
+)
+
+// Valid indicates whether the value is a known member of the ScheduleTriggerKind enum.
+func (e ScheduleTriggerKind) Valid() bool {
+	switch e {
+	case ScheduleTriggerKindAt:
+		return true
+	case ScheduleTriggerKindCron:
+		return true
+	case ScheduleTriggerKindEvery:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduleCreateSessionMode.
+const (
+	ScheduleCreateSessionModeContinue ScheduleCreateSessionMode = "continue"
+	ScheduleCreateSessionModeIsolated ScheduleCreateSessionMode = "isolated"
+	ScheduleCreateSessionModeMain     ScheduleCreateSessionMode = "main"
+)
+
+// Valid indicates whether the value is a known member of the ScheduleCreateSessionMode enum.
+func (e ScheduleCreateSessionMode) Valid() bool {
+	switch e {
+	case ScheduleCreateSessionModeContinue:
+		return true
+	case ScheduleCreateSessionModeIsolated:
+		return true
+	case ScheduleCreateSessionModeMain:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduleCreateTriggerKind.
+const (
+	ScheduleCreateTriggerKindAt    ScheduleCreateTriggerKind = "at"
+	ScheduleCreateTriggerKindCron  ScheduleCreateTriggerKind = "cron"
+	ScheduleCreateTriggerKindEvery ScheduleCreateTriggerKind = "every"
+)
+
+// Valid indicates whether the value is a known member of the ScheduleCreateTriggerKind enum.
+func (e ScheduleCreateTriggerKind) Valid() bool {
+	switch e {
+	case ScheduleCreateTriggerKindAt:
+		return true
+	case ScheduleCreateTriggerKindCron:
+		return true
+	case ScheduleCreateTriggerKindEvery:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduleListSchedulesRunsStatus.
+const (
+	ScheduleListSchedulesRunsStatusError   ScheduleListSchedulesRunsStatus = "error"
+	ScheduleListSchedulesRunsStatusOk      ScheduleListSchedulesRunsStatus = "ok"
+	ScheduleListSchedulesRunsStatusSkipped ScheduleListSchedulesRunsStatus = "skipped"
+	ScheduleListSchedulesRunsStatusTimeout ScheduleListSchedulesRunsStatus = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the ScheduleListSchedulesRunsStatus enum.
+func (e ScheduleListSchedulesRunsStatus) Valid() bool {
+	switch e {
+	case ScheduleListSchedulesRunsStatusError:
+		return true
+	case ScheduleListSchedulesRunsStatusOk:
+		return true
+	case ScheduleListSchedulesRunsStatusSkipped:
+		return true
+	case ScheduleListSchedulesRunsStatusTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduleListSchedulesSessionMode.
+const (
+	ScheduleListSchedulesSessionModeContinue ScheduleListSchedulesSessionMode = "continue"
+	ScheduleListSchedulesSessionModeIsolated ScheduleListSchedulesSessionMode = "isolated"
+	ScheduleListSchedulesSessionModeMain     ScheduleListSchedulesSessionMode = "main"
+)
+
+// Valid indicates whether the value is a known member of the ScheduleListSchedulesSessionMode enum.
+func (e ScheduleListSchedulesSessionMode) Valid() bool {
+	switch e {
+	case ScheduleListSchedulesSessionModeContinue:
+		return true
+	case ScheduleListSchedulesSessionModeIsolated:
+		return true
+	case ScheduleListSchedulesSessionModeMain:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduleListSchedulesTriggerKind.
+const (
+	ScheduleListSchedulesTriggerKindAt    ScheduleListSchedulesTriggerKind = "at"
+	ScheduleListSchedulesTriggerKindCron  ScheduleListSchedulesTriggerKind = "cron"
+	ScheduleListSchedulesTriggerKindEvery ScheduleListSchedulesTriggerKind = "every"
+)
+
+// Valid indicates whether the value is a known member of the ScheduleListSchedulesTriggerKind enum.
+func (e ScheduleListSchedulesTriggerKind) Valid() bool {
+	switch e {
+	case ScheduleListSchedulesTriggerKindAt:
+		return true
+	case ScheduleListSchedulesTriggerKindCron:
+		return true
+	case ScheduleListSchedulesTriggerKindEvery:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduleRunRecordStatus.
+const (
+	ScheduleRunRecordStatusError   ScheduleRunRecordStatus = "error"
+	ScheduleRunRecordStatusOk      ScheduleRunRecordStatus = "ok"
+	ScheduleRunRecordStatusSkipped ScheduleRunRecordStatus = "skipped"
+	ScheduleRunRecordStatusTimeout ScheduleRunRecordStatus = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the ScheduleRunRecordStatus enum.
+func (e ScheduleRunRecordStatus) Valid() bool {
+	switch e {
+	case ScheduleRunRecordStatusError:
+		return true
+	case ScheduleRunRecordStatusOk:
+		return true
+	case ScheduleRunRecordStatusSkipped:
+		return true
+	case ScheduleRunRecordStatusTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduleRunResultStatus.
+const (
+	ScheduleRunResultStatusError   ScheduleRunResultStatus = "error"
+	ScheduleRunResultStatusOk      ScheduleRunResultStatus = "ok"
+	ScheduleRunResultStatusSkipped ScheduleRunResultStatus = "skipped"
+	ScheduleRunResultStatusTimeout ScheduleRunResultStatus = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the ScheduleRunResultStatus enum.
+func (e ScheduleRunResultStatus) Valid() bool {
+	switch e {
+	case ScheduleRunResultStatusError:
+		return true
+	case ScheduleRunResultStatusOk:
+		return true
+	case ScheduleRunResultStatusSkipped:
+		return true
+	case ScheduleRunResultStatusTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduleUpdateSessionMode.
+const (
+	ScheduleUpdateSessionModeContinue ScheduleUpdateSessionMode = "continue"
+	ScheduleUpdateSessionModeIsolated ScheduleUpdateSessionMode = "isolated"
+	ScheduleUpdateSessionModeMain     ScheduleUpdateSessionMode = "main"
+)
+
+// Valid indicates whether the value is a known member of the ScheduleUpdateSessionMode enum.
+func (e ScheduleUpdateSessionMode) Valid() bool {
+	switch e {
+	case ScheduleUpdateSessionModeContinue:
+		return true
+	case ScheduleUpdateSessionModeIsolated:
+		return true
+	case ScheduleUpdateSessionModeMain:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ScheduleUpdateTriggerKind.
+const (
+	ScheduleUpdateTriggerKindAt    ScheduleUpdateTriggerKind = "at"
+	ScheduleUpdateTriggerKindCron  ScheduleUpdateTriggerKind = "cron"
+	ScheduleUpdateTriggerKindEvery ScheduleUpdateTriggerKind = "every"
+)
+
+// Valid indicates whether the value is a known member of the ScheduleUpdateTriggerKind enum.
+func (e ScheduleUpdateTriggerKind) Valid() bool {
+	switch e {
+	case ScheduleUpdateTriggerKindAt:
+		return true
+	case ScheduleUpdateTriggerKindCron:
+		return true
+	case ScheduleUpdateTriggerKindEvery:
 		return true
 	default:
 		return false
@@ -3694,6 +4030,80 @@ type MessageToolCallsStatus string
 // MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type MessageType string
 
+// Notification A user-facing notification (#264) surfaced in the header notification center. Currently raised on scheduled-run failures, but the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+type Notification struct {
+	// AgentId The agent the notification concerns.
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// Body Optional detail (e.g. the failure reason).
+	Body        *string `json:"body,omitempty"`
+	CreatedAtMs int64   `json:"created_at_ms"`
+	Id          string  `json:"id"`
+
+	// Read Per-user read state.
+	Read bool `json:"read"`
+
+	// ScheduleId Click-through target when the notification concerns a schedule.
+	ScheduleId *string `json:"schedule_id,omitempty"`
+
+	// SessionId Click-through target when the notification concerns a run's session.
+	SessionId *string              `json:"session_id,omitempty"`
+	Severity  NotificationSeverity `json:"severity"`
+	Title     string               `json:"title"`
+
+	// Type The event class. Extensible; consumers must tolerate unknown values.
+	Type NotificationType `json:"type"`
+
+	// UpdatedAtMs Set when a coalesced notification is updated (e.g. repeated schedule failure).
+	UpdatedAtMs *int64 `json:"updated_at_ms,omitempty"`
+}
+
+// NotificationSeverity defines model for Notification.Severity.
+type NotificationSeverity string
+
+// NotificationType The event class. Extensible; consumers must tolerate unknown values.
+type NotificationType string
+
+// NotificationList The authenticated user's notifications plus the unread count (#264).
+type NotificationList struct {
+	// Notifications Newest first.
+	Notifications []struct {
+		// AgentId The agent the notification concerns.
+		AgentId *string `json:"agent_id,omitempty"`
+
+		// Body Optional detail (e.g. the failure reason).
+		Body        *string `json:"body,omitempty"`
+		CreatedAtMs int64   `json:"created_at_ms"`
+		Id          string  `json:"id"`
+
+		// Read Per-user read state.
+		Read bool `json:"read"`
+
+		// ScheduleId Click-through target when the notification concerns a schedule.
+		ScheduleId *string `json:"schedule_id,omitempty"`
+
+		// SessionId Click-through target when the notification concerns a run's session.
+		SessionId *string                               `json:"session_id,omitempty"`
+		Severity  NotificationListNotificationsSeverity `json:"severity"`
+		Title     string                                `json:"title"`
+
+		// Type The event class. Extensible; consumers must tolerate unknown values.
+		Type NotificationListNotificationsType `json:"type"`
+
+		// UpdatedAtMs Set when a coalesced notification is updated (e.g. repeated schedule failure).
+		UpdatedAtMs *int64 `json:"updated_at_ms,omitempty"`
+	} `json:"notifications"`
+
+	// UnreadCount Number of unread notifications for the badge.
+	UnreadCount int `json:"unread_count"`
+}
+
+// NotificationListNotificationsSeverity defines model for NotificationList.Notifications.Severity.
+type NotificationListNotificationsSeverity string
+
+// NotificationListNotificationsType The event class. Extensible; consumers must tolerate unknown values.
+type NotificationListNotificationsType string
+
 // OnboardingCompleteRequest Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point).
 type OnboardingCompleteRequest struct {
 	// Admin Initial admin account credentials.
@@ -4135,6 +4545,350 @@ type SandboxStatus struct {
 	// SeccompEnforced Whether seccomp syscall filtering is enforced.
 	SeccompEnforced *bool `json:"seccomp_enforced,omitempty"`
 }
+
+// Schedule A scheduled instruction for an agent (#264) — the wire projection of a cron job. When it fires, the owning agent runs the message in the chosen session mode under guardrails. Read model returned by the /schedules endpoints.
+type Schedule struct {
+	// Channel Channel for deliver=true sends and the run's outbound context.
+	Channel *string `json:"channel,omitempty"`
+
+	// ChatId Chat/peer id within the channel for deliver=true sends.
+	ChatId      *string `json:"chat_id,omitempty"`
+	CreatedAtMs int64   `json:"created_at_ms"`
+
+	// CreatedBy Username that created the schedule (for notification routing).
+	CreatedBy *string `json:"created_by,omitempty"`
+
+	// Deliver true = send the message straight to the channel (no agent turn); false = the owning agent processes it (autonomy).
+	Deliver bool `json:"deliver"`
+
+	// Enabled When false, the scheduler does not fire it (paused).
+	Enabled bool `json:"enabled"`
+
+	// Id Stable schedule id (the underlying cron job id).
+	Id string `json:"id"`
+
+	// Message The instruction delivered to the agent (deliver=false) or sent to the channel (deliver=true).
+	Message string `json:"message"`
+	Name    string `json:"name"`
+
+	// OwnerAgentId The agent that runs this schedule. Pinned; never falls back to the default agent.
+	OwnerAgentId string `json:"owner_agent_id"`
+
+	// Runs The most recent runs (newest first), capped at 20.
+	Runs *[]struct {
+		// DurationMs Wall-clock duration of the run in milliseconds.
+		DurationMs *int64 `json:"duration_ms,omitempty"`
+
+		// Error Failure reason when status is error or timeout.
+		Error *string `json:"error,omitempty"`
+
+		// RanAtMs Unix epoch milliseconds when the run started.
+		RanAtMs int64 `json:"ran_at_ms"`
+
+		// SessionId The scheduled session this run executed in (links to the transcript).
+		SessionId *string `json:"session_id,omitempty"`
+
+		// Status ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+		Status ScheduleRunsStatus `json:"status"`
+	} `json:"runs,omitempty"`
+
+	// SessionId For continue/main modes, the persistent session id this schedule runs in.
+	SessionId *string `json:"session_id,omitempty"`
+
+	// SessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
+	SessionMode ScheduleSessionMode `json:"session_mode"`
+
+	// State Runtime state of a schedule (#264). All fields are server-maintained.
+	State struct {
+		// ConsecutiveFailures Number of consecutive failed runs; resets to 0 after a success.
+		ConsecutiveFailures *int `json:"consecutive_failures,omitempty"`
+
+		// LastError Error from the most recent failed run.
+		LastError *string `json:"last_error,omitempty"`
+
+		// LastRunAtMs Unix epoch milliseconds of the most recent run.
+		LastRunAtMs *int64 `json:"last_run_at_ms,omitempty"`
+
+		// LastStatus Status of the most recent run (ok/error/skipped/timeout), empty if never run.
+		LastStatus *string `json:"last_status,omitempty"`
+
+		// NextRunAtMs Unix epoch milliseconds of the next computed run, if enabled.
+		NextRunAtMs *int64 `json:"next_run_at_ms,omitempty"`
+
+		// Running True while a run of this schedule is currently in progress (overlap guard).
+		Running *bool `json:"running,omitempty"`
+	} `json:"state"`
+
+	// TimeoutSeconds Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default.
+	TimeoutSeconds int `json:"timeout_seconds"`
+
+	// Trigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
+	Trigger struct {
+		// AtMs Unix epoch milliseconds for a one-shot run. Required when kind=at.
+		AtMs *int64 `json:"at_ms,omitempty"`
+
+		// CronExpr Cron expression (5/6 fields). Required when kind=cron.
+		CronExpr *string `json:"cron_expr,omitempty"`
+
+		// EveryMs Interval in milliseconds. Required when kind=every.
+		EveryMs *int64              `json:"every_ms,omitempty"`
+		Kind    ScheduleTriggerKind `json:"kind"`
+	} `json:"trigger"`
+	UpdatedAtMs int64 `json:"updated_at_ms"`
+}
+
+// ScheduleRunsStatus ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+type ScheduleRunsStatus string
+
+// ScheduleSessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
+type ScheduleSessionMode string
+
+// ScheduleTriggerKind defines model for Schedule.Trigger.Kind.
+type ScheduleTriggerKind string
+
+// ScheduleCreate Request body to create a schedule (#264). The owner must be an agent the caller is permitted to use (AuthorizeAgentAccess). Omitted optional fields take their documented defaults.
+type ScheduleCreate struct {
+	Channel *string `json:"channel,omitempty"`
+	ChatId  *string `json:"chat_id,omitempty"`
+
+	// Deliver Default false (agent processes it).
+	Deliver *bool `json:"deliver,omitempty"`
+
+	// Enabled Default true.
+	Enabled      *bool  `json:"enabled,omitempty"`
+	Message      string `json:"message"`
+	Name         string `json:"name"`
+	OwnerAgentId string `json:"owner_agent_id"`
+
+	// SessionMode Default isolated.
+	SessionMode *ScheduleCreateSessionMode `json:"session_mode,omitempty"`
+
+	// TimeoutSeconds Per-run deadline; default 0 = use the global default.
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+
+	// Trigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
+	Trigger struct {
+		// AtMs Unix epoch milliseconds for a one-shot run. Required when kind=at.
+		AtMs *int64 `json:"at_ms,omitempty"`
+
+		// CronExpr Cron expression (5/6 fields). Required when kind=cron.
+		CronExpr *string `json:"cron_expr,omitempty"`
+
+		// EveryMs Interval in milliseconds. Required when kind=every.
+		EveryMs *int64                    `json:"every_ms,omitempty"`
+		Kind    ScheduleCreateTriggerKind `json:"kind"`
+	} `json:"trigger"`
+}
+
+// ScheduleCreateSessionMode Default isolated.
+type ScheduleCreateSessionMode string
+
+// ScheduleCreateTriggerKind defines model for ScheduleCreate.Trigger.Kind.
+type ScheduleCreateTriggerKind string
+
+// ScheduleList List of schedules (#264).
+type ScheduleList struct {
+	Schedules []struct {
+		// Channel Channel for deliver=true sends and the run's outbound context.
+		Channel *string `json:"channel,omitempty"`
+
+		// ChatId Chat/peer id within the channel for deliver=true sends.
+		ChatId      *string `json:"chat_id,omitempty"`
+		CreatedAtMs int64   `json:"created_at_ms"`
+
+		// CreatedBy Username that created the schedule (for notification routing).
+		CreatedBy *string `json:"created_by,omitempty"`
+
+		// Deliver true = send the message straight to the channel (no agent turn); false = the owning agent processes it (autonomy).
+		Deliver bool `json:"deliver"`
+
+		// Enabled When false, the scheduler does not fire it (paused).
+		Enabled bool `json:"enabled"`
+
+		// Id Stable schedule id (the underlying cron job id).
+		Id string `json:"id"`
+
+		// Message The instruction delivered to the agent (deliver=false) or sent to the channel (deliver=true).
+		Message string `json:"message"`
+		Name    string `json:"name"`
+
+		// OwnerAgentId The agent that runs this schedule. Pinned; never falls back to the default agent.
+		OwnerAgentId string `json:"owner_agent_id"`
+
+		// Runs The most recent runs (newest first), capped at 20.
+		Runs *[]struct {
+			// DurationMs Wall-clock duration of the run in milliseconds.
+			DurationMs *int64 `json:"duration_ms,omitempty"`
+
+			// Error Failure reason when status is error or timeout.
+			Error *string `json:"error,omitempty"`
+
+			// RanAtMs Unix epoch milliseconds when the run started.
+			RanAtMs int64 `json:"ran_at_ms"`
+
+			// SessionId The scheduled session this run executed in (links to the transcript).
+			SessionId *string `json:"session_id,omitempty"`
+
+			// Status ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+			Status ScheduleListSchedulesRunsStatus `json:"status"`
+		} `json:"runs,omitempty"`
+
+		// SessionId For continue/main modes, the persistent session id this schedule runs in.
+		SessionId *string `json:"session_id,omitempty"`
+
+		// SessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
+		SessionMode ScheduleListSchedulesSessionMode `json:"session_mode"`
+
+		// State Runtime state of a schedule (#264). All fields are server-maintained.
+		State struct {
+			// ConsecutiveFailures Number of consecutive failed runs; resets to 0 after a success.
+			ConsecutiveFailures *int `json:"consecutive_failures,omitempty"`
+
+			// LastError Error from the most recent failed run.
+			LastError *string `json:"last_error,omitempty"`
+
+			// LastRunAtMs Unix epoch milliseconds of the most recent run.
+			LastRunAtMs *int64 `json:"last_run_at_ms,omitempty"`
+
+			// LastStatus Status of the most recent run (ok/error/skipped/timeout), empty if never run.
+			LastStatus *string `json:"last_status,omitempty"`
+
+			// NextRunAtMs Unix epoch milliseconds of the next computed run, if enabled.
+			NextRunAtMs *int64 `json:"next_run_at_ms,omitempty"`
+
+			// Running True while a run of this schedule is currently in progress (overlap guard).
+			Running *bool `json:"running,omitempty"`
+		} `json:"state"`
+
+		// TimeoutSeconds Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default.
+		TimeoutSeconds int `json:"timeout_seconds"`
+
+		// Trigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
+		Trigger struct {
+			// AtMs Unix epoch milliseconds for a one-shot run. Required when kind=at.
+			AtMs *int64 `json:"at_ms,omitempty"`
+
+			// CronExpr Cron expression (5/6 fields). Required when kind=cron.
+			CronExpr *string `json:"cron_expr,omitempty"`
+
+			// EveryMs Interval in milliseconds. Required when kind=every.
+			EveryMs *int64                           `json:"every_ms,omitempty"`
+			Kind    ScheduleListSchedulesTriggerKind `json:"kind"`
+		} `json:"trigger"`
+		UpdatedAtMs int64 `json:"updated_at_ms"`
+	} `json:"schedules"`
+}
+
+// ScheduleListSchedulesRunsStatus ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+type ScheduleListSchedulesRunsStatus string
+
+// ScheduleListSchedulesSessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
+type ScheduleListSchedulesSessionMode string
+
+// ScheduleListSchedulesTriggerKind defines model for ScheduleList.Schedules.Trigger.Kind.
+type ScheduleListSchedulesTriggerKind string
+
+// ScheduleRunRecord One execution of a schedule (#264). The last 20 are retained inline on a Schedule; full history is reachable via the linked session_id.
+type ScheduleRunRecord struct {
+	// DurationMs Wall-clock duration of the run in milliseconds.
+	DurationMs *int64 `json:"duration_ms,omitempty"`
+
+	// Error Failure reason when status is error or timeout.
+	Error *string `json:"error,omitempty"`
+
+	// RanAtMs Unix epoch milliseconds when the run started.
+	RanAtMs int64 `json:"ran_at_ms"`
+
+	// SessionId The scheduled session this run executed in (links to the transcript).
+	SessionId *string `json:"session_id,omitempty"`
+
+	// Status ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+	Status ScheduleRunRecordStatus `json:"status"`
+}
+
+// ScheduleRunRecordStatus ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+type ScheduleRunRecordStatus string
+
+// ScheduleRunResult Result of a run-now request (#264).
+type ScheduleRunResult struct {
+	Error      *string `json:"error,omitempty"`
+	ScheduleId string  `json:"schedule_id"`
+
+	// SessionId The session the run executed in, when one was created.
+	SessionId *string `json:"session_id,omitempty"`
+
+	// Status skipped when the schedule's previous run is still in progress or the lane is full.
+	Status ScheduleRunResultStatus `json:"status"`
+}
+
+// ScheduleRunResultStatus skipped when the schedule's previous run is still in progress or the lane is full.
+type ScheduleRunResultStatus string
+
+// ScheduleState Runtime state of a schedule (#264). All fields are server-maintained.
+type ScheduleState struct {
+	// ConsecutiveFailures Number of consecutive failed runs; resets to 0 after a success.
+	ConsecutiveFailures *int `json:"consecutive_failures,omitempty"`
+
+	// LastError Error from the most recent failed run.
+	LastError *string `json:"last_error,omitempty"`
+
+	// LastRunAtMs Unix epoch milliseconds of the most recent run.
+	LastRunAtMs *int64 `json:"last_run_at_ms,omitempty"`
+
+	// LastStatus Status of the most recent run (ok/error/skipped/timeout), empty if never run.
+	LastStatus *string `json:"last_status,omitempty"`
+
+	// NextRunAtMs Unix epoch milliseconds of the next computed run, if enabled.
+	NextRunAtMs *int64 `json:"next_run_at_ms,omitempty"`
+
+	// Running True while a run of this schedule is currently in progress (overlap guard).
+	Running *bool `json:"running,omitempty"`
+}
+
+// ScheduleTrigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
+type ScheduleTrigger struct {
+	// AtMs Unix epoch milliseconds for a one-shot run. Required when kind=at.
+	AtMs *int64 `json:"at_ms,omitempty"`
+
+	// CronExpr Cron expression (5/6 fields). Required when kind=cron.
+	CronExpr *string `json:"cron_expr,omitempty"`
+
+	// EveryMs Interval in milliseconds. Required when kind=every.
+	EveryMs *int64              `json:"every_ms,omitempty"`
+	Kind    ScheduleTriggerKind `json:"kind"`
+}
+
+// ScheduleUpdate Request body to update a schedule (#264). All fields optional; only provided fields are changed. Changing owner_agent_id is re-authorized.
+type ScheduleUpdate struct {
+	Channel        *string                    `json:"channel,omitempty"`
+	ChatId         *string                    `json:"chat_id,omitempty"`
+	Deliver        *bool                      `json:"deliver,omitempty"`
+	Enabled        *bool                      `json:"enabled,omitempty"`
+	Message        *string                    `json:"message,omitempty"`
+	Name           *string                    `json:"name,omitempty"`
+	OwnerAgentId   *string                    `json:"owner_agent_id,omitempty"`
+	SessionMode    *ScheduleUpdateSessionMode `json:"session_mode,omitempty"`
+	TimeoutSeconds *int                       `json:"timeout_seconds,omitempty"`
+
+	// Trigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
+	Trigger *struct {
+		// AtMs Unix epoch milliseconds for a one-shot run. Required when kind=at.
+		AtMs *int64 `json:"at_ms,omitempty"`
+
+		// CronExpr Cron expression (5/6 fields). Required when kind=cron.
+		CronExpr *string `json:"cron_expr,omitempty"`
+
+		// EveryMs Interval in milliseconds. Required when kind=every.
+		EveryMs *int64                    `json:"every_ms,omitempty"`
+		Kind    ScheduleUpdateTriggerKind `json:"kind"`
+	} `json:"trigger,omitempty"`
+}
+
+// ScheduleUpdateSessionMode defines model for ScheduleUpdate.SessionMode.
+type ScheduleUpdateSessionMode string
+
+// ScheduleUpdateTriggerKind defines model for ScheduleUpdate.Trigger.Kind.
+type ScheduleUpdateTriggerKind string
 
 // Session Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost.
 type Session struct {
@@ -5116,6 +5870,12 @@ type UpdateProviderJSONRequestBody = ProviderUpdateRequest
 
 // RestoreBackupJSONRequestBody defines body for RestoreBackup for application/json ContentType.
 type RestoreBackupJSONRequestBody = RestoreBackupRequest
+
+// CreateScheduleJSONRequestBody defines body for CreateSchedule for application/json ContentType.
+type CreateScheduleJSONRequestBody = ScheduleCreate
+
+// UpdateScheduleJSONRequestBody defines body for UpdateSchedule for application/json ContentType.
+type UpdateScheduleJSONRequestBody = ScheduleUpdate
 
 // UpdateAuditLogToggleJSONRequestBody defines body for UpdateAuditLogToggle for application/json ContentType.
 type UpdateAuditLogToggleJSONRequestBody = AuditLogToggleRequest

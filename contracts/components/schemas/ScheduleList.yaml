@@ -1,0 +1,11 @@
+title: ScheduleList
+description: List of schedules (#264).
+type: object
+required:
+  - schedules
+additionalProperties: false
+properties:
+  schedules:
+    type: array
+    items:
+      $ref: ./Schedule.yaml

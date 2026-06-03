@@ -304,6 +304,90 @@ type ActivityEvent = {
 type RotateTokenResponse = {
   token: BearerToken;
 };
+type Schedule = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  owner_agent_id: string;
+  created_by?: string | undefined;
+  trigger: ScheduleTrigger;
+  message: string;
+  deliver: boolean;
+  session_mode: "isolated" | "continue" | "main";
+  timeout_seconds: number;
+  session_id?: string | undefined;
+  channel?: string | undefined;
+  chat_id?: string | undefined;
+  state: ScheduleState;
+  runs?: Array<ScheduleRunRecord> | undefined;
+  created_at_ms: number;
+  updated_at_ms: number;
+};
+type ScheduleTrigger = {
+  kind: "at" | "every" | "cron";
+  cron_expr?: string | undefined;
+  every_ms?: number | undefined;
+  at_ms?: number | undefined;
+};
+type ScheduleState = Partial<{
+  next_run_at_ms: number;
+  last_run_at_ms: number;
+  last_status: string;
+  last_error: string;
+  consecutive_failures: number;
+  running: boolean;
+}>;
+type ScheduleRunRecord = {
+  ran_at_ms: number;
+  status: "ok" | "error" | "skipped" | "timeout";
+  error?: string | undefined;
+  session_id?: string | undefined;
+  duration_ms?: number | undefined;
+};
+type ScheduleCreate = {
+  name: string;
+  owner_agent_id: string;
+  trigger: ScheduleTrigger;
+  message: string;
+  deliver?: boolean | undefined;
+  session_mode?: ("isolated" | "continue" | "main") | undefined;
+  timeout_seconds?: number | undefined;
+  enabled?: boolean | undefined;
+  channel?: string | undefined;
+  chat_id?: string | undefined;
+};
+type ScheduleUpdate = Partial<{
+  name: string;
+  owner_agent_id: string;
+  trigger: ScheduleTrigger;
+  message: string;
+  deliver: boolean;
+  session_mode: "isolated" | "continue" | "main";
+  timeout_seconds: number;
+  enabled: boolean;
+  channel: string;
+  chat_id: string;
+}>;
+type ScheduleList = {
+  schedules: Array<Schedule>;
+};
+type NotificationList = {
+  notifications: Array<Notification>;
+  unread_count: number;
+};
+type Notification = {
+  id: string;
+  type: "schedule_failed";
+  title: string;
+  body?: string | undefined;
+  severity: "info" | "warning" | "error";
+  read: boolean;
+  created_at_ms: number;
+  updated_at_ms?: number | undefined;
+  schedule_id?: string | undefined;
+  session_id?: string | undefined;
+  agent_id?: string | undefined;
+};
 
 export const LoginRequest = z.object({
   username: z.string().min(1),
@@ -1287,6 +1371,100 @@ export const McpToolCallRequest = z.object({
 export const McpToolCallResponse = z.object({
   result: z.unknown(),
   error: z.string().optional(),
+});
+export const ScheduleTrigger: z.ZodType<ScheduleTrigger> = z.object({
+  kind: z.enum(["at", "every", "cron"]),
+  cron_expr: z.string().optional(),
+  every_ms: z.number().int().gte(1000).optional(),
+  at_ms: z.number().int().optional(),
+});
+export const ScheduleState: z.ZodType<ScheduleState> = z
+  .object({
+    next_run_at_ms: z.number().int(),
+    last_run_at_ms: z.number().int(),
+    last_status: z.string(),
+    last_error: z.string(),
+    consecutive_failures: z.number().int(),
+    running: z.boolean(),
+  })
+  .partial();
+export const ScheduleRunRecord: z.ZodType<ScheduleRunRecord> = z.object({
+  ran_at_ms: z.number().int(),
+  status: z.enum(["ok", "error", "skipped", "timeout"]),
+  error: z.string().optional(),
+  session_id: z.string().optional(),
+  duration_ms: z.number().int().optional(),
+});
+export const Schedule: z.ZodType<Schedule> = z.object({
+  id: z.string(),
+  name: z.string().min(1),
+  enabled: z.boolean(),
+  owner_agent_id: z.string().min(1),
+  created_by: z.string().optional(),
+  trigger: ScheduleTrigger,
+  message: z.string().min(1),
+  deliver: z.boolean(),
+  session_mode: z.enum(["isolated", "continue", "main"]),
+  timeout_seconds: z.number().int(),
+  session_id: z.string().optional(),
+  channel: z.string().optional(),
+  chat_id: z.string().optional(),
+  state: ScheduleState,
+  runs: z.array(ScheduleRunRecord).optional(),
+  created_at_ms: z.number().int(),
+  updated_at_ms: z.number().int(),
+});
+export const ScheduleList: z.ZodType<ScheduleList> = z.object({
+  schedules: z.array(Schedule),
+});
+export const ScheduleCreate: z.ZodType<ScheduleCreate> = z.object({
+  name: z.string().min(1),
+  owner_agent_id: z.string().min(1),
+  trigger: ScheduleTrigger,
+  message: z.string().min(1),
+  deliver: z.boolean().optional(),
+  session_mode: z.enum(["isolated", "continue", "main"]).optional(),
+  timeout_seconds: z.number().int().gte(0).optional(),
+  enabled: z.boolean().optional(),
+  channel: z.string().optional(),
+  chat_id: z.string().optional(),
+});
+export const ScheduleUpdate: z.ZodType<ScheduleUpdate> = z
+  .object({
+    name: z.string().min(1),
+    owner_agent_id: z.string().min(1),
+    trigger: ScheduleTrigger,
+    message: z.string().min(1),
+    deliver: z.boolean(),
+    session_mode: z.enum(["isolated", "continue", "main"]),
+    timeout_seconds: z.number().int().gte(0),
+    enabled: z.boolean(),
+    channel: z.string(),
+    chat_id: z.string(),
+  })
+  .partial();
+export const ScheduleRunResult = z.object({
+  schedule_id: z.string(),
+  status: z.enum(["ok", "error", "skipped", "timeout"]),
+  session_id: z.string().optional(),
+  error: z.string().optional(),
+});
+export const Notification: z.ZodType<Notification> = z.object({
+  id: z.string(),
+  type: z.literal("schedule_failed"),
+  title: z.string().min(1),
+  body: z.string().optional(),
+  severity: z.enum(["info", "warning", "error"]),
+  read: z.boolean(),
+  created_at_ms: z.number().int(),
+  updated_at_ms: z.number().int().optional(),
+  schedule_id: z.string().optional(),
+  session_id: z.string().optional(),
+  agent_id: z.string().optional(),
+});
+export const NotificationList: z.ZodType<NotificationList> = z.object({
+  notifications: z.array(Notification),
+  unread_count: z.number().int(),
 });
 export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
   LoginResponse;
@@ -2490,6 +2668,65 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
   },
   {
+    method: "get",
+    path: "/notifications",
+    alias: "listNotifications",
+    requestFormat: "json",
+    response: NotificationList,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/notifications/:id/read",
+    alias: "markNotificationRead",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/notifications/read-all",
+    alias: "markAllNotificationsRead",
+    requestFormat: "json",
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "post",
     path: "/onboarding/complete",
     alias: "completeOnboarding",
@@ -2722,6 +2959,213 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         status: 422,
         description: `Filename field is required.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/schedules",
+    alias: "listSchedules",
+    description: `Returns all schedules visible to the authenticated user (#264).`,
+    requestFormat: "json",
+    response: ScheduleList,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/schedules",
+    alias: "createSchedule",
+    description: `Creates a schedule owned by the given agent. The owner must be an agent the caller is permitted to use (403 otherwise).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ScheduleCreate,
+      },
+    ],
+    response: Schedule,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/schedules/:id",
+    alias: "getSchedule",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Schedule,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/schedules/:id",
+    alias: "updateSchedule",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ScheduleUpdate,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Schedule,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/schedules/:id",
+    alias: "deleteSchedule",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/schedules/:id/pause",
+    alias: "pauseSchedule",
+    description: `Flips enabled (pause/resume) and returns the updated schedule (#264).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Schedule,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/schedules/:id/run",
+    alias: "runSchedule",
+    description: `Fires the schedule immediately, respecting the overlap guard and concurrency cap (#264).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: ScheduleRunResult,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
         schema: ErrorResponse,
       },
     ],
@@ -4414,7 +4858,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "exec_approval_request", "exec_approval_expired", "task_status_changed", "replay_message", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "exec_approval_response_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "token", "done", "error", "tool_call_start", "tool_call_result", "subagent_start", "subagent_end", "exec_approval_request", "exec_approval_expired", "task_status_changed", "replay_message", "rate_limit", "media", "agent_switched", "tool_approval_required", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "exec_approval_response_ack", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification"]);
 
 export const AuthFrame = z
   .object({
@@ -4799,6 +5243,22 @@ export const ExecApprovalExpiredFrame = z
   })
   .strict();
 
+export const NotificationFrame = z
+  .object({
+    type: z.literal("notification"),
+    id: z.string().min(1),
+    notification_type: z.literal("schedule_failed"),
+    title: z.string().min(1),
+    body: z.string().optional(),
+    severity: z.enum(["info", "warning", "error"]),
+    read: z.boolean(),
+    created_at_ms: z.number().int(),
+    schedule_id: z.string().optional(),
+    session_id: z.string().optional(),
+    agent_id: z.string().optional(),
+  })
+  .strict();
+
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
@@ -4836,6 +5296,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   SessionCloseFrame,
   WhatsAppPairingSubscribeFrame,
   ExecApprovalExpiredFrame,
+  NotificationFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

@@ -40,7 +40,8 @@ export type WsFrameType =
   | "exec_approval_response_ack"
   | "device_pairing_request"
   | "whatsapp_pairing"
-  | "whatsapp_pairing_subscribe";
+  | "whatsapp_pairing_subscribe"
+  | "notification";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -353,6 +354,20 @@ export interface ExecApprovalExpiredFrame {
   message?: string;
 }
 
+export interface NotificationFrame {
+  type: "notification";
+  id: string;
+  notification_type: "schedule_failed";
+  title: string;
+  body?: string;
+  severity: "info" | "warning" | "error";
+  read: boolean;
+  created_at_ms: number;
+  schedule_id?: string;
+  session_id?: string;
+  agent_id?: string;
+}
+
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
 
 export type WsFrame =
@@ -389,7 +404,8 @@ export type WsFrame =
   | WhatsAppPairingFrame
   | SessionCloseFrame
   | WhatsAppPairingSubscribeFrame
-  | ExecApprovalExpiredFrame;
+  | ExecApprovalExpiredFrame
+  | NotificationFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -436,4 +452,5 @@ export type ServerFrame =
   | ExecApprovalResponseAckFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
-  | ExecApprovalExpiredFrame;
+  | ExecApprovalExpiredFrame
+  | NotificationFrame;

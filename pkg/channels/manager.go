@@ -148,6 +148,21 @@ type asyncTask struct {
 	cancel context.CancelFunc
 }
 
+// ChannelRegistered reports whether a channel with the given name is currently
+// registered (constructed and tracked) on this manager. Used by the scheduled
+// runner to validate a deliver=true target before publishing, so a publish to a
+// channel nobody is subscribed to is recorded as a failure instead of a silent
+// success (M2).
+func (m *Manager) ChannelRegistered(name string) bool {
+	if name == "" {
+		return false
+	}
+	m.mu.RLock()
+	_, ok := m.channels[name]
+	m.mu.RUnlock()
+	return ok
+}
+
 // RecordPlaceholder registers a placeholder message for later editing.
 // Implements PlaceholderRecorder.
 func (m *Manager) RecordPlaceholder(channel, chatID, placeholderID string) {

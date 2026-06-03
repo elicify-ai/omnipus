@@ -523,6 +523,11 @@ func DefaultConfig() *Config {
 			Enabled:  true,
 			Interval: 30,
 		},
+		Schedules: SchedulesConfig{
+			MaxConcurrentRuns: DefaultSchedulesMaxConcurrentRuns,
+			RunTimeoutSeconds: DefaultSchedulesRunTimeoutSeconds,
+			RetryBackoffMs:    append([]int64(nil), DefaultSchedulesRetryBackoffMs...),
+		},
 		Devices: DevicesConfig{
 			Enabled:    false,
 			MonitorUSB: true,

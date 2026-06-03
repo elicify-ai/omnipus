@@ -107,7 +107,38 @@ var (
 	ctxKeyAgentID             = &toolCtxKey{"agentID"}
 	ctxKeySessionKey          = &toolCtxKey{"sessionKey"}
 	ctxKeyTranscriptSessionID = &toolCtxKey{"transcriptSessionID"}
+	ctxKeyProcTracker         = &toolCtxKey{"procTracker"}
 )
+
+// ProcessTrackerFunc records a child PID spawned by a tool so a caller (e.g. the
+// scheduled-run lane, FR-011) can terminate it when the run finishes. It is
+// installed on the tool context by the caller via WithProcessTracker; tools call
+// TrackProcess after spawning a child. A nil tracker (the default for
+// interactive runs) makes TrackProcess a no-op, so normal chat sessions are
+// unaffected.
+type ProcessTrackerFunc func(pid int)
+
+// WithProcessTracker returns a child context carrying a child-process tracker.
+// The scheduled runner installs one keyed to the run's session so spawned
+// children can be cleaned up on completion (FR-011).
+func WithProcessTracker(ctx context.Context, fn ProcessTrackerFunc) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyProcTracker, fn)
+}
+
+// TrackProcess reports a spawned child PID to the context's process tracker, if
+// one is installed. No-op when no tracker is present (the common interactive
+// case) or pid <= 0.
+func TrackProcess(ctx context.Context, pid int) {
+	if pid <= 0 {
+		return
+	}
+	if fn, ok := ctx.Value(ctxKeyProcTracker).(ProcessTrackerFunc); ok && fn != nil {
+		fn(pid)
+	}
+}
 
 // WithToolContext returns a child context carrying channel and chatID.
 func WithToolContext(ctx context.Context, channel, chatID string) context.Context {

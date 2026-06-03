@@ -714,6 +714,13 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *ToolResult
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
 	}
 
+	// FR-011: report the spawned child to the scheduled-run process tracker (if
+	// the caller installed one) so it can be force-terminated on run completion.
+	// No-op for interactive runs (no tracker on the context).
+	if cmd.Process != nil {
+		TrackProcess(ctx, cmd.Process.Pid)
+	}
+
 	done := make(chan error, 1)
 	go func() {
 		done <- cmd.Wait()
@@ -1080,6 +1087,10 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	}
 
 	session.PID = cmd.Process.Pid
+	// FR-011: report the spawned background child to the scheduled-run process
+	// tracker (if installed) so it is force-terminated on run completion. No-op
+	// for interactive runs.
+	TrackProcess(ctx, session.PID)
 	t.sessionManager.Add(session)
 
 	session.outputBuffer = &bytes.Buffer{}

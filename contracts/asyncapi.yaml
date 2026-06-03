@@ -131,6 +131,8 @@ channels:
         $ref: '#/components/messages/WhatsAppPairingFrame'
       ExecApprovalExpiredFrame:
         $ref: '#/components/messages/ExecApprovalExpiredFrame'
+      NotificationFrame:
+        $ref: '#/components/messages/NotificationFrame'
 
 operations:
   # ── Client → server (action: send from SPA perspective) ─────────────────────
@@ -493,6 +495,17 @@ operations:
     messages:
       - $ref: '#/channels/chat/messages/ExecApprovalExpiredFrame'
 
+  receiveNotification:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      A notification was raised for the authenticated user (e.g. a scheduled
+      run failed). The SPA adds it to the header notification center and bumps
+      the unread badge. Delivered only to the recipient user's connections (#264).
+    messages:
+      - $ref: '#/channels/chat/messages/NotificationFrame'
+
 components:
   messages:
     # ── Client → server messages ───────────────────────────────────────────────
@@ -771,6 +784,14 @@ components:
       payload:
         $ref: '#/components/schemas/ExecApprovalExpiredFrame'
 
+    NotificationFrame:
+      name: NotificationFrame
+      title: notification
+      summary: A user notification raised live (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/NotificationFrame'
+
   schemas:
     WsFrameType:
       title: WsFrameType
@@ -811,6 +832,7 @@ components:
         - device_pairing_request
         - whatsapp_pairing
         - whatsapp_pairing_subscribe
+        - notification
 
     AuthFrame:
       title: AuthFrame
@@ -1879,4 +1901,54 @@ components:
           type: string
           minLength: 1
         message:
+          type: string
+
+    NotificationFrame:
+      title: NotificationFrame
+      description: >
+        Server → client. A notification raised for the recipient user (e.g. a
+        scheduled run failed). Delivered only to that user's connections; the SPA
+        adds it to the header notification center (#264).
+      type: object
+      required:
+        - type
+        - id
+        - notification_type
+        - title
+        - severity
+        - read
+        - created_at_ms
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: notification
+        id:
+          type: string
+          minLength: 1
+        notification_type:
+          type: string
+          enum:
+            - schedule_failed
+        title:
+          type: string
+          minLength: 1
+        body:
+          type: string
+        severity:
+          type: string
+          enum:
+            - info
+            - warning
+            - error
+        read:
+          type: boolean
+        created_at_ms:
+          type: integer
+          format: int64
+        schedule_id:
+          type: string
+        session_id:
+          type: string
+        agent_id:
           type: string

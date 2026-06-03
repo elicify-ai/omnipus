@@ -272,6 +272,13 @@ type processOptions struct {
 	SkipInitialSteeringPoll bool                  // If true, skip the steering poll at loop start (used by Continue)
 	TranscriptSessionID     string                // Session ID for transcript tool call recording (empty = disabled)
 	TranscriptStore         *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
+
+	// AutoDenyAsk, when true, makes every `ask`-policy tool call auto-DENIED
+	// without ever requesting human approval (issue #264, FR-009). Scheduled
+	// runs are headless — there is no operator to approve, so blocking on an
+	// approval prompt would stall the run forever. Only ProcessScheduled sets
+	// this; interactive paths leave it false so `ask` keeps prompting.
+	AutoDenyAsk bool
 }
 
 type continuationTarget struct {
@@ -2042,6 +2049,15 @@ func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.Pairi
 	})
 }
 
+// EmitNotification publishes a user-facing notification onto the event bus so
+// the recipient's SPA WebSocket connections receive a notification frame (#264).
+// The WS forwarder filters delivery by Recipient (==wsConn.userID), so the
+// payload is not broadcast to every authenticated tab. Safe to call from any
+// goroutine — the bus drops to a full subscriber rather than blocking.
+func (al *AgentLoop) EmitNotification(p NotificationPayload) {
+	al.emitEvent(EventKindNotification, EventMeta{Source: "schedule"}, p)
+}
+
 func cloneEventArguments(args map[string]any) map[string]any {
 	if len(args) == 0 {
 		return nil
@@ -2202,15 +2218,14 @@ func (al *AgentLoop) getChannelManager() *channels.Manager {
 	return cm
 }
 
-// GetChannelManager returns the current channel manager under the read lock.
-// This exported accessor allows REST handlers in pkg/gateway to inspect
-// runtime channel state (e.g. FailedChannels) without holding additional locks.
-// Returns nil before channels are initialized (e.g. during onboarding).
+// GetChannelManager returns the current channel manager under the read lock
+// (may be nil before channels start, e.g. during onboarding). Exported for
+// pkg/gateway: REST handlers inspect runtime channel state (e.g. FailedChannels),
+// and the scheduled runner validates that a deliver=true target channel is
+// registered before publishing (M2). Set after construction via
+// SetChannelManager, so callers must tolerate nil and re-fetch at use time.
 func (al *AgentLoop) GetChannelManager() *channels.Manager {
-	al.channelManagerMu.RLock()
-	cm := al.channelManager
-	al.channelManagerMu.RUnlock()
-	return cm
+	return al.getChannelManager()
 }
 
 // ReloadProviderAndConfig atomically swaps the provider and config with proper synchronization.
@@ -2957,6 +2972,92 @@ func (al *AgentLoop) ProcessHeartbeat(
 		SendResponse:         false,
 		SuppressToolFeedback: true,
 		NoHistory:            true, // Don't load session history for heartbeat
+	})
+}
+
+// ProcessScheduled runs a fired schedule's message as ownerAgentID against the
+// concrete pre-created sessionID (issue #264, W-1). It is the dedicated headless
+// entry point for the cron → agent fire path and deliberately differs from the
+// human message path:
+//
+//   - It pins ownerAgentID directly via runAgentLoop — it does NOT consult
+//     routing or the sessionActiveAgent handoff map, so a human switching agents
+//     in this session cannot hijack the scheduled run, and a missing/disabled
+//     owner is a hard error (never a default-agent fallback, the core #264 bug).
+//   - It passes the concrete sessionID as TranscriptSessionID so the turn
+//     registers under it (GetActiveTurnHookForSession matches by
+//     transcriptSessionID) and RequestCancel(CancelScope{SessionID}) can abort
+//     it on a caller-imposed deadline. The session key is the per-owner
+//     "agent:<owner>:session:<id>" form, collision-free across isolated runs.
+//   - It sets AutoDenyAsk so any `ask`-policy tool call is denied without
+//     blocking for approval (FR-009) — no operator is present.
+//
+// The caller (the Wave-2 gateway runner) resolves the owner + picks the session
+// per session_mode and supplies a concrete sessionID; it imposes the deadline on
+// ctx and calls RequestCancel on timeout. ProcessScheduled only guarantees
+// owner-pinning, cancellability, and prompt return.
+//
+// Returns the agent's reply and a non-nil error on run failure. An aborted
+// (canceled/deadline) run returns a context-derived error promptly.
+func (al *AgentLoop) ProcessScheduled(
+	ctx context.Context,
+	ownerAgentID, sessionID, content, channel, chatID string,
+) (string, error) {
+	if ownerAgentID == "" {
+		return "", fmt.Errorf("owner unavailable: empty agent id")
+	}
+	if sessionID == "" {
+		return "", fmt.Errorf("scheduled run requires a concrete session id")
+	}
+
+	if err := al.ensureHooksInitialized(ctx); err != nil {
+		return "", err
+	}
+	if err := al.ensureMCPInitialized(ctx); err != nil {
+		return "", err
+	}
+
+	// Owner pinning (FR-001): a missing owner is a hard error — NEVER fall back
+	// to GetDefaultAgent. Note GetAgent registers ALL agents regardless of
+	// Enabled, so registration alone does not imply the owner is active; the
+	// config IsActive() check below rejects a disabled owner.
+	agent, ok := al.GetRegistry().GetAgent(ownerAgentID)
+	if !ok || agent == nil {
+		return "", fmt.Errorf("owner unavailable: agent %q not found", ownerAgentID)
+	}
+	// Disabled-owner guard (FR-001): a registered-but-disabled agent must not
+	// run. The runtime registry keeps disabled agents, so consult config.
+	if ac := findAgentConfig(al.GetConfig(), ownerAgentID); ac != nil && !ac.IsActive() {
+		return "", fmt.Errorf("owner unavailable: agent %q is disabled", ownerAgentID)
+	}
+
+	// Per-owner session key (collision-free across isolated runs). Built here
+	// rather than via agentSessionKey because we bypass resolveMessageRoute.
+	sessionKey := fmt.Sprintf("agent:%s:session:%s", ownerAgentID, sessionID)
+
+	// Resolve the transcript store for the concrete session so tool calls are
+	// recorded and the turn registers under transcriptSessionID == sessionID
+	// (which is what RequestCancel(CancelScope{SessionID}) matches against).
+	transcriptStore := al.ResolveSessionStore(sessionID)
+	if transcriptStore == nil {
+		logger.WarnCF(
+			"agent",
+			"scheduled run: session store not found for session id — tool calls will not be recorded",
+			map[string]any{"session_id": sessionID, "owner": ownerAgentID},
+		)
+	}
+
+	return al.runAgentLoop(ctx, agent, processOptions{
+		SessionKey:          sessionKey,
+		Channel:             channel,
+		ChatID:              chatID,
+		UserMessage:         content,
+		DefaultResponse:     defaultResponse,
+		EnableSummary:       true,
+		SendResponse:        false,
+		TranscriptSessionID: sessionID,
+		TranscriptStore:     transcriptStore,
+		AutoDenyAsk:         true, // FR-009: headless — auto-deny ask-policy tools
 	})
 }
 
@@ -4738,6 +4839,37 @@ turnLoop:
 				continue
 			}
 			if toctouPolicy == "ask" {
+				// Headless auto-deny (issue #264, FR-009): a scheduled run has no
+				// operator to approve, so any `ask`-policy tool is denied without
+				// ever issuing an approval request — the run must never stall.
+				if ts.opts.AutoDenyAsk {
+					const denialReason = "auto-denied: ask-policy tool not allowed in a headless scheduled run"
+					denyMsg := fmt.Sprintf(`{"error":"permission_denied","message":"User denied tool execution.","tool":%q,"reason":%q}`, toolName, denialReason)
+					al.emitPolicyDenyAudit(ts, toolName, "ask", denialReason)
+					deniedMsg := providers.Message{
+						Role:       "tool",
+						Content:    denyMsg,
+						ToolCallID: tc.ID,
+					}
+					messages = append(messages, deniedMsg)
+					if !ts.opts.NoHistory {
+						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
+						ts.recordPersistedMessage(deniedMsg)
+					}
+					al.emitEvent(
+						EventKindToolExecSkipped,
+						ts.eventMeta("runTurn", "turn.tool.skipped"),
+						ToolExecSkippedPayload{
+							Tool:   toolName,
+							Reason: fmt.Sprintf("permission_denied (ask auto-denied: %s)", denialReason),
+						},
+					)
+					if shouldAbort, _ := al.recordSyntheticDeny(ts); shouldAbort {
+						turnStatus = TurnEndStatusAborted
+						return al.abortTurn(ts)
+					}
+					continue
+				}
 				// ask-policy: pause and request human approval (FR-011).
 				approver := al.loadToolApprover()
 				approved, denialReason := approver.RequestApproval(turnCtx, PolicyApprovalReq{

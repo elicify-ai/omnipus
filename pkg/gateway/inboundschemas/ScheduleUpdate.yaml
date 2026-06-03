@@ -1,0 +1,35 @@
+title: ScheduleUpdate
+description: >
+  Request body to update a schedule (#264). All fields optional; only provided
+  fields are changed. Changing owner_agent_id is re-authorized.
+type: object
+additionalProperties: false
+properties:
+  name:
+    type: string
+    minLength: 1
+  owner_agent_id:
+    type: string
+    minLength: 1
+  trigger:
+    $ref: ./ScheduleTrigger.yaml
+  message:
+    type: string
+    minLength: 1
+  deliver:
+    type: boolean
+  session_mode:
+    type: string
+    enum:
+      - isolated
+      - continue
+      - main
+  timeout_seconds:
+    type: integer
+    minimum: 0
+  enabled:
+    type: boolean
+  channel:
+    type: string
+  chat_id:
+    type: string

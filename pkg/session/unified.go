@@ -26,7 +26,24 @@ const (
 	SessionTypeChat    UnifiedSessionType = "chat"
 	SessionTypeTask    UnifiedSessionType = "task"
 	SessionTypeChannel UnifiedSessionType = "channel"
+	// SessionTypeScheduled classifies sessions created by a fired schedule
+	// (issue #264, FR-005). isolated/continue scheduled runs use this type so
+	// the SPA can badge them and group them separately from human chat/task/
+	// channel sessions.
+	SessionTypeScheduled UnifiedSessionType = "scheduled"
 )
+
+// IsValidSessionType reports whether t is one of the known session types.
+// New types must be added here and to the const block above so every
+// validation/listing site accepts them.
+func IsValidSessionType(t UnifiedSessionType) bool {
+	switch t {
+	case SessionTypeChat, SessionTypeTask, SessionTypeChannel, SessionTypeScheduled:
+		return true
+	default:
+		return false
+	}
+}
 
 // MetaPatch is a partial update applied to a session's meta.json.
 // Only non-nil fields are written.
@@ -191,14 +208,24 @@ func (us *UnifiedStore) NewSession(
 	channel string,
 	creatingAgentID string,
 ) (*UnifiedMeta, error) {
-	us.mu.Lock()
-	defer us.mu.Unlock()
-
 	sessionID, err := NewSessionID()
 	if err != nil {
 		return nil, err
 	}
 
+	us.mu.Lock()
+	defer us.mu.Unlock()
+	return us.createSessionLocked(sessionID, sessionType, channel, creatingAgentID)
+}
+
+// createSessionLocked creates a session directory with the EXACT supplied id,
+// meta.json, and an empty transcript. Caller must hold us.mu.
+func (us *UnifiedStore) createSessionLocked(
+	sessionID string,
+	sessionType UnifiedSessionType,
+	channel string,
+	creatingAgentID string,
+) (*UnifiedMeta, error) {
 	now := time.Now().UTC()
 	meta := &UnifiedMeta{
 		SessionMeta: SessionMeta{
@@ -231,6 +258,41 @@ func (us *UnifiedStore) NewSession(
 
 	slog.Debug("unified_store: created session", "id", sessionID, "type", sessionType, "agent", creatingAgentID)
 	return meta, nil
+}
+
+// NewScheduledSession mints a fresh isolated scheduled session (SessionTypeScheduled)
+// with a freshly generated id, owned by ownerAgentID. This is the `isolated`
+// session_mode primitive for fired schedules (issue #264, FR-005). It is a thin
+// wrapper over NewSession that pins the type so callers don't have to remember it.
+func (us *UnifiedStore) NewScheduledSession(ownerAgentID string) (*UnifiedMeta, error) {
+	return us.NewSession(SessionTypeScheduled, "scheduled", ownerAgentID)
+}
+
+// GetOrCreateScheduledSession returns the scheduled session with the EXACT id,
+// creating it if it does not exist (issue #264, W-2). It is the get-or-create
+// primitive backing the `continue` (stable per-schedule id) and `main`
+// (reserved id `sched-main-<owner>`) session modes.
+//
+// On create, the session is SessionTypeScheduled with
+// ActiveAgentID == AgentID == ownerAgentID. The id must pass validateSessionID
+// (no path-escape, non-empty) — the reserved `sched-main-<owner>` id is safe as
+// long as owner ids are pre-normalized (slash-free); validateSessionID rejects
+// any that are not, so safety is by-rejection, not intrinsic.
+//
+// If a session with id already exists, it is returned as-is regardless of its
+// current owner/type (the caller's owner pinning happens in the agent loop, not
+// here) so a human-touched continue session is not clobbered.
+func (us *UnifiedStore) GetOrCreateScheduledSession(id, ownerAgentID string) (*UnifiedMeta, error) {
+	if err := validateSessionID(id); err != nil {
+		return nil, err
+	}
+	us.mu.Lock()
+	defer us.mu.Unlock()
+
+	if meta, err := us.readMetaLocked(id); err == nil {
+		return meta, nil
+	}
+	return us.createSessionLocked(id, SessionTypeScheduled, "scheduled", ownerAgentID)
 }
 
 // GetMeta returns the metadata for a session.

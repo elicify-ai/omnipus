@@ -350,6 +350,26 @@ components:
       $ref: ./components/schemas/McpToolCallRequest.yaml
     McpToolCallResponse:
       $ref: ./components/schemas/McpToolCallResponse.yaml
+    ScheduleTrigger:
+      $ref: ./components/schemas/ScheduleTrigger.yaml
+    ScheduleRunRecord:
+      $ref: ./components/schemas/ScheduleRunRecord.yaml
+    ScheduleState:
+      $ref: ./components/schemas/ScheduleState.yaml
+    Schedule:
+      $ref: ./components/schemas/Schedule.yaml
+    ScheduleCreate:
+      $ref: ./components/schemas/ScheduleCreate.yaml
+    ScheduleUpdate:
+      $ref: ./components/schemas/ScheduleUpdate.yaml
+    ScheduleList:
+      $ref: ./components/schemas/ScheduleList.yaml
+    ScheduleRunResult:
+      $ref: ./components/schemas/ScheduleRunResult.yaml
+    Notification:
+      $ref: ./components/schemas/Notification.yaml
+    NotificationList:
+      $ref: ./components/schemas/NotificationList.yaml
   responses:
     400BadRequest:
       description: "Bad request \u2014 missing or invalid field."
@@ -3777,5 +3797,226 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /schedules:
+    get:
+      operationId: listSchedules
+      summary: List schedules
+      description: Returns all schedules visible to the authenticated user (#264).
+      tags:
+      - schedules
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Schedules.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleList'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    post:
+      operationId: createSchedule
+      summary: Create a schedule
+      description: "Creates a schedule owned by the given agent. The owner must be an agent the caller is permitted to use (403 otherwise).\n"
+      tags:
+      - schedules
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduleCreate'
+      responses:
+        '201':
+          description: Schedule created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /schedules/{id}:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      operationId: getSchedule
+      summary: Get a schedule
+      tags:
+      - schedules
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Schedule.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    put:
+      operationId: updateSchedule
+      summary: Update a schedule
+      tags:
+      - schedules
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduleUpdate'
+      responses:
+        '200':
+          description: Updated schedule.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      operationId: deleteSchedule
+      summary: Delete a schedule
+      tags:
+      - schedules
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: Deleted. No response body.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /schedules/{id}/run:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      operationId: runSchedule
+      summary: Run a schedule now
+      description: "Fires the schedule immediately, respecting the overlap guard and concurrency cap (#264).\n"
+      tags:
+      - schedules
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Run result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleRunResult'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /schedules/{id}/pause:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      operationId: pauseSchedule
+      summary: Toggle a schedule's enabled state
+      description: "Flips enabled (pause/resume) and returns the updated schedule (#264).\n"
+      tags:
+      - schedules
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Updated schedule.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+  /notifications:
+    get:
+      operationId: listNotifications
+      summary: List the authenticated user's notifications
+      tags:
+      - notifications
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Notifications + unread count.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationList'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /notifications/read-all:
+    post:
+      operationId: markAllNotificationsRead
+      summary: Mark all of the user's notifications read
+      tags:
+      - notifications
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: All marked read. No response body.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+  /notifications/{id}/read:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      operationId: markNotificationRead
+      summary: Mark one notification read
+      tags:
+      - notifications
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: Marked read. No response body.
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
 security:
 - BearerAuth: []

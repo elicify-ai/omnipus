@@ -99,6 +99,12 @@ import {
   // fix-AC: promoted from hand-written inline schemas:
   UserContextResponse as UserContextResponseSchema,
   McpServerToolsResponse as McpServerToolsResponseSchema,
+  // #264 Schedules (contract-first #8):
+  Schedule as ScheduleSchema,
+  ScheduleList as ScheduleListSchema,
+  ScheduleRunResult as ScheduleRunResultSchema,
+  // #264 Notifications (contract-first #8):
+  NotificationList as NotificationListSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -253,6 +259,14 @@ import type {
   AgentUpdateRequest,
   AgentCreateRequest,
   ChannelRouting,
+  // #264 Schedules (contract-first #8):
+  Schedule,
+  ScheduleCreate,
+  ScheduleUpdate,
+  ScheduleList,
+  ScheduleRunResult,
+  // #264 Notifications (contract-first #8):
+  NotificationList,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -1176,6 +1190,60 @@ export function startTask(id: string): Promise<void> {
 
 export function deleteTask(id: string): Promise<void> {
   return request(`/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+// ── #264 Schedules ──────────────────────────────────────────────────────────────
+
+// Schedule wire types are re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/Schedule*.yaml. The /schedules surface is the
+// contract projection over the underlying cron job.
+
+export function fetchSchedules(): Promise<Schedule[]> {
+  // GET /schedules returns { schedules: Schedule[] }; flatten to the array the UI consumes.
+  return request<ScheduleList>('/schedules', undefined, ScheduleListSchema as ZodType<ScheduleList>)
+    .then((list) => list.schedules)
+}
+
+export function createSchedule(body: ScheduleCreate): Promise<Schedule> {
+  return request<Schedule>('/schedules', { method: 'POST', body: JSON.stringify(body) }, ScheduleSchema as ZodType<Schedule>)
+}
+
+export function updateSchedule(id: string, body: ScheduleUpdate): Promise<Schedule> {
+  return request<Schedule>(`/schedules/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) }, ScheduleSchema as ZodType<Schedule>)
+}
+
+export function deleteSchedule(id: string): Promise<void> {
+  return request<void>(`/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function runSchedule(id: string): Promise<ScheduleRunResult> {
+  return request<ScheduleRunResult>(`/schedules/${encodeURIComponent(id)}/run`, { method: 'POST' }, ScheduleRunResultSchema as ZodType<ScheduleRunResult>)
+}
+
+export function pauseSchedule(id: string): Promise<Schedule> {
+  return request<Schedule>(`/schedules/${encodeURIComponent(id)}/pause`, { method: 'POST' }, ScheduleSchema as ZodType<Schedule>)
+}
+
+// ── #264 Notifications ────────────────────────────────────────────────────────
+//
+// Header notification center. The REST surface seeds the store on mount and the
+// `notification` WS frame keeps it live. NotificationList wire type is re-exported
+// from generated openapi-types (contract-first #8); see
+// contracts/components/schemas/Notification*.yaml.
+
+export function fetchNotifications(): Promise<NotificationList> {
+  // GET /notifications → { notifications: Notification[], unread_count }.
+  return request<NotificationList>('/notifications', undefined, NotificationListSchema as ZodType<NotificationList>)
+}
+
+export function markNotificationRead(id: string): Promise<void> {
+  // POST /notifications/{id}/read — void response.
+  return request<void>(`/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' })
+}
+
+export function markAllNotificationsRead(): Promise<void> {
+  // POST /notifications/read-all — void response.
+  return request<void>('/notifications/read-all', { method: 'POST' })
 }
 
 // ── Gateway Status ────────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ import {
   NotePencil,
   UploadSimple,
   Info,
+  Plus,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
@@ -35,6 +36,8 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { SandboxProfileSelector } from './SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
+import { SchedulesList } from '@/components/command-center/SchedulesList'
+import { ScheduleFormSheet } from '@/components/command-center/ScheduleFormSheet'
 import {
   fetchAgent,
   fetchAppState,
@@ -156,6 +159,7 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
   const [toolFeedback, setToolFeedback] = useState(false)
   const [heartbeatEnabled, setHeartbeatEnabled] = useState(false)
   const [heartbeatInterval, setHeartbeatInterval] = useState(30)
+  const [creatingSchedule, setCreatingSchedule] = useState(false)
   const [toolsCfg, setToolsCfg] = useState<AgentToolsCfg>({
     builtin: { default_policy: 'allow' },
   })
@@ -897,6 +901,28 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
           </AccordionContent>
         </AccordionItem>
 
+        {/* Schedules — default CLOSED (#264) */}
+        <AccordionItem value="schedules" className="border-0">
+          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            Schedules
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="px-4 space-y-3">
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setCreatingSchedule(true)}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                >
+                  <Plus size={13} />
+                  New schedule
+                </button>
+              </div>
+              <SchedulesList agentId={agentId} />
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+
         {/* Activity — default CLOSED */}
         <AccordionItem value="activity" className="border-0">
           <AccordionTrigger className="px-4 font-headline font-bold text-sm">
@@ -941,6 +967,17 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
           </AccordionContent>
         </AccordionItem>
       </Accordion>
+
+      {/* New schedule slide-over — owner pre-filled to this agent (#264) */}
+      {creatingSchedule && (
+        <ScheduleFormSheet
+          open={true}
+          defaultOwnerAgentId={agentId}
+          onOpenChange={(open) => {
+            if (!open) setCreatingSchedule(false)
+          }}
+        />
+      )}
     </div>
     </div>
   )

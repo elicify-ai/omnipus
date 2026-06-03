@@ -2218,6 +2218,49 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 				pairF.Message = &msg
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeWhatsappPairing), pairF)
+		case agent.EventKindNotification:
+			// #264: a user-facing notification (e.g. a scheduled run failed).
+			// Delivered ONLY to the recipient user's connections (filtered by
+			// wc.userID) so it never leaks to other admins' tabs. The
+			// NotificationAdminBroadcast sentinel fans out to admin-role
+			// connections when no specific recipient could be resolved.
+			p, ok := evt.Payload.(agent.NotificationPayload)
+			if !ok {
+				continue
+			}
+			if p.Recipient == agent.NotificationAdminBroadcast {
+				if wc.role != config.UserRoleAdmin {
+					continue
+				}
+			} else if wc.userID != p.Recipient {
+				continue
+			}
+			notifF := generated.NotificationFrame{
+				Type:             string(generated.WsFrameTypeNotification),
+				Id:               p.ID,
+				NotificationType: p.NotificationType,
+				Title:            p.Title,
+				Severity:         p.Severity,
+				Read:             p.Read,
+				CreatedAtMs:      int(p.CreatedAtMs),
+			}
+			if p.Body != "" {
+				body := p.Body
+				notifF.Body = &body
+			}
+			if p.ScheduleID != "" {
+				sid := p.ScheduleID
+				notifF.ScheduleId = &sid
+			}
+			if p.SessionID != "" {
+				ses := p.SessionID
+				notifF.SessionId = &ses
+			}
+			if p.AgentID != "" {
+				aid := p.AgentID
+				notifF.AgentId = &aid
+			}
+			sendConnGenFrame(wc, string(generated.WsFrameTypeNotification), notifF)
 		}
 	}
 }

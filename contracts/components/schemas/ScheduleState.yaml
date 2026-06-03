@@ -1,0 +1,25 @@
+title: ScheduleState
+description: Runtime state of a schedule (#264). All fields are server-maintained.
+type: object
+additionalProperties: false
+properties:
+  next_run_at_ms:
+    type: integer
+    format: int64
+    description: Unix epoch milliseconds of the next computed run, if enabled.
+  last_run_at_ms:
+    type: integer
+    format: int64
+    description: Unix epoch milliseconds of the most recent run.
+  last_status:
+    type: string
+    description: Status of the most recent run (ok/error/skipped/timeout), empty if never run.
+  last_error:
+    type: string
+    description: Error from the most recent failed run.
+  consecutive_failures:
+    type: integer
+    description: Number of consecutive failed runs; resets to 0 after a success.
+  running:
+    type: boolean
+    description: True while a run of this schedule is currently in progress (overlap guard).

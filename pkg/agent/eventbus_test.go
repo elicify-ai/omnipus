@@ -46,6 +46,43 @@ func TestEventBus_SubscribeEmitUnsubscribeClose(t *testing.T) {
 	}
 }
 
+// TestIsStateCriticalEventKind asserts the drop-warning policy (M1/#283): a
+// dropped EventKindNotification is WARN-class (state-critical), alongside the
+// WhatsApp pairing frame, while high-frequency kinds remain DEBUG-class.
+func TestIsStateCriticalEventKind(t *testing.T) {
+	if !isStateCriticalEventKind(EventKindNotification) {
+		t.Fatal("EventKindNotification must be warn-on-drop (M1): a dropped schedule_failed alert is state-critical")
+	}
+	if !isStateCriticalEventKind(EventKindWhatsAppPairing) {
+		t.Fatal("EventKindWhatsAppPairing must stay warn-on-drop (#283)")
+	}
+	for _, k := range []EventKind{EventKindLLMRequest, EventKindToolExecStart, EventKindTurnStart} {
+		if isStateCriticalEventKind(k) {
+			t.Fatalf("high-frequency kind %v must NOT be warn-on-drop", k)
+		}
+	}
+}
+
+// TestEventBus_NotificationDrop_CountsAndIsCritical drives a real drop of an
+// EventKindNotification through Emit (subscriber buffer full) and asserts it is
+// counted and classified state-critical (so it logs at WARN, not DEBUG).
+func TestEventBus_NotificationDrop_CountsAndIsCritical(t *testing.T) {
+	eb := NewEventBus()
+	sub := eb.Subscribe(1)
+	defer eb.Unsubscribe(sub.ID)
+
+	// Fill the 1-slot buffer, then overflow with notification events.
+	for i := 0; i < 5; i++ {
+		eb.Emit(Event{Kind: EventKindNotification})
+	}
+	if got := eb.Dropped(EventKindNotification); got == 0 {
+		t.Fatal("expected dropped notification events to be counted")
+	}
+	if !isStateCriticalEventKind(EventKindNotification) {
+		t.Fatal("dropped notification must be classified state-critical (WARN)")
+	}
+}
+
 func TestEventBus_DropsWhenSubscriberIsFull(t *testing.T) {
 	eventBus := NewEventBus()
 	sub := eventBus.Subscribe(1)
