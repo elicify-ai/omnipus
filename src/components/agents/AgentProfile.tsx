@@ -272,15 +272,17 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
       if (!hasHydrated.current) return
       // Locked agents: strip every field the backend treats as immutable for
       // the locked roster (Mia/Jim/Ava/Ray/Max). Identity fields plus the
-      // sandbox profile, shell policy, and tools_cfg are all built-in for
-      // these agents — sending them yields either a 400 from the locked-field
-      // validator or silently no-ops, and either way the autosave indicator
-      // would surface a spurious error.
+      // sandbox profile, shell policy, tools_cfg, and skills are all built-in
+      // for these agents — sending them yields a 403 from the locked-field
+      // validator, and the autosave indicator would surface a spurious error.
+      // Skills are stripped here (B-2 defense-in-depth on the frontend side):
+      // the Skills picker is rendered disabled for locked agents, so this strip
+      // is the belt-and-suspenders path for any state that may survive hydration.
       const payload = agent?.locked
         ? (({
             name: _n, description: _d, soul: _s, color: _c, icon: _i,
             heartbeat: _h, instructions: _ins, sandbox_profile: _sp,
-            shell_policy: _shp, tools_cfg: _tc, ...rest
+            shell_policy: _shp, tools_cfg: _tc, skills: _sk, ...rest
           }) => rest)(data)
         : data
       await updateAgent(agentId, payload)
@@ -945,10 +947,16 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
           </AccordionTrigger>
           <AccordionContent>
             <div className="px-4 space-y-3">
-              <p className="text-xs text-[var(--color-muted)]">
-                Grant specific installed skills to this agent. Only skills listed here
-                are available during this agent's runs. Empty means no skills.
-              </p>
+              {isLocked ? (
+                <p className="text-xs text-[var(--color-muted)]">
+                  Skill assignment is read-only for locked core agents.
+                </p>
+              ) : (
+                <p className="text-xs text-[var(--color-muted)]">
+                  Grant specific installed skills to this agent. Only skills listed here
+                  are available during this agent's runs. Empty means no skills.
+                </p>
+              )}
               {availableSkills.length === 0 ? (
                 <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-4 text-center">
                   <Sparkle size={16} className="text-[var(--color-muted)] mx-auto mb-1.5" />
@@ -964,12 +972,13 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                     return (
                       <label
                         key={skill.id}
-                        className="flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 cursor-pointer hover:bg-[var(--color-surface-2)] transition-colors"
+                        className={`flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 transition-colors ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[var(--color-surface-2)]'}`}
                       >
                         <input
                           type="checkbox"
                           checked={granted}
-                          onChange={(e) => {
+                          disabled={isLocked}
+                          onChange={isLocked ? undefined : (e) => {
                             markDirty()
                             if (e.target.checked) {
                               setAgentSkills((prev) => [...prev, skill.id])
@@ -977,7 +986,7 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
                               setAgentSkills((prev) => prev.filter((s) => s !== skill.id))
                             }
                           }}
-                          className="mt-0.5 shrink-0 accent-[var(--color-accent)]"
+                          className="mt-0.5 shrink-0 accent-[var(--color-accent)] disabled:opacity-50"
                           data-testid={`skill-checkbox-${skill.id}`}
                         />
                         <div className="min-w-0">

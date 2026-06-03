@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
-import type { Agent } from '@/lib/api'
+import type { Agent, Skill } from '@/lib/api'
 
 // test_agent_profile_sections (test #13)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: Agent profile renders with type-appropriate sections
@@ -222,5 +222,39 @@ describe('AgentProfile — Skills picker (US-E6)', () => {
     renderProfile('agent-b')
     await screen.findByText('Agent B')
     expect(screen.queryByText(/granted/i)).toBeNull()
+  })
+})
+
+// B-2 extension — locked agent skills picker read-only
+// Traces to: B-2 (#332 / US-D5) extended to Skills field, nontech-ux-hardening-spec §6.5
+describe('AgentProfile — B-2: Skills picker read-only for locked agents', () => {
+  const mockSkills: Skill[] = [
+    { id: 'web-research', name: 'Web Research', version: '1.0.0', verified: true, status: 'active' },
+  ]
+
+  beforeEach(() => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    vi.mocked(fetchSkills).mockResolvedValue(mockSkills)
+  })
+
+  it('shows "Skill assignment is read-only" notice for locked agents when accordion is open', async () => {
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    // Open the Skills accordion
+    const trigger = screen.getByText(/^Skills$/i)
+    fireEvent.click(trigger)
+    // The read-only notice must be visible
+    expect(await screen.findByText(/skill assignment is read-only/i)).toBeInTheDocument()
+  })
+
+  it('renders skill checkboxes as disabled for locked agents', async () => {
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    // Open the Skills accordion
+    const trigger = screen.getByText(/^Skills$/i)
+    fireEvent.click(trigger)
+    // Wait for skill to appear
+    const checkbox = await screen.findByTestId('skill-checkbox-web-research')
+    expect((checkbox as HTMLInputElement).disabled).toBe(true)
   })
 })
