@@ -1,106 +1,24 @@
+import { lazy, Suspense } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Robot } from '@phosphor-icons/react'
-import { AgentCard } from '@/components/agents/AgentCard'
-import { CreateAgentModal } from '@/components/agents/CreateAgentModal'
-import { Button } from '@/components/ui/button'
-import { useUiStore } from '@/store/ui'
-import { fetchAgents, updateAgent, isApiError } from '@/lib/api'
+import { RouteFallback } from '@/components/shared/RouteFallback'
 
-function AgentsScreen() {
-  const { openCreateAgentModal, addToast } = useUiStore()
-  const queryClient = useQueryClient()
+// Code-split: the agent list screen (cards, create-agent modal) lazy-loads into
+// its own chunk. The screen body lives in @/components/screens/AgentListScreen
+// (also imported directly by tests and re-exported from agents.tsx).
+const AgentListScreen = lazy(() =>
+  import('@/components/screens/AgentListScreen').then((m) => ({
+    default: m.AgentListScreen,
+  })),
+)
 
-  const { data: agents = [], isLoading, isError, refetch } = useQuery({
-    queryKey: ['agents'],
-    queryFn: fetchAgents,
-  })
-
-  const { mutate: doSetDefault } = useMutation({
-    mutationFn: (agentId: string) => updateAgent(agentId, { default: true }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-      addToast({ message: 'Default agent updated', variant: 'success' })
-    },
-    onError: (err: unknown) =>
-      addToast({
-        message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to set default',
-        variant: 'error',
-      }),
-  })
-
+function AgentsIndexRoute() {
   return (
-    <div className="absolute inset-0 overflow-y-auto">
-    <div className="max-w-4xl mx-auto px-4 py-6">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Agents</h1>
-          <p className="text-sm text-[var(--color-muted)] mt-0.5">
-            Browse, configure, and create your AI agents.
-          </p>
-        </div>
-        <Button onClick={openCreateAgentModal} className="gap-2">
-          <Plus size={14} weight="bold" /> New Agent
-        </Button>
-      </div>
-
-      {/* Content */}
-      {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="h-32 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse"
-            />
-          ))}
-        </div>
-      ) : isError ? (
-        <div className="flex flex-col items-center justify-center py-16 gap-3">
-          <p className="text-[var(--color-muted)] text-sm">Could not load agents.</p>
-          <Button variant="outline" size="sm" onClick={() => refetch()}>
-            Retry
-          </Button>
-        </div>
-      ) : agents.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
-          <Robot size={48} weight="thin" className="text-[var(--color-border)]" />
-          <div>
-            <p className="text-[var(--color-secondary)] font-medium">No agents yet</p>
-            <p className="text-[var(--color-muted)] text-sm mt-1">
-              Create your first agent to get started.
-            </p>
-          </div>
-          <Button onClick={openCreateAgentModal} className="gap-2">
-            <Plus size={14} weight="bold" /> Create Agent
-          </Button>
-        </div>
-      ) : (
-        <div
-          className={`grid gap-4 ${
-            agents.length < 4
-              ? 'grid-cols-1'
-              : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
-          }`}
-        >
-          {agents.map((agent) => (
-            <AgentCard
-              key={agent.id}
-              agent={agent}
-              onSetDefault={() => doSetDefault(agent.id)}
-            />
-          ))}
-        </div>
-      )}
-
-      <CreateAgentModal />
-    </div>
-    </div>
+    <Suspense fallback={<RouteFallback />}>
+      <AgentListScreen />
+    </Suspense>
   )
 }
 
-export { AgentsScreen as AgentListScreen }
-
 export const Route = createFileRoute('/_app/agents/')({
-  component: AgentsScreen,
+  component: AgentsIndexRoute,
 })

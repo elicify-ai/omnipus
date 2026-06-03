@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { AgentListScreen } from '@/routes/_app/agents'
+import { AgentListScreen } from '@/components/screens/AgentListScreen'
 import { useUiStore } from '@/store/ui'
 
 // test_agent_list_fetch (test #26)

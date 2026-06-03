@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { CommandCenterScreen } from '@/routes/_app/command-center'
+import { CommandCenterScreen } from '@/components/screens/CommandCenterScreen'
 
 // test_task_crud (test #28)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: Task list renders with status grouping

@@ -38,6 +38,16 @@ import { RateLimitIndicator } from './RateLimitIndicator'
 import { MarkdownText } from './markdown-text'
 import { SubagentBlock } from './SubagentBlock'
 import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { useChatStore } from '@/store/chat'
 import type { ChatMessage } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
@@ -1037,6 +1047,14 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashHighlight, setSlashHighlight] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
+  // Harmful-file upload confirmation (replaces the two native window.confirm calls).
+  // `harmfulConfirm` holds the files awaiting confirmation plus the flagged names.
+  // `harmfulStage` advances 1 → 2 (double-confirm) → commit. null = closed.
+  const [harmfulConfirm, setHarmfulConfirm] = useState<{
+    files: File[]
+    harmfulNames: string[]
+  } | null>(null)
+  const [harmfulStage, setHarmfulStage] = useState<1 | 2>(1)
   // EC-15 / FR-21: stop button label progression:
   //   'stop'     — idle, button shows Stop icon
   //   'stopping' — user clicked, button shows "Stopping..." (synchronous, no network RTT)
@@ -1152,23 +1170,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     }
   }
 
-  function handleFilesSelected(files: File[]) {
-    const harmful = files.filter((f) =>
-      HARMFUL_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext))
-    )
-    if (harmful.length > 0) {
-      const confirmed = window.confirm(
-        `Warning: ${harmful.map((f) => f.name).join(', ')} may be potentially harmful file(s).\n\nAre you sure you want to upload?`
-      )
-      if (!confirmed) return
-      const doubleConfirmed = window.confirm(
-        `Please confirm again: Upload ${harmful.length} potentially harmful file(s)?`
-      )
-      if (!doubleConfirmed) return
-    }
-    // Hand each file to the native composer attachment system; the
-    // AttachmentAdapter uploads on send and threads the media:// ref through
-    // onNew. Used by drag-drop and image paste.
+  // commitFiles hands each file to the native composer attachment system; the
+  // AttachmentAdapter uploads on send and threads the media:// ref through
+  // onNew. Used by drag-drop and image paste.
+  function commitFiles(files: File[]) {
     for (const file of files) {
       composerRuntime.addAttachment(file).catch((err: unknown) => {
         addToast({
@@ -1177,6 +1182,20 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         })
       })
     }
+  }
+
+  function handleFilesSelected(files: File[]) {
+    const harmful = files.filter((f) =>
+      HARMFUL_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext))
+    )
+    if (harmful.length > 0) {
+      // Defer to the AlertDialog double-confirm flow; commit happens only when
+      // the user clicks through both stages (preserves the original semantics).
+      setHarmfulStage(1)
+      setHarmfulConfirm({ files, harmfulNames: harmful.map((f) => f.name) })
+      return
+    }
+    commitFiles(files)
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -1540,6 +1559,63 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       <p className="mt-1.5 text-[10px] text-[var(--color-muted)] text-center">
         Agents can make mistakes. Verify important information.
       </p>
+
+      {/* Harmful-file upload double-confirm — replaces the native window.confirm pair.
+          Stage 1 warns and lists the flagged files; stage 2 is the second
+          confirmation. Files are only attached after the user confirms stage 2. */}
+      <AlertDialog
+        open={harmfulConfirm !== null}
+        onOpenChange={(open) => {
+          if (!open) setHarmfulConfirm(null)
+        }}
+      >
+        <AlertDialogContent>
+          {harmfulStage === 1 ? (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Potentially harmful file(s)</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {harmfulConfirm
+                    ? `${harmfulConfirm.harmfulNames.join(', ')} may be potentially harmful file(s).\n\nAre you sure you want to upload?`
+                    : ''}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  onClick={() => setHarmfulStage(2)}
+                >
+                  Continue
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>
+          ) : (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Confirm upload</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {harmfulConfirm
+                    ? `Please confirm again: Upload ${harmfulConfirm.harmfulNames.length} potentially harmful file(s)?`
+                    : ''}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  onClick={() => {
+                    if (harmfulConfirm) commitFiles(harmfulConfirm.files)
+                    setHarmfulConfirm(null)
+                  }}
+                >
+                  Upload
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>
+          )}
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

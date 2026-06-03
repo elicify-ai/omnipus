@@ -55,6 +55,48 @@ const WELCOME_FEATURES = [
   { Icon: Cube, text: 'Single Go binary — no runtime dependencies, runs anywhere' },
 ]
 
+// Lightweight, dependency-free password strength heuristic. Scores on length
+// plus character-class diversity (lower / upper / digit / symbol). Returns a
+// 0–4 score with a human label and a brand token for the meter fill. Empty
+// input returns null so the meter is hidden until the user types.
+type PasswordStrength = {
+  score: 0 | 1 | 2 | 3 | 4
+  label: string
+  color: string
+}
+
+function evaluatePasswordStrength(pw: string): PasswordStrength | null {
+  if (!pw) return null
+  let points = 0
+  if (pw.length >= 8) points += 1
+  if (pw.length >= 12) points += 1
+  const classes =
+    (/[a-z]/.test(pw) ? 1 : 0) +
+    (/[A-Z]/.test(pw) ? 1 : 0) +
+    (/[0-9]/.test(pw) ? 1 : 0) +
+    (/[^A-Za-z0-9]/.test(pw) ? 1 : 0)
+  if (classes >= 2) points += 1
+  if (classes >= 3) points += 1
+  // Passwords below the 8-char minimum are always "Too short" (score 1 max),
+  // regardless of character diversity, to match the validation gate.
+  if (pw.length < 8) {
+    return { score: 1, label: 'Too short', color: 'var(--color-error)' }
+  }
+  const score = Math.min(points, 4) as PasswordStrength['score']
+  switch (score) {
+    case 1:
+      return { score, label: 'Weak', color: 'var(--color-error)' }
+    case 2:
+      return { score, label: 'Fair', color: 'var(--color-warning)' }
+    case 3:
+      return { score, label: 'Good', color: 'var(--color-accent)' }
+    case 4:
+      return { score, label: 'Strong', color: 'var(--color-success)' }
+    default:
+      return { score, label: 'Weak', color: 'var(--color-error)' }
+  }
+}
+
 const stepVariants = {
   enter: (direction: number) => ({
     x: direction > 0 ? 36 : -36,
@@ -87,6 +129,9 @@ function OnboardingWizard() {
   const [selectedModel, setSelectedModel] = useState('')
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [isSaving, setIsSaving] = useState(false)
+  // Surfaced inline on the final step when completeOnboardingTransaction fails,
+  // so the user stays on the step and can retry rather than failing silently.
+  const [finishError, setFinishError] = useState('')
   // Admin credentials step (Step 3)
   const [adminUsername, setAdminUsername] = useState('')
   const [adminPassword, setAdminPassword] = useState('')
@@ -152,6 +197,7 @@ function OnboardingWizard() {
 
   const handleFinish = async () => {
     setIsSaving(true)
+    setFinishError('')
     try {
       const resp = await completeOnboardingTransaction({
         provider: {
@@ -167,10 +213,11 @@ function OnboardingWizard() {
       useAuthStore.getState().setToken(resp.token, resp.role, resp.username)
       navigate({ to: '/' })
     } catch (err) {
-      addToast({
-        message: `Could not complete setup: ${err instanceof Error ? err.message : 'Unknown error'}`,
-        variant: 'error',
-      })
+      // Surface the failure both inline (so the user stays on step 4 and can
+      // retry) and as a toast — never strand the error silently.
+      const message = `Could not complete setup: ${err instanceof Error ? err.message : 'Unknown error'}`
+      setFinishError(message)
+      addToast({ message, variant: 'error' })
     } finally {
       setIsSaving(false)
     }
@@ -231,11 +278,23 @@ function OnboardingWizard() {
         </div>
       )}
 
-      {/* Step indicator */}
-      <div className="flex items-center gap-2 mb-12 z-10" role="progressbar" aria-valuenow={step} aria-valuemin={1} aria-valuemax={4}>
+      {/* Step indicator — labeled for assistive tech so screen readers announce
+          progress. The dots themselves are decorative (aria-hidden); the
+          progressbar role + valuenow/min/max + aria-label carry the semantics,
+          and the sr-only line gives a plain-text "Step X of N" announcement. */}
+      <div
+        className="flex items-center gap-2 mb-12 z-10"
+        role="progressbar"
+        aria-valuenow={step}
+        aria-valuemin={1}
+        aria-valuemax={4}
+        aria-label={`Onboarding progress: step ${step} of 4`}
+      >
+        <span className="sr-only">Step {step} of 4</span>
         {([1, 2, 3, 4] as Step[]).map((s) => (
           <motion.div
             key={s}
+            aria-hidden
             animate={{
               width: s === step ? 24 : 8,
               backgroundColor:
@@ -337,6 +396,7 @@ function OnboardingWizard() {
                 providerName={providerDef?.display_name ?? selectedProvider}
                 isSaving={isSaving}
                 onFinish={handleFinish}
+                error={finishError}
               />
             </motion.div>
           )}
@@ -680,6 +740,7 @@ function AdminCredentialsStep({
   onBack: () => void
 }) {
   const isValid = username.trim().length > 0 && password.length >= 8 && password === passwordConfirm
+  const strength = evaluatePasswordStrength(password)
   return (
     <div className="flex flex-col items-center text-center gap-6">
       <motion.div
@@ -758,6 +819,34 @@ function AdminCredentialsStep({
               {showPassword ? <EyeSlash size={14} /> : <Eye size={14} />}
             </button>
           </div>
+          {/* Inline password-strength meter — length + character-class heuristic. */}
+          {strength && (
+            <div className="mt-2" data-testid="password-strength">
+              <div
+                className="flex gap-1"
+                role="meter"
+                aria-label="Password strength"
+                aria-valuenow={strength.score}
+                aria-valuemin={0}
+                aria-valuemax={4}
+                aria-valuetext={strength.label}
+              >
+                {[1, 2, 3, 4].map((seg) => (
+                  <div
+                    key={seg}
+                    className="h-1 flex-1 rounded-full transition-colors duration-200"
+                    style={{
+                      backgroundColor:
+                        seg <= strength.score ? strength.color : 'var(--color-surface-2)',
+                    }}
+                  />
+                ))}
+              </div>
+              <p className="text-[10px] mt-1 font-medium" style={{ color: strength.color }}>
+                {strength.label}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Confirm Password */}
@@ -831,10 +920,12 @@ function DoneStep({
   providerName,
   isSaving,
   onFinish,
+  error,
 }: {
   providerName: string
   isSaving: boolean
   onFinish: () => void
+  error?: string
 }) {
   return (
     <div className="flex flex-col items-center text-center gap-8">
@@ -867,8 +958,20 @@ function DoneStep({
         initial={{ y: 14, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.32, duration: 0.38 }}
-        className="w-full"
+        className="w-full space-y-3"
       >
+        {/* Inline failure — keeps the user on this step so they can retry. */}
+        {error && (
+          <div
+            role="alert"
+            data-testid="onboarding-error"
+            className="flex items-start gap-2 text-sm text-left"
+            style={{ color: 'var(--color-error)' }}
+          >
+            <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
         <Button
           className="w-full h-11 gap-2 font-headline font-bold text-base"
           onClick={onFinish}
@@ -878,6 +981,11 @@ function DoneStep({
             <>
               <SpinnerGap size={16} className="animate-spin" />
               Loading...
+            </>
+          ) : error ? (
+            <>
+              Retry Setup
+              <ArrowRight size={16} weight="bold" />
             </>
           ) : (
             <>
