@@ -20,6 +20,7 @@ import (
 // mockChannel is a test double that delegates Send to a configurable function.
 type mockChannel struct {
 	BaseChannel
+	mu                sync.Mutex // guards the recorded-call fields for concurrent Send/SendPlaceholder/EditMessage
 	sendFn            func(ctx context.Context, msg bus.OutboundMessage) error
 	sentMessages      []bus.OutboundMessage
 	placeholdersSent  int
@@ -28,7 +29,9 @@ type mockChannel struct {
 }
 
 func (m *mockChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
+	m.mu.Lock()
 	m.sentMessages = append(m.sentMessages, msg)
+	m.mu.Unlock()
 	return m.sendFn(ctx, msg)
 }
 
@@ -36,13 +39,18 @@ func (m *mockChannel) Start(ctx context.Context) error { return nil }
 func (m *mockChannel) Stop(ctx context.Context) error  { return nil }
 
 func (m *mockChannel) SendPlaceholder(ctx context.Context, chatID string) (string, error) {
+	const id = "mock-ph-123"
+	m.mu.Lock()
 	m.placeholdersSent++
-	m.lastPlaceholderID = "mock-ph-123"
-	return m.lastPlaceholderID, nil
+	m.lastPlaceholderID = id
+	m.mu.Unlock()
+	return id, nil
 }
 
 func (m *mockChannel) EditMessage(ctx context.Context, chatID, messageID, content string) error {
+	m.mu.Lock()
 	m.editedMessages++
+	m.mu.Unlock()
 	return nil
 }
 
@@ -53,7 +61,9 @@ type mockMediaChannel struct {
 }
 
 func (m *mockMediaChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
+	m.mu.Lock()
 	m.sentMediaMessages = append(m.sentMediaMessages, msg)
+	m.mu.Unlock()
 	if m.sendMediaFn != nil {
 		return m.sendMediaFn(ctx, msg)
 	}
