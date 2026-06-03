@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
-import type { Agent } from '@/lib/api'
+import type { Agent, Skill } from '@/lib/api'
 
 // test_agent_profile_sections (test #13)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: Agent profile renders with type-appropriate sections
@@ -18,10 +18,10 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchAgent: vi.fn(), updateAgent: vi.fn() }
+  return { ...actual, fetchAgent: vi.fn(), updateAgent: vi.fn(), fetchSkills: vi.fn() }
 })
 
-import { fetchAgent } from '@/lib/api'
+import { fetchAgent, fetchSkills } from '@/lib/api'
 
 const mockCoreAgent: Agent = {
   id: 'general-assistant',
@@ -78,6 +78,7 @@ function renderProfile(agentId: string) {
 beforeEach(() => {
   mockNavigate.mockClear()
   vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
+  vi.mocked(fetchSkills).mockResolvedValue([])
 })
 
 describe('AgentProfile — loading state', () => {
@@ -163,5 +164,97 @@ describe('AgentProfile — locked core agent sections (test #13)', () => {
     renderProfile('mia')
     await screen.findByText('Mia')
     expect(screen.queryByRole('button', { name: /save/i })).toBeNull()
+  })
+})
+
+// US-E6: per-agent skill assignment tests
+// Traces to: nontech-ux-hardening-spec.md §6.5, F-06
+describe('AgentProfile — Skills picker (US-E6)', () => {
+  it('always shows "Skills" accordion trigger', async () => {
+    // The accordion trigger is always in the DOM regardless of open/closed state.
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    expect(screen.getByText(/^Skills$/i)).toBeInTheDocument()
+  })
+
+  it('shows empty state when no skills are installed', async () => {
+    vi.mocked(fetchSkills).mockResolvedValue([])
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    // Accordion is closed by default; the trigger is still in the DOM
+    expect(screen.getByText(/^Skills$/i)).toBeInTheDocument()
+  })
+
+  it('new agent with no skills shows 0 granted count (not labeled)', async () => {
+    // A new agent has skills = [] or undefined; the count badge only renders when > 0.
+    const agentNoSkills: Agent = { ...mockCoreAgent, skills: undefined }
+    vi.mocked(fetchAgent).mockResolvedValue(agentNoSkills)
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    // The "X granted" badge must NOT appear when skills is empty/absent.
+    expect(screen.queryByText(/granted/i)).toBeNull()
+  })
+
+  it('shows granted count badge when agent has skills', async () => {
+    const agentWithSkills: Agent = { ...mockCoreAgent, skills: ['web-research', 'code-review'] }
+    vi.mocked(fetchAgent).mockResolvedValue(agentWithSkills)
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    // "2 granted" badge in the accordion header
+    expect(screen.getByText(/2 granted/i)).toBeInTheDocument()
+  })
+
+  it('granting skills to agent A does not affect agent B rendering (AC2)', async () => {
+    // Two separate renders simulate two agents. AC2: agent A's skills must not
+    // bleed into agent B when the component is unmounted and remounted.
+    const agentA: Agent = { ...mockCoreAgent, id: 'agent-a', name: 'Agent A', skills: ['web-research'] }
+    const agentB: Agent = { ...mockCoreAgent, id: 'agent-b', name: 'Agent B', skills: [] }
+
+    // Render agent A — should show 1 granted
+    vi.mocked(fetchAgent).mockResolvedValue(agentA)
+    const { unmount } = renderProfile('agent-a')
+    await screen.findByText('Agent A')
+    expect(screen.getByText(/1 granted/i)).toBeInTheDocument()
+    unmount()
+
+    // Render agent B — must show 0 granted (no badge)
+    vi.mocked(fetchAgent).mockResolvedValue(agentB)
+    renderProfile('agent-b')
+    await screen.findByText('Agent B')
+    expect(screen.queryByText(/granted/i)).toBeNull()
+  })
+})
+
+// B-2 extension — locked agent skills picker read-only
+// Traces to: B-2 (#332 / US-D5) extended to Skills field, nontech-ux-hardening-spec §6.5
+describe('AgentProfile — B-2: Skills picker read-only for locked agents', () => {
+  const mockSkills: Skill[] = [
+    { id: 'web-research', name: 'Web Research', version: '1.0.0', verified: true, status: 'active' },
+  ]
+
+  beforeEach(() => {
+    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
+    vi.mocked(fetchSkills).mockResolvedValue(mockSkills)
+  })
+
+  it('shows "Skill assignment is read-only" notice for locked agents when accordion is open', async () => {
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    // Open the Skills accordion
+    const trigger = screen.getByText(/^Skills$/i)
+    fireEvent.click(trigger)
+    // The read-only notice must be visible
+    expect(await screen.findByText(/skill assignment is read-only/i)).toBeInTheDocument()
+  })
+
+  it('renders skill checkboxes as disabled for locked agents', async () => {
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    // Open the Skills accordion
+    const trigger = screen.getByText(/^Skills$/i)
+    fireEvent.click(trigger)
+    // Wait for skill to appear
+    const checkbox = await screen.findByTestId('skill-checkbox-web-research')
+    expect((checkbox as HTMLInputElement).disabled).toBe(true)
   })
 })

@@ -934,6 +934,400 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 	assert.Equal(t, "allow", policies["web_search"])
 }
 
+// TestCreateAgent_WithSkills verifies POST /api/v1/agents with skills persists and
+// returns the skill list.
+//
+// BDD: Given a create-agent request with a skills list,
+// When POST /api/v1/agents is called,
+// Then the response includes the skills list and config.json persists it.
+//
+// Traces to: US-E6 (nontech-ux-hardening-spec §6.5), F-06.
+func TestCreateAgent_WithSkills(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	body := `{"name":"Skill Agent","skills":["web-research","code-review"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var resp struct {
+		ID     string   `json:"id"`
+		Name   string   `json:"name"`
+		Skills []string `json:"skills"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "Skill Agent", resp.Name)
+	assert.Equal(t, []string{"web-research", "code-review"}, resp.Skills)
+
+	// Verify config.json persisted the skill list.
+	savedCfg, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	var savedMap map[string]any
+	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
+	agentsMap, _ := savedMap["agents"].(map[string]any)
+	list, _ := agentsMap["list"].([]any)
+	require.Len(t, list, 1)
+	agentMap, _ := list[0].(map[string]any)
+	skillsList, _ := agentMap["skills"].([]any)
+	require.Len(t, skillsList, 2)
+	assert.Equal(t, "web-research", skillsList[0])
+	assert.Equal(t, "code-review", skillsList[1])
+}
+
+// TestCreateAgent_NoSkills verifies that a new agent with no skills field has
+// no skills in the response and none persisted to config.json (default none).
+//
+// BDD: Given a create-agent request without a skills field,
+// When POST /api/v1/agents is called,
+// Then the response has no skills field and config.json has no skills key.
+//
+// Traces to: US-E6 AC1 — new agent grants no skills until one is added.
+func TestCreateAgent_NoSkills(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	body := `{"name":"Skillless Agent"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	// The response JSON must not contain a "skills" key (or it is null/absent).
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	skills, hasSkills := raw["skills"]
+	// Either absent entirely, or explicitly null — both mean no skills.
+	if hasSkills {
+		assert.Nil(t, skills, "skills must be null or absent when not provided on create")
+	}
+
+	// config.json must not have a skills key for the new agent.
+	savedCfg, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	var savedMap map[string]any
+	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
+	agentsMap, _ := savedMap["agents"].(map[string]any)
+	list, _ := agentsMap["list"].([]any)
+	require.Len(t, list, 1)
+	agentMap, _ := list[0].(map[string]any)
+	_, hasSkillsInConfig := agentMap["skills"]
+	assert.False(t, hasSkillsInConfig, "config.json must not have a skills key for a new agent with no skills")
+}
+
+// TestUpdateAgent_SkillsPersist verifies that PUT /api/v1/agents/{id} with a
+// skills list persists the skills to config.json and returns them in the response.
+//
+// BDD: Given an agent exists in config,
+// When PUT /api/v1/agents/{id} is called with skills=["web-research"],
+// Then the response includes skills and config.json has the skills key.
+// Also verifies that granting skills to agent A does not affect agent B.
+//
+// Traces to: US-E6 AC2 — granting a skill to agent A does not grant it to B.
+func TestUpdateAgent_SkillsPersist(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	// Two agents in config.json; skills update targets only agent-A.
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"agent-a","name":"Agent A"},{"id":"agent-b","name":"Agent B"}]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{
+				{ID: "agent-a", Name: "Agent A"},
+				{ID: "agent-b", Name: "Agent B"},
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	// Update agent-a with skills.
+	body := `{"skills":["web-research","data-analysis"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/agent-a", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "response body: %s", w.Body.String())
+
+	var resp struct {
+		ID     string   `json:"id"`
+		Skills []string `json:"skills"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "agent-a", resp.ID)
+	assert.Equal(t, []string{"web-research", "data-analysis"}, resp.Skills)
+
+	// Verify config.json: agent-a has skills, agent-b has none.
+	savedCfg, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	var savedMap map[string]any
+	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
+	agentsMap, _ := savedMap["agents"].(map[string]any)
+	list, _ := agentsMap["list"].([]any)
+	require.Len(t, list, 2)
+
+	for _, item := range list {
+		agentMap, _ := item.(map[string]any)
+		agentID, _ := agentMap["id"].(string)
+		if agentID == "agent-a" {
+			skillsRaw, _ := agentMap["skills"].([]any)
+			require.Len(t, skillsRaw, 2, "agent-a must have 2 skills in config.json")
+			assert.Equal(t, "web-research", skillsRaw[0])
+			assert.Equal(t, "data-analysis", skillsRaw[1])
+		} else if agentID == "agent-b" {
+			_, hasBSkills := agentMap["skills"]
+			assert.False(t, hasBSkills, "agent-b must have no skills — granting to A must not affect B")
+		}
+	}
+}
+
+// TestUpdateAgent_SkillsClear verifies that sending an empty skills array
+// removes all skills from the agent (opt-out by explicit empty list).
+//
+// BDD: Given an agent exists with skills in config,
+// When PUT /api/v1/agents/{id} is called with skills=[],
+// Then the config.json has no skills key for that agent.
+//
+// Traces to: US-E6.
+func TestUpdateAgent_SkillsClear(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"skilled-agent","name":"Skilled Agent","skills":["web-research"]}]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{
+				{ID: "skilled-agent", Name: "Skilled Agent", Skills: []string{"web-research"}},
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	// Send empty skills array to clear all skills.
+	body := `{"skills":[]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/skilled-agent", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "response body: %s", w.Body.String())
+
+	// config.json must have no skills key after clear.
+	savedCfg, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	var savedMap map[string]any
+	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
+	agentsMap, _ := savedMap["agents"].(map[string]any)
+	list, _ := agentsMap["list"].([]any)
+	require.Len(t, list, 1)
+	agentMap, _ := list[0].(map[string]any)
+	_, hasSkills := agentMap["skills"]
+	assert.False(t, hasSkills, "skills key must be absent in config.json after clearing with empty array")
+}
+
+// TestCreateAgent_UnknownSkillIDRejected verifies that POST /api/v1/agents with a
+// skill ID not in the installed registry is rejected with 400 when skills are installed.
+//
+// BDD: Given a gateway with one installed skill "web-research",
+// When POST /api/v1/agents is called with skills=["unknown-skill"],
+// Then the response is 400 Bad Request with "unknown skill id" in the error.
+//
+// Traces to: US-E6, MINOR (backend) — referential validation for skill IDs.
+func TestCreateAgent_UnknownSkillIDRejected(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	// Create a temp skills directory with one known skill "web-research".
+	// OMNIPUS_BUILTIN_SKILLS env makes the agent loop pick it up on construction.
+	skillsRoot := t.TempDir()
+	t.Setenv("OMNIPUS_BUILTIN_SKILLS", skillsRoot)
+	skillMD := skillsRoot + "/web-research/SKILL.md"
+	require.NoError(t, os.MkdirAll(skillsRoot+"/web-research", 0o755))
+	require.NoError(t, os.WriteFile(skillMD, []byte("---\nname: web-research\ndescription: web search skill\n---\n# Web Research\n"), 0o600))
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	// "unknown-skill" is not installed — must be rejected 400.
+	body := `{"name":"Test Agent","skills":["unknown-skill"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, "unknown skill ID must be rejected with 400; body: %s", w.Body.String())
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "unknown skill id", "error must name the unknown skill")
+
+	// Known skill "web-research" must be accepted.
+	body = `{"name":"Test Agent 2","skills":["web-research"]}`
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code, "known skill ID must be accepted; body: %s", w.Body.String())
+}
+
+// TestUpdateAgent_UnknownSkillIDRejected verifies that PUT /api/v1/agents/{id} with
+// an unknown skill ID is rejected with 400 when skills are installed.
+//
+// BDD: Given an agent and one installed skill "web-research",
+// When PUT /api/v1/agents/{id} is called with skills=["bogus-skill"],
+// Then the response is 400 Bad Request.
+//
+// Traces to: US-E6, MINOR (backend) — referential validation for skill IDs.
+func TestUpdateAgent_UnknownSkillIDRejected(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	skillsRoot := t.TempDir()
+	t.Setenv("OMNIPUS_BUILTIN_SKILLS", skillsRoot)
+	skillMD := skillsRoot + "/web-research/SKILL.md"
+	require.NoError(t, os.MkdirAll(skillsRoot+"/web-research", 0o755))
+	require.NoError(t, os.WriteFile(skillMD, []byte("---\nname: web-research\ndescription: web search skill\n---\n# Web Research\n"), 0o600))
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"my-agent","name":"My Agent"}]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{
+				{ID: "my-agent", Name: "My Agent"},
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	// "bogus-skill" is not installed — must be rejected 400.
+	body := `{"skills":["bogus-skill"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/my-agent", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, "unknown skill ID must be rejected with 400; body: %s", w.Body.String())
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "unknown skill id", "error must name the unknown skill")
+}
+
+// TestUpdateAgent_LockedRejectsSkills verifies that PUT /api/v1/agents/{id} on a
+// locked (core) agent with a skills field is rejected with 403 (B-2 defense-in-depth).
+//
+// BDD: Given a locked core agent "jim",
+// When PUT /api/v1/agents/jim is called with {"skills": ["web-research"]},
+// Then the response is 403 Forbidden.
+//
+// Traces to: B-2 (#332 / US-D5) extended to Skills field.
+func TestUpdateAgent_LockedRejectsSkills(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	coreagent.SeedConfig(cfg)
+	cfgJSON, _ := json.Marshal(cfg)
+	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
+
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	body := `{"skills": ["web-research"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/jim", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	assert.Equal(t, http.StatusForbidden, w.Code, "assigning skills to a locked agent must return 403")
+}
+
 // TestUpdateAgentTools_Success verifies PUT /api/v1/agents/{id}/tools returns 200,
 // updates the response body with the correct agent_type and mode, and persists the
 // tools config to config.json on disk.

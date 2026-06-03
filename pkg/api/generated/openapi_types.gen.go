@@ -2805,6 +2805,9 @@ type Agent struct {
 		EnableDenyPatterns *bool `json:"enable_deny_patterns,omitempty"`
 	} `json:"shell_policy,omitempty"`
 
+	// Skills List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. An empty list (or absent field) means no skills are granted (opt-in, default none).
+	Skills *[]string `json:"skills,omitempty"`
+
 	// Soul Contents of SOUL.md — the agent's system prompt. Empty string for locked core agents (prompt is compiled in, not exposed via API). Empty string for draft agents (no SOUL.md written yet). Always present (never null).
 	Soul string `json:"soul"`
 
@@ -2927,6 +2930,9 @@ type AgentCreateRequest struct {
 		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
+
+	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
+	Skills *[]string `json:"skills,omitempty"`
 
 	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	ToolsCfg *struct {
@@ -3267,6 +3273,9 @@ type AgentUpdateRequest struct {
 		CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
 		EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
 	} `json:"shell_policy,omitempty"`
+
+	// Skills Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills.
+	Skills *[]string `json:"skills,omitempty"`
 
 	// Soul New SOUL.md content (agent system prompt). Rejected on locked agents. Writing this triggers a config reload.
 	Soul *string `json:"soul,omitempty"`

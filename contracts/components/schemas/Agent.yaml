@@ -179,3 +179,14 @@ properties:
       Whether this agent is the global default that handles inbound messages
       with no more-specific routing rule. At most one agent is default.
     example: false
+  skills:
+    type: array
+    uniqueItems: true
+    items:
+      type: string
+    description: >
+      List of skill IDs granted to this agent. Only skills in this list are
+      available during this agent's runs. An empty list (or absent field)
+      means no skills are granted (opt-in, default none).
+    example:
+      - "web-research"
