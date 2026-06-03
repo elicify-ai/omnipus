@@ -30,7 +30,7 @@ import {
 import type { Schedule, ScheduleTrigger, ScheduleRunRecord } from '@/lib/api/generated/openapi-types'
 import { useUiStore } from '@/store/ui'
 import { SkeletonList, EmptyState, ErrorState } from '@/components/shared/ListStates'
-import { ScheduleFormSheet } from './ScheduleFormSheet'
+import { ScheduleFormSheet, sessionModeLabel } from './ScheduleFormSheet'
 
 interface SchedulesListProps {
   // When set, the feed is filtered to schedules owned by this agent (agent profile tab).
@@ -196,7 +196,7 @@ export function SchedulesList({ agentId }: SchedulesListProps) {
                   {schedule.enabled ? 'Enabled' : 'Paused'}
                 </Badge>
                 <Badge variant="secondary" className="text-[10px]">
-                  {schedule.session_mode}
+                  {sessionModeLabel(schedule.session_mode)}
                 </Badge>
                 <Badge variant={last.variant} className="text-[10px]">
                   {last.label}
@@ -357,7 +357,7 @@ function ScheduleDetailSheet({
               <div className="space-y-1.5 text-xs text-[var(--color-muted)]">
                 <div>Owner: <span className="text-[var(--color-secondary)]">{agentName}</span></div>
                 <div>Trigger: <span className="text-[var(--color-secondary)]">{triggerSummary(schedule.trigger)}</span></div>
-                <div>Session mode: <span className="text-[var(--color-secondary)]">{schedule.session_mode}</span></div>
+                <div>Session mode: <span className="text-[var(--color-secondary)]">{sessionModeLabel(schedule.session_mode)}</span></div>
                 <div>Next run: <span className="text-[var(--color-secondary)]">{formatTime(schedule.state?.next_run_at_ms)}</span></div>
               </div>
 
