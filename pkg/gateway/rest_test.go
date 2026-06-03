@@ -1201,7 +1201,14 @@ func TestCreateAgent_UnknownSkillIDRejected(t *testing.T) {
 	t.Setenv("OMNIPUS_BUILTIN_SKILLS", skillsRoot)
 	skillMD := skillsRoot + "/web-research/SKILL.md"
 	require.NoError(t, os.MkdirAll(skillsRoot+"/web-research", 0o755))
-	require.NoError(t, os.WriteFile(skillMD, []byte("---\nname: web-research\ndescription: web search skill\n---\n# Web Research\n"), 0o600))
+	require.NoError(
+		t,
+		os.WriteFile(
+			skillMD,
+			[]byte("---\nname: web-research\ndescription: web search skill\n---\n# Web Research\n"),
+			0o600,
+		),
+	)
 
 	tmpDir := t.TempDir()
 	cfgPath := tmpDir + "/config.json"
@@ -1228,7 +1235,13 @@ func TestCreateAgent_UnknownSkillIDRejected(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	api.HandleAgents(w, r)
 
-	require.Equal(t, http.StatusBadRequest, w.Code, "unknown skill ID must be rejected with 400; body: %s", w.Body.String())
+	require.Equal(
+		t,
+		http.StatusBadRequest,
+		w.Code,
+		"unknown skill ID must be rejected with 400; body: %s",
+		w.Body.String(),
+	)
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Contains(t, resp["error"], "unknown skill id", "error must name the unknown skill")
@@ -1257,7 +1270,14 @@ func TestUpdateAgent_UnknownSkillIDRejected(t *testing.T) {
 	t.Setenv("OMNIPUS_BUILTIN_SKILLS", skillsRoot)
 	skillMD := skillsRoot + "/web-research/SKILL.md"
 	require.NoError(t, os.MkdirAll(skillsRoot+"/web-research", 0o755))
-	require.NoError(t, os.WriteFile(skillMD, []byte("---\nname: web-research\ndescription: web search skill\n---\n# Web Research\n"), 0o600))
+	require.NoError(
+		t,
+		os.WriteFile(
+			skillMD,
+			[]byte("---\nname: web-research\ndescription: web search skill\n---\n# Web Research\n"),
+			0o600,
+		),
+	)
 
 	tmpDir := t.TempDir()
 	cfgPath := tmpDir + "/config.json"
@@ -1287,7 +1307,13 @@ func TestUpdateAgent_UnknownSkillIDRejected(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/my-agent", strings.NewReader(body))
 	api.HandleAgents(w, r)
 
-	require.Equal(t, http.StatusBadRequest, w.Code, "unknown skill ID must be rejected with 400; body: %s", w.Body.String())
+	require.Equal(
+		t,
+		http.StatusBadRequest,
+		w.Code,
+		"unknown skill ID must be rejected with 400; body: %s",
+		w.Body.String(),
+	)
 	var resp map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Contains(t, resp["error"], "unknown skill id", "error must name the unknown skill")

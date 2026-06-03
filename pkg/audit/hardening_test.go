@@ -539,7 +539,9 @@ func TestEmit_LogFailure_BumpsIncSkipped(t *testing.T) {
 	// Confirm the degraded path fires: a direct Log call must fail after Close.
 	logErr := logger.Log(&audit.Entry{Event: audit.EventToolCall, Decision: audit.DecisionAllow})
 	if logErr == nil {
-		t.Skip("Log on a closed logger did not return an error on this platform — cannot exercise the Emit failure path")
+		t.Skip(
+			"Log on a closed logger did not return an error on this platform — cannot exercise the Emit failure path",
+		)
 	}
 
 	// Call audit.Emit against the closed (degraded) logger using the same event
