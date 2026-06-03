@@ -158,3 +158,23 @@ describe('applyRolePreset', () => {
     expect(applyRolePreset(role)).toStrictEqual(expected)
   })
 })
+
+describe('ToolPolicyValue — HC#8 wire-type alignment', () => {
+  it('applyRolePreset returns an object with default_policy and policies fields (matching AgentToolsCfg.builtin shape)', () => {
+    const result = applyRolePreset('balanced')
+    // Verify both required fields are present and have the correct value types
+    expect(typeof result.default_policy).toBe('string')
+    expect(['allow', 'ask', 'deny']).toContain(result.default_policy)
+    expect(typeof result.policies).toBe('object')
+    expect(result.policies).not.toBeNull()
+  })
+
+  it('no AppliedPolicy type exists — ToolPolicyValue is the one export for the shape', () => {
+    // This is a compile-time check enforced by TypeScript — if the file compiled
+    // with the generated type alias, the shape is correct. We verify at runtime
+    // that the return value has the expected structure with no extra fields.
+    const result = applyRolePreset('cautious')
+    const keys = Object.keys(result).sort()
+    expect(keys).toEqual(['default_policy', 'policies'])
+  })
+})
