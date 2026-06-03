@@ -81,6 +81,7 @@ properties:
         example: 5.0
   skills:
     type: array
+    uniqueItems: true
     items:
       type: string
     description: >

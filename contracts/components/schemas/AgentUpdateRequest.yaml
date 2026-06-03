@@ -157,6 +157,7 @@ properties:
     example: false
   skills:
     type: array
+    uniqueItems: true
     items:
       type: string
     description: >
