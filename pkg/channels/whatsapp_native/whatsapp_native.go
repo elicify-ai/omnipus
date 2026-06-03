@@ -1,4 +1,4 @@
-//go:build whatsapp_native
+//go:build !lite && !mipsle && !netbsd && !(freebsd && arm)
 
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
@@ -35,6 +35,13 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/utils"
 )
+
+// NativeAvailable reports whether the native whatsmeow-based WhatsApp transport
+// was compiled into this binary. True in default builds; false in the lite
+// variant or on architectures that exclude modernc.org/sqlite (mipsle, netbsd,
+// freebsd/arm). REST callers use this to know whether to offer the QR-pairing
+// flow or restrict the UI to bridge mode only.
+const NativeAvailable = true
 
 const (
 	sqliteDriver   = "sqlite"
@@ -458,8 +465,8 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	senderID := evt.Info.Sender.String()
 	chatID := evt.Info.Chat.String()
 	content := evt.Message.GetConversation()
-	if content == "" && evt.Message.ExtendedTextMessage != nil {
-		content = evt.Message.ExtendedTextMessage.GetText()
+	if content == "" && evt.Message.GetExtendedTextMessage() != nil {
+		content = evt.Message.GetExtendedTextMessage().GetText()
 	}
 	content = utils.SanitizeMessageContent(content)
 
@@ -627,8 +634,8 @@ func (c *WhatsAppNativeChannel) isBotMentioned(evt *events.Message) bool {
 	}
 	botJID := client.Store.ID.ToNonAD().String()
 
-	if evt.Message.ExtendedTextMessage != nil {
-		ci := evt.Message.ExtendedTextMessage.GetContextInfo()
+	if evt.Message.GetExtendedTextMessage() != nil {
+		ci := evt.Message.GetExtendedTextMessage().GetContextInfo()
 		if ci != nil {
 			for _, jid := range ci.GetMentionedJID() {
 				if jid == botJID {

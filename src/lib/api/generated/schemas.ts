@@ -209,6 +209,9 @@ type ChannelEntry = {
   transport: "websocket" | "webhook" | "bridge" | "tcp" | "http" | "serial";
   enabled: boolean;
   description: string;
+  native_available?: boolean | undefined;
+  degraded?: boolean | undefined;
+  degraded_reason?: string | undefined;
 };
 type ChannelId =
   | "webchat"
@@ -1047,6 +1050,9 @@ export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   ]),
   enabled: z.boolean(),
   description: z.string(),
+  native_available: z.boolean().optional(),
+  degraded: z.boolean().optional(),
+  degraded_reason: z.string().optional(),
 });
 export const ChannelEnabledResponse: z.ZodType<ChannelEnabledResponse> =
   z.object({ id: ChannelId, enabled: z.boolean() });

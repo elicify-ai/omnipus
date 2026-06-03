@@ -38,6 +38,13 @@ interface ChannelConfigPanelProps {
   channelName: string
   open: boolean
   onOpenChange: (open: boolean) => void
+  /**
+   * WhatsApp only: whether the native (whatsmeow) implementation is compiled
+   * into this binary. When false, the native-mode toggle must be disabled and
+   * the QR flow must not be offered. Absent/undefined for non-whatsapp channels
+   * — treat as "no restriction" (i.e. behave as if true).
+   */
+  nativeAvailable?: boolean
 }
 
 function PasswordField({
@@ -83,7 +90,7 @@ function WhatsAppPairingBody({ pairing }: { pairing?: WhatsAppPairingState }) {
     return (
       <>
         {/* QR must sit on a light background to scan reliably in dark mode. */}
-        <div className="rounded-md bg-white p-3">
+        <div data-testid="whatsapp-qr" className="rounded-md bg-white p-3">
           <QRCodeSVG value={pairing.qr} size={184} level="L" />
         </div>
         <p className="text-xs text-[var(--color-secondary)] text-center">
@@ -186,6 +193,7 @@ export function ChannelConfigPanel({
   channelName,
   open,
   onOpenChange,
+  nativeAvailable,
 }: ChannelConfigPanelProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
@@ -314,8 +322,13 @@ export function ChannelConfigPanel({
     return formValues[key]
   }
 
+  // nativeUnavailable is true ONLY when the channel is whatsapp AND the backend
+  // explicitly reports native_available=false. When nativeAvailable is undefined
+  // (older backend or non-whatsapp channel), we treat it as no restriction.
+  const nativeUnavailable = channelId === 'whatsapp' && nativeAvailable === false
+
   const isWhatsAppNative =
-    channelId === 'whatsapp' && Boolean(getValue('use_native'))
+    channelId === 'whatsapp' && !nativeUnavailable && Boolean(getValue('use_native'))
 
   const isBusy = saving || savingAndEnabling
 
@@ -359,6 +372,7 @@ export function ChannelConfigPanel({
                       id={`field-${field.key}`}
                       checked={Boolean(getValue(field.key))}
                       onCheckedChange={(checked) => setValue(field.key, checked)}
+                      disabled={nativeUnavailable && field.key === 'use_native'}
                     />
                   </div>
                 ) : field.type === 'password' ? (
@@ -400,6 +414,22 @@ export function ChannelConfigPanel({
                 )}
 
                 {/* WhatsApp native mode notices */}
+                {channelId === 'whatsapp' && field.key === 'use_native' && nativeUnavailable && (
+                  <div
+                    data-testid="native-unavailable-hint"
+                    className="flex gap-2 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-warning)]/30"
+                  >
+                    <Warning
+                      size={14}
+                      className="text-[var(--color-warning)] shrink-0 mt-0.5"
+                      weight="fill"
+                    />
+                    <p className="text-xs text-[var(--color-muted)]">
+                      This build doesn&apos;t include native WhatsApp. Use a Bridge URL below, or
+                      run the default build.
+                    </p>
+                  </div>
+                )}
                 {channelId === 'whatsapp' && field.key === 'use_native' && isWhatsAppNative && (
                   <WhatsAppNativeNotice />
                 )}

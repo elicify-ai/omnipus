@@ -2202,6 +2202,17 @@ func (al *AgentLoop) getChannelManager() *channels.Manager {
 	return cm
 }
 
+// GetChannelManager returns the current channel manager under the read lock.
+// This exported accessor allows REST handlers in pkg/gateway to inspect
+// runtime channel state (e.g. FailedChannels) without holding additional locks.
+// Returns nil before channels are initialized (e.g. during onboarding).
+func (al *AgentLoop) GetChannelManager() *channels.Manager {
+	al.channelManagerMu.RLock()
+	cm := al.channelManager
+	al.channelManagerMu.RUnlock()
+	return cm
+}
+
 // ReloadProviderAndConfig atomically swaps the provider and config with proper synchronization.
 // It uses a context to allow timeout control from the caller.
 // Returns an error if the reload fails or context is canceled.
