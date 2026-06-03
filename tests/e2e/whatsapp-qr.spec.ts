@@ -217,7 +217,7 @@ async function mockWebSocket(page: import('@playwright/test').Page): Promise<voi
 //      And the WS delivers a whatsapp_pairing frame with status:'code'
 //      Then [data-testid="whatsapp-qr"] is visible in the DOM
 //      And the QR container contains an <svg> element
-//      And the text "Scan with" is visible
+//      And the text "Link a Device" is visible
 //
 // Traces to: whatsapp-qr.spec.ts (this file) — case A; GitHub #283/#298
 
