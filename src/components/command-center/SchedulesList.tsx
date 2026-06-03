@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Clock, Play, Pause, Trash, ArrowSquareOut } from '@phosphor-icons/react'
+import { Clock, Play, Pause, Trash, ArrowSquareOut, PencilSimple } from '@phosphor-icons/react'
 import { Circle } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -218,7 +218,7 @@ export function SchedulesList({ agentId }: SchedulesListProps) {
               <IconAction
                 label="Edit"
                 onClick={() => setEditSchedule(schedule)}
-                icon={<Clock size={14} />}
+                icon={<PencilSimple size={14} />}
               />
               <IconAction
                 label="Delete"

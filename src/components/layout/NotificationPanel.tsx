@@ -15,7 +15,7 @@ import { markNotificationRead, markAllNotificationsRead } from '@/lib/api'
 // #264 — header notification center (right-side Sheet). Lists notifications
 // newest-first; unread items are visually distinct (surface-2 background + a
 // severity-colored dot). Clicking an item marks it read and navigates to its
-// click-through target (schedule → Command Center, session → that session).
+// click-through target (session id → that session; else schedule id → Command Center).
 
 const SEVERITY_COLOR: Record<NotifItem['severity'], string> = {
   info: 'var(--color-accent)',

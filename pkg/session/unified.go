@@ -275,8 +275,9 @@ func (us *UnifiedStore) NewScheduledSession(ownerAgentID string) (*UnifiedMeta, 
 //
 // On create, the session is SessionTypeScheduled with
 // ActiveAgentID == AgentID == ownerAgentID. The id must pass validateSessionID
-// (no path-escape, non-empty) — note the reserved `sched-main-<owner>` id is
-// validation-safe (it contains only the owner id segment, no slashes).
+// (no path-escape, non-empty) — the reserved `sched-main-<owner>` id is safe as
+// long as owner ids are pre-normalized (slash-free); validateSessionID rejects
+// any that are not, so safety is by-rejection, not intrinsic.
 //
 // If a session with id already exists, it is returned as-is regardless of its
 // current owner/type (the caller's owner pinning happens in the agent loop, not

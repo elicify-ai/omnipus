@@ -164,7 +164,7 @@ Different schedules need different memory behavior. A daily report should run in
 
 ### User Story 3 — Guardrails bound autonomous runs (Priority: P0)
 
-A scheduled run has no human watching. It must be bounded: time out at 300s (configurable), never pile up (skip if the previous run of the same job is still going), respect a global concurrency cap (5), auto-deny any `ask`-gated tool (no one to approve), retry transient provider errors with backoff, and clean up child/browser processes.
+A scheduled run has no human watching. It must be bounded: time out at 300s (configurable), never pile up (skip if the previous run of the same job is still going), respect a global concurrency cap (8), auto-deny any `ask`-gated tool (no one to approve), retry transient provider errors with backoff, and clean up child/browser processes.
 
 **Why this priority**: Without guardrails, a hung or runaway autonomous run can strand sessions, exhaust resources, or stall forever on an approval prompt — unacceptable for an always-on server.
 
@@ -240,7 +240,7 @@ Error flows:
 
 Boundary conditions:
 - When a job's previous run is still in progress, the system skips the new fire.
-- When the global concurrency cap (5) is reached, the system queues additional due runs.
+- When the global concurrency cap (8) is reached, the system queues additional due runs.
 - When a scheduled run calls an `ask`-gated tool, the system auto-denies it.
 - When `session_mode=main` with `wake=next-heartbeat`, the system defers the event to the next heartbeat tick.
 
@@ -587,7 +587,7 @@ Write tests BEFORE implementation. Unit → Integration → E2E.
 |---|---|---|---|---|---|
 | 1 | timeout=1s, LLM hangs | error | abort + ownership clear | Timeout abort | |
 | 2 | prev run active | edge | skip | Overlap skip | |
-| 3 | 5 active + 1 due | max | queue | Concurrency cap | cap=5 |
+| 3 | 8 active + 1 due | max | queue | Concurrency cap | cap=8 |
 | 4 | 0 active + 1 due | min | run immediately | Concurrency cap | |
 | 5 | ask tool call | error | auto-deny | Ask auto-denied | |
 | 6 | rate_limit×1 | error | retry @60s | Retry outline | |
@@ -628,7 +628,7 @@ Write tests BEFORE implementation. Unit → Integration → E2E.
 - **FR-004**: System MUST support three session modes per schedule — `isolated` (default), `continue`, `main` — and create/continue/enqueue the session accordingly.
 - **FR-005**: System MUST add `SessionTypeScheduled` and create isolated/continue runs as that type, recording `TriggeredBy` provenance.
 - **FR-006**: System MUST, on timeout, abort the agent run, allow a short cleanup window, then force-clear the run's session ownership.
-- **FR-007**: System MUST enforce a global concurrency cap (default 5, configurable) on a dedicated autonomous-run lane and queue excess due runs.
+- **FR-007**: System MUST enforce a global concurrency cap (default 8, configurable) on a dedicated autonomous-run lane and queue excess due runs.
 - **FR-008**: System MUST skip a fire when the same job's previous run is still in progress, recording the skip.
 - **FR-009**: System MUST auto-deny `ask`-gated tool calls during a scheduled run (non-interactive policy), never stalling on approval.
 - **FR-010**: System MUST retry transient provider errors (rate-limit/overload/network/5xx) up to 3 times with backoff `[60000,120000,300000]` ms, resetting after a success.
@@ -649,7 +649,7 @@ Write tests BEFORE implementation. Unit → Integration → E2E.
 
 - **SC-001**: In `TestFire_RoutesToOwnerNotDefault`, the owning agent handles the run and the default agent's loop receives zero invocations.
 - **SC-002**: A run with `timeout_seconds=1` against a hanging mock LLM aborts and clears session ownership within ≤ (1s + cleanup window ≤ 5s); no session remains owned afterward.
-- **SC-003**: With cap=5 and 5 active runs, a 6th due run does not start until a slot frees (observed start-order in a deterministic harness).
+- **SC-003**: With cap=8 and 8 active runs, a 9th due run does not start until a slot frees (observed start-order in a deterministic harness).
 - **SC-004**: An `ask`-gated tool call in a scheduled run returns a denied result with zero approval-wait time.
 - **SC-005**: A transient-error run records retry timestamps matching `[60s,120s,300s]` offsets on the injected clock; a subsequent success resets `ConsecutiveFailures` to 0.
 - **SC-006**: A failed run publishes exactly one alert to the owning agent's default channel and creates exactly one Attention item.
