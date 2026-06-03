@@ -2171,3 +2171,183 @@ func TestReload_NoRaceWithReaders(t *testing.T) {
 		t.Fatalf("expected mock channel to be removed after Reload")
 	}
 }
+
+// withFactory registers a channel factory for the duration of a test and restores
+// the previous registration (if any) on cleanup, so package-global factory state
+// does not leak between tests.
+func withFactory(t *testing.T, name string, f ChannelFactory) {
+	t.Helper()
+	factoriesMu.Lock()
+	prev, had := factories[name]
+	factories[name] = f
+	factoriesMu.Unlock()
+	t.Cleanup(func() {
+		factoriesMu.Lock()
+		if had {
+			factories[name] = prev
+		} else {
+			delete(factories, name)
+		}
+		factoriesMu.Unlock()
+	})
+}
+
+// removeFactoryForTest ensures no factory is registered under name for the duration
+// of a test, restoring any previous registration on cleanup.
+func removeFactoryForTest(t *testing.T, name string) {
+	t.Helper()
+	factoriesMu.Lock()
+	prev, had := factories[name]
+	delete(factories, name)
+	factoriesMu.Unlock()
+	t.Cleanup(func() {
+		factoriesMu.Lock()
+		if had {
+			factories[name] = prev
+		} else {
+			delete(factories, name)
+		}
+		factoriesMu.Unlock()
+	})
+}
+
+// TestReload_AddedChannelMissingFromMap_NoPanic is the regression guard for the
+// gateway-crash bug (part 1: defense-in-depth). It drives a real Reload that
+// enables WhatsApp while NO factory is registered for "whatsapp_native", so
+// initChannels records a failure and does NOT construct the channel — yet the
+// reload diff still lists "whatsapp_native" in `added`. Before the fix, the
+// added-start loop did `m.channels["whatsapp_native"].Start(ctx)` on a nil
+// channel and panicked, crashing the whole gateway. The nil guard must instead
+// record a degraded failure and return cleanly.
+func TestReload_AddedChannelMissingFromMap_NoPanic(t *testing.T) {
+	// Ensure no factory is registered for the WhatsApp native name for this test, and
+	// restore whatever was there afterward. unregisterFactory removes the entry; the
+	// cleanup runs even though we never set a replacement.
+	removeFactoryForTest(t, "whatsapp_native")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := &Manager{
+		channels:      make(map[string]Channel),
+		workers:       make(map[string]*channelWorker),
+		bus:           bus.NewMessageBus(),
+		config:        &config.Config{},
+		channelHashes: make(map[string]string),
+	}
+	if err := m.StartAll(ctx); err != nil {
+		t.Fatalf("StartAll: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Channels.WhatsApp.Enabled = true
+
+	// This Reload MUST NOT panic. recover() turns a panic into a test failure with a
+	// clear message instead of crashing the test binary (mirrors the gateway crash).
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("Reload panicked on an added channel missing from m.channels "+
+					"(the gateway-crash regression): %v", r)
+			}
+		}()
+		if err := m.Reload(ctx, cfg, credentials.SecretBundle{}); err != nil {
+			t.Fatalf("Reload returned error: %v", err)
+		}
+	}()
+
+	// The missing channel must be recorded as a degraded failure, not started.
+	if _, ok := m.GetChannel("whatsapp_native"); ok {
+		t.Fatalf("whatsapp_native must not be registered when its factory is missing")
+	}
+	failed := m.FailedChannels()
+	found := false
+	for _, f := range failed {
+		if f.Name == "whatsapp_native" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected a recorded channel failure for whatsapp_native, got: %+v", failed)
+	}
+}
+
+// TestReload_EnableWhatsApp_StartsNativeChannel is the regression guard for the
+// root fix (part 2: name consistency). It registers a mock factory under the
+// REGISTERED name "whatsapp_native" (no real whatsmeow / network), enables the
+// "whatsapp" config key, and asserts the Reload diff resolves the config key to
+// the registered name so the channel is actually constructed, started, and
+// registered under "whatsapp_native" — and that no phantom "whatsapp" entry
+// lingers. Before the fix, `added` held "whatsapp" (config key), which never
+// matched m.channels and so never started.
+func TestReload_EnableWhatsApp_StartsNativeChannel(t *testing.T) {
+	started := make(chan struct{}, 1)
+	withFactory(t, "whatsapp_native", func(*config.Config, credentials.SecretBundle, *bus.MessageBus) (Channel, error) {
+		return &mockChannelStartSignal{started: started}, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := &Manager{
+		channels:      make(map[string]Channel),
+		workers:       make(map[string]*channelWorker),
+		bus:           bus.NewMessageBus(),
+		config:        &config.Config{},
+		channelHashes: make(map[string]string),
+	}
+	if err := m.StartAll(ctx); err != nil {
+		t.Fatalf("StartAll: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Channels.WhatsApp.Enabled = true
+
+	if err := m.Reload(ctx, cfg, credentials.SecretBundle{}); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	// The channel must be registered under the REGISTERED name, not the config key.
+	if _, ok := m.GetChannel("whatsapp_native"); !ok {
+		t.Fatalf("expected whatsapp_native to be registered after enabling WhatsApp")
+	}
+	if _, ok := m.GetChannel("whatsapp"); ok {
+		t.Fatalf("a phantom \"whatsapp\" channel must not be registered")
+	}
+
+	// Start must have been called on the constructed channel.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("whatsapp_native channel was never Start()ed after Reload")
+	}
+
+	// The committed hash must be keyed by the registered name so subsequent reloads
+	// are stable (no spurious add/remove churn).
+	m.mu.RLock()
+	_, hasNative := m.channelHashes["whatsapp_native"]
+	_, hasPhantom := m.channelHashes["whatsapp"]
+	m.mu.RUnlock()
+	if !hasNative {
+		t.Fatalf("channelHashes must be keyed by \"whatsapp_native\"; got %v", m.channelHashes)
+	}
+	if hasPhantom {
+		t.Fatalf("channelHashes must not contain the phantom \"whatsapp\" key")
+	}
+}
+
+// mockChannelStartSignal is a mockChannel whose Start signals a channel, letting a
+// test confirm the manager actually started it.
+type mockChannelStartSignal struct {
+	mockChannel
+	started chan struct{}
+}
+
+func (m *mockChannelStartSignal) Start(context.Context) error {
+	select {
+	case m.started <- struct{}{}:
+	default:
+	}
+	return nil
+}

@@ -49,3 +49,45 @@ func TestToChannelHashes(t *testing.T) {
 	assert.Equal(t, "", cc.Telegram.TokenRef)
 	assert.Equal(t, false, cc.Telegram.Enabled)
 }
+
+// TestToChannelHashes_WhatsAppMapsToNativeName is the function-level regression
+// guard for the gateway-crash bug: the WhatsApp config lives under the JSON key
+// "whatsapp", but initChannels registers the channel in m.channels under the
+// REGISTERED name "whatsapp_native". The reload diff (compareChannels) must emit
+// the registered name so m.channels[name] resolves — otherwise the Reload
+// added-start loop dereferences a nil channel and crashes the whole gateway.
+//
+// This asserts purely at the function level (toChannelHashes / compareChannels /
+// toChannelConfig) so it needs no real whatsmeow connection or network.
+func TestToChannelHashes_WhatsAppMapsToNativeName(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Channels.WhatsApp.Enabled = true
+
+	hashes := toChannelHashes(cfg)
+
+	// The hash map must be keyed by the REGISTERED name, never the config key.
+	if _, ok := hashes["whatsapp_native"]; !ok {
+		t.Fatalf("toChannelHashes must key enabled WhatsApp under the registered name "+
+			"\"whatsapp_native\"; got keys: %v", hashes)
+	}
+	if _, ok := hashes["whatsapp"]; ok {
+		t.Fatalf("toChannelHashes must NOT key WhatsApp under the raw config key "+
+			"\"whatsapp\" (that name has no channel in m.channels); got keys: %v", hashes)
+	}
+
+	// A reload that enables WhatsApp (empty old map → enabled new map) must produce
+	// added = ["whatsapp_native"] and NO phantom "whatsapp" added / "whatsapp_native"
+	// removed split.
+	added, removed := compareChannels(map[string]string{}, hashes)
+	assert.EqualValues(t, []string{"whatsapp_native"}, added,
+		"enabling WhatsApp must add the registered name, not the config key")
+	assert.EqualValues(t, []string(nil), removed,
+		"enabling WhatsApp must not mark anything removed")
+
+	// toChannelConfig must still select the WhatsApp config block when the list
+	// holds the REGISTERED name — otherwise initChannels would never see it enabled.
+	cc, err := toChannelConfig(cfg, added)
+	assert.NoError(t, err)
+	assert.True(t, cc.WhatsApp.Enabled,
+		"toChannelConfig must populate WhatsApp.Enabled when list holds \"whatsapp_native\"")
+}

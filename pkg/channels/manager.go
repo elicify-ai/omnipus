@@ -1634,6 +1634,19 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 		n := name // local copy — prevents closure from capturing the loop variable
 		// Stop all channels
 		channel := m.channels[n]
+		// Defense-in-depth: a "removed" name that never resolved to a registered
+		// channel (e.g. it failed to construct on a prior boot/reload) leaves
+		// m.channels[n] nil. Calling Stop would panic and crash the gateway. Skip the
+		// Stop but still queue the unregister so any stale bookkeeping is cleaned up.
+		if channel == nil {
+			logger.WarnCF("channels", "Skipping stop for unregistered channel", map[string]any{
+				"channel": n,
+			})
+			deferFuncs = append(deferFuncs, func() {
+				m.unregisterChannelLocked(n)
+			})
+			continue
+		}
 		logger.InfoCF("channels", "Stopping channel", map[string]any{
 			"channel": n,
 		})
@@ -1694,6 +1707,19 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	for _, name := range added {
 		n := name // local copy — prevents closure from capturing the loop variable
 		channel := m.channels[n]
+		// Defense-in-depth: if the diff produced an "added" name that does not resolve
+		// to a constructed channel (e.g. a config-key/registered-name mismatch, or an
+		// initChannels if-ladder that skipped a misconfigured channel), m.channels[n]
+		// is nil. Calling Start on it would panic and crash the entire gateway. Record
+		// a degraded failure, drop the hash so the channel is re-attempted on the next
+		// reload, and continue — a single missing channel must NEVER take down the bus.
+		if channel == nil {
+			m.recordChannelFailure(n, n, fmt.Errorf(
+				"reload: channel %q was marked for start but is not registered "+
+					"(config/registration name mismatch or skipped init)", n))
+			delete(list, n)
+			continue
+		}
 		logger.InfoCF("channels", "Starting channel", map[string]any{
 			"channel": n,
 		})
