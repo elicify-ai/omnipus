@@ -972,14 +972,11 @@ func setupAndStartServices(
 	// the header notification center.
 	runningServices.notifStore = notifications.NewStore(filepath.Join(homePath, "notifications"))
 
-	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	var err error
 	runningServices.CronService, err = setupCronTool(
 		agentLoop,
 		msgBus,
 		cfg.WorkspacePath(),
-		cfg.Agents.Defaults.RestrictToWorkspace,
-		execTimeout,
 		cfg,
 		runningServices.notifStore,
 	)
@@ -1558,7 +1555,6 @@ func restartServices(
 ) error {
 	cfg := al.GetConfig()
 
-	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
 	if runningServices.notifStore == nil {
 		// Derive the home dir from the workspace path (workspace == <home>/workspace).
 		runningServices.notifStore = notifications.NewStore(
@@ -1569,8 +1565,6 @@ func restartServices(
 		al,
 		msgBus,
 		cfg.WorkspacePath(),
-		cfg.Agents.Defaults.RestrictToWorkspace,
-		execTimeout,
 		cfg,
 		runningServices.notifStore,
 	)
@@ -1777,17 +1771,15 @@ func setupCronTool(
 	agentLoop *agent.AgentLoop,
 	msgBus *bus.MessageBus,
 	workspace string,
-	restrict bool,
-	execTimeout time.Duration,
 	cfg *config.Config,
 	notifStore *notifications.Store,
 ) (*cron.CronService, error) {
 	cronStorePath := filepath.Join(workspace, "cron", "jobs.json")
 
-	cronService := cron.NewCronService(cronStorePath, nil)
+	cronService := cron.NewCronService(cronStorePath)
 
 	// Cron tool — always registered. Policy controls whether an agent can invoke it.
-	cronTool, err := tools.NewCronTool(cronService, agentLoop, msgBus, workspace, restrict, execTimeout, cfg)
+	cronTool, err := tools.NewCronTool(cronService, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("critical error during CronTool initialization: %w", err)
 	}
@@ -1795,8 +1787,8 @@ func setupCronTool(
 
 	// Owner-aware autonomous fire path (#264). The runner wakes a fired
 	// schedule's OWNING agent (never the default), bounded by the per-run
-	// deadline, and raises a notification + channel alert on failure. It
-	// supersedes the legacy SetOnJob adapter, which is removed.
+	// deadline, and raises a notification + channel alert on failure. It is the
+	// only fire path — the cron service records a no-op when no runner is set.
 	// An owner is available only when it is registered AND enabled (HIGH:
 	// disabled-but-registered owner must not run). The registry registers all
 	// agents regardless of Enabled, so we additionally consult the agent's

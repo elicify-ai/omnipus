@@ -66,7 +66,7 @@ func (r *recordingRunner) calls() []string {
 func newAutonomyService(t *testing.T, clk Clock) (*CronService, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "jobs.json")
-	cs := NewCronService(path, nil)
+	cs := NewCronService(path)
 	cs.SetClock(clk)
 	return cs, path
 }
@@ -246,7 +246,7 @@ func TestMigration_BackfillsOwner(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.json")
 	seedStore(t, path, []CronJob{{ID: "j1", Name: "old", Enabled: true}})
 
-	cs := NewCronService(path, nil)
+	cs := NewCronService(path)
 	cs.SetDefaultAgentID("default-agent")
 
 	jobs := cs.ListJobs(true)
@@ -255,7 +255,7 @@ func TestMigration_BackfillsOwner(t *testing.T) {
 	}
 
 	// Persisted on disk.
-	cs2 := NewCronService(path, nil)
+	cs2 := NewCronService(path)
 	if got := cs2.ListJobs(true)[0].AgentID; got != "default-agent" {
 		t.Fatalf("backfill not persisted: owner = %q", got)
 	}

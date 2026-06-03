@@ -175,12 +175,9 @@ type CronStore struct {
 	Jobs    []CronJob `json:"jobs"`
 }
 
-type JobHandler func(job *CronJob) (string, error)
-
 type CronService struct {
 	storePath string
 	store     *CronStore
-	onJob     JobHandler
 	mu        sync.RWMutex
 	running   bool
 	stopChan  chan struct{}
@@ -230,10 +227,9 @@ func (cs *CronService) SetOnSkip(fn func(jobID, reason string)) {
 	cs.onSkip = fn
 }
 
-func NewCronService(storePath string, onJob JobHandler) *CronService {
+func NewCronService(storePath string) *CronService {
 	cs := &CronService{
 		storePath:         storePath,
-		onJob:             onJob,
 		gronx:             gronx.New(),
 		wakeChan:          make(chan struct{}),
 		clock:             realClock{},
@@ -598,8 +594,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 			}
 			// Owner-missing skip (W-8): a job with no resolvable owner must not
 			// fire (no default-agent fallback). Only enforced once a runner is
-			// wired (Wave-2); the legacy onJob path is owner-agnostic. Recompute
-			// the next fire on skip so a recurring job survives.
+			// wired. Recompute the next fire on skip so a recurring job survives.
 			if cs.runner != nil && job.AgentID == "" {
 				cs.rescheduleSkippedUnsafe(job)
 				onSkip := cs.onSkip
@@ -644,14 +639,13 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 
 	cs.mu.RLock()
 	runner := cs.runner
-	onJob := cs.onJob
 	cs.mu.RUnlock()
 
-	// invokeRun calls the runner/handler with a recover so a panic in a
-	// scheduled run becomes a recorded error rather than crashing the gateway
-	// (BLOCKER 2). The returned sessionID may be the stable id the runner
-	// chose (continue/main) so it can be persisted back onto the real job.
-	sessionID, err := invokeRun(runCtx, runner, onJob, callbackJob)
+	// invokeRun calls the runner with a recover so a panic in a scheduled run
+	// becomes a recorded error rather than crashing the gateway (BLOCKER 2). The
+	// returned sessionID may be the stable id the runner chose (continue/main) so
+	// it can be persisted back onto the real job.
+	sessionID, err := invokeRun(runCtx, runner, callbackJob)
 	if cancel != nil {
 		cancel()
 	}
@@ -746,14 +740,13 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	}
 }
 
-// invokeRun calls the configured runner (or legacy onJob handler) for the job,
-// converting any panic into an error so a misbehaving scheduled run can never
-// crash the gateway (BLOCKER 2). The (sessionID,error) outcome is recorded by
-// the caller.
+// invokeRun calls the configured runner for the job, converting any panic into
+// an error so a misbehaving scheduled run can never crash the gateway (BLOCKER
+// 2). The (sessionID,error) outcome is recorded by the caller. When no runner is
+// configured the job records a no-op (empty sessionID, nil error).
 func invokeRun(
 	ctx context.Context,
 	runner ScheduledRunner,
-	onJob JobHandler,
 	job *CronJob,
 ) (sessionID string, err error) {
 	defer func() {
@@ -762,14 +755,8 @@ func invokeRun(
 			log.Printf("[cron] ✗ job '%s' (id: %s) panicked: %v", job.Name, job.ID, r)
 		}
 	}()
-	switch {
-	case runner != nil:
-		// Wave-2 owner-aware fire path.
+	if runner != nil {
 		return runner.RunScheduled(ctx, job)
-	case onJob != nil:
-		// Legacy fire path (string,error). Kept so the gateway adapter keeps
-		// working until Wave-2 swaps in a runner.
-		return onJob(job)
 	}
 	return "", nil
 }
@@ -941,16 +928,6 @@ func (cs *CronService) Load() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	return cs.loadStore()
-}
-
-// SetOnJob installs the legacy (string,error) JobHandler. Deliberate back-compat
-// seam: production wires the owner-aware ScheduledRunner via SetRunner, which
-// takes precedence over onJob in invokeRun. SetOnJob is retained for the legacy
-// handler path and is exercised by tests; it has no production caller today.
-func (cs *CronService) SetOnJob(handler JobHandler) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	cs.onJob = handler
 }
 
 func (cs *CronService) loadStore() error {

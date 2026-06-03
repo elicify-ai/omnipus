@@ -212,7 +212,7 @@ func TestRunner_SessionMode_Continue_ThroughLane(t *testing.T) {
 	cfg := baseConfig()
 	r := newRunnerOnly(t, cfg, map[string]bool{"mia": true})
 
-	cs := cron.NewCronService(filepath.Join(t.TempDir(), "jobs.json"), nil)
+	cs := cron.NewCronService(filepath.Join(t.TempDir(), "jobs.json"))
 	cs.SetRunner(r)
 	require.NoError(t, cs.Start())
 	defer cs.Stop()

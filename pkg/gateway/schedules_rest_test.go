@@ -36,7 +36,7 @@ func newSchedulesTestAPI(t *testing.T) (*restAPI, *cron.CronService) {
 	loop := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 
 	cronPath := filepath.Join(t.TempDir(), "jobs.json")
-	cs := cron.NewCronService(cronPath, nil)
+	cs := cron.NewCronService(cronPath)
 	require.NoError(t, cs.Start())
 	t.Cleanup(cs.Stop)
 
