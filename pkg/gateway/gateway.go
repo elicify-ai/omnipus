@@ -1825,8 +1825,11 @@ func setupCronTool(
 		return nil
 	})
 	// Best-effort per-run child-process cleanup (FR-011). The minimal per-session
-	// registry tracks PIDs the run spawns and terminates them on completion.
+	// registry tracks PIDs the run spawns (via the tracker installed on the run
+	// context, reported by the exec/shell tools) and terminates them on
+	// completion — success, error, or timeout.
 	procReg := newScheduledProcRegistry()
+	runner.setProcessTracker(procReg.Track)
 	runner.setProcessCleanup(procReg.Cleanup)
 	cronService.SetRunner(runner)
 

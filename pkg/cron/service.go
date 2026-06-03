@@ -213,6 +213,21 @@ type CronService struct {
 	// stopDrainTimeout bounds Stop()'s wait on in-flight runs (defaults to
 	// defaultStopDrainTimeout). 0 means "wait unbounded".
 	stopDrainTimeout time.Duration
+
+	// onSkip, when set, is invoked synchronously whenever executeJobByID skips a
+	// fire via the overlap guard (FR-008) or the owner-missing guard (W-8),
+	// before the lock is released. It is a deterministic test seam so a test can
+	// receive a skip signal instead of polling a wall-clock window for a
+	// non-event. nil in production. reason is "overlap" or "owner-missing".
+	onSkip func(jobID, reason string)
+}
+
+// SetOnSkip installs a deterministic skip-observer (tests only). The callback
+// fires for every overlap/owner-missing skip in executeJobByID. nil clears it.
+func (cs *CronService) SetOnSkip(fn func(jobID, reason string)) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.onSkip = fn
 }
 
 func NewCronService(storePath string, onJob JobHandler) *CronService {
@@ -548,8 +563,12 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 			// is not lost (RunDueJobs cleared NextRunAtMS before dispatch).
 			if job.State.Running {
 				cs.rescheduleSkippedUnsafe(job)
+				onSkip := cs.onSkip
 				cs.mu.Unlock()
 				log.Printf("[cron] ⤳ job '%s' (id: %s) skipped — previous run still in progress", job.Name, jobID)
+				if onSkip != nil {
+					onSkip(jobID, "overlap")
+				}
 				return
 			}
 			// Owner-missing skip (W-8): a job with no resolvable owner must not
@@ -558,8 +577,12 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 			// the next fire on skip so a recurring job survives.
 			if cs.runner != nil && job.AgentID == "" {
 				cs.rescheduleSkippedUnsafe(job)
+				onSkip := cs.onSkip
 				cs.mu.Unlock()
 				log.Printf("[cron] ⚠ job '%s' (id: %s) skipped — no owning agent", job.Name, jobID)
+				if onSkip != nil {
+					onSkip(jobID, "owner-missing")
+				}
 				return
 			}
 			job.State.Running = true
@@ -895,6 +918,10 @@ func (cs *CronService) Load() error {
 	return cs.loadStore()
 }
 
+// SetOnJob installs the legacy (string,error) JobHandler. Deliberate back-compat
+// seam: production wires the owner-aware ScheduledRunner via SetRunner, which
+// takes precedence over onJob in invokeRun. SetOnJob is retained for the legacy
+// handler path and is exercised by tests; it has no production caller today.
 func (cs *CronService) SetOnJob(handler JobHandler) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -1005,6 +1032,11 @@ func (cs *CronService) AddJobFull(spec JobSpec) (*CronJob, error) {
 	mode := spec.SessionMode
 	if mode == "" {
 		mode = SessionModeIsolated
+	} else if !mode.Valid() {
+		// Self-reject an invalid non-empty mode rather than persisting a job
+		// the runner cannot interpret (FR-004). Callers that pass "" get the
+		// isolated default above.
+		return nil, fmt.Errorf("invalid session mode %q", mode)
 	}
 	enabled := true
 	if spec.Enabled != nil {
@@ -1094,9 +1126,15 @@ func (cs *CronService) RunNow(jobID string) (status string, sessionID string, er
 		laneCtx = context.Background()
 	}
 
-	// Snapshot the run-count so we can detect whether executeJobByID actually
-	// ran (vs. skipped by the overlap/owner guard before recording a record).
-	beforeLen, _ := cs.runStateSnapshot(jobID)
+	// Snapshot the run-count AND the most-recent record's identity so we can
+	// detect whether executeJobByID actually ran (vs. skipped by the
+	// overlap/owner guard before recording a record). Length alone is
+	// insufficient: executeJobByID trims History to runHistoryCap, so a job
+	// with a saturated history (len==runHistoryCap) keeps the same length
+	// across a genuine run. executeJobByID stamps each record's RanAtMs with
+	// the run's startTime, so a changed last-record RanAtMs is the reliable
+	// "a new run was appended" signal.
+	beforeLen, beforeRec := cs.runStateSnapshot(jobID)
 
 	// Acquire a lane slot (queues when the cap is reached, FR-007).
 	select {
@@ -1112,9 +1150,12 @@ func (cs *CronService) RunNow(jobID string) (status string, sessionID string, er
 	}()
 
 	afterLen, afterRec := cs.runStateSnapshot(jobID)
-	if afterLen == beforeLen {
+	ran := afterLen > beforeLen || afterRec.RanAtMs != beforeRec.RanAtMs
+	if !ran {
 		// No new run record appended → the overlap guard (or owner-missing
-		// guard) skipped the run.
+		// guard) skipped the run. Detected by the most-recent record's identity
+		// (RanAtMs) rather than length, so a saturated history (trimmed back to
+		// runHistoryCap) does not mask a genuine run as "skipped".
 		return "skipped", "", nil
 	}
 	switch afterRec.Status {

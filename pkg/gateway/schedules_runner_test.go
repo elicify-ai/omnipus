@@ -27,6 +27,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/cron"
 	"github.com/dapicom-ai/omnipus/pkg/notifications"
 	"github.com/dapicom-ai/omnipus/pkg/session"
+	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
 // fakeExecutor implements scheduledExecutor for the runner tests.
@@ -40,6 +41,11 @@ type fakeExecutor struct {
 	// hangUntilCtxDone makes ProcessScheduled block until ctx is canceled,
 	// returning ctx.Err(). Used by the deadline/timeout test.
 	hangUntilCtxDone bool
+	// onProcess, when set, is invoked with the run context before returning. It
+	// lets a test simulate a tool spawning a child during the run (e.g. by
+	// calling tools.TrackProcess(ctx, pid)) so the FR-011 tracker wiring is
+	// exercised end-to-end.
+	onProcess func(ctx context.Context)
 }
 
 type fakeCall struct {
@@ -50,6 +56,9 @@ type fakeCall struct {
 
 func (f *fakeExecutor) ProcessScheduled(ctx context.Context, owner, sessionID, content, _, _ string) (string, error) {
 	f.calls = append(f.calls, fakeCall{owner: owner, sessionID: sessionID, content: content})
+	if f.onProcess != nil {
+		f.onProcess(ctx)
+	}
 	if f.hangUntilCtxDone {
 		<-ctx.Done()
 		return "", ctx.Err()
@@ -233,6 +242,68 @@ func TestRunner_SessionMode_Continue_ThroughLane(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ok", status2)
 	assert.Equal(t, sid1, sid2, "continue must reuse the same session id across runs")
+}
+
+// TestRunner_SessionMode_Continue_PrunedRecreates covers the FR-004 "continue
+// pruned" edge. A continue job carries a stale SessionID whose on-disk session
+// no longer exists. pickSession calls GetOrCreateScheduledSession, which for a
+// VALID id RE-CREATES the missing session rather than erroring — so the run
+// proceeds with a usable session id (the recreate path).
+//
+// NOTE on reachability: the explicit error-fallback branch in pickSession
+// (GetOrCreateScheduledSession error → NewScheduledSession) is NOT reachable for
+// a valid-but-pruned id, because GetOrCreateScheduledSession recreates it
+// instead of erroring. That branch only fires when the id is INVALID (fails
+// validateSessionID) — covered by the sibling subtest below, which asserts the
+// fallback yields a fresh, different, usable scheduled session.
+func TestRunner_SessionMode_Continue_PrunedRecreates(t *testing.T) {
+	t.Run("valid pruned id is recreated and usable", func(t *testing.T) {
+		cfg := baseConfig()
+		r, exec, _, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
+
+		// A stale but structurally-valid session id that was never created on disk.
+		const staleID = "session_PRUNEDBUTVALID0000000000"
+		job := &cron.CronJob{
+			ID: "jcp", AgentID: "mia", SessionMode: cron.SessionModeContinue,
+			SessionID: staleID,
+			Payload:   cron.CronPayload{Message: "standup"},
+		}
+
+		sid, err := r.RunScheduled(context.Background(), job)
+		require.NoError(t, err)
+		require.NotEmpty(t, sid)
+		// GetOrCreateScheduledSession recreates the exact id → run uses it.
+		assert.Equal(t, staleID, sid, "valid pruned continue id must be recreated, not replaced")
+
+		// The recreated session is real and scheduled-type (usable).
+		m, err := exec.store.GetMeta(sid)
+		require.NoError(t, err)
+		assert.Equal(t, session.SessionTypeScheduled, m.Type)
+	})
+
+	t.Run("invalid pruned id falls back to a fresh session", func(t *testing.T) {
+		cfg := baseConfig()
+		r, exec, _, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
+
+		// An invalid session id (path-escape) makes GetOrCreateScheduledSession
+		// return an error → the runner's fallback mints a fresh isolated session.
+		const badID = "../escape"
+		job := &cron.CronJob{
+			ID: "jcb", AgentID: "mia", SessionMode: cron.SessionModeContinue,
+			SessionID: badID,
+			Payload:   cron.CronPayload{Message: "standup"},
+		}
+
+		sid, err := r.RunScheduled(context.Background(), job)
+		require.NoError(t, err, "invalid continue id must fall back, not fail the run")
+		require.NotEmpty(t, sid)
+		assert.NotEqual(t, badID, sid, "fallback must yield a different, fresh session id")
+
+		// The fresh session is real and usable.
+		m, err := exec.store.GetMeta(sid)
+		require.NoError(t, err)
+		assert.Equal(t, session.SessionTypeScheduled, m.Type)
+	})
 }
 
 // TestRunner_DisabledOwner_NoFallback asserts a registered-but-disabled owner is
@@ -553,6 +624,113 @@ func TestRunner_ChildProcessCleanup_Invoked(t *testing.T) {
 
 	assert.Equal(t, int32(1), atomic.LoadInt32(&cleaned), "process cleanup must be invoked once on completion")
 	assert.Equal(t, sid, cleanedSession.Load(), "cleanup must be scoped to the run's session id")
+}
+
+// TestRunner_ChildProcessCleanup_OnError asserts the FR-011 cleanup hook fires
+// even when the run FAILS (not just on success). A failed run can leave behind
+// spawned children just as a successful one can, so cleanup must run on the
+// error path too.
+func TestRunner_ChildProcessCleanup_OnError(t *testing.T) {
+	cfg := baseConfig()
+	r, exec, mb, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
+	exec.err = errors.New("boom") // run fails
+	go func() {
+		for range mb.OutboundChan() {
+		}
+	}()
+
+	var cleaned int32
+	var cleanedSession atomic.Value
+	r.setProcessCleanup(func(sessionID string) {
+		atomic.AddInt32(&cleaned, 1)
+		cleanedSession.Store(sessionID)
+	})
+
+	job := &cron.CronJob{
+		ID: "jce", AgentID: "mia", CreatedBy: "alice", SessionMode: cron.SessionModeIsolated,
+		Payload: cron.CronPayload{Message: "spawn"},
+	}
+	sid, err := r.RunScheduled(context.Background(), job)
+	require.Error(t, err)
+	require.NotEmpty(t, sid)
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&cleaned), "process cleanup must fire on the error path")
+	assert.Equal(t, sid, cleanedSession.Load(), "cleanup must be scoped to the run's session id")
+}
+
+// TestRunner_ChildProcessCleanup_OnTimeout asserts the FR-011 cleanup hook fires
+// on the deadline/timeout path. A run that overran its deadline is exactly when
+// orphaned children are most likely, so cleanup must run there too.
+func TestRunner_ChildProcessCleanup_OnTimeout(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Schedules.RunTimeoutSeconds = 0
+	r, exec, mb, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
+	exec.hangUntilCtxDone = true
+	r.canceller = &fakeCanceller{}
+	go func() {
+		for range mb.OutboundChan() {
+		}
+	}()
+
+	var cleaned int32
+	var cleanedSession atomic.Value
+	r.setProcessCleanup(func(sessionID string) {
+		atomic.AddInt32(&cleaned, 1)
+		cleanedSession.Store(sessionID)
+	})
+
+	job := &cron.CronJob{
+		ID: "jct", AgentID: "mia", CreatedBy: "alice",
+		SessionMode: cron.SessionModeIsolated, TimeoutSeconds: 1,
+		Payload: cron.CronPayload{Message: "work"},
+	}
+	sid, err := r.RunScheduled(context.Background(), job)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.DeadlineExceeded))
+	require.NotEmpty(t, sid)
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&cleaned), "process cleanup must fire on the timeout path")
+	assert.Equal(t, sid, cleanedSession.Load(), "cleanup must be scoped to the run's session id")
+}
+
+// TestRunner_ProcessTracker_TrackedThenCleaned proves the FR-011 tracker the
+// runner installs on the ProcessScheduled context is actually reachable by the
+// run: a PID reported through tools.TrackProcess(ctx, pid) during the run lands
+// in the per-session registry and is terminated on completion. This is the
+// end-to-end wiring proof (Track is NOT inert).
+func TestRunner_ProcessTracker_TrackedThenCleaned(t *testing.T) {
+	cfg := baseConfig()
+	r, exec, _, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
+
+	reg := newScheduledProcRegistry()
+	var killed []int
+	var mu sync.Mutex
+	reg.kill = func(pid int) error {
+		mu.Lock()
+		killed = append(killed, pid)
+		mu.Unlock()
+		return nil
+	}
+	r.setProcessTracker(reg.Track)
+	r.setProcessCleanup(reg.Cleanup)
+
+	// Simulate a tool spawning a child during the run: read the tracker the
+	// runner installed on the context and report a PID through it.
+	exec.onProcess = func(ctx context.Context) {
+		tools.TrackProcess(ctx, 4242)
+	}
+
+	job := &cron.CronJob{
+		ID: "jpt", AgentID: "mia", SessionMode: cron.SessionModeIsolated,
+		Payload: cron.CronPayload{Message: "spawn"},
+	}
+	sid, err := r.RunScheduled(context.Background(), job)
+	require.NoError(t, err)
+	require.NotEmpty(t, sid)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []int{4242}, killed, "the tracked child PID must be terminated on completion")
 }
 
 // TestScheduledProcRegistry_TracksAndKills verifies the minimal per-session

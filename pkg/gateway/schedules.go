@@ -23,6 +23,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/notifications"
 	"github.com/dapicom-ai/omnipus/pkg/session"
+	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
 // scheduledExecutor is the subset of *agent.AgentLoop the runner needs. It is an
@@ -81,9 +82,15 @@ type scheduledRunner struct {
 	// check and falls back to the legacy non-empty-channel validation.
 	getChannelChecker func() channelChecker
 
+	// procTrack records a child PID spawned during a run under the run's session
+	// id (FR-011). It is installed on the ProcessScheduled context so the exec/
+	// shell tools report spawned children; procCleanup later terminates them.
+	// nil means "no tracking wired".
+	procTrack func(sessionID string, pid int)
+
 	// procCleanup best-effort terminates child/browser processes tracked for a
 	// finished scheduled run's session (FR-011). nil means "no cleanup wired".
-	// Set via setProcessCleanup; the gateway wires it to the dev-server registry.
+	// Set via setProcessCleanup; the gateway wires it to the proc registry.
 	procCleanup func(sessionID string)
 }
 
@@ -178,6 +185,15 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 	ctx2, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
+	// FR-011: install a per-run child-process tracker on the run context so the
+	// exec/shell tools (which call tools.TrackProcess after spawning a child)
+	// record their PIDs under THIS run's session id. cleanupRunProcesses below
+	// then terminates exactly those PIDs on completion (success/error/timeout).
+	if r.procTrack != nil {
+		sid := sessionID
+		ctx2 = tools.WithProcessTracker(ctx2, func(pid int) { r.procTrack(sid, pid) })
+	}
+
 	// Run the owning agent's turn. If the deadline fires while the turn is
 	// still going, force-abort it via RequestCancel(CancelScope{SessionID}) and
 	// allow a short cleanup window, then return a deadline error so the lane
@@ -235,10 +251,17 @@ func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan str
 		// context so the cancel itself is not aborted by the just-expired ctx2.
 		cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_, _ = r.canceller.RequestCancel(cancelCtx,
+		outcome, cancelErr := r.canceller.RequestCancel(cancelCtx,
 			agent.CancelScope{SessionID: sessionID},
 			agent.CancelCanceller{UserID: "scheduler", Channel: "cron"},
 			agent.CancelHooks{})
+		if cancelErr == nil && !outcome.Fired {
+			// A force-abort that targeted no active turn is worth observing: the
+			// run may have already completed between the deadline check and the
+			// cancel, or the turn was never registered under this session id.
+			logger.DebugCF("gateway", "scheduled run force-abort hit no active turn",
+				map[string]any{"session_id": sessionID, "owner": owner})
+		}
 		// Short cleanup window: let the turn observe the cancel and unwind before
 		// ProcessScheduled returns.
 		select {
@@ -252,6 +275,14 @@ func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan str
 // (FR-011). Idempotent; a nil fn clears the hook.
 func (r *scheduledRunner) setProcessCleanup(fn func(sessionID string)) {
 	r.procCleanup = fn
+}
+
+// setProcessTracker wires the per-run child-process tracking hook (FR-011). It
+// is installed on the ProcessScheduled context so exec/shell tool spawns are
+// recorded under the run's session id and later cleaned up. Idempotent; a nil
+// fn clears the hook.
+func (r *scheduledRunner) setProcessTracker(fn func(sessionID string, pid int)) {
+	r.procTrack = fn
 }
 
 // setChannelChecker wires the lazy channel-registry resolver used to validate a
@@ -274,11 +305,26 @@ func (r *scheduledRunner) channelIsActive(channel string) bool {
 	return cc.ChannelRegistered(channel)
 }
 
-// scheduledProcRegistry is a minimal per-session child-process registry for
-// scheduled runs (FR-011). A real per-session process registry does not exist
-// in the codebase, so this provides the minimal tracking the spec asks for:
-// the agent run records spawned PIDs under its scheduled session id, and the
-// runner best-effort terminates them on completion. Safe for concurrent use.
+// scheduledProcRegistry is a per-session child-process registry for scheduled
+// runs (FR-011). It is wired into the LEGACY (sandbox=off) exec/shell spawn
+// paths: the runner installs a tools.ProcessTracker on the run context keyed to
+// the run's session id, and ExecTool.runSync / ExecTool.runBackground call
+// tools.TrackProcess(ctx, pid) after spawning a child, which lands here via
+// Track. On run completion (success, error, or timeout) the runner calls
+// Cleanup(sessionID), which terminates and forgets every tracked PID for that
+// session.
+//
+// Residual / NOT covered:
+//   - Sandbox-ON exec (ExecTool.runSyncHardened → sandbox.Run) is NOT tracked
+//     here: sandbox.Run owns its child's full lifecycle and force-kills it
+//     (SIGTERM→SIGKILL) on context cancel/timeout via the run's own ctx2, so a
+//     hardened child cannot outlive the run regardless of this registry. Adding
+//     a PID hook through sandbox.Run would require threading a callback through
+//     the hardened-exec API for no additional safety on the timeout path.
+//   - Browser/chromedp processes are not tracked: chromedp manages its own
+//     allocator lifecycle tied to the run context. This is the known residual.
+//
+// Safe for concurrent use.
 type scheduledProcRegistry struct {
 	mu   sync.Mutex
 	pids map[string][]int
@@ -538,6 +584,12 @@ func (r *scheduledRunner) resolveRecipients(job *cron.CronJob, cfg *config.Confi
 		}
 	}
 	if len(out) == 0 {
+		// No persistable recipient (zero admin users). The failure can only be
+		// live-broadcast to any connected admin WS — if none is open, the alert
+		// would otherwise vanish. Log at WARN so the failure is still recorded in
+		// gateway.log for after-the-fact diagnosis (finding M4).
+		logger.WarnCF("gateway", "schedule-failure notification has no persistable recipient; live-broadcast only",
+			map[string]any{"schedule_id": job.ID, "owner": job.AgentID})
 		out = append(out, agent.NotificationAdminBroadcast)
 	}
 	return out

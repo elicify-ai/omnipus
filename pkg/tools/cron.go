@@ -260,33 +260,24 @@ func (t *CronTool) addJob(ctx context.Context, args map[string]any) *ToolResult 
 		timeoutSeconds = int(ts)
 	}
 
-	job, err := t.cronService.AddJob(
-		messagePreview,
-		schedule,
-		message,
-		deliver,
-		channel,
-		chatID,
-	)
+	// Single atomic write (AddJobFull) so the job never persists with an empty
+	// owner/mode between an AddJob and a follow-up UpdateJob. SessionMode is
+	// already normalized above (isolated default + Valid() check); Enabled is
+	// true by default (nil → true).
+	job, err := t.cronService.AddJobFull(cron.JobSpec{
+		Name:           messagePreview,
+		Schedule:       schedule,
+		Message:        message,
+		Command:        command,
+		Deliver:        deliver,
+		Channel:        channel,
+		To:             chatID,
+		AgentID:        owner,
+		SessionMode:    sessionMode,
+		TimeoutSeconds: timeoutSeconds,
+	})
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("Error adding job: %v", err))
-	}
-
-	// Persist owner/mode/timeout + the command payload (if any). Always update
-	// when any of these were set so the new fields land on the stored job.
-	needsUpdate := command != "" || owner != "" || sessionMode != cron.SessionModeIsolated || timeoutSeconds > 0
-	if needsUpdate {
-		if command != "" {
-			job.Payload.Command = command
-		}
-		job.AgentID = owner
-		job.SessionMode = sessionMode
-		job.TimeoutSeconds = timeoutSeconds
-		// H7: check error and remove job on failure.
-		if err := t.cronService.UpdateJob(job); err != nil {
-			t.cronService.RemoveJob(job.ID)
-			return ErrorResult(fmt.Sprintf("Error saving cron job: %v", err))
-		}
 	}
 
 	return SilentResult(fmt.Sprintf("Cron job added: %s (id: %s)", job.Name, job.ID))
@@ -352,6 +343,14 @@ func (t *CronTool) enableJob(args map[string]any, enable bool) *ToolResult {
 // session id (when one exists) and an error for any genuine run failure so the
 // cron service records the run as an error rather than a stringified success
 // (W-4 / M-2). The deliver and command semantics are unchanged.
+//
+// Back-compat seam: this is the legacy JobHandler path (CronService.SetOnJob /
+// the invokeRun onJob fallback). Production wires the owner-aware
+// scheduledRunner via CronService.SetRunner instead, so ExecuteJob has no
+// production caller today — it is retained as the back-compat handler the cron
+// service falls back to when no runner is set, and is still exercised by the
+// cron tool tests. Do not delete without also retiring the onJob fallback in
+// CronService.invokeRun.
 func (t *CronTool) ExecuteJob(ctx context.Context, job *cron.CronJob) (string, error) {
 	// Get channel/chatID from job payload
 	channel := job.Payload.Channel

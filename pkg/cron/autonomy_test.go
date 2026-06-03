@@ -137,6 +137,19 @@ func TestRunDueJobs_OverlapSkip(t *testing.T) {
 	}}
 	cs.SetRunner(runner)
 
+	// Deterministic skip signal (SC-010): rather than poll a wall-clock window
+	// for a non-event, receive on this channel which fires exactly when the
+	// overlap guard skips the second dispatch.
+	skipped := make(chan string, 1)
+	cs.SetOnSkip(func(jobID, reason string) {
+		if reason == "overlap" {
+			select {
+			case skipped <- jobID:
+			default:
+			}
+		}
+	})
+
 	if err := cs.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -151,22 +164,22 @@ func TestRunDueJobs_OverlapSkip(t *testing.T) {
 
 	// Re-arm next-run and fire again while the first is still running. The
 	// second dispatch acquires a lane slot, sees Running=true, and returns
-	// without invoking the runner (overlap guard). We observe the skip by the
-	// runner call count staying at 1, then release the first run.
+	// without invoking the runner (overlap guard).
 	reArm(t, cs, job.ID, clk.Now().UnixMilli()-1)
 	cs.RunDueJobs(clk.Now())
 
-	// Allow the (skipped) second dispatch to complete; the first remains blocked.
-	// The skip path holds no slot and returns immediately, so a short bounded
-	// wait is enough to confirm the runner was NOT invoked a second time.
-	deadline := time.Now().Add(300 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if len(runner.calls()) > 1 {
-			break
+	// Deterministically wait for the overlap skip to fire (no wall-clock poll).
+	select {
+	case got := <-skipped:
+		if got != job.ID {
+			t.Fatalf("overlap skip fired for job %s, want %s", got, job.ID)
 		}
-		time.Sleep(2 * time.Millisecond)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for overlap-guard skip signal")
 	}
 
+	// The runner must have been invoked exactly once: the first (still-blocked)
+	// run, never the skipped second dispatch.
 	if got := len(runner.calls()); got != 1 {
 		t.Fatalf("overlap guard failed: runner called %d times, want 1", got)
 	}
@@ -486,6 +499,63 @@ func TestRunNow_PropagatesError(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatal("expected error from RunNow")
+	}
+}
+
+// TestRunNow_SaturatedHistoryStillReportsError verifies the run-vs-skip
+// classification is by record identity (RanAtMs), not history length. With a
+// saturated history (runHistoryCap records already present), executeJobByID
+// trims the slice back to runHistoryCap after appending the new record, so the
+// length is unchanged across a genuine run. A length-only check would
+// misclassify a real failure as "skipped" and HIDE it from the run-now
+// endpoint; the identity check must still surface "error".
+func TestRunNow_SaturatedHistoryStillReportsError(t *testing.T) {
+	clk := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	cs, _ := newAutonomyService(t, clk)
+	runner := &recordingRunner{err: fmt.Errorf("kaboom")}
+	cs.SetRunner(runner)
+	if err := cs.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer cs.Stop()
+
+	job := addDueJob(t, cs, "mia")
+
+	// Pre-seed exactly runHistoryCap prior run records so the next run trims
+	// back to the same length (len stays == runHistoryCap).
+	cs.mu.Lock()
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID == job.ID {
+			h := make([]CronRunRecord, runHistoryCap)
+			for k := range h {
+				h[k] = CronRunRecord{RanAtMs: int64(1000 + k), Status: "ok", SessionID: "old"}
+			}
+			cs.store.Jobs[i].State.History = h
+		}
+	}
+	cs.mu.Unlock()
+
+	before := jobState(t, cs, job.ID)
+	if len(before.History) != runHistoryCap {
+		t.Fatalf("precondition: history len = %d, want %d", len(before.History), runHistoryCap)
+	}
+
+	status, _, err := cs.RunNow(job.ID)
+	if status != "error" {
+		t.Fatalf("status = %q, want error (saturated history must not mask a real run)", status)
+	}
+	if err == nil {
+		t.Fatal("expected error from RunNow on a failed run with saturated history")
+	}
+
+	// History stayed capped, but the most-recent record is the NEW failed run.
+	after := jobState(t, cs, job.ID)
+	if len(after.History) != runHistoryCap {
+		t.Fatalf("history len = %d, want %d (cap preserved)", len(after.History), runHistoryCap)
+	}
+	last := after.History[len(after.History)-1]
+	if last.Status != "error" {
+		t.Fatalf("last record status = %q, want error", last.Status)
 	}
 }
 
