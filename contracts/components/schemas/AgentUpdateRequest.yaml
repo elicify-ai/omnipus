@@ -155,3 +155,13 @@ properties:
       with no more-specific routing rule. At most one agent is default.
       Omitting this field leaves the flag unchanged.
     example: false
+  skills:
+    type: array
+    items:
+      type: string
+    description: >
+      Replace the agent's skill list. Only the skill IDs in this list will
+      be granted; omitting this field leaves the existing list unchanged.
+      Send an empty array to remove all skills.
+    example:
+      - "web-research"

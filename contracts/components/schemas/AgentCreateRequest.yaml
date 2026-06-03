@@ -79,3 +79,12 @@ properties:
         format: double
         description: Maximum USD cost per day for this agent. Absent = no per-agent cap.
         example: 5.0
+  skills:
+    type: array
+    items:
+      type: string
+    description: >
+      Initial list of skill IDs granted to this agent. An empty list (or
+      absent field) means no skills are granted (opt-in, default none).
+    example:
+      - "web-research"
