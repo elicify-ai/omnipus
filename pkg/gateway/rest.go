@@ -2421,7 +2421,9 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"severity":       "high",
 			"title":          "No LLM models configured",
 			"description":    "No models are configured in model_list. The agent cannot generate responses without at least one model.",
-			"recommendation": "Add at least one model to config.json model_list with a valid API key in credentials.json.",
+			"recommendation": "Go to Settings → Providers and add an API key.",
+			"action_link":    "/settings?tab=providers",
+			"action_label":   "Configure providers",
 		})
 	}
 
@@ -2433,8 +2435,10 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"id":             "no-custom-agents",
 			"severity":       "low",
 			"title":          "No custom agents configured",
-			"description":    "Only the system agent is available. Custom agents can be defined in config.json.",
-			"recommendation": "Add agent configurations to personalize your assistant.",
+			"description":    "Only the built-in agents are available. Custom agents can be defined to personalise your assistant.",
+			"recommendation": "Go to Settings → Agents and create a custom agent.",
+			"action_link":    "/settings?tab=agents",
+			"action_label":   "Manage agents",
 		})
 	}
 
@@ -2447,7 +2451,9 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"severity":       "medium",
 			"title":          "Sandbox is disabled",
 			"description":    "Filesystem and process sandboxing is not enabled. Agent tool executions run without confinement.",
-			"recommendation": "Open Settings → Process Sandbox to enable sandbox mode for production use.",
+			"recommendation": "Go to Settings → Security → Advanced to enable sandbox mode.",
+			"action_link":    "/settings?tab=security",
+			"action_label":   "Open security settings",
 		})
 	}
 
