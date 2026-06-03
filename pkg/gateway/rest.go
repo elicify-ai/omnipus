@@ -3770,6 +3770,22 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
+	// Per-transport field validation: stdio requires command; sse/http require url.
+	// The MCP manager (pkg/mcp/manager.go ConnectServer) hard-fails on missing
+	// cfg.URL for sse/http and missing cfg.Command for stdio — catch it here so the
+	// error surfaces as a 422 rather than a silent connection failure.
+	switch transport {
+	case "stdio":
+		if req.Command == nil || *req.Command == "" {
+			jsonErr(w, http.StatusUnprocessableEntity, "command is required for stdio transport")
+			return
+		}
+	case "sse", "http":
+		if req.Url == nil || *req.Url == "" {
+			jsonErr(w, http.StatusUnprocessableEntity, "url is required for sse/http transport")
+			return
+		}
+	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
 		if tools == nil {
@@ -3791,8 +3807,16 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		}
 		entry := map[string]any{
 			"enabled": true,
-			"command": req.Command,
 			"type":    transport,
+		}
+		// Write the correct config field for each transport so the MCP manager
+		// (pkg/mcp/manager.go ConnectServer) can connect: stdio uses cfg.Command,
+		// sse/http use cfg.URL.
+		switch transport {
+		case "stdio":
+			entry["command"] = *req.Command
+		case "sse", "http":
+			entry["url"] = *req.Url
 		}
 		if req.Args != nil && len(*req.Args) > 0 {
 			entry["args"] = *req.Args

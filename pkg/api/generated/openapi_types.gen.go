@@ -3843,13 +3843,13 @@ type McpServerStatus string
 // McpServerTransport Transport mechanism used by this MCP server. "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers.
 type McpServerTransport string
 
-// McpServerCreate Request body for POST /mcp-servers. Adds a new MCP server to the gateway config.
+// McpServerCreate Request body for POST /mcp-servers. Adds a new MCP server to the gateway config. For stdio transport, `command` is required. For sse/http transport, `url` is required. Exactly one of `command` or `url` must be supplied depending on the transport.
 type McpServerCreate struct {
-	// Args Command-line arguments to pass to the server process.
+	// Args Command-line arguments to pass to the server process. Only applicable for stdio transport.
 	Args *[]string `json:"args,omitempty"`
 
-	// Command Command to start the MCP server process (stdio transport).
-	Command string `json:"command"`
+	// Command Command to start the MCP server process. Required when transport is "stdio". Must be omitted or empty when transport is "sse" or "http".
+	Command *string `json:"command,omitempty"`
 
 	// Env Environment variable overrides passed to the MCP server process. Only applicable for stdio transport. Each key-value pair is injected into the server process environment at startup.
 	Env *map[string]string `json:"env,omitempty"`
@@ -3859,6 +3859,9 @@ type McpServerCreate struct {
 
 	// Transport Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).
 	Transport McpServerCreateTransport `json:"transport"`
+
+	// Url Endpoint URL for remote MCP servers. Required when transport is "sse" or "http". Must be an https:// URL (or http:// for loopback addresses only). Must be omitted when transport is "stdio".
+	Url *string `json:"url,omitempty"`
 }
 
 // McpServerCreateTransport Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).

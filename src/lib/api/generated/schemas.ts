@@ -1358,7 +1358,8 @@ export const McpServer = z
   .passthrough();
 export const McpServerCreate = z.object({
   name: z.string(),
-  command: z.string(),
+  command: z.string().optional(),
+  url: z.string().optional(),
   args: z.array(z.string()).optional(),
   transport: z.enum(["stdio", "sse", "http"]),
   env: z.record(z.string()).optional(),
