@@ -10,24 +10,30 @@
  *   5. state 'error' → distinct copy + Retry button (different from timeout)
  *   6. timeout vs error copy are distinct from each other
  *
+ *   WhatsApp Retry bounded timeout (MAJOR fix):
+ *   7. Retry on timeout → spinner shown while waiting; if no code frame arrives
+ *      within 30s the timer fires and the UI reverts to timeout + Retry
+ *
  *   WhatsApp always-native (#283):
- *   7. WhatsAppNativeNotice mounts for whatsapp when native is available
- *   8. No use_native field (removed)
- *   9. QR container renders when pairing WS frame delivers a QR code
- *  10. native_available:true behaves same as undefined default
- *  11. native_available:false → hint instead of QR notice (#299)
+ *   8. WhatsAppNativeNotice mounts for whatsapp when native is available
+ *   9. No use_native field (removed)
+ *  10. QR container renders when pairing WS frame delivers a QR code
+ *  11. native_available:true behaves same as undefined default
+ *  12. native_available:false → hint instead of QR notice (#299)
  *
  *   Google Chat authGroup picker (#324 / US-C2):
- *  12. Webhook selected → only webhook_url field shows
- *  13. Service account selected → SA fields show
- *  14. Switching method clears the deselected group's state value
+ *  13. Webhook selected → only webhook_url field shows
+ *  14. Service account selected → SA fields show
+ *  15. Switching method clears the deselected group's state value
+ *  16. BLOCKER FIX: submit payload sends '' for deselected sensitive fields
+ *      (not omit/delete — backend deep-merge leaves absent fields untouched)
  *
  *   Human-label errors + a11y (#326 / US-C4):
- *  15. aria-describedby target is rendered in the dialog
- *  16. Test button shows "Test = check without saving" hint
+ *  17. aria-describedby target is rendered in the dialog
+ *  18. Test button shows "Test = check without saving" hint
  *
  *   Helper + link render (#322 / US-C1):
- *  17. helpText renders under field
+ *  19. helpText renders under field
  *  18. helpLink renders as an anchor
  *
  *   Non-whatsapp channels:
@@ -37,8 +43,8 @@
  */
 
 import React from 'react'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
@@ -94,6 +100,7 @@ import {
   fetchChannelConfig,
   getChannelRouting,
   fetchAgents,
+  configureChannel,
 } from '@/lib/api'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { ChannelConfigPanel } from './ChannelConfigPanel'
@@ -247,6 +254,125 @@ describe('ChannelConfigPanel — WhatsApp QR 5-state machine (#325 / US-C3)', ()
   })
 })
 
+describe('ChannelConfigPanel — WhatsApp Retry bounded timeout (MAJOR fix)', () => {
+  // The whatsapp_pairing_subscribe toggle only controls forwarding interest — it
+  // does NOT make whatsmeow mint a new QR. For `error` state the QR loop is
+  // terminal; for `timeout` a new QR may arrive automatically. If no `code` frame
+  // arrives within 30s (RETRY_TIMEOUT_MS), the UI must revert to the fallback
+  // state with the Retry affordance rather than spinning forever.
+  //
+  // Implementation: handleRetry clears the store and sets retryFallbackState.
+  // After RETRY_TIMEOUT_MS it calls useWhatsAppPairingStore.getState().apply(frame).
+  // We wire a mock getState+apply here so the timer callback can update the mock
+  // store state, which causes the component to re-render into the fallback state.
+
+  // Shared mock state for the retry tests — mutable so the timer can push new frames.
+  let pairingByChannel: Record<string, { status: string; qr: string; message: string }> = {}
+  const clearFn = vi.fn((id: string) => { delete pairingByChannel[id] })
+  const applyFn = vi.fn((frame: { channel_id: string; status: string; qr?: string; message?: string }) => {
+    pairingByChannel[frame.channel_id] = {
+      status: frame.status,
+      qr: frame.qr ?? '',
+      message: frame.message ?? '',
+    }
+    // Re-apply the updated mock implementation so the hook returns the new state.
+    vi.mocked(useWhatsAppPairingStore).mockImplementation(
+      ((selector: (s: unknown) => unknown) =>
+        selector({ byChannel: pairingByChannel, clear: clearFn, apply: applyFn })) as never,
+    )
+  })
+
+  beforeEach(() => {
+    // Only fake setTimeout/clearTimeout — leave setInterval real so @testing-library/dom's
+    // waitFor polling (which uses setInterval internally) is not intercepted and doesn't deadlock.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    vi.clearAllMocks()
+    pairingByChannel = {}
+    mockUiStore()
+    vi.mocked(fetchChannelConfig).mockResolvedValue({})
+    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchAgents).mockResolvedValue([])
+    // Wire getState so the timer callback's apply() call works.
+    const mockStore = vi.mocked(useWhatsAppPairingStore)
+    ;(mockStore as unknown as { getState: () => unknown }).getState = () => ({
+      byChannel: pairingByChannel,
+      clear: clearFn,
+      apply: applyFn,
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('Retry on timeout → spinner immediately; after 30s without code frame reverts to timeout + Retry', async () => {
+    // Use real timers for initial render + interaction, then fake for the timer advance.
+    vi.useRealTimers()
+
+    // Seed timeout state.
+    pairingByChannel['whatsapp_native'] = { status: 'timeout', qr: '', message: 'expired' }
+    vi.mocked(useWhatsAppPairingStore).mockImplementation(
+      ((selector: (s: unknown) => unknown) =>
+        selector({ byChannel: pairingByChannel, clear: clearFn, apply: applyFn })) as never,
+    )
+
+    renderPanel('whatsapp', 'WhatsApp')
+    await waitFor(() => {
+      expect(screen.getByText(/QR expired/i)).toBeInTheDocument()
+    })
+
+    // Switch to fake timers just before clicking Retry so the 30s setTimeout is captured.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+    // Click Retry — clears the store, sets retryFallbackState → spinner shown.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('whatsapp-retry'))
+    })
+    expect(screen.getByText(/Generating your QR code/i)).toBeInTheDocument()
+    expect(screen.queryByTestId('whatsapp-retry')).not.toBeInTheDocument()
+
+    // Advance past RETRY_TIMEOUT_MS. The timer fires: apply() injects timeout frame,
+    // setRetryFallbackState(null) triggers re-render.
+    await act(async () => {
+      vi.advanceTimersByTime(31_000)
+    })
+
+    // The UI must revert to timeout + Retry — not an endless spinner.
+    expect(screen.getByText(/QR expired/i)).toBeInTheDocument()
+    expect(screen.getByTestId('whatsapp-retry')).toBeInTheDocument()
+    expect(screen.queryByText(/Generating your QR code/i)).not.toBeInTheDocument()
+  })
+
+  it('Retry on error → spinner immediately; after 30s reverts to error + Retry', async () => {
+    vi.useRealTimers()
+
+    pairingByChannel['whatsapp_native'] = { status: 'error', qr: '', message: 'auth failed' }
+    vi.mocked(useWhatsAppPairingStore).mockImplementation(
+      ((selector: (s: unknown) => unknown) =>
+        selector({ byChannel: pairingByChannel, clear: clearFn, apply: applyFn })) as never,
+    )
+
+    renderPanel('whatsapp', 'WhatsApp')
+    await waitFor(() => {
+      expect(screen.getByText(/Pairing failed/i)).toBeInTheDocument()
+    })
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('whatsapp-retry'))
+    })
+    expect(screen.getByText(/Generating your QR code/i)).toBeInTheDocument()
+
+    await act(async () => {
+      vi.advanceTimersByTime(31_000)
+    })
+
+    expect(screen.getByText(/Pairing failed/i)).toBeInTheDocument()
+    expect(screen.getByTestId('whatsapp-retry')).toBeInTheDocument()
+  })
+})
+
 describe('ChannelConfigPanel — WhatsApp is always native (#283)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -375,6 +501,56 @@ describe('ChannelConfigPanel — Google Chat authGroup picker (#324 / US-C2)', (
     expect(webhookInput).not.toBeNull()
     // The value must be empty — cleared when switching away, not resurrected on switch-back
     expect(webhookInput!.value).toBe('')
+  })
+
+  it('BLOCKER FIX: submit payload sends \'\' for deselected SA sensitive field (not omit)', async () => {
+    // Verify that buildSubmitPayload sends explicit '' for deselected group fields.
+    // The backend configureChannel is a deep-merge: an absent field is left untouched,
+    // so deleting (omitting) deselected fields would leave the previously-stored
+    // service_account_json_ref alive in config.json + the credential store.
+    // Sending '' triggers the backend's clear path (rest.go ~4532-4537).
+    vi.mocked(configureChannel).mockResolvedValue(undefined)
+
+    const client = makeQueryClient()
+    // Seed with a service_account_json already set (simulates a switch from SA → Webhook)
+    client.setQueryData(['channel-config', 'google-chat'], {
+      service_account_json: '[configured]',
+    })
+    client.setQueryData(['channel-routing', 'google-chat'], { default_agent_id: undefined })
+    client.setQueryData(['agents'], [])
+
+    render(
+      <QueryClientProvider client={client}>
+        <ChannelConfigPanel channelId="google-chat" channelName="Google Chat" open={true} onOpenChange={vi.fn()} />
+      </QueryClientProvider>,
+    )
+
+    // The component should detect SA is pre-set and select service_account.
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /Service account/i })).toBeChecked()
+    })
+
+    // Switch to Webhook — this should prepare to clear the SA fields.
+    fireEvent.click(screen.getByRole('radio', { name: /Webhook URL/i }))
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: /Webhook URL/i })).toBeChecked()
+    })
+
+    // Click Save to trigger configureChannel.
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }))
+
+    await waitFor(() => {
+      expect(vi.mocked(configureChannel)).toHaveBeenCalled()
+    })
+
+    const [, payload] = vi.mocked(configureChannel).mock.calls[0] as [string, Record<string, unknown>]
+    // The payload MUST include service_account_json: '' (not deleted/absent).
+    // This presence-with-empty-string is what triggers the backend's credential clear path.
+    expect(Object.prototype.hasOwnProperty.call(payload, 'service_account_json')).toBe(true)
+    expect(payload['service_account_json']).toBe('')
+    // service_account_file must also be cleared.
+    expect(Object.prototype.hasOwnProperty.call(payload, 'service_account_file')).toBe(true)
+    expect(payload['service_account_file']).toBe('')
   })
 })
 

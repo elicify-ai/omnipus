@@ -51,6 +51,8 @@ interface ChannelConfigPanelProps {
 
 // #326: Map raw snake_case API field keys to human-readable labels using the
 // channel descriptor. E.g. "bot_token" → "Bot Token".
+// Dev-mode: emits console.warn for any snake_case token that looks like a field
+// name but has no mapping — surfacing descriptor/backend drift early.
 function mapErrorsToHumanLabels(
   fields: ChannelField[],
   raw: string,
@@ -67,10 +69,30 @@ function mapErrorsToHumanLabels(
     }
   }
 
-  // Replace every snake_case token that matches a known field key.
-  return raw.replace(/\b([a-z][a-z0-9_]*)\b/g, (match) => {
-    return labelMap[match] ?? match
+  const unmapped: string[] = []
+
+  // Replace every snake_case token that matches a known field key; collect
+  // candidates that look like field identifiers but have no mapping for
+  // observability (dev-mode only, never in production log spam).
+  const result = raw.replace(/\b([a-z][a-z0-9_]*)\b/g, (match) => {
+    if (labelMap[match]) return labelMap[match]
+    // Only flag tokens that look like field names (contain underscore or are
+    // long enough to plausibly be an api key), not common English words.
+    if (match.includes('_') || match.length > 12) {
+      unmapped.push(match)
+    }
+    return match
   })
+
+  if (import.meta.env.DEV && unmapped.length > 0) {
+    console.warn(
+      '[ChannelConfigPanel] mapErrorsToHumanLabels: unmapped snake_case tokens in error message — add to channel descriptor or check for backend/descriptor drift:',
+      unmapped,
+      '| raw message:', raw,
+    )
+  }
+
+  return result
 }
 
 function PasswordField({
@@ -226,6 +248,15 @@ function WhatsAppPairingBody({
   }
 }
 
+// RETRY_TIMEOUT_MS is the bounded window after a user presses Retry during which
+// we wait for a fresh `code` frame from the backend. The subscribe toggle only
+// controls forwarding interest — it does NOT make whatsmeow mint a new QR.
+// For a `timeout` state whatsmeow may emit a new code automatically; for `error`
+// the QR loop is terminal and no new code will arrive. If no `code` frame arrives
+// within this window, we revert to the original fallback state with the Retry
+// affordance so the user is never stranded in an endless spinner.
+const RETRY_TIMEOUT_MS = 30_000
+
 // WhatsAppNativeNotice renders the live linked-device pairing QR + status in the
 // browser (#283 / US-C3), fed by the whatsapp_pairing WS frame. The native channel
 // emits under channel_id "whatsapp_native". Replaces the old "check the gateway
@@ -234,6 +265,23 @@ function WhatsAppNativeNotice() {
   const pairing = useWhatsAppPairingStore((s) => s.byChannel['whatsapp_native'])
   const clear = useWhatsAppPairingStore((s) => s.clear)
   const isConnected = useConnectionStore((s) => s.isConnected)
+
+  // retryFallbackState holds the status to revert to if the bounded retry timer
+  // fires without a fresh `code` frame arriving. null = not in retry mode.
+  const [retryFallbackState, setRetryFallbackState] = useState<'timeout' | 'error' | null>(null)
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // When a `code` frame arrives while we're in retry mode, cancel the fallback
+  // timer and exit retry mode. This is the success path.
+  useEffect(() => {
+    if (pairing?.status === 'code' && retryFallbackState !== null) {
+      if (retryTimerRef.current !== null) {
+        clearTimeout(retryTimerRef.current)
+        retryTimerRef.current = null
+      }
+      setRetryFallbackState(null)
+    }
+  }, [pairing?.status, retryFallbackState])
 
   // #283 (Option B): tell the gateway this connection is viewing WhatsApp
   // pairing so the QR is delivered only here, not broadcast to every admin tab.
@@ -248,10 +296,15 @@ function WhatsAppNativeNotice() {
     })
   }, [isConnected])
 
-  // On unmount (panel closed): unsubscribe and drop the QR/pairing secret from
-  // the store so it doesn't linger in memory past the pairing flow (#283).
+  // On unmount (panel closed): cancel any pending retry timer, unsubscribe and
+  // drop the QR/pairing secret from the store so it doesn't linger in memory
+  // past the pairing flow (#283).
   useEffect(
     () => () => {
+      if (retryTimerRef.current !== null) {
+        clearTimeout(retryTimerRef.current)
+        retryTimerRef.current = null
+      }
       useConnectionStore.getState().connection?.send({
         type: 'whatsapp_pairing_subscribe',
         channel_id: 'whatsapp_native',
@@ -263,8 +316,14 @@ function WhatsAppNativeNotice() {
   )
 
   function handleRetry() {
-    // Clear the stale state and re-subscribe to trigger a fresh QR from the backend.
+    const fallback = pairing?.status === 'error' ? 'error' : 'timeout'
+
+    // Clear the stale pairing state so we show the spinner immediately.
     clear('whatsapp_native')
+
+    // Toggle subscribe interest: false then true restores forwarding to this
+    // connection. Note: this does NOT make whatsmeow mint a new QR — it only
+    // re-enables delivery of any QR frames the backend emits on its own schedule.
     useConnectionStore.getState().connection?.send({
       type: 'whatsapp_pairing_subscribe',
       channel_id: 'whatsapp_native',
@@ -275,12 +334,43 @@ function WhatsAppNativeNotice() {
       channel_id: 'whatsapp_native',
       active: true,
     })
+
+    // Enter retry mode: record the fallback state so WhatsAppPairingBody still
+    // renders the spinner (retryFallbackState != null → pairing is undefined in
+    // the store after clear()).
+    setRetryFallbackState(fallback)
+
+    // Bounded timeout: if no `code` frame arrives within RETRY_TIMEOUT_MS, revert
+    // to the original state with the Retry affordance (no endless spinner).
+    if (retryTimerRef.current !== null) {
+      clearTimeout(retryTimerRef.current)
+    }
+    retryTimerRef.current = setTimeout(() => {
+      retryTimerRef.current = null
+      // Re-inject the fallback into the store BEFORE clearing retryFallbackState so
+      // the store holds the correct state when the re-render fires (effectivePairing
+      // switches from undefined to the store value in the same synchronous batch).
+      useWhatsAppPairingStore.getState().apply({
+        type: 'whatsapp_pairing',
+        channel_id: 'whatsapp_native',
+        status: fallback,
+        message: fallback === 'timeout'
+          ? 'the QR code expired before it was scanned'
+          : 'enable multi-device in WhatsApp, then scan the code again',
+      })
+      setRetryFallbackState(null)
+    }, RETRY_TIMEOUT_MS)
   }
+
+  // While in retry mode (retryFallbackState is set), the store has been cleared,
+  // so `pairing` is undefined. We show the spinner by passing undefined as pairing
+  // (the WhatsAppPairingBody default), not the stale pre-clear value.
+  const effectivePairing = retryFallbackState !== null ? undefined : pairing
 
   return (
     <div className="space-y-2 mt-1">
       <div className="flex flex-col items-center gap-3 p-4 rounded-lg bg-[var(--color-surface-1)] border border-[var(--color-border)]">
-        <WhatsAppPairingBody pairing={pairing} onRetry={handleRetry} />
+        <WhatsAppPairingBody pairing={effectivePairing} onRetry={handleRetry} />
       </div>
       <div className="flex gap-2 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-error)]/30">
         <Warning size={14} className="text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" />
@@ -579,22 +669,33 @@ export function ChannelConfigPanel({
     setGChatAuthMethod(method)
   }
 
-  // #324 — build the payload, omitting fields from the deselected authGroup.
+  // #324 — build the payload, explicitly clearing deselected authGroup fields.
+  //
+  // SECURITY: must NOT omit/delete deselected fields — the backend configureChannel
+  // is a deep-merge (pkg/gateway/rest.go ~4549-4561). An absent field is left
+  // untouched, so a previously-stored service_account_json_ref would survive in
+  // config.json + the credential store after switching to Webhook. Instead, we
+  // send an explicit '' for each deselected field so the backend's clear path
+  // (rest.go ~4532-4537) fires: presence with empty string → clear the _ref and
+  // delete the stored credential.
   function buildSubmitPayload(): Record<string, unknown> {
     if (!isGoogleChat) return formValues
 
     const payload = { ...formValues }
     const deselectedGroup = gChatAuthMethod === 'webhook' ? 'service_account' : 'webhook'
-    const fieldsToOmit = fields.filter((f) => f.authGroup === deselectedGroup)
-    for (const f of fieldsToOmit) {
+    const fieldsToClear = fields.filter((f) => f.authGroup === deselectedGroup)
+    for (const f of fieldsToClear) {
+      // Send '' (not delete) so the backend detects the clear and revokes any
+      // stored credential for this field. Dotted keys do not appear in GChat
+      // descriptors but handle them defensively for future-proofing.
       if (f.key.includes('.')) {
         const [parent, child] = f.key.split('.')
-        const parentObj = (payload[parent] as Record<string, unknown> | undefined) ?? {}
-        const { [child]: _removed, ...rest } = parentObj
-        void _removed
-        payload[parent] = rest
+        payload[parent] = {
+          ...((payload[parent] as Record<string, unknown>) ?? {}),
+          [child]: '',
+        }
       } else {
-        delete payload[f.key]
+        payload[f.key] = ''
       }
     }
     return payload
