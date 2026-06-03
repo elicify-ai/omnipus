@@ -163,14 +163,18 @@ function WhatsAppPairingBody({
   pairing?: WhatsAppPairingState
   onRetry?: () => void
 }) {
+  // Shared spinner — used for both the explicit 'waiting' state and any
+  // unexpected/unknown status that falls through the switch below.
+  const generatingSpinner = (
+    <div className="flex items-center gap-2 text-[var(--color-muted)]">
+      <Spinner size={14} className="animate-spin" />
+      <p className="text-xs">Generating your QR code&hellip;</p>
+    </div>
+  )
+
   // waiting: no frame yet, or explicit waiting state — show spinner
   if (!pairing || pairing.status === 'waiting') {
-    return (
-      <div className="flex items-center gap-2 text-[var(--color-muted)]">
-        <Spinner size={14} className="animate-spin" />
-        <p className="text-xs">Generating your QR code&hellip;</p>
-      </div>
-    )
+    return generatingSpinner
   }
 
   // code: QR delivered — show scannable QR + exact Linked Devices steps
@@ -240,12 +244,7 @@ function WhatsAppPairingBody({
       )
     default:
       // Fallback for any unexpected status — show spinner
-      return (
-        <div className="flex items-center gap-2 text-[var(--color-muted)]">
-          <Spinner size={14} className="animate-spin" />
-          <p className="text-xs">Generating your QR code&hellip;</p>
-        </div>
-      )
+      return generatingSpinner
   }
 }
 
@@ -382,6 +381,50 @@ function WhatsAppNativeNotice() {
       </div>
     </div>
   )
+}
+
+// ── Dotted-key helpers ────────────────────────────────────────────────────────
+//
+// Both functions support exactly one level of nesting (a.b), which is the
+// only depth used in the channel descriptor today.  Deep nesting (a.b.c)
+// would require a recursive implementation — extend when needed.
+
+/**
+ * Return a shallow-merged copy of `obj` with `dottedKey` set to `value`.
+ * "group_trigger.mention_only" → obj["group_trigger"]["mention_only"] = value.
+ * Flat keys are set directly.
+ */
+function setNested(
+  obj: Record<string, unknown>,
+  dottedKey: string,
+  value: unknown,
+): Record<string, unknown> {
+  if (!dottedKey.includes('.')) {
+    return { ...obj, [dottedKey]: value }
+  }
+  const dot = dottedKey.indexOf('.')
+  const parent = dottedKey.slice(0, dot)
+  const child = dottedKey.slice(dot + 1)
+  return {
+    ...obj,
+    [parent]: {
+      ...((obj[parent] as Record<string, unknown>) ?? {}),
+      [child]: value,
+    },
+  }
+}
+
+/**
+ * Read `dottedKey` from `obj`.
+ * "group_trigger.mention_only" → (obj["group_trigger"] ?? {})["mention_only"].
+ * Flat keys are read directly.
+ */
+function getNested(obj: Record<string, unknown>, dottedKey: string): unknown {
+  if (!dottedKey.includes('.')) return obj[dottedKey]
+  const dot = dottedKey.indexOf('.')
+  const parent = dottedKey.slice(0, dot)
+  const child = dottedKey.slice(dot + 1)
+  return (obj[parent] as Record<string, unknown> | undefined)?.[child]
 }
 
 // Google Chat auth method groups for the pick-one radio (#324 / US-C2).
@@ -620,27 +663,11 @@ export function ChannelConfigPanel({
   function setValue(key: string, value: unknown) {
     markDirty()
     // Support nested keys like "group_trigger.mention_only"
-    if (key.includes('.')) {
-      const [parent, child] = key.split('.')
-      setFormValues((prev) => ({
-        ...prev,
-        [parent]: {
-          ...((prev[parent] as Record<string, unknown>) ?? {}),
-          [child]: value,
-        },
-      }))
-    } else {
-      setFormValues((prev) => ({ ...prev, [key]: value }))
-    }
+    setFormValues((prev) => setNested(prev, key, value))
   }
 
   function getValue(key: string): unknown {
-    if (key.includes('.')) {
-      const [parent, child] = key.split('.')
-      const parentObj = formValues[parent] as Record<string, unknown> | undefined
-      return parentObj?.[child]
-    }
-    return formValues[key]
+    return getNested(formValues, key)
   }
 
   // #324 — on method switch: clear the deselected group's field values so a
@@ -653,17 +680,9 @@ export function ChannelConfigPanel({
     const fieldsToClear = fields.filter((f) => f.authGroup === clearGroup)
 
     setFormValues((prev) => {
-      const next = { ...prev }
+      let next = { ...prev }
       for (const f of fieldsToClear) {
-        if (f.key.includes('.')) {
-          const [parent, child] = f.key.split('.')
-          next[parent] = {
-            ...((next[parent] as Record<string, unknown>) ?? {}),
-            [child]: '',
-          }
-        } else {
-          next[f.key] = ''
-        }
+        next = setNested(next, f.key, '')
       }
       return next
     })
@@ -682,22 +701,14 @@ export function ChannelConfigPanel({
   function buildSubmitPayload(): Record<string, unknown> {
     if (!isGoogleChat) return formValues
 
-    const payload = { ...formValues }
+    let payload = { ...formValues }
     const deselectedGroup = gChatAuthMethod === 'webhook' ? 'service_account' : 'webhook'
     const fieldsToClear = fields.filter((f) => f.authGroup === deselectedGroup)
+    // Send '' (not delete) so the backend detects the clear and revokes any
+    // stored credential for this field. Dotted keys do not appear in GChat
+    // descriptors but handle them defensively for future-proofing.
     for (const f of fieldsToClear) {
-      // Send '' (not delete) so the backend detects the clear and revokes any
-      // stored credential for this field. Dotted keys do not appear in GChat
-      // descriptors but handle them defensively for future-proofing.
-      if (f.key.includes('.')) {
-        const [parent, child] = f.key.split('.')
-        payload[parent] = {
-          ...((payload[parent] as Record<string, unknown>) ?? {}),
-          [child]: '',
-        }
-      } else {
-        payload[f.key] = ''
-      }
+      payload = setNested(payload, f.key, '')
     }
     return payload
   }

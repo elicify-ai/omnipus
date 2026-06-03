@@ -3,8 +3,11 @@
  *
  * Replaces the raw transport dropdown with a two-mode picker:
  *   - "Local program" (stdio): requires Command; Args, Env, Command under
- *     AdvancedDisclosure. Safety gate via RiskySettingControl pattern:
- *     selecting local-program shows an AlertDialog + a standing badge.
+ *     AdvancedDisclosure. Follows the RiskySettingControl *pattern*
+ *     (AlertDialog confirmation + standing badge) but hand-rolls it inline
+ *     rather than reusing the shared component — the two-button mode picker
+ *     needs a custom layout that the shared component's single-slot API
+ *     cannot express without coupling.
  *   - "Network address" (sse/http): requires a URL; rejects non-https on
  *     non-loopback hosts; shows an inline SSRF caution for RFC1918/link-local
  *     literal addresses (heuristic — the real guard is backend F-G07).
