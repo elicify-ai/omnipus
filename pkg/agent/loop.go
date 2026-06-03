@@ -2218,6 +2218,15 @@ func (al *AgentLoop) getChannelManager() *channels.Manager {
 	return cm
 }
 
+// GetChannelManager returns the current channel manager (may be nil before
+// services start). Exported for the gateway's scheduled runner, which needs to
+// validate a deliver=true target channel is registered before publishing (M2).
+// It is set after construction via SetChannelManager, so callers must tolerate
+// nil and re-fetch at use time.
+func (al *AgentLoop) GetChannelManager() *channels.Manager {
+	return al.getChannelManager()
+}
+
 // ReloadProviderAndConfig atomically swaps the provider and config with proper synchronization.
 // It uses a context to allow timeout control from the caller.
 // Returns an error if the reload fails or context is canceled.

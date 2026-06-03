@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -354,6 +355,143 @@ func TestRunner_Failure_NoRecipients_FallsBackToAdmin(t *testing.T) {
 
 	rootList, _ := notifs.ListForUser("root")
 	assert.Len(t, rootList, 1, "admin should be notified when no other recipient resolves")
+}
+
+// TestRunner_Failure_AdminBroadcast_PersistsPerAdmin asserts M4: with multiple
+// admins and no createdBy/owner-user, each admin gets their OWN persisted
+// notification (readable after restart), not a single _admin_.json sentinel row.
+func TestRunner_Failure_AdminBroadcast_PersistsPerAdmin(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.List = []config.AgentConfig{{ID: "mia", Type: config.AgentTypeCustom}} // no owner-user
+	cfg.Gateway.Users = []config.UserConfig{
+		{Username: "root", Role: config.UserRoleAdmin},
+		{Username: "ops", Role: config.UserRoleAdmin},
+		{Username: "viewer", Role: config.UserRoleUser}, // non-admin: must NOT be notified
+	}
+	r, exec, mb, notifs := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
+	exec.err = fmt.Errorf("boom")
+	go func() {
+		for range mb.OutboundChan() {
+		}
+	}()
+
+	job := &cron.CronJob{ID: "j9", AgentID: "mia", Payload: cron.CronPayload{Message: "x"}} // no created_by
+	_, _ = r.RunScheduled(context.Background(), job)
+
+	rootList, _ := notifs.ListForUser("root")
+	assert.Len(t, rootList, 1, "admin root must have a persisted notification")
+	opsList, _ := notifs.ListForUser("ops")
+	assert.Len(t, opsList, 1, "admin ops must have a persisted notification")
+	viewerList, _ := notifs.ListForUser("viewer")
+	assert.Empty(t, viewerList, "non-admin must not be notified")
+
+	// No sentinel file persisted: ListForUser of the sentinel returns empty.
+	sentinelList, _ := notifs.ListForUser(agent.NotificationAdminBroadcast)
+	assert.Empty(t, sentinelList, "the admin-broadcast sentinel must not be persisted")
+}
+
+// TestRunner_Failure_PushesEvenWhenCreateFails asserts H3: when notification
+// persistence fails, the live WS push still fires for each recipient (so
+// connected users see the alert) instead of being silently dropped.
+func TestRunner_Failure_PushesEvenWhenCreateFails(t *testing.T) {
+	cfg := baseConfig()
+	store, err := session.NewUnifiedStore(t.TempDir())
+	require.NoError(t, err)
+	exec := &fakeExecutor{store: store, cfg: cfg, err: fmt.Errorf("boom")}
+	mb := bus.NewMessageBus()
+	go func() {
+		for range mb.OutboundChan() {
+		}
+	}()
+
+	// Root the notifications store at a path that is a FILE, so saveLocked's
+	// MkdirAll fails and Create errors deterministically.
+	badPath := filepath.Join(t.TempDir(), "not-a-dir")
+	require.NoError(t, os.WriteFile(badPath, []byte("x"), 0o600))
+	notifs := notifications.NewStore(badPath)
+
+	r := newScheduledRunner(exec, fakeChecker{registered: map[string]bool{"mia": true}}, mb, notifs, exec.GetConfig)
+
+	job := &cron.CronJob{
+		ID: "jcf", Name: "report", AgentID: "mia", CreatedBy: "bob",
+		SessionMode: cron.SessionModeIsolated, Payload: cron.CronPayload{Message: "do it"},
+	}
+	_, runErr := r.RunScheduled(context.Background(), job)
+	require.Error(t, runErr)
+
+	// Persistence failed (Create errored), but the live push fired for both
+	// recipients (creator "bob" + owner-user "alice").
+	require.GreaterOrEqual(t, len(exec.emitted), 2, "live push must fire even when persistence fails")
+	recipients := map[string]bool{}
+	for _, p := range exec.emitted {
+		recipients[p.Recipient] = true
+	}
+	assert.True(t, recipients["bob"], "creator must get a live push")
+	assert.True(t, recipients["alice"], "owner-user must get a live push")
+}
+
+// fakeChannelChecker stands in for the channel registry in M2 tests.
+type fakeChannelChecker struct{ registered map[string]bool }
+
+func (c fakeChannelChecker) ChannelRegistered(name string) bool { return c.registered[name] }
+
+// TestRunner_DeliverTrue_UnregisteredChannel_Fails asserts M2: a deliver=true
+// run whose target channel is not registered/active is recorded as a failure
+// (and never publishes), instead of a silent success.
+func TestRunner_DeliverTrue_UnregisteredChannel_Fails(t *testing.T) {
+	cfg := baseConfig()
+	r, exec, mb, notifs := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
+	// Channel registry reports "telegram" as NOT registered.
+	r.setChannelChecker(func() channelChecker {
+		return fakeChannelChecker{registered: map[string]bool{}}
+	})
+
+	job := &cron.CronJob{
+		ID: "jdu", Name: "ping", AgentID: "mia", CreatedBy: "alice",
+		Payload: cron.CronPayload{Message: "hi", Deliver: true, Channel: "telegram", To: "c1"},
+	}
+	sid, err := r.RunScheduled(context.Background(), job)
+	require.Error(t, err, "delivery to an unregistered channel must be a failure")
+	assert.Empty(t, sid)
+	assert.Empty(t, exec.calls, "deliver=true must not run an agent turn")
+	assert.Contains(t, err.Error(), "not registered")
+
+	// The bus is buffered, so by the time RunScheduled returns any outbound is
+	// already enqueued. Drain it non-blockingly: the original delivery payload
+	// "hi" must NOT appear (only the failure ALERT may, which onFailure sends to
+	// the owner's default channel).
+	for {
+		select {
+		case m := <-mb.OutboundChan():
+			assert.NotEqual(t, "hi", m.Content, "the original delivery payload must NOT be published to a dead channel")
+			continue
+		default:
+		}
+		break
+	}
+
+	// The failure raised a notification for the creator.
+	aliceList, _ := notifs.ListForUser("alice")
+	assert.Len(t, aliceList, 1, "an unregistered-channel delivery failure must raise a notification")
+}
+
+// TestRunner_DeliverTrue_RegisteredChannel_Succeeds asserts the M2 check passes
+// through when the target channel IS registered.
+func TestRunner_DeliverTrue_RegisteredChannel_Succeeds(t *testing.T) {
+	cfg := baseConfig()
+	r, _, mb, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
+	r.setChannelChecker(func() channelChecker {
+		return fakeChannelChecker{registered: map[string]bool{"telegram": true}}
+	})
+
+	job := &cron.CronJob{
+		ID: "jdr", Name: "ping", AgentID: "mia",
+		Payload: cron.CronPayload{Message: "hi", Deliver: true, Channel: "telegram", To: "c1"},
+	}
+	_, err := r.RunScheduled(context.Background(), job)
+	require.NoError(t, err)
+	m := drainOutbound(t, mb)
+	assert.Equal(t, "telegram", m.Channel)
 }
 
 // TestRunner_Timeout_ForceCancels asserts that a run exceeding its deadline is

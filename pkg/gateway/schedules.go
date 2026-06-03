@@ -34,6 +34,14 @@ type scheduledExecutor interface {
 	EmitNotification(p agent.NotificationPayload)
 }
 
+// channelChecker reports whether a named channel is currently registered/active.
+// Used by the runner to validate a deliver=true target before publishing (M2),
+// so a publish to a channel nobody is subscribed to becomes a recorded failure
+// instead of a silent success. *channels.Manager satisfies this.
+type channelChecker interface {
+	ChannelRegistered(name string) bool
+}
+
 // agentChecker reports whether an agent id is available to run a schedule:
 // registered AND enabled. The registry registers all agents regardless of
 // Enabled, so the gateway's concrete checker additionally consults the agent's
@@ -66,6 +74,12 @@ type scheduledRunner struct {
 	msgBus    *bus.MessageBus
 	notifs    *notifications.Store
 	getConfig func() *config.Config
+
+	// getChannelChecker resolves the live channel registry at run time (the
+	// channel manager is wired after the runner is constructed). nil or a nil
+	// return means "no registry available" → the runner skips the M2 registered
+	// check and falls back to the legacy non-empty-channel validation.
+	getChannelChecker func() channelChecker
 
 	// procCleanup best-effort terminates child/browser processes tracked for a
 	// finished scheduled run's session (FR-011). nil means "no cleanup wired".
@@ -122,6 +136,15 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 			r.onFailure(job, "", err)
 			return "", err
 		}
+		// M2: validate the target channel is actually registered/active before
+		// publishing. PublishOutbound buffers onto the bus and returns nil even
+		// when no channel is subscribed, so without this check a delivery to a
+		// dead channel would be recorded as a silent success.
+		if !r.channelIsActive(channel) {
+			err := fmt.Errorf("deliver=true schedule target channel %q is not registered/active", channel)
+			r.onFailure(job, "", err)
+			return "", err
+		}
 		pubCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := r.msgBus.PublishOutbound(pubCtx, bus.OutboundMessage{
@@ -165,7 +188,11 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 
 	reply, runErr := r.exec.ProcessScheduled(ctx2, owner, sessionID, job.Payload.Message, channel, chatID)
 	close(runDone)
-	_ = reply // the reply is published to the channel by the agent loop itself.
+	// M6: for deliver=false, ProcessScheduled runs the turn with SendResponse:false,
+	// so the agent's final text reply is NOT auto-published to any channel. If the
+	// agent wants to message a user, it does so via the message tool during its
+	// turn. We intentionally discard the returned reply here.
+	_ = reply
 
 	// FR-011: best-effort clean up any child/browser processes the run spawned.
 	r.cleanupRunProcesses(job, sessionID)
@@ -225,6 +252,26 @@ func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan str
 // (FR-011). Idempotent; a nil fn clears the hook.
 func (r *scheduledRunner) setProcessCleanup(fn func(sessionID string)) {
 	r.procCleanup = fn
+}
+
+// setChannelChecker wires the lazy channel-registry resolver used to validate a
+// deliver=true target before publishing (M2). A nil fn clears it.
+func (r *scheduledRunner) setChannelChecker(fn func() channelChecker) {
+	r.getChannelChecker = fn
+}
+
+// channelIsActive reports whether channel is registered/active per the live
+// channel registry. When no registry is reachable it returns true so the runner
+// degrades to the legacy non-empty check rather than failing every delivery.
+func (r *scheduledRunner) channelIsActive(channel string) bool {
+	if r.getChannelChecker == nil {
+		return true
+	}
+	cc := r.getChannelChecker()
+	if cc == nil {
+		return true
+	}
+	return cc.ChannelRegistered(channel)
 }
 
 // scheduledProcRegistry is a minimal per-session child-process registry for
@@ -404,17 +451,24 @@ func (r *scheduledRunner) onFailure(job *cron.CronJob, sessionID string, runErr 
 			SessionID:  sessionID,
 			AgentID:    job.AgentID,
 		}
-		var stored notifications.Notification
-		var err error
-		if r.notifs != nil {
-			stored, err = r.notifs.Create(n)
+		stored := n
+		// M4: the admin-broadcast sentinel is NOT a real username — persisting it
+		// writes _admin_.json which no ListForUser(username) ever reads. Only
+		// resolved usernames are persisted; the sentinel is a live-push-only
+		// broadcast (used when there are no users at all to enumerate).
+		if r.notifs != nil && recipient != agent.NotificationAdminBroadcast {
+			persisted, err := r.notifs.Create(n)
 			if err != nil {
-				logger.WarnCF("gateway", "failed to persist schedule-failure notification",
+				// H3: persistence failed, but the recipient must STILL see the alert
+				// live. Dropping the push too would lose the failure alert entirely —
+				// operator-visible data loss, so log at Error (not Warn) and fall
+				// through to push the in-memory notification. The bell will be stale
+				// after a restart, but the live WS push still fires now.
+				logger.ErrorCF("gateway", "failed to persist schedule-failure notification; pushing live anyway",
 					map[string]any{"schedule_id": job.ID, "recipient": recipient, "error": err.Error()})
-				continue
+			} else {
+				stored = persisted
 			}
-		} else {
-			stored = n
 		}
 		// Live push to the recipient's connections (filtered by userID in the WS
 		// forwarder). The admin-broadcast recipient maps to the sentinel.
@@ -449,8 +503,10 @@ func (r *scheduledRunner) pushNotification(n notifications.Notification, recipie
 
 // resolveRecipients returns the deduped set of usernames to notify (W-7): the
 // schedule's CreatedBy user and the owning agent's OwnerUsername. If neither is
-// resolvable, returns the admin-broadcast sentinel as the sole recipient so the
-// notification still reaches admins.
+// resolvable, it falls back to every admin USERNAME so each admin gets a
+// persisted, per-user notification they can read after a restart (M4). Only if
+// there are no users at all does it return the admin-broadcast sentinel, which
+// is a live-push-only target (never persisted; see onFailure).
 func (r *scheduledRunner) resolveRecipients(job *cron.CronJob, cfg *config.Config) []string {
 	seen := map[string]bool{}
 	var out []string
@@ -657,7 +713,7 @@ func (a *restAPI) HandleSchedules(w http.ResponseWriter, r *http.Request) {
 	case rest == "": // collection
 		switch r.Method {
 		case http.MethodGet:
-			a.handleListSchedules(w, r)
+			a.handleListSchedules(w, user)
 		case http.MethodPost:
 			a.handleCreateSchedule(w, r, user)
 		default:
@@ -669,11 +725,11 @@ func (a *restAPI) HandleSchedules(w http.ResponseWriter, r *http.Request) {
 		if len(parts) == 1 {
 			switch r.Method {
 			case http.MethodGet:
-				a.handleGetSchedule(w, id)
+				a.handleGetSchedule(w, user, id)
 			case http.MethodPut:
 				a.handleUpdateSchedule(w, r, user, id)
 			case http.MethodDelete:
-				a.handleDeleteSchedule(w, id)
+				a.handleDeleteSchedule(w, user, id)
 			default:
 				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			}
@@ -682,10 +738,10 @@ func (a *restAPI) HandleSchedules(w http.ResponseWriter, r *http.Request) {
 		if len(parts) == 2 && r.Method == http.MethodPost {
 			switch parts[1] {
 			case "run":
-				a.handleRunSchedule(w, id)
+				a.handleRunSchedule(w, user, id)
 				return
 			case "pause":
-				a.handlePauseSchedule(w, id)
+				a.handlePauseSchedule(w, user, id)
 				return
 			}
 		}
@@ -693,14 +749,20 @@ func (a *restAPI) HandleSchedules(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *restAPI) handleListSchedules(w http.ResponseWriter, _ *http.Request) {
+func (a *restAPI) handleListSchedules(w http.ResponseWriter, user *config.UserConfig) {
 	jobs := a.cronService.ListJobs(true)
 	// Build a slice of the generated Schedule type, then round-trip the whole
 	// list into gen.ScheduleList. The ScheduleList element is structurally
 	// identical to gen.Schedule, so the JSON marshal/unmarshal maps cleanly
 	// without any hand-written wire-format struct (hard-constraint #8).
+	//
+	// B3: a non-admin only sees schedules whose owning agent they may access;
+	// admins see all.
 	items := make([]gen.Schedule, 0, len(jobs))
 	for _, job := range jobs {
+		if code, _ := a.authorizeScheduleAccess(user, job); code != 0 {
+			continue
+		}
 		items = append(items, toSchedule(job))
 	}
 	buf, err := json.Marshal(map[string][]gen.Schedule{"schedules": items})
@@ -716,10 +778,14 @@ func (a *restAPI) handleListSchedules(w http.ResponseWriter, _ *http.Request) {
 	jsonOK(w, out)
 }
 
-func (a *restAPI) handleGetSchedule(w http.ResponseWriter, id string) {
+func (a *restAPI) handleGetSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
 	job, ok := a.cronService.GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
+		return
+	}
+	if code, msg := a.authorizeScheduleAccess(user, job); code != 0 {
+		jsonErr(w, code, msg)
 		return
 	}
 	jsonOK(w, toSchedule(job))
@@ -756,27 +822,35 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 
-	deliver := derefBool(req.Deliver, false)
-	job, err := a.cronService.AddJob(req.Name, schedule, req.Message, deliver,
-		derefStr(req.Channel), derefStr(req.ChatId))
-	if err != nil {
-		jsonErr(w, http.StatusInternalServerError, "failed to create schedule")
-		return
+	// Resolve the session mode (M5b: reject an unknown value up front).
+	sessionMode := cron.SessionModeIsolated
+	if req.SessionMode != nil {
+		sessionMode = cron.SessionMode(*req.SessionMode)
+		if !sessionMode.Valid() {
+			jsonErr(w, http.StatusBadRequest, "session_mode must be one of isolated|continue|main")
+			return
+		}
 	}
 
-	// Fill the #264 fields that AddJob doesn't take, then persist.
-	job.AgentID = req.OwnerAgentId
-	job.CreatedBy = user.Username
-	job.TimeoutSeconds = timeout
-	job.SessionMode = cron.SessionModeIsolated
-	if req.SessionMode != nil {
-		job.SessionMode = cron.SessionMode(*req.SessionMode)
-	}
-	if req.Enabled != nil {
-		job.Enabled = *req.Enabled
-	}
-	if err := a.cronService.UpdateJob(job); err != nil {
-		jsonErr(w, http.StatusInternalServerError, "failed to persist schedule")
+	// M3: persist the COMPLETE job (owner, mode, timeout, created-by) in one
+	// atomic write via AddJobFull. The previous AddJob+UpdateJob pair briefly
+	// persisted an owner-less job that could fire and die between the two writes.
+	deliver := derefBool(req.Deliver, false)
+	job, err := a.cronService.AddJobFull(cron.JobSpec{
+		Name:           req.Name,
+		Schedule:       schedule,
+		Message:        req.Message,
+		Deliver:        deliver,
+		Channel:        derefStr(req.Channel),
+		To:             derefStr(req.ChatId),
+		AgentID:        req.OwnerAgentId,
+		SessionMode:    sessionMode,
+		TimeoutSeconds: timeout,
+		CreatedBy:      user.Username,
+		Enabled:        req.Enabled,
+	})
+	if err != nil {
+		jsonErr(w, http.StatusInternalServerError, "failed to create schedule")
 		return
 	}
 	jsonCreated(w, toSchedule(*job))
@@ -786,6 +860,12 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 	job, ok := a.cronService.GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
+		return
+	}
+	// B3: gate on the EXISTING job's owner first — a non-owner non-admin may not
+	// mutate someone else's schedule even if they leave the owner unchanged.
+	if code, msg := a.authorizeScheduleAccess(user, job); code != 0 {
+		jsonErr(w, code, msg)
 		return
 	}
 	var req gen.ScheduleUpdate
@@ -818,7 +898,14 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 		job.Payload.To = *req.ChatId
 	}
 	if req.SessionMode != nil {
-		job.SessionMode = cron.SessionMode(*req.SessionMode)
+		// M5b: reject an unknown session mode before persisting it (a bad value
+		// would silently degrade to isolated at run time).
+		mode := cron.SessionMode(*req.SessionMode)
+		if !mode.Valid() {
+			jsonErr(w, http.StatusBadRequest, "session_mode must be one of isolated|continue|main")
+			return
+		}
+		job.SessionMode = mode
 	}
 	if req.TimeoutSeconds != nil {
 		if *req.TimeoutSeconds < 0 {
@@ -849,7 +936,16 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 	jsonOK(w, toSchedule(job))
 }
 
-func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, id string) {
+func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
+	job, ok := a.cronService.GetJob(id)
+	if !ok {
+		jsonErr(w, http.StatusNotFound, "schedule not found")
+		return
+	}
+	if code, msg := a.authorizeScheduleAccess(user, job); code != 0 {
+		jsonErr(w, code, msg)
+		return
+	}
 	if !a.cronService.RemoveJob(id) {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -857,9 +953,14 @@ func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, id string) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *restAPI) handleRunSchedule(w http.ResponseWriter, id string) {
-	if _, ok := a.cronService.GetJob(id); !ok {
+func (a *restAPI) handleRunSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
+	job, ok := a.cronService.GetJob(id)
+	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
+		return
+	}
+	if code, msg := a.authorizeScheduleAccess(user, job); code != 0 {
+		jsonErr(w, code, msg)
 		return
 	}
 	status, sessionID, runErr := a.cronService.RunNow(id)
@@ -881,10 +982,14 @@ func (a *restAPI) handleRunSchedule(w http.ResponseWriter, id string) {
 	jsonOK(w, res)
 }
 
-func (a *restAPI) handlePauseSchedule(w http.ResponseWriter, id string) {
+func (a *restAPI) handlePauseSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
 	job, ok := a.cronService.GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
+		return
+	}
+	if code, msg := a.authorizeScheduleAccess(user, job); code != 0 {
+		jsonErr(w, code, msg)
 		return
 	}
 	updated := a.cronService.EnableJob(id, !job.Enabled)
@@ -905,6 +1010,29 @@ func (a *restAPI) authorizeScheduleOwner(user *config.UserConfig, ownerAgentID s
 	}
 	if err := config.AuthorizeAgentAccess(user, owner); err != nil {
 		return http.StatusForbidden, "not permitted to schedule for this agent"
+	}
+	return 0, ""
+}
+
+// authorizeScheduleAccess gates a single-schedule operation (get/update/delete/
+// run/pause) on the authenticated user (B3). Access is admin-OR-owner of the
+// schedule's OWNING agent: the user may act on a schedule only if they could
+// schedule for its owner agent in the first place. Returns (0,"") on success or
+// an (httpStatus, message) to reject with. An owner agent that no longer exists
+// in config maps to 403 (not 404) so a deleted-agent schedule is not enumerable
+// by a non-admin probing ids. Admins always pass.
+func (a *restAPI) authorizeScheduleAccess(user *config.UserConfig, job cron.CronJob) (int, string) {
+	if user != nil && user.Role == config.UserRoleAdmin {
+		return 0, ""
+	}
+	cfg := a.agentLoop.GetConfig()
+	owner := findAgentConfig(cfg, job.AgentID)
+	if owner == nil {
+		// Non-admin, owner agent unknown: deny without leaking existence.
+		return http.StatusForbidden, "not permitted to access this schedule"
+	}
+	if err := config.AuthorizeAgentAccess(user, owner); err != nil {
+		return http.StatusForbidden, "not permitted to access this schedule"
 	}
 	return 0, ""
 }

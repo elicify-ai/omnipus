@@ -309,3 +309,155 @@ func TestNotificationsAPI_ReadAll(t *testing.T) {
 }
 
 func i64p(v int64) *int64 { return &v }
+
+// seedJob creates a persisted schedule owned by ownerAgent via AddJobFull, so it
+// carries the owner atomically (no empty-owner intermediate window).
+func seedJob(t *testing.T, cs *cron.CronService, ownerAgent, createdBy string) *cron.CronJob {
+	t.Helper()
+	job, err := cs.AddJobFull(cron.JobSpec{
+		Name:      "seeded",
+		Schedule:  cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)},
+		Message:   "m",
+		AgentID:   ownerAgent,
+		CreatedBy: createdBy,
+	})
+	require.NoError(t, err)
+	return job
+}
+
+// TestSchedulesAPI_Authz_PerOperation asserts B3: a non-owner non-admin gets 403
+// on get/update/delete/run/pause for a schedule they do not own; the owner and
+// admins are allowed. "mia" is owned by alice; "bob" is a non-owner non-admin.
+func TestSchedulesAPI_Authz_PerOperation(t *testing.T) {
+	for _, op := range []struct {
+		name   string
+		method string
+		path   string // relative to /api/v1/schedules/{id}
+		body   func(id string) *bytes.Buffer
+	}{
+		{"get", http.MethodGet, "", nil},
+		{"delete", http.MethodDelete, "", nil},
+		{"run", http.MethodPost, "/run", nil},
+		{"pause", http.MethodPost, "/pause", nil},
+		{"update", http.MethodPut, "", func(string) *bytes.Buffer {
+			b, _ := json.Marshal(gen.ScheduleUpdate{})
+			return bytes.NewBuffer(b)
+		}},
+	} {
+		t.Run(op.name, func(t *testing.T) {
+			api, cs := newSchedulesTestAPI(t)
+			job := seedJob(t, cs, "mia", "alice")
+
+			var body *bytes.Buffer = bytes.NewBuffer(nil)
+			if op.body != nil {
+				body = op.body(job.ID)
+			}
+			url := "/api/v1/schedules/" + job.ID + op.path
+
+			// bob (non-owner, non-admin) → 403.
+			r := withUser(httptest.NewRequest(op.method, url, body), "bob", config.UserRoleUser)
+			w := httptest.NewRecorder()
+			api.HandleSchedules(w, r)
+			assert.Equal(
+				t, http.StatusForbidden, w.Code,
+				"%s by non-owner must be 403; body=%s", op.name, w.Body.String(),
+			)
+
+			// alice (owner) → not 403/404.
+			var ab *bytes.Buffer = bytes.NewBuffer(nil)
+			if op.body != nil {
+				ab = op.body(job.ID)
+			}
+			ra := withUser(httptest.NewRequest(op.method, url, ab), "alice", config.UserRoleUser)
+			wa := httptest.NewRecorder()
+			api.HandleSchedules(wa, ra)
+			assert.NotEqual(t, http.StatusForbidden, wa.Code, "%s by owner must not be 403", op.name)
+			assert.NotEqual(t, http.StatusNotFound, wa.Code, "%s by owner must not be 404", op.name)
+		})
+	}
+}
+
+// TestSchedulesAPI_Authz_AdminAllOperations asserts admins pass every gate.
+func TestSchedulesAPI_Authz_AdminAllOperations(t *testing.T) {
+	api, cs := newSchedulesTestAPI(t)
+	job := seedJob(t, cs, "max", "bob") // owned by bob/max; root is admin
+
+	r := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/schedules/"+job.ID, nil), "root", config.UserRoleAdmin)
+	w := httptest.NewRecorder()
+	api.HandleSchedules(w, r)
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+}
+
+// TestSchedulesAPI_List_FilteredByOwner asserts the list is filtered to
+// schedules a non-admin may access; an admin sees all (B3).
+func TestSchedulesAPI_List_FilteredByOwner(t *testing.T) {
+	api, cs := newSchedulesTestAPI(t)
+	_ = seedJob(t, cs, "mia", "alice") // alice's
+	_ = seedJob(t, cs, "max", "bob")   // bob's
+
+	// alice (non-admin) sees only mia's schedule.
+	ra := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/schedules", nil), "alice", config.UserRoleUser)
+	wa := httptest.NewRecorder()
+	api.HandleSchedules(wa, ra)
+	require.Equal(t, http.StatusOK, wa.Code, wa.Body.String())
+	var aliceList gen.ScheduleList
+	require.NoError(t, json.Unmarshal(wa.Body.Bytes(), &aliceList))
+	require.Len(t, aliceList.Schedules, 1)
+	assert.Equal(t, "mia", aliceList.Schedules[0].OwnerAgentId)
+
+	// admin sees both.
+	rad := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/schedules", nil), "root", config.UserRoleAdmin)
+	wad := httptest.NewRecorder()
+	api.HandleSchedules(wad, rad)
+	require.Equal(t, http.StatusOK, wad.Code)
+	var adminList gen.ScheduleList
+	require.NoError(t, json.Unmarshal(wad.Body.Bytes(), &adminList))
+	assert.Len(t, adminList.Schedules, 2)
+}
+
+// TestSchedulesAPI_Create_AtomicOwner asserts the create path persists the owner
+// atomically via AddJobFull — the stored job has the owner set with no
+// empty-owner intermediate (M3).
+func TestSchedulesAPI_Create_AtomicOwner(t *testing.T) {
+	api, cs := newSchedulesTestAPI(t)
+	r := withUser(
+		httptest.NewRequest(http.MethodPost, "/api/v1/schedules", createScheduleReq(t, "mia")),
+		"alice", config.UserRoleUser,
+	)
+	w := httptest.NewRecorder()
+	api.HandleSchedules(w, r)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var got gen.Schedule
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+
+	// Every persisted job in the store must carry a non-empty owner — proving no
+	// owner-less intermediate write ever landed in the store.
+	jobs := cs.ListJobs(true)
+	require.Len(t, jobs, 1)
+	assert.Equal(t, "mia", jobs[0].AgentID, "owner must be set atomically on create")
+	assert.Equal(t, "alice", jobs[0].CreatedBy)
+	assert.Equal(t, got.Id, jobs[0].ID)
+}
+
+// TestSchedulesAPI_Update_InvalidSessionMode400 asserts an invalid session_mode
+// on update is rejected with 400 before persisting (M5b).
+func TestSchedulesAPI_Update_InvalidSessionMode400(t *testing.T) {
+	api, cs := newSchedulesTestAPI(t)
+	job := seedJob(t, cs, "mia", "alice")
+
+	bad := gen.ScheduleUpdateSessionMode("bogus-mode")
+	body, _ := json.Marshal(gen.ScheduleUpdate{SessionMode: &bad})
+	r := withUser(
+		httptest.NewRequest(http.MethodPut, "/api/v1/schedules/"+job.ID, bytes.NewBuffer(body)),
+		"alice", config.UserRoleUser,
+	)
+	w := httptest.NewRecorder()
+	api.HandleSchedules(w, r)
+	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+
+	// Stored mode unchanged.
+	stored, ok := cs.GetJob(job.ID)
+	require.True(t, ok)
+	assert.NotEqual(t, cron.SessionMode("bogus-mode"), stored.SessionMode)
+}

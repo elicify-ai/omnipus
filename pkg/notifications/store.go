@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
 
 // Severity values mirror the Notification.severity contract enum.
@@ -39,6 +40,16 @@ const (
 
 // notificationCap is the per-user retention bound (keep the most recent N).
 const notificationCap = 50
+
+// validSeverity reports whether s is one of the known wire-enum severity values.
+func validSeverity(s string) bool {
+	switch s {
+	case SeverityInfo, SeverityWarning, SeverityError:
+		return true
+	default:
+		return false
+	}
+}
 
 // Notification is the internal record. It carries every wire field plus the
 // Recipient (username) that scopes per-user storage and the live WS push.
@@ -107,7 +118,32 @@ func (s *Store) loadLocked(recipient string) ([]Notification, error) {
 	}
 	var list []Notification
 	if err := json.Unmarshal(data, &list); err != nil {
-		return nil, fmt.Errorf("notifications: corrupt store for %q: %w", recipient, err)
+		// B4 self-heal: a corrupt history file must NEVER permanently swallow all
+		// future alerts. If we returned the error here, Create would abort before
+		// reaching save and the bad file would never be repaired — every failure
+		// alert for this recipient would be lost. Instead, quarantine the bad file
+		// (rename to <recipient>.json.corrupt-<unixnano>) and return an empty list
+		// so the next Create rewrites a clean file. The store already uses the wall
+		// clock elsewhere (CreatedAtMs), so a UnixNano suffix is consistent.
+		path := s.userFile(recipient)
+		quarantine := fmt.Sprintf("%s.corrupt-%d", path, time.Now().UnixNano())
+		if renameErr := os.Rename(path, quarantine); renameErr != nil {
+			logger.ErrorCF("notifications", "corrupt notification store could not be quarantined",
+				map[string]any{
+					"recipient":    recipient,
+					"path":         path,
+					"error":        err.Error(),
+					"rename_error": renameErr.Error(),
+				})
+		} else {
+			logger.ErrorCF("notifications", "corrupt notification store quarantined; starting a fresh history",
+				map[string]any{
+					"recipient":  recipient,
+					"quarantine": quarantine,
+					"error":      err.Error(),
+				})
+		}
+		return nil, nil
 	}
 	return list, nil
 }
@@ -138,7 +174,10 @@ func (s *Store) Create(n Notification) (Notification, error) {
 	if n.CreatedAtMs == 0 {
 		n.CreatedAtMs = now
 	}
-	if n.Severity == "" {
+	// Gate severity to the known wire enum (M5b). An out-of-set value would be
+	// dropped by the SPA's zod guard, silently losing the alert; coerce unknown
+	// values to "error" so the notification still surfaces.
+	if !validSeverity(n.Severity) {
 		n.Severity = SeverityError
 	}
 
