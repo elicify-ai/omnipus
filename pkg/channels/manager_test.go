@@ -14,6 +14,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/credentials"
 )
 
 // mockChannel is a test double that delegates Send to a configurable function.
@@ -2096,5 +2097,77 @@ func TestManager_Reload_ScopedClear_UnchangedFailedChannelRetained(t *testing.T)
 	}
 	if after[0].Name != "discord" {
 		t.Errorf("expected retained failure to be discord, got %q", after[0].Name)
+	}
+}
+
+// TestReload_NoRaceWithReaders is a deterministic -race regression test for the
+// Reload locking smell: Reload used to m.mu.Unlock() before running its
+// register/unregister deferFuncs, which mutate m.channels / m.workers with the
+// lock RELEASED, racing concurrent RLock readers (GetStatus / GetChannel /
+// GetEnabledChannels / SendMessage) and the restarted dispatch goroutines.
+//
+// The fix runs those mutations while still holding m.mu. With the old (buggy)
+// code this test fails under `go test -race` with a data race on m.channels;
+// with the fix it is race-clean.
+func TestReload_NoRaceWithReaders(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := &Manager{
+		channels:      make(map[string]Channel),
+		workers:       make(map[string]*channelWorker),
+		bus:           bus.NewMessageBus(),
+		config:        &config.Config{},
+		channelHashes: make(map[string]string),
+	}
+
+	// Seed a single mock channel and a non-empty hash so that a Reload with an
+	// empty (channel-less) config yields removed=["mock"], driving the
+	// unregisterChannelLocked deferFunc that the fix moved back under the lock.
+	ch := &mockChannel{sendFn: func(context.Context, bus.OutboundMessage) error { return nil }}
+	m.channels["mock"] = ch
+	m.channelHashes["mock"] = "seed-hash"
+
+	// StartAll spins up the worker goroutines (so unregisterChannelLocked's
+	// <-w.done / <-w.mediaDone drains complete after Reload cancels the context)
+	// plus the dispatch goroutines that RLock m.channels concurrently.
+	if err := m.StartAll(ctx); err != nil {
+		t.Fatalf("StartAll: %v", err)
+	}
+
+	// Hammer the RLock readers concurrently with the Reload write window.
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = m.GetStatus()
+					_, _ = m.GetChannel("mock")
+					_ = m.GetEnabledChannels()
+					_ = m.SendMessage(ctx, bus.OutboundMessage{
+						Channel: "mock", ChatID: "1", Content: "x",
+					})
+				}
+			}
+		}()
+	}
+
+	// Reload with an empty config removes "mock" — the path that previously
+	// mutated m.channels with the lock released.
+	if err := m.Reload(ctx, &config.Config{}, credentials.SecretBundle{}); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	close(stop)
+	readers.Wait()
+
+	if _, ok := m.GetChannel("mock"); ok {
+		t.Fatalf("expected mock channel to be removed after Reload")
 	}
 }

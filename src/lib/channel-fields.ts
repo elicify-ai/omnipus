@@ -1,6 +1,8 @@
 // Channel configuration field definitions
 // Each entry maps to the Go ChannelsConfig struct fields in pkg/config/config.go
 
+import type { ChannelId } from '@/lib/api/generated/openapi-types'
+
 export interface ChannelField { // not-wire-format: UI form-field descriptor for channel config forms; never serialised over any HTTP/WS boundary
   key: string
   label: string
@@ -10,7 +12,10 @@ export interface ChannelField { // not-wire-format: UI form-field descriptor for
   helpText?: string
 }
 
-export const CHANNEL_FIELDS: Record<string, ChannelField[]> = {
+// drift-guard: keying by the generated ChannelId enum (via Partial — not every
+// channel has a config form, e.g. webchat) makes a removed/renamed channel id a
+// tsc error here, forcing this list back in sync with the contract.
+export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
   telegram: [
     {
       key: 'token',
@@ -533,5 +538,8 @@ export const CHANNEL_FIELDS: Record<string, ChannelField[]> = {
 }
 
 export function getChannelFields(channelId: string): ChannelField[] {
-  return CHANNEL_FIELDS[channelId.toLowerCase()] ?? []
+  // CHANNEL_FIELDS is keyed by the generated ChannelId enum (drift-guard). The
+  // caller passes an arbitrary string, so cast at the lookup site; an unknown id
+  // simply falls through to the empty default.
+  return CHANNEL_FIELDS[channelId.toLowerCase() as ChannelId] ?? []
 }

@@ -4026,7 +4026,7 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 	if sub != "" {
 		parts := strings.SplitN(sub, "/", 2)
 		channelID := parts[0]
-		if !validChannelIDs[channelID] {
+		if !validChannelIDs[gen.ChannelId(channelID)] {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
 			return
 		}
@@ -4225,11 +4225,15 @@ func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.Chan
 
 // validChannelIDs is the set of channel IDs that can be toggled via the API.
 // "webchat" is always enabled and intentionally excluded.
-var validChannelIDs = map[string]bool{
-	"telegram": true, "discord": true, "slack": true, "whatsapp": true,
-	"feishu": true, "dingtalk": true, "wecom": true, "weixin": true,
-	"line": true, "qq": true, "irc": true,
-	"matrix": true, "google-chat": true,
+//
+// drift-guard: keyed by the generated gen.ChannelId enum and populated with the
+// named enum constants (not string literals), so removing or renaming a ChannelId
+// value breaks this build until the list is brought back in sync with the contract.
+var validChannelIDs = map[gen.ChannelId]bool{
+	gen.Telegram: true, gen.Discord: true, gen.Slack: true, gen.Whatsapp: true,
+	gen.Feishu: true, gen.Dingtalk: true, gen.Wecom: true, gen.Weixin: true,
+	gen.Line: true, gen.Qq: true, gen.Irc: true,
+	gen.Matrix: true, gen.GoogleChat: true,
 }
 
 // channelWildcardIdx returns the index of the channel-wildcard AgentBinding
@@ -4386,7 +4390,7 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 }
 
 func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, enabled bool) {
-	if !validChannelIDs[channelID] {
+	if !validChannelIDs[gen.ChannelId(channelID)] {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
 		return
 	}
@@ -4413,37 +4417,43 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 
 // channelSensitiveFields maps channel IDs to their secret/credential field names.
 // These are redacted in GET responses (replaced with "[configured]" if set).
-var channelSensitiveFields = map[string][]string{
-	"telegram":    {"token"},
-	"discord":     {"token"},
-	"slack":       {"bot_token", "app_token"},
-	"feishu":      {"app_secret", "encrypt_key", "verification_token"},
-	"matrix":      {"access_token", "crypto_passphrase"},
-	"line":        {"channel_secret", "channel_access_token"},
-	"dingtalk":    {"client_secret"},
-	"qq":          {"app_secret"},
-	"wecom":       {"secret"},
-	"irc":         {"password", "nickserv_password", "sasl_password"},
-	"weixin":      {"token"},
-	"whatsapp":    {},
-	"google-chat": {"service_account_json"},
+//
+// drift-guard: keyed by the generated gen.ChannelId enum with named enum
+// constants, so removing/renaming a ChannelId value breaks this build.
+var channelSensitiveFields = map[gen.ChannelId][]string{
+	gen.Telegram:   {"token"},
+	gen.Discord:    {"token"},
+	gen.Slack:      {"bot_token", "app_token"},
+	gen.Feishu:     {"app_secret", "encrypt_key", "verification_token"},
+	gen.Matrix:     {"access_token", "crypto_passphrase"},
+	gen.Line:       {"channel_secret", "channel_access_token"},
+	gen.Dingtalk:   {"client_secret"},
+	gen.Qq:         {"app_secret"},
+	gen.Wecom:      {"secret"},
+	gen.Irc:        {"password", "nickserv_password", "sasl_password"},
+	gen.Weixin:     {"token"},
+	gen.Whatsapp:   {},
+	gen.GoogleChat: {"service_account_json"},
 }
 
 // channelRequiredFields maps channel IDs to fields that must be non-empty for the channel to work.
-var channelRequiredFields = map[string][]string{
-	"telegram":    {"token"},
-	"discord":     {"token"},
-	"slack":       {"bot_token"},
-	"feishu":      {"app_id", "app_secret"},
-	"matrix":      {"homeserver", "user_id", "access_token"},
-	"line":        {"channel_secret", "channel_access_token"},
-	"dingtalk":    {"client_id", "client_secret"},
-	"qq":          {"app_id", "app_secret"},
-	"wecom":       {"bot_id", "secret"},
-	"irc":         {"server", "nick"},
-	"weixin":      {"token"},
-	"whatsapp":    {},
-	"google-chat": {},
+//
+// drift-guard: keyed by the generated gen.ChannelId enum with named enum
+// constants, so removing/renaming a ChannelId value breaks this build.
+var channelRequiredFields = map[gen.ChannelId][]string{
+	gen.Telegram:   {"token"},
+	gen.Discord:    {"token"},
+	gen.Slack:      {"bot_token"},
+	gen.Feishu:     {"app_id", "app_secret"},
+	gen.Matrix:     {"homeserver", "user_id", "access_token"},
+	gen.Line:       {"channel_secret", "channel_access_token"},
+	gen.Dingtalk:   {"client_id", "client_secret"},
+	gen.Qq:         {"app_id", "app_secret"},
+	gen.Wecom:      {"bot_id", "secret"},
+	gen.Irc:        {"server", "nick"},
+	gen.Weixin:     {"token"},
+	gen.Whatsapp:   {},
+	gen.GoogleChat: {},
 }
 
 // redactChannelConfig returns a copy of cfg with sensitive fields replaced by a
@@ -4456,7 +4466,7 @@ func redactChannelConfig(channelID string, cfg map[string]any) map[string]any {
 	for k, v := range cfg {
 		out[k] = v
 	}
-	for _, field := range channelSensitiveFields[channelID] {
+	for _, field := range channelSensitiveFields[gen.ChannelId(channelID)] {
 		// A set <field>_ref means a credential is stored → mark configured.
 		if ref, _ := out[field+"_ref"].(string); strings.TrimSpace(ref) != "" {
 			out[field] = "[configured]"
@@ -4504,7 +4514,7 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	// is both a plaintext-at-rest violation AND unreadable by the constructor —
 	// so a UI-configured token-based channel would never start.
 	var clearedRefs []string // credentials to delete AFTER the config write commits
-	for _, field := range channelSensitiveFields[channelID] {
+	for _, field := range channelSensitiveFields[gen.ChannelId(channelID)] {
 		raw, present := updates[field]
 		if !present {
 			continue
@@ -4552,7 +4562,7 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		// Invariant (#289/SEC-23): a known secret field is never stored inline in
 		// config.json — it lives only in the credential store via its <field>_ref.
 		// This also scrubs any stale plaintext left by the pre-#289 blind merge.
-		for _, field := range channelSensitiveFields[channelID] {
+		for _, field := range channelSensitiveFields[gen.ChannelId(channelID)] {
 			delete(ch, field)
 		}
 		channels[channelID] = ch
@@ -4585,9 +4595,10 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 		return
 	}
 
-	required := channelRequiredFields[channelID]
-	sensitive := make(map[string]bool, len(channelSensitiveFields[channelID]))
-	for _, f := range channelSensitiveFields[channelID] {
+	cid := gen.ChannelId(channelID)
+	required := channelRequiredFields[cid]
+	sensitive := make(map[string]bool, len(channelSensitiveFields[cid]))
+	for _, f := range channelSensitiveFields[cid] {
 		sensitive[f] = true
 	}
 	var missing []string

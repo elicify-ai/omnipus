@@ -1751,16 +1751,25 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 		go m.runMediaWorker(dispatchCtx, name, w)
 	}
 
-	// Fix 15: execute deferFuncs synchronously after releasing the lock, not in a goroutine.
-	// Running them in a goroutine while the mutex is still held causes a deadlock;
-	// running them in a goroutine after unlock races with subsequent Reload calls.
-	// We must manually unlock here so that RegisterChannel/UnregisterChannel can acquire the lock.
-	m.mu.Unlock()
+	// Execute the register/unregister mutations while STILL holding m.mu.
+	//
+	// These call registerChannelLocked / unregisterChannelLocked, which mutate the
+	// shared m.channels / m.workers / m.mux maps. Concurrent readers take m.mu.RLock
+	// (SendMessage, GetStatus, GetChannel, the dispatchLoop goroutines restarted by
+	// startDispatchers above) and a concurrent RegisterChannel takes m.mu.Lock, so
+	// mutating these maps with the lock released is a data race (and a concurrent
+	// map read+write panic). We therefore keep the lock held: the deferred
+	// m.mu.Unlock() at the top releases it on return.
+	//
+	// This is deadlock-free: unregisterChannelLocked blocks on <-w.done / <-w.mediaDone
+	// (and runs synchronously), but runWorker/runMediaWorker close those channels on
+	// ctx cancellation or queue close WITHOUT acquiring m.mu, so the wait cannot block
+	// on the lock we hold. The *Locked helpers must never acquire m.mu themselves
+	// (only their exported wrappers RegisterChannel/UnregisterChannel do) — calling
+	// them here while holding the lock relies on that invariant.
 	for _, f := range deferFuncs {
 		f()
 	}
-	// Re-acquire so that the deferred m.mu.Unlock() at the top of the function is balanced.
-	m.mu.Lock()
 	return nil
 }
 
