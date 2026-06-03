@@ -1151,6 +1151,11 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 		ag.Soul = soul
 		ag.Default = boolPtr(ac.Default)
+		if len(ac.Skills) > 0 {
+			skills := make([]string, len(ac.Skills))
+			copy(skills, ac.Skills)
+			ag.Skills = &skills
+		}
 		agents = append(agents, ag)
 	}
 
@@ -1197,6 +1202,11 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			ag.Heartbeat = heartbeat
 			ag.Instructions = instructions
 			ag.Default = boolPtr(ac.Default)
+			if len(ac.Skills) > 0 {
+				skills := make([]string, len(ac.Skills))
+				copy(skills, ac.Skills)
+				ag.Skills = &skills
+			}
 			jsonOK(w, ag)
 			return
 		}
@@ -1237,6 +1247,10 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Model != nil && *req.Model != "" {
 		ac.Model = &config.AgentModelConfig{Primary: *req.Model}
+	}
+	if req.Skills != nil && len(*req.Skills) > 0 {
+		ac.Skills = make([]string, len(*req.Skills))
+		copy(ac.Skills, *req.Skills)
 	}
 	// Seed the privilege rail (FR-008/FR-022): custom agents always get
 	// system.*: deny unless the caller explicitly overrides it.
@@ -1328,6 +1342,9 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			}
 			newAgent["tools"] = toolsCfg
 		}
+		if len(ac.Skills) > 0 {
+			newAgent["skills"] = ac.Skills
+		}
 		agents["list"] = append(list, newAgent)
 		return nil
 	}); err != nil {
@@ -1368,6 +1385,11 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	ag.Type = gen.AgentTypeCustom
 	ag.Model = &model
 	ag.Status = gen.AgentStatusDraft
+	if len(ac.Skills) > 0 {
+		skills := make([]string, len(ac.Skills))
+		copy(skills, ac.Skills)
+		ag.Skills = &skills
+	}
 	if createReloadWarning != "" {
 		ag.Warning = &createReloadWarning
 	}
@@ -1646,6 +1668,15 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					}
 					agentMap["tools_cfg"] = tcMap
 				}
+				// Skills: replace the agent's skill list when the caller sends the field.
+				// An explicit empty array removes all skills. Nil (absent) leaves unchanged.
+				if req.Skills != nil {
+					if len(*req.Skills) > 0 {
+						agentMap["skills"] = *req.Skills
+					} else {
+						delete(agentMap, "skills")
+					}
+				}
 				break
 			}
 		}
@@ -1823,12 +1854,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	if reloadWarning != "" {
 		ag.Warning = &reloadWarning
 	}
-	// Populate Default from the live config after the write (handles both the
-	// req.Default=true case and the leave-unchanged case).
+	// Populate Default and Skills from the live config after the write (handles
+	// both the req.Default=true case and the leave-unchanged case).
 	if liveCfg := a.agentLoop.GetConfig(); liveCfg != nil {
 		for _, ac := range liveCfg.Agents.List {
 			if ac.ID == agentID {
 				ag.Default = boolPtr(ac.Default)
+				if len(ac.Skills) > 0 {
+					skills := make([]string, len(ac.Skills))
+					copy(skills, ac.Skills)
+					ag.Skills = &skills
+				}
 				break
 			}
 		}
