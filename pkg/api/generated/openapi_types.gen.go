@@ -2805,7 +2805,7 @@ type Agent struct {
 		EnableDenyPatterns *bool `json:"enable_deny_patterns,omitempty"`
 	} `json:"shell_policy,omitempty"`
 
-	// Skills List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. An empty list (or absent field) means no skills are granted (opt-in, default none).
+	// Skills List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
 
 	// Soul Contents of SOUL.md — the agent's system prompt. Empty string for locked core agents (prompt is compiled in, not exposed via API). Empty string for draft agents (no SOUL.md written yet). Always present (never null).
@@ -3860,7 +3860,7 @@ type McpServerCreate struct {
 	// Transport Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).
 	Transport McpServerCreateTransport `json:"transport"`
 
-	// Url Endpoint URL for remote MCP servers. Required when transport is "sse" or "http". Must be an https:// URL (or http:// for loopback addresses only). Must be omitted when transport is "stdio".
+	// Url Endpoint URL for remote MCP servers. Required when transport is "sse" or "http". Must be an https:// URL, or http:// for loopback addresses only (localhost, 127.x.x.x, or ::1). Any other http:// URL is rejected with 422 by both the SPA and the backend. Must be omitted when transport is "stdio".
 	Url *string `json:"url,omitempty"`
 }
 

@@ -186,7 +186,9 @@ properties:
       type: string
     description: >
       List of skill IDs granted to this agent. Only skills in this list are
-      available during this agent's runs. An empty list (or absent field)
-      means no skills are granted (opt-in, default none).
+      available during this agent's runs. When no skills are granted the field
+      is omitted entirely from the response (the backend does not emit an empty
+      array). Absence of the field and an empty array are semantically identical
+      (opt-in, default none).
     example:
       - "web-research"

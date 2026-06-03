@@ -23,8 +23,9 @@ properties:
     type: string
     description: >
       Endpoint URL for remote MCP servers. Required when transport is "sse" or "http".
-      Must be an https:// URL (or http:// for loopback addresses only).
-      Must be omitted when transport is "stdio".
+      Must be an https:// URL, or http:// for loopback addresses only
+      (localhost, 127.x.x.x, or ::1). Any other http:// URL is rejected with 422
+      by both the SPA and the backend. Must be omitted when transport is "stdio".
     example: "https://mcp.example.com/sse"
   args:
     type: array

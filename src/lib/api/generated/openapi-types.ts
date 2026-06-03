@@ -2611,7 +2611,7 @@ export interface components {
              */
             default?: boolean;
             /**
-             * @description List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. An empty list (or absent field) means no skills are granted (opt-in, default none).
+             * @description List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
              * @example [
              *       "web-research"
              *     ]
@@ -4058,7 +4058,7 @@ export interface components {
              */
             command?: string;
             /**
-             * @description Endpoint URL for remote MCP servers. Required when transport is "sse" or "http". Must be an https:// URL (or http:// for loopback addresses only). Must be omitted when transport is "stdio".
+             * @description Endpoint URL for remote MCP servers. Required when transport is "sse" or "http". Must be an https:// URL, or http:// for loopback addresses only (localhost, 127.x.x.x, or ::1). Any other http:// URL is rejected with 422 by both the SPA and the backend. Must be omitted when transport is "stdio".
              * @example https://mcp.example.com/sse
              */
             url?: string;
