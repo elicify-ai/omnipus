@@ -4,6 +4,20 @@ import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CreateAgentModal } from './CreateAgentModal'
 import { useUiStore } from '@/store/ui'
+import type { Skill } from '@/lib/api'
+
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return {
+    ...actual,
+    fetchProviders: vi.fn().mockResolvedValue([]),
+    fetchRegistryTools: vi.fn().mockResolvedValue([]),
+    fetchSkills: vi.fn().mockResolvedValue([]),
+    createAgent: vi.fn(),
+  }
+})
+
+import { fetchSkills } from '@/lib/api'
 
 // test_create_agent_modal (test #14)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: Creating a custom agent
@@ -105,5 +119,116 @@ describe('CreateAgentModal — actions (test #14)', () => {
     renderModal({ open: true, onClose })
     fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
     expect(onClose).toHaveBeenCalledOnce()
+  })
+})
+
+// US-E6: per-agent skill assignment tests for Create modal
+// Traces to: nontech-ux-hardening-spec.md §6.5, F-06
+describe('CreateAgentModal — Skills picker (US-E6)', () => {
+  it('new agent submits without skills when none are selected (AC1 — default none)', async () => {
+    // A new agent must default to no skills granted.
+    vi.mocked(fetchSkills).mockResolvedValue([])
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Skill Test Agent' } })
+    fireEvent.click(screen.getByRole('button', { name: /create agent/i }))
+
+    await vi.waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Skill Test Agent' })
+      )
+    })
+    // skills must be absent (undefined) when none are selected
+    const call = onCreate.mock.calls[0][0]
+    expect(call.skills).toBeUndefined()
+  })
+
+  it('shows skills in Advanced section when installed skills are present', async () => {
+    const mockSkills: Skill[] = [
+      { id: 'web-research', name: 'Web Research', version: '1.0.0', verified: true, status: 'active' },
+      { id: 'code-review', name: 'Code Review', version: '1.0.0', verified: false, status: 'active' },
+    ]
+    vi.mocked(fetchSkills).mockResolvedValue(mockSkills)
+    renderModal({ open: true, onClose: vi.fn() })
+
+    // Open Advanced section
+    const advancedButton = await screen.findByRole('button', { name: /advanced/i })
+    fireEvent.click(advancedButton)
+
+    // Skills checkboxes should be visible
+    expect(await screen.findByTestId('create-skill-checkbox-web-research')).toBeInTheDocument()
+    expect(await screen.findByTestId('create-skill-checkbox-code-review')).toBeInTheDocument()
+  })
+
+  it('includes selected skills in the onCreate payload', async () => {
+    const mockSkills: Skill[] = [
+      { id: 'web-research', name: 'Web Research', version: '1.0.0', verified: true, status: 'active' },
+    ]
+    vi.mocked(fetchSkills).mockResolvedValue(mockSkills)
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+
+    // Open Advanced section and select the skill
+    const advancedButton = await screen.findByRole('button', { name: /advanced/i })
+    fireEvent.click(advancedButton)
+    const checkbox = await screen.findByTestId('create-skill-checkbox-web-research')
+    fireEvent.click(checkbox)
+
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Research Agent' } })
+    fireEvent.click(screen.getByRole('button', { name: /create agent/i }))
+
+    await vi.waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Research Agent',
+          skills: ['web-research'],
+        })
+      )
+    })
+  })
+
+  it('does not include skills in payload for a different agent that had none selected (AC2)', async () => {
+    // This test verifies that the selectedSkills state is reset between modal opens,
+    // ensuring agent A's selected skills do not bleed into a new agent B creation.
+    const mockSkills: Skill[] = [
+      { id: 'web-research', name: 'Web Research', version: '1.0.0', verified: true, status: 'active' },
+    ]
+    vi.mocked(fetchSkills).mockResolvedValue(mockSkills)
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    const onClose = vi.fn()
+
+    const { rerender } = renderModal({ open: true, onClose, onCreate })
+
+    // Open Advanced and select a skill for "agent A" creation
+    const advancedButton = await screen.findByRole('button', { name: /advanced/i })
+    fireEvent.click(advancedButton)
+    const checkbox = await screen.findByTestId('create-skill-checkbox-web-research')
+    fireEvent.click(checkbox)
+
+    // Close and reopen the modal (simulating creating agent B)
+    rerender(
+      <QueryClientProvider client={makeClient()}>
+        <CreateAgentModal open={false} onClose={onClose} onCreate={onCreate} />
+      </QueryClientProvider>
+    )
+    rerender(
+      <QueryClientProvider client={makeClient()}>
+        <CreateAgentModal open={true} onClose={onClose} onCreate={onCreate} />
+      </QueryClientProvider>
+    )
+
+    // Submit without selecting any skills for the new agent
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Agent B' } })
+    fireEvent.click(screen.getByRole('button', { name: /create agent/i }))
+
+    await vi.waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Agent B' })
+      )
+    })
+    // Agent B should have no skills — state was reset on modal reopen
+    const latestCall = onCreate.mock.calls[onCreate.mock.calls.length - 1][0]
+    expect(latestCall.skills).toBeUndefined()
   })
 })

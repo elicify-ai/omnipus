@@ -25,6 +25,7 @@ vi.mock('@/lib/api', () => ({
   updateAgentTools: vi.fn(),
   fetchGlobalToolPolicies: vi.fn(),
   fetchProviders: vi.fn(),
+  fetchSkills: vi.fn().mockResolvedValue([]),
   createAgent: vi.fn(),
   isApiError: vi.fn(() => false),
 }))

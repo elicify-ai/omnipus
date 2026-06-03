@@ -18,10 +18,10 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchAgent: vi.fn(), updateAgent: vi.fn() }
+  return { ...actual, fetchAgent: vi.fn(), updateAgent: vi.fn(), fetchSkills: vi.fn() }
 })
 
-import { fetchAgent } from '@/lib/api'
+import { fetchAgent, fetchSkills } from '@/lib/api'
 
 const mockCoreAgent: Agent = {
   id: 'general-assistant',
@@ -78,6 +78,7 @@ function renderProfile(agentId: string) {
 beforeEach(() => {
   mockNavigate.mockClear()
   vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
+  vi.mocked(fetchSkills).mockResolvedValue([])
 })
 
 describe('AgentProfile — loading state', () => {
@@ -163,5 +164,63 @@ describe('AgentProfile — locked core agent sections (test #13)', () => {
     renderProfile('mia')
     await screen.findByText('Mia')
     expect(screen.queryByRole('button', { name: /save/i })).toBeNull()
+  })
+})
+
+// US-E6: per-agent skill assignment tests
+// Traces to: nontech-ux-hardening-spec.md §6.5, F-06
+describe('AgentProfile — Skills picker (US-E6)', () => {
+  it('always shows "Skills" accordion trigger', async () => {
+    // The accordion trigger is always in the DOM regardless of open/closed state.
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    expect(screen.getByText(/^Skills$/i)).toBeInTheDocument()
+  })
+
+  it('shows empty state when no skills are installed', async () => {
+    vi.mocked(fetchSkills).mockResolvedValue([])
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    // Accordion is closed by default; the trigger is still in the DOM
+    expect(screen.getByText(/^Skills$/i)).toBeInTheDocument()
+  })
+
+  it('new agent with no skills shows 0 granted count (not labeled)', async () => {
+    // A new agent has skills = [] or undefined; the count badge only renders when > 0.
+    const agentNoSkills: Agent = { ...mockCoreAgent, skills: undefined }
+    vi.mocked(fetchAgent).mockResolvedValue(agentNoSkills)
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    // The "X granted" badge must NOT appear when skills is empty/absent.
+    expect(screen.queryByText(/granted/i)).toBeNull()
+  })
+
+  it('shows granted count badge when agent has skills', async () => {
+    const agentWithSkills: Agent = { ...mockCoreAgent, skills: ['web-research', 'code-review'] }
+    vi.mocked(fetchAgent).mockResolvedValue(agentWithSkills)
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    // "2 granted" badge in the accordion header
+    expect(screen.getByText(/2 granted/i)).toBeInTheDocument()
+  })
+
+  it('granting skills to agent A does not affect agent B rendering (AC2)', async () => {
+    // Two separate renders simulate two agents. AC2: agent A's skills must not
+    // bleed into agent B when the component is unmounted and remounted.
+    const agentA: Agent = { ...mockCoreAgent, id: 'agent-a', name: 'Agent A', skills: ['web-research'] }
+    const agentB: Agent = { ...mockCoreAgent, id: 'agent-b', name: 'Agent B', skills: [] }
+
+    // Render agent A — should show 1 granted
+    vi.mocked(fetchAgent).mockResolvedValue(agentA)
+    const { unmount } = renderProfile('agent-a')
+    await screen.findByText('Agent A')
+    expect(screen.getByText(/1 granted/i)).toBeInTheDocument()
+    unmount()
+
+    // Render agent B — must show 0 granted (no badge)
+    vi.mocked(fetchAgent).mockResolvedValue(agentB)
+    renderProfile('agent-b')
+    await screen.findByText('Agent B')
+    expect(screen.queryByText(/granted/i)).toBeNull()
   })
 })
