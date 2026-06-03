@@ -20,6 +20,7 @@ import {
   UploadSimple,
   Info,
   Plus,
+  Sparkle,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
@@ -45,10 +46,12 @@ import {
   fetchProviders,
   fetchAgentSessions,
   fetchActivity,
+  fetchSkills,
   type AgentSession,
   type ActivityEvent,
   type AgentToolsCfg,
   type SandboxProfile,
+  type Skill,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { AVATAR_COLORS } from '@/lib/constants'
@@ -112,6 +115,13 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
     staleTime: 60_000,
   })
 
+  // US-E6: fetch available (installed) skills so the picker can show them.
+  const { data: availableSkills = [] } = useQuery<Skill[]>({
+    queryKey: ['skills'],
+    queryFn: fetchSkills,
+    staleTime: 60_000,
+  })
+
   const recentActivity = allActivity
     .filter((e) => e.agent_id === agentId)
     .slice(0, 5)
@@ -163,6 +173,8 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
   const [toolsCfg, setToolsCfg] = useState<AgentToolsCfg>({
     builtin: { default_policy: 'allow' },
   })
+  // US-E6: per-agent skill assignment (opt-in, default none).
+  const [agentSkills, setAgentSkills] = useState<string[]>([])
   const [sandboxProfile, setSandboxProfile] = useState<SandboxProfile | undefined>(undefined)
   const [shellDenyPatterns, setShellDenyPatterns] = useState<string[]>([])
   const [shellAdvancedOpen, setShellAdvancedOpen] = useState(false)
@@ -201,6 +213,8 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
       builtin: agent.tools_cfg?.builtin ?? prev.builtin,
       mcp: agent.tools_cfg?.mcp as AgentToolsCfg['mcp'],
     }))
+    // US-E6: hydrate agent skills from the API response (default none).
+    setAgentSkills(agent.skills ?? [])
     hasHydrated.current = true
   }, [agentId, agent])
 
@@ -235,13 +249,19 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
       custom_deny_patterns: shellDenyPatterns.filter((p) => p.trim() !== ''),
     },
     tools_cfg: toolsCfg,
+    // US-E6: include the per-agent skill list in the auto-save payload.
+    // Send the current list (may be empty, meaning no skills). The backend
+    // treats an absent field as "leave unchanged" and an explicit empty
+    // array as "remove all skills" — we always send the current value so
+    // a deliberate clear (removing the last skill) is persisted correctly.
+    skills: agentSkills,
   }), [
     name, description, model, selectedColor, selectedIcon, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
     maxToolCallsPerMinute, maxCostPerDay, soul, instructions, heartbeat,
     timeoutSeconds, maxToolIterations, steeringMode, toolFeedback,
     heartbeatEnabled, heartbeatInterval, sandboxProfile, shellDenyPatterns,
-    toolsCfg,
+    toolsCfg, agentSkills,
   ])
 
   const { status: saveStatus, error: saveError } = useAutoSave(
@@ -910,6 +930,84 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
               </div>
             </AccordionContent>
           </AccordionItem>
+
+        {/* Skills — US-E6: per-agent skill assignment, opt-in, default none */}
+        <AccordionItem value="skills" className="border-0">
+          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <div className="flex items-center gap-2">
+              <span>Skills</span>
+              {agentSkills.length > 0 && (
+                <span className="text-xs text-[var(--color-muted)] font-normal">
+                  {agentSkills.length} granted
+                </span>
+              )}
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="px-4 space-y-3">
+              <p className="text-xs text-[var(--color-muted)]">
+                Grant specific installed skills to this agent. Only skills listed here
+                are available during this agent's runs. Empty means no skills.
+              </p>
+              {availableSkills.length === 0 ? (
+                <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-4 text-center">
+                  <Sparkle size={16} className="text-[var(--color-muted)] mx-auto mb-1.5" />
+                  <p className="text-xs text-[var(--color-muted)]">No skills installed.</p>
+                  <p className="text-xs text-[var(--color-muted)]/70 mt-0.5">
+                    Install skills from the Skills &amp; Tools screen.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {availableSkills.map((skill) => {
+                    const granted = agentSkills.includes(skill.id)
+                    return (
+                      <label
+                        key={skill.id}
+                        className="flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 cursor-pointer hover:bg-[var(--color-surface-2)] transition-colors"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={granted}
+                          onChange={(e) => {
+                            markDirty()
+                            if (e.target.checked) {
+                              setAgentSkills((prev) => [...prev, skill.id])
+                            } else {
+                              setAgentSkills((prev) => prev.filter((s) => s !== skill.id))
+                            }
+                          }}
+                          className="mt-0.5 shrink-0 accent-[var(--color-accent)]"
+                          data-testid={`skill-checkbox-${skill.id}`}
+                        />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-[var(--color-secondary)] leading-tight">
+                            {skill.name}
+                          </p>
+                          {skill.description && (
+                            <p className="text-[11px] text-[var(--color-muted)] mt-0.5 leading-snug">
+                              {skill.description}
+                            </p>
+                          )}
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[10px] font-mono text-[var(--color-muted)]/70">
+                              {skill.id}
+                            </span>
+                            {skill.verified && (
+                              <span className="text-[9px] px-1 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                verified
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </AccordionContent>
+        </AccordionItem>
 
         {/* Sessions — default CLOSED */}
         <AccordionItem value="sessions" className="border-0">
