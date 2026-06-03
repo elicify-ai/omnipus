@@ -141,7 +141,16 @@ func (c *WeixinChannel) Stop(ctx context.Context) error {
 }
 
 // pollLoop is the long-poll receive loop. It runs until ctx is canceled.
+//
+// When the loop returns (ctx canceled via Stop() or a parent-context teardown),
+// the channel can no longer receive messages, so mark IsRunning()=false. This
+// prevents a "zombie" channel that keeps reporting healthy after its only
+// receive loop has exited — which would let the manager route messages into a
+// dead channel that silently drops them. Stop() already sets running=false, so
+// this is idempotent for that path and only adds coverage for an unexpected
+// parent-context cancellation.
 func (c *WeixinChannel) pollLoop(ctx context.Context) {
+	defer c.SetRunning(false)
 	const (
 		defaultPollTimeoutMs = 35_000
 		retryDelay           = 2 * time.Second
