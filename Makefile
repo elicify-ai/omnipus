@@ -160,23 +160,22 @@ build-launcher-tui:
 	@ln -sf omnipus-launcher-tui-$(PLATFORM)-$(ARCH) $(BUILD_DIR)/omnipus-launcher-tui
 	@echo "Build complete: $(BUILD_DIR)/omnipus-launcher-tui"
 
-## build-whatsapp-native: Build with WhatsApp native (whatsmeow) support; larger binary
-build-whatsapp-native: generate
-## @echo "Building $(BINARY_NAME) with WhatsApp native for $(PLATFORM)/$(ARCH)..."
-	@echo "Building for multiple platforms..."
+## build-lite: Build the lite variant (excludes WhatsApp native/whatsmeow); smaller binary
+## NOTE: WhatsApp native (whatsmeow) ships in the DEFAULT build (`make build` / `make build-all`).
+## The lite variant opts OUT of it via `-tags lite` to keep the binary small (~half the size).
+build-lite: generate
+	@echo "Building lite variant (no WhatsApp native) for multiple platforms..."
 	@mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=amd64 $(GO) build -tags $(GO_BUILD_TAGS),whatsapp_native -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 ./$(CMD_DIR)
-	GOOS=linux GOARCH=arm GOARM=7 $(GO) build -tags $(GO_BUILD_TAGS),whatsapp_native -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm ./$(CMD_DIR)
-	GOOS=linux GOARCH=arm64 $(GO) build -tags $(GO_BUILD_TAGS),whatsapp_native -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 ./$(CMD_DIR)
-	GOOS=linux GOARCH=loong64 $(GO) build -tags $(GO_BUILD_TAGS),whatsapp_native -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-loong64 ./$(CMD_DIR)
-	GOOS=linux GOARCH=riscv64 $(GO) build -tags $(GO_BUILD_TAGS),whatsapp_native -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-riscv64 ./$(CMD_DIR)
-	GOOS=linux GOARCH=mipsle GOMIPS=softfloat $(GO) build -tags $(GO_BUILD_TAGS_NO_GOOLM),whatsapp_native -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-mipsle ./$(CMD_DIR)
-	$(call PATCH_MIPS_FLAGS,$(BUILD_DIR)/$(BINARY_NAME)-linux-mipsle)
-	GOOS=darwin GOARCH=arm64 $(GO) build -tags $(GO_BUILD_TAGS),whatsapp_native -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 ./$(CMD_DIR)
-	GOOS=windows GOARCH=amd64 $(GO) build -tags $(GO_BUILD_TAGS),whatsapp_native -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe ./$(CMD_DIR)
-## @$(GO) build $(GOFLAGS) -tags whatsapp_native -ldflags "$(LDFLAGS)" -o $(BINARY_PATH) ./$(CMD_DIR)
-	@echo "Build complete"
-##	@ln -sf $(BINARY_NAME)-$(PLATFORM)-$(ARCH) $(BUILD_DIR)/$(BINARY_NAME)
+	GOOS=linux GOARCH=amd64 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-linux-amd64 ./$(CMD_DIR)
+	GOOS=linux GOARCH=arm GOARM=7 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-linux-arm ./$(CMD_DIR)
+	GOOS=linux GOARCH=arm64 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-linux-arm64 ./$(CMD_DIR)
+	GOOS=linux GOARCH=loong64 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-linux-loong64 ./$(CMD_DIR)
+	GOOS=linux GOARCH=riscv64 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-linux-riscv64 ./$(CMD_DIR)
+	GOOS=linux GOARCH=mipsle GOMIPS=softfloat $(GO) build -tags $(GO_BUILD_TAGS_NO_GOOLM),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-linux-mipsle ./$(CMD_DIR)
+	$(call PATCH_MIPS_FLAGS,$(BUILD_DIR)/$(BINARY_NAME)-lite-linux-mipsle)
+	GOOS=darwin GOARCH=arm64 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-darwin-arm64 ./$(CMD_DIR)
+	GOOS=windows GOARCH=amd64 $(GO) build -tags $(GO_BUILD_TAGS),lite -ldflags "$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-lite-windows-amd64.exe ./$(CMD_DIR)
+	@echo "Lite build complete"
 
 ## build-linux-arm: Build for Linux ARMv7 (e.g. Raspberry Pi Zero 2 W 32-bit)
 build-linux-arm: generate

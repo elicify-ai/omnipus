@@ -8,13 +8,15 @@ For the external bridge mode, see [docs/channels/whatsapp.md](whatsapp.md). Set 
 
 ## Build requirement
 
-Native mode requires the `whatsapp_native` build tag:
+**Native mode ships in the default build — no build tag needed.** A standard build (and every official release binary) includes the whatsmeow stack:
 
 ```bash
-go build -tags whatsapp_native ./cmd/...
+go build ./cmd/...        # native WhatsApp included
 ```
 
-Without the tag the `NewWhatsAppNativeChannel` constructor returns an error at startup. The default binary does not include this tag. `modernc.org/sqlite` is pure Go and does not require CGo, so `CGO_ENABLED=0` builds are supported.
+`modernc.org/sqlite` is pure Go and does not require CGo, so `CGO_ENABLED=0` builds are supported. The whatsmeow + SQLite stack adds roughly 58 MB to the binary.
+
+> **Lite variant.** If you need the smaller binary and don't use native WhatsApp, build with `-tags lite` (`make build-lite`). The lite build omits whatsmeow; with it, `NewWhatsAppNativeChannel` returns an error and `use_native: true` will fail to start the channel. Use bridge mode (`use_native: false`) on a lite build. The planned UI gating for the lite variant is tracked in [#299](https://github.com/elicify-ai/omnipus/issues/299).
 
 ## Configuration
 
@@ -51,17 +53,36 @@ Both bridge mode and native mode share the `WhatsAppConfig` struct. Fields relev
 
 ## Setup
 
-1. Build Omnipus with the `whatsapp_native` tag (see Build requirement above).
-2. Start the gateway. On first run, no session exists and the bot prints a QR code to stdout in half-block Unicode form:
-   ```
-   Starting WhatsApp native channel (whatsmeow)
-   Scan this QR code with WhatsApp (Linked Devices):
-   <QR code>
-   ```
-   The QR code data is also emitted as a structured log entry with `"event": "whatsapp.qr_code"` for programmatic consumption.
-3. Open WhatsApp on your phone → **Linked Devices** → **Link a Device** and scan the QR code.
-4. Once paired, the session is persisted in `store.db` under `session_store_path`. Subsequent gateway starts connect without re-pairing.
-5. If the session is logged out by the server (e.g. from the phone), the channel automatically clears the stored session, reconnects, and emits a fresh QR code for re-pairing.
+Native mode is included in the default build (see Build requirement above), so no special build step is needed — just run the gateway, then pair a device. There are two ways to scan the pairing QR — in the app (recommended) or from the gateway logs (headless).
+
+### Pair in the app (recommended)
+
+The pairing QR renders live inside the SPA — no log scraping required.
+
+1. Open **Channels** in the sidebar and click **Configure** on the WhatsApp card.
+2. Turn on **Native Mode (whatsmeow)** and click **Save & Enable**. The QR appears in the panel and refreshes automatically as whatsmeow rotates it.
+3. On your phone, open WhatsApp → **Linked Devices** → **Link a Device** and scan the QR.
+
+![WhatsApp native QR pairing in the Configure panel](../marketing/screenshots/whatsapp-qr-pairing.png)
+
+The QR is pushed from the gateway over the `whatsapp_pairing` WebSocket frame (see [contracts/asyncapi.yaml](../../contracts/asyncapi.yaml) — `WhatsAppPairingFrame` / `WhatsAppPairingSubscribeFrame`, forwarded in `pkg/gateway/websocket.go`). The panel subscribes on open and renders the current code; you do not need to reload to get a fresh one.
+
+### Pair from the gateway logs (headless)
+
+When you run the gateway without the SPA in front of you, the same QR is also printed to stdout in half-block Unicode form on first run:
+
+```
+Starting WhatsApp native channel (whatsmeow)
+Scan this QR code with WhatsApp (Linked Devices):
+<QR code>
+```
+
+The QR code data is also emitted as a structured log entry with `"event": "whatsapp.qr_code"` for programmatic consumption. Scan it the same way (WhatsApp → **Linked Devices** → **Link a Device**).
+
+### After pairing
+
+- Once paired, the session is persisted in `store.db` under `session_store_path`. Subsequent gateway starts connect without re-pairing.
+- If the session is logged out by the server (e.g. from the phone), the channel automatically clears the stored session, reconnects, and emits a fresh QR — both in the Configure panel and to the logs — for re-pairing.
 
 ## Notes
 

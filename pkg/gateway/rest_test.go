@@ -22,6 +22,8 @@ import (
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/channels"
+	whatsappnative "github.com/dapicom-ai/omnipus/pkg/channels/whatsapp_native"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
@@ -1265,6 +1267,327 @@ func TestPutUserContext_HappyPath(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &getResp))
 	assert.Equal(t, testContent, getResp.Content,
 		"GET must return the content written by PUT (persistence test)")
+}
+
+// --- HandleChannels tests ---
+
+// TestHandleChannels_WhatsApp_NativeAvailable verifies that GET /api/v1/channels
+// returns native_available on the whatsapp entry matching the compile-time
+// whatsappnative.NativeAvailable constant.
+//
+// BDD:
+//
+//	Given a default config with WhatsApp disabled,
+//	When GET /api/v1/channels is called,
+//	Then the response contains a "whatsapp" entry with native_available set to
+//	  the value of whatsappnative.NativeAvailable (true in default builds).
+//
+// Traces to: issue #299 — surface NativeAvailable in channels API.
+func TestHandleChannels_WhatsApp_NativeAvailable(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/channels", nil)
+	api.HandleChannels(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var entries []struct {
+		ID              string `json:"id"`
+		NativeAvailable *bool  `json:"native_available"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+
+	var whatsapp *struct {
+		ID              string `json:"id"`
+		NativeAvailable *bool  `json:"native_available"`
+	}
+	for i := range entries {
+		if entries[i].ID == "whatsapp" {
+			whatsapp = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, whatsapp, "channels list must contain a 'whatsapp' entry")
+	require.NotNil(t, whatsapp.NativeAvailable, "whatsapp entry must have native_available set")
+	// In the default (non-lite) build, NativeAvailable is true; in the lite
+	// variant the whatsappnative package stub sets it to false.  Either way,
+	// the value must match the compile-time constant.
+	assert.Equal(t, whatsappnative.NativeAvailable, *whatsapp.NativeAvailable,
+		"native_available must equal whatsappnative.NativeAvailable compile-time constant")
+}
+
+// TestApplyDegradedOverlay_MarksDegradedEntry verifies that applyDegradedOverlay
+// sets degraded=true and degraded_reason on a channel whose registry id appears
+// in the failed list.
+//
+// BDD:
+//
+//	Given a channels slice containing "telegram" and "whatsapp",
+//	When applyDegradedOverlay is called with a failure for "telegram",
+//	Then the telegram entry has degraded=true and degraded_reason set,
+//	And the whatsapp entry is unchanged.
+//
+// Traces to: issue #299 — degraded overlay in HandleChannels.
+func TestApplyDegradedOverlay_MarksDegradedEntry(t *testing.T) {
+	entries := []gen.ChannelEntry{
+		{Id: "telegram", Name: "Telegram", Transport: "webhook", Enabled: true, Description: "TG"},
+		{Id: "whatsapp", Name: "WhatsApp", Transport: "bridge", Enabled: false, Description: "WA"},
+	}
+
+	failed := []channels.ChannelInitError{
+		{Name: "telegram", Channel: "Telegram", Err: fmt.Errorf("bot token invalid")},
+	}
+	applyDegradedOverlay(entries, failed)
+
+	require.NotNil(t, entries[0].Degraded, "telegram must have degraded set")
+	assert.True(t, *entries[0].Degraded, "telegram degraded must be true")
+	require.NotNil(t, entries[0].DegradedReason, "telegram must have degraded_reason set")
+	assert.Equal(t, "bot token invalid", *entries[0].DegradedReason)
+
+	assert.Nil(t, entries[1].Degraded, "whatsapp must not be marked degraded")
+	assert.Nil(t, entries[1].DegradedReason, "whatsapp must not have degraded_reason")
+}
+
+// TestApplyDegradedOverlay_WhatsAppNativeNormalisedToWhatsApp verifies that a
+// failure recorded under the registry id "whatsapp_native" is mapped to the
+// "whatsapp" channel entry (both share one list entry in the channels API).
+//
+// BDD:
+//
+//	Given a channels slice containing "whatsapp",
+//	When applyDegradedOverlay is called with a failure whose Name is "whatsapp_native",
+//	Then the whatsapp entry is marked degraded with the failure reason.
+//
+// Traces to: issue #299 — whatsapp_native → whatsapp normalisation.
+func TestApplyDegradedOverlay_WhatsAppNativeNormalisedToWhatsApp(t *testing.T) {
+	entries := []gen.ChannelEntry{
+		{Id: "whatsapp", Name: "WhatsApp", Transport: "bridge", Enabled: true, Description: "WA"},
+	}
+
+	failed := []channels.ChannelInitError{
+		{Name: "whatsapp_native", Channel: "WhatsApp Native", Err: fmt.Errorf("not compiled in lite build")},
+	}
+	applyDegradedOverlay(entries, failed)
+
+	require.NotNil(t, entries[0].Degraded, "whatsapp must be marked degraded when whatsapp_native fails")
+	assert.True(t, *entries[0].Degraded)
+	require.NotNil(t, entries[0].DegradedReason)
+	assert.Equal(t, "not compiled in lite build", *entries[0].DegradedReason)
+}
+
+// TestApplyDegradedOverlay_EmptyFailed verifies that applyDegradedOverlay is a
+// no-op when the failed list is empty (nil-safety / baseline behavior).
+func TestApplyDegradedOverlay_EmptyFailed(t *testing.T) {
+	entries := []gen.ChannelEntry{
+		{Id: "telegram", Name: "Telegram", Transport: "webhook", Enabled: true, Description: "TG"},
+	}
+	applyDegradedOverlay(entries, nil)
+	assert.Nil(t, entries[0].Degraded, "no degraded field when failed list is empty")
+	assert.Nil(t, entries[0].DegradedReason)
+}
+
+// TestApplyDegradedOverlay_MultipleSimultaneousFailures verifies that
+// applyDegradedOverlay marks ALL entries when multiple channels fail at once.
+//
+// BDD:
+//
+//	Given a channels slice containing "telegram" and "whatsapp",
+//	When applyDegradedOverlay is called with failures for both channels,
+//	Then both entries have degraded=true and the correct degraded_reason.
+//
+// Traces to: pr-test-analyzer finding — #299 overlay tests.
+func TestApplyDegradedOverlay_MultipleSimultaneousFailures(t *testing.T) {
+	entries := []gen.ChannelEntry{
+		{Id: "telegram", Name: "Telegram", Transport: "webhook", Enabled: true, Description: "TG"},
+		{Id: "whatsapp", Name: "WhatsApp", Transport: "bridge", Enabled: false, Description: "WA"},
+	}
+
+	failed := []channels.ChannelInitError{
+		{Name: "telegram", Channel: "Telegram", Err: fmt.Errorf("bot token invalid")},
+		{Name: "whatsapp", Channel: "WhatsApp", Err: fmt.Errorf("bridge unreachable")},
+	}
+	applyDegradedOverlay(entries, failed)
+
+	require.NotNil(t, entries[0].Degraded, "telegram must be marked degraded")
+	assert.True(t, *entries[0].Degraded)
+	require.NotNil(t, entries[0].DegradedReason)
+	assert.Equal(t, "bot token invalid", *entries[0].DegradedReason)
+
+	require.NotNil(t, entries[1].Degraded, "whatsapp must be marked degraded")
+	assert.True(t, *entries[1].Degraded)
+	require.NotNil(t, entries[1].DegradedReason)
+	assert.Equal(t, "bridge unreachable", *entries[1].DegradedReason)
+}
+
+// TestApplyDegradedOverlay_OrphanFailedID verifies that a failed channel whose
+// registry id has no matching ChannelEntry (e.g. "google-chat" or "signal",
+// which may be recordable by the manager but absent from the HandleChannels
+// list) does NOT panic and leaves all present entries unmarked.
+//
+// BDD:
+//
+//	Given a channels slice containing only "telegram",
+//	When applyDegradedOverlay is called with a failure for "google-chat",
+//	Then telegram is NOT marked degraded (the orphan is silently skipped in the
+//	  pure function; HandleChannels emits a WARN log for it separately).
+//
+// Traces to: code-reviewer + architect finding — #299 silent-drop of unmatched failures.
+func TestApplyDegradedOverlay_OrphanFailedID(t *testing.T) {
+	entries := []gen.ChannelEntry{
+		{Id: "telegram", Name: "Telegram", Transport: "webhook", Enabled: true, Description: "TG"},
+	}
+
+	failed := []channels.ChannelInitError{
+		{Name: "google-chat", Channel: "Google Chat", Err: fmt.Errorf("service account missing")},
+		{Name: "signal", Channel: "Signal", Err: fmt.Errorf("signal-cli not found")},
+	}
+
+	// Must not panic; all entries stay unmarked.
+	applyDegradedOverlay(entries, failed)
+
+	assert.Nil(t, entries[0].Degraded,
+		"telegram must not be marked degraded by an orphan failure for google-chat/signal")
+	assert.Nil(t, entries[0].DegradedReason)
+}
+
+// TestApplyDegradedOverlay_DegradedReasonImpliesDegradedTrue is a contract test
+// asserting the invariant: for every ChannelEntry, if DegradedReason is set
+// then Degraded must also be set and its value must be true.
+//
+// BDD:
+//
+//	Given applyDegradedOverlay has been called with any combination of failures,
+//	When iterating the resulting channel list,
+//	Then every entry satisfies: DegradedReason != nil ⇒ Degraded != nil && *Degraded == true.
+//
+// Traces to: type-design-analyzer finding — invariant guard for degraded fields.
+func TestApplyDegradedOverlay_DegradedReasonImpliesDegradedTrue(t *testing.T) {
+	entries := []gen.ChannelEntry{
+		{Id: "telegram", Name: "Telegram", Transport: "webhook", Enabled: true, Description: "TG"},
+		{Id: "whatsapp", Name: "WhatsApp", Transport: "bridge", Enabled: false, Description: "WA"},
+		{Id: "discord", Name: "Discord", Transport: "websocket", Enabled: false, Description: "DC"},
+	}
+
+	// Mix: telegram fails, discord is healthy, whatsapp_native maps to whatsapp and fails.
+	failed := []channels.ChannelInitError{
+		{Name: "telegram", Channel: "Telegram", Err: fmt.Errorf("bot token invalid")},
+		{Name: "whatsapp_native", Channel: "WhatsApp Native", Err: fmt.Errorf("not compiled")},
+	}
+	applyDegradedOverlay(entries, failed)
+
+	for i, e := range entries {
+		if e.DegradedReason != nil {
+			require.NotNil(t, e.Degraded,
+				"entry[%d] id=%q: DegradedReason is set but Degraded is nil — invariant violated", i, e.Id)
+			assert.True(t, *e.Degraded,
+				"entry[%d] id=%q: DegradedReason is set but *Degraded is false — invariant violated", i, e.Id)
+		}
+		// Converse sanity: if Degraded is nil, DegradedReason must also be nil.
+		if e.Degraded == nil {
+			assert.Nil(t, e.DegradedReason,
+				"entry[%d] id=%q: Degraded is nil but DegradedReason is set — invariant violated", i, e.Id)
+		}
+	}
+}
+
+// TestHandleChannels_WithDegradedChannel_IntegrationPath verifies the handler-level
+// path: HandleChannels → GetChannelManager() → FailedChannels() → applyDegradedOverlay.
+// This exercises the REAL wiring from the HTTP handler through to the channel
+// manager, not just the pure overlay helper in isolation.
+//
+// BDD:
+//
+//	Given an agent loop whose channel manager has telegram pre-seeded as failed,
+//	When GET /api/v1/channels is called,
+//	Then the response contains the "telegram" entry with degraded=true and
+//	  degraded_reason matching the seeded error.
+//
+// Traces to: pr-test-analyzer finding — handler-level integration test for #299.
+func TestHandleChannels_WithDegradedChannel_IntegrationPath(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	// Build a Manager with a pre-seeded telegram failure.  We use
+	// channels.NewManagerForTesting which bypasses NewManager's initChannels so
+	// the test does not need a real token or a live Telegram connection.
+	seededErr := fmt.Errorf("bot token not resolved (token_ref=%q)", "tg-ref-test")
+	mgr := channels.NewManagerForTesting([]channels.ChannelInitError{
+		{Name: "telegram", Channel: "Telegram", Err: seededErr},
+	})
+	api.agentLoop.SetChannelManager(mgr)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/channels", nil)
+	api.HandleChannels(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var entries []struct {
+		ID             string  `json:"id"`
+		Degraded       *bool   `json:"degraded"`
+		DegradedReason *string `json:"degraded_reason"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+
+	var telegram *struct {
+		ID             string  `json:"id"`
+		Degraded       *bool   `json:"degraded"`
+		DegradedReason *string `json:"degraded_reason"`
+	}
+	for i := range entries {
+		if entries[i].ID == "telegram" {
+			telegram = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, telegram, "channels list must contain a 'telegram' entry")
+	require.NotNil(t, telegram.Degraded,
+		"telegram must have degraded set when manager reports it as failed")
+	assert.True(t, *telegram.Degraded,
+		"telegram.degraded must be true when it appears in FailedChannels()")
+	require.NotNil(t, telegram.DegradedReason,
+		"telegram must have degraded_reason when it appears in FailedChannels()")
+	assert.Equal(t, seededErr.Error(), *telegram.DegradedReason,
+		"degraded_reason must match the seeded error message")
+}
+
+// TestHandleChannels_WhatsApp_NativeAvailableAndTelegramOmitted extends
+// TestHandleChannels_WhatsApp_NativeAvailable to additionally assert that a
+// non-whatsapp entry (telegram) does NOT have native_available set.
+//
+// This verifies the "omitted elsewhere" contract: native_available is a
+// whatsapp-specific field and must be absent on all other channel entries.
+//
+// Traces to: pr-test-analyzer finding — assert NativeAvailable omitted on
+// non-whatsapp entries.
+func TestHandleChannels_WhatsApp_NativeAvailableAndTelegramOmitted(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/channels", nil)
+	api.HandleChannels(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var entries []struct {
+		ID              string `json:"id"`
+		NativeAvailable *bool  `json:"native_available"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+
+	for _, e := range entries {
+		if e.ID == "whatsapp" {
+			// whatsapp must have native_available set.
+			require.NotNil(t, e.NativeAvailable,
+				"whatsapp entry must have native_available set")
+			continue
+		}
+		assert.Nil(t, e.NativeAvailable,
+			"entry %q must NOT have native_available set (whatsapp-only field)", e.ID)
+	}
 }
 
 // TestPutUserContext_ValidateInbound_400OnMissingContent verifies that with

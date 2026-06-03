@@ -12,7 +12,7 @@ function ChannelsScreen() {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
-  const [configuringChannel, setConfiguringChannel] = useState<{ id: string; name: string } | null>(null)
+  const [configuringChannel, setConfiguringChannel] = useState<{ id: string; name: string; nativeAvailable?: boolean } | null>(null)
 
   const { data: channels = [], isLoading, isError } = useQuery({
     queryKey: ['channels'],
@@ -54,7 +54,13 @@ function ChannelsScreen() {
         ) : (
           <div className="space-y-2">
             {channels.map((channel) => {
-              const connectionStatus = channel.enabled ? 'enabled' : 'unconfigured'
+              const isDegraded = channel.degraded === true
+              const connectionStatus = isDegraded ? 'degraded' : channel.enabled ? 'enabled' : 'unconfigured'
+              const statusBadge: Record<'degraded' | 'enabled' | 'unconfigured', { variant: 'error' | 'success' | 'muted'; label: string }> = {
+                degraded:     { variant: 'error',   label: 'Failed to start' },
+                enabled:      { variant: 'success', label: 'Enabled' },
+                unconfigured: { variant: 'muted',   label: 'Not configured' },
+              }
               return (
                 <div
                   key={channel.id}
@@ -70,18 +76,29 @@ function ChannelsScreen() {
                         {channel.transport}
                       </Badge>
                       <Badge
-                        variant={connectionStatus === 'enabled' ? 'success' : 'muted'}
+                        variant={statusBadge[connectionStatus].variant}
                         className="text-[10px]"
                       >
-                        {connectionStatus === 'enabled' ? 'Enabled' : 'Not configured'}
+                        {statusBadge[connectionStatus].label}
                       </Badge>
                     </div>
+                    {isDegraded && channel.degraded_reason && (
+                      <p className="mt-0.5 text-[10px] text-[var(--color-muted)] truncate max-w-xs">
+                        {channel.degraded_reason}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {channel.id !== 'webchat' && (
                       <button
                         type="button"
-                        onClick={() => setConfiguringChannel({ id: channel.id, name: channel.name })}
+                        onClick={() =>
+                          setConfiguringChannel({
+                            id: channel.id,
+                            name: channel.name,
+                            nativeAvailable: channel.native_available,
+                          })
+                        }
                         className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
                         aria-label={`Configure ${channel.name}`}
                       >
@@ -108,6 +125,7 @@ function ChannelsScreen() {
           <ChannelConfigPanel
             channelId={configuringChannel.id}
             channelName={configuringChannel.name}
+            nativeAvailable={configuringChannel.nativeAvailable}
             open={true}
             onOpenChange={(open) => {
               if (!open) setConfiguringChannel(null)

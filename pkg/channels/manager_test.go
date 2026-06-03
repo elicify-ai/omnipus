@@ -1385,11 +1385,12 @@ func TestManager_SendPlaceholder(t *testing.T) {
 
 // TestManager_FailedChannelsClearedOnReload verifies two things:
 //  1. FailedChannels() returns a copy and is safe to call concurrently.
-//  2. The failedChannels slice is cleared before initChannels runs on Reload,
-//     so a channel that previously failed but now succeeds is no longer reported
-//     as degraded. We exercise the clear path by directly invoking initChannels
-//     (under the write lock, matching Reload's locking discipline) rather than
-//     calling Reload, which requires a non-nil MessageBus to launch goroutines.
+//  2. Failures for channels in the re-attempted (added) set are cleared before
+//     initChannels runs on Reload, so a channel that previously failed but now
+//     succeeds is no longer reported as degraded. We exercise the clear path by
+//     directly invoking the scoped-filter sequence that Reload performs (under
+//     the write lock) rather than calling Reload, which requires a non-nil
+//     MessageBus to launch goroutines.
 //
 // Traces to: silent-failure-hunter finding — Fix 2 (race) + Fix 3 (stale list).
 func TestManager_FailedChannelsClearedOnReload(t *testing.T) {
@@ -1404,7 +1405,7 @@ func TestManager_FailedChannelsClearedOnReload(t *testing.T) {
 	// init on first boot.
 	m.mu.Lock()
 	m.failedChannels = []ChannelInitError{
-		{Channel: "test-channel", Err: errors.New("env var missing")},
+		{Name: "telegram", Channel: "Telegram", Err: errors.New("env var missing")},
 	}
 	m.mu.Unlock()
 
@@ -1414,10 +1415,22 @@ func TestManager_FailedChannelsClearedOnReload(t *testing.T) {
 		t.Fatalf("expected 1 failed channel before reload, got %d", len(before))
 	}
 
-	// Simulate the clear-then-initChannels sequence that Reload performs.
-	// All operations happen under m.mu.Lock to match Reload's locking discipline.
+	// Simulate Reload's scoped-filter sequence: remove failures for the re-attempted
+	// channel ("telegram"), then run initChannels with a fully-disabled config so no
+	// new failure is recorded.
 	m.mu.Lock()
-	m.failedChannels = m.failedChannels[:0] // Fix 3: clear before re-init
+	added := []string{"telegram"}
+	addedNames := make(map[string]struct{}, len(added))
+	for _, n := range added {
+		addedNames[n] = struct{}{}
+	}
+	kept := m.failedChannels[:0]
+	for _, f := range m.failedChannels {
+		if _, inAdded := addedNames[f.Name]; !inAdded {
+			kept = append(kept, f)
+		}
+	}
+	m.failedChannels = kept
 	// initChannels with a fully-disabled config produces no new failures.
 	_ = m.initChannels(&config.ChannelsConfig{})
 	m.mu.Unlock()
@@ -1469,4 +1482,175 @@ func TestManager_FailedChannelsRaceDetector(t *testing.T) {
 	}()
 
 	wg.Wait()
+}
+
+// TestManager_InitChannels_ReturnsErrorOnFailure verifies that initChannels
+// returns a non-nil error when at least one enabled channel fails to construct.
+//
+// The test relies on the fact that the channels_test binary does NOT import any
+// channel subpackages (no blank imports), so the global factory map has no
+// "telegram" entry.  Enabling Telegram with a non-empty TokenRef satisfies the
+// initChannels gate condition and causes initChannel("telegram", …) to call
+// getFactory("telegram"), which returns (nil, false) — triggering
+// fmt.Errorf("factory not registered …"), which is recorded via
+// recordChannelFailure and ultimately returned by initChannels as
+// errors.Join(…).
+//
+// Traces to: issue #299 backend task — "Manager-abort test (deferred item)".
+func TestManager_InitChannels_ReturnsErrorOnFailure(t *testing.T) {
+	m := &Manager{
+		channels:      make(map[string]Channel),
+		workers:       make(map[string]*channelWorker),
+		config:        &config.Config{},
+		channelHashes: make(map[string]string),
+	}
+
+	// Enable Telegram with a non-empty TokenRef so initChannels attempts to
+	// construct it.  No "telegram" factory is registered in this test binary,
+	// so initChannel will return "factory not registered for channel …".
+	cc := &config.ChannelsConfig{}
+	cc.Telegram.Enabled = true
+	cc.Telegram.TokenRef = "tg-token-ref"
+
+	m.mu.Lock()
+	err := m.initChannels(cc)
+	m.mu.Unlock()
+
+	if err == nil {
+		t.Fatal("expected initChannels to return a non-nil error when a channel fails to construct, got nil")
+	}
+
+	failed := m.FailedChannels()
+	if len(failed) == 0 {
+		t.Fatal("expected at least one entry in FailedChannels() after a construction failure, got none")
+	}
+	if failed[0].Name != "telegram" {
+		t.Errorf("expected FailedChannels()[0].Name == %q, got %q", "telegram", failed[0].Name)
+	}
+	if failed[0].Err == nil {
+		t.Error("expected FailedChannels()[0].Err to be non-nil")
+	}
+}
+
+// TestManager_Reload_FailedInitRestoresPriorFailedChannels verifies that when
+// a Reload's initChannels call fails, the prior failedChannels list is restored
+// and the failed-reload's own failure records do NOT survive.
+//
+// This prevents a false-positive degraded signal after a rolled-back reload:
+// if Telegram was previously healthy (no entry in failedChannels) and a reload
+// attempt fails, the post-reload failedChannels must match the pre-reload
+// snapshot — not reflect the failed attempt.
+//
+// We exercise this by:
+//  1. Seeding a discord failure to represent a pre-existing degraded channel.
+//  2. Running Reload's scoped-filter + initChannels sequence for "telegram"
+//     (which fails — no factory registered in the test binary), then simulating
+//     the revert path.
+//  3. Asserting that FailedChannels() after the failed reload equals the
+//     pre-reload snapshot (only the discord entry).
+//
+// Traces to: silent-failure-hunter CRITICAL finding — Reload degraded-state staleness.
+func TestManager_Reload_FailedInitRestoresPriorFailedChannels(t *testing.T) {
+	m := &Manager{
+		channels:      make(map[string]Channel),
+		workers:       make(map[string]*channelWorker),
+		config:        &config.Config{},
+		channelHashes: make(map[string]string),
+	}
+
+	// Seed a pre-existing failure for discord (was failing before the reload).
+	m.mu.Lock()
+	m.failedChannels = []ChannelInitError{
+		{Name: "discord", Channel: "Discord", Err: errors.New("bad token")},
+	}
+	snapshot := append([]ChannelInitError(nil), m.failedChannels...)
+
+	// Simulate Reload: telegram is being re-attempted (added set = ["telegram"]).
+	// Step 1: capture oldFailed for revert.
+	oldFailed := append([]ChannelInitError(nil), m.failedChannels...)
+
+	// Step 2: scoped-filter — remove telegram from failedChannels (it's in added),
+	// keep discord.
+	addedNames := map[string]struct{}{"telegram": {}}
+	kept := m.failedChannels[:0]
+	for _, f := range m.failedChannels {
+		if _, inAdded := addedNames[f.Name]; !inAdded {
+			kept = append(kept, f)
+		}
+	}
+	m.failedChannels = kept
+
+	// Step 3: initChannels for telegram — fails because no factory is registered.
+	cc := &config.ChannelsConfig{}
+	cc.Telegram.Enabled = true
+	cc.Telegram.TokenRef = "tg-token-ref"
+	err := m.initChannels(cc)
+
+	// initChannels must have failed and recorded a telegram failure.
+	if err == nil {
+		m.mu.Unlock()
+		t.Fatal("expected initChannels to fail for telegram with no registered factory")
+	}
+
+	// Step 4: revert path (mirrors manager.go Reload error branch).
+	m.failedChannels = oldFailed
+
+	m.mu.Unlock()
+
+	// After the failed reload, FailedChannels must equal the pre-reload snapshot.
+	after := m.FailedChannels()
+	if len(after) != len(snapshot) {
+		t.Fatalf("expected %d failed channels after failed reload (pre-reload snapshot), got %d: %v",
+			len(snapshot), len(after), after)
+	}
+	if after[0].Name != "discord" {
+		t.Errorf("expected restored failure to be discord, got %q", after[0].Name)
+	}
+}
+
+// TestManager_Reload_ScopedClear_UnchangedFailedChannelRetained verifies that the
+// scoped clear only removes failure entries for channels in the added set — a
+// channel that was previously failing and is NOT being re-attempted (i.e. not in
+// added) retains its failure entry after the reload succeeds.
+//
+// Scenario: discord failed previously, telegram is being re-added.  After a
+// successful reload of telegram, discord must still appear in FailedChannels.
+//
+// Traces to: silent-failure-hunter CRITICAL finding — blanket clear discards
+// prior failures for channels not in the added set.
+func TestManager_Reload_ScopedClear_UnchangedFailedChannelRetained(t *testing.T) {
+	m := &Manager{
+		channels:      make(map[string]Channel),
+		workers:       make(map[string]*channelWorker),
+		config:        &config.Config{},
+		channelHashes: make(map[string]string),
+	}
+
+	// discord was previously failing; telegram is being re-attempted.
+	m.mu.Lock()
+	m.failedChannels = []ChannelInitError{
+		{Name: "discord", Channel: "Discord", Err: errors.New("token expired")},
+	}
+
+	// Scoped filter: only drop entries for telegram (the added channel).
+	addedNames := map[string]struct{}{"telegram": {}}
+	kept := m.failedChannels[:0]
+	for _, f := range m.failedChannels {
+		if _, inAdded := addedNames[f.Name]; !inAdded {
+			kept = append(kept, f)
+		}
+	}
+	m.failedChannels = kept
+	// Telegram re-init succeeds (fully-disabled config — no telegram entry to process).
+	_ = m.initChannels(&config.ChannelsConfig{})
+	m.mu.Unlock()
+
+	after := m.FailedChannels()
+	if len(after) != 1 {
+		t.Fatalf("expected discord failure to be retained after scoped reload, got %d entries: %v",
+			len(after), after)
+	}
+	if after[0].Name != "discord" {
+		t.Errorf("expected retained failure to be discord, got %q", after[0].Name)
+	}
 }

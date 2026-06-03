@@ -1284,7 +1284,7 @@ Existing integration seams protected by:
 - `modernc.org/sqlite` adds ~10-15MB to the binary size. This is accepted because it avoids CGo.
 - Browser action primitives do not handle iframes or shadow DOM in Wave 4. These are future enhancements.
 - WhatsApp media handling (images, audio, documents) is explicitly out of scope (FUNC-25, future wave).
-- The build tag `whatsapp_native` is retained for optional compilation. Users who don't need WhatsApp can build without it to save binary size.
+- WhatsApp native is compiled into the **default** build (no tag). Users who don't need it can build the smaller `lite` variant (`-tags lite`, `make build-lite`) to save binary size. (Historical note: this was originally an opt-in `whatsapp_native` tag; the tag was inverted so native ships by default — see CLAUDE.md and `pkg/channels/README.md`.)
 - Remote CDP mode trusts the remote endpoint. Authentication to the CDP endpoint is the operator's responsibility (e.g., SSH tunnel, VPN).
 - `browser.evaluate` returns JSON-serializable values only. DOM nodes, functions, and other non-serializable values return as `null`.
 
