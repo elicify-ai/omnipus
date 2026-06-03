@@ -1,9 +1,20 @@
+/**
+ * GatewaySection — Settings → Gateway tab.
+ *
+ * US-B2 / #328:
+ * - auth_mode None wrapped in RiskySettingControl (safe = 'token').
+ * - bind_address 0.0.0.0 wrapped in RiskySettingControl (safe = '127.0.0.1').
+ * - Standing badge derives from persisted config values (fetchConfig → ['config'] query).
+ * - Badge clears on save of the safe value (queryClient.invalidateQueries clears it).
+ * - Restart-gated settings: protection badge tracks the saved value, not pending-restart.
+ */
+
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Copy, ArrowsClockwise, CheckCircle, CaretDown, CaretRight } from '@phosphor-icons/react'
-import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
@@ -11,6 +22,25 @@ import { fetchConfig, updateConfig, rotateGatewayToken, fetchGatewayStatus, fetc
 import { useUiStore } from '@/store/ui'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
+import { RiskySettingControl } from '@/components/shared/RiskySettingControl'
+
+// ── Risky-control copy bundles (US-B2) ────────────────────────────────────────
+
+const BIND_ADDRESS_COPY = {
+  dialogTitle: 'Listen on all network interfaces?',
+  dialogDescription:
+    'Setting bind address to 0.0.0.0 makes the gateway reachable from any network interface, not just your local machine. If this server is on a public network, other devices may be able to reach your Omnipus — make sure login is required and your firewall is configured.',
+  confirmLabel: 'Listen on all interfaces anyway',
+  cancelLabel: 'Keep localhost only (safer)',
+}
+
+const AUTH_MODE_COPY = {
+  dialogTitle: 'Remove login requirement?',
+  dialogDescription:
+    'With auth mode set to "None", anyone who can reach this gateway can use it without logging in. This is only appropriate if the gateway is only accessible locally or on a trusted private network.',
+  confirmLabel: 'Remove login anyway',
+  cancelLabel: 'Keep login on (safer)',
+}
 
 export function GatewaySection() {
   const { addToast } = useUiStore()
@@ -124,6 +154,12 @@ export function GatewaySection() {
     )
   }
 
+  // US-B2: badges derive from the PERSISTED config values (not local draft state).
+  // After save, queryClient.invalidateQueries(['config']) clears the badge if the
+  // safe value was saved.
+  const persistedBindAddress = config?.gateway.bind_address ?? '127.0.0.1'
+  const persistedAuthMode = config?.gateway.auth_mode ?? 'none'
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -137,20 +173,22 @@ export function GatewaySection() {
       </div>
 
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
-        {/* Bind address */}
-        <div className="flex items-center justify-between">
+        {/* Bind address — risky when 0.0.0.0 (US-B2) */}
+        <div className="space-y-2">
           <div>
             <p className="text-sm text-[var(--color-secondary)]">Bind address</p>
-            <p className="text-xs text-[var(--color-muted)]">Where the gateway listens</p>
+            <p className="text-xs text-[var(--color-muted)]">Which network interfaces the gateway listens on</p>
           </div>
-          <SmartSelect
-            value={bindAddress}
-            onValueChange={(v) => { markDirty(); setBindAddress(v) }}
-            triggerClassName="w-[160px] h-8 text-xs font-mono"
-            items={[
-              { value: '127.0.0.1', label: '127.0.0.1 (localhost only)' },
-              { value: '0.0.0.0', label: '0.0.0.0 (all interfaces)' },
+          <RiskySettingControl
+            options={[
+              { value: '127.0.0.1', label: 'Localhost only (127.0.0.1)' },
+              { value: '0.0.0.0', label: 'All interfaces (0.0.0.0)' },
             ]}
+            currentValue={persistedBindAddress}
+            safeValue="127.0.0.1"
+            copy={BIND_ADDRESS_COPY}
+            onConfirm={(v) => { markDirty(); setBindAddress(v) }}
+            onSelectSafe={(v) => { markDirty(); setBindAddress(v) }}
           />
         </div>
 
@@ -169,20 +207,22 @@ export function GatewaySection() {
           />
         </div>
 
-        {/* Auth mode */}
-        <div className="flex items-center justify-between">
+        {/* Auth mode — risky when 'none' (US-B2) */}
+        <div className="space-y-2">
           <div>
-            <p className="text-sm text-[var(--color-secondary)]">Auth mode</p>
-            <p className="text-xs text-[var(--color-muted)]">Require a bearer token for API access</p>
+            <p className="text-sm text-[var(--color-secondary)]">Login requirement</p>
+            <p className="text-xs text-[var(--color-muted)]">Whether a bearer token is required to access the API</p>
           </div>
-          <SmartSelect
-            value={authMode}
-            onValueChange={(v) => { markDirty(); setAuthMode(v as 'none' | 'token') }}
-            triggerClassName="w-[120px] h-8 text-xs"
-            items={[
-              { value: 'none', label: 'None' },
-              { value: 'token', label: 'Bearer token' },
+          <RiskySettingControl
+            options={[
+              { value: 'token', label: 'Bearer token (login required)' },
+              { value: 'none', label: 'None (no login)' },
             ]}
+            currentValue={persistedAuthMode}
+            safeValue="token"
+            copy={AUTH_MODE_COPY}
+            onConfirm={(v) => { markDirty(); setAuthMode(v as 'none' | 'token') }}
+            onSelectSafe={(v) => { markDirty(); setAuthMode(v as 'none' | 'token') }}
           />
         </div>
 
@@ -204,7 +244,7 @@ export function GatewaySection() {
           />
         </div>
 
-        {/* Token management */}
+        {/* Token management — only when auth is token */}
         {authMode === 'token' && (
           <div className="pt-2 border-t border-[var(--color-border)] space-y-2">
             <div className="flex items-center justify-between">
