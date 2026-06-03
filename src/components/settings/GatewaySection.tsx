@@ -157,8 +157,12 @@ export function GatewaySection() {
   // US-B2: badges derive from the PERSISTED config values (not local draft state).
   // After save, queryClient.invalidateQueries(['config']) clears the badge if the
   // safe value was saved.
+  // US-B2: fallback to the SAFE value when config is momentarily undefined.
+  // bind_address safe = '127.0.0.1' (restrict to localhost).
+  // auth_mode safe = 'token' (require login). Never default to 'none' — that
+  // would cause the badge to not appear even if the persisted config is 'none'.
   const persistedBindAddress = config?.gateway.bind_address ?? '127.0.0.1'
-  const persistedAuthMode = config?.gateway.auth_mode ?? 'none'
+  const persistedAuthMode = config?.gateway.auth_mode ?? 'token'
 
   return (
     <div className="space-y-6">
@@ -185,6 +189,7 @@ export function GatewaySection() {
               { value: '0.0.0.0', label: 'All interfaces (0.0.0.0)' },
             ]}
             currentValue={persistedBindAddress}
+            selectedValue={bindAddress}
             safeValue="127.0.0.1"
             copy={BIND_ADDRESS_COPY}
             onConfirm={(v) => { markDirty(); setBindAddress(v) }}
@@ -219,6 +224,7 @@ export function GatewaySection() {
               { value: 'none', label: 'None (no login)' },
             ]}
             currentValue={persistedAuthMode}
+            selectedValue={authMode}
             safeValue="token"
             copy={AUTH_MODE_COPY}
             onConfirm={(v) => { markDirty(); setAuthMode(v as 'none' | 'token') }}
