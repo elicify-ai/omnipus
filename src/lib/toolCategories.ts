@@ -22,8 +22,9 @@ export const CATEGORY_LABELS: Record<string, string> = {
  *  1. Exact match: policies['browser.evaluate'] → direct hit.
  *  2. Glob match:  policies['system.*'] applies to any tool name that starts
  *     with 'system.' — the only glob pattern the backend seeds is `<prefix>.*`.
- *     We support the general `<prefix>.*` form: split the glob key on '.*',
- *     check that the tool name starts with that prefix followed by '.'.
+ *     We support the general `<prefix>.*` form: strip the trailing `.*` from
+ *     the glob key, then check that the tool name starts with that prefix
+ *     followed by '.'.
  *  3. Default policy fallback.
  *
  * The backend stores glob keys like `system.*` to seed the privilege rail

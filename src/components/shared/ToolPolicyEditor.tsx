@@ -97,8 +97,11 @@ function detectActivePreset(value: ToolPolicyValue): RolePreset | null {
  * with an optional hash suffix when sanitization is lossy or the name exceeds
  * 64 characters.
  *
- * The server name is always the segment immediately after the 'mcp_' prefix —
- * i.e. everything between the first and second underscore (after 'mcp').
+ * The server name is the segment immediately after the 'mcp_' prefix —
+ * i.e. the characters up to the first underscore after 'mcp_'. Note: this
+ * is ambiguous when the sanitized server name itself contains an underscore
+ * (e.g. mcp_github_mcp_<tool> would extract 'github', not 'github_mcp'),
+ * because the backend sanitizer permits underscores in server names.
  *
  * We NEVER key on tool.category (two tools from the same server can carry
  * different categories; two servers can share a category value).
@@ -196,14 +199,20 @@ function CategorySection({
   const label = CATEGORY_LABELS[categoryKey] ?? categoryKey
   const summary = categorySummaryPolicy(tools, policies, defaultPolicy)
 
-  const pillClass =
-    summary === 'mixed'
-      ? 'bg-violet-500/20 text-violet-300 border-violet-500/40'
-      : summary === 'allow'
-        ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
-        : summary === 'ask'
-          ? 'bg-amber-500/20 text-amber-400 border-amber-500/40'
-          : 'bg-red-500/20 text-red-400 border-red-500/40'
+  const PILL_CLASS: Record<ToolPolicy | 'mixed', string> = {
+    mixed:  'bg-violet-500/20 text-violet-300 border-violet-500/40',
+    allow:  'bg-emerald-500/20 text-emerald-400 border-emerald-500/40',
+    ask:    'bg-amber-500/20 text-amber-400 border-amber-500/40',
+    deny:   'bg-red-500/20 text-red-400 border-red-500/40',
+  }
+  const pillClass = PILL_CLASS[summary]
+
+  const PILL_LABEL: Record<ToolPolicy | 'mixed', string> = {
+    mixed: 'Mixed',
+    allow: 'Allow',
+    ask:   'Ask',
+    deny:  'Deny',
+  }
 
   return (
     <div
@@ -223,7 +232,7 @@ function CategorySection({
             className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${pillClass}`}
             data-testid={`category-pill-${categoryKey}`}
           >
-            {summary === 'mixed' ? 'Mixed' : summary.charAt(0).toUpperCase() + summary.slice(1)}
+            {PILL_LABEL[summary]}
           </span>
         </span>
         {open ? <CaretUp size={13} /> : <CaretDown size={13} />}
