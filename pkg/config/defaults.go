@@ -78,7 +78,6 @@ func DefaultConfig() *Config {
 		Channels: ChannelsConfig{
 			WhatsApp: WhatsAppConfig{
 				Enabled:          false,
-				BridgeURL:        "ws://localhost:3001",
 				SessionStorePath: "",
 				AllowFrom:        FlexibleStringSlice{},
 			},

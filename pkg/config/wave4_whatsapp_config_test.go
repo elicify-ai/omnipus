@@ -69,14 +69,16 @@ func TestWhatsAppConfigParsing(t *testing.T) {
 			},
 		},
 		{
-			name: "bridge url for legacy mode",
+			// WhatsApp is always native now; a stale legacy bridge_url key must be
+			// silently ignored (unknown JSON fields are dropped on load) rather than
+			// failing the parse.
+			name: "legacy bridge_url is ignored",
 			json: `{
 				"enabled": true,
 				"bridge_url": "http://localhost:8080"
 			}`,
 			wantCfg: WhatsAppConfig{
-				Enabled:   true,
-				BridgeURL: "http://localhost:8080",
+				Enabled: true,
 			},
 		},
 	}
@@ -89,7 +91,6 @@ func TestWhatsAppConfigParsing(t *testing.T) {
 
 			assert.Equal(t, tc.wantCfg.Enabled, got.Enabled, "Enabled mismatch")
 			assert.Equal(t, tc.wantCfg.SessionStorePath, got.SessionStorePath, "SessionStorePath mismatch")
-			assert.Equal(t, tc.wantCfg.BridgeURL, got.BridgeURL, "BridgeURL mismatch")
 			assert.Equal(
 				t,
 				tc.wantCfg.GroupTrigger.MentionOnly,
@@ -119,7 +120,6 @@ func TestWhatsAppConfigDefaults(t *testing.T) {
 	// Traces to: wave4-whatsapp-browser-spec.md line 997 (Test #7)
 	var cfg WhatsAppConfig
 	assert.False(t, cfg.Enabled, "WhatsApp channel must be disabled by default (deny-by-default)")
-	assert.Empty(t, cfg.BridgeURL, "BridgeURL must be empty by default")
 	assert.Empty(t, cfg.SessionStorePath, "SessionStorePath must be empty by default")
 	assert.Empty(t, cfg.AllowFrom, "AllowFrom must be empty by default")
 	assert.False(t, cfg.GroupTrigger.MentionOnly, "GroupTrigger.MentionOnly must be false by default")

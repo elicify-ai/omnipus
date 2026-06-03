@@ -524,10 +524,15 @@ func (m *Manager) initChannel(name, displayName string) error {
 // bus, tagged with dropNoticePrefix so that a notice which itself gets dropped is
 // only logged (see the dispatch enqueue callbacks) — preventing amplification.
 // The prefix is stripped by runWorker before the notice is delivered, so the user
-// never sees the sentinel. The publish is non-blocking: if the bus is closed or
-// the context is done, the notice is logged and discarded.
-func (m *Manager) notifyDrop(ctx context.Context, channel, chatID, text string) {
-	if channel == "" || chatID == "" {
+// never sees the sentinel.
+//
+// The publish MUST be non-blocking. notifyDrop runs synchronously inside the
+// dispatch loop, which is the SOLE consumer of the outbound channel. The drop
+// condition is "outbound buffer full", so a blocking publish here would wait for
+// a slot that only this same loop can drain — a self-deadlock. TryPublishOutbound
+// drops the notice (logged) rather than block when the buffer is still full.
+func (m *Manager) notifyDrop(channel, chatID, text string) {
+	if channel == "" || chatID == "" || m.bus == nil {
 		return
 	}
 	notice := bus.OutboundMessage{
@@ -535,11 +540,10 @@ func (m *Manager) notifyDrop(ctx context.Context, channel, chatID, text string) 
 		ChatID:  chatID,
 		Content: dropNoticePrefix + text,
 	}
-	if err := m.bus.PublishOutbound(ctx, notice); err != nil {
-		logger.WarnCF("channels", "Failed to publish drop notice", map[string]any{
+	if !m.bus.TryPublishOutbound(notice) {
+		logger.WarnCF("channels", "Drop notice dropped (bus full or closed)", map[string]any{
 			"channel": channel,
 			"chat_id": chatID,
-			"error":   err.Error(),
 		})
 	}
 }
@@ -592,8 +596,12 @@ func (m *Manager) initChannels(channels *config.ChannelsConfig) error {
 		// modernc.org/sqlite is unavailable) whatsapp_native fails to construct
 		// and we record a clear failure rather than silently no-op.
 		if err := m.initChannel("whatsapp_native", "WhatsApp Native"); err != nil {
-			m.recordChannelFailure("whatsapp_native", "WhatsApp Native",
-				fmt.Errorf("WhatsApp requires the native build (bridge removed); unavailable on this build variant: %w", err))
+			wrapped := fmt.Errorf(
+				"WhatsApp requires the native build (bridge removed); "+
+					"unavailable on this build variant: %w",
+				err,
+			)
+			m.recordChannelFailure("whatsapp_native", "WhatsApp Native", wrapped)
 		}
 	}
 
@@ -692,12 +700,36 @@ func (m *Manager) initChannels(channels *config.ChannelsConfig) error {
 		"failed_channels":  len(m.failedChannels),
 	})
 
-	// If any enabled channel failed to construct, abort boot per deny-by-default policy.
-	if len(m.failedChannels) > 0 {
-		joinedErrs := make([]error, 0, len(m.failedChannels))
-		for i := range m.failedChannels {
-			joinedErrs = append(joinedErrs, &m.failedChannels[i])
+	// If any enabled channel failed to construct, abort boot per deny-by-default
+	// policy — with the whatsapp_native exception (see bootFatalError).
+	return bootFatalError(m.failedChannels)
+}
+
+// nonFatalChannels lists channels whose construction failure must NOT abort
+// gateway boot. whatsapp_native is non-fatal because on a lite/stub build (or an
+// arch where modernc.org/sqlite is unavailable) WhatsApp cannot construct, and
+// the legacy bridge fallback was removed. Aborting the whole gateway over it
+// would brick every other channel for an operator who left
+// channels.whatsapp.enabled=true. The failure is still recorded and surfaced as
+// degraded via FailedChannels, so status shows a clear "requires the native
+// build" message.
+var nonFatalChannels = map[string]struct{}{
+	"whatsapp_native": {},
+}
+
+// bootFatalError returns a joined error for the subset of failed channels whose
+// failure is boot-fatal, or nil if every failure is non-fatal (or there were
+// none). Non-fatal failures remain recorded in FailedChannels for degraded
+// status; they simply do not abort boot.
+func bootFatalError(failed []ChannelInitError) error {
+	joinedErrs := make([]error, 0, len(failed))
+	for i := range failed {
+		if _, nonFatal := nonFatalChannels[failed[i].Name]; nonFatal {
+			continue
 		}
+		joinedErrs = append(joinedErrs, &failed[i])
+	}
+	if len(joinedErrs) > 0 {
 		return errors.Join(joinedErrs...)
 	}
 	return nil
@@ -843,6 +875,32 @@ func (m *Manager) unregisterChannelHTTPHandler(name string, ch Channel) {
 	}
 }
 
+// newDispatchContext derives a fresh cancelable context from ctx and wires it
+// into m.dispatchTask and m.dispatchCtx. Both StartAll and Reload use it so that
+// the dispatch context (which RegisterChannel and post-start workers bind to) is
+// always refreshed in lockstep with m.dispatchTask — preventing the class of bug
+// where a reload canceled the old context but forgot to refresh m.dispatchCtx,
+// leaving newly-added channels bound to a dead context. Caller must hold m.mu.
+// Returns the new context and its cancel func (the caller is responsible for
+// calling cancel on an early-abort path, e.g. all channels failed to start).
+func (m *Manager) newDispatchContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	dispatchCtx, cancel := context.WithCancel(ctx)
+	m.dispatchTask = &asyncTask{cancel: cancel}
+	m.dispatchCtx = dispatchCtx
+	return dispatchCtx, cancel
+}
+
+// startDispatchers launches the long-lived dispatch goroutines (text + media
+// outbound dispatchers and the TTL janitor) bound to dispatchCtx. Both StartAll
+// and Reload call it so the janitor is never forgotten on a reload (its omission
+// previously leaked typing/placeholder/stream entries after a reload). Caller
+// must hold m.mu.
+func (m *Manager) startDispatchers(dispatchCtx context.Context) {
+	go m.dispatchOutbound(dispatchCtx)
+	go m.dispatchOutboundMedia(dispatchCtx)
+	go m.runTTLJanitor(dispatchCtx)
+}
+
 func (m *Manager) StartAll(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -853,9 +911,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 
 	logger.InfoC("channels", "Starting all channels")
 
-	dispatchCtx, cancel := context.WithCancel(ctx)
-	m.dispatchTask = &asyncTask{cancel: cancel}
-	m.dispatchCtx = dispatchCtx
+	dispatchCtx, cancel := m.newDispatchContext(ctx)
 
 	startedCount := 0
 	configuredCount := len(m.channels)
@@ -883,12 +939,8 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		return fmt.Errorf("channels: all %d configured channels failed to start", configuredCount)
 	}
 
-	// Start the dispatcher that reads from the bus and routes to workers
-	go m.dispatchOutbound(dispatchCtx)
-	go m.dispatchOutboundMedia(dispatchCtx)
-
-	// Start the TTL janitor that cleans up stale typing/placeholder entries
-	go m.runTTLJanitor(dispatchCtx)
+	// Start the bus dispatchers (text + media) and the TTL janitor.
+	m.startDispatchers(dispatchCtx)
 
 	// Start shared HTTP server if configured
 	if m.httpServer != nil {
@@ -1172,6 +1224,16 @@ func (m *Manager) sendWithRetry(ctx context.Context, name string, w *channelWork
 		"error":   lastErr.Error(),
 		"retries": maxRetries,
 	})
+
+	// Surface a short user-facing notice so a failed text send is not silent —
+	// mirroring the media path's "[media delivery failed]" fallback. Guard
+	// against re-notifying our own fallback (the dropNoticePrefix sentinel marks
+	// manager-injected notices) so a fallback that itself fails to send does not
+	// recurse. The publish is non-blocking (see notifyDrop) to avoid stalling the
+	// worker when the bus is saturated.
+	if !strings.HasPrefix(msg.Content, dropNoticePrefix) {
+		m.notifyDrop(name, msg.ChatID, "[message delivery failed]")
+	}
 }
 
 func dispatchLoop[M any](
@@ -1214,7 +1276,7 @@ func dispatchLoop[M any](
 			}
 
 			if wExists && w != nil {
-				if !enqueue(ctx, w, msg) {
+				if !safeEnqueue(ctx, w, msg, enqueue) {
 					return
 				}
 			} else if exists {
@@ -1224,34 +1286,67 @@ func dispatchLoop[M any](
 	}
 }
 
+// safeEnqueue invokes the per-message enqueue closure with a recover guard. The
+// enqueue closures send on a worker queue inside a select that also watches
+// ctx.Done(); during shutdown/reload the worker queue may be closed concurrently
+// (StopAll/Reload close(w.queue)). If the queue is closed AND the send case is
+// chosen before ctx.Done() is observed (Go selects randomly among ready cases),
+// the send panics with "send on closed channel". We recover from that, treat it
+// as "stop dispatching" (return false), and exit the loop cleanly instead of
+// crashing the process mid-shutdown.
+func safeEnqueue[M any](
+	ctx context.Context,
+	w *channelWorker,
+	msg M,
+	enqueue func(context.Context, *channelWorker, M) bool,
+) (cont bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.WarnCF("channels", "Enqueue panic recovered (queue closed during shutdown)",
+				map[string]any{"panic": fmt.Sprintf("%v", r)})
+			cont = false
+		}
+	}()
+	return enqueue(ctx, w, msg)
+}
+
+// enqueueOutbound attempts to hand a text message to the channel worker's queue.
+// It returns true to keep the dispatch loop running, false to stop it (ctx done).
+// On backpressure (queue full) it drops the message and publishes a user-facing
+// drop notice — unless the message is itself a drop notice (the dropNoticePrefix
+// guard), which would otherwise amplify notices on a saturated channel. Extracted
+// from the dispatchOutbound closure so the drop/notify decision is unit-testable
+// without a running dispatcher goroutine.
+func (m *Manager) enqueueOutbound(ctx context.Context, w *channelWorker, msg bus.OutboundMessage) bool {
+	select {
+	case w.queue <- msg:
+		return true
+	case <-ctx.Done():
+		// Shutting down/reloading: do not attempt the send (the worker
+		// queue may already be closed, which would panic). Exit the loop.
+		return false
+	default:
+		// Backpressure: the worker queue is full. Report the drop instead
+		// of silently swallowing it, and surface user-facing feedback the
+		// same way a failed media send does so the user is not left
+		// waiting on a reply that will never arrive.
+		logger.ErrorCF("channels", "Outbound queue full, message dropped",
+			map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID})
+		// Don't re-notify if a drop notice itself got dropped (avoids
+		// an amplification loop).
+		if !strings.HasPrefix(msg.Content, dropNoticePrefix) {
+			m.notifyDrop(msg.Channel, msg.ChatID, "[message dropped: channel is overloaded, please retry]")
+		}
+		return true
+	}
+}
+
 func (m *Manager) dispatchOutbound(ctx context.Context) {
 	dispatchLoop(
 		ctx, m,
 		m.bus.OutboundChan(),
 		func(msg bus.OutboundMessage) string { return msg.Channel },
-		func(ctx context.Context, w *channelWorker, msg bus.OutboundMessage) bool {
-			select {
-			case w.queue <- msg:
-				return true
-			case <-ctx.Done():
-				// Shutting down/reloading: do not attempt the send (the worker
-				// queue may already be closed, which would panic). Exit the loop.
-				return false
-			default:
-				// Backpressure: the worker queue is full. Report the drop instead
-				// of silently swallowing it, and surface user-facing feedback the
-				// same way a failed media send does so the user is not left
-				// waiting on a reply that will never arrive.
-				logger.ErrorCF("channels", "Outbound queue full, message dropped",
-					map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID})
-				// Don't re-notify if a drop notice itself got dropped (avoids
-				// an amplification loop).
-				if !strings.HasPrefix(msg.Content, dropNoticePrefix) {
-					m.notifyDrop(ctx, msg.Channel, msg.ChatID, "[message dropped: channel is overloaded, please retry]")
-				}
-				return true
-			}
-		},
+		m.enqueueOutbound,
 		"Outbound dispatcher started",
 		"Outbound dispatcher stopped",
 		"Unknown channel for outbound message",
@@ -1277,7 +1372,7 @@ func (m *Manager) dispatchOutboundMedia(ctx context.Context) {
 				// surface user-facing feedback.
 				logger.ErrorCF("channels", "Outbound media queue full, message dropped",
 					map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID})
-				m.notifyDrop(ctx, msg.Channel, msg.ChatID, "[media dropped: channel is overloaded, please retry]")
+				m.notifyDrop(msg.Channel, msg.ChatID, "[media dropped: channel is overloaded, please retry]")
 				return true
 			}
 		},
@@ -1395,9 +1490,11 @@ func (m *Manager) sendMediaWithRetry(
 	return lastErr
 }
 
-// runTTLJanitor periodically scans the typingStops and placeholders maps
-// and evicts entries that have exceeded their TTL. This prevents memory
-// accumulation when outbound paths fail to trigger preSend (e.g. LLM errors).
+// runTTLJanitor periodically scans the typingStops, reactionUndos, placeholders
+// and streamActive maps and evicts entries that have exceeded their TTL. This
+// prevents memory accumulation when outbound paths fail to trigger preSend
+// (e.g. LLM errors). The per-tick sweep is delegated to evictStale so it can be
+// unit-tested deterministically without a wall-clock timer.
 func (m *Manager) runTTLJanitor(ctx context.Context) {
 	ticker := time.NewTicker(janitorInterval)
 	defer ticker.Stop()
@@ -1407,47 +1504,55 @@ func (m *Manager) runTTLJanitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			m.typingStops.Range(func(key, value any) bool {
-				if entry, ok := value.(typingEntry); ok {
-					if now.Sub(entry.createdAt) > typingStopTTL {
-						if _, loaded := m.typingStops.LoadAndDelete(key); loaded {
-							entry.stop() // idempotent, safe
-						}
-					}
-				}
-				return true
-			})
-			m.reactionUndos.Range(func(key, value any) bool {
-				if entry, ok := value.(reactionEntry); ok {
-					if now.Sub(entry.createdAt) > typingStopTTL {
-						if _, loaded := m.reactionUndos.LoadAndDelete(key); loaded {
-							entry.undo() // idempotent, safe
-						}
-					}
-				}
-				return true
-			})
-			m.placeholders.Range(func(key, value any) bool {
-				if entry, ok := value.(placeholderEntry); ok {
-					if now.Sub(entry.createdAt) > placeholderTTL {
-						m.placeholders.Delete(key)
-					}
-				}
-				return true
-			})
-			// Evict stale streamActive markers. A marker is normally consumed by
-			// preSend/preSendMedia, but if the agent errors after Finalize and
-			// never publishes an outbound message for the key, the marker leaks.
-			m.streamActive.Range(func(key, value any) bool {
-				if entry, ok := value.(streamEntry); ok {
-					if now.Sub(entry.createdAt) > placeholderTTL {
-						m.streamActive.Delete(key)
-					}
-				}
-				return true
-			})
+			m.evictStale(now)
 		}
 	}
+}
+
+// evictStale performs a single TTL sweep over all expiry-tracked maps, evicting
+// (and invoking the idempotent cleanup of) every entry older than its TTL as of
+// now. Extracted from runTTLJanitor so the eviction logic is testable without
+// relying on the ticker.
+func (m *Manager) evictStale(now time.Time) {
+	m.typingStops.Range(func(key, value any) bool {
+		if entry, ok := value.(typingEntry); ok {
+			if now.Sub(entry.createdAt) > typingStopTTL {
+				if _, loaded := m.typingStops.LoadAndDelete(key); loaded {
+					entry.stop() // idempotent, safe
+				}
+			}
+		}
+		return true
+	})
+	m.reactionUndos.Range(func(key, value any) bool {
+		if entry, ok := value.(reactionEntry); ok {
+			if now.Sub(entry.createdAt) > typingStopTTL {
+				if _, loaded := m.reactionUndos.LoadAndDelete(key); loaded {
+					entry.undo() // idempotent, safe
+				}
+			}
+		}
+		return true
+	})
+	m.placeholders.Range(func(key, value any) bool {
+		if entry, ok := value.(placeholderEntry); ok {
+			if now.Sub(entry.createdAt) > placeholderTTL {
+				m.placeholders.Delete(key)
+			}
+		}
+		return true
+	})
+	// Evict stale streamActive markers. A marker is normally consumed by
+	// preSend/preSendMedia, but if the agent errors after Finalize and
+	// never publishes an outbound message for the key, the marker leaks.
+	m.streamActive.Range(func(key, value any) bool {
+		if entry, ok := value.(streamEntry); ok {
+			if now.Sub(entry.createdAt) > placeholderTTL {
+				m.streamActive.Delete(key)
+			}
+		}
+		return true
+	})
 }
 
 func (m *Manager) GetChannel(name string) (Channel, bool) {
@@ -1525,13 +1630,11 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 			m.unregisterChannelLocked(n)
 		})
 	}
-	dispatchCtx, cancel := context.WithCancel(ctx)
-	m.dispatchTask = &asyncTask{cancel: cancel}
-	// Refresh m.dispatchCtx so that RegisterChannel (and any worker spun up
-	// after this reload) binds to the live context instead of the dead one that
-	// was just canceled above. Without this, dispatch goroutines for channels
-	// added after a reload run on a canceled context and silently drop messages.
-	m.dispatchCtx = dispatchCtx
+	// Refresh the dispatch context (and m.dispatchCtx, used by RegisterChannel and
+	// post-reload workers) in lockstep with m.dispatchTask. Without this, dispatch
+	// goroutines for channels added after a reload run on the just-canceled context
+	// and silently drop messages.
+	dispatchCtx, cancel := m.newDispatchContext(ctx)
 	cc, err := toChannelConfig(cfg, added)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("toChannelConfig error: %v", err))
@@ -1599,16 +1702,11 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	// Commit hashes only for successfully started channels.
 	m.channelHashes = list
 
-	// Restart dispatch goroutines against the new dispatchCtx so outbound messages
-	// continue to be routed after the old context was canceled above.
-	go m.dispatchOutbound(dispatchCtx)
-	go m.dispatchOutboundMedia(dispatchCtx)
-
-	// Restart the TTL janitor on the new dispatchCtx. The old janitor was bound
-	// to the context canceled above (m.dispatchTask.cancel) and has exited, so
-	// without this restart stale typing/placeholder/stream entries would never
-	// be evicted after a reload.
-	go m.runTTLJanitor(dispatchCtx)
+	// Restart the bus dispatchers + TTL janitor against the new dispatchCtx so
+	// outbound routing and stale-entry eviction resume after the old context was
+	// canceled above. (Reload previously forgot the janitor here — startDispatchers
+	// keeps StartAll and Reload in lockstep so it can't be omitted again.)
+	m.startDispatchers(dispatchCtx)
 
 	// Restart workers for existing (unchanged) channels on the new dispatch context.
 	// Without this, unchanged channel workers retain the old (canceled) context

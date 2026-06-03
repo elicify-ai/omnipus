@@ -2,6 +2,10 @@ package dingtalk
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -175,5 +179,74 @@ func TestOnChatBotMessageReceived_StoresSessionWebhookForReply(t *testing.T) {
 	}
 	if got.(string) != "https://example.com/reply-22" {
 		t.Fatalf("stored webhook=%q", got)
+	}
+}
+
+// TestSend_WebhookRequestShape exercises the happy-path Send: it points the
+// stored session webhook at an httptest server and asserts the POSTed JSON body
+// is a DingTalk markdown reply (msgtype=markdown, title="Omnipus", text carries
+// the message content) sent with a JSON content type. Previously the Send path
+// only had failure-case coverage.
+func TestSend_WebhookRequestShape(t *testing.T) {
+	type captured struct {
+		method      string
+		contentType string
+		body        map[string]any
+	}
+	got := make(chan captured, 1)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		got <- captured{
+			method:      r.Method,
+			contentType: r.Header.Get("Content-Type"),
+			body:        body,
+		}
+		// The SDK requires a 200 to treat the send as successful.
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"errcode":0}`))
+	}))
+	defer srv.Close()
+
+	ch, _ := newTestDingTalkChannel(t, config.DingTalkConfig{})
+	ch.SetRunning(true)
+	t.Cleanup(func() { ch.SetRunning(false) })
+
+	// Seed the session webhook for the target chat (normally stored on inbound).
+	ch.sessionWebhooks.Store("conv-shape", srv.URL)
+
+	err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "conv-shape",
+		Content: "hello from omnipus",
+	})
+	if err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+
+	select {
+	case c := <-got:
+		if c.method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", c.method)
+		}
+		if !strings.HasPrefix(c.contentType, "application/json") {
+			t.Fatalf("expected application/json content type, got %q", c.contentType)
+		}
+		if c.body["msgtype"] != "markdown" {
+			t.Fatalf("expected msgtype=markdown, got %v", c.body["msgtype"])
+		}
+		md, ok := c.body["markdown"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected a markdown object in body, got %T", c.body["markdown"])
+		}
+		if md["title"] != "Omnipus" {
+			t.Fatalf("expected title=Omnipus, got %v", md["title"])
+		}
+		text, _ := md["text"].(string)
+		if !strings.Contains(text, "hello from omnipus") {
+			t.Fatalf("expected message content in markdown text, got %q", text)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("webhook was never called by Send")
 	}
 }

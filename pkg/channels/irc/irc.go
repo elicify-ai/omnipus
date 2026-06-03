@@ -113,6 +113,14 @@ func (c *IRCChannel) Start(ctx context.Context) error {
 
 	c.conn = conn
 
+	// Mark running BEFORE launching the loop goroutine. The goroutine calls
+	// SetRunning(false) when Loop() returns; if it were launched first, a
+	// fast-failing Loop() could set running=false and then be clobbered back to
+	// true by the SetRunning(true) below — re-creating the very zombie this guards
+	// against. Setting true first means the goroutine's false always wins on exit.
+	// (Match weixin's ordering.)
+	c.SetRunning(true)
+
 	// ircevent.Connection.Loop() handles reconnection internally and only returns
 	// when the connection is permanently torn down (Quit() / fatal). When it does
 	// return, the channel is dead, so flip IsRunning() to false to avoid a "zombie"
@@ -125,7 +133,6 @@ func (c *IRCChannel) Start(ctx context.Context) error {
 		logger.InfoC("irc", "IRC connection loop exited; channel marked not running")
 	}()
 
-	c.SetRunning(true)
 	logger.InfoCF("irc", "IRC channel started", map[string]any{
 		"server": c.config.Server,
 		"nick":   c.config.Nick,

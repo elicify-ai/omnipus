@@ -522,7 +522,6 @@ func (c *configV0) migrateChannelConfigs() {
 	if c.Channels.Discord.MentionOnly && !c.Channels.Discord.GroupTrigger.MentionOnly {
 		c.Channels.Discord.GroupTrigger.MentionOnly = true
 	}
-
 }
 
 // secretFieldPatterns is the set of JSON tag base-names that identify a field
