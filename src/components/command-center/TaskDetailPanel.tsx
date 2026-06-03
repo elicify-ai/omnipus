@@ -149,7 +149,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
 
   return (
     <Sheet open={task != null} onOpenChange={(open) => { if (!open) onClose() }}>
-      <SheetContent side="right" className="w-[380px] sm:w-[460px] overflow-y-auto">
+      <SheetContent side="right" className="w-full sm:w-[380px] md:w-[460px] overflow-y-auto">
         <SheetHeader className="mb-5">
           <SheetTitle className="pr-6 leading-snug">{task?.title ?? ''}</SheetTitle>
         </SheetHeader>

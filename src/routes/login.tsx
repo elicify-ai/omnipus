@@ -136,7 +136,8 @@ function LoginScreen() {
               <button
                 type="button"
                 onClick={() => setShowPassword((v) => !v)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 transition-colors"
+                // Padded 44x44 mobile tap target without enlarging the 14px icon.
+                className="absolute right-1 sm:right-2.5 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 transition-colors"
                 style={{ color: 'var(--color-muted)' }}
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
               >
@@ -175,7 +176,8 @@ function LoginScreen() {
           <button
             type="button"
             onClick={() => navigate({ to: '/onboarding' })}
-            className="inline-flex items-center gap-2 text-sm transition-colors hover:underline"
+            // Pad to a 44px-high mobile tap target without growing the visual text.
+            className="inline-flex items-center justify-center gap-2 min-h-11 px-2 text-sm transition-colors hover:underline"
             style={{ color: 'var(--color-muted)' }}
           >
             <Rocket size={14} />

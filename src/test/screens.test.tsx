@@ -143,8 +143,10 @@ describe('Command Center screen — empty state', () => {
   let CommandCenterScreen: () => JSX.Element
 
   beforeAll(async () => {
-    const mod = await import('@/routes/_app/command-center')
-    CommandCenterScreen = mod.Route.options.component as () => JSX.Element
+    // The command-center route now lazy-loads its screen; import the screen
+    // module directly so the test renders real content (not the Suspense fallback).
+    const mod = await import('@/components/screens/CommandCenterScreen')
+    CommandCenterScreen = mod.CommandCenterScreen as () => JSX.Element
   }, 60_000)
 
   it('renders "Command Center" screen with StatusBar and TaskList', () => {
@@ -168,10 +170,10 @@ describe('Agents screen — empty state', () => {
   let AgentsScreen: () => JSX.Element
 
   beforeAll(async () => {
-    // agents.tsx is the layout route (renders <Outlet />) — the actual list screen
-    // with the "Agents" h1 lives in agents.index.tsx. Import the index route instead.
-    const mod = await import('@/routes/_app/agents.index')
-    AgentsScreen = mod.Route.options.component as () => JSX.Element
+    // The agents/ index route now lazy-loads its screen; import the screen module
+    // directly so the test renders real content (not the Suspense fallback).
+    const mod = await import('@/components/screens/AgentListScreen')
+    AgentsScreen = mod.AgentListScreen as () => JSX.Element
   }, 60_000)
 
   it('renders "Agents" as h1 heading', () => {
@@ -184,8 +186,10 @@ describe('Skills screen — empty state', () => {
   let SkillsScreen: () => JSX.Element
 
   beforeAll(async () => {
-    const mod = await import('@/routes/_app/skills')
-    SkillsScreen = mod.Route.options.component as () => JSX.Element
+    // The skills route now lazy-loads its screen; import the screen module
+    // directly so the test renders real content (not the Suspense fallback).
+    const mod = await import('@/components/screens/SkillsScreen')
+    SkillsScreen = mod.SkillsScreen as () => JSX.Element
   }, 60_000)
 
   it('renders "Skills & Tools" as h1 heading', () => {
@@ -199,8 +203,10 @@ describe('Settings screen — empty state', () => {
   let SettingsScreen: () => JSX.Element
 
   beforeAll(async () => {
-    const mod = await import('@/routes/_app/settings')
-    SettingsScreen = mod.Route.options.component as () => JSX.Element
+    // The settings route now lazy-loads its screen; import the screen module
+    // directly so the test renders real content (not the Suspense fallback).
+    const mod = await import('@/components/screens/SettingsScreen')
+    SettingsScreen = mod.SettingsScreen as () => JSX.Element
   }, 60_000)
 
   it('renders "Settings" as h1 heading', () => {

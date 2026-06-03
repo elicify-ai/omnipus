@@ -29,6 +29,8 @@ export const Route = createFileRoute('/_app/agents')({
   notFoundComponent: AgentsNotFound,
 })
 
-// Re-export AgentListScreen from the index route for consumers that import from this path.
-// TanStack Router's file-based routing resolves this file for the "/agents" route prefix.
-export { AgentListScreen } from './agents.index'
+// Note: the agent list screen body now lives in
+// @/components/screens/AgentListScreen and is lazy-loaded by agents.index.tsx.
+// It is intentionally NOT re-exported here — an eager re-export would pull the
+// screen back into this (eager) layout chunk and defeat the code split.
+// Consumers (tests) import AgentListScreen from the screen module directly.

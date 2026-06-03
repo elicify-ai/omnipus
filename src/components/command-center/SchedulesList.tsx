@@ -10,6 +10,16 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
   fetchSchedules,
   fetchAgents,
   runSchedule,
@@ -87,6 +97,8 @@ export function SchedulesList({ agentId }: SchedulesListProps) {
 
   const [detailSchedule, setDetailSchedule] = useState<Schedule | null>(null)
   const [editSchedule, setEditSchedule] = useState<Schedule | null>(null)
+  // Schedule pending delete confirmation; non-null drives the AlertDialog open.
+  const [pendingDelete, setPendingDelete] = useState<Schedule | null>(null)
 
   const { data: schedules = [], isLoading, isError } = useQuery({
     queryKey: ['schedules'],
@@ -223,9 +235,7 @@ export function SchedulesList({ agentId }: SchedulesListProps) {
               <IconAction
                 label="Delete"
                 destructive
-                onClick={() => {
-                  if (window.confirm(`Delete schedule "${schedule.name}"?`)) doDelete(schedule.id)
-                }}
+                onClick={() => setPendingDelete(schedule)}
                 icon={<Trash size={14} />}
               />
             </div>
@@ -253,6 +263,37 @@ export function SchedulesList({ agentId }: SchedulesListProps) {
           }}
         />
       )}
+
+      {/* Delete confirmation — replaces the native window.confirm */}
+      <AlertDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete schedule</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete
+                ? `Delete schedule "${pendingDelete.name}"? This cannot be undone.`
+                : ''}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (pendingDelete) doDelete(pendingDelete.id)
+                setPendingDelete(null)
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

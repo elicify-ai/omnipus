@@ -86,8 +86,9 @@ import {
 } from '@/lib/api'
 import type { ChannelEntry } from '@/lib/api'
 import { ChannelConfigPanel } from '@/components/skills/ChannelConfigPanel'
-// With the createFileRoute mock in place, Route is `{ component: ChannelsScreen }` at runtime.
-import { Route as ChannelsRoute } from './channels'
+// The channels route now lazy-loads its screen; import the screen module
+// directly so the test renders real content (not the Suspense fallback).
+import { ChannelsScreen } from '@/components/screens/ChannelsScreen'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -473,9 +474,9 @@ describe('ChannelConfigPanel — Routing section', () => {
 // ── Section 3: ChannelsScreen degraded state ──────────────────────────────────
 // Traces to: issue #299 — UI must not show degraded channels as healthy.
 
-// The real ChannelsScreen component is accessible via Route.component because the
-// createFileRoute mock returns `opts` directly, making Route = { component: ChannelsScreen }.
-const RealChannelsScreen = (ChannelsRoute as unknown as { component: React.ComponentType }).component
+// ChannelsScreen is imported directly from its (eager) module so the test
+// renders real content rather than the route's lazy Suspense fallback.
+const RealChannelsScreen = ChannelsScreen
 
 function renderRealChannelsScreen() {
   const client = makeQueryClient()

@@ -25,15 +25,24 @@ import { rehypePhosphorEmoji } from '@/lib/rehype-phosphor-emoji'
 import { rewriteLegacyURL, resolveEffectivePreview } from '@/lib/preview-url'
 import { isSafeHref } from '@/lib/url-safe'
 import { fetchAboutInfo } from '@/lib/api'
-import * as PhosphorIcons from '@phosphor-icons/react'
+import { PHOSPHOR_EMOJI_ICONS } from '@/lib/phosphor-emoji-icons'
 import type { ComponentPropsWithoutRef } from 'react'
 
 // ── Phosphor icon span renderer ───────────────────────────────────────────────
 // Renders <span data-phosphor-icon="IconName"> as the corresponding Phosphor icon.
+// Icons are resolved from an explicit allow-list (PHOSPHOR_EMOJI_ICONS) rather
+// than a wildcard `import * as` — see src/lib/phosphor-emoji-icons.tsx. An
+// unknown name falls through to the original span (preserving prior behavior:
+// only names present in the icon set were ever rendered as icons).
 
 function PhosphorEmojiSpan({ 'data-phosphor-icon': iconName, children, ...props }: ComponentPropsWithoutRef<'span'> & { 'data-phosphor-icon'?: string }) {
-  if (iconName && iconName in PhosphorIcons) {
-    const Icon = (PhosphorIcons as unknown as Record<string, React.ComponentType<{ size?: number; weight?: string; className?: string }>>)[iconName]
+  // PHOSPHOR_EMOJI_ICONS is a sealed `as const` map; `iconName` is an arbitrary
+  // string from the DOM attribute, so index through a string-keyed view. A name
+  // absent from the allow-list yields undefined → original span is rendered.
+  const Icon = iconName
+    ? (PHOSPHOR_EMOJI_ICONS as Record<string, (typeof PHOSPHOR_EMOJI_ICONS)[keyof typeof PHOSPHOR_EMOJI_ICONS] | undefined>)[iconName]
+    : undefined
+  if (Icon) {
     return <Icon size={14} weight="regular" className="inline-block align-middle text-[var(--color-accent)] mx-0.5" />
   }
   return <span {...props}>{children}</span>

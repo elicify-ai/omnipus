@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SchedulesList } from './SchedulesList'
 import type { Schedule } from '@/lib/api/generated/openapi-types'
@@ -29,7 +29,7 @@ vi.mock('@/store/ui', () => ({
   },
 }))
 
-import { fetchSchedules, fetchAgents, runSchedule } from '@/lib/api'
+import { fetchSchedules, fetchAgents, runSchedule, deleteSchedule } from '@/lib/api'
 
 const mockAgents = [
   { id: 'mia', name: 'Mia', type: 'core' },
@@ -140,5 +140,50 @@ describe('SchedulesList — card feed (#264 US6 AS1)', () => {
     await screen.findByText(/run history/i)
     // two run rows for s1, no table
     expect(screen.getAllByTestId('schedule-run-row')).toHaveLength(2)
+  })
+})
+
+describe('SchedulesList — destructive delete via AlertDialog', () => {
+  it('opens the confirm dialog and does NOT delete until confirmed', async () => {
+    renderList()
+    await screen.findByText('Daily PR summary')
+    // Row Delete on the first schedule opens the dialog, no mutation yet.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0])
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toBeInTheDocument()
+    expect(deleteSchedule).not.toHaveBeenCalled()
+  })
+
+  it('confirms with the CORRECT schedule id (deletes the second of two)', async () => {
+    renderList()
+    await screen.findByText('Weekly cron job')
+    // Second schedule (s2) is the second Delete button.
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[1])
+    await screen.findByRole('alertdialog')
+    // The dialog's confirm button is labelled "Delete" too — scope to the dialog.
+    const dialog = screen.getByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(deleteSchedule).toHaveBeenCalledWith('s2'))
+    expect(deleteSchedule).toHaveBeenCalledTimes(1)
+  })
+
+  it('Cancel dismisses without deleting', async () => {
+    renderList()
+    await screen.findByText('Daily PR summary')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0])
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(deleteSchedule).not.toHaveBeenCalled()
+  })
+
+  it('Escape dismisses without deleting', async () => {
+    renderList()
+    await screen.findByText('Daily PR summary')
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0])
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.keyDown(dialog, { key: 'Escape', code: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(deleteSchedule).not.toHaveBeenCalled()
   })
 })

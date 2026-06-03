@@ -202,7 +202,12 @@ export function Sidebar() {
       {effectivelyPinned && (
         <aside
           className="flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-1)] border-r border-[var(--color-border)]"
-          style={{ width: 'var(--spacing-sidebar)' }}
+          style={{
+            width: 'var(--spacing-sidebar)',
+            paddingTop: 'env(safe-area-inset-top)',
+            paddingBottom: 'env(safe-area-inset-bottom)',
+            paddingLeft: 'env(safe-area-inset-left)',
+          }}
           aria-label="Main navigation"
         >
           {sidebarContent}
@@ -218,7 +223,12 @@ export function Sidebar() {
             exit={{ x: '-100%' }}
             transition={{ type: 'tween', duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
             className="fixed left-0 top-0 z-40 flex h-full flex-col bg-[var(--color-surface-1)] border-r border-[var(--color-border)] shadow-2xl"
-            style={{ width: 'var(--spacing-sidebar)' }}
+            style={{
+              width: 'var(--spacing-sidebar)',
+              paddingTop: 'env(safe-area-inset-top)',
+              paddingBottom: 'env(safe-area-inset-bottom)',
+              paddingLeft: 'env(safe-area-inset-left)',
+            }}
             role="dialog"
             aria-modal="true"
             aria-label="Main navigation"

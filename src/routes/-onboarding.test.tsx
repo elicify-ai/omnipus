@@ -59,6 +59,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/test-avatar.svg' }))
 
 import { configureProvider, probeProvider, completeOnboardingTransaction } from '@/lib/api'
+import { evaluatePasswordStrength, friendlyProbeError } from './onboarding'
 
 // Cache the dynamically imported component across all tests so the first import's
 // transform cost (~20s) only pays once and doesn't time out individual tests.
@@ -317,6 +318,102 @@ describe('OnboardingWizard — test connection', () => {
 })
 
 // =====================================================================
+// friendlyProbeError — maps raw upstream probe strings to plain-language,
+// actionable messages at the display layer. The raw string is preserved
+// separately (behind a "Technical details" disclosure) by the caller.
+// =====================================================================
+
+describe('friendlyProbeError', () => {
+  it('maps 401/403 (and auth-ish text) to a "key rejected" message naming the provider', () => {
+    for (const raw of [
+      'upstream models: status 401',
+      'status 403',
+      '401 unauthorized',
+      'invalid api key',
+      'request rejected',
+    ]) {
+      const msg = friendlyProbeError(raw, 'OpenAI')
+      expect(msg).toMatch(/rejected by OpenAI/i)
+      expect(msg).toMatch(/double-check/i)
+    }
+  })
+
+  it('maps 429 / rate-limit text to a "rate limited" message naming the provider', () => {
+    expect(friendlyProbeError('upstream models: status 429', 'Groq')).toMatch(
+      /rate limited by Groq/i
+    )
+    expect(friendlyProbeError('rate limit exceeded', 'Groq')).toMatch(/rate limited by Groq/i)
+  })
+
+  it('falls back to a generic "couldn\'t reach" message for network/timeout/unknown', () => {
+    for (const raw of ['network error', 'request timeout', 'dial tcp: connection refused', '']) {
+      const msg = friendlyProbeError(raw, 'Anthropic')
+      expect(msg).toMatch(/couldn.t reach Anthropic/i)
+    }
+  })
+
+  it('does not misclassify a 404/500 status as an auth error', () => {
+    expect(friendlyProbeError('status 404', 'OpenAI')).toMatch(/couldn.t reach OpenAI/i)
+    expect(friendlyProbeError('status 500', 'OpenAI')).toMatch(/couldn.t reach OpenAI/i)
+  })
+})
+
+// =====================================================================
+// Scenario: friendly probe error in the UI (display-layer mapping + a11y)
+// =====================================================================
+
+describe('OnboardingWizard — friendly probe error display', () => {
+  async function failConnect(rawError: string) {
+    vi.mocked(configureProvider).mockResolvedValue({} as never)
+    vi.mocked(probeProvider).mockResolvedValue({ success: false, error: rawError })
+    await renderWizard()
+    fireEvent.click(screen.getByRole('button', { name: /get started/i }))
+    await waitFor(() => screen.getByText(/connect a provider/i))
+    fireEvent.click(screen.getByRole('button', { name: 'Anthropic' }))
+    await waitFor(() => screen.getByLabelText('API Key'))
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-ant-test' } })
+    fireEvent.click(screen.getByRole('button', { name: /connect & load models/i }))
+    await waitFor(() => screen.getByTestId('onboarding-error'))
+  }
+
+  it('renders a friendly message (not the raw upstream string) as the primary error', async () => {
+    await failConnect('upstream models: status 401')
+    // Primary, plain-language message naming the provider.
+    expect(screen.getByText(/rejected by Anthropic/i)).toBeInTheDocument()
+  })
+
+  it('keeps the raw upstream string available behind a Technical details disclosure', async () => {
+    await failConnect('upstream models: status 401')
+    expect(screen.getByText(/technical details/i)).toBeInTheDocument()
+    // Raw string is preserved (inside the <details>), not discarded.
+    expect(screen.getByText('upstream models: status 401')).toBeInTheDocument()
+  })
+
+  it('the probe error container is a live region announced to screen readers', async () => {
+    await failConnect('status 429')
+    const alert = screen.getByTestId('onboarding-error')
+    expect(alert).toHaveAttribute('role', 'alert')
+    expect(alert).toHaveAttribute('aria-live', 'assertive')
+    // Visually-hidden "Error:" prefix paired with the icon.
+    expect(alert.textContent).toMatch(/error:/i)
+  })
+})
+
+// =====================================================================
+// Scenario: visible step counter (sighted users)
+// =====================================================================
+
+describe('OnboardingWizard — visible step indicator', () => {
+  it('shows a visible "Step 1 of 4" counter alongside the progressbar', async () => {
+    await renderWizard()
+    // Two matches expected: the sr-only span inside the progressbar and the new
+    // visible aria-hidden counter. At least one must be present and visible-class.
+    const matches = screen.getAllByText(/step 1 of 4/i)
+    expect(matches.length).toBeGreaterThanOrEqual(2)
+  })
+})
+
+// =====================================================================
 // Scenario: Skip onboarding — button removed
 // The Welcome step no longer exposes a skip path.
 // Users must complete provider + admin setup to reach the app.
@@ -330,6 +427,68 @@ describe('OnboardingWizard — no skip button', () => {
 
     expect(screen.queryByRole('button', { name: /skip/i })).not.toBeInTheDocument()
     expect(screen.queryByText(/skip/i)).not.toBeInTheDocument()
+  })
+})
+
+// =====================================================================
+// evaluatePasswordStrength — pure heuristic, table-driven boundary coverage.
+// Empty → null; <8 chars → "Too short" (score 1) regardless of class mix;
+// >=8 scores 1–4 by length + character-class diversity. Score is never > 4.
+// =====================================================================
+
+describe('evaluatePasswordStrength', () => {
+  it('returns null for empty input', () => {
+    expect(evaluatePasswordStrength('')).toBeNull()
+  })
+
+  it('treats <8 chars as "Too short" (score 1) even with mixed classes', () => {
+    // "Aa1!" has all four classes but is only 4 chars → still gated to score 1.
+    const r = evaluatePasswordStrength('Aa1!')
+    expect(r).toEqual({ score: 1, label: 'Too short', color: 'var(--color-error)' })
+  })
+
+  it('scores an 8-char single-class password as "Weak" (1)', () => {
+    const r = evaluatePasswordStrength('aaaaaaaa')
+    expect(r?.score).toBe(1)
+    expect(r?.label).toBe('Weak')
+  })
+
+  it('scores an 8-char two-class password as "Fair" (2)', () => {
+    const r = evaluatePasswordStrength('aaaaaaaA')
+    expect(r?.score).toBe(2)
+    expect(r?.label).toBe('Fair')
+  })
+
+  it('scores an 8-char three-class password as "Good" (3)', () => {
+    const r = evaluatePasswordStrength('aaaaaA12')
+    expect(r?.score).toBe(3)
+    expect(r?.label).toBe('Good')
+  })
+
+  it('scores a 12-char four-class password as "Strong" (4)', () => {
+    const r = evaluatePasswordStrength('aaaaaaaA12!@')
+    expect(r?.score).toBe(4)
+    expect(r?.label).toBe('Strong')
+    expect(r?.color).toBe('var(--color-success)')
+  })
+
+  it('never exceeds score 4 for very long, very diverse passwords', () => {
+    const r = evaluatePasswordStrength('Abcdefgh12345678!@#$%^&*()')
+    expect(r?.score).toBe(4)
+    expect(r?.score).toBeLessThanOrEqual(4)
+  })
+
+  it('uses only the closed set of brand-token colors', () => {
+    const allowed = new Set([
+      'var(--color-error)',
+      'var(--color-warning)',
+      'var(--color-accent)',
+      'var(--color-success)',
+    ])
+    for (const pw of ['', 'a', 'aaaaaaaa', 'aaaaaaaA', 'aaaaaA12', 'aaaaaaaA12!@']) {
+      const r = evaluatePasswordStrength(pw)
+      if (r) expect(allowed.has(r.color)).toBe(true)
+    }
   })
 })
 
@@ -406,5 +565,49 @@ describe('OnboardingWizard — finish', () => {
     await waitFor(() => {
       expect(screen.getByText(/anthropic connected/i)).toBeInTheDocument()
     })
+  })
+
+  it('surfaces an inline error and stays on step 4 with Retry Setup when finish fails', async () => {
+    // BDD: Given step 4, When completeOnboardingTransaction rejects, Then an inline
+    //      error (data-testid="onboarding-error") is shown, the user stays on step 4,
+    //      navigation does NOT fire, and the CTA becomes "Retry Setup".
+    vi.mocked(configureProvider).mockResolvedValue({} as never)
+    vi.mocked(probeProvider).mockResolvedValue({ success: true })
+    vi.mocked(completeOnboardingTransaction).mockRejectedValueOnce(new Error('server exploded'))
+
+    await goToFinishStep()
+    fireEvent.click(screen.getByRole('button', { name: /start exploring/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('onboarding-error')).toBeInTheDocument()
+    })
+    expect(screen.getByText(/server exploded/i)).toBeInTheDocument()
+    // Stayed on step 4 (still showing the Done heading) and did not navigate.
+    expect(screen.getByText(/you.re all set/i)).toBeInTheDocument()
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /retry setup/i })).toBeInTheDocument()
+  })
+
+  it('retry after a failure clears the error and navigates on success', async () => {
+    // BDD: Given a finish failure on step 4, When the user clicks Retry Setup and the
+    //      retry succeeds, Then the inline error clears and navigation to / fires.
+    vi.mocked(configureProvider).mockResolvedValue({} as never)
+    vi.mocked(probeProvider).mockResolvedValue({ success: true })
+    vi.mocked(completeOnboardingTransaction)
+      .mockRejectedValueOnce(new Error('transient outage'))
+      .mockResolvedValueOnce({ token: 't', role: 'admin', username: 'admin' } as never)
+
+    await goToFinishStep()
+
+    // First attempt fails → inline error + Retry Setup CTA.
+    fireEvent.click(screen.getByRole('button', { name: /start exploring/i }))
+    await waitFor(() => expect(screen.getByTestId('onboarding-error')).toBeInTheDocument())
+
+    // Retry succeeds → error clears, navigates to root.
+    fireEvent.click(screen.getByRole('button', { name: /retry setup/i }))
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
+    })
+    expect(screen.queryByTestId('onboarding-error')).not.toBeInTheDocument()
   })
 })

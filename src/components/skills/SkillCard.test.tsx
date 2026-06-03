@@ -29,9 +29,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import { fetchSkills, fetchMcpServers, fetchTools } from '@/lib/api'
-import { Route } from '@/routes/_app/skills'
-
-const SkillsScreen = (Route as any).component as React.ComponentType
+// The skills route now lazy-loads its screen; import the screen module directly
+// so the test renders real content (not the route's Suspense fallback).
+import { SkillsScreen } from '@/components/screens/SkillsScreen'
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
