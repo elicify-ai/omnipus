@@ -191,9 +191,13 @@ const (
 	// AskDenyReasonScheduled — the run is a headless cron/scheduled run with
 	// no operator present to approve. Any `ask`-policy tool is auto-denied
 	// immediately so the run never stalls waiting for human approval that can
-	// never arrive (F-13, FR-009, O-3). The audit entry carries the
-	// schedule_job_id and schedule_job_name fields so operators can later
-	// identify which schedule was responsible for the skip.
+	// never arrive (F-13, FR-009, O-3).
+	//
+	// The tool.policy.ask.denied entry (emitted via EmitToolPolicyAskDenied) does
+	// NOT carry schedule_job_id or schedule_job_name — EmitToolPolicyAskDenied has
+	// a fixed field set without them. The schedule identity rides on the companion
+	// tool.policy.deny.attempted entry (via emitPolicyDenyAudit's extra Details
+	// map) and on the structured INFO log line in emitScheduledAutoDenyAudit.
 	AskDenyReasonScheduled AskDenyReason = "scheduled"
 )
 
@@ -308,8 +312,11 @@ func Emit(ctx context.Context, logger *Logger, event string, sev Severity, field
 		// this write failure. Mirror the contract of audit.EmitEntry: a wired
 		// logger that fails to write is a runtime health signal, distinct from
 		// audit being explicitly disabled (auditLogger==nil, skipped counter
-		// must NOT be bumped). Use the event name as the tool label so
-		// /metrics can disambiguate which event family was dropped.
+		// must NOT be bumped). The event name is passed as the tool label;
+		// however IncSkipped only has a dedicated bucket for "web_serve" —
+		// all other values (including event names) aggregate into the single
+		// "other" counter, and the decision argument is ignored for non-web_serve
+		// calls. There is no per-event-family breakout in /metrics today.
 		IncSkipped(event, DecisionDeny)
 	}
 }
