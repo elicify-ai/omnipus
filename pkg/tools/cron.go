@@ -25,9 +25,7 @@ type CronTool struct {
 // itself only creates/lists/edits schedules, so it carries no executor or exec
 // tool of its own. The allow_command / exec.enabled flags still gate whether a
 // command-bearing schedule may be created.
-func NewCronTool(
-	cronService *cron.CronService, config *config.Config,
-) (*CronTool, error) {
+func NewCronTool(cronService *cron.CronService, config *config.Config) *CronTool {
 	allowCommand := false
 	execEnabled := false
 	if config != nil {
@@ -39,7 +37,7 @@ func NewCronTool(
 		cronService:  cronService,
 		allowCommand: allowCommand,
 		execEnabled:  execEnabled,
-	}, nil
+	}
 }
 
 // Name returns the tool name

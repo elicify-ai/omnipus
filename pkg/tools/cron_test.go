@@ -14,11 +14,7 @@ func newTestCronToolWithConfig(t *testing.T, cfg *config.Config) *CronTool {
 	t.Helper()
 	storePath := filepath.Join(t.TempDir(), "cron.json")
 	cronService := cron.NewCronService(storePath)
-	tool, err := NewCronTool(cronService, cfg)
-	if err != nil {
-		t.Fatalf("NewCronTool() error: %v", err)
-	}
-	return tool
+	return NewCronTool(cronService, cfg)
 }
 
 func newTestCronTool(t *testing.T) *CronTool {

@@ -1779,10 +1779,7 @@ func setupCronTool(
 	cronService := cron.NewCronService(cronStorePath)
 
 	// Cron tool — always registered. Policy controls whether an agent can invoke it.
-	cronTool, err := tools.NewCronTool(cronService, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("critical error during CronTool initialization: %w", err)
-	}
+	cronTool := tools.NewCronTool(cronService, cfg)
 	agentLoop.RegisterTool(cronTool)
 
 	// Owner-aware autonomous fire path (#264). The runner wakes a fired

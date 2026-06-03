@@ -92,10 +92,11 @@ func IsTransient(err error) bool {
 	return errors.As(err, &te)
 }
 
-// ScheduledRunner is the Wave-2 integration seam (set via SetRunner). The lane
+// ScheduledRunner is the agent integration seam (set via SetRunner). The lane
 // calls RunScheduled for each due job that has an owner; the (string,error)
-// outcome is recorded into CronJobState. The agent side is implemented in a
-// later wave — this package only defines and calls the interface.
+// outcome is recorded into CronJobState. The production implementation is the
+// gateway's scheduledRunner (pkg/gateway/schedules.go); it is the sole fire
+// path — when no runner is set the job records a no-op.
 type ScheduledRunner interface {
 	RunScheduled(ctx context.Context, job *CronJob) (string, error)
 }
@@ -133,7 +134,8 @@ type CronJobState struct {
 	LastError   string `json:"lastError,omitempty"`
 
 	// ConsecutiveFailures counts back-to-back error runs; reset to 0 on success
-	// (FR-012). Used by alerting/auto-pause heuristics in later waves.
+	// (FR-012). Surfaced by the runner's failure alerting (Ambiguity #1: no
+	// auto-pause — failures keep alerting, coalesced per schedule).
 	ConsecutiveFailures int `json:"consecutiveFailures,omitempty"`
 	// Running is the overlap guard (FR-008): set true around a run, false after.
 	Running bool `json:"running,omitempty"`
@@ -187,7 +189,7 @@ type CronService struct {
 	// clock is the injected time source (W-5). Defaults to realClock.
 	clock Clock
 
-	// runner is the Wave-2 agent seam (W-3/runner seam); nil until set.
+	// runner is the agent fire path (W-3/runner seam); nil until SetRunner.
 	runner ScheduledRunner
 
 	// defaultAgentID backfills owner-less jobs on load (W-8 migration). Empty
@@ -253,7 +255,7 @@ func (cs *CronService) SetClock(c Clock) {
 	}
 }
 
-// SetRunner sets the Wave-2 agent seam invoked by the parallel lane for each
+// SetRunner installs the agent fire path invoked by the parallel lane for each
 // owned due job (W-3 runner seam).
 func (cs *CronService) SetRunner(r ScheduledRunner) {
 	cs.mu.Lock()
@@ -575,6 +577,9 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	startTime := cs.now().UnixMilli()
 
 	cs.mu.Lock()
+	// Snapshot the runner under the lock we already hold (SetRunner is a one-time
+	// boot wiring, but this keeps the read race-free and avoids a second RLock).
+	runner := cs.runner
 	var callbackJob *CronJob
 	for i := range cs.store.Jobs {
 		job := &cs.store.Jobs[i]
@@ -595,7 +600,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 			// Owner-missing skip (W-8): a job with no resolvable owner must not
 			// fire (no default-agent fallback). Only enforced once a runner is
 			// wired. Recompute the next fire on skip so a recurring job survives.
-			if cs.runner != nil && job.AgentID == "" {
+			if runner != nil && job.AgentID == "" {
 				cs.rescheduleSkippedUnsafe(job)
 				onSkip := cs.onSkip
 				cs.mu.Unlock()
@@ -636,10 +641,6 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	if callbackJob.TimeoutSeconds > 0 {
 		runCtx, cancel = context.WithTimeout(runCtx, time.Duration(callbackJob.TimeoutSeconds)*time.Second)
 	}
-
-	cs.mu.RLock()
-	runner := cs.runner
-	cs.mu.RUnlock()
 
 	// invokeRun calls the runner with a recover so a panic in a scheduled run
 	// becomes a recorded error rather than crashing the gateway (BLOCKER 2). The
