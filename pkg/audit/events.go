@@ -187,10 +187,18 @@ const (
 	// ask batch was denied or canceled, so this and every subsequent
 	// sibling call is auto-denied. FR-065.
 	AskDenyReasonBatchShortCircuit AskDenyReason = "batch_short_circuit"
+
+	// AskDenyReasonScheduled — the run is a headless cron/scheduled run with
+	// no operator present to approve. Any `ask`-policy tool is auto-denied
+	// immediately so the run never stalls waiting for human approval that can
+	// never arrive (F-13, FR-009, O-3). The audit entry carries the
+	// schedule_job_id and schedule_job_name fields so operators can later
+	// identify which schedule was responsible for the skip.
+	AskDenyReasonScheduled AskDenyReason = "scheduled"
 )
 
-// IsValidAskDenyReason reports whether `r` is one of the six enum values
-// defined by FR-047 + FR-065. Useful at API boundaries before logging.
+// IsValidAskDenyReason reports whether `r` is one of the known enum values
+// defined by FR-047 + FR-065 + F-13. Useful at API boundaries before logging.
 func IsValidAskDenyReason(r AskDenyReason) bool {
 	switch r {
 	case AskDenyReasonUser,
@@ -198,7 +206,8 @@ func IsValidAskDenyReason(r AskDenyReason) bool {
 		AskDenyReasonCancel,
 		AskDenyReasonRestart,
 		AskDenyReasonSaturated,
-		AskDenyReasonBatchShortCircuit:
+		AskDenyReasonBatchShortCircuit,
+		AskDenyReasonScheduled:
 		return true
 	}
 	return false
@@ -295,6 +304,13 @@ func Emit(ctx context.Context, logger *Logger, event string, sev Severity, field
 		event == EventBootAbort
 	if writeErr := logger.writeLine(data, fsyncRequired); writeErr != nil {
 		slog.Error("audit: write record failed", "error", writeErr, "event", event)
+		// CRIT-6: bump the skipped counter so /health audit_degraded surfaces
+		// this write failure. Mirror the contract of audit.EmitEntry: a wired
+		// logger that fails to write is a runtime health signal, distinct from
+		// audit being explicitly disabled (auditLogger==nil, skipped counter
+		// must NOT be bumped). Use the event name as the tool label so
+		// /metrics can disambiguate which event family was dropped.
+		IncSkipped(event, DecisionDeny)
 	}
 }
 

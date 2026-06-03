@@ -194,6 +194,13 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 		ctx2 = tools.WithProcessTracker(ctx2, func(pid int) { r.procTrack(sid, pid) })
 	}
 
+	// O-3 / F-13 / issue #342: inject the schedule identity into the run
+	// context so the agent loop's auto-deny path can include the job id and
+	// name in the audit entry it emits for each ask-gated tool that is
+	// auto-denied during this headless run. Without this, the operator cannot
+	// tell from the audit log which schedule was responsible for the skip.
+	ctx2 = agent.WithScheduledJobContext(ctx2, job.ID, job.Name)
+
 	// Run the owning agent's turn. If the deadline fires while the turn is
 	// still going, force-abort it via RequestCancel(CancelScope{SessionID}) and
 	// allow a short cleanup window, then return a deadline error so the lane
