@@ -29,7 +29,7 @@ export type ToolPolicyValue = Required<NonNullable<AgentToolsCfg['builtin']>>
 
 export type RolePreset = 'cautious' | 'balanced' | 'full_access'
 
-export interface PresetDefinition {
+export interface PresetDefinition { // not-wire-format: internal UI role-preset descriptor (label/description + defaultPolicy/overrides); compiled into a generated ToolPolicyValue locally and never serialized or sent across any HTTP/WS boundary
   /** Human-readable label shown in the UI. */
   label: string
   /** One-sentence description shown under the preset button. */
