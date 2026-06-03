@@ -517,7 +517,7 @@ func TestEmitEntry_LogFailure_BumpsIncSkipped(t *testing.T) {
 // logger's writeLine fails (degraded mode), Emit bumps IncSkipped so /health
 // audit_degraded reflects the gap.
 //
-// This is the Emit analogue of TestEmitEntry_LogFailure_BumpsIncSkipped, which
+// This is the Emit analog of TestEmitEntry_LogFailure_BumpsIncSkipped, which
 // covers the EmitEntry path. Both paths share the same CRIT-6 contract —
 // covered separately here because Emit calls writeLine directly (bypassing
 // Logger.Log) and the IncSkipped label is the event name, not Entry.Tool.

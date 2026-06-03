@@ -202,7 +202,7 @@ func TestAddMCPServer_Stdio_NoCommand(t *testing.T) {
 // --- Fix #5: validateSkillIDs fail-open when no skills are installed ---
 
 // TestCreateAgent_WithSkillID_NoInstalledSkills verifies the deliberate
-// fail-open behaviour: when the installed-skills set is empty (fresh install,
+// fail-open behavior: when the installed-skills set is empty (fresh install,
 // test environment with no skills directory), POST /api/v1/agents with an
 // arbitrary skill id returns 201. The runtime filter in the agent loop is the
 // final enforcement gate; the REST layer must not block agents on unknown skill
