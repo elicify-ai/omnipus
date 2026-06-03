@@ -4876,11 +4876,21 @@ turnLoop:
 				if ts.opts.AutoDenyAsk {
 					const denialReason = "auto-denied: ask-policy tool not allowed in a headless scheduled run"
 					denyMsg := fmt.Sprintf(`{"error":"permission_denied","message":"User denied tool execution.","tool":%q,"reason":%q}`, toolName, denialReason)
-					al.emitPolicyDenyAudit(ts, toolName, "ask", denialReason)
-					// O-3 / F-13 / issue #342: emit a structured tool.policy.ask.denied
-					// audit entry so operators can identify which scheduled run
-					// silently skipped a tool. The schedule job id and name come from
-					// the context injected by the cron fire path (gateway RunScheduled).
+					// Build optional extra Details for the deny.attempted entry so
+					// both correlated records carry the schedule identity (O-3 / F-13
+					// / issue #342). scheduledJobContextFrom is a no-op read — safe to
+					// call even when no job info was injected.
+					var denyExtra map[string]any
+					if jobInfo, ok := scheduledJobContextFrom(turnCtx); ok && jobInfo.JobID != "" {
+						denyExtra = map[string]any{
+							"schedule_job_id":   jobInfo.JobID,
+							"schedule_job_name": jobInfo.JobName,
+						}
+					}
+					al.emitPolicyDenyAudit(ts, toolName, "ask", denialReason, denyExtra)
+					// O-3 / F-13 / issue #342: emit the canonical tool.policy.ask.denied
+					// entry via EmitToolPolicyAskDenied (CRIT-6 compliant, INFO severity,
+					// reason=AskDenyReasonScheduled). See emitScheduledAutoDenyAudit.
 					al.emitScheduledAutoDenyAudit(turnCtx, ts, toolName, tc.ID)
 					deniedMsg := providers.Message{
 						Role:       "tool",
@@ -6670,55 +6680,117 @@ func (al *AgentLoop) toolRequiresAdmin(ts *turnState, toolName string) bool {
 
 // emitPolicyDenyAudit writes a tool.policy.deny.attempted audit entry.
 // context is a free-form note such as "mid_turn_policy_change" or the denial reason.
+// extra, when non-nil, is merged into the Details map so callers can attach
+// structured fields (e.g. schedule_job_id) without a separate emit.
 //
 // CRIT-6 + typed-Decision/Event migration: routes through audit.EmitEntry so
 // Log failure bumps the audit-skipped counter (/health audit_degraded), and
 // uses the typed EventToolPolicyDenyAttempted + DecisionDeny constants in
 // place of raw string literals.
-func (al *AgentLoop) emitPolicyDenyAudit(ts *turnState, toolName, resolvedPolicy, context string) {
+func (al *AgentLoop) emitPolicyDenyAudit(
+	ts *turnState,
+	toolName, resolvedPolicy, context string,
+	extra ...map[string]any,
+) {
+	details := map[string]any{
+		"turn_id":         ts.turnID,
+		"resolved_policy": resolvedPolicy,
+		"context":         context,
+	}
+	for _, m := range extra {
+		for k, v := range m {
+			details[k] = v
+		}
+	}
 	audit.EmitEntry(al.auditLogger, &audit.Entry{
 		Event:     audit.EventToolPolicyDenyAttempted,
 		Decision:  audit.DecisionDeny,
 		AgentID:   ts.agentID,
 		Tool:      toolName,
 		SessionID: ts.sessionKey,
-		Details: map[string]any{
-			"turn_id":         ts.turnID,
-			"resolved_policy": resolvedPolicy,
-			"context":         context,
-		},
+		Details:   details,
 	})
 }
 
-// emitScheduledAutoDenyAudit writes a tool.policy.ask.denied audit entry
-// for the headless scheduled-run auto-deny path (O-3 / F-13 / issue #342).
-// It emits using the structured EmitToolPolicyAskDenied helper with reason
-// AskDenyReasonScheduled so operators (and SIEM rules) can observe which
-// scheduled run skipped an ask-gated tool without any human having been
-// consulted.
+// emitScheduledAutoDenyAudit writes a tool.policy.ask.denied audit entry for
+// the headless scheduled-run auto-deny path (O-3 / F-13 / issue #342).
+//
+// It routes through audit.EmitToolPolicyAskDenied (the canonical helper) so:
+//   - CRIT-6 is honored: write failures bump IncSkipped via the Emit path,
+//     making /health audit_degraded accurate.
+//   - Severity is SeverityInfo (documented contract for ask.denied events).
+//   - The reason field carries AskDenyReasonScheduled so SIEM rules can filter
+//     headless auto-denies without string-matching the context note.
 //
 // The schedule identity (job_id, job_name) is read from the run context via
-// scheduledJobContextFrom — the cron fire path injects it with
-// WithScheduledJobContext before calling ProcessScheduled. If no job info was
-// injected (e.g. in tests that call ProcessScheduled directly without the
-// context wrapper), the fields are omitted rather than emitting a misleading
-// empty value.
+// scheduledJobContextFrom — the cron fire path (gateway RunScheduled) injects
+// it with WithScheduledJobContext before calling ProcessScheduled. When the
+// job info is missing from the context (e.g. a caller that omits the wrapper),
+// a slog.Warn is emitted so the lost attribution is loud, and the ask.denied
+// entry is still written (with empty schedule fields) so the denial is always
+// recorded.
+//
+// The companion emitPolicyDenyAudit call (tool.policy.deny.attempted) at the
+// same call site carries the same schedule identity in its Details map, giving
+// operators two correlated entries per auto-deny: one for the policy-deny
+// audit trail and one for the structured ask.denied reason.
 func (al *AgentLoop) emitScheduledAutoDenyAudit(
 	ctx context.Context,
 	ts *turnState,
 	toolName, toolCallID string,
 ) {
-	fields := map[string]any{
-		"agent_id":     ts.agentID,
-		"tool_name":    toolName,
-		"tool_call_id": toolCallID,
-		"session_id":   ts.sessionKey,
-		"turn_id":      ts.turnID,
-		"reason":       string(audit.AskDenyReasonScheduled),
-	}
+	var jobID, jobName string
 	if info, ok := scheduledJobContextFrom(ctx); ok && info.JobID != "" {
-		fields["schedule_job_id"] = info.JobID
-		fields["schedule_job_name"] = info.JobName
+		jobID = info.JobID
+		jobName = info.JobName
+	} else {
+		// MEDIUM: missing job identity means the audit entry can't name the
+		// schedule that was responsible for the skip. This is loud so operators
+		// notice mis-wired fire paths (e.g. ProcessScheduled called without
+		// WithScheduledJobContext). The ask.denied entry is still emitted —
+		// losing the denial record entirely is worse than a partially-attributed
+		// one.
+		logger.WarnCF("agent", "scheduled auto-deny audit: job identity missing from context",
+			map[string]any{
+				"note":        "ask.denied entry will lack schedule_job_id/name",
+				"agent_id":    ts.agentID,
+				"tool":        toolName,
+				"session_key": ts.sessionKey,
+			},
+		)
 	}
-	audit.Emit(ctx, al.auditLogger, audit.EventToolPolicyAskDenied, audit.SeverityWarn, fields)
+
+	// Emit the canonical tool.policy.ask.denied record. approvalID and
+	// approverUserID are empty: in the headless path no approval was ever
+	// requested, so there is no approval id to reference and no human actor.
+	// argsHash and cancelledToolCallIDs are also empty / nil for the same reason.
+	audit.EmitToolPolicyAskDenied(
+		ctx,
+		al.auditLogger,
+		"", // approvalID — no approval request was made
+		"", // approverUserID — no human actor
+		toolName,
+		ts.agentID,
+		ts.sessionKey,
+		ts.turnID,
+		audit.AskDenyReasonScheduled,
+		"",  // argsHash — not available at this call site
+		nil, // cancelledToolCallIDs — not applicable
+	)
+
+	// The schedule identity (jobID, jobName) also appears in the companion
+	// tool.policy.deny.attempted entry emitted by the emitPolicyDenyAudit call
+	// at the auto-deny call site — the caller reads it from the context and
+	// passes it as extra Details there. Log it here too so the structured log
+	// line is self-contained even when audit writing is disabled.
+	if jobID != "" {
+		logger.InfoCF("agent", "scheduled auto-deny: ask-gated tool skipped in headless run",
+			map[string]any{
+				"schedule_job_id":   jobID,
+				"schedule_job_name": jobName,
+				"tool":              toolName,
+				"agent_id":          ts.agentID,
+			},
+		)
+	}
 }

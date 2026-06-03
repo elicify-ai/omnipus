@@ -404,14 +404,18 @@ func schedTestLoopWithAudit(t *testing.T) (*AgentLoop, string, string) {
 
 // TestProcessScheduled_AskToolAutoDenied_EmitsScheduledAudit asserts that when
 // a scheduled (headless) run auto-denies an ask-gated tool, the auto-deny path
-// emits a tool.policy.ask.denied audit entry with:
-//   - reason = "scheduled"  (AskDenyReasonScheduled, F-13 / O-3 / issue #342)
-//   - schedule_job_id and schedule_job_name matching the job injected via
-//     WithScheduledJobContext into the run context
-//   - tool_name naming the denied tool
+// emits two correlated audit entries (F-13 / O-3 / issue #342):
 //
-// The test is deterministic: the injected clock / mock LLM provider returns a
-// scripted tool_call followed by a text recovery; no wall-clock sleeps are used.
+//  1. tool.policy.ask.denied — canonical structured record via
+//     audit.EmitToolPolicyAskDenied; severity=INFO, reason="scheduled",
+//     tool_name="dangerous_tool". CRIT-6 compliant (IncSkipped on write failure).
+//
+//  2. tool.policy.deny.attempted — emitted by emitPolicyDenyAudit via
+//     audit.EmitEntry; carries schedule_job_id and schedule_job_name in
+//     details so operators can identify which schedule triggered the skip.
+//
+// The test is deterministic: a scripted ScenarioProvider drives the LLM
+// interaction (tool_call → text recovery) with no wall-clock sleeps.
 //
 // Traces to: F-13, O-3, §11 deferred note, issue #342 AC "emits an audit entry".
 func TestProcessScheduled_AskToolAutoDenied_EmitsScheduledAudit(t *testing.T) {
@@ -457,16 +461,24 @@ func TestProcessScheduled_AskToolAutoDenied_EmitsScheduledAudit(t *testing.T) {
 		"auto-deny must short-circuit before the approver is consulted")
 
 	// -------------------------------------------------------------------------
-	// Audit assertion (O-3 / F-13 / issue #342 acceptance criterion):
-	// The audit.jsonl must contain a tool.policy.ask.denied record with:
-	//   - fields.reason  == "scheduled"
-	//   - fields.tool_name == "dangerous_tool"
-	//   - fields.schedule_job_id   == wantJobID
-	//   - fields.schedule_job_name == wantJobName
+	// Audit assertions (O-3 / F-13 / issue #342 acceptance criterion):
+	//
+	// The auto-deny path emits two correlated audit records per skipped tool:
+	//
+	// 1. tool.policy.deny.attempted (Entry / flat format via EmitEntry+EmitPolicyDenyAudit):
+	//    - top-level "event" == EventToolPolicyDenyAttempted
+	//    - "details.schedule_job_id"   == wantJobID
+	//    - "details.schedule_job_name" == wantJobName
+	//
+	// 2. tool.policy.ask.denied (Record / nested format via EmitToolPolicyAskDenied):
+	//    - top-level "event" == EventToolPolicyAskDenied
+	//    - "fields.reason"    == "scheduled"   (AskDenyReasonScheduled)
+	//    - "fields.tool_name" == "dangerous_tool"
+	//    - "severity"         == "INFO"  (documented contract for ask.denied)
 	//
 	// ProcessScheduled is synchronous and the audit logger flushes after every
-	// write (bufio.Writer.Flush in Logger.writeLine), so the entry is already
-	// on disk when ProcessScheduled returns. No additional close/flush needed.
+	// write (bufio.Writer.Flush in Logger.writeLine), so both entries are on
+	// disk before ProcessScheduled returns. No additional close/flush needed.
 	// -------------------------------------------------------------------------
 	require.FileExists(t, auditPath,
 		"audit.jsonl must exist — AuditLog=true and at least one audit event was expected")
@@ -475,33 +487,58 @@ func TestProcessScheduled_AskToolAutoDenied_EmitsScheduledAudit(t *testing.T) {
 	require.NoError(t, err, "audit.jsonl must be readable and contain valid JSONL")
 	require.NotEmpty(t, records, "audit.jsonl must contain at least one record")
 
-	// Look for the tool.policy.ask.denied record emitted by emitScheduledAutoDenyAudit.
-	// These records are in the structured Record format:
-	//   {"event":"tool.policy.ask.denied","severity":"WARN","fields":{...}}
-	var found *map[string]any
+	// ---- assertion 1: tool.policy.ask.denied record ----
+	// Emitted by emitScheduledAutoDenyAudit via audit.EmitToolPolicyAskDenied.
+	// Structured Record format: {"event":..., "severity":"INFO", "fields":{...}}.
+	var askDenied *map[string]any
 	for i, rec := range records {
 		if rec["event"] != audit.EventToolPolicyAskDenied {
 			continue
 		}
-		// The structured Emit path nests payload under "fields".
 		fields, ok := rec["fields"].(map[string]any)
 		if !ok {
 			continue
 		}
 		if fields["reason"] == string(audit.AskDenyReasonScheduled) {
-			found = &records[i]
+			askDenied = &records[i]
 			break
 		}
 	}
-	require.NotNil(t, found,
+	require.NotNil(t, askDenied,
 		"audit.jsonl must contain a %q record with reason=%q; all records: %v",
 		audit.EventToolPolicyAskDenied, audit.AskDenyReasonScheduled, records)
 
-	fields := (*found)["fields"].(map[string]any)
-	assert.Equal(t, "dangerous_tool", fields["tool_name"],
-		"audit entry must name the denied tool")
-	assert.Equal(t, wantJobID, fields["schedule_job_id"],
-		"audit entry must include the schedule job id injected via WithScheduledJobContext")
-	assert.Equal(t, wantJobName, fields["schedule_job_name"],
-		"audit entry must include the schedule job name injected via WithScheduledJobContext")
+	askFields := (*askDenied)["fields"].(map[string]any)
+	assert.Equal(t, "dangerous_tool", askFields["tool_name"],
+		"ask.denied entry must name the denied tool")
+	assert.Equal(t, "INFO", (*askDenied)["severity"],
+		"ask.denied entry must have INFO severity per the documented contract")
+
+	// ---- assertion 2: tool.policy.deny.attempted record carries schedule id ----
+	// Emitted by emitPolicyDenyAudit (Entry flat format via EmitEntry).
+	// schedule_job_id and schedule_job_name are in the "details" map.
+	var denyAttempted *map[string]any
+	for i, rec := range records {
+		if rec["event"] != audit.EventToolPolicyDenyAttempted {
+			continue
+		}
+		// Entry flat format: "details" is a top-level map.
+		details, ok := rec["details"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if details["schedule_job_id"] == wantJobID {
+			denyAttempted = &records[i]
+			break
+		}
+	}
+	require.NotNil(t, denyAttempted,
+		"audit.jsonl must contain a %q record with details.schedule_job_id=%q; all records: %v",
+		audit.EventToolPolicyDenyAttempted, wantJobID, records)
+
+	denyDetails := (*denyAttempted)["details"].(map[string]any)
+	assert.Equal(t, wantJobID, denyDetails["schedule_job_id"],
+		"deny.attempted entry must carry the schedule job id")
+	assert.Equal(t, wantJobName, denyDetails["schedule_job_name"],
+		"deny.attempted entry must carry the schedule job name")
 }

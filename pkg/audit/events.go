@@ -304,6 +304,13 @@ func Emit(ctx context.Context, logger *Logger, event string, sev Severity, field
 		event == EventBootAbort
 	if writeErr := logger.writeLine(data, fsyncRequired); writeErr != nil {
 		slog.Error("audit: write record failed", "error", writeErr, "event", event)
+		// CRIT-6: bump the skipped counter so /health audit_degraded surfaces
+		// this write failure. Mirror the contract of audit.EmitEntry: a wired
+		// logger that fails to write is a runtime health signal, distinct from
+		// audit being explicitly disabled (auditLogger==nil, skipped counter
+		// must NOT be bumped). Use the event name as the tool label so
+		// /metrics can disambiguate which event family was dropped.
+		IncSkipped(event, DecisionDeny)
 	}
 }
 
