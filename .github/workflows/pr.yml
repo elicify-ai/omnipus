@@ -187,6 +187,10 @@ jobs:
         uses: golang/govulncheck-action@v1
         with:
           go-package: ./...
+          # Pin to the repo's go.mod toolchain (1.26.4+) — the action otherwise
+          # defaults go-version-input to "stable" (still 1.26.3), which would
+          # re-flag the crypto/x509 stdlib CVEs GO-2026-5037/5039 fixed in 1.26.4.
+          go-version-file: go.mod
 
   test:
     name: Tests
