@@ -187,6 +187,12 @@ jobs:
         uses: golang/govulncheck-action@v1
         with:
           go-package: ./...
+          # The action runs its OWN setup-go with go-version-input:stable and
+          # GOTOOLCHAIN=local, so it ignores both the job's Setup Go step and
+          # go.mod's toolchain. Pin it to the patched stdlib (go1.26.4 fixes
+          # GO-2026-5037 crypto/x509 and GO-2026-5039 net/textproto). Keep this
+          # in sync with the `go` directive in go.mod.
+          go-version-input: '1.26.4'
 
   test:
     name: Tests
