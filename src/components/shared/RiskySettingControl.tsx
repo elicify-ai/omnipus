@@ -8,11 +8,18 @@
  * - The badge derives from `currentValue` (the persisted, saved value), NOT
  *   from internal state. The caller owns persistence; this component is pure-UI.
  * - No retroactive dialog fires when `currentValue` is already risky on mount.
- * - No per-site branching: `copy`, `safeValue`, and `onConfirm` are always props
+ * - No per-site branching: `copy` / `safeValue` / and `onConfirm` are always props
  *   (F-G09). The stdio MCP gate and sandbox-profile selector reuse this pattern.
  * - The dialog's default (safe) button is the CANCEL path; the confirm (weaken)
  *   button is the secondary "danger" action. This is the correct AlertDialog
  *   semantics for a destructive choice.
+ * - `selectedValue` (optional) drives the active highlight independently from
+ *   `currentValue`. When omitted it falls back to `currentValue`. This allows
+ *   the caller to drive the highlight from local draft state so the button
+ *   reflects the user's intent immediately — even during the useAutoSave debounce
+ *   window before the save fires and the ['config'] query refetches. The
+ *   STANDING BADGE always derives from `currentValue` (persisted), never from
+ *   `selectedValue` (draft).
  *
  * Spec §2 / Issue #317.
  */
@@ -55,6 +62,16 @@ export interface RiskySettingControlProps<T extends string> {
    */
   currentValue: T
   /**
+   * Optional: the locally-selected (draft) value for the active-highlight.
+   * When provided, the radio highlight tracks this value so it reflects the
+   * user's intent immediately — even during the useAutoSave debounce window
+   * before the save fires and the query refetches.
+   *
+   * Invariant: the standing badge ALWAYS derives from `currentValue` (persisted),
+   * never from `selectedValue` (draft). Omit to fall back to `currentValue`.
+   */
+  selectedValue?: T
+  /**
    * The safe value. Options whose value equals safeValue get a "Recommended"
    * pill. Selecting any OTHER value opens the consequence AlertDialog.
    */
@@ -85,10 +102,13 @@ export interface RiskySettingControlProps<T extends string> {
  * - Selecting a non-safe option opens an AlertDialog to confirm the weakening.
  * - While `currentValue !== safeValue`, a standing amber badge is shown.
  * - No dialog fires on initial render even if `currentValue` is already risky.
+ * - Active highlight is driven by `selectedValue ?? currentValue` so callers
+ *   can pass draft state for immediate visual feedback.
  */
 export function RiskySettingControl<T extends string>({
   options,
   currentValue,
+  selectedValue,
   safeValue,
   copy,
   onConfirm,
@@ -100,13 +120,19 @@ export function RiskySettingControl<T extends string>({
   // from `currentValue` to avoid a retroactive dialog on mount.
   const [pendingRiskyValue, setPendingRiskyValue] = useState<T | null>(null)
 
+  // The badge always derives from the PERSISTED value.
   const isCurrentRisky = currentValue !== safeValue
+
+  // The active highlight uses the draft (selectedValue) when provided,
+  // falling back to the persisted value. This keeps the button highlight
+  // immediately responsive without changing badge semantics.
+  const activeHighlightValue = selectedValue ?? currentValue
 
   function handleOptionClick(clickedValue: T) {
     if (disabled) return
-    // Clicking the already-current (persisted) value is a no-op — it is not a
-    // new safe selection nor a new risky weakening. Do NOT open the dialog.
-    if (clickedValue === currentValue) return
+    // Clicking the already-highlighted value is a no-op — not a new safe
+    // selection nor a new risky weakening. Do NOT open the dialog.
+    if (clickedValue === activeHighlightValue) return
     if (clickedValue === safeValue) {
       onSelectSafe(clickedValue)
     } else {
@@ -134,7 +160,7 @@ export function RiskySettingControl<T extends string>({
         <div className="flex flex-wrap gap-2" role="group">
           {options.map((opt) => {
             const isSafe = opt.value === safeValue
-            const isActive = currentValue === opt.value
+            const isActive = activeHighlightValue === opt.value
             return (
               <button
                 key={opt.value}
@@ -163,7 +189,7 @@ export function RiskySettingControl<T extends string>({
           })}
         </div>
 
-        {/* Standing amber badge — shown while persisted value is risky */}
+        {/* Standing amber badge — shown while PERSISTED value is risky */}
         {isCurrentRisky && (
           <div
             className="flex items-center gap-1.5 text-[11px] text-amber-400"

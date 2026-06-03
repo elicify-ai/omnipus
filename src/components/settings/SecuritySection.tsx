@@ -1,10 +1,38 @@
+/**
+ * SecuritySection — Settings → Security tab.
+ *
+ * Two-layer IA (US-B1 / #327):
+ *   Primary layer  — Security health (DiagnosticsSection score + 3 plain toggles)
+ *   Advanced layer — All jargon (sandbox internals, SSRF, deny-regex, tool grid,
+ *                    audit log) under ONE AdvancedDisclosure.
+ *
+ * Risky controls wrapped in RiskySettingControl (US-B2 / #328):
+ *   - policyMode (safe = 'deny')
+ *   - bind_address (in GatewaySection — not here; done there)
+ *   - auth_mode (in GatewaySection — not here; done there)
+ *
+ * Global Tool Access via ToolPolicyEditor (US-B3 / #329):
+ *   - Replaces GlobalToolPoliciesSection entirely.
+ *   - Deletes local CATEGORY_LABELS / PolicyBadge / groupByCategory duplicates.
+ *   - Imports shared canonicals from @/lib/toolCategories and @/components/shared.
+ *
+ * Score-as-control-surface + plain restart banner + vault reassurance (US-B4 / #330):
+ *   - action_link / action_label links in DiagnosticsSection IssueCard.
+ *   - RestartBanner plain summary with jargon behind "Technical details".
+ *   - Credential Vault reassurance line.
+ *
+ * SkillTrustSection mounted (US-E4 / #340 part):
+ *   - Block / Warn-unverified / Allow-all radio already built; imported here.
+ */
+
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { AuditLogViewer } from './AuditLogViewer'
 import { ExecAllowlistSection } from './ExecAllowlistSection'
 import { PromptGuardSection } from './PromptGuardSection'
 import { ExecProxyStatusCard } from './ExecProxyStatusCard'
+import { SkillTrustSection } from './SkillTrustSection'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash, Key, ShieldCheck, ShieldWarning, Prohibit } from '@phosphor-icons/react'
+import { Plus, Trash, Key, Lock } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useAutoSave } from '@/hooks/useAutoSave'
@@ -20,7 +48,6 @@ import {
 } from '@/components/ui/dialog'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
-import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion'
 import {
   fetchConfig,
   updateConfig,
@@ -32,71 +59,17 @@ import {
   fetchGlobalToolPolicies,
   updateGlobalToolPolicies,
   isApiError,
-  type BuiltinTool,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { DiagnosticsSection } from './DiagnosticsSection'
 import { SandboxSection } from './SandboxSection'
+import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
+import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
+import { RiskySettingControl } from '@/components/shared/RiskySettingControl'
 
-// ── Tool Access — Global Policies ─────────────────────────────────────────────
-
-type ToolPolicy = 'allow' | 'ask' | 'deny'
-
-const CATEGORY_LABELS: Record<string, string> = {
-  file: 'File & Code',
-  code: 'Code Execution',
-  web: 'Web & Search',
-  browser: 'Browser Automation',
-  communication: 'Communication',
-  task: 'Task Management',
-  automation: 'Automation',
-  search: 'Search & Discovery',
-  skills: 'Skills',
-  hardware: 'Hardware (IoT)',
-}
-
-function PolicyBadge({
-  policy,
-  onClick,
-  active,
-  disabled,
-}: {
-  policy: ToolPolicy
-  onClick: () => void
-  active: boolean
-  disabled?: boolean
-}) {
-  const configs: Record<ToolPolicy, { icon: typeof ShieldCheck; label: string; color: string; activeColor: string }> = {
-    allow: { icon: ShieldCheck, label: 'Allow', color: 'text-[var(--color-muted)]', activeColor: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' },
-    ask: { icon: ShieldWarning, label: 'Ask', color: 'text-[var(--color-muted)]', activeColor: 'bg-amber-500/20 text-amber-400 border-amber-500/40' },
-    deny: { icon: Prohibit, label: 'Deny', color: 'text-[var(--color-muted)]', activeColor: 'bg-red-500/20 text-red-400 border-red-500/40' },
-  }
-  const cfg = configs[policy]
-  const Icon = cfg.icon
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-        active ? cfg.activeColor : `border-transparent ${cfg.color} hover:bg-[var(--color-surface-2)]`
-      }`}
-    >
-      <Icon size={11} weight="bold" />
-      {cfg.label}
-    </button>
-  )
-}
-
-function groupByCategory(tools: BuiltinTool[]): Record<string, BuiltinTool[]> {
-  const groups: Record<string, BuiltinTool[]> = {}
-  for (const t of tools) {
-    const cat = t.category || 'other'
-    if (!groups[cat]) groups[cat] = []
-    groups[cat].push(t)
-  }
-  return groups
-}
+// ── Tool Access — Global Policies (US-B3) ──────────────────────────────────────
+// CATEGORY_LABELS, PolicyBadge, and groupByCategory are now imported from the
+// shared canonicals. Local duplicates removed per #329.
 
 function GlobalToolPoliciesSection() {
   const queryClient = useQueryClient()
@@ -111,50 +84,29 @@ function GlobalToolPoliciesSection() {
     queryFn: fetchGlobalToolPolicies,
   })
 
-  // Local draft state — initialised from server data
-  const [defaultPolicy, setDefaultPolicy] = useState<ToolPolicy>('ask')
-  const [perToolPolicies, setPerToolPolicies] = useState<Record<string, ToolPolicy>>({})
+  const [toolPolicyValue, setToolPolicyValue] = useState<ToolPolicyValue>({
+    default_policy: 'ask',
+    policies: {},
+  })
   const [isDraftReady, setIsDraftReady] = useState(false)
 
   useEffect(() => {
     if (!globalPolicies || isDraftReady) return
-    setDefaultPolicy(globalPolicies.default_policy)
-    setPerToolPolicies(globalPolicies.policies ?? {})
+    setToolPolicyValue({
+      default_policy: globalPolicies.default_policy,
+      policies: globalPolicies.policies ?? {},
+    })
     setIsDraftReady(true)
   }, [globalPolicies, isDraftReady])
 
-  const policiesData = useMemo(
-    () => ({ default_policy: defaultPolicy, policies: perToolPolicies }),
-    [defaultPolicy, perToolPolicies],
-  )
-
   const { status: saveStatus, error: saveError } = useAutoSave(
-    policiesData,
+    toolPolicyValue,
     async (cfg) => {
       await updateGlobalToolPolicies(cfg)
       queryClient.invalidateQueries({ queryKey: ['global-tool-policies'] })
     },
     { disabled: !isDraftReady },
   )
-
-  function handleSetDefaultPolicy(p: ToolPolicy) {
-    setDefaultPolicy(p)
-  }
-
-  function handleSetToolPolicy(toolName: string, p: ToolPolicy) {
-    setPerToolPolicies((prev) => {
-      const next = { ...prev }
-      if (p === defaultPolicy) {
-        delete next[toolName]
-      } else {
-        next[toolName] = p
-      }
-      return next
-    })
-  }
-
-  const displayTools = builtinTools.filter((t) => t.scope !== 'system')
-  const grouped = groupByCategory(displayTools)
 
   const isLoading = toolsLoading || policiesLoading
 
@@ -179,77 +131,36 @@ function GlobalToolPoliciesSection() {
   return (
     <div className="space-y-4">
       <p className="text-xs text-[var(--color-muted)]">
-        These policies apply globally across all agents. Per-agent policies shown in the Agent Profile cannot
-        override a global "Deny". Tools blocked here are greyed out in each agent's tool list.
+        These policies apply globally across all agents. Per-agent policies cannot override a global
+        "Deny". Tools blocked here are greyed out in each agent's tool list.
       </p>
-
-      {/* Default policy */}
-      <div className="space-y-1.5">
-        <p className="text-xs text-[var(--color-muted)]">Default policy for unlisted tools</p>
-        <div className="flex gap-1.5">
-          {(['allow', 'ask', 'deny'] as ToolPolicy[]).map((p) => (
-            <PolicyBadge
-              key={p}
-              policy={p}
-              active={defaultPolicy === p}
-              onClick={() => handleSetDefaultPolicy(p)}
-            />
-          ))}
-        </div>
-      </div>
-
-      {/* Per-tool policies grouped by category */}
-      <div className="space-y-3">
-        <p className="text-xs text-[var(--color-muted)]">Per-tool policies ({displayTools.length} tools)</p>
-        {Object.entries(grouped).map(([category, catTools]) => (
-          <div key={category} className="space-y-1">
-            <p className="text-[10px] font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
-              {CATEGORY_LABELS[category] || category}
-            </p>
-            <div className="space-y-0.5">
-              {catTools.map((tool) => {
-                const resolved: ToolPolicy = perToolPolicies[tool.name] ?? defaultPolicy
-                const isOverridden = tool.name in perToolPolicies
-                return (
-                  <div
-                    key={tool.name}
-                    className="flex items-center justify-between py-1 px-2 rounded hover:bg-[var(--color-surface-2)] transition-colors"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <span className={`text-xs font-mono ${isOverridden ? 'text-[var(--color-secondary)]' : 'text-[var(--color-muted)]'}`}>
-                        {tool.name}
-                      </span>
-                      <span className="text-[10px] text-[var(--color-muted)] ml-2 hidden sm:inline">
-                        {tool.description?.slice(0, 50)}{(tool.description?.length ?? 0) > 50 ? '...' : ''}
-                      </span>
-                    </div>
-                    <div className="flex gap-0.5 shrink-0">
-                      {(['allow', 'ask', 'deny'] as ToolPolicy[]).map((p) => (
-                        <PolicyBadge
-                          key={p}
-                          policy={p}
-                          active={resolved === p}
-                          onClick={() => handleSetToolPolicy(tool.name, p)}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-
+      <ToolPolicyEditor
+        tools={builtinTools}
+        value={toolPolicyValue}
+        onChange={setToolPolicyValue}
+        disabled={!isDraftReady}
+      />
       <div className="pt-2 flex items-center gap-3">
         <AutoSaveIndicator status={saveStatus} error={saveError} />
         <span className="text-[10px] text-[var(--color-muted)]">
-          {Object.keys(perToolPolicies).length} override{Object.keys(perToolPolicies).length !== 1 ? 's' : ''} | Default: {defaultPolicy}
+          {Object.keys(toolPolicyValue.policies).length} override{Object.keys(toolPolicyValue.policies).length !== 1 ? 's' : ''} | Default: {toolPolicyValue.default_policy}
         </span>
       </div>
     </div>
   )
 }
+
+// ── Policy mode risky control (US-B2) ─────────────────────────────────────────
+
+const POLICY_MODE_COPY = {
+  dialogTitle: 'Switch to Allow mode?',
+  dialogDescription:
+    'Allow mode lets agents run tools without asking first. This gives agents more autonomy but lowers your oversight. Switch to Deny to stay in control.',
+  confirmLabel: 'Switch to Allow anyway',
+  cancelLabel: 'Keep Deny (safer)',
+}
+
+// ── SecuritySection ────────────────────────────────────────────────────────────
 
 export function SecuritySection() {
   const { addToast } = useUiStore()
@@ -274,6 +185,8 @@ export function SecuritySection() {
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
 
+  // US-B2: policyMode derives its badge from the PERSISTED value (config.security.policy_mode).
+  // The local state is the draft; after save the query is invalidated so config refetches.
   const [policyMode, setPolicyMode] = useState<'allow' | 'deny'>('deny')
   const [execApproval, setExecApproval] = useState<'auto' | 'ask' | 'deny'>('ask')
   const [dailyCostCap, setDailyCostCap] = useState('')
@@ -374,323 +287,345 @@ export function SecuritySection() {
   const capValue = parseFloat(dailyCostCap) || 10
   const spendPercent = Math.min((todaySpend / capValue) * 100, 100)
 
+  // US-B2: badge derives from persisted config.security.policy_mode (not local state).
+  // After save, the query is invalidated so persistedPolicyMode updates.
+  const persistedPolicyMode = config?.security.policy_mode ?? 'deny'
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Security & Policy</h2>
           <p className="text-xs text-[var(--color-muted)] mt-0.5">
-            Control agent behavior boundaries and resource limits.
+            Control how protected your setup is and adjust agent boundaries.
           </p>
         </div>
         <AutoSaveIndicator status={saveStatus} error={saveError} />
       </div>
 
-      <Accordion
-        type="multiple"
-        defaultValue={['diagnostics']}
-        className="rounded-lg border border-[var(--color-border)] divide-y divide-[var(--color-border)] overflow-hidden"
+      {/* ── PRIMARY LAYER (US-B1): Security health + plain outcome controls ──── */}
+
+      {/* Security Health — score always visible at top */}
+      <section
+        className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4"
+        aria-label="Security health"
+        data-testid="security-health-header"
       >
-        {/* Diagnostics — open by default */}
-        <AccordionItem value="diagnostics" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
-            Diagnostics
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4 space-y-3">
-              <DiagnosticsSection />
+        <DiagnosticsSection />
+      </section>
+
+      {/* Plain outcome toggles (US-B1: 3-4 toggles without jargon) */}
+      <section className="space-y-3" data-testid="plain-toggles">
+        <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">
+          Protection settings
+        </p>
+
+        {/* 1. Default policy mode — wraps risky "Allow" (US-B2) */}
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-2">
+          <div>
+            <p className="text-sm text-[var(--color-secondary)]">Agent tool access</p>
+            <p className="text-xs text-[var(--color-muted)] mt-0.5">
+              Whether agents must ask your permission before running tools or can run freely.
+            </p>
+          </div>
+          <RiskySettingControl
+            options={[
+              { value: 'deny', label: 'Must ask first (safer)' },
+              { value: 'allow', label: 'Run freely' },
+            ]}
+            currentValue={persistedPolicyMode}
+            selectedValue={policyMode}
+            safeValue="deny"
+            copy={POLICY_MODE_COPY}
+            onConfirm={(v) => {
+              markDirty()
+              setPolicyMode(v as 'allow' | 'deny')
+            }}
+            onSelectSafe={(v) => {
+              markDirty()
+              setPolicyMode(v as 'allow' | 'deny')
+            }}
+          />
+        </div>
+
+        {/* 2. Exec approval */}
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-[var(--color-secondary)]">Shell command approval</p>
+              <p className="text-xs text-[var(--color-muted)]">How shell commands are handled when an agent wants to run them</p>
             </div>
-          </AccordionContent>
-        </AccordionItem>
+            <SmartSelect
+              value={execApproval}
+              onValueChange={(v) => { markDirty(); setExecApproval(v as typeof execApproval) }}
+              triggerClassName="w-[130px] h-8 text-xs"
+              items={[
+                { value: 'auto', label: 'Auto-allow' },
+                { value: 'ask', label: 'Ask each time' },
+                { value: 'deny', label: 'Always deny' },
+              ]}
+            />
+          </div>
+        </div>
 
-        {/* Tool Access — Global Policies */}
-        <AccordionItem value="tool-access" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
-            Tool Access — Global Policies
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4 space-y-3">
-              <GlobalToolPoliciesSection />
+        {/* 3. Daily cost cap — shows spend progress */}
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-[var(--color-secondary)]">Daily spending limit</p>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-[var(--color-muted)]">$</span>
+              <Input
+                type="number"
+                min="0"
+                step="0.5"
+                value={dailyCostCap}
+                onChange={(e) => { markDirty(); setDailyCostCap(e.target.value) }}
+                className="w-24 h-7 text-xs font-mono"
+                placeholder="10.00"
+              />
             </div>
-          </AccordionContent>
-        </AccordionItem>
-
-        {/* Command Execution & Allowlist — merged section */}
-        <AccordionItem value="command-execution" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
-            Command Execution & Allowlist
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4 space-y-3">
-              <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-[var(--color-secondary)]">Exec approval mode</p>
-                    <p className="text-xs text-[var(--color-muted)]">How shell command execution is handled</p>
-                  </div>
-                  <SmartSelect
-                    value={execApproval}
-                    onValueChange={(v) => { markDirty(); setExecApproval(v as typeof execApproval) }}
-                    triggerClassName="w-[120px] h-8 text-xs"
-                    items={[
-                      { value: 'auto', label: 'Auto-allow' },
-                      { value: 'ask', label: 'Ask each time' },
-                      { value: 'deny', label: 'Always deny' },
-                    ]}
-                  />
-                </div>
-
-                <Separator />
-
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-[var(--color-secondary)]">Default policy mode</p>
-                    <p className="text-xs text-[var(--color-muted)]">Whether agents are allowed or denied by default</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-[var(--color-muted)]">Deny</span>
-                    <Switch
-                      checked={policyMode === 'allow'}
-                      onCheckedChange={(v) => { markDirty(); setPolicyMode(v ? 'allow' : 'deny') }}
-                    />
-                    <span className="text-xs text-[var(--color-secondary)]">Allow</span>
-                  </div>
-                </div>
-
-                <Separator />
-
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-[var(--color-secondary)]">Exec timeout (seconds)</p>
-                    <p className="text-xs text-[var(--color-muted)]">Max time for a single command, 0 = no limit</p>
-                  </div>
-                  <Input
-                    type="number"
-                    min="0"
-                    value={execTimeoutSecs}
-                    onChange={(e) => { markDirty(); setExecTimeoutSecs(e.target.value) }}
-                    className="w-24 h-7 text-xs font-mono"
-                    placeholder="0"
-                  />
-                </div>
-
-                <Separator />
-
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-[var(--color-secondary)]">Background timeout (seconds)</p>
-                    <p className="text-xs text-[var(--color-muted)]">Max time for background processes, 0 = no limit</p>
-                  </div>
-                  <Input
-                    type="number"
-                    min="0"
-                    value={maxBackgroundSecs}
-                    onChange={(e) => { markDirty(); setMaxBackgroundSecs(e.target.value) }}
-                    className="w-24 h-7 text-xs font-mono"
-                    placeholder="0"
-                  />
-                </div>
-
-                <Separator />
-
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-[var(--color-secondary)]">Enable deny patterns</p>
-                    <p className="text-xs text-[var(--color-muted)]">Block commands matching configured deny patterns</p>
-                  </div>
-                  <Switch
-                    checked={enableDenyPatterns}
-                    onCheckedChange={(v) => { markDirty(); setEnableDenyPatterns(v) }}
-                  />
-                </div>
-              </div>
-
-              <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mt-4">
-                Binary Allowlist
-              </p>
-              <ExecAllowlistSection />
-
-              <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mt-4">
-                SSRF Proxy
-              </p>
-              <ExecProxyStatusCard />
+          </div>
+          <div className="space-y-1">
+            <div className="flex justify-between text-[10px] text-[var(--color-muted)]">
+              <span>
+                {gatewayStatusError
+                  ? "Today's spend: unavailable"
+                  : `Today's spend: $${todaySpend.toFixed(2)}`}
+              </span>
+              <span>Cap: ${capValue.toFixed(2)}</span>
             </div>
-          </AccordionContent>
-        </AccordionItem>
+            <Progress value={spendPercent} className="h-1.5" />
+          </div>
+        </div>
 
-        {/* Prompt Guard */}
-        <AccordionItem value="prompt-guard" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
-            Prompt Injection Defense
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4 space-y-3">
-              <PromptGuardSection />
-            </div>
-          </AccordionContent>
-        </AccordionItem>
+        {/* 4. Skill Trust (US-E4 / #340) — plain language, top-level */}
+        <SkillTrustSection />
+      </section>
 
-        {/* Process Sandbox */}
-        <AccordionItem value="sandbox" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
-            Process Sandbox
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4 space-y-3">
-              <SandboxSection />
-              <p className="text-xs text-[var(--color-muted)] pt-1">
-                Sandbox configuration is auto-detected at startup based on your kernel capabilities.
-              </p>
-            </div>
-          </AccordionContent>
-        </AccordionItem>
+      {/* ── ADVANCED LAYER (US-B1): all jargon behind one collapsed section ── */}
+      <AdvancedDisclosure
+        title="Advanced / technical details"
+        summary="Process isolation, tool grid, audit log — safe to skip"
+        data-testid="advanced-technical-details"
+      >
+        <div className="space-y-6">
 
-        {/* Policy section merged into Command Execution above */}
+          {/* Tool Access — Global Policies (US-B3) */}
+          <section>
+            <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
+              Tool Access — Global Policies
+            </p>
+            <GlobalToolPoliciesSection />
+          </section>
 
-        {/* Rate Limits & Cost Control */}
-        <AccordionItem value="rate-limits" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
-            Rate Limits & Cost Control
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4 space-y-3">
-              <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
+          <Separator />
+
+          {/* Command Execution Internals */}
+          <section>
+            <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
+              Command Execution
+            </p>
+            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
+              <div className="flex items-center justify-between">
                 <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-sm text-[var(--color-secondary)]">Daily cost cap</p>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-[var(--color-muted)]">$</span>
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.5"
-                        value={dailyCostCap}
-                        onChange={(e) => { markDirty(); setDailyCostCap(e.target.value) }}
-                        className="w-24 h-7 text-xs font-mono"
-                        placeholder="10.00"
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-[10px] text-[var(--color-muted)]">
-                      <span>
-                        {gatewayStatusError
-                          ? "Today's spend: unavailable"
-                          : `Today's spend: $${todaySpend.toFixed(2)}`}
-                      </span>
-                      <span>Cap: ${capValue.toFixed(2)}</span>
-                    </div>
-                    <Progress value={spendPercent} className="h-1.5" />
-                  </div>
+                  <p className="text-sm text-[var(--color-secondary)]">Exec timeout (seconds)</p>
+                  <p className="text-xs text-[var(--color-muted)]">Max time for a single command, 0 = no limit</p>
                 </div>
+                <Input
+                  type="number"
+                  min="0"
+                  value={execTimeoutSecs}
+                  onChange={(e) => { markDirty(); setExecTimeoutSecs(e.target.value) }}
+                  className="w-24 h-7 text-xs font-mono"
+                  placeholder="0"
+                />
+              </div>
 
-                <Separator />
+              <Separator />
 
-                <div className="space-y-3">
-                  <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Per-Agent Defaults</p>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-[var(--color-secondary)]">LLM calls / hour</p>
-                      <p className="text-xs text-[var(--color-muted)]">Default limit per agent</p>
-                    </div>
-                    <Input
-                      type="number"
-                      min="0"
-                      value={agentLlmCallsPerHour}
-                      onChange={(e) => { markDirty(); setAgentLlmCallsPerHour(e.target.value) }}
-                      className="w-24 h-7 text-xs font-mono"
-                      placeholder="Unlimited"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-[var(--color-secondary)]">Tool calls / minute</p>
-                      <p className="text-xs text-[var(--color-muted)]">Default limit per agent</p>
-                    </div>
-                    <Input
-                      type="number"
-                      min="0"
-                      value={agentToolCallsPerMin}
-                      onChange={(e) => { markDirty(); setAgentToolCallsPerMin(e.target.value) }}
-                      className="w-24 h-7 text-xs font-mono"
-                      placeholder="Unlimited"
-                    />
-                  </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-[var(--color-secondary)]">Background timeout (seconds)</p>
+                  <p className="text-xs text-[var(--color-muted)]">Max time for background processes, 0 = no limit</p>
                 </div>
+                <Input
+                  type="number"
+                  min="0"
+                  value={maxBackgroundSecs}
+                  onChange={(e) => { markDirty(); setMaxBackgroundSecs(e.target.value) }}
+                  className="w-24 h-7 text-xs font-mono"
+                  placeholder="0"
+                />
+              </div>
+
+              <Separator />
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-[var(--color-secondary)]">Enable deny patterns</p>
+                  <p className="text-xs text-[var(--color-muted)]">Block commands matching configured deny patterns</p>
+                </div>
+                <Switch
+                  checked={enableDenyPatterns}
+                  onCheckedChange={(v) => { markDirty(); setEnableDenyPatterns(v) }}
+                />
               </div>
             </div>
-          </AccordionContent>
-        </AccordionItem>
 
-        {/* Credential Vault */}
-        <AccordionItem value="credential-vault" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
-            <span className="flex-1 text-left">Credential Vault</span>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 px-2 gap-1 text-xs mr-2"
-              onClick={(e) => { e.stopPropagation(); setCredModalOpen(true) }}
-            >
-              <Plus size={11} weight="bold" />
-              Add key
-            </Button>
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4 space-y-3">
-              <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] divide-y divide-[var(--color-border)]">
-                {credentialsError && (
-                  <div className="p-4 text-sm text-red-400">Failed to load credentials. Please try again.</div>
-                )}
-                {!credentialsError && credentials.length === 0 && (
-                  <div className="p-4 text-sm text-[var(--color-muted)] flex items-center gap-2">
-                    <Key size={14} />
-                    No credentials stored. Add your first key above.
-                  </div>
-                )}
-                {credentials.map((cred) => (
-                  <div key={cred.key} className="flex items-center justify-between px-4 py-2.5">
-                    <div>
-                      <p className="text-sm font-mono text-[var(--color-secondary)]">{cred.key}</p>
-                      <p className="text-[10px] text-[var(--color-muted)] font-mono">••••••••••••</p>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 w-7 p-0 text-[var(--color-muted)] hover:text-[var(--color-error)]"
-                      onClick={() => setDeletingKey(cred.key)}
-                    >
-                      <Trash size={13} />
-                    </Button>
-                  </div>
-                ))}
+            <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mt-4 mb-2">
+              Binary Allowlist
+            </p>
+            <ExecAllowlistSection />
+          </section>
+
+          <Separator />
+
+          {/* SSRF Proxy */}
+          <section>
+            <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
+              SSRF Proxy
+            </p>
+            <ExecProxyStatusCard />
+          </section>
+
+          <Separator />
+
+          {/* Prompt Guard */}
+          <section>
+            <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
+              Prompt Injection Defense
+            </p>
+            <PromptGuardSection />
+          </section>
+
+          <Separator />
+
+          {/* Process Sandbox */}
+          <section>
+            <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
+              Process Sandbox (Landlock / seccomp)
+            </p>
+            <SandboxSection />
+            <p className="text-xs text-[var(--color-muted)] pt-1">
+              Sandbox configuration is auto-detected at startup based on your kernel capabilities.
+            </p>
+          </section>
+
+          <Separator />
+
+          {/* Per-Agent Rate Limits */}
+          <section>
+            <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
+              Per-Agent Rate Limits
+            </p>
+            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-[var(--color-secondary)]">LLM calls / hour</p>
+                  <p className="text-xs text-[var(--color-muted)]">Default limit per agent</p>
+                </div>
+                <Input
+                  type="number"
+                  min="0"
+                  value={agentLlmCallsPerHour}
+                  onChange={(e) => { markDirty(); setAgentLlmCallsPerHour(e.target.value) }}
+                  className="w-24 h-7 text-xs font-mono"
+                  placeholder="Unlimited"
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-[var(--color-secondary)]">Tool calls / minute</p>
+                  <p className="text-xs text-[var(--color-muted)]">Default limit per agent</p>
+                </div>
+                <Input
+                  type="number"
+                  min="0"
+                  value={agentToolCallsPerMin}
+                  onChange={(e) => { markDirty(); setAgentToolCallsPerMin(e.target.value) }}
+                  className="w-24 h-7 text-xs font-mono"
+                  placeholder="Unlimited"
+                />
               </div>
             </div>
-          </AccordionContent>
-        </AccordionItem>
+          </section>
 
-        {/* Audit Log */}
-        <AccordionItem value="audit-log" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
-            <span className="flex-1 text-left">Audit Log</span>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 px-2 text-xs mr-2"
-              onClick={(e) => { e.stopPropagation(); setAuditLogOpen(true) }}
-            >
-              View Log
-            </Button>
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4 pb-2">
-              <p className="text-xs text-[var(--color-muted)]">
-                Security events, policy decisions, and tool executions. Use the button above to open the full viewer.
+          <Separator />
+
+          {/* Audit Log */}
+          <section>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">
+                Audit Log
               </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => setAuditLogOpen(true)}
+              >
+                View Log
+              </Button>
             </div>
-          </AccordionContent>
-        </AccordionItem>
-      </Accordion>
+            <p className="text-xs text-[var(--color-muted)]">
+              Security events, policy decisions, and tool executions.
+            </p>
+          </section>
+
+        </div>
+      </AdvancedDisclosure>
+
+      {/* ── Credential Vault (US-B4) — always visible with reassurance line ─── */}
+      <section>
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-[var(--color-secondary)]">Credential Vault</h3>
+            </div>
+            <p className="text-xs text-[var(--color-muted)] mt-0.5 flex items-center gap-1">
+              <Lock size={11} />
+              Your keys are encrypted and stored only on this server — never sent anywhere.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 gap-1 text-xs"
+            onClick={() => setCredModalOpen(true)}
+          >
+            <Plus size={11} weight="bold" />
+            Add key
+          </Button>
+        </div>
+
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] divide-y divide-[var(--color-border)]">
+          {credentialsError && (
+            <div className="p-4 text-sm text-red-400">Failed to load credentials. Please try again.</div>
+          )}
+          {!credentialsError && credentials.length === 0 && (
+            <div className="p-4 text-sm text-[var(--color-muted)] flex items-center gap-2">
+              <Key size={14} />
+              No credentials stored. Add your first key above.
+            </div>
+          )}
+          {credentials.map((cred) => (
+            <div key={cred.key} className="flex items-center justify-between px-4 py-2.5">
+              <div>
+                <p className="text-sm font-mono text-[var(--color-secondary)]">{cred.key}</p>
+                <p className="text-[10px] text-[var(--color-muted)] font-mono">••••••••••••</p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0 text-[var(--color-muted)] hover:text-[var(--color-error)]"
+                onClick={() => setDeletingKey(cred.key)}
+              >
+                <Trash size={13} />
+              </Button>
+            </div>
+          ))}
+        </div>
+      </section>
 
       <AuditLogViewer open={auditLogOpen} onOpenChange={setAuditLogOpen} />
 
