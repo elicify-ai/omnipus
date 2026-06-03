@@ -38,6 +38,13 @@ interface ChannelConfigPanelProps {
   channelName: string
   open: boolean
   onOpenChange: (open: boolean) => void
+  /**
+   * Capability flag from the channel's ChannelEntry (#299): whether this server
+   * build can run native WhatsApp (whatsmeow). Only `false` gates the WhatsApp
+   * linked-device QR pairing UI; `undefined`/`true` are treated as available so
+   * the QR renders by default ("the UI must only offer what the binary can do").
+   */
+  nativeAvailable?: boolean
 }
 
 function PasswordField({
@@ -186,6 +193,7 @@ export function ChannelConfigPanel({
   channelName,
   open,
   onOpenChange,
+  nativeAvailable,
 }: ChannelConfigPanelProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
@@ -315,9 +323,13 @@ export function ChannelConfigPanel({
   }
 
   // WhatsApp is always native (whatsmeow) — the legacy bridge + the `use_native`
-  // toggle were removed. The linked-device QR pairing UI is therefore shown
-  // unconditionally for the whatsapp channel.
+  // toggle were removed, so there is no user-facing native toggle. The
+  // linked-device QR pairing UI is still capability-gated (#299): on a lite/stub
+  // build the backend reports native_available:false on the whatsapp ChannelEntry,
+  // and we must NOT show a QR that can never pair. Only `false` gates;
+  // `undefined`/`true` default to available.
   const isWhatsApp = channelId === 'whatsapp'
+  const whatsAppNativeUnavailable = isWhatsApp && nativeAvailable === false
 
   const isBusy = saving || savingAndEnabling
 
@@ -404,8 +416,21 @@ export function ChannelConfigPanel({
             ))}
 
             {/* WhatsApp is always native (whatsmeow): show the live linked-device
-                QR pairing UI unconditionally (#283). */}
-            {isWhatsApp && <WhatsAppNativeNotice />}
+                QR pairing UI (#283) — but only when the server build can run
+                native WhatsApp. On a lite/stub build (native_available:false) show
+                a hint instead of a QR that can never pair (#299). */}
+            {isWhatsApp &&
+              (whatsAppNativeUnavailable ? (
+                <p
+                  data-testid="native-unavailable-hint"
+                  className="text-xs text-[var(--color-muted)] leading-relaxed mt-1 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]"
+                >
+                  WhatsApp requires the native build (whatsmeow); this server build
+                  doesn&apos;t include it, so linked-device pairing is unavailable.
+                </p>
+              ) : (
+                <WhatsAppNativeNotice />
+              ))}
 
             {/* Routing — hidden for webchat (no agent-routing concept) */}
             {!isWebchat && (

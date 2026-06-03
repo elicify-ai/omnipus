@@ -206,7 +206,14 @@ type AgentUpdateRequest = Partial<{
 type ChannelEntry = {
   id: ChannelId;
   name: string;
-  transport: "websocket" | "webhook" | "bridge" | "tcp" | "http" | "serial";
+  transport:
+    | "websocket"
+    | "webhook"
+    | "bridge"
+    | "native"
+    | "tcp"
+    | "http"
+    | "serial";
   enabled: boolean;
   description: string;
   native_available?: boolean | undefined;
@@ -1126,6 +1133,7 @@ export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
     "websocket",
     "webhook",
     "bridge",
+    "native",
     "tcp",
     "http",
     "serial",

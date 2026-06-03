@@ -641,6 +641,7 @@ func (e ChannelEntryId) Valid() bool {
 const (
 	ChannelEntryTransportBridge    ChannelEntryTransport = "bridge"
 	ChannelEntryTransportHttp      ChannelEntryTransport = "http"
+	ChannelEntryTransportNative    ChannelEntryTransport = "native"
 	ChannelEntryTransportSerial    ChannelEntryTransport = "serial"
 	ChannelEntryTransportTcp       ChannelEntryTransport = "tcp"
 	ChannelEntryTransportWebhook   ChannelEntryTransport = "webhook"
@@ -653,6 +654,8 @@ func (e ChannelEntryTransport) Valid() bool {
 	case ChannelEntryTransportBridge:
 		return true
 	case ChannelEntryTransportHttp:
+		return true
+	case ChannelEntryTransportNative:
 		return true
 	case ChannelEntryTransportSerial:
 		return true

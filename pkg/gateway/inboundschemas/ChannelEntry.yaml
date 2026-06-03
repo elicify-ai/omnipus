@@ -25,6 +25,7 @@ properties:
       - websocket
       - webhook
       - bridge
+      - native
       - tcp
       - http
       - serial

@@ -3176,7 +3176,7 @@ export interface components {
              * @example webhook
              * @enum {string}
              */
-            transport: "websocket" | "webhook" | "bridge" | "tcp" | "http" | "serial";
+            transport: "websocket" | "webhook" | "bridge" | "native" | "tcp" | "http" | "serial";
             /**
              * @description Whether this channel is currently enabled.
              * @example false

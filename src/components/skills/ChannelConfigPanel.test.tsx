@@ -7,13 +7,18 @@
  * field gating it.
  *
  * Covers:
- *   1. The WhatsAppNativeNotice (live QR / status block) mounts for whatsapp.
+ *   1. The WhatsAppNativeNotice (live QR / status block) mounts for whatsapp
+ *      when native is available (native_available true OR undefined → default).
  *   2. When the pairing WS frame carries a QR code, the QR container renders.
  *   3. No `use_native` field is rendered (the field was removed).
  *   4. Non-whatsapp channels do NOT render the pairing notice.
+ *   5. Capability gating (#299): native_available:false renders the hint
+ *      ([data-testid="native-unavailable-hint"]) and NOT the QR notice — the
+ *      unit-level mirror of whatsapp-qr.spec.ts case B.
  *
  * Traces to: #283 (live QR pairing in the SPA) + the channels-cleanup branch
- * (always-native WhatsApp; `use_native` removed from channel-fields).
+ * (always-native WhatsApp; `use_native` removed from channel-fields) + #299
+ * (native_available capability gating).
  */
 
 import React from 'react'
@@ -92,7 +97,7 @@ function mockUiStore() {
   return { addToast }
 }
 
-function renderPanel(channelId: string, channelName: string) {
+function renderPanel(channelId: string, channelName: string, nativeAvailable?: boolean) {
   const client = makeQueryClient()
   // Pre-seed query data so the component doesn't need to fetch.
   client.setQueryData(['channel-config', channelId], {})
@@ -105,6 +110,7 @@ function renderPanel(channelId: string, channelName: string) {
       <ChannelConfigPanel
         channelId={channelId}
         channelName={channelName}
+        nativeAvailable={nativeAvailable}
         open={true}
         onOpenChange={onOpenChange}
       />
@@ -122,10 +128,18 @@ describe('ChannelConfigPanel — WhatsApp is always native', () => {
     vi.mocked(fetchChannelConfig).mockResolvedValue({})
     vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([])
+    // Reset the pairing store to an empty state. vi.clearAllMocks() clears call
+    // data but NOT mockImplementation, so a QR-carrying impl set by one test
+    // would otherwise leak into the next — making assertions order-dependent.
+    vi.mocked(useWhatsAppPairingStore).mockImplementation(
+      ((selector: (s: { byChannel: Record<string, unknown>; clear: () => void }) => unknown) =>
+        selector({ byChannel: {}, clear: vi.fn() })) as never,
+    )
   })
 
   it('renders the live linked-device pairing notice for whatsapp (no use_native gate)', async () => {
-    // The native QR pairing UX (#283) must mount unconditionally for whatsapp.
+    // The native QR pairing UX (#283) mounts for whatsapp when native is
+    // available. Here nativeAvailable is omitted → undefined → default-available.
     renderPanel('whatsapp', 'WhatsApp')
 
     await waitFor(() => {
@@ -164,6 +178,42 @@ describe('ChannelConfigPanel — WhatsApp is always native', () => {
     await waitFor(() => {
       expect(screen.getByTestId('whatsapp-qr')).toBeInTheDocument()
     })
+  })
+
+  it('renders the QR notice when native_available:true is explicitly passed', async () => {
+    // Explicit-true must behave the same as the undefined default: QR notice on.
+    renderPanel('whatsapp', 'WhatsApp', true)
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Enable and save, then a QR code will appear here/i),
+      ).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('native-unavailable-hint')).not.toBeInTheDocument()
+  })
+
+  it('capability gating (#299): native_available:false shows the hint and NOT the QR notice', async () => {
+    // On a lite/stub build the backend reports native_available:false; the panel
+    // must show the unavailable hint instead of a QR that can never pair.
+    // Even if a QR were present in the pairing store, the notice must not mount.
+    vi.mocked(useWhatsAppPairingStore).mockImplementation(
+      ((selector: (s: { byChannel: Record<string, unknown>; apply: () => void; clear: () => void }) => unknown) =>
+        selector({
+          byChannel: { whatsapp_native: { status: 'code', qr: 'https://example.com/test-qr', message: '' } },
+          apply: vi.fn(),
+          clear: vi.fn(),
+        })) as never,
+    )
+
+    renderPanel('whatsapp', 'WhatsApp', false)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('native-unavailable-hint')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('whatsapp-qr')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/Enable and save, then a QR code will appear here/i),
+    ).not.toBeInTheDocument()
   })
 })
 

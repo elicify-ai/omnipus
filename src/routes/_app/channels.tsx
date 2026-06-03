@@ -12,7 +12,11 @@ function ChannelsScreen() {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
 
-  const [configuringChannel, setConfiguringChannel] = useState<{ id: string; name: string } | null>(null)
+  const [configuringChannel, setConfiguringChannel] = useState<{
+    id: string
+    name: string
+    nativeAvailable?: boolean
+  } | null>(null)
 
   const { data: channels = [], isLoading, isError } = useQuery({
     queryKey: ['channels'],
@@ -96,6 +100,7 @@ function ChannelsScreen() {
                           setConfiguringChannel({
                             id: channel.id,
                             name: channel.name,
+                            nativeAvailable: channel.native_available,
                           })
                         }
                         className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
@@ -124,6 +129,7 @@ function ChannelsScreen() {
           <ChannelConfigPanel
             channelId={configuringChannel.id}
             channelName={configuringChannel.name}
+            nativeAvailable={configuringChannel.nativeAvailable}
             open={true}
             onOpenChange={(open) => {
               if (!open) setConfiguringChannel(null)
