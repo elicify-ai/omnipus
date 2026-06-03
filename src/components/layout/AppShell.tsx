@@ -62,7 +62,7 @@ export function AppShell() {
     location.pathname.startsWith('/sessions/')
 
   return (
-    <div className="flex h-dvh w-full overflow-hidden bg-[var(--color-primary)]">
+    <div data-app-shell className="flex h-dvh w-full overflow-hidden bg-[var(--color-primary)]">
       {/* Sidebar renders in both pinned (flex child) and overlay (fixed) modes */}
       <Sidebar />
 

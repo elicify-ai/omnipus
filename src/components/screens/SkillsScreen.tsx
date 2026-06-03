@@ -16,13 +16,15 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '@/components/ui/dialog'
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import {
   fetchSkills,
   fetchMcpServers,
@@ -90,7 +92,7 @@ export function SkillsScreen() {
   })
 
   return (
-    <div className="absolute inset-0 overflow-y-auto">
+    <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
     <div className="max-w-4xl mx-auto px-4 py-6">
       <div className="mb-6">
         <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Skills & Tools</h1>
@@ -309,52 +311,60 @@ export function SkillsScreen() {
 
       {/* Skill delete confirmation */}
 
-      <Dialog open={confirmDeleteSkill !== null} onOpenChange={(o) => !o && setConfirmDeleteSkill(null)}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Remove skill</DialogTitle>
-            <DialogDescription>
+      <AlertDialog
+        open={confirmDeleteSkill !== null}
+        onOpenChange={(o) => !o && setConfirmDeleteSkill(null)}
+      >
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove skill</AlertDialogTitle>
+            <AlertDialogDescription>
               Remove <span className="font-medium text-[var(--color-secondary)]">{confirmDeleteSkill}</span>? This cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setConfirmDeleteSkill(null)}>
-              Cancel
-            </Button>
-            <Button
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
+            <AlertDialogAction
               variant="destructive"
               size="sm"
-              onClick={() => confirmDeleteSkill && doDeleteSkill(confirmDeleteSkill)}
+              onClick={() => {
+                if (confirmDeleteSkill) doDeleteSkill(confirmDeleteSkill)
+                setConfirmDeleteSkill(null)
+              }}
             >
               Remove
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* MCP server delete confirmation */}
-      <Dialog open={confirmDeleteMcp !== null} onOpenChange={(o) => !o && setConfirmDeleteMcp(null)}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Remove MCP server</DialogTitle>
-            <DialogDescription>
+      <AlertDialog
+        open={confirmDeleteMcp !== null}
+        onOpenChange={(o) => !o && setConfirmDeleteMcp(null)}
+      >
+        <AlertDialogContent className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove MCP server</AlertDialogTitle>
+            <AlertDialogDescription>
               Remove this MCP server? Any agents using it will lose access to its tools.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setConfirmDeleteMcp(null)}>
-              Cancel
-            </Button>
-            <Button
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
+            <AlertDialogAction
               variant="destructive"
               size="sm"
-              onClick={() => confirmDeleteMcp && doDeleteMcp(confirmDeleteMcp)}
+              onClick={() => {
+                if (confirmDeleteMcp) doDeleteMcp(confirmDeleteMcp)
+                setConfirmDeleteMcp(null)
+              }}
             >
               Remove
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
     </div>
     </div>

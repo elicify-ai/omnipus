@@ -42,7 +42,7 @@ export function CommandCenterScreen() {
     filter === 'all' ? tasks.length : tasks.filter((t) => t.status === filter).length
 
   return (
-    <div className="absolute inset-0 overflow-y-auto">
+    <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
     <div className="flex flex-col">
       {/* 1. Status bar */}
       <StatusBar />

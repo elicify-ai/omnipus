@@ -23,7 +23,12 @@ import type { ComponentPropsWithoutRef } from 'react'
 // wildcard `import * as` (which pulls the whole ~5MB icon set). See
 // src/lib/phosphor-emoji-icons.tsx. Mirrors markdown-text.tsx.
 function PhosphorEmojiSpan({ 'data-phosphor-icon': iconName, children, ...props }: ComponentPropsWithoutRef<'span'> & { 'data-phosphor-icon'?: string }) {
-  const Icon = iconName ? PHOSPHOR_EMOJI_ICONS[iconName] : undefined
+  // PHOSPHOR_EMOJI_ICONS is a sealed `as const` map; `iconName` is an arbitrary
+  // string from the DOM attribute, so index through a string-keyed view. A name
+  // absent from the allow-list yields undefined → original span is rendered.
+  const Icon = iconName
+    ? (PHOSPHOR_EMOJI_ICONS as Record<string, (typeof PHOSPHOR_EMOJI_ICONS)[keyof typeof PHOSPHOR_EMOJI_ICONS] | undefined>)[iconName]
+    : undefined
   if (Icon) {
     return <Icon size={14} weight="regular" className="inline-block align-middle text-[var(--color-accent)] mx-0.5" />
   }

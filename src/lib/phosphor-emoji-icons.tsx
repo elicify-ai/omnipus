@@ -6,9 +6,14 @@
 // it defeats tree-shaking. The set of icon names that can appear in a
 // `data-phosphor-icon` attribute is exactly the *values* of EMOJI_MAP in
 // src/lib/rehype-phosphor-emoji.ts — so we import only those by name and look
-// them up from a small Record. Any name not in the map falls back to a generic
-// icon (Question), which should never happen in practice since the plugin only
-// emits names from this same closed set.
+// them up from this small, sealed Record.
+//
+// Lookup behavior: a name absent from this allow-list resolves to `undefined`,
+// and the consumers (markdown-text.tsx, historical-markdown.tsx) render the
+// ORIGINAL span children unchanged in that case — there is no generic-icon
+// fallback. This cannot happen in practice because EMOJI_MAP's icon values are
+// typed `PhosphorIconName` (a key union of this map), so a new emoji whose icon
+// is not added here is a COMPILE error, not a runtime miss.
 //
 // When EMOJI_MAP grows a new icon value, add the matching named import here.
 
@@ -31,17 +36,18 @@ import {
   Rocket,
   Gear,
   Wrench,
-  Question,
 } from '@phosphor-icons/react'
 
-export type PhosphorIconComponent = ComponentType<{
+type PhosphorIconComponent = ComponentType<{
   size?: number
   weight?: 'thin' | 'light' | 'regular' | 'bold' | 'fill' | 'duotone'
   className?: string
 }>
 
-// Allow-list keyed by the exact icon names produced by EMOJI_MAP.
-export const PHOSPHOR_EMOJI_ICONS: Record<string, PhosphorIconComponent> = {
+// Allow-list keyed by the exact icon names produced by EMOJI_MAP. Sealed with
+// `as const satisfies` so `PhosphorIconName` is a precise key union usable as a
+// compile-time drift guard against EMOJI_MAP.
+export const PHOSPHOR_EMOJI_ICONS = {
   CheckCircle,
   Warning,
   Info,
@@ -59,16 +65,6 @@ export const PHOSPHOR_EMOJI_ICONS: Record<string, PhosphorIconComponent> = {
   Rocket,
   Gear,
   Wrench,
-}
+} as const satisfies Record<string, PhosphorIconComponent>
 
-// Fallback for an unrecognized name. The rehype plugin only ever emits names
-// from the closed EMOJI_MAP set, so this is defensive — but it guarantees a
-// real component is always returned so the caller never renders `undefined`.
-export const PHOSPHOR_EMOJI_FALLBACK: PhosphorIconComponent = Question
-
-// Resolve a `data-phosphor-icon` name to a concrete icon component, or null if
-// the name is absent (so the caller can render the original span children).
-export function resolvePhosphorEmojiIcon(name: string | undefined): PhosphorIconComponent | null {
-  if (!name) return null
-  return PHOSPHOR_EMOJI_ICONS[name] ?? PHOSPHOR_EMOJI_FALLBACK
-}
+export type PhosphorIconName = keyof typeof PHOSPHOR_EMOJI_ICONS

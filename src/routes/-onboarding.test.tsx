@@ -59,6 +59,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/test-avatar.svg' }))
 
 import { configureProvider, probeProvider, completeOnboardingTransaction } from '@/lib/api'
+import { evaluatePasswordStrength } from './onboarding'
 
 // Cache the dynamically imported component across all tests so the first import's
 // transform cost (~20s) only pays once and doesn't time out individual tests.
@@ -334,6 +335,68 @@ describe('OnboardingWizard — no skip button', () => {
 })
 
 // =====================================================================
+// evaluatePasswordStrength — pure heuristic, table-driven boundary coverage.
+// Empty → null; <8 chars → "Too short" (score 1) regardless of class mix;
+// >=8 scores 1–4 by length + character-class diversity. Score is never > 4.
+// =====================================================================
+
+describe('evaluatePasswordStrength', () => {
+  it('returns null for empty input', () => {
+    expect(evaluatePasswordStrength('')).toBeNull()
+  })
+
+  it('treats <8 chars as "Too short" (score 1) even with mixed classes', () => {
+    // "Aa1!" has all four classes but is only 4 chars → still gated to score 1.
+    const r = evaluatePasswordStrength('Aa1!')
+    expect(r).toEqual({ score: 1, label: 'Too short', color: 'var(--color-error)' })
+  })
+
+  it('scores an 8-char single-class password as "Weak" (1)', () => {
+    const r = evaluatePasswordStrength('aaaaaaaa')
+    expect(r?.score).toBe(1)
+    expect(r?.label).toBe('Weak')
+  })
+
+  it('scores an 8-char two-class password as "Fair" (2)', () => {
+    const r = evaluatePasswordStrength('aaaaaaaA')
+    expect(r?.score).toBe(2)
+    expect(r?.label).toBe('Fair')
+  })
+
+  it('scores an 8-char three-class password as "Good" (3)', () => {
+    const r = evaluatePasswordStrength('aaaaaA12')
+    expect(r?.score).toBe(3)
+    expect(r?.label).toBe('Good')
+  })
+
+  it('scores a 12-char four-class password as "Strong" (4)', () => {
+    const r = evaluatePasswordStrength('aaaaaaaA12!@')
+    expect(r?.score).toBe(4)
+    expect(r?.label).toBe('Strong')
+    expect(r?.color).toBe('var(--color-success)')
+  })
+
+  it('never exceeds score 4 for very long, very diverse passwords', () => {
+    const r = evaluatePasswordStrength('Abcdefgh12345678!@#$%^&*()')
+    expect(r?.score).toBe(4)
+    expect(r?.score).toBeLessThanOrEqual(4)
+  })
+
+  it('uses only the closed set of brand-token colors', () => {
+    const allowed = new Set([
+      'var(--color-error)',
+      'var(--color-warning)',
+      'var(--color-accent)',
+      'var(--color-success)',
+    ])
+    for (const pw of ['', 'a', 'aaaaaaaa', 'aaaaaaaA', 'aaaaaA12', 'aaaaaaaA12!@']) {
+      const r = evaluatePasswordStrength(pw)
+      if (r) expect(allowed.has(r.color)).toBe(true)
+    }
+  })
+})
+
+// =====================================================================
 // Scenario: Finish onboarding (US-7 AC9)
 // Traces to: wave5b-system-agent-spec.md — Scenario: Onboarding finish persists state
 // =====================================================================
@@ -406,5 +469,49 @@ describe('OnboardingWizard — finish', () => {
     await waitFor(() => {
       expect(screen.getByText(/anthropic connected/i)).toBeInTheDocument()
     })
+  })
+
+  it('surfaces an inline error and stays on step 4 with Retry Setup when finish fails', async () => {
+    // BDD: Given step 4, When completeOnboardingTransaction rejects, Then an inline
+    //      error (data-testid="onboarding-error") is shown, the user stays on step 4,
+    //      navigation does NOT fire, and the CTA becomes "Retry Setup".
+    vi.mocked(configureProvider).mockResolvedValue({} as never)
+    vi.mocked(probeProvider).mockResolvedValue({ success: true })
+    vi.mocked(completeOnboardingTransaction).mockRejectedValueOnce(new Error('server exploded'))
+
+    await goToFinishStep()
+    fireEvent.click(screen.getByRole('button', { name: /start exploring/i }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('onboarding-error')).toBeInTheDocument()
+    })
+    expect(screen.getByText(/server exploded/i)).toBeInTheDocument()
+    // Stayed on step 4 (still showing the Done heading) and did not navigate.
+    expect(screen.getByText(/you.re all set/i)).toBeInTheDocument()
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /retry setup/i })).toBeInTheDocument()
+  })
+
+  it('retry after a failure clears the error and navigates on success', async () => {
+    // BDD: Given a finish failure on step 4, When the user clicks Retry Setup and the
+    //      retry succeeds, Then the inline error clears and navigation to / fires.
+    vi.mocked(configureProvider).mockResolvedValue({} as never)
+    vi.mocked(probeProvider).mockResolvedValue({ success: true })
+    vi.mocked(completeOnboardingTransaction)
+      .mockRejectedValueOnce(new Error('transient outage'))
+      .mockResolvedValueOnce({ token: 't', role: 'admin', username: 'admin' } as never)
+
+    await goToFinishStep()
+
+    // First attempt fails → inline error + Retry Setup CTA.
+    fireEvent.click(screen.getByRole('button', { name: /start exploring/i }))
+    await waitFor(() => expect(screen.getByTestId('onboarding-error')).toBeInTheDocument())
+
+    // Retry succeeds → error clears, navigates to root.
+    fireEvent.click(screen.getByRole('button', { name: /retry setup/i }))
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
+    })
+    expect(screen.queryByTestId('onboarding-error')).not.toBeInTheDocument()
   })
 })

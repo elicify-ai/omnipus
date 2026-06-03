@@ -55,6 +55,7 @@ const AlertDialogContent = React.forwardRef<
       onInteractOutside={(e) => e.preventDefault()}
       className={cn(
         'fixed left-[50%] top-[50%] z-50 grid w-full max-w-md translate-x-[-50%] translate-y-[-50%] gap-4',
+        'max-h-[90dvh] overflow-y-auto',
         'border border-[var(--color-border)] bg-[var(--color-surface-1)] p-6 shadow-2xl',
         'rounded-xl text-[var(--color-secondary)]',
         'data-[state=open]:animate-in data-[state=closed]:animate-out',
@@ -118,8 +119,13 @@ const AlertDialogCancel = React.forwardRef<HTMLButtonElement, ButtonProps>(
 )
 AlertDialogCancel.displayName = 'AlertDialogCancel'
 
-// Action — the confirm button. Proceeds ONLY when clicked.
-const AlertDialogAction = React.forwardRef<HTMLButtonElement, ButtonProps>(
+// Action — the confirm button. Proceeds ONLY when clicked. `onClick` is REQUIRED:
+// a confirm with no handler is a no-op (the dialog would never act on confirm),
+// so we make that a compile error rather than a silent dead button.
+type AlertDialogActionProps = ButtonProps & {
+  onClick: NonNullable<ButtonProps['onClick']>
+}
+const AlertDialogAction = React.forwardRef<HTMLButtonElement, AlertDialogActionProps>(
   ({ variant = 'default', ...props }, ref) => <Button ref={ref} variant={variant} {...props} />
 )
 AlertDialogAction.displayName = 'AlertDialogAction'

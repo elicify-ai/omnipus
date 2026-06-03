@@ -1048,8 +1048,11 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const [slashHighlight, setSlashHighlight] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
   // Harmful-file upload confirmation (replaces the two native window.confirm calls).
-  // `harmfulConfirm` holds the files awaiting confirmation plus the flagged names.
-  // `harmfulStage` advances 1 → 2 (double-confirm) → commit. null = closed.
+  // `harmfulConfirm` holds the files awaiting confirmation plus the flagged names;
+  // it is the open/closed signal — the dialog is closed when `harmfulConfirm` is
+  // null and open otherwise. `harmfulStage` is typed 1 | 2 (never null) and only
+  // advances 1 → 2 (double-confirm) before commit; it is reset to 1 each time a
+  // new harmful set is queued (see handleFilesSelected).
   const [harmfulConfirm, setHarmfulConfirm] = useState<{
     files: File[]
     harmfulNames: string[]
@@ -1805,7 +1808,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           <div className="relative w-full">
             {/* Gradient fade above composer */}
             <div className="absolute -top-8 left-0 right-0 h-8 bg-gradient-to-t from-[var(--color-primary)] to-transparent pointer-events-none" />
-            <div className="w-full max-w-3xl mx-auto px-4 pb-2 pt-2">
+            <div className="w-full max-w-3xl mx-auto px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
               <OmnipusComposer agentRemoved={agentRemoved} />
             </div>
           </div>

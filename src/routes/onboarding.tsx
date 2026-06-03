@@ -57,18 +57,30 @@ const WELCOME_FEATURES = [
 
 // Lightweight, dependency-free password strength heuristic. Scores on length
 // plus character-class diversity (lower / upper / digit / symbol). Returns a
-// 0–4 score with a human label and a brand token for the meter fill. Empty
-// input returns null so the meter is hidden until the user types.
+// 1–4 score with a human label and a brand token for the meter fill (or null
+// for empty input, so the meter is hidden until the user types).
+type PasswordStrengthLabel = 'Too short' | 'Weak' | 'Fair' | 'Good' | 'Strong'
+type PasswordStrengthColor =
+  | 'var(--color-error)'
+  | 'var(--color-warning)'
+  | 'var(--color-accent)'
+  | 'var(--color-success)'
 type PasswordStrength = {
-  score: 0 | 1 | 2 | 3 | 4
-  label: string
-  color: string
+  score: 1 | 2 | 3 | 4
+  label: PasswordStrengthLabel
+  color: PasswordStrengthColor
 }
 
-function evaluatePasswordStrength(pw: string): PasswordStrength | null {
+// Exported for unit testing (table-driven coverage of the score boundaries).
+export function evaluatePasswordStrength(pw: string): PasswordStrength | null {
   if (!pw) return null
-  let points = 0
-  if (pw.length >= 8) points += 1
+  // Passwords below the 8-char minimum are always "Too short" (score 1),
+  // regardless of character diversity, to match the validation gate. This
+  // early return also guarantees the score below is always 1–4 (never 0).
+  if (pw.length < 8) {
+    return { score: 1, label: 'Too short', color: 'var(--color-error)' }
+  }
+  let points = 1 // length >= 8 (guaranteed by the early return above)
   if (pw.length >= 12) points += 1
   const classes =
     (/[a-z]/.test(pw) ? 1 : 0) +
@@ -77,11 +89,6 @@ function evaluatePasswordStrength(pw: string): PasswordStrength | null {
     (/[^A-Za-z0-9]/.test(pw) ? 1 : 0)
   if (classes >= 2) points += 1
   if (classes >= 3) points += 1
-  // Passwords below the 8-char minimum are always "Too short" (score 1 max),
-  // regardless of character diversity, to match the validation gate.
-  if (pw.length < 8) {
-    return { score: 1, label: 'Too short', color: 'var(--color-error)' }
-  }
   const score = Math.min(points, 4) as PasswordStrength['score']
   switch (score) {
     case 1:
@@ -92,8 +99,6 @@ function evaluatePasswordStrength(pw: string): PasswordStrength | null {
       return { score, label: 'Good', color: 'var(--color-accent)' }
     case 4:
       return { score, label: 'Strong', color: 'var(--color-success)' }
-    default:
-      return { score, label: 'Weak', color: 'var(--color-error)' }
   }
 }
 

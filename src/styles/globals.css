@@ -102,24 +102,25 @@ body {
 /* With viewport-fit=cover the app shell extends edge-to-edge under    */
 /* notches and home indicators. Pad the shell chrome with             */
 /* env(safe-area-inset-*) so content is never hidden. The sidebar      */
-/* applies its own insets inline (see Sidebar.tsx). The app-shell      */
-/* root is the only top-level dvh flex container; its <header> top bar */
-/* and <main> content column are targeted structurally so no JSX       */
-/* change is required.                                                 */
+/* applies its own insets inline (see Sidebar.tsx). Rules are scoped   */
+/* to the app-shell root via the [data-app-shell] marker (see          */
+/* AppShell.tsx) so a future nested <header>/<main> can never inherit  */
+/* notch padding from a fragile global descendant match.              */
+/*                                                                     */
+/* The bottom home-indicator inset is applied directly to each screen's*/
+/* scroll container (pb-[env(safe-area-inset-bottom)]), NOT to <main>: */
+/* every screen body is `absolute inset-0 overflow-y-auto`, sized to   */
+/* <main>'s padding box, so padding on <main> is overlapped by the     */
+/* child and is a no-op. The scroll container is the real fix.         */
 /* ------------------------------------------------------------------ */
 
 /* App-shell root reserves the right notch inset for the whole shell. */
-.h-dvh {
+[data-app-shell] {
   padding-right: env(safe-area-inset-right);
 }
 
 /* Top bar — clear the top notch (max() keeps the existing py-3 when
    there is no notch). */
-.h-dvh header {
+[data-app-shell] > div > header {
   padding-top: max(0.75rem, env(safe-area-inset-top));
-}
-
-/* Bottom home-indicator inset on the scrollable content column. */
-.h-dvh main {
-  padding-bottom: env(safe-area-inset-bottom);
 }

@@ -28,7 +28,7 @@ export function SettingsScreen() {
   const showAccessTab = isAdmin && !devModeBypass
 
   return (
-    <div className="absolute inset-0 overflow-y-auto">
+    <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
       <div className="max-w-3xl mx-auto px-4 py-6">
         {/* Header */}
         <div className="mb-6">
