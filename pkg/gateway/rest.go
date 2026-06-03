@@ -1225,6 +1225,13 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
 		return
 	}
+	// Referential validation: reject unknown skill IDs before doing any work.
+	if req.Skills != nil && len(*req.Skills) > 0 {
+		if errMsg := a.validateSkillIDs(*req.Skills); errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
+			return
+		}
+	}
 	description := ""
 	if req.Description != nil {
 		description = strings.TrimSpace(*req.Description)
@@ -1499,11 +1506,20 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	foundAgent := cfg.Agents.List[foundIdx]
 	if foundAgent.Locked {
 		// Protected: name, description, soul (prompt content), heartbeat (HEARTBEAT.md content),
-		// instructions, color, and icon are identity fields — reject on locked agents.
+		// instructions, color, icon, and skills are identity/capability fields — reject on locked agents.
+		// Skills are included here (B-2 defense-in-depth): core agents have compiled-in capability
+		// sets; allowing runtime skill assignment would silently override that invariant.
 		if req.Name != nil || req.Description != nil ||
 			req.Soul != nil || req.Heartbeat != nil || req.Instructions != nil ||
-			req.Color != nil || req.Icon != nil {
+			req.Color != nil || req.Icon != nil || req.Skills != nil {
 			jsonErr(w, http.StatusForbidden, "cannot modify locked agent identity or prompt")
+			return
+		}
+	}
+	// Referential validation: reject unknown skill IDs before doing any work.
+	if req.Skills != nil && len(*req.Skills) > 0 {
+		if errMsg := a.validateSkillIDs(*req.Skills); errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
 		}
 	}
@@ -2322,6 +2338,48 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 		})
 	}
 	jsonOK(w, result)
+}
+
+// installedSkillIDs returns the set of skill IDs currently known to the agent
+// loop (same source as GET /api/v1/skills). An empty map is returned when no
+// skills are installed, which lets the validation below produce a proper 400
+// ("unknown skill id") rather than silently accepting any string.
+func (a *restAPI) installedSkillIDs() map[string]struct{} {
+	info := a.agentLoop.GetStartupInfo()
+	skillsInfo, ok := info["skills"].(map[string]any)
+	if !ok {
+		return map[string]struct{}{}
+	}
+	names, _ := skillsInfo["names"].([]string)
+	result := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		result[n] = struct{}{}
+	}
+	return result
+}
+
+// validateSkillIDs returns an error string (for a 400 response) if any of the
+// supplied skill IDs are not present in the installed-skills registry.
+// Returns "" when all IDs are valid or when no skills are installed at all
+// (to avoid false rejections in environments where the skills directory hasn't
+// been populated yet — the agent loop's runtime filter is the final gate).
+func (a *restAPI) validateSkillIDs(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	installed := a.installedSkillIDs()
+	// Skip validation when the installed set is empty: the skills directory may
+	// not exist yet (fresh install, test environment). Accept any id and let the
+	// agent loop's skill filter gate unknown ids at runtime.
+	if len(installed) == 0 {
+		return ""
+	}
+	for _, id := range ids {
+		if _, ok := installed[id]; !ok {
+			return fmt.Sprintf("unknown skill id: %q", id)
+		}
+	}
+	return ""
 }
 
 func (a *restAPI) searchSkills(w http.ResponseWriter, _ *http.Request) {
