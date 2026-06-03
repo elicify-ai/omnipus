@@ -334,6 +334,7 @@ export function SecuritySection() {
               { value: 'allow', label: 'Run freely' },
             ]}
             currentValue={persistedPolicyMode}
+            selectedValue={policyMode}
             safeValue="deny"
             copy={POLICY_MODE_COPY}
             onConfirm={(v) => {
