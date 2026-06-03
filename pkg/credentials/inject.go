@@ -110,7 +110,6 @@ func ResolveAll(cfg *config.Config, store *Store) (map[string]string, []error) {
 		ch.Matrix.CryptoPassphraseRef,
 		ch.LINE.ChannelSecretRef,
 		ch.LINE.ChannelAccessTokenRef,
-		ch.OneBot.AccessTokenRef,
 		ch.WeCom.SecretRef,
 		ch.Weixin.TokenRef,
 		ch.IRC.PasswordRef,

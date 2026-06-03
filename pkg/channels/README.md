@@ -446,20 +446,18 @@ The following factory names are registered. The gateway blank-imports each subpa
 | `matrix` | `pkg/channels/matrix/` | TypingCapable, PlaceholderCapable, MessageEditor, MediaSender — conditionally imported (build tag in `pkg/gateway/channel_matrix.go`, CGo required) |
 | `feishu` | `pkg/channels/feishu/` | PlaceholderCapable, MessageEditor, ReactionCapable, MediaSender, CommandRegistrarCapable (64-bit only; 32-bit stubs at `feishu_32.go`) |
 | `dingtalk` | `pkg/channels/dingtalk/` | CommandRegistrarCapable (uses DingTalk Stream/WebSocket mode, not webhook) |
-| `onebot` | `pkg/channels/onebot/` | ReactionCapable, MediaSender |
 | `qq` | `pkg/channels/qq/` | TypingCapable, MediaSender |
 | `irc` | `pkg/channels/irc/` | TypingCapable |
 | `wecom` | `pkg/channels/wecom/` | StreamingCapable, MediaSender (WebSocket AI Bot; no WebhookHandler) |
 | `weixin` | `pkg/channels/weixin/` | TypingCapable, MediaSender |
-| `whatsapp` | `pkg/channels/whatsapp/` | — (Bridge mode: connects to external bridge via `BridgeURL`) |
-| `whatsapp_native` | `pkg/channels/whatsapp_native/` | TypingCapable |
+| `whatsapp_native` | `pkg/channels/whatsapp_native/` | TypingCapable (the `whatsapp` user-facing channel is always native; the legacy bridge channel was removed) |
 | `google-chat` | `pkg/channels/googlechat/` | TypingCapable, WebhookHandler, CommandRegistrarCapable |
 
 ### Notes on specific channels
 
 **matrix** is conditionally imported with build tag `!mipsle && !netbsd && !(freebsd && arm) && cgo` (`pkg/gateway/channel_matrix.go:1-28`) because its transitive dependencies (`mautrix`, `modernc.org/sqlite`) fail on those targets.
 
-**whatsapp vs whatsapp_native:** `initChannels` checks `WhatsAppConfig.UseNative` to select which factory to use (`pkg/channels/manager.go:524-535`). Only one of the two is initialized per run.
+**whatsapp is always native:** the legacy bridge channel (`pkg/channels/whatsapp/`, which connected to an external bridge via `BridgeURL`) has been removed. When `WhatsAppConfig.Enabled` is true, `initChannels` always initializes `whatsapp_native`; on a lite/stub build (or an arch where `modernc.org/sqlite` is unavailable) it records a clear init failure rather than silently no-op.
 
 **whatsapp_native build-tag inversion:** native WhatsApp (whatsmeow) ships in the **default** build. `whatsapp_native.go` is gated `//go:build !lite && !mipsle && !netbsd && !(freebsd && arm)` (the real impl) and `whatsapp_native_stub.go` is its exact complement `//go:build lite || mipsle || netbsd || (freebsd && arm)` (returns an error). The arch exclusions mirror the **matrix** note above — `modernc.org/sqlite` can't build on those targets, so native degrades to the stub there. The `lite` tag (`make build-lite`) opts out everywhere to produce a smaller binary. There is no longer a `whatsapp_native` opt-in tag.
 

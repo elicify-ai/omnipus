@@ -9,8 +9,9 @@
  *
  *   Case B — Capability gating (negative path, #299 regression):
  *     When the channels API reports native_available:false for WhatsApp, the
- *     Native Mode toggle is disabled, the unavailable hint renders
- *     ([data-testid="native-unavailable-hint"]), and NO QR is rendered.
+ *     unavailable hint renders ([data-testid="native-unavailable-hint"]) and NO
+ *     QR is rendered. There is no `use_native` toggle anymore (WhatsApp is always
+ *     native); the gating is purely on the native_available capability flag.
  *
  * Approach: fully deterministic, no real WhatsApp connection.
  *   - page.route() stubs all REST calls the panel makes (channels list, config,
@@ -72,8 +73,12 @@ const WEBCHAT_CHANNEL = {
   description: 'Built-in web chat',
 }
 
-/** Minimal channel config with use_native:true so the QR block can mount. */
-const WHATSAPP_CONFIG_NATIVE = { use_native: true }
+/**
+ * Minimal channel config. WhatsApp is always native now (no `use_native` field);
+ * the QR notice mounts based purely on the channelId + native_available, not on
+ * any config value, so an empty object is sufficient.
+ */
+const WHATSAPP_CONFIG_NATIVE = {}
 
 /** Minimal routing response (no default agent configured). */
 const EMPTY_ROUTING = {}
@@ -114,9 +119,10 @@ async function stubChannelsRest(
     }
   })
 
-  // GET /api/v1/channels/whatsapp — channel config (triggers QR block when
-  // use_native:true is present). In case B we still set use_native:true to
-  // confirm the gating logic IGNORES config and respects native_available:false.
+  // GET /api/v1/channels/whatsapp — channel config. The QR block no longer keys
+  // off any config field (use_native was removed); it mounts purely from the
+  // whatsapp channelId + the native_available capability flag. In case B the
+  // gating respects native_available:false regardless of config contents.
   await page.route('**/api/v1/channels/whatsapp', async (route: Route) => {
     if (route.request().method() === 'GET') {
       await route.fulfill({
@@ -268,8 +274,11 @@ test(
 //      And the channels API reports native_available:false for WhatsApp
 //      When the user opens the Configure WhatsApp panel
 //      Then [data-testid="native-unavailable-hint"] is visible
-//      And the Native Mode (use_native) Switch is disabled
 //      And [data-testid="whatsapp-qr"] does NOT exist in the DOM
+//
+// Note: there is no `use_native` toggle anymore — WhatsApp is always native and
+// the field was removed. The gating is purely capability-driven: native_available
+// :false → render the hint, suppress the QR.
 //
 // Regression guard for #299: if the gating check is removed, the QR would
 // render even on builds that cannot support native WhatsApp, confusing users.
@@ -277,7 +286,7 @@ test(
 // Traces to: whatsapp-qr.spec.ts (this file) — case B; GitHub #299
 
 test(
-  '(B) native_available:false disables the toggle, shows the hint, and does NOT render the QR',
+  '(B) native_available:false shows the capability hint and does NOT render the QR (no toggle)',
   async ({ page }) => {
     // We still mock the WS so that the SPA's isConnected path works normally
     // (avoids spurious reconnect warnings) — but no QR frame should be
@@ -296,28 +305,13 @@ test(
     await expect(sheet).toBeVisible({ timeout: 10_000 })
     await expect(sheet).toContainText(/configure whatsapp/i)
 
-    // Wait for the config to load (the skeleton must resolve before assertions).
-    // The unavailable hint is shown only after the fields render.
-    // Use the label for the use_native switch — "Native Mode (whatsmeow)" — via
-    // the associated input ID so we pick a unique element. The text "native mode"
-    // also appears in the bridge_url help text ("Only needed if native mode is
-    // off"), causing a strict-mode violation if we match by text alone.
-    await expect(sheet.locator('label[for="field-use_native"]')).toBeVisible({ timeout: 10_000 })
-
-    // ── Core assertion A: the hint is visible.
+    // ── Core assertion A: the capability hint is visible.
+    // The hint is shown (in place of the QR notice) only after the config loads
+    // and the panel renders; waiting on it also covers the skeleton resolving.
     const unavailableHint = page.getByTestId('native-unavailable-hint')
-    await expect(unavailableHint).toBeVisible({ timeout: 5_000 })
+    await expect(unavailableHint).toBeVisible({ timeout: 10_000 })
 
-    // ── Core assertion B: the Native Mode switch is disabled.
-    // The Switch renders as a <button role="switch" id="field-use_native">.
-    // When nativeUnavailable=true, ChannelConfigPanel passes disabled={true}
-    // to the Switch which sets aria-disabled="true" on the rendered button.
-    const useNativeSwitch = sheet.locator('#field-use_native')
-    await expect(useNativeSwitch).toBeVisible({ timeout: 5_000 })
-    // Radix Switch sets the HTML `disabled` attribute when disabled=true.
-    await expect(useNativeSwitch).toBeDisabled()
-
-    // ── Core assertion C: no QR container in the DOM.
+    // ── Core assertion B: no QR container in the DOM.
     // A hardcoded or ungated implementation would render the QR even when
     // native_available:false — this assertion catches that regression.
     await expect(page.getByTestId('whatsapp-qr')).toHaveCount(0)

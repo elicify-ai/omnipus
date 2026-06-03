@@ -266,9 +266,10 @@ func TestConvertToOmnipus(t *testing.T) {
 		t.Errorf("expected telegram token 'test-token', got '%s'", omnipusCfg.Channels.Telegram.Token)
 	}
 
-	if omnipusCfg.Channels.WhatsApp.BridgeURL != "http://localhost:3000" {
-		t.Errorf("expected whatsapp bridge URL 'http://localhost:3000', got '%s'",
-			omnipusCfg.Channels.WhatsApp.BridgeURL)
+	// BridgeURL is no longer migrated (WhatsApp is always native; bridge removed).
+	// Verify the channel's enabled flag still migrates.
+	if !omnipusCfg.Channels.WhatsApp.Enabled {
+		t.Error("whatsapp should be enabled after migration")
 	}
 
 	if omnipusCfg.Channels.Feishu.AppID != "app-id" {
@@ -636,8 +637,7 @@ func TestToStandardConfig(t *testing.T) {
 				AllowFrom: []string{"user1"},
 			},
 			WhatsApp: WhatsAppConfig{
-				Enabled:   true,
-				BridgeURL: "http://localhost:3000",
+				Enabled: true,
 			},
 		},
 		Gateway: GatewayConfig{

@@ -15,7 +15,7 @@ import (
 // the registered observer, which the gateway bridges to the SPA.
 func TestPairingObserver(t *testing.T) {
 	ch, err := NewWhatsAppNativeChannel(
-		config.WhatsAppConfig{Enabled: true, UseNative: true},
+		config.WhatsAppConfig{Enabled: true},
 		bus.NewMessageBus(),
 		t.TempDir(),
 	)

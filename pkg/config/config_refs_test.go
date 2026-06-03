@@ -160,17 +160,6 @@ func TestChannelConfig_AllRefsRoundTrip(t *testing.T) {
 			},
 		},
 		{
-			name: "onebot/access_token_ref",
-			setup: func(c *Config) {
-				c.Channels.OneBot.AccessTokenRef = "ONEBOT_TOKEN_TEST"
-			},
-			verify: func(t *testing.T, c *Config) {
-				if c.Channels.OneBot.AccessTokenRef != "ONEBOT_TOKEN_TEST" {
-					t.Errorf("got %q, want ONEBOT_TOKEN_TEST", c.Channels.OneBot.AccessTokenRef)
-				}
-			},
-		},
-		{
 			name: "wecom/secret_ref",
 			setup: func(c *Config) {
 				c.Channels.WeCom.SecretRef = "WECOM_SECRET_TEST"

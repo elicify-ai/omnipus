@@ -39,10 +39,10 @@ interface ChannelConfigPanelProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   /**
-   * WhatsApp only: whether the native (whatsmeow) implementation is compiled
-   * into this binary. When false, the native-mode toggle must be disabled and
-   * the QR flow must not be offered. Absent/undefined for non-whatsapp channels
-   * — treat as "no restriction" (i.e. behave as if true).
+   * Capability flag from the channel's ChannelEntry (#299): whether this server
+   * build can run native WhatsApp (whatsmeow). Only `false` gates the WhatsApp
+   * linked-device QR pairing UI; `undefined`/`true` are treated as available so
+   * the QR renders by default ("the UI must only offer what the binary can do").
    */
   nativeAvailable?: boolean
 }
@@ -322,13 +322,14 @@ export function ChannelConfigPanel({
     return formValues[key]
   }
 
-  // nativeUnavailable is true ONLY when the channel is whatsapp AND the backend
-  // explicitly reports native_available=false. When nativeAvailable is undefined
-  // (older backend or non-whatsapp channel), we treat it as no restriction.
-  const nativeUnavailable = channelId === 'whatsapp' && nativeAvailable === false
-
-  const isWhatsAppNative =
-    channelId === 'whatsapp' && !nativeUnavailable && Boolean(getValue('use_native'))
+  // WhatsApp is always native (whatsmeow) — the legacy bridge + the `use_native`
+  // toggle were removed, so there is no user-facing native toggle. The
+  // linked-device QR pairing UI is still capability-gated (#299): on a lite/stub
+  // build the backend reports native_available:false on the whatsapp ChannelEntry,
+  // and we must NOT show a QR that can never pair. Only `false` gates;
+  // `undefined`/`true` default to available.
+  const isWhatsApp = channelId === 'whatsapp'
+  const whatsAppNativeUnavailable = isWhatsApp && nativeAvailable === false
 
   const isBusy = saving || savingAndEnabling
 
@@ -372,7 +373,6 @@ export function ChannelConfigPanel({
                       id={`field-${field.key}`}
                       checked={Boolean(getValue(field.key))}
                       onCheckedChange={(checked) => setValue(field.key, checked)}
-                      disabled={nativeUnavailable && field.key === 'use_native'}
                     />
                   </div>
                 ) : field.type === 'password' ? (
@@ -412,29 +412,25 @@ export function ChannelConfigPanel({
                     {field.helpText}
                   </p>
                 )}
-
-                {/* WhatsApp native mode notices */}
-                {channelId === 'whatsapp' && field.key === 'use_native' && nativeUnavailable && (
-                  <div
-                    data-testid="native-unavailable-hint"
-                    className="flex gap-2 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-warning)]/30"
-                  >
-                    <Warning
-                      size={14}
-                      className="text-[var(--color-warning)] shrink-0 mt-0.5"
-                      weight="fill"
-                    />
-                    <p className="text-xs text-[var(--color-muted)]">
-                      This build doesn&apos;t include native WhatsApp. Use a Bridge URL below, or
-                      run the default build.
-                    </p>
-                  </div>
-                )}
-                {channelId === 'whatsapp' && field.key === 'use_native' && isWhatsAppNative && (
-                  <WhatsAppNativeNotice />
-                )}
               </div>
             ))}
+
+            {/* WhatsApp is always native (whatsmeow): show the live linked-device
+                QR pairing UI (#283) — but only when the server build can run
+                native WhatsApp. On a lite/stub build (native_available:false) show
+                a hint instead of a QR that can never pair (#299). */}
+            {isWhatsApp &&
+              (whatsAppNativeUnavailable ? (
+                <p
+                  data-testid="native-unavailable-hint"
+                  className="text-xs text-[var(--color-muted)] leading-relaxed mt-1 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]"
+                >
+                  WhatsApp requires the native build (whatsmeow); this server build
+                  doesn&apos;t include it, so linked-device pairing is unavailable.
+                </p>
+              ) : (
+                <WhatsAppNativeNotice />
+              ))}
 
             {/* Routing — hidden for webchat (no agent-routing concept) */}
             {!isWebchat && (

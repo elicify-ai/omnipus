@@ -206,7 +206,14 @@ type AgentUpdateRequest = Partial<{
 type ChannelEntry = {
   id: ChannelId;
   name: string;
-  transport: "websocket" | "webhook" | "bridge" | "tcp" | "http" | "serial";
+  transport:
+    | "websocket"
+    | "webhook"
+    | "bridge"
+    | "native"
+    | "tcp"
+    | "http"
+    | "serial";
   enabled: boolean;
   description: string;
   native_available?: boolean | undefined;
@@ -225,10 +232,9 @@ type ChannelId =
   | "weixin"
   | "line"
   | "qq"
-  | "onebot"
   | "irc"
   | "matrix"
-  | "maixcam";
+  | "google-chat";
 type DoctorResult = {
   score: number;
   issues: Array<DoctorIssue>;
@@ -1116,10 +1122,9 @@ export const ChannelId = z.enum([
   "weixin",
   "line",
   "qq",
-  "onebot",
   "irc",
   "matrix",
-  "maixcam",
+  "google-chat",
 ]);
 export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   id: ChannelId,
@@ -1128,6 +1133,7 @@ export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
     "websocket",
     "webhook",
     "bridge",
+    "native",
     "tcp",
     "http",
     "serial",

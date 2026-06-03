@@ -1,6 +1,8 @@
 // Channel configuration field definitions
 // Each entry maps to the Go ChannelsConfig struct fields in pkg/config/config.go
 
+import type { ChannelId } from '@/lib/api/generated/openapi-types'
+
 export interface ChannelField { // not-wire-format: UI form-field descriptor for channel config forms; never serialised over any HTTP/WS boundary
   key: string
   label: string
@@ -10,7 +12,10 @@ export interface ChannelField { // not-wire-format: UI form-field descriptor for
   helpText?: string
 }
 
-export const CHANNEL_FIELDS: Record<string, ChannelField[]> = {
+// drift-guard: keying by the generated ChannelId enum (via Partial — not every
+// channel has a config form, e.g. webchat) makes a removed/renamed channel id a
+// tsc error here, forcing this list back in sync with the contract.
+export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
   telegram: [
     {
       key: 'token',
@@ -121,21 +126,6 @@ export const CHANNEL_FIELDS: Record<string, ChannelField[]> = {
   ],
 
   whatsapp: [
-    {
-      key: 'use_native',
-      label: 'Native Mode (whatsmeow)',
-      type: 'toggle',
-      required: false,
-      helpText: 'Uses built-in WhatsApp connection — requires QR code scan',
-    },
-    {
-      key: 'bridge_url',
-      label: 'Bridge URL',
-      type: 'url',
-      required: false,
-      placeholder: 'ws://localhost:3001',
-      helpText: 'Only needed if native mode is off',
-    },
     {
       key: 'allow_from',
       label: 'Allow From',
@@ -398,42 +388,53 @@ export const CHANNEL_FIELDS: Record<string, ChannelField[]> = {
     },
   ],
 
-  onebot: [
+  'google-chat': [
     {
-      key: 'ws_url',
-      label: 'WebSocket URL',
-      type: 'url',
-      required: true,
-      placeholder: 'ws://localhost:3000',
-      helpText: 'WebSocket address of your OneBot-compatible client (e.g. go-cqhttp)',
-    },
-    {
-      key: 'access_token',
-      label: 'Access Token',
+      key: 'webhook_url',
+      label: 'Webhook URL',
       type: 'password',
       required: false,
-      helpText: 'Optional access token for authenticating with the OneBot client',
+      placeholder: 'https://chat.googleapis.com/v1/spaces/...',
+      helpText: 'Incoming webhook URL for a Google Chat space (simplest setup)',
+    },
+    {
+      key: 'service_account_json',
+      label: 'Service Account JSON',
+      type: 'textarea',
+      required: false,
+      placeholder: '{ "type": "service_account", ... }',
+      helpText: 'Paste the service-account key JSON (for bot/API mode). Stored encrypted.',
+    },
+    {
+      key: 'service_account_file',
+      label: 'Service Account File Path',
+      type: 'text',
+      required: false,
+      placeholder: '/path/to/service-account.json',
+      helpText: 'Alternative to pasting JSON: path to the service-account key file on disk',
+    },
+    {
+      key: 'space',
+      label: 'Space',
+      type: 'text',
+      required: false,
+      placeholder: 'spaces/AAAA...',
+      helpText: 'Default Google Chat space to post to (bot mode)',
     },
     {
       key: 'allow_from',
       label: 'Allow From',
       type: 'text',
       required: false,
-      placeholder: 'user_id1, group_id1',
+      placeholder: 'user1@example.com, user2@example.com',
+      helpText: 'Comma-separated user IDs (empty = allow all)',
     },
     {
       key: 'group_trigger.mention_only',
       label: 'Groups: mention only',
       type: 'toggle',
       required: false,
-    },
-    {
-      key: 'reconnect_interval',
-      label: 'Reconnect Interval (s)',
-      type: 'number',
-      required: false,
-      placeholder: '5',
-      helpText: 'Seconds to wait before reconnecting on disconnect',
+      helpText: 'Only respond when mentioned in a space',
     },
   ],
 
@@ -537,5 +538,8 @@ export const CHANNEL_FIELDS: Record<string, ChannelField[]> = {
 }
 
 export function getChannelFields(channelId: string): ChannelField[] {
-  return CHANNEL_FIELDS[channelId.toLowerCase()] ?? []
+  // CHANNEL_FIELDS is keyed by the generated ChannelId enum (drift-guard). The
+  // caller passes an arbitrary string, so cast at the lookup site; an unknown id
+  // simply falls through to the empty default.
+  return CHANNEL_FIELDS[channelId.toLowerCase() as ChannelId] ?? []
 }
