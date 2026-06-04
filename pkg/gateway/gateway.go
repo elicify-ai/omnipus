@@ -123,6 +123,13 @@ type services struct {
 	servedSubdirs *agent.ServedSubdirs
 	devServers    *sandbox.DevServerRegistry
 	egressProxy   *sandbox.EgressProxy
+
+	// restAPIRef holds a pointer to the restAPI constructed by setupAndStartServices.
+	// Used by RunContextWithOptions to update builtinRegistry after live-deps are wired
+	// (the M16 re-population at line ~689 creates a fresh *BuiltinRegistry that must
+	// reach the already-constructed restAPI; storing the ref here avoids
+	// a larger refactor of setupAndStartServices).
+	restAPIRef *restAPI
 }
 
 type startupBlockedProvider struct {
@@ -608,12 +615,23 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 
 	// M16 (FR-001/FR-002): pre-instantiate central registries.
 	// BuiltinRegistry is populated here with nil deps (for name/description metadata only).
+	// System.* tools are registered with nil deps; general builtins are registered as
+	// metadata-only instances (deps-free, never executed — per ADR-018 D-A1).
 	// After sysAgentDeps is wired (below), the registry is re-populated with live deps.
 	// MCPRegistry starts empty; MCP servers populate it at connection time.
 	centralBuiltinReg := tools.NewBuiltinRegistry()
 	for _, t := range systools.AllTools(nil, nil) {
 		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
 			slog.Warn("gateway: central builtin registry pre-population skipped duplicate",
+				"tool", t.Name(), "error", regErr)
+		}
+	}
+	// Register general-builtin metadata (SC-108 / Issue #350): these instances
+	// expose Name/Description/Category for /api/v1/tools but are NEVER Execute()d.
+	// Constructor errors are logged and skipped per the log-and-skip invariant.
+	for _, t := range tools.GeneralBuiltinMetadata() {
+		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
+			slog.Warn("gateway: central builtin registry general-builtin skipped",
 				"tool", t.Name(), "error", regErr)
 		}
 	}
@@ -686,6 +704,12 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// (if ever routed through the central registry) have valid deps.
 	// The registry created before setupAndStartServices used nil deps for
 	// the shape/name/description metadata only; swap to real deps here.
+	//
+	// Fix #350 (SC-108): also re-register general-builtin metadata and propagate
+	// the updated registry to restAPI.builtinRegistry. Without this the restAPI
+	// (constructed inside setupAndStartServices) would retain the pre-sysAgentDeps
+	// registry. The restAPIRef field was stored by setupAndStartServices exactly
+	// for this late-wire step.
 	centralBuiltinReg = tools.NewBuiltinRegistry()
 	for _, t := range systools.AllTools(sysAgentDeps, nil) {
 		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
@@ -693,8 +717,26 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 				"tool", t.Name(), "error", err)
 		}
 	}
+	// Re-register general-builtin metadata in the live-deps registry (metadata-only,
+	// never executed; duplicates skipped). These instances expose correct
+	// Name/Description/Category for /api/v1/tools without executing anything.
+	generalBuiltinsRegistered := 0
+	for _, t := range tools.GeneralBuiltinMetadata() {
+		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
+			slog.Warn("gateway: central builtin registry general-builtin re-population skipped",
+				"tool", t.Name(), "error", err)
+		} else {
+			generalBuiltinsRegistered++
+		}
+	}
+	// Propagate the updated registry to the already-constructed restAPI (SC-108 fix).
+	if runningServices.restAPIRef != nil {
+		runningServices.restAPIRef.builtinRegistry = centralBuiltinReg
+	}
 	slog.Info("gateway: central BuiltinRegistry re-populated with live deps",
-		"count", centralBuiltinReg.Count())
+		"system_tools", centralBuiltinReg.Count()-generalBuiltinsRegistered,
+		"general_builtins", generalBuiltinsRegistered,
+		"total", centralBuiltinReg.Count())
 
 	fmt.Printf("✓ Gateway started on %s:%d\n", cfg.Gateway.Host, cfg.Gateway.Port)
 	fmt.Println("Press Ctrl+C to stop")
@@ -1291,6 +1333,10 @@ func setupAndStartServices(
 		cronService:     runningServices.CronService,     // #264: schedules CRUD
 		notifStore:      runningServices.notifStore,      // #264: notification center
 	}
+	// Stash the api ref so RunContextWithOptions can update builtinRegistry
+	// after the M16 live-deps re-population (the :689 reassignment creates a fresh
+	// *BuiltinRegistry that would otherwise not reach the already-constructed api).
+	runningServices.restAPIRef = api
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/sessions", api.withAuth(api.HandleSessions))
 	// /api/v1/sessions/ handles: sessions CRUD AND the tool-results sub-resource
 	// GET /api/v1/sessions/{session_id}/tool-results/{ref} (dispatched inside HandleSessions).
