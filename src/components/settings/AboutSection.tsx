@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { fetchAboutInfo } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import omnipusLogo from '@/assets/logo/omnipus-logo.svg'
 
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
@@ -43,11 +44,14 @@ export function AboutSection() {
 
   return (
     <div className="space-y-6">
-      {/* Logo + tagline */}
+      {/* Logo + tagline — FR-109: real logo, not placeholder */}
       <div className="flex flex-col items-center py-6 gap-3">
-        <div className="w-16 h-16 rounded-2xl bg-[var(--color-accent)] flex items-center justify-center text-[var(--color-primary)] font-headline font-black text-3xl select-none">
-          O
-        </div>
+        <img
+          src={omnipusLogo}
+          alt="Omnipus logo"
+          data-testid="omnipus-logo"
+          className="w-16 h-16 select-none"
+        />
         <div className="text-center">
           <h1 className="font-headline font-bold text-xl text-[var(--color-secondary)]">Omnipus</h1>
           <p className="text-xs text-[var(--color-muted)] mt-0.5">The Sovereign Deep — Agentic Core</p>
@@ -83,7 +87,12 @@ export function AboutSection() {
           )}
           {info && (
             <>
-              <InfoRow label="Version" value={info.version} mono testId="build-version" />
+              <InfoRow
+                label="Version"
+                value={info.version === 'dev' ? 'development build' : info.version}
+                mono
+                testId="build-version"
+              />
               <InfoRow label="Go version" value={info.go_version} mono />
               <InfoRow label="Operating system" value={info.os} mono />
               <InfoRow label="Architecture" value={info.arch} mono />
@@ -111,7 +120,7 @@ export function AboutSection() {
             className="h-8 gap-1.5 text-xs"
             asChild
           >
-            <a href="https://github.com/omnipus-ai/omnipus" target="_blank" rel="noopener noreferrer">
+            <a href="https://github.com/elicify-ai/omnipus" target="_blank" rel="noopener noreferrer">
               <GithubLogo size={13} />
               View on GitHub
               <ArrowSquareOut size={11} className="text-[var(--color-muted)]" />

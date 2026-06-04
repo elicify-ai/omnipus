@@ -1,5 +1,5 @@
 /**
- * McpServerModal.test.tsx — Issue #336 ACs.
+ * McpServerModal.test.tsx — Issue #336 + #356 ACs.
  *
  * Covers:
  * 1. Network mode shows URL field; Add enabled with valid https URL.
@@ -8,6 +8,9 @@
  * 4. Local-program mode shows confirm dialog on select.
  * 5. Saved stdio server shows standing badge after confirmation.
  * 6. Raw transport string is NOT shown in MCPServerPicker.
+ * 7. FR-110 / US-7: modal renders as a Sheet (slide-out), not a Dialog.
+ *    Focus-trap, ESC, and focus-restore are provided by Radix DialogPrimitive
+ *    (the Sheet primitive) — tested at the integration level via dialog role.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -241,6 +244,55 @@ describe('McpServerModal — local program mode (stdio safety gate, US-E1)', () 
     await waitFor(() => screen.getByTestId('local-command'))
     await user.type(screen.getByTestId('local-command'), 'npx my-server')
     expect(screen.getByTestId('submit-add')).not.toBeDisabled()
+  })
+})
+
+// ── FR-110 / US-7: Sheet (slide-out) instead of Dialog ───────────────────────
+
+describe('McpServerModal — FR-110: renders as a Sheet slide-out', () => {
+  it('renders the sheet content when open', async () => {
+    renderModal(true)
+    await waitFor(() => {
+      expect(screen.getByTestId('mcp-sheet')).toBeInTheDocument()
+    })
+  })
+
+  it('sheet content contains the Add server heading', async () => {
+    renderModal(true)
+    await waitFor(() => {
+      expect(screen.getByText('Add MCP Server')).toBeInTheDocument()
+    })
+  })
+
+  it('does not render content when closed', () => {
+    renderModal(false)
+    // The sheet is closed — dialog role may still exist in portal but it should not be visible
+    expect(screen.queryByTestId('mcp-sheet')).not.toBeInTheDocument()
+  })
+
+  it('has a dialog role (Radix DialogPrimitive backing the Sheet)', async () => {
+    renderModal(true)
+    await waitFor(() => {
+      // Radix Dialog.Content renders role="dialog" for a11y
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+  })
+
+  it('ESC key closes the sheet (Radix handles ESC natively)', async () => {
+    const onOpenChange = vi.fn()
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <McpServerModal open={true} onOpenChange={onOpenChange} />
+      </QueryClientProvider>
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId('mcp-sheet')).toBeInTheDocument()
+    })
+    const user = userEvent.setup()
+    await user.keyboard('{Escape}')
+    await waitFor(() => {
+      expect(onOpenChange).toHaveBeenCalledWith(false)
+    })
   })
 })
 

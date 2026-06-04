@@ -57,7 +57,10 @@
 }
 
 html {
-  font-size: 16px;
+  /* FR-108: root font-size driven by user preference (12–20px, clamped).
+     When --user-font-size is unset the fallback is 14px (product default).
+     This rescales the entire rem scale — Tailwind v4 spacing/sizing/text. */
+  font-size: clamp(12px, var(--user-font-size, 14px), 20px);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
