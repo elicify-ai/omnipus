@@ -125,10 +125,11 @@ beforeEach(() => {
   vi.mocked(api.fetchProviders).mockResolvedValue([])
 })
 
-// ── B-1 (#331 / US-D4): system.* tools go to Advanced, NOT primary grid ───────
+// ── US-1 / AC5 / FR-103: system.* tools appear in the flat category grid ──────
+// (The old system-disclosure-wrapper §3 is removed per Issue #357.)
 
-describe('B-1: system.* tools in Advanced disclosure, not primary grid (#331)', () => {
-  it('renders system.* tool inside the Advanced/system disclosure, not the primary category grid', async () => {
+describe('US-1: system.* tools appear in the flat category grid, not a separate disclosure (#357)', () => {
+  it('renders system.* tool inside the category grid (no separate system-disclosure-wrapper)', async () => {
     render(
       <ToolsAndPermissions
         agentId="agent-1"
@@ -140,21 +141,15 @@ describe('B-1: system.* tools in Advanced disclosure, not primary grid (#331)', 
     )
 
     await waitFor(() => {
-      // The system tool should NOT appear in data-testid=category-grid
-      // (it must only be in data-testid=system-tools-list inside the disclosure).
-      const categoryGrid = document.querySelector('[data-testid="category-grid"]')
-      if (categoryGrid) {
-        // system.config.set must not be in the primary grid
-        expect(categoryGrid.textContent).not.toContain('system.config.set')
-      }
-      // The system-disclosure-wrapper is present (because we have 1 system tool)
-      expect(document.querySelector('[data-testid="system-disclosure-wrapper"]')).toBeInTheDocument()
+      // The system-disclosure-wrapper must NOT be present (removed in #357).
+      expect(document.querySelector('[data-testid="system-disclosure-wrapper"]')).not.toBeInTheDocument()
+      // The category grid must be present with the system category pill.
+      expect(document.querySelector('[data-testid="category-grid"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="category-pill-system"]')).toBeInTheDocument()
     })
   })
 
-  it('a payload with both system.* and regular tools: system.* only in disclosure', async () => {
-    // This test uses a tool list that INCLUDES system.* tools mixed with regular tools,
-    // verifying the B-1 fix: category-based filter (not scope-based).
+  it('a payload with both system.* and regular tools: both appear in the category grid', async () => {
     vi.mocked(api.fetchRegistryTools).mockResolvedValue([
       SYSTEM_TOOL,
       FILESYSTEM_TOOL,
@@ -173,18 +168,18 @@ describe('B-1: system.* tools in Advanced disclosure, not primary grid (#331)', 
     )
 
     await waitFor(() => {
-      // system-disclosure should be present (two system tools)
-      expect(document.querySelector('[data-testid="system-disclosure-wrapper"]')).toBeInTheDocument()
-      // The regular filesystem tool should be in the category grid
+      // No separate system disclosure (removed in #357).
+      expect(document.querySelector('[data-testid="system-disclosure-wrapper"]')).not.toBeInTheDocument()
+      // The category grid must include both the system category and the filesystem category.
       const categoryGrid = document.querySelector('[data-testid="category-grid"]')
       expect(categoryGrid).toBeInTheDocument()
-      // The filesystem category should be listed (key is 'filesystem', label falls back to 'filesystem')
-      expect(categoryGrid?.textContent).toContain('filesystem')
+      expect(document.querySelector('[data-testid="category-pill-system"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="category-pill-filesystem"]')).toBeInTheDocument()
     })
   })
 
-  it('MCP tool with unset category is NOT placed in system disclosure', async () => {
-    // An MCP tool with no category must go to the MCP section, not system disclosure.
+  it('MCP tool with unset category goes to the MCP section, not the category grid', async () => {
+    // An MCP tool with no category must go to the MCP section.
     const mcpToolNoCategory: RegistryTool = {
       name: 'mcp_server_action',
       scope: 'general',
@@ -205,9 +200,9 @@ describe('B-1: system.* tools in Advanced disclosure, not primary grid (#331)', 
     )
 
     await waitFor(() => {
-      // system-disclosure should NOT be present (no system category tools)
+      // No system-disclosure-wrapper (removed in #357).
       expect(document.querySelector('[data-testid="system-disclosure-wrapper"]')).not.toBeInTheDocument()
-      // MCP tools section should be present
+      // MCP tools section should be present.
       expect(document.querySelector('[data-testid="mcp-tools-section"]')).toBeInTheDocument()
     })
   })

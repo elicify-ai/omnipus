@@ -35,7 +35,7 @@ vi.mock('@/hooks/useAutoSave', () => ({
 }))
 
 import * as api from '@/lib/api'
-import type { RegistryTool, AgentToolEntry, AgentToolsCfg } from '@/lib/api'
+import type { RegistryTool, AgentToolsCfg } from '@/lib/api'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 
 // MCPServerPicker depends on server data — mock it to simplify tests
@@ -179,17 +179,12 @@ describe('ToolsAndPermissions — source badge (FR-027)', () => {
   })
 })
 
-describe('ToolsAndPermissions — system.* in Advanced (B-1 / FR-086 / MAJ-008)', () => {
-  const FENCED_ENTRY: AgentToolEntry = {
-    name: 'system.config.set',
-    configured_policy: 'allow',
-    effective_policy: 'ask',
-    fence_applied: true,
-    requires_admin_ask: true,
-  }
+describe('ToolsAndPermissions — system.* in flat category grid (US-1 / AC5 / FR-103 / #357)', () => {
+  // The old system-disclosure-wrapper §3 is removed per Issue #357.
+  // system.* tools now appear in the main category grid under the "System" label.
 
   beforeEach(() => {
-    // Registry includes the admin tool (category='system' — goes to Advanced disclosure)
+    // Registry includes only the system tool (category='system').
     vi.mocked(api.fetchRegistryTools).mockResolvedValue([
       { ...ADMIN_TOOL, scope: 'core' },
     ])
@@ -197,11 +192,11 @@ describe('ToolsAndPermissions — system.* in Advanced (B-1 / FR-086 / MAJ-008)'
       config: {
         builtin: { default_policy: 'allow', policies: { 'system.config.set': 'allow' } },
       },
-      tools: [FENCED_ENTRY],
+      tools: [],
     })
   })
 
-  it('system.* tool (category=system) appears in the Advanced/system disclosure', async () => {
+  it('system.* tool (category=system) appears in the flat category grid, NOT a separate disclosure', async () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
@@ -211,11 +206,15 @@ describe('ToolsAndPermissions — system.* in Advanced (B-1 / FR-086 / MAJ-008)'
       />
     )
     await waitFor(() => {
-      expect(document.querySelector('[data-testid="system-disclosure-wrapper"]')).toBeInTheDocument()
+      // system-disclosure-wrapper must NOT exist (removed in #357).
+      expect(document.querySelector('[data-testid="system-disclosure-wrapper"]')).not.toBeInTheDocument()
+      // Category grid must be present with a system category pill.
+      expect(document.querySelector('[data-testid="category-grid"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="category-pill-system"]')).toBeInTheDocument()
     })
   })
 
-  it('system.* tool does NOT appear in the primary category grid', async () => {
+  it('system.* tool is accessible inside the system category section in the grid', async () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
@@ -225,21 +224,12 @@ describe('ToolsAndPermissions — system.* in Advanced (B-1 / FR-086 / MAJ-008)'
       />
     )
     await waitFor(() => {
-      // Primary category grid must exist (for non-system tools) but must be empty here
-      // since the only tool is system.config.set (category='system')
-      const grid = document.querySelector('[data-testid="category-grid"]')
-      // Grid does not exist (no regular tools) OR does not contain the system tool
-      if (grid) {
-        expect(grid.textContent).not.toContain('system.config.set')
-      }
+      // Category grid and system category pill should be present.
+      expect(document.querySelector('[data-testid="category-pill-system"]')).toBeInTheDocument()
     })
   })
 
-  it('does not render fence badge inline (fence info is in ToolPolicyEditor raw grid when expanded)', async () => {
-    // The fence badge was in the old inline tool row.
-    // In the new ToolPolicyEditor-based UI the tool is inside the collapsed Advanced
-    // disclosure. The fence badge is NOT rendered in the summary.
-    // This test confirms no spurious fence-badge text in the visible area.
+  it('does not render fence badge inline (no downgraded-to-ask text by default)', async () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
@@ -249,10 +239,9 @@ describe('ToolsAndPermissions — system.* in Advanced (B-1 / FR-086 / MAJ-008)'
       />
     )
     await waitFor(() => {
-      expect(document.querySelector('[data-testid="system-disclosure-wrapper"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="category-grid"]')).toBeInTheDocument()
     })
-    // The "downgraded to ask" text only appears if we expand the raw-tool-grid.
-    // Since it's collapsed by default, it should NOT be in the document.
+    // "downgraded to ask" text must not appear in collapsed state.
     expect(screen.queryByText(/downgraded to ask/i)).not.toBeInTheDocument()
   })
 })

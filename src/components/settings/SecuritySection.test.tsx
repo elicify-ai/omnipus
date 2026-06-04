@@ -319,7 +319,7 @@ describe('SecuritySection — US-B3 ToolPolicyEditor in advanced section', () =>
     expect(screen.getByTestId('preset-full_access')).toBeInTheDocument()
   })
 
-  it('system.* tool appears only in Advanced/system disclosure, not primary categories', async () => {
+  it('system.* tool appears in the flat category grid (no separate system-disclosure-wrapper)', async () => {
     renderSection()
 
     await waitFor(() => {
@@ -331,15 +331,12 @@ describe('SecuritySection — US-B3 ToolPolicyEditor in advanced section', () =>
       expect(screen.getByTestId('tool-policy-editor')).toBeInTheDocument()
     })
 
-    // The system-disclosure-wrapper exists (system tools are there)
-    expect(screen.getByTestId('system-disclosure-wrapper')).toBeInTheDocument()
+    // The old system-disclosure-wrapper must NOT exist (#357 flat list fix).
+    expect(screen.queryByTestId('system-disclosure-wrapper')).not.toBeInTheDocument()
 
-    // The category-grid must NOT contain a 'system' category row
-    const categoryGrid = screen.getByTestId('category-grid')
-    expect(categoryGrid).not.toHaveTextContent('System')
-
-    // system.status tool name must NOT appear in category-grid
-    expect(categoryGrid).not.toHaveTextContent('system.status')
+    // The category-grid must contain a 'system' category pill (system tools in the grid).
+    expect(screen.getByTestId('category-grid')).toBeInTheDocument()
+    expect(screen.getByTestId('category-pill-system')).toBeInTheDocument()
   })
 
   it('a category with mixed policies shows a Mixed pill', async () => {

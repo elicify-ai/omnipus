@@ -13,6 +13,15 @@ export const CATEGORY_LABELS: Record<string, string> = {
   skills: 'Skills',
   hardware: 'Hardware (IoT)',
   system: 'System',
+  // 'core' is the legacy category emitted by un-recategorized general builtins;
+  // render as "General" so no raw internal key leaks to users (AC4 / FR-103).
+  core: 'General',
+  // Filesystem tools from the registry may carry 'filesystem' as the category.
+  filesystem: 'File & Code',
+  // Shell tools from the registry may carry 'shell' as the category.
+  shell: 'Shell',
+  // Fallback for tools with no recognised category.
+  other: 'Other',
 }
 
 /**
