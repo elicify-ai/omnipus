@@ -3445,10 +3445,18 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					models = []string{}
 				}
 			}
+			// FR-104: report Connected only when the provider's API key resolves to
+			// a non-empty credential. providerAPIKeys is populated above for every
+			// provider that has either a resolvable api_key_ref or an inline api_key;
+			// absence from the map means no key was found.
+			status := gen.ProviderStatusDisconnected
+			if _, hasKey := providerAPIKeys[name]; hasKey {
+				status = gen.ProviderStatusConnected
+			}
 			p := gen.Provider{
 				Id:     name,
 				Name:   name,
-				Status: gen.ProviderStatusConnected,
+				Status: status,
 				Models: models,
 			}
 			if modelFetchWarning != "" {
