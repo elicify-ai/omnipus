@@ -110,6 +110,30 @@ func newTestAPIWithMasterKey(t *testing.T) (*restAPI, string, string) {
 	return api, tmpDir, hexKey
 }
 
+// setupMasterKeyTempDir creates a temp directory with a minimal config.json,
+// sets OMNIPUS_MASTER_KEY to a fresh random hex key, and returns (tmpDir, hexKey).
+// Unlike newTestAPIWithMasterKey it does NOT create an AgentLoop — use this
+// when the caller creates its own loop immediately, so that only ONE AgentLoop
+// is alive per test instead of two. This halves the peak heap footprint of
+// tests that previously called newTestAPIWithMasterKey only to throw away the
+// loop it returned.
+func setupMasterKeyTempDir(t *testing.T) (string, string) {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	t.Setenv("OMNIPUS_KEY_FILE", "")
+
+	rawKey := make([]byte, 32)
+	_, err := rand.Read(rawKey)
+	require.NoError(t, err)
+	hexKey := hex.EncodeToString(rawKey)
+	t.Setenv("OMNIPUS_MASTER_KEY", hexKey)
+
+	tmpDir := t.TempDir()
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+	return tmpDir, hexKey
+}
+
 // readConfigMap reads config.json from dir and returns it as a map.
 func readConfigMap(t *testing.T, dir string) map[string]any {
 	t.Helper()
@@ -649,7 +673,10 @@ func TestProviderPUT_RefusesWhenNoMasterKey(t *testing.T) {
 //
 // Traces to: pkg/gateway/rest.go — HandleProviders GET (api_key_ref resolution)
 func TestProviderGET_ResolvesAPIKeyRefFromCredStore(t *testing.T) {
-	_, tmpDir, _ := newTestAPIWithMasterKey(t)
+	// setupMasterKeyTempDir sets OMNIPUS_MASTER_KEY and returns (tmpDir, hexKey)
+	// without creating an AgentLoop. The loop below is the only one created, so
+	// peak memory for this test is one AgentLoop (not two). #351 #352
+	tmpDir, _ := setupMasterKeyTempDir(t)
 
 	// Step 1: Store an API key in the credentials store.
 	credRef := "OPENAI_API_KEY"

@@ -295,7 +295,10 @@ func TestHandleProviders_CredStoreRef_EmptyRef_IsDisconnected(t *testing.T) {
 //
 // Traces to: FR-104, US-2/AC2, test dataset row: _ref resolves non-empty → Connected.
 func TestHandleProviders_CredStoreRef_Resolved_IsConnected(t *testing.T) {
-	api, tmpDir, _ := newTestAPIWithMasterKey(t)
+	// setupMasterKeyTempDir (no AgentLoop) — the loop below is the only one
+	// created in this test, avoiding the wasted first loop that the old
+	// newTestAPIWithMasterKey call would have left alive until cleanup. #351 #352
+	tmpDir, _ := setupMasterKeyTempDir(t)
 
 	// Store an API key in the credentials store.
 	credRef := "ANTHROPIC_API_KEY_SPEC1"
@@ -340,8 +343,14 @@ func TestHandleProviders_CredStoreRef_Resolved_IsConnected(t *testing.T) {
 	}
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	api.agentLoop = al
-	api.credStore = credStore
+	api := &restAPI{
+		agentLoop:     al,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		homePath:      tmpDir,
+		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		credStore:     credStore,
+	}
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/providers", nil)
