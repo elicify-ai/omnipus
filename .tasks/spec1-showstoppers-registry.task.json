@@ -1,0 +1,339 @@
+{
+  "version": "0.1.0",
+  "epic": {
+    "task_id": "spec1-showstoppers-registry",
+    "task_name": "Spec-1 — v0.1 showstopper fixes + tool-registry metadata correction",
+    "goal": "Resolve the manual-test showstoppers blocking PR #344 and correct general-builtin metadata exposure so the global tool editor is usable, delivered via the §11 max-parallel wave model.",
+    "notes": "Source: docs/internal/specs/uxh-spec1-showstoppers-and-registry.md (ADR-018). Ships FIRST to unblock PR #344 (v0.1 UX-hardening epic, held off main). 7-reviewer gate runs after EACH feature AND on the whole-epic diff before the Spec-1 -> hotfix/v0.1.0 (PR #344) integration. Do NOT manually add issues to the board or set Done. Hard invariant: per-agent tool execution instances stay per-agent (metadata-only change)."
+  },
+  "tasks": [
+    {
+      "task_id": "wave0-registry-metadata",
+      "task_name": "Register general-builtin metadata centrally + fix deps-registry drop",
+      "goal": "The central BuiltinRegistry exposes general-builtin metadata via GET /api/v1/tools (count > 41) using deps-free metadata-only construction, and the re-populated live-deps registry reaches restAPI.builtinRegistry.",
+      "inputs": [
+        {"name": "general_builtin_set", "type": "go-symbols", "constraints": "exec, read_file, write_file, list_dir, edit_file, append_file, web_search, web_fetch (exact set enumerated and asserted in a unit test)", "source": "pkg/tools/, pkg/sysagent/tools/ (systools.AllTools pattern)"},
+        {"name": "boot_registry_flow", "type": "go-code", "constraints": "gateway.go:614 (system-only population today), :630 (passed by value), :689 (re-population dropped)", "source": "pkg/gateway/gateway.go"}
+      ],
+      "outputs": [
+        {"name": "central_metadata_registry", "type": "go-code", "constraints": "general builtins constructed once with dummy workspace \"\", restrict=false, deps-nil, purely to read Name()/Description()/Category(); constructor errors logged-and-skipped never fatal; metadata instances NEVER Execute()d via central registry", "destination": "pkg/tools/builtin_registry.go, pkg/gateway/gateway.go"},
+        {"name": "category_overrides", "type": "go-code", "constraints": "basic purpose Category(): exec->Code; read_file/write_file/list_dir/edit_file/append_file->File; web_search->Search; web_fetch->Web; any tool still reporting core handled by frontend General label", "destination": "general builtin constructors"},
+        {"name": "boot_count_logs", "type": "log-output", "constraints": "logs general-builtin metadata count AND total /tools count at boot (SC-108)", "destination": "gateway boot logs (~gateway.go:696)"}
+      ],
+      "acceptance": [
+        "A unit test builtin_registry_metadata_test.go asserts the exact general-builtin name set and that the registered metadata count is greater than 41.",
+        "GET /api/v1/tools on a default install returns both general-builtin and system.* entries, total count greater than 41, including exec, read_file, web_search.",
+        "A unit test gateway_deps_registry_test.go asserts the re-populated live-deps registry reaches restAPI.builtinRegistry (the :689 fix; not the nil-deps copy from :630).",
+        "A regression test confirms two agents with distinct workspaces each Execute() exec only in their own workspace (per-agent instancing preserved; central metadata instances are never executed).",
+        "Boot logs emit the general-builtin metadata count and the total /tools count.",
+        "gofmt, golangci-lint, go test -race are green for touched Go packages."
+      ],
+      "depends_on": {"status": "N/A", "reason": "Wave 0 critical path; has no upstream dependency."},
+      "constraints": [
+        "MUST NOT move tool execution to a shared central instance — per-agent workspace-bound instancing preserved (Non-Behavior).",
+        "gateway.go is Wave-0-ONLY; no other parallel task may touch it (F-04 ownership).",
+        "Metadata construction MUST be deps-free and never Execute()d centrally (F-17 invariant).",
+        "FR-102 (the :689 fix) has no user-visible /tools effect today — fix as hygiene, do NOT claim it fixes the US-1 regression (US-1 is fixed by FR-101)."
+      ],
+      "files_scope": ["pkg/tools/builtin_registry.go", "pkg/gateway/gateway.go", "pkg/tools/builtin_registry_metadata_test.go", "pkg/gateway/gateway_deps_registry_test.go"],
+      "priority": "P0",
+      "notes": "wave: Wave 0 | team: Wave-0 (critical path) | subagent-type: backend-lead | Traces: FR-101/102, US-1/AC2,AC3,AC7, SC-101, SC-108. Blocks fe-flatten-toolpolicyeditor and E2E-1."
+    },
+    {
+      "task_id": "be-providers-status",
+      "task_name": "Report provider Connected only when API key resolves",
+      "goal": "GET /api/v1/providers reports Connected only when the provider's API key (inline or _ref) resolves to a non-empty credential, otherwise not-connected.",
+      "inputs": [
+        {"name": "providers_handler", "type": "go-code", "constraints": "HandleProviders rest.go:3387, status hard-coded Connected at :3451", "source": "pkg/gateway/rest.go"},
+        {"name": "key_resolution", "type": "go-code", "constraints": "resolve api_key_ref via credential store, and inline api_key", "source": "credential store / config"}
+      ],
+      "outputs": [
+        {"name": "status_logic", "type": "go-code", "constraints": "Connected iff key resolves non-empty (+ optional cached test); Disconnected otherwise", "destination": "pkg/gateway/rest.go HandleProviders"}
+      ],
+      "acceptance": [
+        "Given a provider whose api_key_ref resolves empty (or no key), the handler returns a not-connected status.",
+        "Given a provider whose api_key_ref resolves to a non-empty credential, the handler returns Connected.",
+        "Given a provider configured with an inline (non-_ref) API key, the handler returns Connected.",
+        "A go test asserts the four-case status table: _ref non-empty -> Connected, _ref empty -> Disconnected, inline key -> Connected, no key -> Disconnected.",
+        "gofmt, golangci-lint, go test -race green."
+      ],
+      "depends_on": {"status": "N/A", "reason": "Wave 1 BE-fixes; file-disjoint from gateway.go, runs in parallel from minute 0."},
+      "constraints": ["Does NOT touch gateway.go (Wave-0-only, F-04 ownership)."],
+      "files_scope": ["pkg/gateway/rest.go"],
+      "priority": "P0",
+      "notes": "wave: Wave 1 | team: BE-fixes | subagent-type: backend-lead | Traces: FR-104, US-2, SC-103."
+    },
+    {
+      "task_id": "be-restart-keys-hotreload",
+      "task_name": "Remove gateway.users from RestartGatedKeys + flip hot_reload default on",
+      "goal": "A fresh onboarded install shows no pending-restart banner because gateway.users is removed from RestartGatedKeys, and hot_reload defaults to on with no appliedConfig re-baseline.",
+      "inputs": [
+        {"name": "restart_gated_keys", "type": "go-code", "constraints": "RestartGatedKeys rest_pending_restart.go:36; normalizeUsersForDiff; appliedConfig rest.go:84-90 (once-at-boot, stays immutable)", "source": "pkg/gateway/rest_pending_restart.go, rest.go"},
+        {"name": "hot_reload_default", "type": "go-code", "constraints": "defaults.go:363 HotReload:false -> true", "source": "pkg/gateway/defaults.go"}
+      ],
+      "outputs": [
+        {"name": "gated_keys_change", "type": "go-code", "constraints": "remove config.GatewayUsers from RestartGatedKeys; verify onboarding-written provider entry is hot (rewired on config change) and not gated; authoritative gated set = GatewayPort, sandbox mode, preview listener host/port (NOT bind_address, F-18)", "destination": "pkg/gateway/rest_pending_restart.go"},
+        {"name": "hot_reload_on", "type": "go-code", "constraints": "HotReload default true in defaults.go; NO appliedConfig re-baseline (F-01/F-20 — avoids -race data race)", "destination": "pkg/gateway/defaults.go"}
+      ],
+      "acceptance": [
+        "A go test asserts that a config diff changing only gateway.users (and the onboarding provider) flags NO restart-required key.",
+        "A go test asserts that changing GatewayPort (a key genuinely in RestartGatedKeys) flags the banner for that key only.",
+        "A go test asserts that changing sandbox mode flags the restart banner.",
+        "hot_reload default is true in defaults.go and there is no new mutable appliedConfig (appliedConfig stays the once-at-boot immutable snapshot).",
+        "go test -race is green (no data race introduced — re-baseline is dropped).",
+        "gofmt, golangci-lint green."
+      ],
+      "depends_on": {"status": "N/A", "reason": "Wave 1 BE-fixes; file-disjoint from gateway.go, runs in parallel from minute 0."},
+      "constraints": [
+        "Default plan is the simpler no-re-baseline fix (F-20); do NOT add appliedConfig re-baseline unless verification finds a genuinely-gated key onboarding writes (then F-08: use sync.RWMutex / atomic.Pointer guard + -race test).",
+        "Does NOT touch gateway.go (Wave-0-only, F-04 ownership).",
+        "bind_address is NOT a gated key today (no main-listener key, F-18)."
+      ],
+      "files_scope": ["pkg/gateway/rest_pending_restart.go", "pkg/gateway/defaults.go", "pkg/gateway/rest.go"],
+      "priority": "P0",
+      "notes": "wave: Wave 1 | team: BE-fixes | subagent-type: backend-lead | Traces: FR-105/106, US-3, US-4/AC2, SC-104. The hot_reload default flip (FR-106) is done HERE in defaults.go, NOT in gateway.go (F-04)."
+    },
+    {
+      "task_id": "fe-flatten-toolpolicyeditor",
+      "task_name": "Flatten ToolPolicyEditor to a single de-duplicated allow/ask/deny list",
+      "goal": "ToolPolicyEditor renders every builtin tool exactly once with Allow/Ask/Deny, grouped by human-readable category labels, with the system-hidden disclosure removed and no raw core/system label, across all call-sites.",
+      "inputs": [
+        {"name": "editor_component", "type": "tsx", "constraints": "ToolPolicyEditor.tsx §3 (system disclosure) + §5 (raw tools.map grid that re-lists ALL tools incl system) = the double-list", "source": "src ToolPolicyEditor.tsx"},
+        {"name": "consumers", "type": "tsx", "constraints": "SecuritySection (global), ToolsAndPermissions + CreateAgentModal (per-agent)", "source": "src settings + agents"},
+        {"name": "corrected_tools_api", "type": "wire", "constraints": "GET /api/v1/tools now returns general+system with basic categories (core for un-recategorized)", "source": "wave0-registry-metadata"}
+      ],
+      "outputs": [
+        {"name": "flat_editor", "type": "tsx", "constraints": "remove §3 system-hidden disclosure; de-duplicate so each tool renders once in its category section; no tool listed twice", "destination": "ToolPolicyEditor.tsx"},
+        {"name": "category_label_map", "type": "tsx", "constraints": "add core->\"General\" entry to CATEGORY_LABELS; no raw category key (core/system) shown as a user-facing label", "destination": "CATEGORY_LABELS"},
+        {"name": "updated_consumers", "type": "tsx", "constraints": "SecuritySection + ToolsAndPermissions consume the corrected registry; per-agent UX becomes the same flat list", "destination": "SecuritySection.tsx, ToolsAndPermissions.tsx"}
+      ],
+      "acceptance": [
+        "On a default install against the REAL /api/v1/tools, the editor primary grid is non-empty and contains general tools (exec, read_file, web_search).",
+        "No tool name appears more than once in the editor.",
+        "No raw category key (core or system) is rendered as a user-facing label; core-bucket tools render under a human-readable \"General\" label.",
+        "The system-hidden disclosure (§3) is removed; the per-category grid is the only per-tool listing (no second full list).",
+        "Each tool offers Allow/Ask/Deny controls.",
+        "A component test runs PER call-site (global SecuritySection + per-agent ToolsAndPermissions/CreateAgentModal), with the mock using the REAL category values the backend emits (core for un-recategorized — NOT file).",
+        "tsc -b --noEmit (npm run typecheck) and vitest green."
+      ],
+      "depends_on": ["wave0-registry-metadata"],
+      "constraints": [
+        "Can build against the /tools contract immediately; integrate/verify only AFTER Wave 0 merges (needs corrected /tools).",
+        "MUST NOT render the scope field (system/core/general) as a user-facing grouping (Non-Behavior).",
+        "Component test mock MUST use the real backend category values (core), not file (F-21)."
+      ],
+      "files_scope": ["src/components/settings/ToolPolicyEditor.tsx", "src/components/settings/SecuritySection.tsx", "src/components/agents/ToolsAndPermissions.tsx"],
+      "priority": "P0",
+      "notes": "wave: Wave 1 (integrates AFTER Wave 0) | team: FE-tools | subagent-type: frontend-lead | Traces: FR-103, US-1/AC1,AC4,AC5,AC6."
+    },
+    {
+      "task_id": "fe-gateway-noauth-banner",
+      "task_name": "Remove no-auth UI + add unauthenticated-mode banner + drop hot-reload toggle",
+      "goal": "The Gateway settings tab no longer offers auth_mode:none or a hot-reload toggle, and the SPA shows a loud persistent banner whenever the backend boots with auth_mode:none or dev_mode_bypass:true.",
+      "inputs": [
+        {"name": "gateway_section", "type": "tsx", "constraints": "GatewaySection.tsx auth_mode @:67, hot_reload toggle @:296", "source": "src settings GatewaySection.tsx"},
+        {"name": "boot_auth_state", "type": "wire", "constraints": "backend exposes auth_mode:none / dev_mode_bypass:true state to the SPA", "source": "gateway state API"}
+      ],
+      "outputs": [
+        {"name": "noauth_removed", "type": "tsx", "constraints": "no auth_mode:none control; token auth is the only UI option (backend config-file capability retained)", "destination": "GatewaySection.tsx"},
+        {"name": "toggle_removed", "type": "tsx", "constraints": "hot-reload toggle removed (always on)", "destination": "GatewaySection.tsx"},
+        {"name": "warning_banner", "type": "tsx", "constraints": "loud persistent banner when auth_mode:none OR dev_mode_bypass:true (consistent with the existing one-time stderr WARN)", "destination": "SPA app shell / settings"}
+      ],
+      "acceptance": [
+        "The Gateway tab renders no auth_mode:none / connect-without-authentication control.",
+        "The Gateway tab renders no hot-reload toggle.",
+        "When the backend boots with auth_mode:none, the SPA shows a persistent unauthenticated-access banner.",
+        "When the backend boots with dev_mode_bypass:true, the SPA shows the same persistent banner.",
+        "A component test (GatewaySection.test.tsx) asserts no auth_mode:none option and no hot-reload toggle.",
+        "tsc -b --noEmit and vitest green."
+      ],
+      "depends_on": {"status": "N/A", "reason": "Wave 1 FE-settings; file-disjoint, parallel from minute 0."},
+      "constraints": ["MUST NOT remove the backend no-auth capability — only the UI option (Non-Behavior)."],
+      "files_scope": ["src/components/settings/GatewaySection.tsx"],
+      "priority": "P1",
+      "notes": "wave: Wave 1 | team: FE-settings | subagent-type: frontend-lead | Traces: FR-107, FR-107b, US-4, SC-106."
+    },
+    {
+      "task_id": "fe-fontsize",
+      "task_name": "Wire profile font-size to scale the root UI",
+      "goal": "Changing the profile font-size slider scales the app root font-size via html{font-size:var(--user-font-size)}, bounded 12-20px, persisting across reload, with layout intact at both bounds.",
+      "inputs": [
+        {"name": "profile_section", "type": "tsx", "constraints": "ProfileSection.tsx:128 sets --user-font-size but it is unconsumed", "source": "src settings ProfileSection.tsx"}
+      ],
+      "outputs": [
+        {"name": "root_css", "type": "css", "constraints": "html { font-size: var(--user-font-size) } — rescales the whole rem scale (Tailwind v4 spacing/sizing included)", "destination": "root/global CSS"},
+        {"name": "bounds_persistence", "type": "tsx", "constraints": "clamp 12-20px; persists across reload", "destination": "ProfileSection.tsx"}
+      ],
+      "acceptance": [
+        "Setting the slider to 18px makes getComputedStyle(html).fontSize equal 18px.",
+        "The value persists across a reload.",
+        "Inputs 11/12/18/20/21 clamp to 12/12/18/20/20 respectively.",
+        "A visual check confirms layout does not break at the 12px and 20px bounds.",
+        "A component test (ProfileSection.test.tsx) asserts the slider sets the root font-size, the bounds clamp, and the value persists.",
+        "tsc -b --noEmit and vitest green."
+      ],
+      "depends_on": {"status": "N/A", "reason": "Wave 1 FE-settings; file-disjoint, parallel from minute 0."},
+      "constraints": ["Bounded 12-20px (FR-108)."],
+      "files_scope": ["src/components/settings/ProfileSection.tsx", "src/index.css"],
+      "priority": "P1",
+      "notes": "wave: Wave 1 | team: FE-settings | subagent-type: frontend-lead | Traces: FR-108, US-5, SC-105."
+    },
+    {
+      "task_id": "fe-about",
+      "task_name": "Fix About page logo, GitHub URL, and version",
+      "goal": "The About page renders the real octopus logo, links to github.com/elicify-ai/omnipus, and shows the build-injected version instead of dev.",
+      "inputs": [
+        {"name": "about_panel", "type": "tsx", "constraints": "About panel in SettingsScreen; current placeholder \"O\" and wrong github link omnipus-ai/omnipus", "source": "src SettingsScreen About"},
+        {"name": "logo_asset", "type": "svg", "constraints": "src/assets/logo/omnipus-logo.svg", "source": "assets"},
+        {"name": "build_version", "type": "ldflag", "constraints": "build-injected version; fallback string (not dev) when ldflag absent", "source": "build version var"}
+      ],
+      "outputs": [
+        {"name": "about_fixed", "type": "tsx", "constraints": "renders omnipus-logo.svg <img>; GitHub URL https://github.com/elicify-ai/omnipus; real version", "destination": "About panel"}
+      ],
+      "acceptance": [
+        "The About tab renders the octopus logo image (omnipus-logo.svg), not a placeholder O.",
+        "The GitHub link points at https://github.com/elicify-ai/omnipus.",
+        "The version shown is the build version, not dev (and a fallback string, not dev, when the ldflag is absent).",
+        "A component test (About.test.tsx) asserts the logo img, the elicify-ai github link, and version not equal to dev.",
+        "tsc -b --noEmit and vitest green."
+      ],
+      "depends_on": {"status": "N/A", "reason": "Wave 1 FE-settings; file-disjoint, parallel from minute 0."},
+      "constraints": [
+        "Do NOT change go.mod — the Go module path stays github.com/dapicom-ai/omnipus (import path, unrelated to the public-repo link).",
+        "Owner to confirm elicify-ai resolves to a live public repo before ship (else hide the link)."
+      ],
+      "files_scope": ["src/components/settings/", "src/assets/logo/omnipus-logo.svg"],
+      "priority": "P1",
+      "notes": "wave: Wave 1 | team: FE-settings | subagent-type: frontend-lead | Traces: FR-109, US-6."
+    },
+    {
+      "task_id": "fe-mcp-sheet",
+      "task_name": "Convert McpServerModal from Dialog to a slide-out Sheet",
+      "goal": "Adding or configuring an MCP server opens a slide-out Sheet (consistent with ChannelConfigPanel), focus-trapped, ESC-dismissible, with focus restored on close, behavior otherwise unchanged.",
+      "inputs": [
+        {"name": "mcp_modal", "type": "tsx", "constraints": "McpServerModal.tsx currently uses Dialog", "source": "src skills McpServerModal.tsx"}
+      ],
+      "outputs": [
+        {"name": "mcp_sheet", "type": "tsx", "constraints": "renders in a Sheet (slide-out); a11y: focus trap, ESC dismiss, focus restored on close (F-16)", "destination": "McpServerModal.tsx"}
+      ],
+      "acceptance": [
+        "Clicking Add server opens a slide-out Sheet (not a centered Dialog).",
+        "The Sheet is focus-trapped, ESC dismisses it, and focus is restored to the trigger on close.",
+        "MCP add/configure behavior is otherwise unchanged.",
+        "A component test (McpServerModal.test.tsx) asserts it renders within a Sheet.",
+        "tsc -b --noEmit and vitest green."
+      ],
+      "depends_on": {"status": "N/A", "reason": "Wave 1 FE-settings; file-disjoint, parallel from minute 0."},
+      "constraints": {"status": "N/A", "reason": "Self-contained component swap; only constraint is the a11y AC already listed."},
+      "files_scope": ["src/components/skills/McpServerModal.tsx"],
+      "priority": "P1",
+      "notes": "wave: Wave 1 | team: FE-settings | subagent-type: frontend-lead | Traces: FR-110, US-7."
+    },
+    {
+      "task_id": "investigate-whatsapp-qr",
+      "task_name": "Investigate (time-boxed) WhatsApp QR enable->pairing-frame flow",
+      "goal": "Reproduce and root-cause the WhatsApp enable->whatsapp_pairing-frame flow on a controlled native build, fixing it in Spec-1 if the cause is shallow or filing a tracked follow-up if deep so it does not hold PR #344.",
+      "inputs": [
+        {"name": "pairing_flow", "type": "go+tsx", "constraints": "ChannelConfigPanel.tsx:260-360, pkg/channels/whatsapp_native, websocket.go forwarding", "source": "WhatsApp pairing path"}
+      ],
+      "outputs": [
+        {"name": "root_cause_report", "type": "report", "constraints": "documented reproduction + root cause; shallow->fix in Spec-1, deep->tracked follow-up issue", "destination": "issue comment / follow-up issue"},
+        {"name": "fix_or_deferral", "type": "code-or-issue", "constraints": "if fixed: QR renders within pairing timeout (no perpetual spinner, no silence); security ACs F-14 if fixed (frame to authenticated admin only; consumed/expired QR not re-served; pairing audit-logged)", "destination": "pkg/channels/whatsapp_native / tracked issue"}
+      ],
+      "acceptance": [
+        "The enable->whatsapp_pairing-frame flow is reproduced on a controlled native build and the root cause is documented.",
+        "Either: the QR renders within the pairing timeout on a default native build with WhatsApp enabled+saved (no perpetual spinner, no silence); OR a tracked follow-up issue is filed with the root cause and the work is deferred out of Spec-1.",
+        "If fixed in Spec-1: the whatsapp_pairing WS frame is delivered only to authenticated admin sessions, a consumed/expired QR is not re-served, and pairing events are audit-logged (F-14)."
+      ],
+      "depends_on": {"status": "N/A", "reason": "Wave 1 Investigate; decoupled and time-boxed, parallel from minute 0."},
+      "constraints": [
+        "TIME-BOXED — report root cause before committing scope; if deep, file a tracked issue and drop from Spec-1 (must not hold PR #344).",
+        "On a lite/excluded-arch build (native_available:false) the UI shows a capability hint, not a hung QR (F-22)."
+      ],
+      "files_scope": ["pkg/channels/whatsapp_native/", "pkg/gateway/websocket.go", "src/components/channels/ChannelConfigPanel.tsx"],
+      "priority": "P1",
+      "notes": "wave: Wave 1 | team: Investigate | subagent-type: backend-lead (+ frontend-lead for repro) | Traces: FR-111, US-8. Deferrable Task."
+    },
+    {
+      "task_id": "investigate-token-ttl",
+      "task_name": "Investigate (time-boxed) the ~2-3 min session expiry mechanism",
+      "goal": "Locate the actual mechanism behind the ~2-3 minute session expiry (NOT the 24h session cookie) before any fix, and either fix it cheaply or defer it out of Spec-1 with a tracked issue.",
+      "inputs": [
+        {"name": "expiry_facts", "type": "go+ts", "constraints": "[FACT] session cookie MaxAge is 24h (SessionCookieMaxAge=86400, middleware/session_cookie.go:78); the ~2-3 min expiry is the CSRF token TTL or a client-side refresh gap (expires_at in src/lib/api.ts:725,752) — NOT auth.go", "source": "session cookie + CSRF + client refresh"}
+      ],
+      "outputs": [
+        {"name": "mechanism_location", "type": "report", "constraints": "identifies whether the expiry is CSRF TTL or a client-side refresh gap", "destination": "issue comment / follow-up issue"},
+        {"name": "fix_or_deferral", "type": "code-or-issue", "constraints": "if cheap: fix with a deterministic test (FE task if client-side); else defer out of Spec-1 (P1) with a tracked issue", "destination": "src/lib/api.ts or backend / tracked issue"}
+      ],
+      "acceptance": [
+        "The actual expiry mechanism is identified (CSRF token TTL vs client-side refresh gap) and documented before any fix.",
+        "Either: a logged-in admin session remains valid for a sane duration (at least the configured session length) without spurious 401s on /config and /agents, verified by a deterministic test; OR a tracked follow-up issue is filed and the work is deferred out of Spec-1.",
+        "If the cause is client-side, the fix lives in a FE task with a deterministic (no wall-clock) test, not a backend AC."
+      ],
+      "depends_on": {"status": "N/A", "reason": "Wave 1 Investigate; decoupled and time-boxed, parallel from minute 0."},
+      "constraints": [
+        "TIME-BOXED and likely DEFERRED out of Spec-1 (F-09) — locate the mechanism before any fix; default plan is to time-box it OUT unless the mechanism is found cheaply.",
+        "The 24h session cookie is NOT the cause — do not change it."
+      ],
+      "files_scope": ["src/lib/api.ts", "pkg/gateway/middleware/session_cookie.go"],
+      "priority": "P1",
+      "notes": "wave: Wave 1 | team: Investigate | subagent-type: backend-lead | Traces: FR-112, US-9. Deferrable Task."
+    },
+    {
+      "task_id": "qa-unit-component-tests",
+      "task_name": "Author unit + component tests for all Spec-1 features",
+      "goal": "Every Spec-1 feature has deterministic unit (go) and component (vitest) tests T1-T12 authored and green, with mocks using the real backend category values.",
+      "inputs": [
+        {"name": "feature_branches", "type": "code", "constraints": "outputs of wave0 + all Wave 1 feature tasks", "source": "Wave 0 + Wave 1 tasks"},
+        {"name": "tdd_plan", "type": "spec", "constraints": "spec §7 TDD plan T1-T12", "source": "uxh-spec1-showstoppers-and-registry.md §7"}
+      ],
+      "outputs": [
+        {"name": "go_tests", "type": "go-test", "constraints": "T1-T5: builtin_registry_metadata, gateway_deps_registry, HandleToolsRegistry integration, HandleProviders status, pending_restart — deterministic, no wall-clock, injected config", "destination": "pkg/**/_test.go"},
+        {"name": "component_tests", "type": "vitest", "constraints": "T6-T12: ToolPolicyEditor (flat, once each, no raw core/system label, mock uses real core value, per call-site), ProvidersSection, RestartBanner/Settings, GatewaySection, ProfileSection, About, McpServerModal", "destination": "src/**/*.test.tsx"}
+      ],
+      "acceptance": [
+        "Go tests T1-T5 exist and pass under go test -race -count=1 (deterministic, injected config, no wall-clock).",
+        "Component tests T6-T12 exist and pass under vitest.",
+        "The ToolPolicyEditor component test runs per call-site (global + per-agent) and its mock uses the REAL category value the backend emits (core for un-recategorized), not file.",
+        "All current touched-area tests stay green (regression).",
+        "go test -race, vitest, and verify-contracts are green."
+      ],
+      "depends_on": ["wave0-registry-metadata", "be-providers-status", "be-restart-keys-hotreload", "fe-flatten-toolpolicyeditor", "fe-gateway-noauth-banner", "fe-fontsize", "fe-about", "fe-mcp-sheet"],
+      "constraints": ["Tests MUST be deterministic (no wall-clock)."],
+      "files_scope": ["pkg/tools/builtin_registry_metadata_test.go", "pkg/gateway/gateway_deps_registry_test.go", "pkg/gateway/pending_restart_test.go", "src/components/settings/ToolPolicyEditor.test.tsx", "src/components/settings/GatewaySection.test.tsx", "src/components/settings/ProfileSection.test.tsx"],
+      "priority": "P0",
+      "notes": "wave: Wave 2 | team: QA | subagent-type: qa-lead | Traces: §7 T1-T12, SC-107."
+    },
+    {
+      "task_id": "qa-e2e-playwright",
+      "task_name": "Author Playwright e2e suite against the embedded SPA + real gateway",
+      "goal": "The Playwright suite E2E-1..E2E-7 (E2E-8 conditional) passes against the embedded SPA and real gateway, with E2E-1 the regression-catcher asserting a real, non-empty tool grid with no raw category label.",
+      "inputs": [
+        {"name": "integrated_build", "type": "binary", "constraints": "embedded SPA + real gateway with Wave 0 + Wave 1 merged", "source": "all feature tasks"},
+        {"name": "e2e_plan", "type": "spec", "constraints": "spec §7 E2E-1..E2E-8", "source": "uxh-spec1-showstoppers-and-registry.md §7"}
+      ],
+      "outputs": [
+        {"name": "e2e_suite", "type": "playwright", "constraints": "E2E-1 security-tools (real gateway; grid NON-EMPTY, contains exec/web_search, no tool double-listed, no user-facing label equals a raw key core/system); E2E-2 providers; E2E-3 fresh-install no restart banner; E2E-4 settings-gateway no no-auth/no hot-reload toggle; E2E-5 profile-fontsize; E2E-6 about; E2E-7 mcp-add slide-out; E2E-8 whatsapp-qr (conditional on D-B3 time-box)", "destination": "tests/e2e/"}
+      ],
+      "acceptance": [
+        "E2E-1 boots the real gateway and asserts the Tool Access grid is non-empty, contains exec and web_search, no tool is double-listed, and no user-facing category label equals a raw key (core or system).",
+        "E2E-2 asserts an unconfigured provider is not green.",
+        "E2E-3 asserts a fresh onboarded install shows zero restart banners.",
+        "E2E-4 asserts no auth_mode:none control and no hot-reload toggle are in the DOM.",
+        "E2E-5 asserts the slider changes getComputedStyle(html).fontSize.",
+        "E2E-6 asserts the logo renders, the github link is elicify-ai, and the version is shown.",
+        "E2E-7 asserts Add-server opens a slide-out Sheet.",
+        "E2E-1..E2E-7 pass against the embedded SPA (E2E-8 conditional on the D-B3 time-box outcome); the full Playwright run is green."
+      ],
+      "depends_on": ["qa-unit-component-tests", "wave0-registry-metadata", "fe-flatten-toolpolicyeditor"],
+      "constraints": [
+        "E2E-1 runs ONLY after Wave 0 integrates (needs the corrected /tools).",
+        "Test against the embedded SPA (the Go binary), not the Vite dev server.",
+        "E2E-1 is mandatory — it is the regression-catcher the mocked unit tests missed."
+      ],
+      "files_scope": ["tests/e2e/security-tools.spec.ts", "tests/e2e/providers.spec.ts", "tests/e2e/fresh-install.spec.ts", "tests/e2e/settings-gateway.spec.ts", "tests/e2e/profile-fontsize.spec.ts", "tests/e2e/about.spec.ts", "tests/e2e/mcp-add.spec.ts"],
+      "priority": "P0",
+      "notes": "wave: Wave 2 | team: QA | subagent-type: qa-lead | Traces: §7 E2E-1..E2E-8, SC-102, SC-107."
+    }
+  ]
+}

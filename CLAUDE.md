@@ -162,6 +162,24 @@ make verify-contracts  # exit 0
 
 ## Build & E2E Testing
 
+### Host resource constraints (this dev box) — MANDATORY
+
+This dev host is **15 GB RAM / 4 cores / 77 GB root disk chronically ~96 % full** (the
+swapfile, Go/npm caches, and `~/.claude` transcripts all live on root). It is easy to crash
+the tmux/Claude session here via **OOM** or **ENOSPC** (a full root disk crashes Claude's
+transcript write *and* hangs `sudo`, which can't write its audit log).
+
+- **Do NOT run the full `pkg/gateway` Go test suite locally.** Run at most one narrowly-scoped
+  single test (`-run '^TestName$' -parallel 1`), or **validate via CI (16 GB runners) — CI is
+  the authority.** Clean baseline: the epic-base `pkg/gateway` suite is only ~86 MB / ~60 s.
+- **Never run multiple Go test suites in parallel** on this box (each subagent running
+  `go test ./...` simultaneously is what exhausts RAM → OOM-kills tmux/Claude).
+- **Do NOT use `MemoryMax` cgroup caps with swap enabled** — they thrash into multi-minute
+  unkillable zombies. If you must cap, use `MemorySwapMax=0` so a runaway dies instantly.
+- Watch root disk before/after builds (`df -h /`); clearing `~/.cache/go-build` forces a
+  multi-GB recompile that can refill it. Biggest reclaimable: `~/.local`, `/var`.
+- Full session/Spec-1 context: `docs/internal/specs/uxh-spec1-STATUS-2026-06-04.md`.
+
 ### SPA Embed Pipeline
 
 The binary embeds the SPA from `pkg/gateway/spa/` — **not** the Vite output (`dist/spa/`). Sync before building:
