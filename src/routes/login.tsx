@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { login, fetchAppState, isApiError } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
+import { resetTokenValidationCache } from './authValidation'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 
 function LoginScreen() {
@@ -25,6 +26,9 @@ function LoginScreen() {
     try {
       const resp = await login(username.trim(), password)
       setToken(resp.token, resp.role, resp.username)
+      // #359: a fresh login issues a new bearer token — drop any cached validation
+      // verdict so the /_app guard re-validates this session immediately.
+      resetTokenValidationCache()
       // Check if onboarding is still needed
       const state = await fetchAppState()
       if (!state.onboarding_complete) {

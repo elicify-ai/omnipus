@@ -4584,13 +4584,15 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 	}
 	// #358: persisting channels.<id>.enabled via safeUpdateConfigJSON only swaps the
 	// in-memory config pointer (refreshConfigAndRewireServices → SwapConfig); it does
-	// NOT start or stop the channel. Trigger a reload so ChannelManager.Reload applies
-	// the diff — starting a newly-enabled channel (e.g. whatsapp_native, which then
-	// emits its pairing QR over the whatsapp_pairing WS frame) or stopping a disabled
-	// one. The Reload path is crash-safe and name-correct as of #313. Mirrors the
-	// TriggerReload pattern used by HandleCreateAgent (rest.go:1369) and others.
+	// NOT start or stop the channel. Reload so ChannelManager.Reload applies the diff —
+	// starting a newly-enabled channel (e.g. whatsapp_native, which then emits its
+	// pairing QR over the whatsapp_pairing WS frame) or stopping a disabled one. The
+	// Reload path is crash-safe and name-correct as of #313. awaitReload treats an
+	// unwired reload pipeline (the unit-test environment) as a no-op and only returns an
+	// error on a genuine reload failure, which we surface rather than reporting a false
+	// success (the flag persisted but the channel did not start).
 	if a.agentLoop != nil {
-		if err := a.agentLoop.TriggerReload(); err != nil {
+		if err := a.awaitReload(); err != nil {
 			verb := "start"
 			if !enabled {
 				verb = "stop"

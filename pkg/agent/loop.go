@@ -2082,14 +2082,21 @@ func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.Pairi
 	// WhatsApp device leaves a tamper-evident trail. We deliberately do NOT log the
 	// `code`/`connecting` states (high-frequency, and the QR itself is a scannable
 	// secret that must never reach the audit file) — only the terminal outcomes.
+	// Decision uses the audit vocabulary (allow=linked, error=failed/expired); the
+	// exact pairing status rides in Details.
 	switch status {
 	case channels.PairingStatusLinked, channels.PairingStatusError, channels.PairingStatusTimeout:
+		decision := audit.DecisionAllow
+		if status != channels.PairingStatusLinked {
+			decision = audit.DecisionError
+		}
 		audit.EmitEntry(al.auditLogger, &audit.Entry{
 			Timestamp: time.Now().UTC(),
-			Event:     "channel.pairing." + string(status),
-			Decision:  string(status),
+			Event:     audit.EventChannelPairing,
+			Decision:  decision,
 			Details: map[string]any{
 				"channel": channelID,
+				"status":  string(status),
 				"message": message,
 			},
 		})
