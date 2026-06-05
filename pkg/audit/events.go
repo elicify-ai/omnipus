@@ -187,10 +187,22 @@ const (
 	// ask batch was denied or canceled, so this and every subsequent
 	// sibling call is auto-denied. FR-065.
 	AskDenyReasonBatchShortCircuit AskDenyReason = "batch_short_circuit"
+
+	// AskDenyReasonScheduled — the run is a headless cron/scheduled run with
+	// no operator present to approve. Any `ask`-policy tool is auto-denied
+	// immediately so the run never stalls waiting for human approval that can
+	// never arrive (F-13, FR-009, O-3).
+	//
+	// The tool.policy.ask.denied entry (emitted via EmitToolPolicyAskDenied) does
+	// NOT carry schedule_job_id or schedule_job_name — EmitToolPolicyAskDenied has
+	// a fixed field set without them. The schedule identity rides on the companion
+	// tool.policy.deny.attempted entry (via emitPolicyDenyAudit's extra Details
+	// map) and on the structured INFO log line in emitScheduledAutoDenyAudit.
+	AskDenyReasonScheduled AskDenyReason = "scheduled"
 )
 
-// IsValidAskDenyReason reports whether `r` is one of the six enum values
-// defined by FR-047 + FR-065. Useful at API boundaries before logging.
+// IsValidAskDenyReason reports whether `r` is one of the known enum values
+// defined by FR-047 + FR-065 + F-13. Useful at API boundaries before logging.
 func IsValidAskDenyReason(r AskDenyReason) bool {
 	switch r {
 	case AskDenyReasonUser,
@@ -198,7 +210,8 @@ func IsValidAskDenyReason(r AskDenyReason) bool {
 		AskDenyReasonCancel,
 		AskDenyReasonRestart,
 		AskDenyReasonSaturated,
-		AskDenyReasonBatchShortCircuit:
+		AskDenyReasonBatchShortCircuit,
+		AskDenyReasonScheduled:
 		return true
 	}
 	return false
@@ -295,6 +308,16 @@ func Emit(ctx context.Context, logger *Logger, event string, sev Severity, field
 		event == EventBootAbort
 	if writeErr := logger.writeLine(data, fsyncRequired); writeErr != nil {
 		slog.Error("audit: write record failed", "error", writeErr, "event", event)
+		// CRIT-6: bump the skipped counter so /health audit_degraded surfaces
+		// this write failure. Mirror the contract of audit.EmitEntry: a wired
+		// logger that fails to write is a runtime health signal, distinct from
+		// audit being explicitly disabled (auditLogger==nil, skipped counter
+		// must NOT be bumped). The event name is passed as the tool label;
+		// however IncSkipped only has a dedicated bucket for "web_serve" —
+		// all other values (including event names) aggregate into the single
+		// "other" counter, and the decision argument is ignored for non-web_serve
+		// calls. There is no per-event-family breakout in /metrics today.
+		IncSkipped(event, DecisionDeny)
 	}
 }
 

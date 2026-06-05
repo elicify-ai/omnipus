@@ -1,0 +1,792 @@
+{
+  "version": "0.1.0",
+  "meta": {
+    "epic_title": "[Epic] Non-Technical-User UX Hardening of Configuration Surfaces",
+    "spec": "docs/internal/specs/nontech-ux-hardening-spec.md",
+    "sink": "github",
+    "repo": "elicify-ai/omnipus",
+    "parallelism_model": {
+      "summary": "Waves of parallel teams. Wave 0 ships the shared primitives (critical-path blocker for all tool-policy work). Workstream A (Schedules) and Workstream C (Channels) are independent and run in Wave 1 concurrently with Wave 0. Wave 2 (B/D/E) all consume ToolPolicyEditor and run in parallel with each other once Wave 0 lands.",
+      "waves": [
+        {
+          "wave": 0,
+          "name": "Shared primitives (CRITICAL PATH)",
+          "teams": [
+            {"team": "Primitives", "tasks": ["build-tool-policy-presets-map", "build-tool-policy-editor", "build-risky-setting-control", "build-advanced-disclosure"], "subagents": ["frontend-lead", "qa-lead"]}
+          ]
+        },
+        {
+          "wave": 1,
+          "name": "Independent workstreams (start immediately, parallel with Wave 0)",
+          "teams": [
+            {"team": "A-Schedules", "tasks": ["sched-simple-first-form", "sched-friendly-when-preview", "sched-advanced-wording-d18"], "subagents": ["frontend-lead", "qa-lead"]},
+            {"team": "C-Channels", "tasks": ["chan-fields-metadata-delta", "chan-helper-links-advanced", "chan-gchat-pick-one", "chan-whatsapp-qr-states", "chan-human-errors-a11y"], "subagents": ["frontend-lead", "qa-lead"]}
+          ]
+        },
+        {
+          "wave": 2,
+          "name": "Tool-policy consumers (parallel after Wave 0 lands)",
+          "teams": [
+            {"team": "B-Security", "tasks": ["sec-two-layer-ia", "sec-risky-settings-wrap", "sec-global-tool-editor", "sec-score-control-surface"], "subagents": ["frontend-lead", "qa-lead"]},
+            {"team": "D-Agent", "tasks": ["agent-create-consistency", "agent-shared-preset-model", "agent-sandbox-plain-language", "bug-b1-system-tools-misplaced", "bug-b2-locked-agent-403"], "subagents": ["frontend-lead", "qa-lead"]},
+            {"team": "E-Tools-MCP-Skills", "tasks": ["mcp-add-server-fix-stdio-gate", "tools-tab-readonly-overview", "delete-dead-selection-presets", "skills-trust-mount", "mcp-tools-governed-shared-editor", "per-agent-skill-assignment"], "subagents": ["frontend-lead", "qa-lead"]}
+          ]
+        }
+      ],
+      "deferred_backend": ["deferred-scheduled-autodeny-audit"]
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "build-tool-policy-presets-map",
+      "task_name": "Build toolPolicyPresets role->policy mapping module",
+      "goal": "A pure module exports Cautious/Balanced/Full-access presets that resolve to the exact default_policy + override map in spec §2.1 using real registered tool ids.",
+      "wave": 0,
+      "team": "Primitives",
+      "subagent": "frontend-lead",
+      "priority": "P0",
+      "estimate": "1h",
+      "depends_on": {"status": "N/A", "reason": "First task; shared primitives have no prior dependency."},
+      "inputs": [
+        {"name": "spec §2.1 role-preset mapping table", "type": "spec", "constraints": "Cautious=default ask; Balanced=default allow with exec=ask, browser.navigate/click/type=ask, browser.evaluate=deny, write_file=ask; Full access=default allow no overrides", "source": "docs/internal/specs/nontech-ux-hardening-spec.md §2.1"},
+        {"name": "real tool ids", "type": "data", "constraints": "exec, browser.navigate, browser.click, browser.type, browser.evaluate, write_file (no delete_file exists)", "source": "live GET /api/v1/tools"}
+      ],
+      "outputs": [
+        {"name": "POLICY_PRESETS map", "type": "ts-module", "constraints": "exported preset->{default_policy, overrides} structure; no delete_file id", "destination": "src/lib/toolPolicyPresets.ts"}
+      ],
+      "acceptance": [
+        "Balanced preset resolves to default_policy 'allow' with overrides exec=ask, browser.navigate=ask, browser.click=ask, browser.type=ask, browser.evaluate=deny, write_file=ask and no other keys.",
+        "Cautious preset resolves to default_policy 'ask' with zero overrides.",
+        "Full access preset resolves to default_policy 'allow' with zero overrides.",
+        "No preset references a 'delete_file' tool id.",
+        "toolPolicyPresets.test asserts each preset map equals the §2.1 table exactly."
+      ],
+      "constraints": ["Must not introduce a new wire/generated type (spec §9)."],
+      "files_scope": ["src/lib/toolPolicyPresets.ts", "src/lib/toolPolicyPresets.test.ts"],
+      "notes": "Traces US-B3, US-D2, TDD row 1."
+    },
+    {
+      "task_id": "build-tool-policy-editor",
+      "task_name": "Build shared ToolPolicyEditor component",
+      "goal": "A single ToolPolicyEditor component renders the 3 role presets + collapsed user-facing categories, routes system.* (category==='system') into a collapsed Advanced/system disclosure, shows Mixed pills for heterogeneous categories, exposes the raw per-tool grid behind 'Customize per tool (advanced)', and round-trips an existing per-tool policy unchanged.",
+      "wave": 0,
+      "team": "Primitives",
+      "subagent": "frontend-lead",
+      "priority": "P0",
+      "estimate": "4h",
+      "depends_on": ["build-tool-policy-presets-map", "build-advanced-disclosure"],
+      "inputs": [
+        {"name": "preset map", "type": "ts-module", "constraints": "from build-tool-policy-presets-map", "source": "src/lib/toolPolicyPresets.ts"},
+        {"name": "canonical category model", "type": "ts-module", "constraints": "CATEGORY_LABELS, groupByCategory, resolvePolicy", "source": "@/lib/toolCategories"},
+        {"name": "shared PolicyBadge", "type": "component", "constraints": "use the canonical shared badge", "source": "@/components/shared/PolicyBadge"},
+        {"name": "tool payload", "type": "data", "constraints": "system.* tools carry category:'system' (scope is 'core'); MCP tools carry source:'mcp'", "source": "GET /api/v1/tools"}
+      ],
+      "outputs": [
+        {"name": "ToolPolicyEditor", "type": "component", "constraints": "preset-first; raw grid behind Advanced; system.* only inside Advanced/system disclosure; MCP tools grouped per-server (not by category)", "destination": "src/components/shared/ToolPolicyEditor.tsx"}
+      ],
+      "acceptance": [
+        "Selecting Balanced writes default_policy allow with the §2.1 overrides; Cautious writes default_policy ask; Full access writes default_policy allow with no overrides.",
+        "Tools with category==='system' render only inside the collapsed Advanced/system disclosure (default deny + danger note), never in the primary category list.",
+        "A category whose tools resolve to differing policies shows a 'Mixed' pill; a uniform category shows a single Allow/Ask/Deny pill.",
+        "MCP tools (source:'mcp') render grouped per-server with a source badge and are NOT swept into the Advanced/system disclosure even when category is unset.",
+        "The raw per-tool grid is hidden until 'Customize per tool (advanced)' is expanded.",
+        "Loading an existing per-tool override from config renders it and re-saving untouched emits a byte-identical policy payload.",
+        "ToolPolicyEditor.test validates against the real /tools payload shape (not a mock missing category)."
+      ],
+      "constraints": ["HIGH-RISK shared component: two call-sites (global Security + every Agent profile) must both keep their policy round-trip.", "Must not edit src/lib/api/generated/ (spec §9)."],
+      "files_scope": ["src/components/shared/ToolPolicyEditor.tsx", "src/components/shared/ToolPolicyEditor.test.tsx", "src/lib/toolCategories.ts"],
+      "notes": "Traces US-B3, US-D2, US-D4 separation logic, TDD row 2. Critical-path blocker for B/D/E."
+    },
+    {
+      "task_id": "build-risky-setting-control",
+      "task_name": "Build shared RiskySettingControl component",
+      "goal": "A RiskySettingControl component with props copy/safeValue/onConfirm shows a Recommended pill on the safe value, opens a consequence AlertDialog (safe=default button) when a risky value is selected, and renders a standing 'This lowers your protection' badge derived from the persisted value.",
+      "wave": 0,
+      "team": "Primitives",
+      "subagent": "frontend-lead",
+      "priority": "P0",
+      "estimate": "3h",
+      "depends_on": {"status": "N/A", "reason": "Independent primitive; builds on existing AlertDialog and SandboxProfileSelector confirm pattern, no in-spec dependency."},
+      "inputs": [
+        {"name": "AlertDialog primitive", "type": "component", "constraints": "existing", "source": "src/components/ui/alert-dialog.tsx"},
+        {"name": "confirm pattern reference", "type": "component", "constraints": "SandboxProfileSelector.tsx:184-233", "source": "src/components/agents/SandboxProfileSelector.tsx"}
+      ],
+      "outputs": [
+        {"name": "RiskySettingControl", "type": "component", "constraints": "props copy/safeValue/onConfirm; no internal per-site branching; badge is a pure function of persisted value", "destination": "src/components/shared/RiskySettingControl.tsx"}
+      ],
+      "acceptance": [
+        "The safe value renders a 'Recommended' pill.",
+        "Selecting a risky value opens an AlertDialog whose default button is the safe option; choosing it cancels the change.",
+        "Confirming the weakening applies the value AND renders a persistent 'This lowers your protection' badge.",
+        "The standing badge is a pure function of the persisted value: it shows on mount when the persisted value is already unsafe and clears only when the safe value is persisted (not on mere local re-render).",
+        "No retroactive dialog fires for a value that is already unsafe on load.",
+        "RiskySettingControl.test and RiskySettingControl.revert.test cover the pill, confirm-to-weaken, standing badge, no-retroactive-dialog, and persisted-value-derived clear-on-save."
+      ],
+      "constraints": ["Pattern reused by the stdio MCP gate (US-E1) — the component or at least the pattern must be reusable.", "Restart-gated settings: badge tracks the SAVED value, not pending-restart state (M-2)."],
+      "files_scope": ["src/components/shared/RiskySettingControl.tsx", "src/components/shared/RiskySettingControl.test.tsx", "src/components/shared/RiskySettingControl.revert.test.tsx"],
+      "notes": "Traces US-B2, TDD rows 3 and 11."
+    },
+    {
+      "task_id": "build-advanced-disclosure",
+      "task_name": "Build shared AdvancedDisclosure component",
+      "goal": "A reusable AdvancedDisclosure collapsible component renders a safe-defaults summary header and hides its children until expanded, generalizing the existing CreateAgentModal collapsed pattern.",
+      "wave": 0,
+      "team": "Primitives",
+      "subagent": "frontend-lead",
+      "priority": "P0",
+      "estimate": "1h",
+      "depends_on": {"status": "N/A", "reason": "Leaf primitive; only generalizes an existing inline pattern."},
+      "inputs": [
+        {"name": "existing collapsed pattern", "type": "component", "constraints": "CreateAgentModal.tsx:278-307", "source": "src/components/agents/CreateAgentModal.tsx"}
+      ],
+      "outputs": [
+        {"name": "AdvancedDisclosure", "type": "component", "constraints": "labeled, safe-to-skip summary, children hidden until expanded", "destination": "src/components/shared/AdvancedDisclosure.tsx"}
+      ],
+      "acceptance": [
+        "Children are not present in the document until the disclosure is expanded.",
+        "The collapsed header shows a configurable label and summary text.",
+        "AdvancedDisclosure.test asserts children mount only after expansion."
+      ],
+      "constraints": {"status": "N/A", "reason": "Pure presentational component, no cross-boundary constraints."},
+      "files_scope": ["src/components/shared/AdvancedDisclosure.tsx", "src/components/shared/AdvancedDisclosure.test.tsx"],
+      "notes": "Consumed by A1, B1, C1, D3 advanced collapses."
+    },
+    {
+      "task_id": "sched-simple-first-form",
+      "task_name": "Make Schedule form simple-first with Advanced collapse (US-A1)",
+      "goal": "ScheduleFormSheet renders only Name, Message, When, Which-agent at the primary altitude and hides Memory/Delivery/Timeout/Active plus the keep-full-thread toggle behind AdvancedDisclosure until expanded.",
+      "wave": 1,
+      "team": "A-Schedules",
+      "subagent": "frontend-lead",
+      "priority": "P0",
+      "estimate": "2h",
+      "depends_on": ["build-advanced-disclosure"],
+      "inputs": [
+        {"name": "ScheduleFormSheet", "type": "component", "constraints": "8 flat fields today", "source": "src/components/command-center/ScheduleFormSheet.tsx"},
+        {"name": "AdvancedDisclosure", "type": "component", "constraints": "from Wave 0", "source": "src/components/shared/AdvancedDisclosure.tsx"}
+      ],
+      "outputs": [
+        {"name": "simple-first ScheduleFormSheet", "type": "component", "constraints": "four primary fields; rest under Advanced", "destination": "src/components/command-center/ScheduleFormSheet.tsx"}
+      ],
+      "acceptance": [
+        "On a fresh form, Name, Message, When, and Which-agent are visible and Memory/Delivery/Timeout/Active are not in the document.",
+        "Expanding 'Advanced options' reveals Memory/Delivery/Timeout/Active.",
+        "ScheduleFormSheet.test asserts the simple/advanced split."
+      ],
+      "constraints": ["Must not remove any existing field — all remain reachable under Advanced (spec §9)."],
+      "files_scope": ["src/components/command-center/ScheduleFormSheet.tsx"],
+      "notes": "Traces US-A1, TDD row 4."
+    },
+    {
+      "task_id": "sched-friendly-when-preview",
+      "task_name": "Friendly When? selector with live NextRunPreview and cron round-trip (US-A2)",
+      "goal": "The When? control offers Once/Repeat/Custom, emits only the six grammar shapes in §2.1 (at/every/cron), renders a live NextRunPreview with a 'server time' label, reverse-parses existing triggers per the grammar (complex cron opens Custom verbatim), and gates Save via a client 5-field structural check plus server validation.",
+      "wave": 1,
+      "team": "A-Schedules",
+      "subagent": "frontend-lead",
+      "priority": "P0",
+      "estimate": "4h",
+      "depends_on": ["sched-simple-first-form"],
+      "inputs": [
+        {"name": "finite friendly grammar table", "type": "spec", "constraints": "Once->at; every N min/hr/day->every; daily/weekly/monthly at HH:MM->cron", "source": "spec §3 US-A2 M-1"},
+        {"name": "triggerSummary()", "type": "function", "constraints": "reuse for human-readable preview", "source": "src/components/command-center/SchedulesList.tsx:42"}
+      ],
+      "outputs": [
+        {"name": "friendly When? UI + NextRunPreview", "type": "component", "constraints": "emits only grammar shapes; NextRunPreview is a LOCAL component", "destination": "src/components/command-center/ScheduleFormSheet.tsx"}
+      ],
+      "acceptance": [
+        "Repeat with a time-of-day or week/month unit emits {kind:'cron', cron:<generated>} and the preview shows the human recurrence plus 'server time'.",
+        "Repeat = every N minutes/hours/days with no time emits {kind:'every', every_ms:N×unit}.",
+        "Custom '0 18 * * *' renders the human equivalent plus examples; a malformed string gates Save with an inline error and hides the preview.",
+        "A structurally valid but semantically invalid cron (e.g. '99 99 * * *') passes the client 5-field check, shows 'checking…' instead of a Next run, and the server 4xx maps to the same inline error.",
+        "A brand-new form defaults the trigger to Once.",
+        "Editing a saved {cron:'0 18 * * *'} re-hydrates to 'Every day at 6:00 PM'; editing {cron:'*/5 9-17 * * 1-5'} opens Custom with the raw string and re-saving untouched leaves the stored trigger byte-identical.",
+        "The weekday/day-of-month widget appears only for the week/month selections.",
+        "cronRoundTrip.test covers friendly->cron generation, reverse parse, complex-cron->Custom, and byte-identical re-save."
+      ],
+      "constraints": ["No new cron library — client check is a regex 5-field structural gate only; authoritative validation stays server-side (spec §9, M-8).", "Emit 'at' as a local-zone ISO string for consistency with cron (M-1)."],
+      "files_scope": ["src/components/command-center/ScheduleFormSheet.tsx", "src/components/command-center/SchedulesList.tsx"],
+      "notes": "Traces US-A2, TDD rows 4 and 10."
+    },
+    {
+      "task_id": "sched-advanced-wording-d18",
+      "task_name": "Plain Advanced wording and Hermes isolated-only session model (US-A3/D18)",
+      "goal": "The Schedule form removes 'Use my main chat', defaults submissions to session_mode:'isolated', offers an Advanced 'keep the full thread' opt-in mapping to session_mode:'continue', defaults Owner to the default:true agent, and never renders the raw session_mode enum on a schedule card.",
+      "wave": 1,
+      "team": "A-Schedules",
+      "subagent": "frontend-lead",
+      "priority": "P0",
+      "estimate": "2h",
+      "depends_on": ["sched-simple-first-form"],
+      "inputs": [
+        {"name": "D18 owner decision", "type": "spec", "constraints": "Hermes isolated-only; main dropped from UI; memory is workspace-scoped/shared", "source": "spec §3 US-A3, §12"},
+        {"name": "default agent flag", "type": "data", "constraints": "agent with default:true (Mia on fresh install)", "source": "GET /api/v1/agents"}
+      ],
+      "outputs": [
+        {"name": "session-mode-simplified ScheduleFormSheet", "type": "component", "constraints": "no main; isolated default; continue under Advanced; no raw enum on card", "destination": "src/components/command-center/ScheduleFormSheet.tsx"}
+      ],
+      "acceptance": [
+        "The form offers no 'Use my main chat' option and no submit path produces session_mode:'main'.",
+        "A default submit produces session_mode:'isolated'.",
+        "The Advanced 'keep the full thread' opt-in produces session_mode:'continue'.",
+        "Owner defaults to the agent with default:true.",
+        "A created schedule's card does not render the raw session_mode string.",
+        "A pre-existing 'main' schedule loads in read-only/legacy form (mode not re-selectable) and is not silently rewritten to isolated."
+      ],
+      "constraints": ["Must NOT edit src/lib/api/generated/ — the session_mode wire enum retains 'main' (F-G03, spec §9).", "Switching Repeat<->Custom clears the other input (no silent carry-over)."],
+      "files_scope": ["src/components/command-center/ScheduleFormSheet.tsx", "src/components/command-center/SchedulesList.tsx"],
+      "notes": "Traces US-A3, D18, TDD row 4. Holdout H9."
+    },
+    {
+      "task_id": "chan-fields-metadata-delta",
+      "task_name": "Add helpLink/advanced/authGroup to ChannelField + scheme assertion (US-C1 metadata)",
+      "goal": "channel-fields.ts gains optional helpLink/advanced/authGroup fields on ChannelField (reusing existing helpText), all required fields on the six CJK channels get helpText, helpLink is added where a real https source URL exists, and a unit test asserts every helpLink.url matches ^https://.",
+      "wave": 1,
+      "team": "C-Channels",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "3h",
+      "depends_on": {"status": "N/A", "reason": "Channels workstream is independent; ChannelField is not-wire-format and needs no shared primitive."},
+      "inputs": [
+        {"name": "ChannelField metadata delta", "type": "spec", "constraints": "add helpLink {label,url}, advanced:boolean, authGroup:string; reuse helpText (used 48×); do NOT add a 'helper' field", "source": "spec §2.2"},
+        {"name": "13-channel descriptor set", "type": "data", "constraints": "telegram,discord,slack,whatsapp,feishu,matrix,line,dingtalk,qq,wecom,irc,weixin,google-chat; signal absent (skip)", "source": "src/lib/channel-fields.ts"}
+      ],
+      "outputs": [
+        {"name": "extended channel-fields.ts", "type": "ts-module", "constraints": "additive optional fields; CJK helpText filled; https-only helpLinks", "destination": "src/lib/channel-fields.ts"}
+      ],
+      "acceptance": [
+        "ChannelField gains optional helpLink {label,url}, advanced, and authGroup fields and no new 'helper' field is added.",
+        "Every required field on feishu/line/dingtalk/qq/wecom/weixin has helpText after this pass.",
+        "Every descriptor helpLink.url is a compile-time https:// literal and helpLinkScheme.test asserts all match ^https://.",
+        "No generated/wire type changes and make verify-contracts is unaffected."
+      ],
+      "constraints": ["helpLink.url MUST be a constant literal, https-only, never user/runtime input (M-4).", "ChannelField is not-wire-format; do not add wire types (spec §9)."],
+      "files_scope": ["src/lib/channel-fields.ts", "src/lib/channel-fields.test.ts"],
+      "notes": "Traces US-C1, §2.2, TDD row 12. Blocks chan-helper-links-advanced and chan-gchat-pick-one."
+    },
+    {
+      "task_id": "chan-helper-links-advanced",
+      "task_name": "Per-field HelperLink + source links + Advanced collapse in ChannelConfigPanel (US-C1)",
+      "goal": "ChannelConfigPanel renders a local HelperLink (helpText + clickable helpLink) under each field, a per-channel 'How to connect' intro, and collapses advanced:true fields under AdvancedDisclosure with secure outbound links.",
+      "wave": 1,
+      "team": "C-Channels",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "3h",
+      "depends_on": ["chan-fields-metadata-delta", "build-advanced-disclosure"],
+      "inputs": [
+        {"name": "ChannelConfigPanel", "type": "component", "constraints": "current per-channel config slide-over", "source": "src/components/.../ChannelConfigPanel.tsx"},
+        {"name": "channel-fields metadata", "type": "ts-module", "constraints": "with helpLink/advanced", "source": "src/lib/channel-fields.ts"}
+      ],
+      "outputs": [
+        {"name": "ChannelConfigPanel with HelperLink", "type": "component", "constraints": "HelperLink is LOCAL (single consumer); advanced fields collapsed", "destination": "src/components/.../ChannelConfigPanel.tsx"}
+      ],
+      "acceptance": [
+        "Telegram Bot Token shows its existing helpText plus a clickable helpLink, and 'Allow From' renders under Advanced.",
+        "A field with no helpLink renders helpText only with no broken link element.",
+        "Outbound helpLink anchors render with target=_blank and rel=noopener noreferrer.",
+        "ChannelConfigPanel.test asserts helper+link render and the advanced collapse."
+      ],
+      "constraints": ["HelperLink is a LOCAL component, not abstracted into shared (M-11)."],
+      "files_scope": ["src/components/agents/ChannelConfigPanel.tsx"],
+      "notes": "Traces US-C1, TDD row 6."
+    },
+    {
+      "task_id": "chan-gchat-pick-one",
+      "task_name": "Google Chat authGroup 'pick one' picker (US-C2)",
+      "goal": "The Google Chat Configure panel renders a 'How do you want to connect?' radio over the authGroup, shows only the selected method's fields, clears the deselected group's useState value on switch, and submits only the selected group's fields.",
+      "wave": 1,
+      "team": "C-Channels",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "2h",
+      "depends_on": ["chan-fields-metadata-delta"],
+      "inputs": [
+        {"name": "google-chat descriptor", "type": "data", "constraints": "6 fields already exist with helpText; authGroup is the only new work", "source": "src/lib/channel-fields.ts"}
+      ],
+      "outputs": [
+        {"name": "GChat auth picker", "type": "component", "constraints": "radio over authGroup; mutual exclusion", "destination": "src/components/agents/ChannelConfigPanel.tsx"}
+      ],
+      "acceptance": [
+        "Selecting Webhook shows only webhook_url; selecting Service account shows service_account_json + service_account_file; the other group's fields are not submitted.",
+        "Switching method clears the deselected group's field useState value (asserted empty), so a switch-back cannot resurrect a stale secret.",
+        "ChannelConfigPanel.test asserts the GChat authGroup mutual-exclusion and state-clear-on-switch."
+      ],
+      "constraints": ["Switch-clear mirrors the Repeat<->Custom rule (M-13/F-G08)."],
+      "files_scope": ["src/components/agents/ChannelConfigPanel.tsx", "src/lib/channel-fields.ts"],
+      "notes": "Traces US-C2, TDD row 6. Holdout H5."
+    },
+    {
+      "task_id": "chan-whatsapp-qr-states",
+      "task_name": "WhatsApp QR 5-state machine (US-C3)",
+      "goal": "The WhatsApp native notice renders distinct UI for each of the five wire states waiting/code/linked/timeout/error, with QR + phone steps on code and a Retry on both timeout and error.",
+      "wave": 1,
+      "team": "C-Channels",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "2h",
+      "depends_on": {"status": "N/A", "reason": "Reads the existing whatsapp_pairing WS frame; no shared-primitive dependency."},
+      "inputs": [
+        {"name": "WhatsAppPairing wire states", "type": "data", "constraints": "5 states waiting|code|linked|timeout|error", "source": "src/lib/api/generated asyncapi-types.ts:334"}
+      ],
+      "outputs": [
+        {"name": "WhatsApp QR state UI", "type": "component", "constraints": "5 distinct states by real wire name (no invented 'ready')", "destination": "src/components/agents/ChannelConfigPanel.tsx"}
+      ],
+      "acceptance": [
+        "No frame renders the waiting spinner 'Generating your QR code…'.",
+        "State 'code' renders the QR image plus the Linked Devices steps and a refresh note.",
+        "State 'linked' renders success.",
+        "States 'timeout' and 'error' render distinct copy and both offer a Retry control.",
+        "whatsappQrState.test covers all 5 wire states and asserts timeout vs error copy differ."
+      ],
+      "constraints": ["Map only the real wire names; do not invent a 'ready' state (US-C3)."],
+      "files_scope": ["src/components/agents/ChannelConfigPanel.tsx"],
+      "notes": "Traces US-C3, TDD row 7. Crash precursor fixed in PR #313. Holdout H6."
+    },
+    {
+      "task_id": "chan-human-errors-a11y",
+      "task_name": "Human-label channel errors + Test clarity + aria-describedby (US-C4)",
+      "goal": "ChannelConfigPanel maps raw snake_case validation errors to the field's human label, adds a 'Test = check without saving' hint plus a pass/fail Test result line, and adds the missing aria-describedby on Configure dialogs.",
+      "wave": 1,
+      "team": "C-Channels",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "2h",
+      "depends_on": {"status": "N/A", "reason": "Client-side error mapping + a11y on the existing panel; no shared-primitive dependency."},
+      "inputs": [
+        {"name": "field label map", "type": "data", "constraints": "snake_case key -> human label from channel-fields", "source": "src/lib/channel-fields.ts"}
+      ],
+      "outputs": [
+        {"name": "human-label errors + a11y", "type": "component", "constraints": "label-mapped errors; aria-describedby present", "destination": "src/components/agents/ChannelConfigPanel.tsx"}
+      ],
+      "acceptance": [
+        "Testing with an empty required field shows 'Please fill in: <Label>' and never the raw key like bot_token.",
+        "The Configure dialog has an aria-describedby target.",
+        "ChannelConfigPanel.test asserts human-label errors and the aria-describedby."
+      ],
+      "constraints": ["Backend error field labels are mapped client-side (D10); no backend change (spec §9)."],
+      "files_scope": ["src/components/agents/ChannelConfigPanel.tsx"],
+      "notes": "Traces US-C4, TDD row 6."
+    },
+    {
+      "task_id": "sec-two-layer-ia",
+      "task_name": "Two-layer Security IA: Health header over collapsed Advanced (US-B1)",
+      "goal": "The Security tab shows the Security Score plus 3-4 plain outcome toggles at the top and moves all jargon (Landlock/SSRF/deny-regex/tool grid/audit log) under one collapsed 'Advanced / technical details' section.",
+      "wave": 2,
+      "team": "B-Security",
+      "subagent": "frontend-lead",
+      "priority": "P0",
+      "estimate": "3h",
+      "depends_on": ["build-advanced-disclosure"],
+      "inputs": [
+        {"name": "SecuritySection + DiagnosticsSection", "type": "component", "constraints": "Score lives in DiagnosticsSection", "source": "src/components/settings/SecuritySection.tsx, DiagnosticsSection.tsx"}
+      ],
+      "outputs": [
+        {"name": "two-layer Security IA", "type": "component", "constraints": "Score + toggles primary; jargon under Advanced", "destination": "src/components/settings/SecuritySection.tsx"}
+      ],
+      "acceptance": [
+        "The Security tab shows the Score and 3-4 outcome toggles, and the strings Landlock/SSRF/regex are not in the document until 'Advanced' is expanded.",
+        "Expanding Advanced reveals the sandbox internals, SSRF, deny-regex, tool grid, and audit log.",
+        "SecuritySection.test asserts jargon is hidden until Advanced."
+      ],
+      "constraints": ["Must not remove any capability — all advanced controls remain reachable (spec §9)."],
+      "files_scope": ["src/components/settings/SecuritySection.tsx", "src/components/settings/DiagnosticsSection.tsx"],
+      "notes": "Traces US-B1, TDD row 5. Holdout H3."
+    },
+    {
+      "task_id": "sec-risky-settings-wrap",
+      "task_name": "Wrap the four risky Security/Gateway controls in RiskySettingControl (US-B2)",
+      "goal": "auth_mode None, bind_address 0.0.0.0, Process-sandbox Off, and the Tool-Access policyMode toggle each use RiskySettingControl with a Recommended pill, confirm-to-weaken dialog, and a standing badge derived from the persisted config value.",
+      "wave": 2,
+      "team": "B-Security",
+      "subagent": "frontend-lead",
+      "priority": "P0",
+      "estimate": "4h",
+      "depends_on": ["build-risky-setting-control"],
+      "inputs": [
+        {"name": "four control sites", "type": "code", "constraints": "auth_mode GatewaySection ~183; bind_address ~151; sandbox profile; policyMode SecuritySection :453 (safe default 'deny' :277)", "source": "src/components/settings/GatewaySection.tsx, SecuritySection.tsx, SandboxProfileSelector.tsx"},
+        {"name": "persisted config queries", "type": "data", "constraints": "['config'] for auth_mode/bind_address/sandbox; ['global-tool-policies'] for policyMode", "source": "fetchConfig GatewaySection.tsx:50-52"}
+      ],
+      "outputs": [
+        {"name": "four wrapped risky controls", "type": "component", "constraints": "each preserves its existing save path", "destination": "src/components/settings/GatewaySection.tsx, SecuritySection.tsx, SandboxProfileSelector.tsx"}
+      ],
+      "acceptance": [
+        "Given auth=token, selecting None opens an AlertDialog with 'Keep login on' as the default button and selecting it cancels.",
+        "Confirming the weakening changes the value and leaves a persistent 'This lowers your protection' badge.",
+        "Each of the four controls' safe option carries a 'Recommended' pill.",
+        "Each standing badge derives from the named persisted value (auth_mode<-config.gateway.auth_mode, bind_address<-config.gateway.bind_address, sandbox<-config, policyMode<-global-tool-policies) and survives reload.",
+        "Reselecting the safe value clears the badge on save (not on local re-render), and for restart-gated settings the protection badge tracks the saved value not pending-restart state.",
+        "All four controls already in their unsafe state on load show the standing badge immediately with no retroactive dialog."
+      ],
+      "constraints": ["Each control's existing save path must be preserved (MEDIUM risk).", "policyMode is safe-by-default; its badge fires only after a deliberate switch to allow."],
+      "files_scope": ["src/components/settings/GatewaySection.tsx", "src/components/settings/SecuritySection.tsx", "src/components/agents/SandboxProfileSelector.tsx"],
+      "notes": "Traces US-B2, TDD rows 3 and 11. Highest-risk story. Holdout H4."
+    },
+    {
+      "task_id": "sec-global-tool-editor",
+      "task_name": "Global Tool Access via ToolPolicyEditor + local-duplicate consolidation (US-B3)",
+      "goal": "Global Security tool policy is rendered by the shared ToolPolicyEditor (3 roles + categories, system.* under Advanced/system, MCP per-server) replacing GlobalToolPoliciesSection, and SecuritySection's local CATEGORY_LABELS/PolicyBadge/groupByCategory are collapsed onto the shared canonicals.",
+      "wave": 2,
+      "team": "B-Security",
+      "subagent": "frontend-lead",
+      "priority": "P0",
+      "estimate": "3h",
+      "depends_on": ["build-tool-policy-editor"],
+      "inputs": [
+        {"name": "GlobalToolPoliciesSection", "type": "code", "constraints": "SecuritySection.tsx:101-252 to replace", "source": "src/components/settings/SecuritySection.tsx"},
+        {"name": "local duplicates", "type": "code", "constraints": "CATEGORY_LABELS :45, PolicyBadge :58, groupByCategory :91", "source": "src/components/settings/SecuritySection.tsx"}
+      ],
+      "outputs": [
+        {"name": "Security tool editor on ToolPolicyEditor", "type": "component", "constraints": "single shared editor; canonical category source + PolicyBadge", "destination": "src/components/settings/SecuritySection.tsx"}
+      ],
+      "acceptance": [
+        "Selecting Balanced writes default allow with the §2.1 overrides; Cautious writes default ask; Full access writes default allow with no overrides.",
+        "A category with mixed resolved policies shows a 'Mixed' pill; a uniform category shows a single policy pill.",
+        "system.* tools appear only inside the Advanced/system disclosure (default deny), not the primary categories.",
+        "SecuritySection imports CATEGORY_LABELS/groupByCategory from @/lib/toolCategories and PolicyBadge from @/components/shared/PolicyBadge with no local copies remaining.",
+        "An existing global per-tool override loaded from config renders and re-saves unchanged."
+      ],
+      "constraints": ["Must absorb GlobalToolPoliciesSection entirely into the shared editor (preset-consolidation widening §6)."],
+      "files_scope": ["src/components/settings/SecuritySection.tsx"],
+      "notes": "Traces US-B3, US-D4 (global grid), TDD rows 1 and 2."
+    },
+    {
+      "task_id": "sec-score-control-surface",
+      "task_name": "Score as control surface + plain restart banner + vault reassurance (US-B4)",
+      "goal": "Each Security Score deduction links to its in-place fix, the populated state reads as reassurance, the restart banner shows a plain summary with jargon behind 'Technical details', and the Credential Vault header gains an encryption-reassurance line.",
+      "wave": 2,
+      "team": "B-Security",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "3h",
+      "depends_on": ["build-advanced-disclosure"],
+      "inputs": [
+        {"name": "IssueCard action_link/action_label", "type": "code", "constraints": "DiagnosticsSection score deductions", "source": "src/components/settings/DiagnosticsSection.tsx"},
+        {"name": "RestartBanner", "type": "component", "constraints": "raw config diff + systemd/docker jargon today", "source": "src/components/settings/RestartBanner.tsx"}
+      ],
+      "outputs": [
+        {"name": "score-as-control + plain banner", "type": "component", "constraints": "deductions link in-place; jargon behind Technical details", "destination": "src/components/settings/DiagnosticsSection.tsx, RestartBanner.tsx"}
+      ],
+      "acceptance": [
+        "Each Score deduction renders an action link that navigates to its in-place fix control.",
+        "Score = 100 shows 'You're protected' with no deduction list.",
+        "The restart banner shows a plain one-line summary and hides the raw config diff plus systemd/docker text behind 'Technical details'.",
+        "The Credential Vault header shows the encryption-reassurance line about keys staying on this server.",
+        "SecuritySection.test asserts a score deduction links to its in-place fix."
+      ],
+      "constraints": {"status": "N/A", "reason": "Presentational/IA change; no cross-boundary or runtime constraints beyond spec §9 no-capability-removal."},
+      "files_scope": ["src/components/settings/DiagnosticsSection.tsx", "src/components/settings/RestartBanner.tsx", "src/components/settings/SecuritySection.tsx"],
+      "notes": "Traces US-B4, TDD row 5."
+    },
+    {
+      "task_id": "bug-b1-system-tools-misplaced",
+      "task_name": "BUG B-1: separate system.* tools via category==='system' in both grids (US-D4)",
+      "goal": "Both the per-agent ToolsAndPermissions editor and the global Security tool editor filter system.* tools by category==='system' (not scope) into the collapsed Advanced/system disclosure with a danger note, verified against the real /tools payload.",
+      "wave": 2,
+      "team": "D-Agent",
+      "subagent": "frontend-lead",
+      "priority": "P0",
+      "estimate": "2h",
+      "depends_on": ["build-tool-policy-editor"],
+      "inputs": [
+        {"name": "broken scope filters", "type": "code", "constraints": "ToolsAndPermissions.tsx:217 (scope==='system') and SecuritySection.tsx:156 (scope!=='system') both fail because tools are scope:'core'", "source": "src/components/agents/ToolsAndPermissions.tsx, SecuritySection.tsx"},
+        {"name": "live tool payload", "type": "data", "constraints": "41 system.* tools all category:'system', scope:'core'", "source": "GET /api/v1/tools"}
+      ],
+      "outputs": [
+        {"name": "category-based system separation", "type": "code", "constraints": "filter category==='system' in both grids", "destination": "src/components/agents/ToolsAndPermissions.tsx, SecuritySection.tsx"}
+      ],
+      "acceptance": [
+        "Opening Tools for a new custom agent shows only user-facing categories in the primary grid and the 41 system.* rows appear only inside the collapsed Advanced/system disclosure (default deny).",
+        "The global Security tool editor behaves identically.",
+        "The Advanced/system disclosure carries a danger note and expanding it is a deliberate action.",
+        "Tests run against the real /tools payload shape, not a mock that omits category."
+      ],
+      "constraints": ["No backend change required — SPA filter only (spec §12).", "Must not also catch an MCP tool with unset category (guarded by US-E5)."],
+      "files_scope": ["src/components/agents/ToolsAndPermissions.tsx", "src/components/settings/SecuritySection.tsx"],
+      "notes": "Traces US-D4, TDD row 2."
+    },
+    {
+      "task_id": "bug-b2-locked-agent-403",
+      "task_name": "BUG B-2: render locked-agent Tools panel read-only (US-D5)",
+      "goal": "The per-agent Tools panel renders read-only Allow/Ask/Deny controls and fires no write for locked core agents, eliminating the silent autosave 403.",
+      "wave": 2,
+      "team": "D-Agent",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "1h",
+      "depends_on": ["build-tool-policy-editor"],
+      "inputs": [
+        {"name": "locked-agent autosave path", "type": "code", "constraints": "editable presets render for locked agents then autosave 403s", "source": "src/components/agents/ToolsAndPermissions.tsx"}
+      ],
+      "outputs": [
+        {"name": "read-only locked Tools panel", "type": "code", "constraints": "read-only controls; no write fired", "destination": "src/components/agents/ToolsAndPermissions.tsx"}
+      ],
+      "acceptance": [
+        "Opening Tools on a locked core agent shows read-only controls.",
+        "No write request fires from the locked-agent Tools panel.",
+        "AgentTools.test asserts read-only and no write for a locked agent."
+      ],
+      "constraints": ["Render read-only — do NOT merely suppress autosave (that leaves controls interactive and silently drops edits, M-12)."],
+      "files_scope": ["src/components/agents/ToolsAndPermissions.tsx"],
+      "notes": "Traces US-D5, TDD row 8."
+    },
+    {
+      "task_id": "agent-shared-preset-model",
+      "task_name": "Replace agent ad-hoc presets with shared ToolPolicyEditor (US-D2)",
+      "goal": "ToolsAndPermissions replaces its four ad-hoc presets (Unrestricted/Cautious/Standard/Minimal) with the shared ToolPolicyEditor (Cautious/Balanced/Full access, preset-first, raw grid behind Customize), rendering identically to global Security.",
+      "wave": 2,
+      "team": "D-Agent",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "3h",
+      "depends_on": ["build-tool-policy-editor"],
+      "inputs": [
+        {"name": "agent POLICY_PRESETS", "type": "code", "constraints": "ToolsAndPermissions.tsx:47-83 four presets to replace", "source": "src/components/agents/ToolsAndPermissions.tsx"}
+      ],
+      "outputs": [
+        {"name": "agent editor on ToolPolicyEditor", "type": "code", "constraints": "three roles; identical to global", "destination": "src/components/agents/ToolsAndPermissions.tsx"}
+      ],
+      "acceptance": [
+        "Global and per-agent surfaces render the same three role labels and the same category rollups.",
+        "An agent saved under a removed preset (Unrestricted/Standard/Minimal) loads and re-saves under Cautious/Balanced/Full without mutating policy on mere render.",
+        "oldPresetCompat.test verifies an arbitrary saved policy loads and saves unchanged."
+      ],
+      "constraints": ["Policy-presets (live) are REPLACED, not deleted; do not conflate with the dead selection-presets (F-G12)."],
+      "files_scope": ["src/components/agents/ToolsAndPermissions.tsx"],
+      "notes": "Traces US-D2, TDD rows 2 and 14."
+    },
+    {
+      "task_id": "agent-create-consistency",
+      "task_name": "Create-Agent uses ToolPolicyEditor + Balanced default (US-D1)",
+      "goal": "CreateAgentModal applies the shared ToolPolicyEditor with plain labels, keeps the temperature-in-Advanced collapse, and defaults a new agent to the Balanced role rather than default_policy:'allow'.",
+      "wave": 2,
+      "team": "D-Agent",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "2h",
+      "depends_on": ["build-tool-policy-editor"],
+      "inputs": [
+        {"name": "CreateAgentModal default", "type": "code", "constraints": "current default default_policy:'allow' ~:84; blank form kept", "source": "src/components/agents/CreateAgentModal.tsx"}
+      ],
+      "outputs": [
+        {"name": "Create-Agent on ToolPolicyEditor", "type": "code", "constraints": "Balanced default; plain labels", "destination": "src/components/agents/CreateAgentModal.tsx"}
+      ],
+      "acceptance": [
+        "Creating a new agent defaults its tool policy to the Balanced role, not default_policy:'allow'.",
+        "The Create-Agent tool section renders the shared ToolPolicyEditor with plain labels and the temperature control stays under Advanced.",
+        "AgentTools.test asserts new-agent default = Balanced."
+      ],
+      "constraints": ["Keep the blank form — no template gallery (US-D1)."],
+      "files_scope": ["src/components/agents/CreateAgentModal.tsx"],
+      "notes": "Traces US-D1, TDD row 8."
+    },
+    {
+      "task_id": "agent-sandbox-plain-language",
+      "task_name": "Plain-language sandbox + behavior + standing weakened-profile badge (US-D3)",
+      "goal": "SandboxProfileSelector exposes 2-3 plain options with kernel jargon under Advanced, keeps the type-the-name confirm for Off, adds a standing warning badge when a widening profile (Workspace+Net/Off) is active, and relabels SOUL.md/HEARTBEAT.md plus tuning captions in plain language.",
+      "wave": 2,
+      "team": "D-Agent",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "3h",
+      "depends_on": ["build-risky-setting-control", "build-advanced-disclosure"],
+      "inputs": [
+        {"name": "SandboxProfileSelector + ShellDenyPatternsEditor", "type": "code", "constraints": "type-the-name confirm exists; missing standing badge", "source": "src/components/agents/SandboxProfileSelector.tsx, ShellDenyPatternsEditor.tsx"}
+      ],
+      "outputs": [
+        {"name": "plain-language sandbox + badge", "type": "code", "constraints": "badge only on widening profile; regex under Advanced", "destination": "src/components/agents/SandboxProfileSelector.tsx, ShellDenyPatternsEditor.tsx, AgentProfile.tsx"}
+      ],
+      "acceptance": [
+        "The sandbox selector shows 2-3 plain options with a Recommended pill on inherit-global and kernel/Landlock wording only under Advanced.",
+        "Selecting Off still requires the existing type-the-name confirm.",
+        "A standing warning badge appears on the accordion header only when a widening profile (Workspace+Net or Off) is active, and a shell-deny pattern (which hardens) does NOT trigger the badge.",
+        "SOUL.md is labeled 'Personality & instructions' and HEARTBEAT.md is labeled 'Background tasks / periodic instructions' with the .md framing under Advanced.",
+        "Temperature/top-p/steering/iterations/timeout each show a plain caption."
+      ],
+      "constraints": ["Badge only a widening carve-out, never a hardening shell-deny pattern (F-G14)."],
+      "files_scope": ["src/components/agents/SandboxProfileSelector.tsx", "src/components/agents/ShellDenyPatternsEditor.tsx", "src/components/agents/AgentProfile.tsx"],
+      "notes": "Traces US-D3. Holdout H7."
+    },
+    {
+      "task_id": "mcp-add-server-fix-stdio-gate",
+      "task_name": "Fix MCP Add-server (URL field) + simple/advanced + stdio safety gate (US-E1)",
+      "goal": "McpServerModal replaces the transport dropdown with a 'local program / network address' choice that reveals a URL field for the network path (fixing the can't-add-network-server bug), relaxes the command-required gate for URL, hides raw transport, and gates stdio behind a confirm dialog plus a standing 'runs a local program' badge with an SSRF caution on internal-address URLs.",
+      "wave": 2,
+      "team": "E-Tools-MCP-Skills",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "4h",
+      "depends_on": ["build-risky-setting-control"],
+      "inputs": [
+        {"name": "McpServerModal bug", "type": "code", "constraints": "canSubmit=name&&command :55; no URL field so SSE/HTTP servers can't be added", "source": "src/components/skills/McpServerModal.tsx"},
+        {"name": "MCPServerPicker", "type": "code", "constraints": "raw transport string at :43 to hide", "source": "src/components/agents/MCPServerPicker.tsx"}
+      ],
+      "outputs": [
+        {"name": "fixed MCP modal + stdio gate", "type": "code", "constraints": "URL path enabled; stdio confirm + standing badge; SSRF caution", "destination": "src/components/skills/McpServerModal.tsx, MCPServerPicker.tsx"}
+      ],
+      "acceptance": [
+        "Choosing 'network address' shows a URL field and Add is enabled with a valid https (or http-localhost) URL; an internal/RFC1918/link-local literal-address URL shows an inline SSRF caution (visible warning, not a hard block).",
+        "Choosing 'local program' shows Command/Args/Env and Add opens the confirm dialog 'this runs a program on your server'.",
+        "A saved stdio server shows a standing 'runs a local program' warning badge.",
+        "The raw transport string is not shown in MCPServerPicker.",
+        "A non-https, non-localhost-http scheme is rejected."
+      ],
+      "constraints": ["SPA SSRF check is a literal-IP/hostname heuristic only; the authoritative guard is the backend connect path (F-G07).", "Reuse the RiskySettingControl pattern for the stdio gate."],
+      "files_scope": ["src/components/skills/McpServerModal.tsx", "src/components/agents/MCPServerPicker.tsx"],
+      "notes": "Traces US-E1. Contains a correctness bug fix (network servers couldn't be added)."
+    },
+    {
+      "task_id": "mcp-tools-governed-shared-editor",
+      "task_name": "MCP tools governed in shared editor, global + per-agent, with orphan persistence (US-E5)",
+      "goal": "The global Security editor groups MCP tools (source:'mcp') per-server with a source badge (matching the per-agent editor), the B-1 system separation never catches an MCP tool with unset category, and a removed server's tools disappear while any persisted Deny stays inert and re-applies on re-add.",
+      "wave": 2,
+      "team": "E-Tools-MCP-Skills",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "3h",
+      "depends_on": ["build-tool-policy-editor", "bug-b1-system-tools-misplaced"],
+      "inputs": [
+        {"name": "MCP tool source", "type": "data", "constraints": "GET /tools includes source:'mcp' (rest.go:122-126); both editors already fetch /tools", "source": "GET /api/v1/tools"}
+      ],
+      "outputs": [
+        {"name": "MCP per-server grouping in global editor", "type": "code", "constraints": "group by source+server, not category; orphan policy kept-but-inert", "destination": "src/components/settings/SecuritySection.tsx, ToolsAndPermissions.tsx"}
+      ],
+      "acceptance": [
+        "With an MCP server configured, its tools render as a per-server group with a source badge in BOTH global Security and an agent's Tools.",
+        "A global Deny on an MCP tool greys it out per-agent.",
+        "Removing the server removes its tools from both editors, a previously-saved Deny persists inertly, and re-adding the server re-applies it.",
+        "An MCP tool with unset category is NOT swept into the Advanced/system disclosure.",
+        "mcpPolicyOrphan.test uses a synthetic source:'mcp' tool to cover per-server render, inert orphan, and re-add re-apply."
+      ],
+      "constraints": ["No pruning job — orphan policy entries are kept-but-inert (M-6).", "Test with a synthetic MCP tool (no live MCP server at audit time)."],
+      "files_scope": ["src/components/settings/SecuritySection.tsx", "src/components/agents/ToolsAndPermissions.tsx"],
+      "notes": "Traces US-E5, TDD row 13."
+    },
+    {
+      "task_id": "tools-tab-readonly-overview",
+      "task_name": "Skills->Tools tab becomes read-only by-category overview (US-E2)",
+      "goal": "The Skills Tools tab renders a plain-language by-category 'what your agents can do' summary with no raw system.* and a 'Manage permissions -> Security' link, with all editing happening only in Security.",
+      "wave": 2,
+      "team": "E-Tools-MCP-Skills",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "2h",
+      "depends_on": ["build-tool-policy-editor"],
+      "inputs": [
+        {"name": "Skills Tools tab", "type": "code", "constraints": "currently raw 41-row grid", "source": "src/components/skills/SkillsScreen.tsx"}
+      ],
+      "outputs": [
+        {"name": "read-only Tools overview", "type": "code", "constraints": "category outcomes + link, no editing", "destination": "src/components/skills/SkillsScreen.tsx"}
+      ],
+      "acceptance": [
+        "The Tools tab shows category outcomes plus a 'Manage permissions -> Security' link, not the raw 41-row grid.",
+        "No raw system.* ids appear in the Tools tab.",
+        "Editing tool policy is reachable only from Security."
+      ],
+      "constraints": {"status": "N/A", "reason": "Presentational read-only surface; no cross-boundary constraint."},
+      "files_scope": ["src/components/skills/SkillsScreen.tsx"],
+      "notes": "Traces US-E2."
+    },
+    {
+      "task_id": "delete-dead-selection-presets",
+      "task_name": "Delete dead selection-preset code (US-E3)",
+      "goal": "Delete the unwired selection-preset files agentToolPresets.ts, ToolPickerPreset.tsx, and ToolGroupList.tsx with no dangling imports and a passing build + tsc -b.",
+      "wave": 2,
+      "team": "E-Tools-MCP-Skills",
+      "subagent": "frontend-lead",
+      "priority": "P2",
+      "estimate": "1h",
+      "depends_on": ["agent-shared-preset-model"],
+      "inputs": [
+        {"name": "dead selection-preset files", "type": "code", "constraints": "unwired; divergent third vocabulary; distinct from live policy-presets (F-G12)", "source": "src/lib/agentToolPresets.ts, src/components/agents/ToolPickerPreset.tsx, ToolGroupList.tsx"}
+      ],
+      "outputs": [
+        {"name": "removed dead files", "type": "code", "constraints": "no dangling imports", "destination": "(deletions)"}
+      ],
+      "acceptance": [
+        "agentToolPresets.ts, ToolPickerPreset.tsx, and ToolGroupList.tsx are deleted.",
+        "Build and tsc -b --noEmit pass after removal with no dangling imports.",
+        "No remaining import references the deleted modules."
+      ],
+      "constraints": ["Delete only the dead SELECTION-presets; do not touch the live POLICY_PRESETS (F-G12)."],
+      "files_scope": ["src/lib/agentToolPresets.ts", "src/components/agents/ToolPickerPreset.tsx", "src/components/agents/ToolGroupList.tsx"],
+      "notes": "Traces US-E3. Sequence after agent-shared-preset-model so no live consumer breaks."
+    },
+    {
+      "task_id": "skills-trust-mount",
+      "task_name": "Mount SkillTrustSection + install-time trust surfacing + error toast (US-E4)",
+      "goal": "The existing SkillTrustSection is confirmed against the Block/Warn-unverified-default/Allow-all contract and mounted in Settings->Security with persistence, the SkillBrowser install flow surfaces capabilities + an unverified notice + confirm, and the silent non-hash install-error swallow is replaced with a toast.",
+      "wave": 2,
+      "team": "E-Tools-MCP-Skills",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "3h",
+      "depends_on": {"status": "N/A", "reason": "Operates on existing SkillTrustSection + SkillBrowser; no shared-primitive dependency."},
+      "inputs": [
+        {"name": "existing SkillTrustSection", "type": "code", "constraints": "exists with test but imported nowhere; tri-state + persistence to confirm/adapt", "source": "src/components/settings/SkillTrustSection.tsx"},
+        {"name": "silent install-error swallow", "type": "code", "constraints": "SkillBrowser.tsx:52 swallows non-hash errors", "source": "src/components/skills/SkillBrowser.tsx"}
+      ],
+      "outputs": [
+        {"name": "mounted skill trust + toast", "type": "code", "constraints": "mounted in Security; install confirm; error toast", "destination": "src/components/settings/SecuritySection.tsx, SkillBrowser.tsx"}
+      ],
+      "acceptance": [
+        "SkillTrustSection renders in Settings->Security and its tri-state (Block / Warn-unverified default / Allow-all) persists.",
+        "A failed non-hash install shows a toast rather than failing silently.",
+        "Installing a skill surfaces its capabilities plus an unverified notice and a confirm step.",
+        "SkillTrustSection.test passes against the mounted component."
+      ],
+      "constraints": ["First confirm the existing tri-state matches the contract and adapt if it diverges (do not assume)."],
+      "files_scope": ["src/components/settings/SecuritySection.tsx", "src/components/settings/SkillTrustSection.tsx", "src/components/skills/SkillBrowser.tsx"],
+      "notes": "Traces US-E4."
+    },
+    {
+      "task_id": "per-agent-skill-assignment",
+      "task_name": "Per-agent opt-in Skills picker (US-E6)",
+      "goal": "A per-agent Skills picker on the agent profile and Create-Agent advanced edits AgentConfig.Skills, defaulting a new agent to no skills (matching the empty-list==none runtime), so granting a skill to one agent does not grant it to another.",
+      "wave": 2,
+      "team": "E-Tools-MCP-Skills",
+      "subagent": "frontend-lead",
+      "priority": "P1",
+      "estimate": "2h",
+      "depends_on": {"status": "N/A", "reason": "Backend already supports per-agent Skills; empty==none is current runtime (F-06). Frontend-only, no shared-primitive dependency."},
+      "inputs": [
+        {"name": "AgentConfig.Skills", "type": "data", "constraints": "empty Skills == zero skills today (loop.go:6102-6107)", "source": "GET /api/v1/skills"}
+      ],
+      "outputs": [
+        {"name": "per-agent Skills picker", "type": "code", "constraints": "edits AgentConfig.Skills; default none", "destination": "src/components/agents/AgentProfile.tsx, CreateAgentModal.tsx"}
+      ],
+      "acceptance": [
+        "A new agent grants no skills until one is added.",
+        "Granting a skill to agent A does not grant it to agent B.",
+        "A skill not granted to an agent is unavailable in that agent's runs."
+      ],
+      "constraints": ["Frontend-only — no migration, no §9 violation (F-06)."],
+      "files_scope": ["src/components/agents/AgentProfile.tsx", "src/components/agents/CreateAgentModal.tsx"],
+      "notes": "Traces US-E6. Holdout H9 (memory persists across isolated runs)."
+    },
+    {
+      "task_id": "deferred-scheduled-autodeny-audit",
+      "task_name": "BACKEND FOLLOW-UP: audit line on scheduled auto-deny of an ask-gated tool",
+      "goal": "The cron fire path emits an audit entry whenever a scheduled run auto-denies an ask-gated tool, so an operator can later see the skip.",
+      "wave": "deferred",
+      "team": "backend-followup",
+      "subagent": "backend-lead",
+      "priority": "P2",
+      "estimate": "2h",
+      "depends_on": {"status": "N/A", "reason": "Backend follow-up tracked as a deferral (F-G11); not part of the UI sprint and independent of the SPA waves."},
+      "inputs": [
+        {"name": "cron fire path", "type": "code", "constraints": "scheduled runs auto-DENY ask tools (F-13)", "source": "pkg/cron/service.go, pkg/agent/loop.go"}
+      ],
+      "outputs": [
+        {"name": "audit entry on auto-deny", "type": "code", "constraints": "one audit line per auto-denied ask-gated tool in a scheduled run", "destination": "pkg/agent/ (cron fire path)"}
+      ],
+      "acceptance": [
+        "When a scheduled run auto-denies an ask-gated tool, the cron fire path emits an audit entry naming the tool and the schedule.",
+        "A test asserts the audit entry is written on auto-deny."
+      ],
+      "constraints": ["Backend-only; outside the UI sprint (spec §9 limits UI scope to bugs B-1/B-2)."],
+      "files_scope": ["pkg/agent/loop.go", "pkg/audit/"],
+      "notes": "Traces O-3, F-13, F-G11 explicit tracked deferral. Area: agent-loop + audit. Type: Task."
+    }
+  ]
+}

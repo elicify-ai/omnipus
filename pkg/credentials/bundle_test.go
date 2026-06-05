@@ -117,13 +117,6 @@ func TestResolveBundle_AllChannelRefs(t *testing.T) {
 			},
 		},
 		{
-			refName: "ONEBOT_ACCESS_TOKEN",
-			want:    "onebot-access-token",
-			setOnCfg: func(cfg *config.Config, ref string) {
-				cfg.Channels.OneBot.AccessTokenRef = ref
-			},
-		},
-		{
 			refName: "WECOM_SECRET",
 			want:    "wecom-secret",
 			setOnCfg: func(cfg *config.Config, ref string) {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, act } from '@testing-library/react'
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // Mock the API layer before importing anything that uses it.
@@ -87,11 +87,11 @@ describe('RestartBanner — empty diff → not rendered', () => {
 })
 
 // ----------------------------------------------------------------------------
-// TestRestartBanner_NonEmptyDiff_RendersRows
+// TestRestartBanner_NonEmptyDiff_RendersPlainSummary (US-B4)
 // ----------------------------------------------------------------------------
 
-describe('RestartBanner — non-empty diff → renders rows', () => {
-  it('renders the heading and one row per entry with correct "X → Y" text', async () => {
+describe('RestartBanner — non-empty diff → renders plain summary', () => {
+  it('renders a plain one-line summary with change count', async () => {
     vi.mocked(fetchPendingRestart).mockResolvedValue(TWO_ENTRIES)
 
     renderBanner()
@@ -100,17 +100,55 @@ describe('RestartBanner — non-empty diff → renders rows', () => {
       expect(screen.getByRole('status')).toBeInTheDocument()
     })
 
-    expect(screen.getByText('Changes pending restart')).toBeInTheDocument()
+    // US-B4: plain summary is visible immediately
+    const summary = screen.getByTestId('restart-banner-summary')
+    expect(summary).toHaveTextContent(/2 changes? saved/i)
+    expect(summary).toHaveTextContent(/restart to apply/i)
+  })
 
-    // Row 1: sandbox.mode: off → enforce
+  it('jargon diff rows are hidden until "Technical details" is expanded', async () => {
+    vi.mocked(fetchPendingRestart).mockResolvedValue(TWO_ENTRIES)
+
+    renderBanner()
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    // The raw key diff (sandbox.mode: off → enforce) must NOT be visible yet.
+    expect(screen.queryByText('sandbox.mode:')).not.toBeInTheDocument()
+    expect(screen.queryByText('session.dm_scope:')).not.toBeInTheDocument()
+    // The systemd/docker jargon must NOT be visible yet.
+    expect(screen.queryByText(/systemd/i)).not.toBeInTheDocument()
+
+    // Expand "Technical details"
+    const techToggle = screen.getByTestId('restart-banner-tech-toggle')
+    fireEvent.click(techToggle)
+
+    // Now the diff rows are visible.
     expect(screen.getByText('sandbox.mode:')).toBeInTheDocument()
     expect(screen.getByText('off')).toBeInTheDocument()
     expect(screen.getByText('enforce')).toBeInTheDocument()
 
-    // Row 2: session.dm_scope: per-channel-peer → main
     expect(screen.getByText('session.dm_scope:')).toBeInTheDocument()
     expect(screen.getByText('per-channel-peer')).toBeInTheDocument()
     expect(screen.getByText('main')).toBeInTheDocument()
+
+    // systemd text appears in the details
+    expect(screen.getByText(/systemd/i)).toBeInTheDocument()
+  })
+
+  it('renders singular "1 change" when only one entry', async () => {
+    vi.mocked(fetchPendingRestart).mockResolvedValue([TWO_ENTRIES[0]])
+
+    renderBanner()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('restart-banner-summary')).toBeInTheDocument()
+    })
+
+    const summary = screen.getByTestId('restart-banner-summary')
+    expect(summary).toHaveTextContent(/1 change saved/i)
   })
 })
 
@@ -202,6 +240,10 @@ describe('RestartBanner — complex value → (modified)', () => {
     await waitFor(() => {
       expect(screen.getByRole('status')).toBeInTheDocument()
     })
+
+    // Expand technical details to see the diff rows.
+    const techToggle = screen.getByTestId('restart-banner-tech-toggle')
+    fireEvent.click(techToggle)
 
     // Both applied and persisted are objects → both shown as "(modified)".
     const modifiedTexts = screen.getAllByText('(modified)')

@@ -112,18 +112,19 @@ const CurrentVersion = 1
 
 // Config is the current config structure with version support
 type Config struct {
-	Version   int             `json:"version"            yaml:"-"` // Config schema version for migration
-	Agents    AgentsConfig    `json:"agents"             yaml:"-"`
-	Bindings  []AgentBinding  `json:"bindings,omitempty" yaml:"-"`
-	Session   SessionConfig   `json:"session,omitempty"  yaml:"-"`
-	Channels  ChannelsConfig  `json:"channels"           yaml:"channels"`
-	Providers []*ModelConfig  `json:"providers"          yaml:"providers"` // Configured providers with credentials
-	Gateway   GatewayConfig   `json:"gateway"            yaml:"-"`
-	Hooks     HooksConfig     `json:"hooks,omitempty"    yaml:"-"`
-	Tools     ToolsConfig     `json:"tools"              yaml:",inline"`
-	Heartbeat HeartbeatConfig `json:"heartbeat"          yaml:"-"`
-	Devices   DevicesConfig   `json:"devices"            yaml:"-"`
-	Voice     VoiceConfig     `json:"voice"              yaml:"-"`
+	Version   int             `json:"version"             yaml:"-"` // Config schema version for migration
+	Agents    AgentsConfig    `json:"agents"              yaml:"-"`
+	Bindings  []AgentBinding  `json:"bindings,omitempty"  yaml:"-"`
+	Session   SessionConfig   `json:"session,omitempty"   yaml:"-"`
+	Channels  ChannelsConfig  `json:"channels"            yaml:"channels"`
+	Providers []*ModelConfig  `json:"providers"           yaml:"providers"` // Configured providers with credentials
+	Gateway   GatewayConfig   `json:"gateway"             yaml:"-"`
+	Hooks     HooksConfig     `json:"hooks,omitempty"     yaml:"-"`
+	Tools     ToolsConfig     `json:"tools"               yaml:",inline"`
+	Heartbeat HeartbeatConfig `json:"heartbeat"           yaml:"-"`
+	Schedules SchedulesConfig `json:"schedules,omitempty" yaml:"-"`
+	Devices   DevicesConfig   `json:"devices"             yaml:"-"`
+	Voice     VoiceConfig     `json:"voice"               yaml:"-"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty" yaml:"-"`
 
@@ -781,7 +782,6 @@ type ChannelsConfig struct {
 	Slack      SlackConfig      `json:"slack"       yaml:"slack,omitempty"`
 	Matrix     MatrixConfig     `json:"matrix"      yaml:"matrix,omitempty"`
 	LINE       LINEConfig       `json:"line"        yaml:"line,omitempty"`
-	OneBot     OneBotConfig     `json:"onebot"      yaml:"onebot,omitempty"`
 	WeCom      WeComConfig      `json:"wecom"       yaml:"wecom,omitempty"       envPrefix:"OMNIPUS_CHANNELS_WECOM_"`
 	Weixin     WeixinConfig     `json:"weixin"      yaml:"weixin,omitempty"`
 	IRC        IRCConfig        `json:"irc"         yaml:"irc,omitempty"`
@@ -825,8 +825,6 @@ type StreamingConfig struct {
 
 type WhatsAppConfig struct {
 	Enabled            bool                `json:"enabled"                 yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_ENABLED"`
-	BridgeURL          string              `json:"bridge_url"              yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_BRIDGE_URL"`
-	UseNative          bool                `json:"use_native"              yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_USE_NATIVE"`
 	SessionStorePath   string              `json:"session_store_path"      yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_SESSION_STORE_PATH"`
 	AllowFrom          FlexibleStringSlice `json:"allow_from"              yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_ALLOW_FROM"`
 	ReasoningChannelID string              `json:"reasoning_channel_id"    yaml:"-" env:"OMNIPUS_CHANNELS_WHATSAPP_REASONING_CHANNEL_ID"`
@@ -935,19 +933,6 @@ type LINEConfig struct {
 	ReasoningChannelID    string              `json:"reasoning_channel_id"               yaml:"-"`
 }
 
-type OneBotConfig struct {
-	Enabled            bool                `json:"enabled"                    yaml:"-" env:"OMNIPUS_CHANNELS_ONEBOT_ENABLED"`
-	WSUrl              string              `json:"ws_url"                     yaml:"-" env:"OMNIPUS_CHANNELS_ONEBOT_WS_URL"`
-	AccessTokenRef     string              `json:"access_token_ref,omitempty" yaml:"-" env:"OMNIPUS_CHANNELS_ONEBOT_ACCESS_TOKEN_REF"`
-	ReconnectInterval  int                 `json:"reconnect_interval"         yaml:"-" env:"OMNIPUS_CHANNELS_ONEBOT_RECONNECT_INTERVAL"`
-	GroupTriggerPrefix []string            `json:"group_trigger_prefix"       yaml:"-" env:"OMNIPUS_CHANNELS_ONEBOT_GROUP_TRIGGER_PREFIX"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"                 yaml:"-" env:"OMNIPUS_CHANNELS_ONEBOT_ALLOW_FROM"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"    yaml:"-"`
-	Typing             TypingConfig        `json:"typing,omitempty"           yaml:"-"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"      yaml:"-"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"       yaml:"-"`
-}
-
 type WeComGroupConfig struct {
 	AllowFrom FlexibleStringSlice `json:"allow_from,omitempty"`
 }
@@ -974,18 +959,20 @@ type WeixinConfig struct {
 }
 
 type GoogleChatConfig struct {
-	Enabled            bool                `json:"enabled"                        yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_ENABLED"`
-	Mode               string              `json:"mode"                           yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_MODE"` // "webhook" | "bot"
-	WebhookURL         SecureString        `json:"webhook_url,omitzero"           yaml:"webhook_url,omitempty"          env:"OMNIPUS_CHANNELS_GOOGLECHAT_WEBHOOK_URL"`
-	ServiceAccountFile string              `json:"service_account_file,omitempty" yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_SERVICE_ACCOUNT_FILE"`
-	ServiceAccountJSON SecureString        `json:"service_account_json,omitzero"  yaml:"service_account_json,omitempty" env:"OMNIPUS_CHANNELS_GOOGLECHAT_SERVICE_ACCOUNT_JSON"`
-	Space              string              `json:"space"                          yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_SPACE"`
-	BotUser            string              `json:"bot_user"                       yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_BOT_USER"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"                     yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_ALLOW_FROM"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"        yaml:"-"`
-	Typing             TypingConfig        `json:"typing,omitempty"               yaml:"-"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"          yaml:"-"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"           yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_REASONING_CHANNEL_ID"`
+	Enabled               bool                `json:"enabled"                            yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_ENABLED"`
+	Mode                  string              `json:"mode"                               yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_MODE"` // "webhook" | "bot"
+	WebhookURL            SecureString        `json:"webhook_url,omitzero"               yaml:"webhook_url,omitempty"          env:"OMNIPUS_CHANNELS_GOOGLECHAT_WEBHOOK_URL"`
+	WebhookURLRef         string              `json:"webhook_url_ref,omitempty"          yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_WEBHOOK_URL_REF"`
+	ServiceAccountFile    string              `json:"service_account_file,omitempty"     yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_SERVICE_ACCOUNT_FILE"`
+	ServiceAccountJSON    SecureString        `json:"service_account_json,omitzero"      yaml:"service_account_json,omitempty" env:"OMNIPUS_CHANNELS_GOOGLECHAT_SERVICE_ACCOUNT_JSON"`
+	ServiceAccountJSONRef string              `json:"service_account_json_ref,omitempty" yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_SERVICE_ACCOUNT_JSON_REF"`
+	Space                 string              `json:"space"                              yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_SPACE"`
+	BotUser               string              `json:"bot_user"                           yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_BOT_USER"`
+	AllowFrom             FlexibleStringSlice `json:"allow_from"                         yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_ALLOW_FROM"`
+	GroupTrigger          GroupTriggerConfig  `json:"group_trigger,omitempty"            yaml:"-"`
+	Typing                TypingConfig        `json:"typing,omitempty"                   yaml:"-"`
+	Placeholder           PlaceholderConfig   `json:"placeholder,omitempty"              yaml:"-"`
+	ReasoningChannelID    string              `json:"reasoning_channel_id"               yaml:"-"                              env:"OMNIPUS_CHANNELS_GOOGLECHAT_REASONING_CHANNEL_ID"`
 }
 
 type IRCConfig struct {
@@ -1010,6 +997,51 @@ type IRCConfig struct {
 type HeartbeatConfig struct {
 	Enabled  bool `json:"enabled"  env:"OMNIPUS_HEARTBEAT_ENABLED"`
 	Interval int  `json:"interval" env:"OMNIPUS_HEARTBEAT_INTERVAL"` // minutes, min 5
+}
+
+// SchedulesConfig holds global guardrail settings for scheduled agent runs
+// (#264). These are deliberately separate from agents.defaults.timeout_seconds
+// (which is intentionally 0/disabled): scheduled runs are unattended and need
+// their own deadline + concurrency bounds.
+type SchedulesConfig struct {
+	// MaxConcurrentRuns bounds the parallel autonomous-run lane (FR-007).
+	// Default 8; values <= 0 fall back to the default on load.
+	MaxConcurrentRuns int `json:"max_concurrent_runs,omitempty" env:"OMNIPUS_SCHEDULES_MAX_CONCURRENT_RUNS"`
+	// RunTimeoutSeconds is the global per-run deadline applied to every scheduled
+	// run that does not set a per-schedule override (FR-003). Default 300.
+	RunTimeoutSeconds int `json:"run_timeout_seconds,omitempty" env:"OMNIPUS_SCHEDULES_RUN_TIMEOUT_SECONDS"`
+	// RetryBackoffMs is the transient-error retry backoff schedule (FR-010): the
+	// next fire after the Nth consecutive transient failure is offset by
+	// RetryBackoffMs[N] ms, capped at len(RetryBackoffMs) attempts before
+	// resuming normal cadence. Default [60000,120000,300000].
+	RetryBackoffMs []int64 `json:"retry_backoff_ms,omitempty"`
+}
+
+// Schedules config defaults (#264).
+const (
+	// DefaultSchedulesMaxConcurrentRuns is the fallback parallel-lane capacity.
+	DefaultSchedulesMaxConcurrentRuns = 8
+	// DefaultSchedulesRunTimeoutSeconds is the fallback per-run deadline.
+	DefaultSchedulesRunTimeoutSeconds = 300
+)
+
+// DefaultSchedulesRetryBackoffMs is the fallback transient-error retry backoff
+// schedule (FR-010): 1m, 2m, 5m offsets keyed by retry attempt.
+var DefaultSchedulesRetryBackoffMs = []int64{60000, 120000, 300000}
+
+// ApplyDefaults fills any unset/invalid field with its documented default
+// (FR-003/FR-007). Idempotent. Bounds-checked: non-positive values reset to
+// the default rather than being honored.
+func (s *SchedulesConfig) ApplyDefaults() {
+	if s.MaxConcurrentRuns <= 0 {
+		s.MaxConcurrentRuns = DefaultSchedulesMaxConcurrentRuns
+	}
+	if s.RunTimeoutSeconds <= 0 {
+		s.RunTimeoutSeconds = DefaultSchedulesRunTimeoutSeconds
+	}
+	if len(s.RetryBackoffMs) == 0 {
+		s.RetryBackoffMs = append([]int64(nil), DefaultSchedulesRetryBackoffMs...)
+	}
 }
 
 type DevicesConfig struct {
@@ -1715,6 +1747,10 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	// registry's GetDefaultAgent sees a clean canonical state (F11).
 	RepairMultipleDefaults(cfg)
 
+	// Apply schedules guardrail defaults (#264 FR-003/FR-007) so a loaded
+	// config without a schedules block still gets 8 / 300.
+	cfg.Schedules.ApplyDefaults()
+
 	// Apply defaults and validate bounds for all security-relevant fields
 	// (FR-001, FR-002a, numeric sandbox fields, AuthMismatchLogLevel).
 	if err := validateBootConfig(cfg); err != nil {
@@ -1768,12 +1804,6 @@ func (c *Config) migrateChannelConfigs() {
 	// Discord: mention_only -> group_trigger.mention_only
 	if c.Channels.Discord.MentionOnly && !c.Channels.Discord.GroupTrigger.MentionOnly {
 		c.Channels.Discord.GroupTrigger.MentionOnly = true
-	}
-
-	// OneBot: group_trigger_prefix -> group_trigger.prefixes
-	if len(c.Channels.OneBot.GroupTriggerPrefix) > 0 &&
-		len(c.Channels.OneBot.GroupTrigger.Prefixes) == 0 {
-		c.Channels.OneBot.GroupTrigger.Prefixes = c.Channels.OneBot.GroupTriggerPrefix
 	}
 }
 

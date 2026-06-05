@@ -135,6 +135,29 @@ Keep-alive ping sent every 30 seconds to prevent proxy/firewall timeout. No resp
 
 ---
 
+### `whatsapp_pairing_subscribe`
+
+Registers or clears THIS connection's interest in a channel's `whatsapp_pairing` (QR/status) frames. The SPA sends `active: true` when an operator opens a channel's pairing UI and `active: false` when they leave, so the QR pairing secret is delivered only to the connection that is watching it rather than to every authenticated admin connection (#283).
+
+```json
+{
+  "type": "whatsapp_pairing_subscribe",
+  "channel_id": "whatsapp_native",
+  "active": true
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| type | string | yes | Always `"whatsapp_pairing_subscribe"` |
+| channel_id | string | yes | The channel whose pairing frames this connection wants (e.g. `"whatsapp_native"`) |
+| active | boolean | yes | `true` to start receiving pairing frames for `channel_id` on this connection, `false` to stop |
+
+**Producer**: `useWhatsAppPairingStore` / `WhatsAppNativeNotice` in the Configure panel (`src/store/whatsappPairing.ts`)
+**Consumer**: Gateway WebSocket handler — gates per-connection delivery of `whatsapp_pairing` frames.
+
+---
+
 ## Server to Client Frames
 
 These frames are sent by the backend to the frontend over the WebSocket connection.
@@ -388,6 +411,33 @@ Notifies the frontend that a task's status has changed, enabling real-time task 
 
 ---
 
+### `whatsapp_pairing`
+
+Emitted by the WhatsApp native/QR channel during linked-device pairing so the SPA can render the QR code and live status in the browser instead of requiring the operator to read the gateway terminal (#283). Delivered only to connections that have sent a `whatsapp_pairing_subscribe` with `active: true` for the matching `channel_id`.
+
+```json
+{
+  "type": "whatsapp_pairing",
+  "channel_id": "whatsapp_native",
+  "status": "code",
+  "qr": "2@abc123...",
+  "message": ""
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| type | string | yes | Always `"whatsapp_pairing"` |
+| channel_id | string | yes | The channel emitting the pairing event (e.g. `"whatsapp_native"`) |
+| status | string | yes | Pairing lifecycle: `"waiting"` (connecting), `"code"` (a QR is available to scan), `"linked"` (device paired), `"timeout"` (the displayed QR expired and a fresh one follows), `"error"` (pairing failed — see `message`) |
+| qr | string | no | The QR payload to render (whatsmeow linked-device code). Present when `status` is `"code"`; empty otherwise. Transient pairing secret — the SPA holds it only while the config panel is open and never persists it |
+| message | string | no | Optional human-readable detail, e.g. the error reason when `status` is `"error"` |
+
+**Producer**: WhatsApp native channel (`pkg/channels/whatsapp_native/`), forwarded by the gateway WebSocket handler (`pkg/gateway/websocket.go`)
+**Consumer**: `WhatsAppNativeNotice` in the channel Configure panel — renders the QR (`qrcode.react`) when `status === "code"` and the live waiting → linked status otherwise.
+
+---
+
 ## Frame Type Summary
 
 | Direction | Type | Description |
@@ -397,6 +447,7 @@ Notifies the frontend that a task's status has changed, enabling real-time task 
 | C→S | `cancel` | Cancel in-progress turn |
 | C→S | `exec_approval_response` | Respond to exec approval request |
 | C→S | `ping` | Keep-alive |
+| C→S | `whatsapp_pairing_subscribe` | Start/stop receiving WhatsApp pairing frames on this connection (#283) |
 | S→C | `token` | LLM response token chunk |
 | S→C | `done` | Turn complete, with usage stats |
 | S→C | `error` | Unrecoverable error |
@@ -407,6 +458,7 @@ Notifies the frontend that a task's status has changed, enabling real-time task 
 | S→C | `timeout` | System-initiated turn timeout (MAJ-004) |
 | S→C | `compaction` | Context window compacted (MAJ-004) |
 | S→C | `task_status_changed` | Task status updated (MAJ-004) |
+| S→C | `whatsapp_pairing` | WhatsApp linked-device pairing QR/status (#283) |
 
 ---
 

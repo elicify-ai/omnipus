@@ -78,6 +78,8 @@ channels:
         $ref: '#/components/messages/DevicePairingResponseFrame'
       SessionCloseFrame:
         $ref: '#/components/messages/SessionCloseFrame'
+      WhatsAppPairingSubscribeFrame:
+        $ref: '#/components/messages/WhatsAppPairingSubscribeFrame'
       # ── Server → client ───────────────────────────────────────────────────────
       SessionStartedFrame:
         $ref: '#/components/messages/SessionStartedFrame'
@@ -125,8 +127,12 @@ channels:
         $ref: '#/components/messages/ExecApprovalResponseAckFrame'
       DevicePairingRequestFrame:
         $ref: '#/components/messages/DevicePairingRequestFrame'
+      WhatsAppPairingFrame:
+        $ref: '#/components/messages/WhatsAppPairingFrame'
       ExecApprovalExpiredFrame:
         $ref: '#/components/messages/ExecApprovalExpiredFrame'
+      NotificationFrame:
+        $ref: '#/components/messages/NotificationFrame'
 
 operations:
   # ── Client → server (action: send from SPA perspective) ─────────────────────
@@ -218,6 +224,18 @@ operations:
       fires CloseSession on the agent loop, and responds with session_close_ack.
     messages:
       - $ref: '#/channels/chat/messages/SessionCloseFrame'
+
+  sendWhatsAppPairingSubscribe:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Start or stop receiving whatsapp_pairing (QR/status) frames for a channel
+      on THIS connection. The SPA sends active:true when an operator opens a
+      channel's pairing UI and active:false when they leave, so the QR pairing
+      secret is delivered only to the connection that is watching it (#283).
+    messages:
+      - $ref: '#/channels/chat/messages/WhatsAppPairingSubscribeFrame'
 
   # ── Server → client (action: receive from SPA perspective) ──────────────────
 
@@ -455,6 +473,17 @@ operations:
     messages:
       - $ref: '#/channels/chat/messages/DevicePairingRequestFrame'
 
+  receiveWhatsAppPairing:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      The WhatsApp native/QR channel published a pairing update (a QR code to scan
+      or a status change). The SPA renders the QR and live waiting → linked status
+      (#283).
+    messages:
+      - $ref: '#/channels/chat/messages/WhatsAppPairingFrame'
+
   receiveExecApprovalExpired:
     action: receive
     channel:
@@ -465,6 +494,17 @@ operations:
       state so the user is not left with active Allow/Deny buttons.
     messages:
       - $ref: '#/channels/chat/messages/ExecApprovalExpiredFrame'
+
+  receiveNotification:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      A notification was raised for the authenticated user (e.g. a scheduled
+      run failed). The SPA adds it to the header notification center and bumps
+      the unread badge. Delivered only to the recipient user's connections (#264).
+    messages:
+      - $ref: '#/channels/chat/messages/NotificationFrame'
 
 components:
   messages:
@@ -533,6 +573,14 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/SessionCloseFrame'
+
+    WhatsAppPairingSubscribeFrame:
+      name: WhatsAppPairingSubscribeFrame
+      title: whatsapp_pairing_subscribe
+      summary: Subscribe/unsubscribe this connection to a channel's pairing frames (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/WhatsAppPairingSubscribeFrame'
 
     # ── Server → client messages ───────────────────────────────────────────────
 
@@ -720,6 +768,14 @@ components:
       payload:
         $ref: '#/components/schemas/DevicePairingRequestFrame'
 
+    WhatsAppPairingFrame:
+      name: WhatsAppPairingFrame
+      title: whatsapp_pairing
+      summary: WhatsApp pairing QR / status (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/WhatsAppPairingFrame'
+
     ExecApprovalExpiredFrame:
       name: ExecApprovalExpiredFrame
       title: exec_approval_expired
@@ -727,6 +783,14 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ExecApprovalExpiredFrame'
+
+    NotificationFrame:
+      name: NotificationFrame
+      title: notification
+      summary: A user notification raised live (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/NotificationFrame'
 
   schemas:
     WsFrameType:
@@ -766,6 +830,9 @@ components:
         - session_close_ack
         - exec_approval_response_ack
         - device_pairing_request
+        - whatsapp_pairing
+        - whatsapp_pairing_subscribe
+        - notification
 
     AuthFrame:
       title: AuthFrame
@@ -1745,6 +1812,37 @@ components:
         session_id:
           type: string
 
+    WhatsAppPairingFrame:
+      title: WhatsAppPairingFrame
+      description: >
+        Server → client WhatsApp native/QR pairing update (QR code + live status)
+        so the SPA can pair in-browser without the gateway terminal (#283).
+      type: object
+      required:
+        - type
+        - channel_id
+        - status
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: whatsapp_pairing
+        channel_id:
+          type: string
+          minLength: 1
+        status:
+          type: string
+          enum:
+            - waiting
+            - code
+            - linked
+            - timeout
+            - error
+        qr:
+          type: string
+        message:
+          type: string
+
     SessionCloseFrame:
       title: SessionCloseFrame
       description: Client → server explicit session close request.
@@ -1760,6 +1858,28 @@ components:
         session_id:
           type: string
           minLength: 1
+
+    WhatsAppPairingSubscribeFrame:
+      title: WhatsAppPairingSubscribeFrame
+      description: >
+        Client → server. Registers or clears this connection's interest in a
+        channel's whatsapp_pairing frames so the QR is delivered only to the
+        operator viewing that channel's pairing UI (#283).
+      type: object
+      required:
+        - type
+        - channel_id
+        - active
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: whatsapp_pairing_subscribe
+        channel_id:
+          type: string
+          minLength: 1
+        active:
+          type: boolean
 
     ExecApprovalExpiredFrame:
       title: ExecApprovalExpiredFrame
@@ -1781,4 +1901,54 @@ components:
           type: string
           minLength: 1
         message:
+          type: string
+
+    NotificationFrame:
+      title: NotificationFrame
+      description: >
+        Server → client. A notification raised for the recipient user (e.g. a
+        scheduled run failed). Delivered only to that user's connections; the SPA
+        adds it to the header notification center (#264).
+      type: object
+      required:
+        - type
+        - id
+        - notification_type
+        - title
+        - severity
+        - read
+        - created_at_ms
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: notification
+        id:
+          type: string
+          minLength: 1
+        notification_type:
+          type: string
+          enum:
+            - schedule_failed
+        title:
+          type: string
+          minLength: 1
+        body:
+          type: string
+        severity:
+          type: string
+          enum:
+            - info
+            - warning
+            - error
+        read:
+          type: boolean
+        created_at_ms:
+          type: integer
+          format: int64
+        schedule_id:
+          type: string
+        session_id:
+          type: string
+        agent_id:
           type: string

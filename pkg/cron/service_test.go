@@ -18,7 +18,7 @@ func TestSaveStore_FilePermissions(t *testing.T) {
 	tmpDir := t.TempDir()
 	storePath := filepath.Join(tmpDir, "cron", "jobs.json")
 
-	cs := NewCronService(storePath, nil)
+	cs := NewCronService(storePath)
 
 	_, err := cs.AddJob("test", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "hello", false, "cli", "direct")
 	if err != nil {
@@ -40,9 +40,12 @@ func int64Ptr(v int64) *int64 {
 	return &v
 }
 
-func setupService(handler JobHandler) (*CronService, string) {
+func setupService(runner ScheduledRunner) (*CronService, string) {
 	tmpFile := fmt.Sprintf("test_cron_%d.json", time.Now().UnixNano())
-	cs := NewCronService(tmpFile, handler)
+	cs := NewCronService(tmpFile)
+	if runner != nil {
+		cs.SetRunner(runner)
+	}
 	return cs, tmpFile
 }
 
@@ -116,14 +119,14 @@ func TestCronService_ExecutionFlow(t *testing.T) {
 	var mu sync.Mutex
 	executedJobs := make(map[string]bool)
 
-	handler := func(job *CronJob) (string, error) {
+	runner := &recordingRunner{hook: func(job *CronJob) (string, error) {
 		mu.Lock()
 		executedJobs[job.ID] = true
 		mu.Unlock()
 		return "ok", nil
-	}
+	}}
 
-	cs, path := setupService(handler)
+	cs, path := setupService(runner)
 	defer os.Remove(path)
 
 	// Start the service
@@ -132,9 +135,14 @@ func TestCronService_ExecutionFlow(t *testing.T) {
 	}
 	defer cs.Stop()
 
-	// Add a job then runs 100ms from now
+	// Add a job then runs 100ms from now. The runner enforces the owner-missing
+	// guard, so the job needs an owner to fire.
 	target := time.Now().Add(100 * time.Millisecond).UnixMilli()
 	job, _ := cs.AddJob("FastJob", CronSchedule{Kind: "at", AtMS: &target}, "", false, "", "")
+	job.AgentID = "mia"
+	if err := cs.UpdateJob(job); err != nil {
+		t.Fatalf("UpdateJob failed: %v", err)
+	}
 
 	// Check for job execution with a timeout
 	success := false
@@ -165,7 +173,7 @@ func TestCronService_PersistenceIntegrity(t *testing.T) {
 	defer os.Remove(tmpFile)
 
 	// write a job and persist
-	cs1 := NewCronService(tmpFile, nil)
+	cs1 := NewCronService(tmpFile)
 	at := int64(2000000000000)
 	cs1.AddJob("PersistMe", CronSchedule{Kind: "at", AtMS: &at}, "payload", true, "ch1", "")
 
@@ -175,7 +183,7 @@ func TestCronService_PersistenceIntegrity(t *testing.T) {
 	}
 
 	// reload and check data integrity
-	cs2 := NewCronService(tmpFile, nil)
+	cs2 := NewCronService(tmpFile)
 	if err := cs2.Load(); err != nil {
 		t.Fatalf("Failed to load store: %v", err)
 	}
@@ -187,7 +195,7 @@ func TestCronService_PersistenceIntegrity(t *testing.T) {
 
 	// test loading invalid JSON
 	os.WriteFile(tmpFile, []byte("{invalid json}"), 0o644)
-	cs3 := NewCronService(tmpFile, nil)
+	cs3 := NewCronService(tmpFile)
 	err := cs3.loadStore()
 	if err == nil {
 		t.Error("Should return error when loading invalid JSON")

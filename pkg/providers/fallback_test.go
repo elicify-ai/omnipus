@@ -554,9 +554,13 @@ func TestFallback_SecondCandidate_GetsFreshBudget_AfterPrimaryTimesOut(t *testin
 
 	run := func(ctx context.Context, provider, model string) (*LLMResponse, error) {
 		if model == "modelA" {
-			// Block until this attempt's per-candidate ctx is done, simulating a
-			// timeout that consumes the full parent deadline.
-			<-ctx.Done()
+			// Block until the PARENT deadline is fully exhausted (not just this
+			// candidate's split slice), so the fallback deterministically hits the
+			// "exhausted parent → fresh per-candidate budget" path. Blocking on the
+			// attempt ctx alone would only consume the parent's remaining/2 split,
+			// leaving the fallback a shrinking parent-bounded budget that flakes
+			// under parallel load.
+			<-parentCtx.Done()
 			return nil, ctx.Err()
 		}
 		// modelB (fallback): record how much budget is left in the attempt ctx.

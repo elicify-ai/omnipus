@@ -22,6 +22,8 @@ import (
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/channels"
+	whatsappnative "github.com/dapicom-ai/omnipus/pkg/channels/whatsapp_native"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
@@ -932,6 +934,426 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 	assert.Equal(t, "allow", policies["web_search"])
 }
 
+// TestCreateAgent_WithSkills verifies POST /api/v1/agents with skills persists and
+// returns the skill list.
+//
+// BDD: Given a create-agent request with a skills list,
+// When POST /api/v1/agents is called,
+// Then the response includes the skills list and config.json persists it.
+//
+// Traces to: US-E6 (nontech-ux-hardening-spec §6.5), F-06.
+func TestCreateAgent_WithSkills(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	body := `{"name":"Skill Agent","skills":["web-research","code-review"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var resp struct {
+		ID     string   `json:"id"`
+		Name   string   `json:"name"`
+		Skills []string `json:"skills"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "Skill Agent", resp.Name)
+	assert.Equal(t, []string{"web-research", "code-review"}, resp.Skills)
+
+	// Verify config.json persisted the skill list.
+	savedCfg, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	var savedMap map[string]any
+	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
+	agentsMap, _ := savedMap["agents"].(map[string]any)
+	list, _ := agentsMap["list"].([]any)
+	require.Len(t, list, 1)
+	agentMap, _ := list[0].(map[string]any)
+	skillsList, _ := agentMap["skills"].([]any)
+	require.Len(t, skillsList, 2)
+	assert.Equal(t, "web-research", skillsList[0])
+	assert.Equal(t, "code-review", skillsList[1])
+}
+
+// TestCreateAgent_NoSkills verifies that a new agent with no skills field has
+// no skills in the response and none persisted to config.json (default none).
+//
+// BDD: Given a create-agent request without a skills field,
+// When POST /api/v1/agents is called,
+// Then the response has no skills field and config.json has no skills key.
+//
+// Traces to: US-E6 AC1 — new agent grants no skills until one is added.
+func TestCreateAgent_NoSkills(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	body := `{"name":"Skillless Agent"}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	// The response JSON must not contain a "skills" key (or it is null/absent).
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	skills, hasSkills := raw["skills"]
+	// Either absent entirely, or explicitly null — both mean no skills.
+	if hasSkills {
+		assert.Nil(t, skills, "skills must be null or absent when not provided on create")
+	}
+
+	// config.json must not have a skills key for the new agent.
+	savedCfg, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	var savedMap map[string]any
+	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
+	agentsMap, _ := savedMap["agents"].(map[string]any)
+	list, _ := agentsMap["list"].([]any)
+	require.Len(t, list, 1)
+	agentMap, _ := list[0].(map[string]any)
+	_, hasSkillsInConfig := agentMap["skills"]
+	assert.False(t, hasSkillsInConfig, "config.json must not have a skills key for a new agent with no skills")
+}
+
+// TestUpdateAgent_SkillsPersist verifies that PUT /api/v1/agents/{id} with a
+// skills list persists the skills to config.json and returns them in the response.
+//
+// BDD: Given an agent exists in config,
+// When PUT /api/v1/agents/{id} is called with skills=["web-research"],
+// Then the response includes skills and config.json has the skills key.
+// Also verifies that granting skills to agent A does not affect agent B.
+//
+// Traces to: US-E6 AC2 — granting a skill to agent A does not grant it to B.
+func TestUpdateAgent_SkillsPersist(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	// Two agents in config.json; skills update targets only agent-A.
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"agent-a","name":"Agent A"},{"id":"agent-b","name":"Agent B"}]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{
+				{ID: "agent-a", Name: "Agent A"},
+				{ID: "agent-b", Name: "Agent B"},
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	// Update agent-a with skills.
+	body := `{"skills":["web-research","data-analysis"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/agent-a", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "response body: %s", w.Body.String())
+
+	var resp struct {
+		ID     string   `json:"id"`
+		Skills []string `json:"skills"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "agent-a", resp.ID)
+	assert.Equal(t, []string{"web-research", "data-analysis"}, resp.Skills)
+
+	// Verify config.json: agent-a has skills, agent-b has none.
+	savedCfg, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	var savedMap map[string]any
+	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
+	agentsMap, _ := savedMap["agents"].(map[string]any)
+	list, _ := agentsMap["list"].([]any)
+	require.Len(t, list, 2)
+
+	for _, item := range list {
+		agentMap, _ := item.(map[string]any)
+		agentID, _ := agentMap["id"].(string)
+		if agentID == "agent-a" {
+			skillsRaw, _ := agentMap["skills"].([]any)
+			require.Len(t, skillsRaw, 2, "agent-a must have 2 skills in config.json")
+			assert.Equal(t, "web-research", skillsRaw[0])
+			assert.Equal(t, "data-analysis", skillsRaw[1])
+		} else if agentID == "agent-b" {
+			_, hasBSkills := agentMap["skills"]
+			assert.False(t, hasBSkills, "agent-b must have no skills — granting to A must not affect B")
+		}
+	}
+}
+
+// TestUpdateAgent_SkillsClear verifies that sending an empty skills array
+// removes all skills from the agent (opt-out by explicit empty list).
+//
+// BDD: Given an agent exists with skills in config,
+// When PUT /api/v1/agents/{id} is called with skills=[],
+// Then the config.json has no skills key for that agent.
+//
+// Traces to: US-E6.
+func TestUpdateAgent_SkillsClear(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"skilled-agent","name":"Skilled Agent","skills":["web-research"]}]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{
+				{ID: "skilled-agent", Name: "Skilled Agent", Skills: []string{"web-research"}},
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	// Send empty skills array to clear all skills.
+	body := `{"skills":[]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/skilled-agent", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "response body: %s", w.Body.String())
+
+	// config.json must have no skills key after clear.
+	savedCfg, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	var savedMap map[string]any
+	require.NoError(t, json.Unmarshal(savedCfg, &savedMap))
+	agentsMap, _ := savedMap["agents"].(map[string]any)
+	list, _ := agentsMap["list"].([]any)
+	require.Len(t, list, 1)
+	agentMap, _ := list[0].(map[string]any)
+	_, hasSkills := agentMap["skills"]
+	assert.False(t, hasSkills, "skills key must be absent in config.json after clearing with empty array")
+}
+
+// TestCreateAgent_UnknownSkillIDRejected verifies that POST /api/v1/agents with a
+// skill ID not in the installed registry is rejected with 400 when skills are installed.
+//
+// BDD: Given a gateway with one installed skill "web-research",
+// When POST /api/v1/agents is called with skills=["unknown-skill"],
+// Then the response is 400 Bad Request with "unknown skill id" in the error.
+//
+// Traces to: US-E6, MINOR (backend) — referential validation for skill IDs.
+func TestCreateAgent_UnknownSkillIDRejected(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	// Create a temp skills directory with one known skill "web-research".
+	// OMNIPUS_BUILTIN_SKILLS env makes the agent loop pick it up on construction.
+	skillsRoot := t.TempDir()
+	t.Setenv("OMNIPUS_BUILTIN_SKILLS", skillsRoot)
+	skillMD := skillsRoot + "/web-research/SKILL.md"
+	require.NoError(t, os.MkdirAll(skillsRoot+"/web-research", 0o755))
+	require.NoError(
+		t,
+		os.WriteFile(
+			skillMD,
+			[]byte("---\nname: web-research\ndescription: web search skill\n---\n# Web Research\n"),
+			0o600,
+		),
+	)
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	// "unknown-skill" is not installed — must be rejected 400.
+	body := `{"name":"Test Agent","skills":["unknown-skill"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	require.Equal(
+		t,
+		http.StatusBadRequest,
+		w.Code,
+		"unknown skill ID must be rejected with 400; body: %s",
+		w.Body.String(),
+	)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "unknown skill id", "error must name the unknown skill")
+
+	// Known skill "web-research" must be accepted.
+	body = `{"name":"Test Agent 2","skills":["web-research"]}`
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	require.Equal(t, http.StatusCreated, w.Code, "known skill ID must be accepted; body: %s", w.Body.String())
+}
+
+// TestUpdateAgent_UnknownSkillIDRejected verifies that PUT /api/v1/agents/{id} with
+// an unknown skill ID is rejected with 400 when skills are installed.
+//
+// BDD: Given an agent and one installed skill "web-research",
+// When PUT /api/v1/agents/{id} is called with skills=["bogus-skill"],
+// Then the response is 400 Bad Request.
+//
+// Traces to: US-E6, MINOR (backend) — referential validation for skill IDs.
+func TestUpdateAgent_UnknownSkillIDRejected(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	skillsRoot := t.TempDir()
+	t.Setenv("OMNIPUS_BUILTIN_SKILLS", skillsRoot)
+	skillMD := skillsRoot + "/web-research/SKILL.md"
+	require.NoError(t, os.MkdirAll(skillsRoot+"/web-research", 0o755))
+	require.NoError(
+		t,
+		os.WriteFile(
+			skillMD,
+			[]byte("---\nname: web-research\ndescription: web search skill\n---\n# Web Research\n"),
+			0o600,
+		),
+	)
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096},"list":[{"id":"my-agent","name":"My Agent"}]}}`
+	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{
+				{ID: "my-agent", Name: "My Agent"},
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	// "bogus-skill" is not installed — must be rejected 400.
+	body := `{"skills":["bogus-skill"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/my-agent", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	require.Equal(
+		t,
+		http.StatusBadRequest,
+		w.Code,
+		"unknown skill ID must be rejected with 400; body: %s",
+		w.Body.String(),
+	)
+	var resp map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Contains(t, resp["error"], "unknown skill id", "error must name the unknown skill")
+}
+
+// TestUpdateAgent_LockedRejectsSkills verifies that PUT /api/v1/agents/{id} on a
+// locked (core) agent with a skills field is rejected with 403 (B-2 defense-in-depth).
+//
+// BDD: Given a locked core agent "jim",
+// When PUT /api/v1/agents/jim is called with {"skills": ["web-research"]},
+// Then the response is 403 Forbidden.
+//
+// Traces to: B-2 (#332 / US-D5) extended to Skills field.
+func TestUpdateAgent_LockedRejectsSkills(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{Workspace: tmpDir, ModelName: "test-model", MaxTokens: 4096},
+		},
+	}
+	coreagent.SeedConfig(cfg)
+	cfgJSON, _ := json.Marshal(cfg)
+	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
+
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	body := `{"skills": ["web-research"]}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/jim", strings.NewReader(body))
+	api.HandleAgents(w, r)
+
+	assert.Equal(t, http.StatusForbidden, w.Code, "assigning skills to a locked agent must return 403")
+}
+
 // TestUpdateAgentTools_Success verifies PUT /api/v1/agents/{id}/tools returns 200,
 // updates the response body with the correct agent_type and mode, and persists the
 // tools config to config.json on disk.
@@ -1265,6 +1687,327 @@ func TestPutUserContext_HappyPath(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &getResp))
 	assert.Equal(t, testContent, getResp.Content,
 		"GET must return the content written by PUT (persistence test)")
+}
+
+// --- HandleChannels tests ---
+
+// TestHandleChannels_WhatsApp_NativeAvailable verifies that GET /api/v1/channels
+// returns native_available on the whatsapp entry matching the compile-time
+// whatsappnative.NativeAvailable constant.
+//
+// BDD:
+//
+//	Given a default config with WhatsApp disabled,
+//	When GET /api/v1/channels is called,
+//	Then the response contains a "whatsapp" entry with native_available set to
+//	  the value of whatsappnative.NativeAvailable (true in default builds).
+//
+// Traces to: issue #299 — surface NativeAvailable in channels API.
+func TestHandleChannels_WhatsApp_NativeAvailable(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/channels", nil)
+	api.HandleChannels(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var entries []struct {
+		ID              string `json:"id"`
+		NativeAvailable *bool  `json:"native_available"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+
+	var whatsapp *struct {
+		ID              string `json:"id"`
+		NativeAvailable *bool  `json:"native_available"`
+	}
+	for i := range entries {
+		if entries[i].ID == "whatsapp" {
+			whatsapp = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, whatsapp, "channels list must contain a 'whatsapp' entry")
+	require.NotNil(t, whatsapp.NativeAvailable, "whatsapp entry must have native_available set")
+	// In the default (non-lite) build, NativeAvailable is true; in the lite
+	// variant the whatsappnative package stub sets it to false.  Either way,
+	// the value must match the compile-time constant.
+	assert.Equal(t, whatsappnative.NativeAvailable, *whatsapp.NativeAvailable,
+		"native_available must equal whatsappnative.NativeAvailable compile-time constant")
+}
+
+// TestApplyDegradedOverlay_MarksDegradedEntry verifies that applyDegradedOverlay
+// sets degraded=true and degraded_reason on a channel whose registry id appears
+// in the failed list.
+//
+// BDD:
+//
+//	Given a channels slice containing "telegram" and "whatsapp",
+//	When applyDegradedOverlay is called with a failure for "telegram",
+//	Then the telegram entry has degraded=true and degraded_reason set,
+//	And the whatsapp entry is unchanged.
+//
+// Traces to: issue #299 — degraded overlay in HandleChannels.
+func TestApplyDegradedOverlay_MarksDegradedEntry(t *testing.T) {
+	entries := []gen.ChannelEntry{
+		{Id: "telegram", Name: "Telegram", Transport: "webhook", Enabled: true, Description: "TG"},
+		{Id: "whatsapp", Name: "WhatsApp", Transport: "bridge", Enabled: false, Description: "WA"},
+	}
+
+	failed := []channels.ChannelInitError{
+		{Name: "telegram", Channel: "Telegram", Err: fmt.Errorf("bot token invalid")},
+	}
+	applyDegradedOverlay(entries, failed)
+
+	require.NotNil(t, entries[0].Degraded, "telegram must have degraded set")
+	assert.True(t, *entries[0].Degraded, "telegram degraded must be true")
+	require.NotNil(t, entries[0].DegradedReason, "telegram must have degraded_reason set")
+	assert.Equal(t, "bot token invalid", *entries[0].DegradedReason)
+
+	assert.Nil(t, entries[1].Degraded, "whatsapp must not be marked degraded")
+	assert.Nil(t, entries[1].DegradedReason, "whatsapp must not have degraded_reason")
+}
+
+// TestApplyDegradedOverlay_WhatsAppNativeNormalisedToWhatsApp verifies that a
+// failure recorded under the registry id "whatsapp_native" is mapped to the
+// "whatsapp" channel entry (both share one list entry in the channels API).
+//
+// BDD:
+//
+//	Given a channels slice containing "whatsapp",
+//	When applyDegradedOverlay is called with a failure whose Name is "whatsapp_native",
+//	Then the whatsapp entry is marked degraded with the failure reason.
+//
+// Traces to: issue #299 — whatsapp_native → whatsapp normalisation.
+func TestApplyDegradedOverlay_WhatsAppNativeNormalisedToWhatsApp(t *testing.T) {
+	entries := []gen.ChannelEntry{
+		{Id: "whatsapp", Name: "WhatsApp", Transport: "bridge", Enabled: true, Description: "WA"},
+	}
+
+	failed := []channels.ChannelInitError{
+		{Name: "whatsapp_native", Channel: "WhatsApp Native", Err: fmt.Errorf("not compiled in lite build")},
+	}
+	applyDegradedOverlay(entries, failed)
+
+	require.NotNil(t, entries[0].Degraded, "whatsapp must be marked degraded when whatsapp_native fails")
+	assert.True(t, *entries[0].Degraded)
+	require.NotNil(t, entries[0].DegradedReason)
+	assert.Equal(t, "not compiled in lite build", *entries[0].DegradedReason)
+}
+
+// TestApplyDegradedOverlay_EmptyFailed verifies that applyDegradedOverlay is a
+// no-op when the failed list is empty (nil-safety / baseline behavior).
+func TestApplyDegradedOverlay_EmptyFailed(t *testing.T) {
+	entries := []gen.ChannelEntry{
+		{Id: "telegram", Name: "Telegram", Transport: "webhook", Enabled: true, Description: "TG"},
+	}
+	applyDegradedOverlay(entries, nil)
+	assert.Nil(t, entries[0].Degraded, "no degraded field when failed list is empty")
+	assert.Nil(t, entries[0].DegradedReason)
+}
+
+// TestApplyDegradedOverlay_MultipleSimultaneousFailures verifies that
+// applyDegradedOverlay marks ALL entries when multiple channels fail at once.
+//
+// BDD:
+//
+//	Given a channels slice containing "telegram" and "whatsapp",
+//	When applyDegradedOverlay is called with failures for both channels,
+//	Then both entries have degraded=true and the correct degraded_reason.
+//
+// Traces to: pr-test-analyzer finding — #299 overlay tests.
+func TestApplyDegradedOverlay_MultipleSimultaneousFailures(t *testing.T) {
+	entries := []gen.ChannelEntry{
+		{Id: "telegram", Name: "Telegram", Transport: "webhook", Enabled: true, Description: "TG"},
+		{Id: "whatsapp", Name: "WhatsApp", Transport: "bridge", Enabled: false, Description: "WA"},
+	}
+
+	failed := []channels.ChannelInitError{
+		{Name: "telegram", Channel: "Telegram", Err: fmt.Errorf("bot token invalid")},
+		{Name: "whatsapp", Channel: "WhatsApp", Err: fmt.Errorf("bridge unreachable")},
+	}
+	applyDegradedOverlay(entries, failed)
+
+	require.NotNil(t, entries[0].Degraded, "telegram must be marked degraded")
+	assert.True(t, *entries[0].Degraded)
+	require.NotNil(t, entries[0].DegradedReason)
+	assert.Equal(t, "bot token invalid", *entries[0].DegradedReason)
+
+	require.NotNil(t, entries[1].Degraded, "whatsapp must be marked degraded")
+	assert.True(t, *entries[1].Degraded)
+	require.NotNil(t, entries[1].DegradedReason)
+	assert.Equal(t, "bridge unreachable", *entries[1].DegradedReason)
+}
+
+// TestApplyDegradedOverlay_OrphanFailedID verifies that a failed channel whose
+// registry id has no matching ChannelEntry (e.g. "google-chat" or "signal",
+// which may be recordable by the manager but absent from the HandleChannels
+// list) does NOT panic and leaves all present entries unmarked.
+//
+// BDD:
+//
+//	Given a channels slice containing only "telegram",
+//	When applyDegradedOverlay is called with a failure for "google-chat",
+//	Then telegram is NOT marked degraded (the orphan is silently skipped in the
+//	  pure function; HandleChannels emits a WARN log for it separately).
+//
+// Traces to: code-reviewer + architect finding — #299 silent-drop of unmatched failures.
+func TestApplyDegradedOverlay_OrphanFailedID(t *testing.T) {
+	entries := []gen.ChannelEntry{
+		{Id: "telegram", Name: "Telegram", Transport: "webhook", Enabled: true, Description: "TG"},
+	}
+
+	failed := []channels.ChannelInitError{
+		{Name: "google-chat", Channel: "Google Chat", Err: fmt.Errorf("service account missing")},
+		{Name: "signal", Channel: "Signal", Err: fmt.Errorf("signal-cli not found")},
+	}
+
+	// Must not panic; all entries stay unmarked.
+	applyDegradedOverlay(entries, failed)
+
+	assert.Nil(t, entries[0].Degraded,
+		"telegram must not be marked degraded by an orphan failure for google-chat/signal")
+	assert.Nil(t, entries[0].DegradedReason)
+}
+
+// TestApplyDegradedOverlay_DegradedReasonImpliesDegradedTrue is a contract test
+// asserting the invariant: for every ChannelEntry, if DegradedReason is set
+// then Degraded must also be set and its value must be true.
+//
+// BDD:
+//
+//	Given applyDegradedOverlay has been called with any combination of failures,
+//	When iterating the resulting channel list,
+//	Then every entry satisfies: DegradedReason != nil ⇒ Degraded != nil && *Degraded == true.
+//
+// Traces to: type-design-analyzer finding — invariant guard for degraded fields.
+func TestApplyDegradedOverlay_DegradedReasonImpliesDegradedTrue(t *testing.T) {
+	entries := []gen.ChannelEntry{
+		{Id: "telegram", Name: "Telegram", Transport: "webhook", Enabled: true, Description: "TG"},
+		{Id: "whatsapp", Name: "WhatsApp", Transport: "bridge", Enabled: false, Description: "WA"},
+		{Id: "discord", Name: "Discord", Transport: "websocket", Enabled: false, Description: "DC"},
+	}
+
+	// Mix: telegram fails, discord is healthy, whatsapp_native maps to whatsapp and fails.
+	failed := []channels.ChannelInitError{
+		{Name: "telegram", Channel: "Telegram", Err: fmt.Errorf("bot token invalid")},
+		{Name: "whatsapp_native", Channel: "WhatsApp Native", Err: fmt.Errorf("not compiled")},
+	}
+	applyDegradedOverlay(entries, failed)
+
+	for i, e := range entries {
+		if e.DegradedReason != nil {
+			require.NotNil(t, e.Degraded,
+				"entry[%d] id=%q: DegradedReason is set but Degraded is nil — invariant violated", i, e.Id)
+			assert.True(t, *e.Degraded,
+				"entry[%d] id=%q: DegradedReason is set but *Degraded is false — invariant violated", i, e.Id)
+		}
+		// Converse sanity: if Degraded is nil, DegradedReason must also be nil.
+		if e.Degraded == nil {
+			assert.Nil(t, e.DegradedReason,
+				"entry[%d] id=%q: Degraded is nil but DegradedReason is set — invariant violated", i, e.Id)
+		}
+	}
+}
+
+// TestHandleChannels_WithDegradedChannel_IntegrationPath verifies the handler-level
+// path: HandleChannels → GetChannelManager() → FailedChannels() → applyDegradedOverlay.
+// This exercises the REAL wiring from the HTTP handler through to the channel
+// manager, not just the pure overlay helper in isolation.
+//
+// BDD:
+//
+//	Given an agent loop whose channel manager has telegram pre-seeded as failed,
+//	When GET /api/v1/channels is called,
+//	Then the response contains the "telegram" entry with degraded=true and
+//	  degraded_reason matching the seeded error.
+//
+// Traces to: pr-test-analyzer finding — handler-level integration test for #299.
+func TestHandleChannels_WithDegradedChannel_IntegrationPath(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	// Build a Manager with a pre-seeded telegram failure.  We use
+	// channels.NewManagerForTesting which bypasses NewManager's initChannels so
+	// the test does not need a real token or a live Telegram connection.
+	seededErr := fmt.Errorf("bot token not resolved (token_ref=%q)", "tg-ref-test")
+	mgr := channels.NewManagerForTesting([]channels.ChannelInitError{
+		{Name: "telegram", Channel: "Telegram", Err: seededErr},
+	})
+	api.agentLoop.SetChannelManager(mgr)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/channels", nil)
+	api.HandleChannels(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var entries []struct {
+		ID             string  `json:"id"`
+		Degraded       *bool   `json:"degraded"`
+		DegradedReason *string `json:"degraded_reason"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+
+	var telegram *struct {
+		ID             string  `json:"id"`
+		Degraded       *bool   `json:"degraded"`
+		DegradedReason *string `json:"degraded_reason"`
+	}
+	for i := range entries {
+		if entries[i].ID == "telegram" {
+			telegram = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, telegram, "channels list must contain a 'telegram' entry")
+	require.NotNil(t, telegram.Degraded,
+		"telegram must have degraded set when manager reports it as failed")
+	assert.True(t, *telegram.Degraded,
+		"telegram.degraded must be true when it appears in FailedChannels()")
+	require.NotNil(t, telegram.DegradedReason,
+		"telegram must have degraded_reason when it appears in FailedChannels()")
+	assert.Equal(t, seededErr.Error(), *telegram.DegradedReason,
+		"degraded_reason must match the seeded error message")
+}
+
+// TestHandleChannels_WhatsApp_NativeAvailableAndTelegramOmitted extends
+// TestHandleChannels_WhatsApp_NativeAvailable to additionally assert that a
+// non-whatsapp entry (telegram) does NOT have native_available set.
+//
+// This verifies the "omitted elsewhere" contract: native_available is a
+// whatsapp-specific field and must be absent on all other channel entries.
+//
+// Traces to: pr-test-analyzer finding — assert NativeAvailable omitted on
+// non-whatsapp entries.
+func TestHandleChannels_WhatsApp_NativeAvailableAndTelegramOmitted(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/channels", nil)
+	api.HandleChannels(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var entries []struct {
+		ID              string `json:"id"`
+		NativeAvailable *bool  `json:"native_available"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+
+	for _, e := range entries {
+		if e.ID == "whatsapp" {
+			// whatsapp must have native_available set.
+			require.NotNil(t, e.NativeAvailable,
+				"whatsapp entry must have native_available set")
+			continue
+		}
+		assert.Nil(t, e.NativeAvailable,
+			"entry %q must NOT have native_available set (whatsapp-only field)", e.ID)
+	}
 }
 
 // TestPutUserContext_ValidateInbound_400OnMissingContent verifies that with

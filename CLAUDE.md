@@ -1,144 +1,107 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code when working in this repository.
 
 ## Project
 
-Omnipus is an agentic core: a single Go binary with the SPA embedded via `go:embed`, kernel-level sandboxing (Landlock + seccomp on Linux 5.13+), RBAC, audit logging, encrypted credential management, and compiled-in Go channels. Community-facing, MIT-licensed, no telemetry.
-
-**Domain:** omnipus.ai
+Omnipus is an agentic core: a single Go binary with the SPA embedded via `go:embed`, kernel-level sandboxing (Landlock + seccomp on Linux 5.13+), RBAC, audit logging, encrypted credential management, and compiled-in Go channels. Community-facing, MIT-licensed, no telemetry. **Domain:** omnipus.ai
 
 ## Status
 
-Active development. Substantial parts of the system are implemented and running on `main`: the agent loop and turn engine (`pkg/agent/`), 5 core agents (`pkg/coreagent/`), 41 `system.*` tools defined in `pkg/sysagent/tools/`, the tool registry and MCP integration (`pkg/tools/`, `pkg/mcp/`), skills loader and ClawHub registry (`pkg/skills/`), session/memory storage (`pkg/session/`, `pkg/memory/`), the gateway with embedded SPA (`pkg/gateway/`), credential boot contract, audit/policy/sandbox wiring, and ~16 in-process Go channels (Telegram, Discord, Slack, Matrix, IRC, Teams, Google Chat, WhatsApp, …). Onboarding flow, REST + WebSocket APIs, and the React SPA are functional.
+Active development. Most of the system is implemented and running on `main`: agent loop + turn engine (`pkg/agent/`), 5 core agents (`pkg/coreagent/`), 41 `system.*` tools (`pkg/sysagent/tools/`), tool registry + MCP (`pkg/tools/`, `pkg/mcp/`), skills + ClawHub (`pkg/skills/`), session/memory (`pkg/session/`, `pkg/memory/`), gateway + embedded SPA (`pkg/gateway/`), credential boot, audit/policy/sandbox, ~14 in-process Go channels (Telegram, Discord, Slack, Matrix, IRC, Google Chat, WhatsApp, …). WIP: unified plugin system (#151), Signal channel + proto-installer (unpushed sibling clone), security/UX hardening.
 
-> **Note on the historical "system agent" naming.** Earlier docs and the BRD describe an `omnipus-system` agent as a distinct always-on agent that holds the `system.*` tools. **There is no such runtime agent.** The 41 `system.*` tools are ordinary builtins; per-agent policy decides which agent can call which one (see `docs/internal/specs/tool-registry-redesign-spec.md`). The `pkg/sysagent/` package name is preserved as a tool-grouping namespace only — it does not represent an agent. All references below have been updated to reflect this; the central tool registry redesign is complete.
-
-Work in progress includes a unified plugin system (issue #151), the Signal channel and a proto-installer for plugin-style channel install/uninstall (currently unpushed in a sibling clone), and various security/UX hardening sprints.
-
-Authoritative architecture references:
+**Authoritative references** (code wins over docs on any disagreement):
 - `docs/internal/architecture/AS-IS-architecture.md` — evidence-based as-is, code-cited.
-- `docs/internal/architecture/plugin-extensibility-assessment.md` — plugin/extension status across channels, tools, skills, MCP.
-- `docs/internal/architecture/ADR-*.md` — accepted architectural decisions.
-
-Background specs in `docs/internal/BRD/` describe original intent and remain useful for context, but where they disagree with the code or the as-is document, the code wins:
-
-- `Omnipus BRD.md` — Main BRD: security + functional requirements, delivery phases
-- `Omnipus Windows BRD appendic.md` — Appendix A: Windows kernel security (Job Objects, Restricted Tokens, DACL)
-- `Omnipus_BRD_AppendixB_Feature_Parity.md` — Appendix B: feature parity requirements
-- `Omnipus_BRD_AppendixC_UI_Spec.md` — Appendix C: UI/UX spec
-- `Omnipus_BRD_AppendixD_System_Agent.md` — Appendix D: system agent + 35 system tools
-- `Omnipus_BRD_AppendixE_DataModel.md` — Appendix E: file-based data model
-- `OpenClaw_vs_Omnipus_Comparison.md` — competitive analysis
+- `docs/internal/architecture/plugin-extensibility-assessment.md` — plugin/extension status.
+- `docs/internal/architecture/ADR-*.md` — accepted decisions.
+- `docs/internal/BRD/` — original intent (Main BRD, Appendices A–E, competitive analysis); useful for context but superseded by code/as-is where they conflict.
 
 ## Release Strategy (v0.1 → v0.2 → v0.3)
 
-Three-phase plan locked 2026-05-03 to resolve the dilemma of an unstable WIP branch + a pentest backlog + a large memory/projects redesign.
+Three-phase plan locked 2026-05-03.
 
-**v0.1 — Stabilize current branch (`feature/iframe-preview-tier13`).** Ship the in-flight `web_serve` unification, kernel-enforced bind-port allow-list, sandbox-aware `exec`, and iframe preview as one focused PR. Plan: `/home/Daniel/.claude/plans/quizzical-marinating-frog.md`. No memory/projects scope creep — that is explicitly v0.3.
+- **v0.1 — Stabilize `feature/iframe-preview-tier13`.** Ship `web_serve` unification, kernel-enforced bind-port allow-list, sandbox-aware `exec`, iframe preview as one PR. Plan: `/home/Daniel/.claude/plans/quizzical-marinating-frog.md`. No memory/projects creep.
+- **v0.2 — Security hardening (pentest quick wins).** Issue [#155](https://github.com/dapicom-ai/omnipus/issues/155). Quick fixes only: env var allowlist (`pkg/sandbox/hardened_exec.go::sensitiveEnvKeys`), `master.key` 0600 check, shell-guard hardening, internal-CIDR egress blocking, audit HMAC chain, auth-endpoint rate limiting. Structural fixes → v0.3.
+- **v0.3 / 1.0 — "Rooms" redesign (memory + projects + tasks + sandbox topology).** Issue [#156](https://github.com/dapicom-ai/omnipus/issues/156). Fresh-build, no back-compat. Five locked design docs in `docs/internal/design/`: `sandbox-redesign-2026-05.md` (two-room topology), `memory-redesign-2026-05.md` (4-tier memory, remember/recall/retrospective, Dreamcatcher, bleve+JSONL+MinHash, no embeddings), `tasks-redesign-2026-05.md` (per-room tasks, cascade-delete), `projects-ui-2026-05.md` (3 SPA surfaces), `settings-notifications-2026-05.md`.
 
-**v0.2 — Security hardening (pentest quick wins).** GitHub issue [#155](https://github.com/dapicom-ai/omnipus/issues/155). Quick fixes only — no architectural changes. Items: env var allowlist switch (`pkg/sandbox/hardened_exec.go::sensitiveEnvKeys`), `master.key` 0600 verification, shell-guard hardening, internal-CIDR egress blocking, audit log integrity (HMAC chain), rate limiting on auth endpoints. Defers structural fixes (process isolation, capability-based RBAC) to v0.3.
+**Routing rule:** when new work comes up, ask which phase it belongs to first. Pentest findings → v0.2 unless structural (→ v0.3). Memory/projects/tasks/room-topology → v0.3. Anything else not completing v0.1 → flag the scope question.
 
-**v0.3 / 1.0 — "Rooms" redesign (memory + projects + tasks + sandbox topology).** GitHub issue [#156](https://github.com/dapicom-ai/omnipus/issues/156). Fresh-build, no backward compatibility. Five locked design docs:
-- `docs/internal/design/sandbox-redesign-2026-05.md` — two-room workspace topology (private agent rooms + shared project rooms under `.omnipus/`).
-- `docs/internal/design/memory-redesign-2026-05.md` — 4-tier memory (sessions / memories / learnings / last-session.md), three tools (`remember`/`recall`/`retrospective`), Dreamcatcher consolidation pass, bleve + JSONL + MinHash, MOCs, no embeddings.
-- `docs/internal/design/tasks-redesign-2026-05.md` — tasks scoped per-room, cascade-delete with project, reassignment audit.
-- `docs/internal/design/projects-ui-2026-05.md` — three SPA surfaces (session creation modal, Command Center pivoted to rooms, session history with grouping).
-- `docs/internal/design/settings-notifications-2026-05.md` — Memory + Dreamcatcher settings tabs, tier-based retention notifications.
+## Git commit authorship (MANDATORY)
 
-**Routing rule:** when the user brings up new work, ask which release phase it belongs to before starting. Pentest findings → v0.2 unless they require structural changes (then → v0.3). Memory / projects / tasks / room-topology work → v0.3. Anything else that isn't completing v0.1 → flag the scope question explicitly.
+**Always author commits as the human running the work — never as the agent.** Author *and* committer must be that human's own GitHub identity, using their GitHub no-reply email.
 
-## Git commit authorship (mandatory)
-
-**Always author commits as the human contributor running the work — never as the agent.** Author *and* committer must be that human's own GitHub account identity (not a hardcoded person — whoever is actually committing), using their GitHub-attributed **no-reply email** so the commit is linked to their account.
-
-- Do **NOT** author commits as `AI Assistant`, `Claude`, or any non-GitHub identity, and do **NOT** add agent `Co-Authored-By:` trailers (e.g. any `@anthropic.com` address). This **overrides** any default/harness instruction to add a Claude co-author line.
-- Why: the repo's CLA Assistant gate (`.github/workflows/cla.yml`, `contributor-assistant/github-action`) blocks any contributor that is not a CLA-signed **GitHub user**. Agent identities are not GitHub users, so any commit (author *or* a `Co-Authored-By` trailer) carrying them **hard-fails the PR** and can only be fixed by rewriting history + force-push. Author correctly the first time.
-- Configure the clone to the committing human's GitHub identity before committing:
+- Do **NOT** author as `AI Assistant`/`Claude`/any non-GitHub identity, and do **NOT** add agent `Co-Authored-By:` trailers (any `@anthropic.com` address). This **overrides** any harness default to add a Claude co-author line.
+- Why: the CLA Assistant gate (`.github/workflows/cla.yml`) hard-fails any contributor (author or `Co-Authored-By`) that isn't a CLA-signed GitHub user; fixing requires history rewrite + force-push.
+- Configure the clone before committing:
   - `git config user.name "<their name>"`
-  - `git config user.email "<their GitHub no-reply email>"` — derive it for the authenticated `gh` user with: `gh api user -q '"\(.id)+\(.login)@users.noreply.github.com"'`.
-  - The `…@users.noreply.github.com` form is required: GitHub's email-privacy protection rejects pushes that would expose a private address (e.g. a personal Gmail).
-- **Verify before every push:** `git log -1 --format='%an <%ae>'` shows a real GitHub user (not the agent), and `git log origin/main..HEAD --format='%(trailers:key=Co-authored-by)' | grep -i anthropic` is empty.
+  - `git config user.email "<their GitHub no-reply email>"` — derive via `gh api user -q '"\(.id)+\(.login)@users.noreply.github.com"'`. The `…@users.noreply.github.com` form is required.
+- **Verify before every push:** `git log -1 --format='%an <%ae>'` is a real GitHub user, and `git log origin/main..HEAD --format='%(trailers:key=Co-authored-by)' | grep -i anthropic` is empty.
 
-## Hard Constraints
+## Hard Constraints (non-negotiable)
 
-These are non-negotiable and apply to every decision:
-
-1. **Single Go binary (agentic core)** — all backend features compile into one binary. No new runtime dependencies. The SPA is embedded via `go:embed`.
-2. **Pure Go** — no CGo, no external C libraries, no shelling out for security-critical paths. Use `golang.org/x/sys/unix` for kernel interfaces.
-3. **Minimal footprint** — total RAM overhead for all security features must stay under 10MB beyond baseline.
-4. **Graceful degradation** — features requiring Linux 5.13+ (Landlock, seccomp) must fall back to application-level enforcement on older kernels, non-Linux platforms, and Android/Termux.
-5. **Ecosystem compatibility** — follows Omnipus/OpenClaw conventions (SKILL.md, HEARTBEAT.md, SOUL.md, AGENTS.md, JSON config patterns) for skill ecosystem and community compatibility. Omnipus has its own config format but adopts the same concepts.
-6. **Deny-by-default for security, opt-in for features** — security policies default to most restrictive; functional features default to disabled. **Documented exception:** when a sandbox mode (`enforce` or `permissive`) is active, the workspace shell tools (`workspace.shell`, `workspace.shell_bg`) are enabled by default for Jim. Rationale: the kernel sandbox itself is the protective layer, and Jim's seed forces `experimental.workspace_shell_enabled = true` at config-creation time anyway — making the helper-default `false` only creates a test-vs-production behavioral gap, not real safety. Operators who want shell tools fully off must set `experimental.workspace_shell_enabled = false` explicitly. With sandbox `off` (god-mode), no implicit defaults apply — operator opt-in is required.
-7. **Release responsibility — fix everything, no excuses.** Every branch must be fully green before it ships. Pre-existing failures (lint, vuln, Go test, race, vitest, tsc, Playwright, anything CI runs) are our responsibility to fix regardless of who introduced them. "Pre-existing", "not introduced by my work", "broken on main too" are NEVER acceptable closure paths for an observed failure. Either fix it now, or get explicit user approval to defer with a tracked issue + target date. The release contract is full functionality; we do not ship around known failures.
-8. **Contract-first wire formats — single source of truth, runtime-validated.** Every byte that crosses the gateway/SPA boundary (REST request/response, WS frame, persisted JSON consumed by the SPA) MUST be defined in `contracts/openapi.yaml` or `contracts/asyncapi.yaml` **before** any Go or TypeScript code is written. Generated types in `pkg/api/generated/` and `src/lib/api/generated/` are the only legal cross-boundary types — they are committed to the repo, regenerated via `scripts/gen-contracts.sh`, and verified in CI by `make verify-contracts` (fails on drift). **Hand-written wire-format types are FORBIDDEN and actively caught by lint:** (a) any package-level struct in `pkg/gateway/*.go` (non-test, non-generated) that has ≥2 `json:` tags is flagged — opt-out with `// not-wire-format` for internal structs that are not wire types; (b) any `export interface` or `export type = { }` (object-literal) in `src/lib/api.ts` or `src/lib/ws.ts` is flagged — opt-out with `// not-wire-format` for internal callback/helper interfaces. AsyncAPI Zod schemas are generated (not hand-written): `scripts/_gen-asyncapi-types.mjs` emits `src/lib/api/generated/_asyncapi-zod-schemas.generated.ts`, which `scripts/_gen-ts.sh` concatenates into `src/lib/api/generated/schemas.ts`; the hand-written `scripts/_asyncapi-zod-schemas.ts` is deprecated and no longer used. SPA edge validates every incoming payload through the matching zod schema (drop + dropped-frame counter + dev-mode toast on failure; no production crash, no error UI clutter). Backend `pkg/api/generated/contract_test.go` fails on any Go struct that produces schema-invalid JSON. Adding a new wire type means: (a) add schema to `contracts/components/schemas/`, (b) reference it from `openapi.yaml` or `asyncapi.yaml`, (c) run `scripts/gen-contracts.sh`, (d) commit the generated diff, (e) write the handler/consumer using the generated type. Steps in any other order are an error.
+1. **Single Go binary** — all backend features compile into one binary. No new runtime deps. SPA embedded via `go:embed`.
+2. **Pure Go** — no CGo, no external C libs, no shelling out for security-critical paths. Use `golang.org/x/sys/unix` for kernel interfaces.
+3. **Minimal footprint** — security-feature RAM overhead < 10MB beyond baseline.
+4. **Graceful degradation** — Linux 5.13+ features (Landlock, seccomp) fall back to app-level enforcement on older kernels, non-Linux, Android/Termux.
+5. **Ecosystem compatibility** — follow Omnipus/OpenClaw conventions (SKILL.md, HEARTBEAT.md, SOUL.md, AGENTS.md, JSON config).
+6. **Deny-by-default for security, opt-in for features.** Documented exception: with a sandbox mode (`enforce`/`permissive`) active, workspace shell tools (`workspace.shell`, `workspace.shell_bg`) default ON for Jim — the kernel sandbox is the protective layer and Jim's seed forces `experimental.workspace_shell_enabled=true` anyway. To disable, set it `false` explicitly. Sandbox `off` (god-mode) applies no implicit defaults — operator opt-in required.
+7. **Release responsibility — fix everything, no excuses.** Every branch fully green before shipping. Pre-existing failures (lint, vuln, Go test, race, vitest, tsc, Playwright — anything CI runs) are ours to fix regardless of origin. "Pre-existing"/"not mine"/"broken on main too" are NEVER acceptable closure paths. Fix now, or get explicit user approval to defer with a tracked issue + target date.
+8. **Contract-first wire formats — single source of truth, runtime-validated.** Every byte crossing the gateway/SPA boundary (REST req/resp, WS frame, persisted JSON the SPA reads) MUST be defined in `contracts/openapi.yaml` or `contracts/asyncapi.yaml` **before** any Go/TS code. Generated types in `pkg/api/generated/` and `src/lib/api/generated/` are the only legal cross-boundary types — committed, regenerated via `scripts/gen-contracts.sh`, verified by `make verify-contracts` (fails on drift). **Hand-written wire-format types are FORBIDDEN and lint-caught:** (a) package-level struct in `pkg/gateway/*.go` (non-test/non-generated) with ≥2 `json:` tags is flagged — opt out with `// not-wire-format`; (b) `export interface`/`export type = {}` object-literal in `src/lib/api.ts` or `src/lib/ws.ts` is flagged — same opt-out. AsyncAPI Zod schemas are generated, not hand-written. SPA edge validates every incoming payload via the matching zod schema (drop + counter + dev-mode toast on failure; no prod crash). Backend `pkg/api/generated/contract_test.go` fails on any Go struct producing schema-invalid JSON. See the 5-step "add a wire type" process under Contract regeneration.
 
 ## Tech Stack
 
-**Backend:** Go (targeting Go 1.22+ — go.mod requires go 1.26.3; `//go:build go1.22` tags in generated files; `slog` added in 1.21). Key packages: `golang.org/x/sys/unix` (Landlock, seccomp), `chromedp` (browser automation), `whatsmeow` (WhatsApp), `discordgo` (Discord), `telebot` (Telegram), `slack-go` (Slack), `go-nostr` (Nostr), `modernc.org/sqlite` (pure Go SQLite for whatsmeow — no CGo). All channels currently in the codebase are compiled into the single binary as in-process Go implementations. Channels that depend on a non-Go runtime (e.g. Signal, which requires `signal-cli`/JRE) wrap the dependency by spawning a sidecar binary from inside their own `Start()` and communicating with it over local HTTP (Signal) or WebSocket (WhatsApp bridge). There is no generic stdio "bridge protocol"; HTTP-localhost is the de facto pattern.
+**Backend:** Go (go.mod requires 1.26.3; targets 1.22+). Key packages: `golang.org/x/sys/unix` (Landlock/seccomp), `chromedp`, `whatsmeow` (WhatsApp), `discordgo`, `telebot`, `slack-go`, `go-nostr`, `modernc.org/sqlite` (pure-Go SQLite for whatsmeow, no CGo). All channels are in-process Go. Channels wrapping a non-Go runtime (e.g. Signal → `signal-cli`) spawn a sidecar from their own `Start()` and talk over localhost HTTP — there is no generic stdio bridge protocol. (WhatsApp is pure-Go in-process via whatsmeow, NOT a sidecar example.)
 
-**Frontend:** TypeScript, React 19, Vite 6, shadcn/ui (Radix + Tailwind CSS v4), AssistantUI (chat), Phosphor Icons (`@phosphor-icons/react`), Zustand (UI state), TanStack Query (server state), TanStack Router, Framer Motion. The SPA is built by Vite into `dist/spa/`, copied into `pkg/gateway/spa/`, and embedded into the Go binary via `go:embed`.
+**Frontend:** TypeScript, React 19, Vite 6, shadcn/ui (Radix + Tailwind v4), AssistantUI (chat), Phosphor Icons, Zustand (UI state), TanStack Query (server state), TanStack Router, Framer Motion. Vite builds to `dist/spa/`, copied to `pkg/gateway/spa/`, embedded via `go:embed`.
 
-**Storage:** File-based only (JSON/JSONL) for all Omnipus data. No PostgreSQL or Redis. Exception: WhatsApp session uses SQLite via whatsmeow with `modernc.org/sqlite` (pure Go, no CGo). SQLite is isolated to WhatsApp session storage only — never used for Omnipus's own data. Data directory: `~/.omnipus/`. Atomic writes (temp file + rename). Credentials in `credentials.json` (AES-256-GCM encrypted, Argon2id KDF), never in `config.json`. **Sessions:** Day-partitioned JSONL transcripts (`sessions/<id>/<YYYY-MM-DD>.jsonl`) with configurable retention (default 90 days). **Context compression** is single-layer: when the token budget is exceeded, `forceCompression` (`pkg/agent/loop.go:4473-4550`) drops ~50% of the oldest turns and writes a summary note via `SetHistory` + `Save`. The historical claim of a second "tool result pruning" pass is not implemented today. **Concurrency:** per-entity files for high-contention data (tasks, pins). Sessions and memory use a 64-shard mutex pool keyed by FNV hash of session ID (`pkg/memory/jsonl.go:21-77`), not a single-writer goroutine. Atomic writes via temp-file + rename (`fileutil.WriteFileAtomic`). Advisory `unix.Flock` on Linux/macOS (`pkg/fileutil/flock_unix.go:18-22`); on Windows, `LockFileEx` is **not** used — the code relies on the single-writer goroutine pattern instead (see `pkg/fileutil/flock_windows.go:15`).
+**Storage:** File-based only (JSON/JSONL); no PostgreSQL/Redis. SQLite is isolated to WhatsApp session storage only. Data dir `~/.omnipus/`. Atomic writes (temp file + rename, `fileutil.WriteFileAtomic`). Credentials in `credentials.json` (AES-256-GCM, Argon2id), never in `config.json`. Sessions: day-partitioned JSONL (`sessions/<id>/<YYYY-MM-DD>.jsonl`, default 90-day retention). Context compression is **single-layer**: `forceCompression` (`pkg/agent/loop.go:4473-4550`) drops ~50% of oldest turns + writes a summary (no second "tool result pruning" pass). Concurrency: per-entity files for hot data (tasks, pins); sessions/memory use a 64-shard mutex pool keyed by FNV hash (`pkg/memory/jsonl.go:21-77`). Advisory `unix.Flock` on Linux/macOS; Windows uses the single-writer goroutine pattern (no `LockFileEx`).
 
-**Credential provisioning:** All secrets are stored in `credentials.json` (AES-256-GCM, Argon2id KDF). See [ADR-004](docs/internal/architecture/ADR-004-credential-boot-contract.md) for the full boot contract.
+### Credential provisioning
 
-**Unlock modes** (tried in priority order):
+All secrets in `credentials.json` (AES-256-GCM, Argon2id). Full boot contract: [ADR-004](docs/internal/architecture/ADR-004-credential-boot-contract.md).
 
-1. `OMNIPUS_MASTER_KEY` — 64-char hex-encoded 256-bit key in the environment. Use for CI/CD pipelines and container deployments where secrets are injected via env.
-2. `OMNIPUS_KEY_FILE` — path to a file (mode 0600) containing the hex key. Use for long-running server deployments where mounting a key file is more practical than env injection.
-3. **Default key file** — if `$OMNIPUS_HOME/master.key` exists (mode 0600), it is loaded automatically. This is how auto-generated keys survive across reboots without any env configuration.
-4. **Auto-generate on fresh install** — if no key is configured and no `credentials.json` exists yet, the gateway mints a fresh 256-bit key, writes it to `$OMNIPUS_HOME/master.key` with 0600, and logs a prominent backup warning to stderr. This closes the headless first-run chicken-and-egg: a new user on a cloud VPS can start the gateway with zero configuration and still end up with a working encrypted credential store. Auto-generate **never** fires when an existing `credentials.json` is present — that would strand the encrypted data.
-5. **Interactive TTY prompt** — passphrase entered at the terminal. Only works when a TTY is attached; never use for headless/daemon mode.
+**Unlock modes (priority order):**
+1. `OMNIPUS_MASTER_KEY` — 64-char hex 256-bit key in env (CI/CD, containers).
+2. `OMNIPUS_KEY_FILE` — path to a 0600 file with the hex key (long-running servers).
+3. **Default key file** — `$OMNIPUS_HOME/master.key` (0600) loaded automatically if present.
+4. **Auto-generate on fresh install** — if no key configured and no `credentials.json` yet, gateway mints a 256-bit key, writes `$OMNIPUS_HOME/master.key` (0600), logs a backup warning. Never fires when `credentials.json` already exists.
+5. **Interactive TTY prompt** — passphrase at terminal; TTY-only, never headless.
 
-**Critical — back up the master key file.** Whether you provide it via `OMNIPUS_KEY_FILE`, or it was auto-generated to `$OMNIPUS_HOME/master.key` on first boot, losing it makes every credential in `credentials.json` (API keys, channel tokens, etc.) permanently inaccessible. The auto-generate path prints a multi-line warning to stderr on first boot — watch for it in systemd journal / Docker logs.
+**Critical:** back up the master key file — losing it makes every credential permanently inaccessible.
 
-**Generating a key file manually** (for operators who prefer explicit provisioning over auto-generate):
+Manual key file: `openssl rand -hex 32 > master.key && chmod 600 master.key && export OMNIPUS_KEY_FILE=...`
 
-```bash
-openssl rand -hex 32 > /var/lib/omnipus/master.key
-chmod 600 /var/lib/omnipus/master.key
-export OMNIPUS_KEY_FILE=/var/lib/omnipus/master.key
-```
+**Key rotation:** `omnipus credentials rotate` (no args, passphrase-based) unlocks via current mode, prompts twice for new passphrase, then `store.RotateWithPassphrase` re-encrypts everything. No `--key-file` flag, no zero-downtime path — headless key-file rotation means stop gateway, replace `master.key`, restart, re-onboard secrets via `omnipus credentials set` or Settings → Security → Credential Vault.
 
-**Key rotation:** Run `omnipus credentials rotate` — the command takes no arguments (`cobra.NoArgs` per `cmd/omnipus/internal/credentials/command.go::newRotateCommand`) and is **passphrase-based**: it unlocks the store via the current mode (env var / key file / interactive prompt), then prompts twice for the new passphrase, then calls `store.RotateWithPassphrase` which atomically re-encrypts every credential under the new key. A `--key-file` flag was never wired up; the rotation path is passphrase-only today. For headless key-file deployments the operational workflow is: stop the gateway, replace `$OMNIPUS_HOME/master.key` with a freshly minted hex key, restart, and re-onboard any agent secrets via `omnipus credentials set` (or the Settings → Security → Credential Vault UI). There is no zero-downtime rotation path in the current CLI — a brief restart is required.
-
-**Boot order:** `NewStore → Unlock → LoadConfigWithStore → InjectFromConfig → ResolveBundle → RegisterSensitiveValues → NewManager → Start` — any failure aborts boot. Channel secrets are passed directly as a `credentials.SecretBundle` to channel constructors; they do not require environment injection.
+**Boot order:** `NewStore → Unlock → LoadConfigWithStore → InjectFromConfig → ResolveBundle → RegisterSensitiveValues → NewManager → Start`. Any failure aborts boot. Channel secrets pass directly as a `credentials.SecretBundle` to constructors.
 
 ## Architecture Patterns
 
-**Platform abstraction for sandboxing:** `SandboxBackend` interface with Linux (Landlock+seccomp), Windows (Job Objects+Restricted Tokens+DACL), and Fallback (app-level) backends. Policy engine and audit logging are cross-platform; only enforcement backend varies.
+**Sandboxing:** `SandboxBackend` interface — Linux (Landlock+seccomp), Windows (Job Objects+Restricted Tokens+DACL), Fallback (app-level). Policy + audit are cross-platform; only the enforcement backend varies.
 
-**Channel model:** All channels implement the same `Channel` Go interface (`pkg/channels/base.go:47-56`) plus opt-in capability interfaces (`TypingCapable`, `MessageEditor`, `MessageDeleter`, `ReactionCapable`, `PlaceholderCapable`, `StreamingCapable`, `CommandRegistrarCapable` — see `pkg/channels/interfaces.go:13-70`). Each channel registers a factory at compile time via `channels.RegisterFactory(name, factory)` from a `func init()` in its subpackage (`pkg/channels/registry.go`); activation is then a hardcoded if-ladder over typed config fields in `Manager.initChannels()` (`pkg/channels/manager.go:433-530`). Channels communicate with the agent loop only through the in-process `MessageBus` (`pkg/bus/bus.go`). Channels that wrap an external dependency embed the bridge directly inside their own implementation: WhatsApp uses a WebSocket to a separate bridge process (`pkg/channels/whatsapp/whatsapp.go:31-46`); the in-flight Signal channel spawns `signal-cli-rest-api` as a sidecar and talks to it over HTTP on localhost. There is **no** `BridgeAdapter` type, **no** stdio bridge protocol, and **no** Channel SDK in the codebase today. A generalized plugin/installer is in scoping — see issue #151 and the proto-installer in the unpushed `omnipus-channel-signal` clone (`pkg/channelmanager/`).
+**Channel model:** All channels implement `Channel` (`pkg/channels/base.go:47-56`) plus opt-in capability interfaces (`TypingCapable`, `MessageEditor`, `MessageDeleter`, `ReactionCapable`, `PlaceholderCapable`, `StreamingCapable`, `CommandRegistrarCapable` — `pkg/channels/interfaces.go:13-70`). Each registers a factory at compile time via `channels.RegisterFactory(name, factory)` in a `func init()`; activation is a hardcoded if-ladder in `Manager.initChannels()` (`pkg/channels/manager.go:513-625`). Channels talk to the agent loop only via the in-process `MessageBus` (`pkg/bus/bus.go`). There is **no** `BridgeAdapter`, **no** stdio bridge protocol, **no** Channel SDK (issue #151 tracks the planned unified plugin system).
 
-**Channels UI + inbound routing:** the SPA has a dedicated top-level **Channels** screen (`src/routes/_app/channels.tsx`) — an endless-feed list of channel cards; per-channel config lives in a Configure slide-over (`ChannelConfigPanel`). Channel config was moved OUT of the Skills & Tools page (now 3 tabs) and the Routing tab was removed from Settings (per-channel routing is now in the Configure sheet). Which agent answers a channel is resolved by `pkg/routing/route.go::ResolveRoute` from `cfg.Bindings[]` (most-specific first: peer → guild → team → account → channel-wildcard → default). The per-channel **Default agent** control is backed by `GET/PUT /api/v1/channels/{id}/routing` (generated `ChannelRouting` wire type), which reads/writes a channel-wildcard `AgentBinding` (`Match{Channel:id, AccountID:"*"}`). **Known bug — issue [#289](https://github.com/elicify-ai/omnipus/issues/289) (P1):** `configureChannel` (`pkg/gateway/rest.go`) blind-merges UI secret fields INLINE into `config.json`, but channel activation + constructors require secrets in the encrypted credential store via a `<field>_ref` field (e.g. `token_ref`). So token-based channels configured through the UI **do not activate** (their `*Ref` stays empty). The fix routes secret fields → `storeCredential` + sets `<field>_ref`; until it lands, channel tokens must be placed in the credential store manually (`omnipus credentials set` + the `*_ref` in config). WhatsApp (QR/bridge) is unaffected; Google-Chat has no UI descriptors yet.
+**Channels UI + routing:** dedicated top-level **Channels** screen (`src/routes/_app/channels.tsx`), per-channel config in a Configure slide-over (`ChannelConfigPanel`). Agent routing resolved by `pkg/routing/route.go::ResolveRoute` from `cfg.Bindings[]` (most-specific first: peer → guild → team → account → channel-wildcard → default). Per-channel **Default agent** control backed by `GET/PUT /api/v1/channels/{id}/routing` (`ChannelRouting` wire type). **Channel secrets are credential-store-routed** (SEC-23, #289 via #296): `configureChannel` (`pkg/gateway/rest.go`) detects secret fields (token/secret/password/key/api_key), stores each in the encrypted store, writes a `<field>_ref` to `config.json` — no plaintext secret persisted. `Test` validates via `credentialRefResolves`.
 
-**Agent types:** Core (5 agents with prompts compiled into the binary via `pkg/coreagent/core.go:24-150`; identity locked, user can toggle/configure model and tools) and Custom (user-defined). There is **no separate "system" agent**. The 41 `system.*` tools defined in `pkg/sysagent/tools/` are ordinary builtins registered on the central tool registry; per-agent policy (allow/ask/deny, with `system.*: deny` seeded by default on custom agents) decides exposure. The post-redesign code retires the `omnipus-system` naming and removes `WireSystemTools` / `WireAvaAgentTools` as code paths — see `docs/internal/specs/tool-registry-redesign-spec.md`. Note: `config.AgentTypeSystem` (`"system"`) survives in the config schema and the `/api/v1/agents` API contract for legacy/operator-supplied entries — production `SeedConfig` does NOT seed any such entry, but if a config.json contains one, the gateway will surface it. Handler tests in `pkg/gateway/rest_test.go` exercise this contract by injecting a synthetic `omnipus-system` config entry.
+**WhatsApp native QR pairing** (#283 via #298): `whatsapp_native` (whatsmeow) emits its pairing QR over the `whatsapp_pairing` WS frame; SPA renders it inline in the Configure panel (`WhatsAppNativeNotice`, `qrcode.react`). Enable & Save, then scan via WhatsApp → Linked Devices. Native WhatsApp ships by **default** (`!lite`, excluding `mipsle`/`netbsd`/`freebsd&arm` where `modernc.org/sqlite` can't build → stub). A **lite** build (`make build-lite`, `-tags lite`) drops whatsmeow (~58 MB smaller); WhatsApp is then unavailable and the manager records a non-fatal failure (gateway boots degraded). The old `whatsapp_native` opt-in tag and `make build-whatsapp-native` are retired — do not reintroduce. Lite UX tracked in #299.
 
-**Default agent (single source of truth):** the agent that handles inbound messages with no more-specific binding is the one whose `AgentConfig.Default` (`json:"default"`) is true. `agent.Registry.GetDefaultAgent()` honors this flag FIRST (then the legacy `Agents.Defaults.DefaultAgentID`, then first registered), so the SPA chat and channel routing agree. `pkg/routing/route.go::resolveDefaultAgentID` resolves it for channels and, when no agent is marked default, falls back to the **first ENABLED agent** (NOT the historical `"main"` constant, which usually does not exist) and logs a WARN. `coreagent.SeedConfig` marks **Mia** `default:true` on a fresh install. Set it from the Agents screen ★ ("Set as default") → `PUT /api/v1/agents/{id}` with `default:true`; the handler enforces the single-default invariant (clears `Default` on all other agents) and `pkg/config` repairs any multi-default config at load. The `Default` flag is **decoupled** from per-agent workspace topology — marking an agent default does NOT relocate its `agents/<id>/` workspace (`pkg/agent/instance.go`).
+**Agent types:** Core (5 agents, prompts compiled in via `pkg/coreagent/core.go:24-150`; identity locked, model/tools configurable) and Custom. **There is no "system" agent** — the 41 `system.*` tools (`pkg/sysagent/tools/`) are ordinary builtins governed by per-agent policy (allow/ask/deny; `system.*: deny` seeded on custom agents). `pkg/sysagent/` is a tool-grouping namespace only. The tool-registry redesign is complete: `WireSystemTools`, `WireAvaAgentTools`, `ScopeSystem`, `IsSystemAgent`, `ComposeAndRegister`, and the static `builtinCatalog` are removed; governance is policy-only via `BuiltinRegistry` + `MCPRegistry` + per-agent `ToolPolicyCfg` (spec: `docs/internal/specs/tool-registry-redesign-spec.md`). Note: `config.AgentTypeSystem` (`"system"`) survives in the config schema / `/api/v1/agents` contract for legacy entries; production `SeedConfig` seeds none.
 
-The current custom-agent file format is structured: `AGENT.md` (singular) with frontmatter, plus `SOUL.md` for the prompt and `HEARTBEAT.md` for periodic instructions. The legacy `AGENTS.md` (plural) format is still loaded as a fallback (`pkg/agent/definition.go:21-22, 73, 104`) but should not be used for new agents.
+**Default agent (single source of truth):** the agent with `AgentConfig.Default` (`json:"default"`) true. `agent.Registry.GetDefaultAgent()` honors it first (then legacy `Agents.Defaults.DefaultAgentID`, then first registered). `pkg/routing/route.go::resolveDefaultAgentID` falls back to the **first ENABLED agent** when none is marked (not the historical `"main"` constant) and logs WARN. `coreagent.SeedConfig` marks **Mia** default on fresh install. Set via Agents screen ★ → `PUT /api/v1/agents/{id}` with `default:true` (handler enforces single-default; `pkg/config` repairs multi-default at load). The flag does NOT relocate the agent's `agents/<id>/` workspace.
 
-**Brand:** "The Sovereign Deep" — dark-first design. Colors: Deep Space Black (`#0A0A0B`), Liquid Silver (`#E2E8F0`), Forge Gold (`#D4AF37`). Fonts: Outfit (headlines), Inter (body), JetBrains Mono (code). Octopus mascot ("Master Tasker"). See `docs/internal/brand/brand-guidelines.md`.
+**Custom-agent format:** structured `AGENT.md` (singular) with frontmatter + `SOUL.md` (prompt) + `HEARTBEAT.md` (periodic). Legacy `AGENTS.md` (plural) still loads as fallback but is not for new agents.
 
-**UI design rules:** Chat-first, dark-first. Sidebar defaults to overlay drawer but can be pinned for persistent navigation. No separate canvas (rich content renders inline, expands to fullscreen). No emoji in stored data or UI chrome (emoji-to-Phosphor-icon translator in chat output only). Tool calls visible by default with collapsible detail.
+**Brand:** "The Sovereign Deep" — dark-first. Deep Space Black (`#0A0A0B`), Liquid Silver (`#E2E8F0`), Forge Gold (`#D4AF37`). Fonts: Outfit (headlines), Inter (body), JetBrains Mono (code). Octopus mascot. See `docs/internal/brand/brand-guidelines.md`.
 
-**Doc/code drift to be aware of.** This file describes the system at the level of intent and has drifted from the implementation in places. The evidence-based as-is lives in `docs/internal/architecture/AS-IS-architecture.md` and the plugin extension assessment in `docs/internal/architecture/plugin-extensibility-assessment.md`. When this file (or anything under `docs/internal/BRD/`) disagrees with those documents or with the code, the **code is the source of truth**. Known drift items already corrected above: there is no `ChannelProvider` interface (it's `Channel`), no `BridgeAdapter` type, no stdio bridge protocol, no Channel SDK, no two-layer compression, no `LockFileEx` on Windows, **no `omnipus-system` agent** (the system-agent concept is fictional; `system.*` tools are ordinary builtins governed by per-agent policy). Issue #151 tracks the unified plugin system that will eventually subsume the channel-installer prototype. The central tool registry redesign (`docs/internal/specs/tool-registry-redesign-spec.md`) is **complete**: `WireSystemTools`, `WireAvaAgentTools`, `ScopeSystem`, `IsSystemAgent`, `ComposeAndRegister`, and the static `builtinCatalog` slice are all removed; policy-only governance via `BuiltinRegistry` + `MCPRegistry` + per-agent `ToolPolicyCfg` atomic pointer is in place.
+**UI rules:** Chat-first, dark-first. Sidebar is an overlay drawer (pinnable). No separate canvas (rich content inline, expands fullscreen). No emoji in stored data or UI chrome (emoji→Phosphor translator in chat output only). Tool calls visible by default, collapsible.
 
 ## Spec-Driven Workflow
 
-Use this sequence when implementing features:
-
-1. Read the relevant BRD section(s) before writing any code
-2. Use `/plan-spec` to generate implementation specs with TDD/BDD scenarios
-3. Use `/grill-spec` to stress-test specs for gaps before implementation
-4. Use `/taskify` to decompose into structured task graphs
-5. Implement in Plan Mode first, then switch to normal mode
-6. Use `/grill-code` to verify spec compliance after implementation
+When implementing features: (1) read the relevant BRD section(s); (2) `/plan-spec` for TDD/BDD specs; (3) `/grill-spec` to stress-test; (4) `/taskify` to decompose; (5) implement in Plan Mode first; (6) `/grill-code` to verify compliance.
 
 ## Issue & Project Board Conventions
 
-When filing or triaging GitHub issues, follow `docs/internal/issue-and-board-conventions.md` — this applies to the lead and every subagent. The essentials:
+Follow `docs/internal/issue-and-board-conventions.md` (applies to lead + every subagent). Essentials:
 
 - **Type is the "kind" axis** (exactly one): **Bug / Feature / Task / Epic** — set the org-level Issue Type, not a label. The `bug`/`enhancement` labels are **retired/deleted**; never recreate them.
 - **`gh` has no `--type` flag** — set the Type via GraphQL `updateIssueIssueType` after `gh issue create` (or use the issue templates in the UI, which set `type:` automatically). Type IDs and the exact recipe are in the doc.
@@ -153,25 +116,16 @@ When filing or triaging GitHub issues, follow `docs/internal/issue-and-board-con
 
 ## Subagent Workflow
 
-The lead (you) orchestrates all work by spawning specialized subagents via the Agent tool. There are no agent teams — you spawn subagents directly, give them focused tasks, and review their output.
+You (the lead) orchestrate all work by spawning subagents via the Agent tool (no teams). Decompose into focused units, give each subagent a complete prompt (spec ref, exact files, definition of done), run independent work in parallel, review every output, run QA after implementation.
 
-### Implementing subagents (spawn via Agent tool with `subagent_type`)
-- `frontend-lead` (sonnet) — React/TypeScript UI work. Scope: `src/`, `packages/ui/`
-- `backend-lead` (sonnet) — Go backend work. Scope: `pkg/`, `cmd/`, `internal/` (except security packages)
-- `security-lead` (opus) — Security implementation. Scope: `pkg/security/`, `pkg/sandbox/`, `pkg/audit/`, `pkg/policy/`
-- `qa-lead` (sonnet) — Tests only. Scope: `*_test.go`, `*.test.ts`, `*.test.tsx`
+**Implementing subagents:** `frontend-lead` (sonnet, `src/`, `packages/ui/`), `backend-lead` (sonnet, `pkg/`, `cmd/`, `internal/` except security), `security-lead` (opus, `pkg/security/`, `pkg/sandbox/`, `pkg/audit/`, `pkg/policy/`), `qa-lead` (sonnet, tests only).
+**Review subagents:** `architect` (opus, design/ADRs) + the pr-review-toolkit agents.
 
-### Review subagents (spawn via Agent tool with `subagent_type`)
-- `architect` (opus) — cross-cutting design review, ADRs
-- pr-review-toolkit agents (6 total, always run all after implementation work)
+**Per task type:** frontend-only → frontend-lead → qa-lead; backend-only → backend-lead → qa-lead; security → security-lead + backend-lead → qa-lead; full-stack → frontend-lead + backend-lead (parallel) → qa-lead; design questions → architect.
 
-### How to use subagents
+### Review pipeline — 7-reviewer quality gate (MANDATORY)
 
-1. **Decompose the work** — break the task into focused units scoped to one subagent each
-2. **Spawn subagents with clear, complete prompts** — include the spec reference, the exact files to modify, and what "done" looks like. Each subagent starts fresh with no prior context.
-3. **Run subagents in parallel** when their work is independent (e.g., frontend + backend for the same feature)
-4. **Review every subagent's output** — check their functional proof, verify their claims, run the review pipeline
-5. **Run QA after implementation** — spawn qa-lead to write tests against the code the other subagents just wrote
+Runs **twice**: after EACH feature (before its PR merges to base) AND on the WHOLE epic diff before the final `→ main` PR. All seven must be clean or each finding explicitly deferred with a tracked issue. Hard release rule, on par with Constraint #7.
 
 ### Which subagents to spawn per task type
 - **Frontend-only work:** frontend-lead → qa-lead
@@ -197,7 +151,7 @@ Run reviewers 1–6 in parallel; run the `/grill-code` architect pass (7) as its
 
 ## Quality Gates
 
-Before reporting any work done, subagents and the lead must verify all applicable gates pass:
+Verify all applicable gates before reporting work done:
 
 ```bash
 # Backend
@@ -209,35 +163,62 @@ CGO_ENABLED=1 go build -tags goolm,stdjson ./...            # exit 0
 govulncheck ./...                                           # 0 vulnerabilities
 
 # Frontend
-npm run typecheck     # tsc -b --noEmit — exits 0 (see WARNING below)
+npm run typecheck     # tsc -b --noEmit — exit 0 (see WARNING)
 npx vitest run        # exit 0
 
 # Contracts
 make verify-contracts  # exit 0
 ```
 
-**WARNING — TypeScript typecheck trap.** `tsconfig.json` is a project-references root with no `include`/`files` entries. Running `tsc --noEmit` (without `-b`) is a **silent no-op** — it always exits 0 even when referenced sub-projects have type errors. The correct command is `tsc -b --noEmit`. Use `npm run typecheck` which is wired to the correct command.
+**WARNING — typecheck trap.** `tsconfig.json` is a project-references root with no `include`/`files`. `tsc --noEmit` (without `-b`) is a silent no-op (always exits 0). Use `npm run typecheck` (wired to `tsc -b --noEmit`).
 
 ## Build & E2E Testing
 
+### Testing & building — CI is the authority (MANDATORY)
+
+**Rule: CI is the source of truth for Go test/build results. Never run the full Go test
+suite (especially `pkg/gateway`) locally.** This runs in an **ephemeral, resource-constrained
+devpod** — recreated on demand with varying specs (seen: 2–4 cores, 3.8–15 GB RAM, and a
+root disk that has been as full as ~96 %). Linking and running the full gateway *test binary*
+— which pulls in the pure-Go OLM crypto via the `goolm` tag — can OOM-kill or stall the
+session. CI runs on 16 GB runners; trust it. Push and read the checks rather than reproducing
+the suite here.
+
+**Always build/test through `make` (or pass the build tags) — never raw `go test ./...`.**
+The Matrix channel (`pkg/channels/matrix`) is gated behind `//go:build goolm`, and the gateway
+imports it, so **without the tags the package will not even compile** — you get the misleading
+`build constraints exclude all Go files in .../pkg/channels/matrix → [setup failed]`. That is
+**not** a flake, an OOM, or a real bug — it is a missing build tag. Canonical tags (`Makefile`,
+`GO_BUILD_TAGS`): **`goolm,stdjson`**.
+- `make test` / `make build` inject `-tags goolm,stdjson` automatically — prefer them.
+- Raw invocation MUST carry the tags: `CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/...`.
+
+- **To validate backend changes: push and let CI run** — do not run the full suite here.
+- **At most one narrowly-scoped local test** when you must (`-tags goolm,stdjson -run '^TestName$' -p 1`).
+  A single scoped `pkg/gateway` test is cheap (~86 MB / ~60 s clean); the *full* suite or a
+  parallel `./...` is what exhausts RAM → OOM-kills the session.
+- **Never run multiple Go test suites in parallel.** **Do NOT use `MemoryMax` cgroup caps with
+  swap enabled** — they thrash into unkillable zombies; if you must cap, use `MemorySwapMax=0`
+  so a runaway dies instantly. Watch root disk around builds (`df -h /`); clearing
+  `~/.cache/go-build` forces a multi-GB recompile.
+- Full session/Spec-1 context: `docs/internal/specs/uxh-spec1-STATUS-2026-06-04.md`.
+
 ### SPA Embed Pipeline
 
-The Go binary embeds the frontend SPA from `pkg/gateway/spa/` via `go:embed`. This directory is **not** the Vite build output — `npm run build` outputs to `dist/spa/`. You must sync them before building the binary:
+The binary embeds the SPA from `pkg/gateway/spa/` — **not** the Vite output (`dist/spa/`). Sync before building:
 
 ```bash
-npm run build                    # builds to dist/spa/
-rm -rf pkg/gateway/spa/assets    # remove stale assets
-cp -r dist/spa/* pkg/gateway/spa/  # sync to embed dir
-CGO_ENABLED=0 go build -o /tmp/omnipus ./cmd/omnipus/  # rebuild binary
+npm run build                          # → dist/spa/
+rm -rf pkg/gateway/spa/assets          # drop stale assets
+cp -r dist/spa/* pkg/gateway/spa/      # sync to embed dir
+CGO_ENABLED=0 go build -o /tmp/omnipus ./cmd/omnipus/
 ```
 
-**If you skip the sync, the binary will serve a stale SPA that does not include your frontend changes.** Verify with: `grep -c "YOUR_NEW_STRING" pkg/gateway/spa/assets/index-*.js` — must be >0.
+Skip the sync → stale SPA served. Verify: `grep -c "YOUR_NEW_STRING" pkg/gateway/spa/assets/index-*.js` > 0.
 
-### E2E Testing with the Embedded SPA
+### Running the embedded SPA
 
-Always test against the embedded SPA (the Go binary), not the Vite dev server. The Vite dev server proxies `/api` to `localhost:18790` which may not match the gateway port.
-
-**Start the gateway:**
+Always test against the Go binary, not the Vite dev server (which proxies `/api` to `localhost:18790`).
 
 ```bash
 export OMNIPUS_HOME=/tmp/omnipus-e2e-test
@@ -245,97 +226,31 @@ rm -rf "$OMNIPUS_HOME" && mkdir -p "$OMNIPUS_HOME"
 OMNIPUS_BEARER_TOKEN="" ./omnipus gateway --allow-empty &
 ```
 
-**Known blockers and workarounds:**
+**Known blockers:**
+1. **Port conflict** — default port 3000; if taken (e.g. Next.js) the gateway silently fails to bind. Check `lsof -i :3000 | grep LISTEN`; set `gateway.port` in `$OMNIPUS_HOME/config.json`.
+2. **`gateway.dev_mode_bypass`** — auth tree (`pkg/gateway/auth.go:55-98`): no Bearer header → 401 always; `Gateway.Users` populated → token must match a user; `OMNIPUS_BEARER_TOKEN` set → constant-time match; no users AND no env token → bypass=true lets caller through as admin (one-time WARN), bypass=false → 401. **Onboarding does NOT need bypass** (`/api/v1/state`, `/onboarding/*`, `/auth/login`, `/auth/register-admin`, `/providers`, `/media/`, `/uploads/` use `withOptionalAuth`). Set bypass=true only to drive a `withAuth` endpoint pre-onboarding, for Go test scaffolding, or local dev. `RequireNotBypass` middleware returns **503** when bypass=true on high-blast-radius admin routes (e.g. sandbox-config PUT) — never set in production, never remove the guard without an ADR. **Default: false.**
+3. **Model must support tool use** — Omnipus sends tools every request; a non-tool model (e.g. `google/gemma-2-9b-it`) returns 404. Use `z-ai/glm-5-turbo`, `google/gemini-2.5-flash`, or `anthropic/claude-3.5-haiku`.
+4. **Logs** — `$OMNIPUS_HOME/logs/`: `gateway.log` (runtime), `gateway_panic.log` (startup; check if gateway exits silently).
 
-1. **Port conflict with other apps** — Port 3000 is the default. If another app (e.g., Next.js) is running on 3000, the gateway silently fails to bind. Check with `lsof -i :3000 | grep LISTEN`. Fix: set a different port in `$OMNIPUS_HOME/config.json` under `gateway.port` (e.g., 5000) before starting.
+### E2E checklist (after frontend+backend changes)
 
-2. **`gateway.dev_mode_bypass` — what it is and when to use it**
+Onboarding flow → Chat (multi-turn, token/cost) → Agents (list, create, profile) → System agent (read-only sections) → Settings (all tabs) → Command Center → Skills & Tools tabs → Sidebar nav → zero console errors (WS reconnect warnings OK).
 
-   The auth decision tree in `pkg/gateway/auth.go:55-98` (`checkBearerAuth`, called by `withAuth`) is:
+### Two-port preview
 
-   1. No `Authorization: Bearer …` header → 401 always. Bypass never fires.
-   2. `cfg.Gateway.Users` populated → token must match a registered user.
-   3. `OMNIPUS_BEARER_TOKEN` env set → token must constant-time-equal the env value.
-   4. No users **and** no env token → `dev_mode_bypass: true` lets the caller through as admin (one-time stderr WARN); `dev_mode_bypass: false` returns 401 "no users configured, complete onboarding first".
-
-   **Onboarding does NOT need bypass.** `/api/v1/state`, `/api/v1/onboarding/*`, `/api/v1/auth/login`, `/api/v1/auth/register-admin`, `/api/v1/providers`, `/api/v1/media/`, `/api/v1/uploads/` are wired with `withOptionalAuth` (see `pkg/gateway/rest.go` ~L2004-2098), which never calls `checkBearerAuth`. The SPA onboarding wizard works on a fresh install with `dev_mode_bypass: false` and zero users.
-
-   **When to set `dev_mode_bypass: true`:**
-   - Driving a `withAuth`-protected endpoint (e.g., `curl /api/v1/agents`, `/api/v1/sessions`, `/api/v1/config`) before onboarding has minted a real admin user.
-   - Go test scaffolding — `pkg/gateway/routes_admin_test.go`, `websocket_m4_test.go`, etc. flip the flag so admin-route tests don't have to register users + log in just to authenticate.
-   - Local-dev shells where you intentionally don't want a login step.
-
-   **Defense-in-depth contract:** the paired `RequireNotBypass` middleware (see `TestSandboxConfigPUT_RealMux_DevModeBypass503`) explicitly returns **503** when `dev_mode_bypass=true` is set, on a hand-picked allow-list of high-blast-radius admin routes (e.g., sandbox-config PUT). The flag is loud and self-limiting by design — never set it in production, never remove the `RequireNotBypass` guard without an ADR.
-
-   **Default: `false`.** Only flip it on for the three use cases above. The previous CLAUDE.md note claiming bypass was *required* for onboarding was incorrect and has been removed.
-
-3. **Model must support tool use** — Omnipus sends tools with every LLM request. If the selected model doesn't support tool use (e.g., `google/gemma-2-9b-it` on OpenRouter), the LLM call returns a 404 with "No endpoints found that support tool use." Use a tool-capable model like `z-ai/glm-5-turbo`, `google/gemini-2.5-flash`, or `anthropic/claude-3.5-haiku`.
-
-4. **Gateway logs are in `$OMNIPUS_HOME/logs/`** — `gateway.log` for runtime logs, `gateway_panic.log` for startup errors. Always check `gateway_panic.log` if the gateway exits silently.
-
-### E2E Test Checklist
-
-After frontend+backend changes, verify these flows on the embedded SPA:
-
-1. **Onboarding** — Welcome → Provider → API Key → Model Select → Admin Account → Complete
-2. **Chat** — Send message → receive LLM response → multi-turn context retained → token/cost updates
-3. **Agents** — List (system + custom) → Create Agent (with Tools & Permissions) → Agent Profile (accordion, tools panel)
-4. **System Agent** — Profile shows read-only sections only (no Identity, no Tools & Permissions)
-5. **Settings** — Provider shows Connected, all tabs load
-6. **Command Center** — Gateway status, task board
-7. **Skills & Tools** — 4 tabs, empty states
-8. **Sidebar** — All nav items, active highlighting
-9. **Console errors** — Zero JS errors (WebSocket reconnect warnings are acceptable)
-
-### Operator configuration: two-port preview
-
-The gateway opens two listeners by default. `gateway.port` (default `5000`) serves the SPA and the authenticated API. `gateway.preview_port` (default `5001`) serves agent-generated HTML previews on a separate origin, providing browser-level isolation between the SPA's admin token and content produced by agents. Setting `gateway.preview_listener_enabled = false` **fully disables the iframe-preview feature**: the second listener is not started, and the `/preview/` path prefix is **not** registered on the main mux either, so requests to `<main-host>:<port>/preview/...` receive a 404 from the SPA catch-all. `web_serve` tool calls still mint tokens, but the URLs they hand back to the agent will not resolve. There is no fallback to single-port serving — disabling the preview listener is a full rollback of the iframe-preview feature. Re-enable and restart to restore functionality. See `docs/operations/reverse-proxy.md` for complete details.
-
-Reverse-proxy operators who terminate TLS at nginx or Caddy should set `gateway.public_url` and `gateway.preview_origin` to the fully-qualified HTTPS URLs that the browser reaches (e.g. `https://omnipus.example.com` and `https://preview.omnipus.example.com`). The gateway uses these values to build correct `Content-Security-Policy` and `frame-ancestors` headers. See `docs/operations/reverse-proxy.md` for complete nginx and Caddy configuration examples.
-
-On Android/Termux, `gateway.preview_listener_enabled` defaults to `false` because Termux processes typically cannot bind a second network port without additional permissions — iframe previews are unavailable in that environment. The gateway detects the Termux environment at boot and applies this default automatically.
+Gateway opens two listeners by default: `gateway.port` (5000, SPA + authenticated API) and `gateway.preview_port` (5001, agent-generated HTML previews on a separate origin for browser isolation). `gateway.preview_listener_enabled=false` fully disables iframe preview (second listener not started, `/preview/` not registered → 404; `web_serve` URLs won't resolve). No single-port fallback. Reverse-proxy operators set `gateway.public_url` and `gateway.preview_origin` to the FQ HTTPS URLs the browser reaches (for correct CSP / `frame-ancestors`) — see `docs/operations/reverse-proxy.md`. On Android/Termux, `preview_listener_enabled` defaults to false (can't bind a second port).
 
 ## Contract regeneration
 
-All wire-format types that cross the gateway/SPA boundary are generated from two spec files:
+Wire types are generated from `contracts/openapi.yaml` (REST), `contracts/asyncapi.yaml` (WS), `contracts/components/schemas/` (shared schemas). Artifacts (committed, never hand-edit): `pkg/api/generated/` (Go, oapi-codegen) and `src/lib/api/generated/` (TS types + Zod, openapi-typescript / openapi-zod-client).
 
-- `contracts/openapi.yaml` — REST endpoints
-- `contracts/asyncapi.yaml` — WebSocket frames
-- `contracts/components/schemas/` — shared JSON Schema component definitions
+Run codegen: `make gen-contracts` (lints both specs, regenerates all; idempotent on a clean tree).
 
-Generated artifacts (committed to the repo — never hand-edit):
-
-- `pkg/api/generated/` — Go types (generated by `oapi-codegen`)
-- `src/lib/api/generated/` — TypeScript types + Zod schemas (generated by `openapi-typescript` and `openapi-zod-client`)
-
-### Running codegen locally
-
-```bash
-make gen-contracts
-```
-
-This runs `scripts/gen-contracts.sh`, which lints both specs and regenerates all artifacts. Running it twice in a clean tree produces no git diff (idempotent).
-
-### Adding a new wire type (hard-constraint #8 — 5-step process)
-
-1. Add the schema to `contracts/components/schemas/<TypeName>.yaml`
-2. Reference it from `contracts/openapi.yaml` (REST) or `contracts/asyncapi.yaml` (WS), or both
-3. Run `scripts/gen-contracts.sh` to regenerate all artifacts
+**Add a new wire type (Constraint #8, 5 steps in order):**
+1. Add schema to `contracts/components/schemas/<TypeName>.yaml`
+2. Reference it from `openapi.yaml` and/or `asyncapi.yaml`
+3. Run `scripts/gen-contracts.sh`
 4. Commit the generated diff alongside the spec change (one atomic commit)
-5. Write the handler (Go) or consumer (TypeScript) using the **generated type only** — never hand-write a parallel struct or interface
+5. Write the handler/consumer using the generated type only — never a parallel struct/interface
 
-Steps in any other order violate hard-constraint #8 and will fail the `verify-contracts` CI gate.
-
-### Handling a verify-contracts CI failure
-
-If the `verify-contracts` CI job fails, it means the committed generated files are stale relative to the spec. Fix:
-
-```bash
-make gen-contracts          # regenerate from spec
-git diff                    # review the changes
-git add pkg/api/generated/ src/lib/api/generated/
-git commit -m "chore(contracts): regenerate from spec"
-git push
-```
-
-Never commit a spec change without also committing the regenerated artifacts. Never edit generated files directly — they will be overwritten on the next `make gen-contracts` run.
+**verify-contracts CI failure** = committed generated files are stale: `make gen-contracts`, review `git diff`, commit `pkg/api/generated/ src/lib/api/generated/`, push. Never commit a spec change without regenerated artifacts; never edit generated files directly.

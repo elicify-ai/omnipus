@@ -7,7 +7,9 @@ import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay }
 import { queryClient } from '@/lib/queryClient'
 import type { Message, ToolCall } from '@/lib/api'
 import type { WsReceiveFrame, WsExecApprovalRequestFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
-import type { ToolResultRef, TruncatedResult } from '@/lib/api/generated/asyncapi-types'
+import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame } from '@/lib/api/generated/asyncapi-types'
+import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
+import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { registerSyncChatForeground } from '@/store/session'
 
@@ -2231,6 +2233,24 @@ export const useChatStore = create<ChatStore>((set, get) => {
               return { sessionsById, ...bucketToForeground(fg) }
             })
           }, 60_000)
+          break
+        }
+        case 'whatsapp_pairing': {
+          // #283: global (not session-tied) — record QR/status for the Channels
+          // config panel. Accessed via getState() at frame time (not a hook
+          // subscription) so chatStore stays decoupled from the pairing store.
+          useWhatsAppPairingStore
+            .getState()
+            .apply(frame as WhatsAppPairingFrame)
+          break
+        }
+
+        case 'notification': {
+          // #264: global (not session-tied) — push into the dedicated
+          // Notifications store backing the header notification center. Mirrors
+          // the #283 whatsapp_pairing case: accessed via getState() at frame
+          // time so chatStore stays decoupled from the notifications store.
+          useNotificationsStore.getState().apply(frame as NotificationFrame)
           break
         }
 

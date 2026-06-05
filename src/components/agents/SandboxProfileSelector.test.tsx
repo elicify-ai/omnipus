@@ -38,20 +38,23 @@ describe('SandboxProfileSelector', () => {
     renderSelector()
     const radios = screen.getAllByRole('radio')
     expect(radios).toHaveLength(5)
-    expect(screen.getByLabelText(/Sandbox profile: None/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/Sandbox profile: Workspace \+ Net/i)).toBeInTheDocument()
-    expect(screen.getByLabelText(/Sandbox profile: Off/i)).toBeInTheDocument()
+    // Labels updated for plain language (#335 / US-D3)
+    expect(screen.getByTestId('sandbox-profile-radio-none')).toBeInTheDocument()
+    expect(screen.getByTestId('sandbox-profile-radio-workspace')).toBeInTheDocument()
+    expect(screen.getByTestId('sandbox-profile-radio-workspace+net')).toBeInTheDocument()
+    expect(screen.getByTestId('sandbox-profile-radio-host')).toBeInTheDocument()
+    expect(screen.getByTestId('sandbox-profile-radio-off')).toBeInTheDocument()
   })
 
   it('selecting non-off profile calls onChange immediately', () => {
     const { onChange } = renderSelector()
-    fireEvent.click(screen.getByLabelText('Sandbox profile: Workspace'))
+    fireEvent.click(screen.getByTestId('sandbox-profile-radio-workspace'))
     expect(onChange).toHaveBeenCalledWith('workspace')
   })
 
   it('selecting off opens confirmation dialog', async () => {
     renderSelector()
-    fireEvent.click(screen.getByLabelText(/Sandbox profile: Off/i))
+    fireEvent.click(screen.getByTestId('sandbox-profile-radio-off'))
     await waitFor(() => {
       expect(screen.getByText(/Disable sandbox for Test Agent/i)).toBeInTheDocument()
     })
@@ -59,7 +62,7 @@ describe('SandboxProfileSelector', () => {
 
   it('typing wrong name keeps submit disabled', async () => {
     renderSelector()
-    fireEvent.click(screen.getByLabelText(/Sandbox profile: Off/i))
+    fireEvent.click(screen.getByTestId('sandbox-profile-radio-off'))
     await waitFor(() => {
       expect(screen.getByTestId('sandbox-off-confirm-input')).toBeInTheDocument()
     })
@@ -71,7 +74,7 @@ describe('SandboxProfileSelector', () => {
 
   it('typing exact agent name enables submit', async () => {
     renderSelector()
-    fireEvent.click(screen.getByLabelText(/Sandbox profile: Off/i))
+    fireEvent.click(screen.getByTestId('sandbox-profile-radio-off'))
     await waitFor(() => {
       expect(screen.getByTestId('sandbox-off-confirm-input')).toBeInTheDocument()
     })
@@ -83,7 +86,7 @@ describe('SandboxProfileSelector', () => {
 
   it('onChange fires with off only after exact-match confirmation', async () => {
     const { onChange } = renderSelector()
-    fireEvent.click(screen.getByLabelText(/Sandbox profile: Off/i))
+    fireEvent.click(screen.getByTestId('sandbox-profile-radio-off'))
     await waitFor(() => {
       expect(screen.getByTestId('sandbox-off-confirm-input')).toBeInTheDocument()
     })
@@ -102,7 +105,7 @@ describe('SandboxProfileSelector', () => {
 
   it('cancel closes dialog without calling onChange', async () => {
     const { onChange } = renderSelector()
-    fireEvent.click(screen.getByLabelText(/Sandbox profile: Off/i))
+    fireEvent.click(screen.getByTestId('sandbox-profile-radio-off'))
     await waitFor(() => {
       expect(screen.getByText(/Disable sandbox for Test Agent/i)).toBeInTheDocument()
     })
@@ -122,7 +125,7 @@ describe('SandboxProfileSelector', () => {
     const { onChange } = renderSelector({ value: 'workspace' })
 
     // Open the confirmation dialog by clicking "off".
-    fireEvent.click(screen.getByLabelText(/Sandbox profile: Off/i))
+    fireEvent.click(screen.getByTestId('sandbox-profile-radio-off'))
     await waitFor(() => {
       expect(screen.getByText(/Disable sandbox for Test Agent/i)).toBeInTheDocument()
     })
@@ -136,12 +139,12 @@ describe('SandboxProfileSelector', () => {
     // onChange must not have been called.
     expect(onChange).not.toHaveBeenCalled()
 
-    // The "workspace" radio must still be selected.
-    const workspaceRadio = screen.getByLabelText('Sandbox profile: Workspace')
+    // The "workspace" radio must still be selected via data-testid.
+    const workspaceRadio = screen.getByTestId('sandbox-profile-radio-workspace')
     expect(workspaceRadio).toBeChecked()
 
     // The "off" radio must NOT be checked.
-    const offRadio = screen.getByLabelText(/Sandbox profile: Off/i)
+    const offRadio = screen.getByTestId('sandbox-profile-radio-off')
     expect(offRadio).not.toBeChecked()
   })
 

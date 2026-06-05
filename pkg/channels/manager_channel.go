@@ -16,6 +16,31 @@ import (
 // fields are plain strings (*Ref), they survive JSON marshal/unmarshal without any
 // special handling.
 
+// configKeyToChannelName maps a channels config JSON key to the channel name that
+// initChannels registers in m.channels (and that StartAll iterates). For almost all
+// channels the config key IS the registered name, so the map only needs the divergent
+// cases. WhatsApp is the one mismatch: its config lives under the "whatsapp" key
+// (config.ChannelsConfig.WhatsApp `json:"whatsapp"`), but initChannels registers the
+// always-native whatsmeow implementation under "whatsapp_native" (initChannel(
+// "whatsapp_native", ...)). Without this remap, a Reload that enables WhatsApp produces
+// added=["whatsapp"] while m.channels only has "whatsapp_native" — so the Reload
+// added-start loop dereferences a nil channel and crashes the gateway.
+//
+// Keeping channelHashes / compareChannels / toChannelConfig all keyed by the REGISTERED
+// name means StartAll and Reload agree, and m.channels[name] always resolves.
+var configKeyToChannelName = map[string]string{
+	"whatsapp": "whatsapp_native",
+}
+
+// channelNameForConfigKey returns the registered channel name for a channels config
+// JSON key, applying configKeyToChannelName. Keys without an entry map to themselves.
+func channelNameForConfigKey(configKey string) string {
+	if name, ok := configKeyToChannelName[configKey]; ok {
+		return name
+	}
+	return configKey
+}
+
 func toChannelHashes(cfg *config.Config) map[string]string {
 	result := make(map[string]string)
 	ch := cfg.Channels
@@ -50,7 +75,11 @@ func toChannelHashes(cfg *config.Config) map[string]string {
 			valueBytes = []byte("{}")
 		}
 		hash := md5.Sum(valueBytes)
-		result[key] = hex.EncodeToString(hash[:])
+		// Key the hash map by the REGISTERED channel name, not the raw config key,
+		// so compareChannels' added/removed lists (and m.channelHashes) line up with
+		// m.channels — which initChannels populates under the registered name. For all
+		// channels except WhatsApp these are identical; see channelNameForConfigKey.
+		result[channelNameForConfigKey(key)] = hex.EncodeToString(hash[:])
 	}
 
 	return result
@@ -99,9 +128,14 @@ func toChannelConfig(cfg *config.Config, list []string) (*config.ChannelsConfig,
 	temp := make(map[string]map[string]any, 0)
 
 	for key, value := range channelConfig {
+		// `list` holds REGISTERED channel names (the output of toChannelHashes /
+		// compareChannels), while `key` is the config JSON key. Translate the key to
+		// its registered name before matching so a list entry like "whatsapp_native"
+		// still selects the "whatsapp" config block. See channelNameForConfigKey.
+		registeredName := channelNameForConfigKey(key)
 		found := false
 		for _, s := range list {
-			if key == s {
+			if registeredName == s {
 				found = true
 				break
 			}

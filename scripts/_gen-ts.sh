@@ -38,11 +38,14 @@ else
   NODE_BIN="$REPO_ROOT/node_modules/.bin"
   NODE_MODULES="$REPO_ROOT/node_modules"
 fi
-# contracts/ lives in the main repo root, not the worktree root.
-# Allow CONTRACTS env var override so worktrees with modified contracts can
-# generate from their own copy (e.g. worktrees/fix-inline-schemas).
+# contracts/ resolution: prefer the worktree's own contracts/ if it exists
+# (so branch-specific schema changes are picked up), then fall back to the
+# main-repo checkout, then finally the REPO_ROOT itself.
+# Allow CONTRACTS env var override for any remaining edge cases.
 if [ -z "${CONTRACTS:-}" ]; then
-  if [ -d "$MAIN_REPO_ROOT/contracts" ]; then
+  if [ -d "$REPO_ROOT/contracts" ]; then
+    CONTRACTS="$REPO_ROOT/contracts"
+  elif [ -d "$MAIN_REPO_ROOT/contracts" ]; then
     CONTRACTS="$MAIN_REPO_ROOT/contracts"
   else
     CONTRACTS="$REPO_ROOT/contracts"

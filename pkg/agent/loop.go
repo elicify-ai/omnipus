@@ -272,6 +272,44 @@ type processOptions struct {
 	SkipInitialSteeringPoll bool                  // If true, skip the steering poll at loop start (used by Continue)
 	TranscriptSessionID     string                // Session ID for transcript tool call recording (empty = disabled)
 	TranscriptStore         *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
+
+	// AutoDenyAsk, when true, makes every `ask`-policy tool call auto-DENIED
+	// without ever requesting human approval (issue #264, FR-009). Scheduled
+	// runs are headless — there is no operator to approve, so blocking on an
+	// approval prompt would stall the run forever. Only ProcessScheduled sets
+	// this; interactive paths leave it false so `ask` keeps prompting.
+	AutoDenyAsk bool
+}
+
+// ScheduledJobInfo carries the schedule/job identity that ProcessScheduled
+// callers inject into the run context via WithScheduledJobContext. The
+// auto-deny path reads it so the emitted audit entry names the responsible
+// schedule (F-13 / O-3 observability requirement, issue #342).
+type ScheduledJobInfo struct {
+	JobID   string
+	JobName string
+}
+
+// scheduledJobContextKey is the unexported context key for ScheduledJobInfo.
+type scheduledJobContextKey struct{}
+
+// WithScheduledJobContext returns a child context carrying the schedule
+// identity. Call this in the cron fire path (pkg/gateway/schedules.go
+// RunScheduled) before calling ProcessScheduled so the auto-deny audit entry
+// can include the job id and name.
+func WithScheduledJobContext(ctx context.Context, jobID, jobName string) context.Context {
+	return context.WithValue(ctx, scheduledJobContextKey{}, ScheduledJobInfo{
+		JobID:   jobID,
+		JobName: jobName,
+	})
+}
+
+// scheduledJobContextFrom retrieves the ScheduledJobInfo from ctx, or returns
+// a zero-value struct when no info was injected (interactive / non-scheduled
+// runs). The boolean reports whether info was present.
+func scheduledJobContextFrom(ctx context.Context) (ScheduledJobInfo, bool) {
+	v, ok := ctx.Value(scheduledJobContextKey{}).(ScheduledJobInfo)
+	return v, ok
 }
 
 type continuationTarget struct {
@@ -2028,6 +2066,52 @@ func (al *AgentLoop) emitEvent(kind EventKind, meta EventMeta, payload any) {
 	al.eventBus.Emit(evt)
 }
 
+// EmitWhatsAppPairing publishes a WhatsApp native/QR pairing update (QR code or
+// status) onto the event bus so every connected SPA WebSocket client receives a
+// whatsapp_pairing frame (#283). Safe to call from a channel's own goroutine —
+// the bus drops to a full subscriber rather than blocking. Wired into the
+// WhatsApp native channel at gateway boot via SetPairingObserver.
+func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.PairingStatus, qr, message string) {
+	al.emitEvent(EventKindWhatsAppPairing, EventMeta{Source: "channel"}, WhatsAppPairingPayload{
+		ChannelID: channelID,
+		Status:    status,
+		QR:        qr,
+		Message:   message,
+	})
+	// FR-111 (#358): audit-log device-pairing lifecycle transitions so linking a new
+	// WhatsApp device leaves a tamper-evident trail. We deliberately do NOT log the
+	// `code`/`connecting` states (high-frequency, and the QR itself is a scannable
+	// secret that must never reach the audit file) — only the terminal outcomes.
+	// Decision uses the audit vocabulary (allow=linked, error=failed/expired); the
+	// exact pairing status rides in Details.
+	switch status {
+	case channels.PairingStatusLinked, channels.PairingStatusError, channels.PairingStatusTimeout:
+		decision := audit.DecisionAllow
+		if status != channels.PairingStatusLinked {
+			decision = audit.DecisionError
+		}
+		audit.EmitEntry(al.auditLogger, &audit.Entry{
+			Timestamp: time.Now().UTC(),
+			Event:     audit.EventChannelPairing,
+			Decision:  decision,
+			Details: map[string]any{
+				"channel": channelID,
+				"status":  string(status),
+				"message": message,
+			},
+		})
+	}
+}
+
+// EmitNotification publishes a user-facing notification onto the event bus so
+// the recipient's SPA WebSocket connections receive a notification frame (#264).
+// The WS forwarder filters delivery by Recipient (==wsConn.userID), so the
+// payload is not broadcast to every authenticated tab. Safe to call from any
+// goroutine — the bus drops to a full subscriber rather than blocking.
+func (al *AgentLoop) EmitNotification(p NotificationPayload) {
+	al.emitEvent(EventKindNotification, EventMeta{Source: "schedule"}, p)
+}
+
 func cloneEventArguments(args map[string]any) map[string]any {
 	if len(args) == 0 {
 		return nil
@@ -2186,6 +2270,16 @@ func (al *AgentLoop) getChannelManager() *channels.Manager {
 	cm := al.channelManager
 	al.channelManagerMu.RUnlock()
 	return cm
+}
+
+// GetChannelManager returns the current channel manager under the read lock
+// (may be nil before channels start, e.g. during onboarding). Exported for
+// pkg/gateway: REST handlers inspect runtime channel state (e.g. FailedChannels),
+// and the scheduled runner validates that a deliver=true target channel is
+// registered before publishing (M2). Set after construction via
+// SetChannelManager, so callers must tolerate nil and re-fetch at use time.
+func (al *AgentLoop) GetChannelManager() *channels.Manager {
+	return al.getChannelManager()
 }
 
 // ReloadProviderAndConfig atomically swaps the provider and config with proper synchronization.
@@ -2932,6 +3026,92 @@ func (al *AgentLoop) ProcessHeartbeat(
 		SendResponse:         false,
 		SuppressToolFeedback: true,
 		NoHistory:            true, // Don't load session history for heartbeat
+	})
+}
+
+// ProcessScheduled runs a fired schedule's message as ownerAgentID against the
+// concrete pre-created sessionID (issue #264, W-1). It is the dedicated headless
+// entry point for the cron → agent fire path and deliberately differs from the
+// human message path:
+//
+//   - It pins ownerAgentID directly via runAgentLoop — it does NOT consult
+//     routing or the sessionActiveAgent handoff map, so a human switching agents
+//     in this session cannot hijack the scheduled run, and a missing/disabled
+//     owner is a hard error (never a default-agent fallback, the core #264 bug).
+//   - It passes the concrete sessionID as TranscriptSessionID so the turn
+//     registers under it (GetActiveTurnHookForSession matches by
+//     transcriptSessionID) and RequestCancel(CancelScope{SessionID}) can abort
+//     it on a caller-imposed deadline. The session key is the per-owner
+//     "agent:<owner>:session:<id>" form, collision-free across isolated runs.
+//   - It sets AutoDenyAsk so any `ask`-policy tool call is denied without
+//     blocking for approval (FR-009) — no operator is present.
+//
+// The caller (the Wave-2 gateway runner) resolves the owner + picks the session
+// per session_mode and supplies a concrete sessionID; it imposes the deadline on
+// ctx and calls RequestCancel on timeout. ProcessScheduled only guarantees
+// owner-pinning, cancellability, and prompt return.
+//
+// Returns the agent's reply and a non-nil error on run failure. An aborted
+// (canceled/deadline) run returns a context-derived error promptly.
+func (al *AgentLoop) ProcessScheduled(
+	ctx context.Context,
+	ownerAgentID, sessionID, content, channel, chatID string,
+) (string, error) {
+	if ownerAgentID == "" {
+		return "", fmt.Errorf("owner unavailable: empty agent id")
+	}
+	if sessionID == "" {
+		return "", fmt.Errorf("scheduled run requires a concrete session id")
+	}
+
+	if err := al.ensureHooksInitialized(ctx); err != nil {
+		return "", err
+	}
+	if err := al.ensureMCPInitialized(ctx); err != nil {
+		return "", err
+	}
+
+	// Owner pinning (FR-001): a missing owner is a hard error — NEVER fall back
+	// to GetDefaultAgent. Note GetAgent registers ALL agents regardless of
+	// Enabled, so registration alone does not imply the owner is active; the
+	// config IsActive() check below rejects a disabled owner.
+	agent, ok := al.GetRegistry().GetAgent(ownerAgentID)
+	if !ok || agent == nil {
+		return "", fmt.Errorf("owner unavailable: agent %q not found", ownerAgentID)
+	}
+	// Disabled-owner guard (FR-001): a registered-but-disabled agent must not
+	// run. The runtime registry keeps disabled agents, so consult config.
+	if ac := findAgentConfig(al.GetConfig(), ownerAgentID); ac != nil && !ac.IsActive() {
+		return "", fmt.Errorf("owner unavailable: agent %q is disabled", ownerAgentID)
+	}
+
+	// Per-owner session key (collision-free across isolated runs). Built here
+	// rather than via agentSessionKey because we bypass resolveMessageRoute.
+	sessionKey := fmt.Sprintf("agent:%s:session:%s", ownerAgentID, sessionID)
+
+	// Resolve the transcript store for the concrete session so tool calls are
+	// recorded and the turn registers under transcriptSessionID == sessionID
+	// (which is what RequestCancel(CancelScope{SessionID}) matches against).
+	transcriptStore := al.ResolveSessionStore(sessionID)
+	if transcriptStore == nil {
+		logger.WarnCF(
+			"agent",
+			"scheduled run: session store not found for session id — tool calls will not be recorded",
+			map[string]any{"session_id": sessionID, "owner": ownerAgentID},
+		)
+	}
+
+	return al.runAgentLoop(ctx, agent, processOptions{
+		SessionKey:          sessionKey,
+		Channel:             channel,
+		ChatID:              chatID,
+		UserMessage:         content,
+		DefaultResponse:     defaultResponse,
+		EnableSummary:       true,
+		SendResponse:        false,
+		TranscriptSessionID: sessionID,
+		TranscriptStore:     transcriptStore,
+		AutoDenyAsk:         true, // FR-009: headless — auto-deny ask-policy tools
 	})
 }
 
@@ -4713,6 +4893,52 @@ turnLoop:
 				continue
 			}
 			if toctouPolicy == "ask" {
+				// Headless auto-deny (issue #264, FR-009): a scheduled run has no
+				// operator to approve, so any `ask`-policy tool is denied without
+				// ever issuing an approval request — the run must never stall.
+				if ts.opts.AutoDenyAsk {
+					const denialReason = "auto-denied: ask-policy tool not allowed in a headless scheduled run"
+					denyMsg := fmt.Sprintf(`{"error":"permission_denied","message":"User denied tool execution.","tool":%q,"reason":%q}`, toolName, denialReason)
+					// Build optional extra Details for the deny.attempted entry so
+					// both correlated records carry the schedule identity (O-3 / F-13
+					// / issue #342). scheduledJobContextFrom is a no-op read — safe to
+					// call even when no job info was injected.
+					var denyExtra map[string]any
+					if jobInfo, ok := scheduledJobContextFrom(turnCtx); ok && jobInfo.JobID != "" {
+						denyExtra = map[string]any{
+							"schedule_job_id":   jobInfo.JobID,
+							"schedule_job_name": jobInfo.JobName,
+						}
+					}
+					al.emitPolicyDenyAudit(ts, toolName, "ask", denialReason, denyExtra)
+					// O-3 / F-13 / issue #342: emit the canonical tool.policy.ask.denied
+					// entry via EmitToolPolicyAskDenied (CRIT-6 compliant, INFO severity,
+					// reason=AskDenyReasonScheduled). See emitScheduledAutoDenyAudit.
+					al.emitScheduledAutoDenyAudit(turnCtx, ts, toolName, tc.ID)
+					deniedMsg := providers.Message{
+						Role:       "tool",
+						Content:    denyMsg,
+						ToolCallID: tc.ID,
+					}
+					messages = append(messages, deniedMsg)
+					if !ts.opts.NoHistory {
+						ts.agent.Sessions.AddFullMessage(ts.sessionKey, deniedMsg)
+						ts.recordPersistedMessage(deniedMsg)
+					}
+					al.emitEvent(
+						EventKindToolExecSkipped,
+						ts.eventMeta("runTurn", "turn.tool.skipped"),
+						ToolExecSkippedPayload{
+							Tool:   toolName,
+							Reason: fmt.Sprintf("permission_denied (ask auto-denied: %s)", denialReason),
+						},
+					)
+					if shouldAbort, _ := al.recordSyntheticDeny(ts); shouldAbort {
+						turnStatus = TurnEndStatusAborted
+						return al.abortTurn(ts)
+					}
+					continue
+				}
 				// ask-policy: pause and request human approval (FR-011).
 				approver := al.loadToolApprover()
 				approved, denialReason := approver.RequestApproval(turnCtx, PolicyApprovalReq{
@@ -6477,22 +6703,117 @@ func (al *AgentLoop) toolRequiresAdmin(ts *turnState, toolName string) bool {
 
 // emitPolicyDenyAudit writes a tool.policy.deny.attempted audit entry.
 // context is a free-form note such as "mid_turn_policy_change" or the denial reason.
+// extra, when non-nil, is merged into the Details map so callers can attach
+// structured fields (e.g. schedule_job_id) without a separate emit.
 //
 // CRIT-6 + typed-Decision/Event migration: routes through audit.EmitEntry so
 // Log failure bumps the audit-skipped counter (/health audit_degraded), and
 // uses the typed EventToolPolicyDenyAttempted + DecisionDeny constants in
 // place of raw string literals.
-func (al *AgentLoop) emitPolicyDenyAudit(ts *turnState, toolName, resolvedPolicy, context string) {
+func (al *AgentLoop) emitPolicyDenyAudit(
+	ts *turnState,
+	toolName, resolvedPolicy, context string,
+	extra ...map[string]any,
+) {
+	details := map[string]any{
+		"turn_id":         ts.turnID,
+		"resolved_policy": resolvedPolicy,
+		"context":         context,
+	}
+	for _, m := range extra {
+		for k, v := range m {
+			details[k] = v
+		}
+	}
 	audit.EmitEntry(al.auditLogger, &audit.Entry{
 		Event:     audit.EventToolPolicyDenyAttempted,
 		Decision:  audit.DecisionDeny,
 		AgentID:   ts.agentID,
 		Tool:      toolName,
 		SessionID: ts.sessionKey,
-		Details: map[string]any{
-			"turn_id":         ts.turnID,
-			"resolved_policy": resolvedPolicy,
-			"context":         context,
-		},
+		Details:   details,
 	})
+}
+
+// emitScheduledAutoDenyAudit writes a tool.policy.ask.denied audit entry for
+// the headless scheduled-run auto-deny path (O-3 / F-13 / issue #342).
+//
+// It routes through audit.EmitToolPolicyAskDenied (the canonical helper) so:
+//   - CRIT-6 is honored: write failures bump IncSkipped via the Emit path,
+//     making /health audit_degraded accurate.
+//   - Severity is SeverityInfo (documented contract for ask.denied events).
+//   - The reason field carries AskDenyReasonScheduled so SIEM rules can filter
+//     headless auto-denies without string-matching the context note.
+//
+// The schedule identity (job_id, job_name) is read from the run context via
+// scheduledJobContextFrom — the cron fire path (gateway RunScheduled) injects
+// it with WithScheduledJobContext before calling ProcessScheduled. When the
+// job info is missing from the context (e.g. a caller that omits the wrapper),
+// a slog.Warn is emitted so the lost attribution is loud, and the ask.denied
+// entry is still written (with empty schedule fields) so the denial is always
+// recorded.
+//
+// The companion emitPolicyDenyAudit call (tool.policy.deny.attempted) at the
+// same call site carries the same schedule identity in its Details map, giving
+// operators two correlated entries per auto-deny: one for the policy-deny
+// audit trail and one for the structured ask.denied reason.
+func (al *AgentLoop) emitScheduledAutoDenyAudit(
+	ctx context.Context,
+	ts *turnState,
+	toolName, toolCallID string,
+) {
+	var jobID, jobName string
+	if info, ok := scheduledJobContextFrom(ctx); ok && info.JobID != "" {
+		jobID = info.JobID
+		jobName = info.JobName
+	} else {
+		// MEDIUM: missing job identity means the audit entry can't name the
+		// schedule that was responsible for the skip. This is loud so operators
+		// notice mis-wired fire paths (e.g. ProcessScheduled called without
+		// WithScheduledJobContext). The ask.denied entry is still emitted —
+		// losing the denial record entirely is worse than a partially-attributed
+		// one.
+		logger.WarnCF("agent", "scheduled auto-deny audit: job identity missing from context",
+			map[string]any{
+				"note":        "ask.denied entry will lack schedule_job_id/name",
+				"agent_id":    ts.agentID,
+				"tool":        toolName,
+				"session_key": ts.sessionKey,
+			},
+		)
+	}
+
+	// Emit the canonical tool.policy.ask.denied record. approvalID and
+	// approverUserID are empty: in the headless path no approval was ever
+	// requested, so there is no approval id to reference and no human actor.
+	// argsHash and cancelledToolCallIDs are also empty / nil for the same reason.
+	audit.EmitToolPolicyAskDenied(
+		ctx,
+		al.auditLogger,
+		"", // approvalID — no approval request was made
+		"", // approverUserID — no human actor
+		toolName,
+		ts.agentID,
+		ts.sessionKey,
+		ts.turnID,
+		audit.AskDenyReasonScheduled,
+		"",  // argsHash — not available at this call site
+		nil, // cancelledToolCallIDs — not applicable
+	)
+
+	// The schedule identity (jobID, jobName) also appears in the companion
+	// tool.policy.deny.attempted entry emitted by the emitPolicyDenyAudit call
+	// at the auto-deny call site — the caller reads it from the context and
+	// passes it as extra Details there. Log it here too so the structured log
+	// line is self-contained even when audit writing is disabled.
+	if jobID != "" {
+		logger.InfoCF("agent", "scheduled auto-deny: ask-gated tool skipped in headless run",
+			map[string]any{
+				"schedule_job_id":   jobID,
+				"schedule_job_name": jobName,
+				"tool":              toolName,
+				"agent_id":          ts.agentID,
+			},
+		)
+	}
 }

@@ -301,8 +301,11 @@ func TestDefaultConfig_Gateway(t *testing.T) {
 	if cfg.Gateway.Port == 0 {
 		t.Error("Gateway port should have default value")
 	}
-	if cfg.Gateway.HotReload {
-		t.Error("Gateway hot reload should be disabled by default")
+	// FR-106: hot_reload must default to true so fresh installs apply config
+	// changes without a restart. Operators who set hot_reload:false in config.json
+	// retain the old behavior (JSON value wins over the default).
+	if !cfg.Gateway.HotReload {
+		t.Error("Gateway hot reload should be enabled by default (FR-106)")
 	}
 }
 

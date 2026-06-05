@@ -1,6 +1,10 @@
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { AppShell } from '@/components/layout/AppShell'
 import { fetchAppState, validateToken } from '@/lib/api'
+import { checkTokenValidity, resetTokenValidationCache } from './authValidation'
+
+// Re-exported so the login flow (and tests) can reset the validation cache (#359).
+export { resetTokenValidationCache }
 
 // Pathless layout route — wraps all app screens in AppShell
 // Landing page (/landing) is a sibling, NOT nested here, so it renders without the shell
@@ -24,16 +28,16 @@ export const Route = createFileRoute('/_app')({
     if (!token) {
       throw redirect({ to: '/login' })
     }
-    // Validate token by calling /auth/validate
-    try {
-      await validateToken()
-    } catch (err) {
-      // Token is invalid or expired — clear it and redirect to login
+    // Validate the token (cached + transient-tolerant — see authValidation.ts).
+    // Only a CONFIRMED 401 evicts the session; a network/5xx hiccup keeps it.
+    const verdict = await checkTokenValidity(validateToken)
+    if (verdict === 'unauthorized') {
       sessionStorage.removeItem('omnipus_auth_token')
       localStorage.removeItem('omnipus_auth_token')
-      console.warn('[auth] Token validation failed:', err)
+      console.warn('[auth] Token validation failed (401) — redirecting to login')
       throw redirect({ to: '/login' })
     }
+    // 'ok' or 'transient' → proceed into the app.
   },
   component: AppShell,
 })

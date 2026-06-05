@@ -110,6 +110,30 @@ func newTestAPIWithMasterKey(t *testing.T) (*restAPI, string, string) {
 	return api, tmpDir, hexKey
 }
 
+// setupMasterKeyTempDir creates a temp directory with a minimal config.json,
+// sets OMNIPUS_MASTER_KEY to a fresh random hex key, and returns (tmpDir, hexKey).
+// Unlike newTestAPIWithMasterKey it does NOT create an AgentLoop — use this
+// when the caller creates its own loop immediately, so that only ONE AgentLoop
+// is alive per test instead of two. This halves the peak heap footprint of
+// tests that previously called newTestAPIWithMasterKey only to throw away the
+// loop it returned.
+func setupMasterKeyTempDir(t *testing.T) (string, string) {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	t.Setenv("OMNIPUS_KEY_FILE", "")
+
+	rawKey := make([]byte, 32)
+	_, err := rand.Read(rawKey)
+	require.NoError(t, err)
+	hexKey := hex.EncodeToString(rawKey)
+	t.Setenv("OMNIPUS_MASTER_KEY", hexKey)
+
+	tmpDir := t.TempDir()
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+	return tmpDir, hexKey
+}
+
 // readConfigMap reads config.json from dir and returns it as a map.
 func readConfigMap(t *testing.T, dir string) map[string]any {
 	t.Helper()
@@ -330,15 +354,25 @@ func TestHandleRegisterAdmin_ConcurrentOnlyOneSucceeds(t *testing.T) {
 // TestProviders_BackwardCompatPlaintextAPIKey verifies that a config with an old-style
 // plaintext api_key field (not api_key_ref) is still served by GET /api/v1/providers.
 //
-// BDD: Given config.json has a provider entry with plaintext "api_key" (not api_key_ref),
+// BDD: Given config.json has a provider entry with the legacy "api_key" field
+// AND the corresponding env-var (OPENAI_API_KEY, populated by InjectFromConfig at boot)
+// is set to the plaintext value,
 // When GET /api/v1/providers is called,
-// Then 200 with the provider listed (backward compat — old installs continue to work).
+// Then 200 with the provider listed as "connected" (backward compat — old installs work).
+//
+// FR-104: Connected status requires that the key resolves to a non-empty value.
+// In the old-format path, InjectFromConfig writes the plaintext to the env var
+// referenced by APIKeyRef; this test simulates that injection.
 //
 // Traces to: pkg/gateway/rest.go — HandleProviders GET (backward compat)
 func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	t.Setenv("OMNIPUS_MASTER_KEY", "")
 	t.Setenv("OMNIPUS_KEY_FILE", "")
+	// Simulate InjectFromConfig injecting the plaintext api_key into the env var
+	// referenced by the ModelConfig.APIKeyRef field ("OPENAI_API_KEY").
+	// On a real deployment, this injection happens at boot via credentials.InjectFromConfig.
+	t.Setenv("OPENAI_API_KEY", "sk-oldformat-plaintext")
 	tmpDir := t.TempDir()
 
 	// Old-format config: provider entry uses plaintext api_key (not api_key_ref).
@@ -360,7 +394,8 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", data, 0o600))
 
-	// Build config struct reflecting the old plaintext key.
+	// Build config struct reflecting the old plaintext key migrated to env-var injection.
+	// APIKeyRef points at the env var that InjectFromConfig would have populated.
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
@@ -399,8 +434,9 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 	for _, p := range providers {
 		if id, ok := p["id"].(string); ok && id == "openai" {
 			found = true
+			// FR-104: key resolved via env var injection → connected.
 			assert.Equal(t, "connected", p["status"],
-				"openai provider must have status='connected' when plaintext api_key is set")
+				"openai provider must have status='connected' when env var holds the plaintext api_key")
 			break
 		}
 	}
@@ -637,7 +673,10 @@ func TestProviderPUT_RefusesWhenNoMasterKey(t *testing.T) {
 //
 // Traces to: pkg/gateway/rest.go — HandleProviders GET (api_key_ref resolution)
 func TestProviderGET_ResolvesAPIKeyRefFromCredStore(t *testing.T) {
-	_, tmpDir, _ := newTestAPIWithMasterKey(t)
+	// setupMasterKeyTempDir sets OMNIPUS_MASTER_KEY and returns (tmpDir, hexKey)
+	// without creating an AgentLoop. The loop below is the only one created, so
+	// peak memory for this test is one AgentLoop (not two). #351 #352
+	tmpDir, _ := setupMasterKeyTempDir(t)
 
 	// Step 1: Store an API key in the credentials store.
 	credRef := "OPENAI_API_KEY"

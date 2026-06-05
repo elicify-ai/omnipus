@@ -187,6 +187,12 @@ jobs:
         uses: golang/govulncheck-action@v1
         with:
           go-package: ./...
+          # The action runs its OWN setup-go with go-version-input:stable and
+          # GOTOOLCHAIN=local, so it ignores both the job's Setup Go step and
+          # go.mod's toolchain. Pin it to the patched stdlib (go1.26.4 fixes
+          # GO-2026-5037 crypto/x509 and GO-2026-5039 net/textproto). Keep this
+          # in sync with the `go` directive in go.mod.
+          go-version-input: '1.26.4'
 
   test:
     name: Tests
@@ -333,9 +339,69 @@ jobs:
             -timeout 5m -v ./tests/perf/...
 
   playwright:
-    name: Playwright E2E
+    name: E2E — ${{ matrix.group }}
     runs-on: ubuntu-latest
     needs: [test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # LLM Group A: chat is the single heaviest test file (9 LLM calls).
+          # Isolated so it doesn't block the other LLM groups.
+          - group: llm-chat
+            specs: >-
+              tests/e2e/chat.spec.ts
+          # LLM Group B: medium-weight agent-to-agent flows (spawn, handoff, cancel, hot-reload).
+          - group: llm-agents
+            specs: >-
+              tests/e2e/subagent.spec.ts
+              tests/e2e/handoff.spec.ts
+              tests/e2e/cancel-cross-channel.spec.ts
+              tests/e2e/hot-reload.spec.ts
+          # LLM Group C: light-LLM tests (1–3 calls each, feature-flag checks).
+          - group: llm-light
+            specs: >-
+              tests/e2e/bug-regression.spec.ts
+              tests/e2e/channels-routing.spec.ts
+              tests/e2e/command-center.spec.ts
+              tests/e2e/media.spec.ts
+              tests/e2e/open-in-chat.spec.ts
+              tests/e2e/settings.spec.ts
+          # Non-LLM Group A: real-gateway UI flows (no OpenRouter calls).
+          - group: ui
+            specs: >-
+              tests/e2e/accessibility.spec.ts
+              tests/e2e/agents.spec.ts
+              tests/e2e/auth.spec.ts
+              tests/e2e/burst-resilience.spec.ts
+              tests/e2e/contract-counters.spec.ts
+              tests/e2e/idle-no-reconnect.spec.ts
+              tests/e2e/multi-turn-render.spec.ts
+              tests/e2e/replay-fidelity.spec.ts
+              tests/e2e/retention.spec.ts
+              tests/e2e/security-tools.spec.ts
+              tests/e2e/sidebar.spec.ts
+              tests/e2e/skills.spec.ts
+              tests/e2e/user-crud.spec.ts
+              tests/e2e/ws-reconnect.spec.ts
+              tests/e2e/xss.spec.ts
+          # Non-LLM Group B: deterministic/config-surface tests (no OpenRouter calls).
+          - group: stubs
+            specs: >-
+              tests/e2e/about.spec.ts
+              tests/e2e/api-errors.spec.ts
+              tests/e2e/fresh-install.spec.ts
+              tests/e2e/iframe-preview-5xx.spec.ts
+              tests/e2e/iframe-preview-warmup.spec.ts
+              tests/e2e/mcp-add.spec.ts
+              tests/e2e/profile-fontsize.spec.ts
+              tests/e2e/providers.spec.ts
+              tests/e2e/serve-iframe.spec.ts
+              tests/e2e/settings-gateway.spec.ts
+              tests/e2e/version-drift.spec.ts
+              tests/e2e/web-serve-canonical.spec.ts
+              tests/e2e/web-serve-malformed.spec.ts
+              tests/e2e/whatsapp-qr.spec.ts
     env:
       OMNIPUS_HOME: /tmp/omnipus-e2e
     steps:
@@ -528,13 +594,13 @@ jobs:
         env:
           OMNIPUS_URL: http://localhost:6060
           OPENROUTER_API_KEY_CI: ${{ secrets.OPENROUTER_API_KEY_CI }}
-        run: npx playwright test
+        run: npx playwright test ${{ matrix.specs }}
 
       - name: Upload Playwright artifacts
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-artifacts
+          name: playwright-artifacts-${{ matrix.group }}
           path: |
             playwright-report/
             test-results/
@@ -544,7 +610,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: gateway-logs
+          name: gateway-logs-${{ matrix.group }}
           path: |
             /tmp/omnipus.log
             /tmp/omnipus-e2e/logs/

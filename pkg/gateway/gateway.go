@@ -36,13 +36,11 @@ import (
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/googlechat"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/irc"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/line"
-	_ "github.com/dapicom-ai/omnipus/pkg/channels/onebot"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/qq"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/slack"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/telegram"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/wecom"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/weixin"
-	_ "github.com/dapicom-ai/omnipus/pkg/channels/whatsapp"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/whatsapp_native"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
@@ -55,6 +53,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/heartbeat"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/media"
+	"github.com/dapicom-ai/omnipus/pkg/notifications"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
 	"github.com/dapicom-ai/omnipus/pkg/policy"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
@@ -79,6 +78,9 @@ type services struct {
 	CronService      *cron.CronService
 	HeartbeatService *heartbeat.HeartbeatService
 	MediaStore       media.MediaStore
+	// notifStore backs schedule-failure notifications and the header
+	// notification center (#264). Created once at boot, reused across reloads.
+	notifStore *notifications.Store
 	// ChannelManager is read-only to HTTP handlers (they access it via the
 	// agent loop's GetChannelManager). It is written only during executeReload,
 	// which is single-flighted by the reloading atomic.Bool. No handler reads
@@ -121,6 +123,13 @@ type services struct {
 	servedSubdirs *agent.ServedSubdirs
 	devServers    *sandbox.DevServerRegistry
 	egressProxy   *sandbox.EgressProxy
+
+	// restAPIRef holds a pointer to the restAPI constructed by setupAndStartServices.
+	// Used by RunContextWithOptions to update builtinRegistry after live-deps are wired
+	// (the M16 re-population at line ~689 creates a fresh *BuiltinRegistry that must
+	// reach the already-constructed restAPI; storing the ref here avoids
+	// a larger refactor of setupAndStartServices).
+	restAPIRef *restAPI
 }
 
 type startupBlockedProvider struct {
@@ -163,7 +172,6 @@ func buildEnabledRefMap(cfg *config.Config) map[string]bool {
 		{ch.DingTalk.Enabled, []string{ch.DingTalk.ClientSecretRef}},
 		{ch.Matrix.Enabled, []string{ch.Matrix.AccessTokenRef, ch.Matrix.CryptoPassphraseRef}},
 		{ch.LINE.Enabled, []string{ch.LINE.ChannelSecretRef, ch.LINE.ChannelAccessTokenRef}},
-		{ch.OneBot.Enabled, []string{ch.OneBot.AccessTokenRef}},
 		{ch.WeCom.Enabled, []string{ch.WeCom.SecretRef}},
 		{ch.Weixin.Enabled, []string{ch.Weixin.TokenRef}},
 		{ch.IRC.Enabled, []string{ch.IRC.PasswordRef, ch.IRC.NickServPasswordRef, ch.IRC.SASLPasswordRef}},
@@ -607,12 +615,23 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 
 	// M16 (FR-001/FR-002): pre-instantiate central registries.
 	// BuiltinRegistry is populated here with nil deps (for name/description metadata only).
+	// System.* tools are registered with nil deps; general builtins are registered as
+	// metadata-only instances (deps-free, never executed — per ADR-018 D-A1).
 	// After sysAgentDeps is wired (below), the registry is re-populated with live deps.
 	// MCPRegistry starts empty; MCP servers populate it at connection time.
 	centralBuiltinReg := tools.NewBuiltinRegistry()
 	for _, t := range systools.AllTools(nil, nil) {
 		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
 			slog.Warn("gateway: central builtin registry pre-population skipped duplicate",
+				"tool", t.Name(), "error", regErr)
+		}
+	}
+	// Register general-builtin metadata (SC-108 / Issue #350): these instances
+	// expose Name/Description/Category for /api/v1/tools but are NEVER Execute()d.
+	// Constructor errors are logged and skipped per the log-and-skip invariant.
+	for _, t := range tools.GeneralBuiltinMetadata() {
+		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
+			slog.Warn("gateway: central builtin registry general-builtin skipped",
 				"tool", t.Name(), "error", regErr)
 		}
 	}
@@ -685,6 +704,12 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// (if ever routed through the central registry) have valid deps.
 	// The registry created before setupAndStartServices used nil deps for
 	// the shape/name/description metadata only; swap to real deps here.
+	//
+	// Fix #350 (SC-108): also re-register general-builtin metadata and propagate
+	// the updated registry to restAPI.builtinRegistry. Without this the restAPI
+	// (constructed inside setupAndStartServices) would retain the pre-sysAgentDeps
+	// registry. The restAPIRef field was stored by setupAndStartServices exactly
+	// for this late-wire step.
 	centralBuiltinReg = tools.NewBuiltinRegistry()
 	for _, t := range systools.AllTools(sysAgentDeps, nil) {
 		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
@@ -692,8 +717,26 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 				"tool", t.Name(), "error", err)
 		}
 	}
+	// Re-register general-builtin metadata in the live-deps registry (metadata-only,
+	// never executed; duplicates skipped). These instances expose correct
+	// Name/Description/Category for /api/v1/tools without executing anything.
+	generalBuiltinsRegistered := 0
+	for _, t := range tools.GeneralBuiltinMetadata() {
+		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
+			slog.Warn("gateway: central builtin registry general-builtin re-population skipped",
+				"tool", t.Name(), "error", err)
+		} else {
+			generalBuiltinsRegistered++
+		}
+	}
+	// Propagate the updated registry to the already-constructed restAPI (SC-108 fix).
+	if runningServices.restAPIRef != nil {
+		runningServices.restAPIRef.builtinRegistry = centralBuiltinReg
+	}
 	slog.Info("gateway: central BuiltinRegistry re-populated with live deps",
-		"count", centralBuiltinReg.Count())
+		"system_tools", centralBuiltinReg.Count()-generalBuiltinsRegistered,
+		"general_builtins", generalBuiltinsRegistered,
+		"total", centralBuiltinReg.Count())
 
 	fmt.Printf("✓ Gateway started on %s:%d\n", cfg.Gateway.Host, cfg.Gateway.Port)
 	fmt.Println("Press Ctrl+C to stop")
@@ -964,15 +1007,17 @@ func setupAndStartServices(
 ) (*services, error) {
 	runningServices := &services{credStore: credStore, bundle: bundle, sandboxResult: sandboxResult}
 
-	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
+	// Per-user notification store (#264). Backs schedule-failure notifications and
+	// the header notification center.
+	runningServices.notifStore = notifications.NewStore(filepath.Join(homePath, "notifications"))
+
 	var err error
 	runningServices.CronService, err = setupCronTool(
 		agentLoop,
 		msgBus,
 		cfg.WorkspacePath(),
-		cfg.Agents.Defaults.RestrictToWorkspace,
-		execTimeout,
 		cfg,
+		runningServices.notifStore,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("error setting up cron service: %w", err)
@@ -1031,6 +1076,13 @@ func setupAndStartServices(
 	// /cancel via text-parsing (FR-2). Must happen after SetChannelManager so
 	// the Manager already has its channels map populated.
 	runningServices.ChannelManager.SetCancelInterceptor(agentLoop)
+	// #283: bridge WhatsApp native pairing (QR/status) → agent event bus so the
+	// per-connection WS forwarder broadcasts a whatsapp_pairing frame to the SPA.
+	runningServices.ChannelManager.SetPairingObserver(
+		func(channelID string, status channels.PairingStatus, qr, message string) {
+			agentLoop.EmitWhatsAppPairing(channelID, status, qr, message)
+		},
+	)
 
 	if transcriber := voice.DetectTranscriber(cfg, runningServices.bundle); transcriber != nil {
 		agentLoop.SetTranscriber(transcriber)
@@ -1278,7 +1330,13 @@ func setupAndStartServices(
 		builtinRegistry: builtinReg,                      // M16: central builtin registry (FR-001)
 		mcpRegistry:     mcpReg,                          // M16: central MCP registry (FR-001)
 		allowGodMode:    allowGodMode,                    // god-mode latch (2)
+		cronService:     runningServices.CronService,     // #264: schedules CRUD
+		notifStore:      runningServices.notifStore,      // #264: notification center
 	}
+	// Stash the api ref so RunContextWithOptions can update builtinRegistry
+	// after the M16 live-deps re-population (the :689 reassignment creates a fresh
+	// *BuiltinRegistry that would otherwise not reach the already-constructed api).
+	runningServices.restAPIRef = api
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/sessions", api.withAuth(api.HandleSessions))
 	// /api/v1/sessions/ handles: sessions CRUD AND the tool-results sub-resource
 	// GET /api/v1/sessions/{session_id}/tool-results/{ref} (dispatched inside HandleSessions).
@@ -1540,15 +1598,18 @@ func restartServices(
 ) error {
 	cfg := al.GetConfig()
 
-	execTimeout := time.Duration(cfg.Tools.Cron.ExecTimeoutMinutes) * time.Minute
+	if runningServices.notifStore == nil {
+		// Derive the home dir from the workspace path (workspace == <home>/workspace).
+		runningServices.notifStore = notifications.NewStore(
+			filepath.Join(filepath.Dir(cfg.WorkspacePath()), "notifications"))
+	}
 	var err error
 	runningServices.CronService, err = setupCronTool(
 		al,
 		msgBus,
 		cfg.WorkspacePath(),
-		cfg.Agents.Defaults.RestrictToWorkspace,
-		execTimeout,
 		cfg,
+		runningServices.notifStore,
 	)
 	if err != nil {
 		return fmt.Errorf("error restarting cron service: %w", err)
@@ -1753,30 +1814,77 @@ func setupCronTool(
 	agentLoop *agent.AgentLoop,
 	msgBus *bus.MessageBus,
 	workspace string,
-	restrict bool,
-	execTimeout time.Duration,
 	cfg *config.Config,
+	notifStore *notifications.Store,
 ) (*cron.CronService, error) {
 	cronStorePath := filepath.Join(workspace, "cron", "jobs.json")
 
-	cronService := cron.NewCronService(cronStorePath, nil)
+	cronService := cron.NewCronService(cronStorePath)
 
 	// Cron tool — always registered. Policy controls whether an agent can invoke it.
-	cronTool, err := tools.NewCronTool(cronService, agentLoop, msgBus, workspace, restrict, execTimeout, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("critical error during CronTool initialization: %w", err)
-	}
+	cronTool := tools.NewCronTool(cronService, cfg)
 	agentLoop.RegisterTool(cronTool)
 
-	if cronTool != nil {
-		cronService.SetOnJob(func(job *cron.CronJob) (string, error) {
-			result := cronTool.ExecuteJob(context.Background(), job)
-			return result, nil
-		})
+	// Owner-aware autonomous fire path (#264). The runner wakes a fired
+	// schedule's OWNING agent (never the default), bounded by the per-run
+	// deadline, and raises a notification + channel alert on failure. It is the
+	// only fire path — the cron service records a no-op when no runner is set.
+	// An owner is available only when it is registered AND enabled (HIGH:
+	// disabled-but-registered owner must not run). The registry registers all
+	// agents regardless of Enabled, so we additionally consult the agent's
+	// config IsActive() flag — a disabled owner is treated as unavailable.
+	checker := agentCheckerFunc(func(agentID string) bool {
+		if _, ok := agentLoop.GetRegistry().GetAgent(agentID); !ok {
+			return false
+		}
+		ac := findAgentConfig(agentLoop.GetConfig(), agentID)
+		if ac == nil {
+			// Registered in the runtime registry but absent from config (e.g. the
+			// generic default instance) — treat as available for back-compat.
+			return true
+		}
+		return ac.IsActive()
+	})
+	runner := newScheduledRunner(agentLoop, checker, msgBus, notifStore, agentLoop.GetConfig)
+	// M2: resolve the channel registry lazily — the channel manager is wired onto
+	// the agent loop after this runner is built (SetChannelManager during service
+	// start), so the runner re-fetches it at delivery time. A nil manager makes
+	// channelIsActive degrade to the legacy non-empty check.
+	runner.setChannelChecker(func() channelChecker {
+		if cm := agentLoop.GetChannelManager(); cm != nil {
+			return cm
+		}
+		return nil
+	})
+	// Best-effort per-run child-process cleanup (FR-011). The minimal per-session
+	// registry tracks PIDs the run spawns (via the tracker installed on the run
+	// context, reported by the exec/shell tools) and terminates them on
+	// completion — success, error, or timeout.
+	procReg := newScheduledProcRegistry()
+	runner.setProcessTracker(procReg.Track)
+	runner.setProcessCleanup(procReg.Cleanup)
+	cronService.SetRunner(runner)
+
+	// Default agent id used only to migrate owner-less legacy jobs on load (W-8).
+	defaultAgentID := ""
+	if def := agentLoop.GetRegistry().GetDefaultAgent(); def != nil {
+		defaultAgentID = def.ID
+	}
+	cronService.SetDefaultAgentID(defaultAgentID)
+
+	if cfg != nil {
+		cronService.SetMaxConcurrentRuns(cfg.Schedules.MaxConcurrentRuns)
+		cronService.SetRetryBackoff(cfg.Schedules.RetryBackoffMs)
 	}
 
 	return cronService, nil
 }
+
+// agentCheckerFunc adapts a func to the agentChecker interface used by the
+// scheduled runner.
+type agentCheckerFunc func(agentID string) bool
+
+func (f agentCheckerFunc) IsRegistered(agentID string) bool { return f(agentID) }
 
 // shouldWarnPreviewOrigin returns true when the preview listener is bound on a
 // wildcard address (0.0.0.0 or "::") and gateway.preview_origin is empty.

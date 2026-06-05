@@ -78,8 +78,6 @@ func DefaultConfig() *Config {
 		Channels: ChannelsConfig{
 			WhatsApp: WhatsAppConfig{
 				Enabled:          false,
-				BridgeURL:        "ws://localhost:3001",
-				UseNative:        false,
 				SessionStorePath: "",
 				AllowFrom:        FlexibleStringSlice{},
 			},
@@ -144,12 +142,6 @@ func DefaultConfig() *Config {
 				WebhookPath:  "/webhook/line",
 				AllowFrom:    FlexibleStringSlice{},
 				GroupTrigger: GroupTriggerConfig{MentionOnly: true},
-			},
-			OneBot: OneBotConfig{
-				Enabled:           false,
-				WSUrl:             "ws://127.0.0.1:3001",
-				ReconnectInterval: 5,
-				AllowFrom:         FlexibleStringSlice{},
 			},
 			WeCom: WeComConfig{
 				Enabled:             false,
@@ -366,9 +358,12 @@ func DefaultConfig() *Config {
 			},
 		},
 		Gateway: GatewayConfig{
-			Host:      "127.0.0.1",
-			Port:      5000,
-			HotReload: false,
+			Host: "127.0.0.1",
+			Port: 5000,
+			// FR-106: hot_reload defaults on so config changes take effect without a
+			// restart on fresh installs. Operators who explicitly set hot_reload:false
+			// in their config.json retain the old behavior (JSON value wins over default).
+			HotReload: true,
 			LogLevel:  "warn",
 		},
 		Tools: ToolsConfig{
@@ -522,6 +517,11 @@ func DefaultConfig() *Config {
 		Heartbeat: HeartbeatConfig{
 			Enabled:  true,
 			Interval: 30,
+		},
+		Schedules: SchedulesConfig{
+			MaxConcurrentRuns: DefaultSchedulesMaxConcurrentRuns,
+			RunTimeoutSeconds: DefaultSchedulesRunTimeoutSeconds,
+			RetryBackoffMs:    append([]int64(nil), DefaultSchedulesRetryBackoffMs...),
 		},
 		Devices: DevicesConfig{
 			Enabled:    false,

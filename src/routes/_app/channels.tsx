@@ -1,124 +1,22 @@
-import { useState } from 'react'
+import { lazy, Suspense } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Hash, Gear } from '@phosphor-icons/react'
-import { Badge } from '@/components/ui/badge'
-import { fetchChannels, enableChannel, disableChannel, isApiError } from '@/lib/api'
-import { useUiStore } from '@/store/ui'
-import { ChannelConfigPanel } from '@/components/skills/ChannelConfigPanel'
-import { SkeletonList, EmptyState, ErrorState } from '@/components/shared/ListStates'
+import { RouteFallback } from '@/components/shared/RouteFallback'
 
-function ChannelsScreen() {
-  const { addToast } = useUiStore()
-  const queryClient = useQueryClient()
+// Code-split: the channels screen (cards + config slide-over) lazy-loads into
+// its own chunk. The screen body lives in @/components/screens/ChannelsScreen
+// (also imported directly by tests).
+const ChannelsScreen = lazy(() =>
+  import('@/components/screens/ChannelsScreen').then((m) => ({ default: m.ChannelsScreen })),
+)
 
-  const [configuringChannel, setConfiguringChannel] = useState<{ id: string; name: string } | null>(null)
-
-  const { data: channels = [], isLoading, isError } = useQuery({
-    queryKey: ['channels'],
-    queryFn: fetchChannels,
-  })
-
-  const { mutate: doToggleChannel } = useMutation({
-    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
-      enabled ? disableChannel(id) : enableChannel(id),
-    onSuccess: (_, { enabled }) => {
-      queryClient.invalidateQueries({ queryKey: ['channels'] })
-      addToast({ message: enabled ? 'Channel disabled' : 'Channel enabled', variant: 'success' })
-    },
-    onError: (err: Error) =>
-      addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' }),
-  })
-
+function ChannelsRoute() {
   return (
-    <div className="absolute inset-0 overflow-y-auto">
-      <div className="max-w-4xl mx-auto px-4 py-6">
-        {/* Header */}
-        <div className="mb-6">
-          <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Channels</h1>
-          <p className="text-sm text-[var(--color-muted)] mt-0.5">
-            Connect Telegram, Discord, Slack and more, and choose which agent answers each.
-          </p>
-        </div>
-
-        {/* Content */}
-        {isError ? (
-          <ErrorState message="Could not load channels." />
-        ) : isLoading ? (
-          <SkeletonList />
-        ) : channels.length === 0 ? (
-          <EmptyState
-            icon={<Hash size={40} weight="thin" />}
-            message="No channels configured."
-          />
-        ) : (
-          <div className="space-y-2">
-            {channels.map((channel) => {
-              const connectionStatus = channel.enabled ? 'enabled' : 'unconfigured'
-              return (
-                <div
-                  key={channel.id}
-                  data-testid={`channel-card-${channel.id}`}
-                  className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-sm text-[var(--color-secondary)]">
-                        {channel.name}
-                      </span>
-                      <Badge variant="outline" className="text-[10px] font-mono">
-                        {channel.transport}
-                      </Badge>
-                      <Badge
-                        variant={connectionStatus === 'enabled' ? 'success' : 'muted'}
-                        className="text-[10px]"
-                      >
-                        {connectionStatus === 'enabled' ? 'Enabled' : 'Not configured'}
-                      </Badge>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {channel.id !== 'webchat' && (
-                      <button
-                        type="button"
-                        onClick={() => setConfiguringChannel({ id: channel.id, name: channel.name })}
-                        className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
-                        aria-label={`Configure ${channel.name}`}
-                      >
-                        <Gear size={13} />
-                        Configure
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => doToggleChannel({ id: channel.id, enabled: channel.enabled })}
-                      className="text-xs text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors font-medium"
-                    >
-                      {channel.enabled ? 'Disable' : 'Enable'}
-                    </button>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-
-        {/* Channel config slide-over */}
-        {configuringChannel && (
-          <ChannelConfigPanel
-            channelId={configuringChannel.id}
-            channelName={configuringChannel.name}
-            open={true}
-            onOpenChange={(open) => {
-              if (!open) setConfiguringChannel(null)
-            }}
-          />
-        )}
-      </div>
-    </div>
+    <Suspense fallback={<RouteFallback />}>
+      <ChannelsScreen />
+    </Suspense>
   )
 }
 
 export const Route = createFileRoute('/_app/channels')({
-  component: ChannelsScreen,
+  component: ChannelsRoute,
 })

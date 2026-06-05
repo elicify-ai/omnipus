@@ -446,7 +446,8 @@ func (t *ExecTool) Name() string {
 	return "exec"
 }
 
-func (t *ExecTool) Scope() ToolScope { return ScopeCore }
+func (t *ExecTool) Scope() ToolScope       { return ScopeCore }
+func (t *ExecTool) Category() ToolCategory { return CategoryCode }
 
 func (t *ExecTool) Description() string {
 	return `Execute shell commands. Use background=true for long-running commands (returns sessionId). Use pty=true for interactive commands (can combine with background=true). Use poll/read/write/send-keys/kill with sessionId to manage background sessions. Sessions auto-cleanup 30 minutes after process exits; use kill to terminate early. Output buffer limit: 1MB.`
@@ -712,6 +713,13 @@ func (t *ExecTool) runSync(ctx context.Context, command, cwd string) *ToolResult
 
 	if err := cmd.Start(); err != nil {
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", err))
+	}
+
+	// FR-011: report the spawned child to the scheduled-run process tracker (if
+	// the caller installed one) so it can be force-terminated on run completion.
+	// No-op for interactive runs (no tracker on the context).
+	if cmd.Process != nil {
+		TrackProcess(ctx, cmd.Process.Pid)
 	}
 
 	done := make(chan error, 1)
@@ -1080,6 +1088,10 @@ func (t *ExecTool) runBackground(ctx context.Context, command, cwd string, ptyEn
 	}
 
 	session.PID = cmd.Process.Pid
+	// FR-011: report the spawned background child to the scheduled-run process
+	// tracker (if installed) so it is force-terminated on run completion. No-op
+	// for interactive runs.
+	TrackProcess(ctx, session.PID)
 	t.sessionManager.Add(session)
 
 	session.outputBuffer = &bytes.Buffer{}

@@ -106,7 +106,6 @@ type channelsConfigV0 struct {
 	Slack    slackConfigV0    `json:"slack"`
 	Matrix   matrixConfigV0   `json:"matrix"`
 	LINE     lineConfigV0     `json:"line"`
-	OneBot   onebotConfigV0   `json:"onebot"`
 	WeCom    wecomConfigV0    `json:"wecom"    envPrefix:"OMNIPUS_CHANNELS_WECOM_"`
 	IRC      ircConfigV0      `json:"irc"`
 }
@@ -124,7 +123,6 @@ func (v *channelsConfigV0) ToChannelsConfig() ChannelsConfig {
 		Slack:    v.Slack.ToSlackConfig(),
 		Matrix:   v.Matrix.ToMatrixConfig(),
 		LINE:     v.LINE.ToLINEConfig(),
-		OneBot:   v.OneBot.ToOneBotConfig(),
 		WeCom:    v.WeCom.ToWeComConfig(),
 		IRC:      v.IRC.ToIRCConfig(),
 	}
@@ -330,33 +328,6 @@ func (v *lineConfigV0) ToLINEConfig() LINEConfig {
 	}
 }
 
-type onebotConfigV0 struct {
-	Enabled            bool                `json:"enabled"                 env:"OMNIPUS_CHANNELS_ONEBOT_ENABLED"`
-	WSUrl              string              `json:"ws_url"                  env:"OMNIPUS_CHANNELS_ONEBOT_WS_URL"`
-	AccessToken        string              `json:"access_token"            env:"OMNIPUS_CHANNELS_ONEBOT_ACCESS_TOKEN"`
-	ReconnectInterval  int                 `json:"reconnect_interval"      env:"OMNIPUS_CHANNELS_ONEBOT_RECONNECT_INTERVAL"`
-	GroupTriggerPrefix []string            `json:"group_trigger_prefix"    env:"OMNIPUS_CHANNELS_ONEBOT_GROUP_TRIGGER_PREFIX"`
-	AllowFrom          FlexibleStringSlice `json:"allow_from"              env:"OMNIPUS_CHANNELS_ONEBOT_ALLOW_FROM"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
-	Typing             TypingConfig        `json:"typing,omitempty"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id"    env:"OMNIPUS_CHANNELS_ONEBOT_REASONING_CHANNEL_ID"`
-}
-
-func (v *onebotConfigV0) ToOneBotConfig() OneBotConfig {
-	return OneBotConfig{
-		Enabled:            v.Enabled,
-		WSUrl:              v.WSUrl,
-		ReconnectInterval:  v.ReconnectInterval,
-		GroupTriggerPrefix: v.GroupTriggerPrefix,
-		AllowFrom:          v.AllowFrom,
-		GroupTrigger:       v.GroupTrigger,
-		Typing:             v.Typing,
-		Placeholder:        v.Placeholder,
-		ReasoningChannelID: v.ReasoningChannelID,
-	}
-}
-
 type wecomConfigV0 struct {
 	Enabled             bool                        `json:"enabled"                    env:"ENABLED"`
 	BotID               string                      `json:"bot_id"                     env:"BOT_ID"`
@@ -551,12 +522,6 @@ func (c *configV0) migrateChannelConfigs() {
 	if c.Channels.Discord.MentionOnly && !c.Channels.Discord.GroupTrigger.MentionOnly {
 		c.Channels.Discord.GroupTrigger.MentionOnly = true
 	}
-
-	// OneBot: group_trigger_prefix -> group_trigger.prefixes
-	if len(c.Channels.OneBot.GroupTriggerPrefix) > 0 &&
-		len(c.Channels.OneBot.GroupTrigger.Prefixes) == 0 {
-		c.Channels.OneBot.GroupTrigger.Prefixes = c.Channels.OneBot.GroupTriggerPrefix
-	}
 }
 
 // secretFieldPatterns is the set of JSON tag base-names that identify a field
@@ -714,10 +679,6 @@ func (c *configV0) MigrateWithStore(store CredentialStore) (*Config, error) {
 	}
 	if err := migrateSecret("LINE_CHANNEL_ACCESS_TOKEN", c.Channels.LINE.ChannelAccessToken,
 		func(ref string) { cfg.Channels.LINE.ChannelAccessTokenRef = ref }); err != nil {
-		return nil, err
-	}
-	if err := migrateSecret("ONEBOT_ACCESS_TOKEN", c.Channels.OneBot.AccessToken,
-		func(ref string) { cfg.Channels.OneBot.AccessTokenRef = ref }); err != nil {
 		return nil, err
 	}
 	if err := migrateSecret("WEIXIN_TOKEN", c.Channels.Weixin.Token,

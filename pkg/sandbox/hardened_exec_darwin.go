@@ -60,8 +60,11 @@ func applyPlatformHardening(cmd *exec.Cmd, _ Limits) error {
 // rather than only operators tailing logs).
 func applyPostStartHardening(_ *exec.Cmd, lim Limits) error {
 	if lim.MemoryLimitBytes > 0 {
-		slog.Warn("hardened_exec/darwin: MemoryLimitBytes ignored (RLIMIT_AS unsupported on macOS); child runs unbounded",
-			"requested_bytes", lim.MemoryLimitBytes)
+		slog.Warn(
+			"hardened_exec/darwin: MemoryLimitBytes ignored (RLIMIT_AS unsupported on macOS); child runs unbounded",
+			"requested_bytes",
+			lim.MemoryLimitBytes,
+		)
 	}
 	return nil
 }

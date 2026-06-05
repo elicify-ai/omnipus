@@ -1,0 +1,16 @@
+title: NotificationList
+description: The authenticated user's notifications plus the unread count (#264).
+type: object
+required:
+  - notifications
+  - unread_count
+additionalProperties: false
+properties:
+  notifications:
+    type: array
+    description: Newest first.
+    items:
+      $ref: ./Notification.yaml
+  unread_count:
+    type: integer
+    description: Number of unread notifications for the badge.

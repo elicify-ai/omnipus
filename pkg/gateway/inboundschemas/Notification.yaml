@@ -1,0 +1,53 @@
+title: Notification
+description: >
+  A user-facing notification (#264) surfaced in the header notification center.
+  Currently raised on scheduled-run failures, but the type is open for future
+  sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+type: object
+required:
+  - id
+  - type
+  - title
+  - severity
+  - read
+  - created_at_ms
+additionalProperties: false
+properties:
+  id:
+    type: string
+  type:
+    type: string
+    enum:
+      - schedule_failed
+    description: The event class. Extensible; consumers must tolerate unknown values.
+  title:
+    type: string
+    minLength: 1
+  body:
+    type: string
+    description: Optional detail (e.g. the failure reason).
+  severity:
+    type: string
+    enum:
+      - info
+      - warning
+      - error
+  read:
+    type: boolean
+    description: Per-user read state.
+  created_at_ms:
+    type: integer
+    format: int64
+  updated_at_ms:
+    type: integer
+    format: int64
+    description: Set when a coalesced notification is updated (e.g. repeated schedule failure).
+  schedule_id:
+    type: string
+    description: Click-through target when the notification concerns a schedule.
+  session_id:
+    type: string
+    description: Click-through target when the notification concerns a run's session.
+  agent_id:
+    type: string
+    description: The agent the notification concerns.

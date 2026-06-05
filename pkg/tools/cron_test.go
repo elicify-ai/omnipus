@@ -5,9 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/cron"
 )
@@ -15,13 +13,8 @@ import (
 func newTestCronToolWithConfig(t *testing.T, cfg *config.Config) *CronTool {
 	t.Helper()
 	storePath := filepath.Join(t.TempDir(), "cron.json")
-	cronService := cron.NewCronService(storePath, nil)
-	msgBus := bus.NewMessageBus()
-	tool, err := NewCronTool(cronService, nil, msgBus, t.TempDir(), true, 0, cfg)
-	if err != nil {
-		t.Fatalf("NewCronTool() error: %v", err)
-	}
-	return tool
+	cronService := cron.NewCronService(storePath)
+	return NewCronTool(cronService, cfg)
 }
 
 func newTestCronTool(t *testing.T) *CronTool {
@@ -206,34 +199,5 @@ func TestCronTool_NonCommandJobDefaultsDeliverToFalse(t *testing.T) {
 	}
 	if jobs[0].Payload.Deliver {
 		t.Fatal("expected deliver=false by default for non-command jobs")
-	}
-}
-
-func TestCronTool_ExecuteJobPublishesErrorWhenExecDisabled(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Tools.Exec.Enabled = false
-
-	tool := newTestCronToolWithConfig(t, cfg)
-	job := &cron.CronJob{}
-	job.Payload.Channel = "cli"
-	job.Payload.To = "direct"
-	job.Payload.Command = "df -h"
-
-	if got := tool.ExecuteJob(context.Background(), job); got != "ok" {
-		t.Fatalf("ExecuteJob() = %q, want ok", got)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	var msg bus.OutboundMessage
-	select {
-	case msg = <-tool.msgBus.OutboundChan():
-		// got message
-	case <-ctx.Done():
-		t.Fatal("timeout waiting for outbound message")
-	}
-	if !strings.Contains(msg.Content, "command execution is disabled") {
-		t.Fatalf("expected exec disabled message, got: %s", msg.Content)
 	}
 }

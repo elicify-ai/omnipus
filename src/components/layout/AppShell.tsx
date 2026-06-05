@@ -1,7 +1,8 @@
 import { useEffect } from 'react'
 import { Outlet, useLocation } from '@tanstack/react-router'
-import { List, CaretLeft } from '@phosphor-icons/react'
+import { List, CaretLeft, Bell } from '@phosphor-icons/react'
 import { Sidebar } from './Sidebar'
+import { NotificationPanel } from './NotificationPanel'
 import { useSidebarStore } from '@/store/sidebar'
 import { SessionBar } from '@/components/chat/SessionBar'
 import { ToastContainer } from '@/components/ui/toast-container'
@@ -9,9 +10,10 @@ import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
 import { OmnipusRuntimeProvider } from '@/components/chat/OmnipusRuntimeProvider'
 import { ErrorBoundary } from '@/components/ui/error-boundary'
 import { queryClient } from '@/lib/queryClient'
-import { fetchTasks, fetchAgents, fetchAppState } from '@/lib/api'
+import { fetchTasks, fetchAgents, fetchAppState, fetchNotifications } from '@/lib/api'
 import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
+import { useNotificationsStore } from '@/store/notifications'
 import { useQuery } from '@tanstack/react-query'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
 
@@ -21,7 +23,9 @@ export function AppShell() {
   const location = useLocation()
   const connectionError = useConnectionStore((s) => s.connectionError)
   const reconnect = useConnectionStore((s) => s.reconnect)
-  const { openSessionPanel } = useUiStore()
+  const { openSessionPanel, toggleNotificationPanel } = useUiStore()
+  const unreadCount = useNotificationsStore((s) => s.unreadCount)
+  const hydrateNotifications = useNotificationsStore((s) => s.hydrate)
 
   const { data: appState } = useQuery({
     queryKey: ['app-state'],
@@ -29,6 +33,17 @@ export function AppShell() {
     staleTime: 60_000,
   })
   const devModeBypass = appState?.dev_mode_bypass === true
+
+  // #264: seed the notification center from REST on mount; the `notification`
+  // WS frame keeps it live thereafter (see chatStore.handleFrame).
+  const { data: notificationList } = useQuery({
+    queryKey: ['notifications'],
+    queryFn: fetchNotifications,
+    staleTime: 60_000,
+  })
+  useEffect(() => {
+    if (notificationList) hydrateNotifications(notificationList)
+  }, [notificationList, hydrateNotifications])
 
   // Version-drift detection (#110): shows a toast when build_sha changes
   useVersionCheck()
@@ -47,7 +62,7 @@ export function AppShell() {
     location.pathname.startsWith('/sessions/')
 
   return (
-    <div className="flex h-dvh w-full overflow-hidden bg-[var(--color-primary)]">
+    <div data-app-shell className="flex h-dvh w-full overflow-hidden bg-[var(--color-primary)]">
       {/* Sidebar renders in both pinned (flex child) and overlay (fixed) modes */}
       <Sidebar />
 
@@ -88,6 +103,25 @@ export function AppShell() {
                 <CaretLeft size={14} className="rotate-180" />
               </button>
             )}
+
+            {/* Notification center bell — #264. Unread badge renders 99+ past 99. */}
+            <button
+              type="button"
+              onClick={toggleNotificationPanel}
+              aria-label="Open notifications"
+              data-testid="notification-bell"
+              className="relative flex items-center justify-center h-8 w-8 rounded-md text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
+            >
+              <Bell size={20} />
+              {unreadCount > 0 && (
+                <span
+                  data-testid="notification-badge"
+                  className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-medium leading-none bg-[var(--color-error)] text-white"
+                >
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
+            </button>
           </header>
 
           {/* Global connection error banner — visible on every screen */}
@@ -128,6 +162,9 @@ export function AppShell() {
 
       {/* Tool approval modal — FR-011, FR-082 */}
       <ToolApprovalModal />
+
+      {/* Notification center panel — #264 */}
+      <NotificationPanel />
     </div>
   )
 }

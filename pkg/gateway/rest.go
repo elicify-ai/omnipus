@@ -34,12 +34,16 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/agent"
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/channels"
+	whatsappnative "github.com/dapicom-ai/omnipus/pkg/channels/whatsapp_native"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
+	"github.com/dapicom-ai/omnipus/pkg/cron"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 	"github.com/dapicom-ai/omnipus/pkg/media"
+	"github.com/dapicom-ai/omnipus/pkg/notifications"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
 	providers_pkg "github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
@@ -126,6 +130,15 @@ type restAPI struct {
 	// Mirrors the same field on AgentLoop for runtime tool coercion.
 	// Latch (2) — REST enforcement.
 	allowGodMode bool
+
+	// cronService backs the /api/v1/schedules CRUD + run-now + pause endpoints
+	// (#264). Schedules are a contract-first projection over cron.CronJob.
+	// Nil in test setups that do not exercise schedules.
+	cronService *cron.CronService
+
+	// notifStore backs /api/v1/notifications (#264). Per-user, file-based.
+	// Nil in test setups that do not exercise notifications.
+	notifStore *notifications.Store
 }
 
 // --- CORS / JSON helpers ---
@@ -1138,6 +1151,11 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 		ag.Soul = soul
 		ag.Default = boolPtr(ac.Default)
+		if len(ac.Skills) > 0 {
+			skills := make([]string, len(ac.Skills))
+			copy(skills, ac.Skills)
+			ag.Skills = &skills
+		}
 		agents = append(agents, ag)
 	}
 
@@ -1184,6 +1202,11 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			ag.Heartbeat = heartbeat
 			ag.Instructions = instructions
 			ag.Default = boolPtr(ac.Default)
+			if len(ac.Skills) > 0 {
+				skills := make([]string, len(ac.Skills))
+				copy(skills, ac.Skills)
+				ag.Skills = &skills
+			}
 			jsonOK(w, ag)
 			return
 		}
@@ -1201,6 +1224,13 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if req.Name == "" {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
 		return
+	}
+	// Referential validation: reject unknown skill IDs before doing any work.
+	if req.Skills != nil && len(*req.Skills) > 0 {
+		if errMsg := a.validateSkillIDs(*req.Skills); errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
+			return
+		}
 	}
 	description := ""
 	if req.Description != nil {
@@ -1224,6 +1254,10 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Model != nil && *req.Model != "" {
 		ac.Model = &config.AgentModelConfig{Primary: *req.Model}
+	}
+	if req.Skills != nil && len(*req.Skills) > 0 {
+		ac.Skills = make([]string, len(*req.Skills))
+		copy(ac.Skills, *req.Skills)
 	}
 	// Seed the privilege rail (FR-008/FR-022): custom agents always get
 	// system.*: deny unless the caller explicitly overrides it.
@@ -1315,6 +1349,9 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			}
 			newAgent["tools"] = toolsCfg
 		}
+		if len(ac.Skills) > 0 {
+			newAgent["skills"] = ac.Skills
+		}
 		agents["list"] = append(list, newAgent)
 		return nil
 	}); err != nil {
@@ -1355,6 +1392,11 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	ag.Type = gen.AgentTypeCustom
 	ag.Model = &model
 	ag.Status = gen.AgentStatusDraft
+	if len(ac.Skills) > 0 {
+		skills := make([]string, len(ac.Skills))
+		copy(skills, ac.Skills)
+		ag.Skills = &skills
+	}
 	if createReloadWarning != "" {
 		ag.Warning = &createReloadWarning
 	}
@@ -1464,11 +1506,20 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	foundAgent := cfg.Agents.List[foundIdx]
 	if foundAgent.Locked {
 		// Protected: name, description, soul (prompt content), heartbeat (HEARTBEAT.md content),
-		// instructions, color, and icon are identity fields — reject on locked agents.
+		// instructions, color, icon, and skills are identity/capability fields — reject on locked agents.
+		// Skills are included here (B-2 defense-in-depth): core agents have compiled-in capability
+		// sets; allowing runtime skill assignment would silently override that invariant.
 		if req.Name != nil || req.Description != nil ||
 			req.Soul != nil || req.Heartbeat != nil || req.Instructions != nil ||
-			req.Color != nil || req.Icon != nil {
+			req.Color != nil || req.Icon != nil || req.Skills != nil {
 			jsonErr(w, http.StatusForbidden, "cannot modify locked agent identity or prompt")
+			return
+		}
+	}
+	// Referential validation: reject unknown skill IDs before doing any work.
+	if req.Skills != nil && len(*req.Skills) > 0 {
+		if errMsg := a.validateSkillIDs(*req.Skills); errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
 		}
 	}
@@ -1632,6 +1683,15 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 						tcMap["mcp"] = mcpMap
 					}
 					agentMap["tools_cfg"] = tcMap
+				}
+				// Skills: replace the agent's skill list when the caller sends the field.
+				// An explicit empty array removes all skills. Nil (absent) leaves unchanged.
+				if req.Skills != nil {
+					if len(*req.Skills) > 0 {
+						agentMap["skills"] = *req.Skills
+					} else {
+						delete(agentMap, "skills")
+					}
 				}
 				break
 			}
@@ -1810,12 +1870,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	if reloadWarning != "" {
 		ag.Warning = &reloadWarning
 	}
-	// Populate Default from the live config after the write (handles both the
-	// req.Default=true case and the leave-unchanged case).
+	// Populate Default and Skills from the live config after the write (handles
+	// both the req.Default=true case and the leave-unchanged case).
 	if liveCfg := a.agentLoop.GetConfig(); liveCfg != nil {
 		for _, ac := range liveCfg.Agents.List {
 			if ac.ID == agentID {
 				ag.Default = boolPtr(ac.Default)
+				if len(ac.Skills) > 0 {
+					skills := make([]string, len(ac.Skills))
+					copy(skills, ac.Skills)
+					ag.Skills = &skills
+				}
 				break
 			}
 		}
@@ -2275,6 +2340,48 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 	jsonOK(w, result)
 }
 
+// installedSkillIDs returns the set of skill IDs currently known to the agent
+// loop (same source as GET /api/v1/skills). An empty map is returned when no
+// skills are installed, which lets the validation below produce a proper 400
+// ("unknown skill id") rather than silently accepting any string.
+func (a *restAPI) installedSkillIDs() map[string]struct{} {
+	info := a.agentLoop.GetStartupInfo()
+	skillsInfo, ok := info["skills"].(map[string]any)
+	if !ok {
+		return map[string]struct{}{}
+	}
+	names, _ := skillsInfo["names"].([]string)
+	result := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		result[n] = struct{}{}
+	}
+	return result
+}
+
+// validateSkillIDs returns an error string (for a 400 response) if any of the
+// supplied skill IDs are not present in the installed-skills registry.
+// Returns "" when all IDs are valid or when no skills are installed at all
+// (to avoid false rejections in environments where the skills directory hasn't
+// been populated yet — the agent loop's runtime filter is the final gate).
+func (a *restAPI) validateSkillIDs(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	installed := a.installedSkillIDs()
+	// Skip validation when the installed set is empty: the skills directory may
+	// not exist yet (fresh install, test environment). Accept any id and let the
+	// agent loop's skill filter gate unknown ids at runtime.
+	if len(installed) == 0 {
+		return ""
+	}
+	for _, id := range ids {
+		if _, ok := installed[id]; !ok {
+			return fmt.Sprintf("unknown skill id: %q", id)
+		}
+	}
+	return ""
+}
+
 func (a *restAPI) searchSkills(w http.ResponseWriter, _ *http.Request) {
 	jsonErr(w, http.StatusNotImplemented, "ClawHub search not yet implemented")
 }
@@ -2408,7 +2515,9 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"severity":       "high",
 			"title":          "No LLM models configured",
 			"description":    "No models are configured in model_list. The agent cannot generate responses without at least one model.",
-			"recommendation": "Add at least one model to config.json model_list with a valid API key in credentials.json.",
+			"recommendation": "Go to Settings → Providers and add an API key.",
+			"action_link":    "/settings?tab=providers",
+			"action_label":   "Configure providers",
 		})
 	}
 
@@ -2420,8 +2529,10 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"id":             "no-custom-agents",
 			"severity":       "low",
 			"title":          "No custom agents configured",
-			"description":    "Only the system agent is available. Custom agents can be defined in config.json.",
-			"recommendation": "Add agent configurations to personalize your assistant.",
+			"description":    "Only the built-in agents are available. Custom agents can be defined to personalise your assistant.",
+			"recommendation": "Go to Settings → Agents and create a custom agent.",
+			"action_link":    "/settings?tab=agents",
+			"action_label":   "Manage agents",
 		})
 	}
 
@@ -2434,7 +2545,9 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"severity":       "medium",
 			"title":          "Sandbox is disabled",
 			"description":    "Filesystem and process sandboxing is not enabled. Agent tool executions run without confinement.",
-			"recommendation": "Open Settings → Process Sandbox to enable sandbox mode for production use.",
+			"recommendation": "Go to Settings → Security → Advanced to enable sandbox mode.",
+			"action_link":    "/settings?tab=security",
+			"action_label":   "Open security settings",
 		})
 	}
 
@@ -2510,6 +2623,13 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/agents/", a.withAuth(a.HandleAgents))
 	cm.RegisterHTTPHandler("/api/v1/config/gateway/rotate-token", a.withAuth(a.rotateGatewayToken))
 	cm.RegisterHTTPHandler("/api/v1/activity", a.withAuth(a.HandleActivity))
+
+	// Schedules CRUD + run-now + pause (#264).
+	cm.RegisterHTTPHandler("/api/v1/schedules", a.withAuth(a.HandleSchedules))
+	cm.RegisterHTTPHandler("/api/v1/schedules/", a.withAuth(a.HandleSchedules))
+	// Header notification center (#264).
+	cm.RegisterHTTPHandler("/api/v1/notifications", a.withAuth(a.HandleNotifications))
+	cm.RegisterHTTPHandler("/api/v1/notifications/", a.withAuth(a.HandleNotifications))
 
 	// Settings endpoints (Wave 4).
 	// GET /api/v1/audit-log — admin-only: audit log contains every admin
@@ -3325,10 +3445,18 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					models = []string{}
 				}
 			}
+			// FR-104: report Connected only when the provider's API key resolves to
+			// a non-empty credential. providerAPIKeys is populated above for every
+			// provider that has either a resolvable api_key_ref or an inline api_key;
+			// absence from the map means no key was found.
+			status := gen.ProviderStatusDisconnected
+			if _, hasKey := providerAPIKeys[name]; hasKey {
+				status = gen.ProviderStatusConnected
+			}
 			p := gen.Provider{
 				Id:     name,
 				Name:   name,
-				Status: gen.ProviderStatusConnected,
+				Status: status,
 				Models: models,
 			}
 			if modelFetchWarning != "" {
@@ -3656,6 +3784,30 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
+	// Per-transport field validation: stdio requires command; sse/http require url.
+	// The MCP manager (pkg/mcp/manager.go ConnectServer) hard-fails on missing
+	// cfg.URL for sse/http and missing cfg.Command for stdio — catch it here so the
+	// error surfaces as a 422 rather than a silent connection failure.
+	switch transport {
+	case "stdio":
+		if req.Command == nil || *req.Command == "" {
+			jsonErr(w, http.StatusUnprocessableEntity, "command is required for stdio transport")
+			return
+		}
+	case "sse", "http":
+		if req.Url == nil || *req.Url == "" {
+			jsonErr(w, http.StatusUnprocessableEntity, "url is required for sse/http transport")
+			return
+		}
+		// Mirror SPA isValidUrlScheme: https always accepted; http only for
+		// loopback (localhost, 127.x.x.x, ::1). Any other http:// URL is
+		// rejected so the SPA validation cannot be bypassed via direct API call.
+		if !mcpURLSchemeValid(*req.Url) {
+			jsonErr(w, http.StatusUnprocessableEntity,
+				"url must use https, or http for loopback addresses only (localhost, 127.x.x.x, ::1)")
+			return
+		}
+	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
 		if tools == nil {
@@ -3677,8 +3829,16 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		}
 		entry := map[string]any{
 			"enabled": true,
-			"command": req.Command,
 			"type":    transport,
+		}
+		// Write the correct config field for each transport so the MCP manager
+		// (pkg/mcp/manager.go ConnectServer) can connect: stdio uses cfg.Command,
+		// sse/http use cfg.URL.
+		switch transport {
+		case "stdio":
+			entry["command"] = *req.Command
+		case "sse", "http":
+			entry["url"] = *req.Url
 		}
 		if req.Args != nil && len(*req.Args) > 0 {
 			entry["args"] = *req.Args
@@ -3715,6 +3875,36 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		ToolCount: 0,
 	}
 	jsonCreated(w, resp)
+}
+
+// mcpURLSchemeValid reports whether rawURL is acceptable for an sse/http MCP
+// server endpoint. It mirrors the SPA's isValidUrlScheme function
+// (src/components/skills/McpServerModal.tsx) so the contract described in
+// McpServerCreate.yaml is enforced server-side and cannot be bypassed via
+// direct API calls.
+//
+// Rules:
+//   - https:// is always accepted.
+//   - http:// is accepted only for loopback hosts: "localhost", any 127.x.x.x
+//     address, or "::1" / "[::1]".
+//   - Any other scheme (http:// to a public host, ws://, ftp://, etc.) is rejected.
+func mcpURLSchemeValid(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	switch parsed.Scheme {
+	case "https":
+		return true
+	case "http":
+		host := strings.ToLower(parsed.Hostname())
+		return host == "localhost" ||
+			strings.HasPrefix(host, "127.") ||
+			host == "::1" ||
+			host == "[::1]"
+	default:
+		return false
+	}
 }
 
 func (a *restAPI) deleteMCPServer(w http.ResponseWriter, id string) {
@@ -4006,7 +4196,7 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 	if sub != "" {
 		parts := strings.SplitN(sub, "/", 2)
 		channelID := parts[0]
-		if !validChannelIDs[channelID] {
+		if !validChannelIDs[gen.ChannelId(channelID)] {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
 			return
 		}
@@ -4092,11 +4282,12 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 			Description: "Slack Socket Mode",
 		},
 		{
-			Id:          "whatsapp",
-			Name:        "WhatsApp",
-			Transport:   "bridge",
-			Enabled:     ch.WhatsApp.Enabled,
-			Description: "WhatsApp via bridge or native",
+			Id:              "whatsapp",
+			Name:            "WhatsApp",
+			Transport:       "native",
+			Enabled:         ch.WhatsApp.Enabled,
+			Description:     "WhatsApp (native, whatsmeow)",
+			NativeAvailable: boolPtr(whatsappnative.NativeAvailable),
 		},
 		{
 			Id:          "feishu",
@@ -4128,26 +4319,91 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 		},
 		{Id: "line", Name: "LINE", Transport: "webhook", Enabled: ch.LINE.Enabled, Description: "LINE Messaging API"},
 		{Id: "qq", Name: "QQ", Transport: "websocket", Enabled: ch.QQ.Enabled, Description: "QQ via napcat"},
-		{
-			Id:          "onebot",
-			Name:        "OneBot",
-			Transport:   "websocket",
-			Enabled:     ch.OneBot.Enabled,
-			Description: "OneBot v11 protocol",
-		},
 		{Id: "irc", Name: "IRC", Transport: "tcp", Enabled: ch.IRC.Enabled, Description: "Internet Relay Chat"},
 		{Id: "matrix", Name: "Matrix", Transport: "http", Enabled: ch.Matrix.Enabled, Description: "Matrix protocol"},
+		{
+			Id:          "google-chat",
+			Name:        "Google Chat",
+			Transport:   "webhook",
+			Enabled:     ch.GoogleChat.Enabled,
+			Description: "Google Chat (webhook or service account)",
+		},
 	}
+
+	// Overlay degraded state from the runtime channel manager. Channels that
+	// failed to construct at startup are marked degraded=true with the init
+	// error as the reason. whatsapp_native failures map to the "whatsapp" entry
+	// because both transports share one list entry.
+	if mgr := a.agentLoop.GetChannelManager(); mgr != nil {
+		failed := mgr.FailedChannels()
+		applyDegradedOverlay(channels, failed)
+		// Warn for any failed channel whose (normalised) id has no matching entry
+		// in the channels list — these are dead channels that would otherwise be
+		// silently invisible to operators.
+		if len(failed) > 0 {
+			entryIDs := make(map[string]struct{}, len(channels))
+			for _, e := range channels {
+				entryIDs[string(e.Id)] = struct{}{}
+			}
+			for _, f := range failed {
+				id := f.Name
+				if id == "whatsapp_native" {
+					id = "whatsapp"
+				}
+				if _, matched := entryIDs[id]; !matched {
+					slog.Warn("channels: failed channel has no matching entry in channels list",
+						"registry_id", f.Name,
+						"channel", f.Channel,
+						"error", f.Err.Error(),
+					)
+				}
+			}
+		}
+	}
+
 	jsonOK(w, channels)
+}
+
+// applyDegradedOverlay marks entries in channelList as degraded when the
+// supplied failed list contains a matching registry id.  It is a pure function
+// extracted from HandleChannels so that it can be unit-tested without a full
+// REST stack.
+//
+// Normalisation rule: "whatsapp_native" maps to the list entry "whatsapp"
+// because both the bridge and native transports share a single ChannelEntry.
+func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.ChannelInitError) {
+	if len(failed) == 0 {
+		return
+	}
+	// Build a map of normalised registry-id → error reason.
+	degradedMap := make(map[string]string, len(failed))
+	for _, f := range failed {
+		id := f.Name
+		if id == "whatsapp_native" {
+			id = "whatsapp"
+		}
+		degradedMap[id] = f.Err.Error()
+	}
+	for i := range channelList {
+		if reason, ok := degradedMap[string(channelList[i].Id)]; ok {
+			r := reason
+			channelList[i].Degraded = boolPtr(true)
+			channelList[i].DegradedReason = &r
+		}
+	}
 }
 
 // validChannelIDs is the set of channel IDs that can be toggled via the API.
 // "webchat" is always enabled and intentionally excluded.
-var validChannelIDs = map[string]bool{
-	"telegram": true, "discord": true, "slack": true, "whatsapp": true,
-	"feishu": true, "dingtalk": true, "wecom": true, "weixin": true,
-	"line": true, "qq": true, "onebot": true, "irc": true,
-	"matrix": true,
+//
+// drift-guard: keyed by the generated gen.ChannelId enum and populated with the
+// named enum constants (not string literals), so removing or renaming a ChannelId
+// value breaks this build until the list is brought back in sync with the contract.
+var validChannelIDs = map[gen.ChannelId]bool{
+	gen.Telegram: true, gen.Discord: true, gen.Slack: true, gen.Whatsapp: true,
+	gen.Feishu: true, gen.Dingtalk: true, gen.Wecom: true, gen.Weixin: true,
+	gen.Line: true, gen.Qq: true, gen.Irc: true,
+	gen.Matrix: true, gen.GoogleChat: true,
 }
 
 // channelWildcardIdx returns the index of the channel-wildcard AgentBinding
@@ -4304,7 +4560,7 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 }
 
 func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, enabled bool) {
-	if !validChannelIDs[channelID] {
+	if !validChannelIDs[gen.ChannelId(channelID)] {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("channel %q not found", channelID))
 		return
 	}
@@ -4326,42 +4582,70 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
+	// #358: persisting channels.<id>.enabled via safeUpdateConfigJSON only swaps the
+	// in-memory config pointer (refreshConfigAndRewireServices → SwapConfig); it does
+	// NOT start or stop the channel. Reload so ChannelManager.Reload applies the diff —
+	// starting a newly-enabled channel (e.g. whatsapp_native, which then emits its
+	// pairing QR over the whatsapp_pairing WS frame) or stopping a disabled one. The
+	// Reload path is crash-safe and name-correct as of #313. awaitReload treats an
+	// unwired reload pipeline (the unit-test environment) as a no-op and only returns an
+	// error on a genuine reload failure, which we surface rather than reporting a false
+	// success (the flag persisted but the channel did not start).
+	if a.agentLoop != nil {
+		if err := a.awaitReload(); err != nil {
+			verb := "start"
+			if !enabled {
+				verb = "stop"
+			}
+			slog.Error("rest: channel reload after enable toggle failed",
+				"channel", channelID, "enabled", enabled, "error", err)
+			jsonErr(w, http.StatusInternalServerError,
+				fmt.Sprintf("channel %s saved but failed to %s: %v", channelID, verb, err))
+			return
+		}
+	}
 	jsonOK(w, gen.ChannelEnabledResponse{Id: gen.ChannelEnabledResponseId(channelID), Enabled: enabled})
 }
 
 // channelSensitiveFields maps channel IDs to their secret/credential field names.
 // These are redacted in GET responses (replaced with "[configured]" if set).
-var channelSensitiveFields = map[string][]string{
-	"telegram": {"token"},
-	"discord":  {"token"},
-	"slack":    {"bot_token", "app_token"},
-	"feishu":   {"app_secret", "encrypt_key", "verification_token"},
-	"matrix":   {"access_token", "crypto_passphrase"},
-	"line":     {"channel_secret", "channel_access_token"},
-	"dingtalk": {"client_secret"},
-	"qq":       {"app_secret"},
-	"wecom":    {"secret"},
-	"onebot":   {"access_token"},
-	"irc":      {"password", "nickserv_password", "sasl_password"},
-	"weixin":   {"token"},
-	"whatsapp": {},
+//
+// drift-guard: keyed by the generated gen.ChannelId enum with named enum
+// constants, so removing/renaming a ChannelId value breaks this build.
+var channelSensitiveFields = map[gen.ChannelId][]string{
+	gen.Telegram:   {"token"},
+	gen.Discord:    {"token"},
+	gen.Slack:      {"bot_token", "app_token"},
+	gen.Feishu:     {"app_secret", "encrypt_key", "verification_token"},
+	gen.Matrix:     {"access_token", "crypto_passphrase"},
+	gen.Line:       {"channel_secret", "channel_access_token"},
+	gen.Dingtalk:   {"client_secret"},
+	gen.Qq:         {"app_secret"},
+	gen.Wecom:      {"secret"},
+	gen.Irc:        {"password", "nickserv_password", "sasl_password"},
+	gen.Weixin:     {"token"},
+	gen.Whatsapp:   {},
+	gen.GoogleChat: {"webhook_url", "service_account_json"},
 }
 
 // channelRequiredFields maps channel IDs to fields that must be non-empty for the channel to work.
-var channelRequiredFields = map[string][]string{
-	"telegram": {"token"},
-	"discord":  {"token"},
-	"slack":    {"bot_token"},
-	"feishu":   {"app_id", "app_secret"},
-	"matrix":   {"homeserver", "user_id", "access_token"},
-	"line":     {"channel_secret", "channel_access_token"},
-	"dingtalk": {"client_id", "client_secret"},
-	"qq":       {"app_id", "app_secret"},
-	"wecom":    {"bot_id", "secret"},
-	"onebot":   {"ws_url"},
-	"irc":      {"server", "nick"},
-	"weixin":   {"token"},
-	"whatsapp": {},
+//
+// drift-guard: keyed by the generated gen.ChannelId enum with named enum
+// constants, so removing/renaming a ChannelId value breaks this build.
+var channelRequiredFields = map[gen.ChannelId][]string{
+	gen.Telegram:   {"token"},
+	gen.Discord:    {"token"},
+	gen.Slack:      {"bot_token"},
+	gen.Feishu:     {"app_id", "app_secret"},
+	gen.Matrix:     {"homeserver", "user_id", "access_token"},
+	gen.Line:       {"channel_secret", "channel_access_token"},
+	gen.Dingtalk:   {"client_id", "client_secret"},
+	gen.Qq:         {"app_id", "app_secret"},
+	gen.Wecom:      {"bot_id", "secret"},
+	gen.Irc:        {"server", "nick"},
+	gen.Weixin:     {"token"},
+	gen.Whatsapp:   {},
+	gen.GoogleChat: {},
 }
 
 // redactChannelConfig returns a copy of cfg with sensitive fields replaced by a
@@ -4374,7 +4658,7 @@ func redactChannelConfig(channelID string, cfg map[string]any) map[string]any {
 	for k, v := range cfg {
 		out[k] = v
 	}
-	for _, field := range channelSensitiveFields[channelID] {
+	for _, field := range channelSensitiveFields[gen.ChannelId(channelID)] {
 		// A set <field>_ref means a credential is stored → mark configured.
 		if ref, _ := out[field+"_ref"].(string); strings.TrimSpace(ref) != "" {
 			out[field] = "[configured]"
@@ -4422,7 +4706,7 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	// is both a plaintext-at-rest violation AND unreadable by the constructor —
 	// so a UI-configured token-based channel would never start.
 	var clearedRefs []string // credentials to delete AFTER the config write commits
-	for _, field := range channelSensitiveFields[channelID] {
+	for _, field := range channelSensitiveFields[gen.ChannelId(channelID)] {
 		raw, present := updates[field]
 		if !present {
 			continue
@@ -4470,7 +4754,7 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		// Invariant (#289/SEC-23): a known secret field is never stored inline in
 		// config.json — it lives only in the credential store via its <field>_ref.
 		// This also scrubs any stale plaintext left by the pre-#289 blind merge.
-		for _, field := range channelSensitiveFields[channelID] {
+		for _, field := range channelSensitiveFields[gen.ChannelId(channelID)] {
 			delete(ch, field)
 		}
 		channels[channelID] = ch
@@ -4503,9 +4787,10 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 		return
 	}
 
-	required := channelRequiredFields[channelID]
-	sensitive := make(map[string]bool, len(channelSensitiveFields[channelID]))
-	for _, f := range channelSensitiveFields[channelID] {
+	cid := gen.ChannelId(channelID)
+	required := channelRequiredFields[cid]
+	sensitive := make(map[string]bool, len(channelSensitiveFields[cid]))
+	for _, f := range channelSensitiveFields[cid] {
 		sensitive[f] = true
 	}
 	var missing []string
@@ -4566,9 +4851,9 @@ func countEnabledChannels(cfg *config.Config) int {
 		ch.Weixin.Enabled,
 		ch.LINE.Enabled,
 		ch.QQ.Enabled,
-		ch.OneBot.Enabled,
 		ch.IRC.Enabled,
 		ch.Matrix.Enabled,
+		ch.GoogleChat.Enabled,
 	} {
 		if enabled {
 			count++

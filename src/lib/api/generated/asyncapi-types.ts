@@ -38,7 +38,10 @@ export type WsFrameType =
   | "pong"
   | "session_close_ack"
   | "exec_approval_response_ack"
-  | "device_pairing_request";
+  | "device_pairing_request"
+  | "whatsapp_pairing"
+  | "whatsapp_pairing_subscribe"
+  | "notification";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -325,9 +328,23 @@ export interface DevicePairingRequestFrame {
   session_id?: string;
 }
 
+export interface WhatsAppPairingFrame {
+  type: "whatsapp_pairing";
+  channel_id: string;
+  status: "waiting" | "code" | "linked" | "timeout" | "error";
+  qr?: string;
+  message?: string;
+}
+
 export interface SessionCloseFrame {
   type: "session_close";
   session_id: string;
+}
+
+export interface WhatsAppPairingSubscribeFrame {
+  type: "whatsapp_pairing_subscribe";
+  channel_id: string;
+  active: boolean;
 }
 
 export interface ExecApprovalExpiredFrame {
@@ -335,6 +352,20 @@ export interface ExecApprovalExpiredFrame {
   id: string;
   session_id: string;
   message?: string;
+}
+
+export interface NotificationFrame {
+  type: "notification";
+  id: string;
+  notification_type: "schedule_failed";
+  title: string;
+  body?: string;
+  severity: "info" | "warning" | "error";
+  read: boolean;
+  created_at_ms: number;
+  schedule_id?: string;
+  session_id?: string;
+  agent_id?: string;
 }
 
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
@@ -370,8 +401,11 @@ export type WsFrame =
   | SessionCloseAckFrame
   | ExecApprovalResponseAckFrame
   | DevicePairingRequestFrame
+  | WhatsAppPairingFrame
   | SessionCloseFrame
-  | ExecApprovalExpiredFrame;
+  | WhatsAppPairingSubscribeFrame
+  | ExecApprovalExpiredFrame
+  | NotificationFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -383,12 +417,13 @@ export type ClientFrame =
   | PingFrame
   | AttachSessionFrame
   | DevicePairingResponseFrame
-  | SessionCloseFrame;
+  | SessionCloseFrame
+  | WhatsAppPairingSubscribeFrame;
 
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close"] as const
+export const ClientFrameTypes = ["auth", "message", "cancel", "exec_approval_response", "ping", "attach_session", "device_pairing_response", "session_close", "whatsapp_pairing_subscribe"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -416,4 +451,6 @@ export type ServerFrame =
   | SessionCloseAckFrame
   | ExecApprovalResponseAckFrame
   | DevicePairingRequestFrame
-  | ExecApprovalExpiredFrame;
+  | WhatsAppPairingFrame
+  | ExecApprovalExpiredFrame
+  | NotificationFrame;

@@ -1,0 +1,23 @@
+title: ScheduleRunResult
+description: Result of a run-now request (#264).
+type: object
+required:
+  - schedule_id
+  - status
+additionalProperties: false
+properties:
+  schedule_id:
+    type: string
+  status:
+    type: string
+    enum:
+      - ok
+      - error
+      - skipped
+      - timeout
+    description: skipped when the schedule's previous run is still in progress or the lane is full.
+  session_id:
+    type: string
+    description: The session the run executed in, when one was created.
+  error:
+    type: string

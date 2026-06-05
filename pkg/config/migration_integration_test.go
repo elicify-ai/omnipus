@@ -342,11 +342,6 @@ func TestMigration_Integration_ChannelsConfigMigrated(t *testing.T) {
 				"enabled": true,
 				"token": "discord-token",
 				"mention_only": true
-			},
-			"onebot": {
-				"enabled": true,
-				"ws_url": "ws://127.0.0.1:3001",
-				"group_trigger_prefix": ["/", "!"]
 			}
 		},
 		"gateway": {
@@ -377,18 +372,6 @@ func TestMigration_Integration_ChannelsConfigMigrated(t *testing.T) {
 	// Discord: mention_only should be migrated to group_trigger.mention_only
 	if cfg.Channels.Discord.GroupTrigger.MentionOnly != true {
 		t.Error("Discord.GroupTrigger.MentionOnly should be true after migration")
-	}
-
-	// OneBot: group_trigger_prefix should be migrated to group_trigger.prefixes
-	if len(cfg.Channels.OneBot.GroupTrigger.Prefixes) != 2 {
-		t.Errorf("len(OneBot.GroupTrigger.Prefixes) = %d, want 2", len(cfg.Channels.OneBot.GroupTrigger.Prefixes))
-	} else {
-		if cfg.Channels.OneBot.GroupTrigger.Prefixes[0] != "/" {
-			t.Errorf("Prefixes[0] = %q, want %q", cfg.Channels.OneBot.GroupTrigger.Prefixes[0], "/")
-		}
-		if cfg.Channels.OneBot.GroupTrigger.Prefixes[1] != "!" {
-			t.Errorf("Prefixes[1] = %q, want %q", cfg.Channels.OneBot.GroupTrigger.Prefixes[1], "!")
-		}
 	}
 }
 

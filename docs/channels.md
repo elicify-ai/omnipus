@@ -162,7 +162,7 @@ omnipus start
 
 Omnipus can connect to WhatsApp in two ways.
 
-**Native (recommended):** In-process using [whatsmeow](https://github.com/tulir/whatsmeow). No separate bridge. Set `"use_native": true` and leave `bridge_url` empty. On first run, scan the QR code with WhatsApp (Linked Devices). Session is stored under your workspace (e.g. `workspace/whatsapp/`). The native channel is **optional** to keep the default binary small; build with `-tags whatsapp_native` (e.g. `make build-whatsapp-native` or `go build -tags whatsapp_native ./cmd/...`).
+**Native (recommended):** In-process using [whatsmeow](https://github.com/tulir/whatsmeow). No separate bridge. Set `"use_native": true` and leave `bridge_url` empty. Open **Channels → Configure** on the WhatsApp card, turn on **Native Mode** and **Save & Enable** — the pairing QR renders live in the panel; scan it with WhatsApp → **Linked Devices** → **Link a Device** (see [Native docs](channels/whatsapp_native.md#pair-in-the-app-recommended)). Session is stored under your workspace (e.g. `workspace/whatsapp/`). Native WhatsApp is included in the **default build** (and every official release) — no build tag needed. (A smaller `lite` build that omits it is available via `make build-lite`; on a lite build use bridge mode instead.)
 
 **Bridge:** Connect to an external WebSocket bridge. Set `bridge_url` (e.g. `ws://localhost:3001`) and keep `use_native` false.
 
@@ -181,7 +181,7 @@ Omnipus can connect to WhatsApp in two ways.
 }
 ```
 
-If `session_store_path` is empty, the session is stored in `<workspace>/whatsapp/`. Run `omnipus start`; on first run, scan the QR code printed in the terminal with WhatsApp → Linked Devices.
+If `session_store_path` is empty, the session is stored in `<workspace>/whatsapp/`. After enabling the channel, scan the pairing QR — it renders live in the **Channels → Configure** panel (recommended), and is also printed to the terminal on first run for headless setups. Scan with WhatsApp → **Linked Devices** → **Link a Device**.
 
 </details>
 

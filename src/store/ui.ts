@@ -20,6 +20,12 @@ interface UiStore {
   openCreateAgentModal: () => void
   closeCreateAgentModal: () => void
 
+  // Notification center panel (#264)
+  notificationPanelOpen: boolean
+  openNotificationPanel: () => void
+  closeNotificationPanel: () => void
+  toggleNotificationPanel: () => void
+
   // Toast
   toasts: Toast[]
   addToast: (toast: Omit<Toast, 'id'>) => void
@@ -45,6 +51,12 @@ export const useUiStore = create<UiStore>((set, get) => ({
   createAgentModalOpen: false,
   openCreateAgentModal: () => set({ createAgentModalOpen: true }),
   closeCreateAgentModal: () => set({ createAgentModalOpen: false }),
+
+  notificationPanelOpen: false,
+  openNotificationPanel: () => set({ notificationPanelOpen: true }),
+  closeNotificationPanel: () => set({ notificationPanelOpen: false }),
+  toggleNotificationPanel: () =>
+    set((state) => ({ notificationPanelOpen: !state.notificationPanelOpen })),
 
   toasts: [],
   addToast: (toast) => {
