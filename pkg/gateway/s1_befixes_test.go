@@ -39,6 +39,8 @@ import (
 //	Then the provider is shown as "disconnected" (not "connected").
 //
 // Traces to: FR-104, US-2/AC1, SC-103, test dataset row: no-key → Disconnected.
+//
+//nolint:dupl // parallel-by-design to the EnvVarKey variant (two explicit cases)
 func TestHandleProviders_NoKey_IsDisconnected(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	t.Setenv("OMNIPUS_MASTER_KEY", "")
@@ -125,6 +127,8 @@ func TestHandleProviders_NoKey_IsDisconnected(t *testing.T) {
 //	Then the provider is shown as "connected".
 //
 // Traces to: FR-104, US-2/AC2, SC-103, test dataset row: inline-key → Connected.
+//
+//nolint:dupl // parallel-by-design to the NoKey variant (two explicit cases)
 func TestHandleProviders_EnvVarKey_IsConnected(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	t.Setenv("OMNIPUS_MASTER_KEY", "")
@@ -487,11 +491,18 @@ func TestPendingRestart_GatewayPortStillGated(t *testing.T) {
 //
 // Traces to: FR-106, US-3/AC3.
 func TestPendingRestart_SandboxModeStillGated(t *testing.T) {
+	// gateway.port is pinned to the same value on both sides: it is a gated key
+	// that lacks omitempty, so the applied config (a full struct) always
+	// materializes it. Real config.json is a full serialization too, but the test's
+	// persisted map is sparse — without this pin, port 0-vs-absent reads as a second
+	// spurious diff. Keeping it equal isolates the assertion to sandbox.mode.
 	applied := map[string]any{
 		"sandbox": map[string]any{"mode": "off"},
+		"gateway": map[string]any{"port": float64(5000)},
 	}
 	persisted := map[string]any{
 		"sandbox": map[string]any{"mode": "enforce"}, // changed
+		"gateway": map[string]any{"port": float64(5000)},
 	}
 	api := newPendingRestartAPI(t, applied, persisted)
 
