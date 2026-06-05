@@ -42,9 +42,35 @@
  * CLAUDE.md — "E2E tests always target the embedded SPA (Go binary)".
  */
 
+import * as fs from 'fs'
+import * as path from 'path'
 import { expect, test } from '@playwright/test'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
+
+// ── Auth helper ───────────────────────────────────────────────────────────────
+
+/**
+ * Read the bearer token from the Playwright storageState file that global-setup
+ * wrote. Avoids calling POST /api/v1/auth/login which would rotate the admin's
+ * token_hash and invalidate the storageState token for all subsequent page tests
+ * (causing them to land on the login screen).
+ *
+ * The SPA stores the bearer under the key 'omnipus_auth_token' in localStorage.
+ * Playwright's storageState JSON layout:
+ *   { origins: [{ origin: "http://localhost:6060", localStorage: [{name, value}] }] }
+ */
+function readStorageStateToken(): string {
+  const authFile = path.join(__dirname, 'fixtures/.auth/admin.json')
+  const state = JSON.parse(fs.readFileSync(authFile, 'utf-8')) as {
+    origins?: Array<{ localStorage?: Array<{ name: string; value: string }> }>
+  }
+  const token = state.origins
+    ?.flatMap((o) => o.localStorage ?? [])
+    .find((e) => e.name === 'omnipus_auth_token')?.value
+  if (!token) throw new Error('omnipus_auth_token not found in storageState — check global-setup')
+  return token
+}
 
 // ── AC2: API-level assertion (SC-101) ─────────────────────────────────────────
 // Independent test against the real /api/v1/tools — not a mock.
@@ -58,12 +84,14 @@ const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 test('(AC2/SC-101) GET /api/v1/tools returns > 41 entries including exec and web_search', async ({
   request,
 }) => {
-  // The gateway runs with dev_mode_bypass: true in CI (set by global-setup).
-  // In bypass mode all requests pass through unauthenticated — no login call
-  // needed. Calling POST /api/v1/auth/login here would rotate the admin's token
-  // hash, invalidating the storageState bearer token used by all subsequent page
-  // tests, causing them to land on the login screen instead of the app.
-  const toolsRes = await request.get(`${BASE_URL}/api/v1/tools`)
+  // Read the bearer token from the storageState file written by global-setup.
+  // We never call POST /api/v1/auth/login here — doing so rotates the admin's
+  // token_hash, invalidating the storageState token for all subsequent page tests.
+  const token = readStorageStateToken()
+
+  const toolsRes = await request.get(`${BASE_URL}/api/v1/tools`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
   expect(toolsRes.ok(), `GET /api/v1/tools failed: ${toolsRes.status()}`).toBe(true)
 
   const tools = (await toolsRes.json()) as Array<{ name: string; category?: string }>
@@ -141,10 +169,12 @@ test(
     await expect(categoryGrid).toBeVisible({ timeout: 15_000 })
 
     // ── AC1 (non-empty): the category grid must have at least one category row ─
-    // CategorySection renders a <button> with aria-expanded for each category.
-    // We count them inside the category-grid container.
-    const categoryButtons = categoryGrid.getByRole('button')
-    const categoryCount = await categoryButtons.count()
+    // CategorySection renders a <button aria-expanded> for each category. We
+    // select ONLY buttons with the aria-expanded attribute to exclude the
+    // Allow/Ask/Deny policy buttons that appear inside expanded categories
+    // (those policy buttons do not have aria-expanded).
+    const categoryToggles = categoryGrid.locator('button[aria-expanded]')
+    const categoryCount = await categoryToggles.count()
     expect(
       categoryCount,
       `Expected at least 1 category in the grid, got ${categoryCount}`,
@@ -155,44 +185,33 @@ test(
     // The raw key "core" must NEVER appear as the full button text content.
     // The raw key "system" must NEVER appear as the sole button text content
     // (though "System" — the human label — is acceptable).
-    //
-    // We collect all category button text values and assert:
-    //   - no button's trimmed innerText equals exactly "core"
-    //   - no button's trimmed innerText equals exactly "system" (case-sensitive)
-    const allCategoryButtonTexts = await categoryButtons.evaluateAll((buttons: Element[]) =>
+    const allCategoryButtonTexts = await categoryToggles.evaluateAll((buttons: Element[]) =>
       buttons.map((b) => b.textContent?.trim() ?? ''),
     )
 
     for (const text of allCategoryButtonTexts) {
-      // The button contains the label + the pill text (e.g. "GeneralAsk").
-      // We check that the RAW KEY "core" does not appear as a standalone prefix
-      // of the text before any policy pill content.
-      // More precisely: the button text must NOT start with "core" as a word.
       expect(
         text.toLowerCase().startsWith('core'),
         `Category button text "${text}" starts with raw key "core" — expected "General" label`,
       ).toBe(false)
 
-      // "system" (lowercase, exact) must not be the leading word either.
-      // "System" (capitalised) IS the valid human label and is allowed.
       expect(
         text.startsWith('system'),
         `Category button text "${text}" starts with raw key "system" (lowercase) — expected "System" label`,
       ).toBe(false)
     }
 
-    // ── Expand all categories to find tool rows ────────────────────────────────
-    // tool-row-* testids only appear in the DOM after the category is expanded.
-    // We expand each category button in sequence.
-    const buttonCount = await categoryButtons.count()
-    for (let i = 0; i < buttonCount; i++) {
-      const btn = categoryButtons.nth(i)
-      // Only click if not already expanded.
-      const expanded = await btn.getAttribute('aria-expanded')
-      if (expanded !== 'true') {
+    // ── Expand all categories to expose tool-row-* testids ────────────────────
+    // tool-row-* testids only appear in the DOM after their category is expanded.
+    // Iterate over category toggle buttons (aria-expanded) only — NOT the
+    // Allow/Ask/Deny policy buttons inside already-expanded categories.
+    const toggleCount = await categoryToggles.count()
+    for (let i = 0; i < toggleCount; i++) {
+      const btn = categoryToggles.nth(i)
+      const isExpanded = await btn.getAttribute('aria-expanded')
+      if (isExpanded !== 'true') {
         await btn.click()
-        // Brief wait for the expanded content to mount.
-        await page.waitForTimeout(100)
+        await page.waitForTimeout(150)
       }
     }
 
