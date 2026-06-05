@@ -7,12 +7,18 @@
  *
  * Layout (top to bottom):
  * 1. Role preset selector (Cautious / Balanced / Full access) via toolPolicyPresets.
- * 2. Primary category grid — collapsed per-category rows showing a summary pill.
- *    - system.* tools (category === 'system') are NOT here — they live in (3).
- *    - MCP tools (source === 'mcp') are NOT here — they live in (4).
- * 3. "Advanced / system tools" AdvancedDisclosure — system.* only, danger note.
- * 4. MCP tools — grouped per-server with a source badge (not folded into system).
- * 5. "Customize per tool (advanced)" AdvancedDisclosure — raw per-tool grid.
+ * 2. Single de-duplicated category grid — ALL builtin tools appear exactly once,
+ *    grouped by their human-readable category label. MCP tools are NOT here.
+ * 3. MCP tools — grouped per-server with a source badge.
+ * 4. Default policy control (inside "Customize defaults (advanced)" — no tool re-list).
+ *
+ * Design decisions (US-1 / AC5 / FR-103):
+ * - There is NO separate "system" disclosure — system.* tools appear in the
+ *   category grid under the "System" label alongside all other builtins.
+ * - There is NO raw per-tool re-listing — each tool appears exactly once.
+ * - The `core` category (un-recategorized general builtins) renders as "General"
+ *   via CATEGORY_LABELS (AC4). The raw key "core" or "system" is never shown
+ *   as a user-facing heading.
  *
  * Props:
  *   tools    — full RegistryTool[] from GET /api/v1/tools
@@ -22,11 +28,11 @@
  * Policy round-trip: loading a value and saving unchanged emits a byte-identical
  * payload. The component never mutates `value` in place.
  *
- * Spec §2.1 / Issue #318.
+ * Spec §2.1 / US-1 / AC5 / FR-103 / Issue #357.
  */
 
 import { useMemo, useState } from 'react'
-import { CaretDown, CaretUp, Database, ShieldWarning } from '@phosphor-icons/react'
+import { CaretDown, CaretUp, Database } from '@phosphor-icons/react'
 import type { RegistryTool } from '@/lib/api'
 import type { ToolPolicy } from '@/components/shared/PolicyBadge'
 import { PolicyBadge } from '@/components/shared/PolicyBadge'
@@ -264,31 +270,33 @@ function CategorySection({
 export function ToolPolicyEditor({ tools, value, onChange, disabled }: ToolPolicyEditorProps) {
   const { default_policy: defaultPolicy, policies } = value
 
-  // ── Partition tools into three buckets ──────────────────────────────────────
+  // ── Partition tools into two buckets ─────────────────────────────────────────
+  // MCP tools → MCP section (grouped by server name).
+  // All builtin tools (including system.*) → single de-duplicated category grid.
+  // No separate "system" disclosure — system.* tools appear in the category grid
+  // under the "System" label (CATEGORY_LABELS['system'] = 'System').
+  // This satisfies US-1 / AC5 / FR-103 / Issue #357.
 
-  const { systemTools, mcpTools, regularTools } = useMemo(() => {
-    const system: RegistryTool[] = []
+  const { builtinTools, mcpTools } = useMemo(() => {
+    const builtin: RegistryTool[] = []
     const mcp: RegistryTool[] = []
-    const regular: RegistryTool[] = []
 
     for (const tool of tools) {
       if (tool.source === 'mcp') {
-        // MCP tools always go to the MCP section, regardless of category.
         mcp.push(tool)
-      } else if (tool.category === 'system') {
-        // system.* tools (category === 'system') go to the Advanced/system disclosure.
-        // This is the B-1 fix: filter on category, NOT scope.
-        system.push(tool)
       } else {
-        regular.push(tool)
+        builtin.push(tool)
       }
     }
 
-    return { systemTools: system, mcpTools: mcp, regularTools: regular }
+    return { builtinTools: builtin, mcpTools: mcp }
   }, [tools])
 
-  // Group regular tools by category (produces all keys except 'system' and MCP).
-  const groupedRegular = useMemo(() => groupByCategory(regularTools), [regularTools])
+  // Group ALL builtin tools (including system.*) by category.
+  // system.* tools carry category='system' → CATEGORY_LABELS['system'] = 'System'.
+  // General builtins (exec, web_search, etc.) may carry category='core' →
+  // CATEGORY_LABELS['core'] = 'General'. No raw key ever surfaces to the user.
+  const groupedBuiltin = useMemo(() => groupByCategory(builtinTools), [builtinTools])
 
   // Group MCP tools by server name.
   const groupedMcp = useMemo(() => groupMcpByServer(mcpTools), [mcpTools])
@@ -356,12 +364,14 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled }: ToolPolic
         )}
       </div>
 
-      {/* 2. Primary category grid (excludes system.* and MCP tools) */}
-      {Object.keys(groupedRegular).length > 0 && (
+      {/* 2. Single de-duplicated category grid — ALL builtin tools exactly once.
+              system.* tools appear here under "System"; general builtins under
+              "General" (core category). No tool appears twice. */}
+      {Object.keys(groupedBuiltin).length > 0 && (
         <div className="space-y-2">
           <p className="text-xs font-medium text-[var(--color-muted)]">Tool categories</p>
           <div className="space-y-1.5" data-testid="category-grid">
-            {Object.entries(groupedRegular).map(([cat, catTools]) => (
+            {Object.entries(groupedBuiltin).map(([cat, catTools]) => (
               <CategorySection
                 key={cat}
                 categoryKey={cat}
@@ -376,37 +386,7 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled }: ToolPolic
         </div>
       )}
 
-      {/* 3. Advanced / system tools disclosure (system.* only, default deny, danger note) */}
-      {systemTools.length > 0 && (
-        <div data-testid="system-disclosure-wrapper">
-          <AdvancedDisclosure
-            title="Advanced / system tools"
-            summary={`${systemTools.length} system tool${systemTools.length !== 1 ? 's' : ''} — restrict unless you know what they do`}
-          >
-            <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
-              <ShieldWarning size={14} className="text-amber-400 shrink-0 mt-0.5" weight="fill" />
-              <p className="text-[11px] text-amber-300 leading-relaxed">
-                These are low-level system tools that can affect the host environment. They default to
-                <strong className="text-amber-200"> Deny</strong> for safety. Only allow them if you understand the risk.
-              </p>
-            </div>
-            <div className="space-y-0.5" data-testid="system-tools-list">
-              {systemTools.map((tool) => (
-                <CategoryToolRow
-                  key={tool.name}
-                  tool={tool}
-                  policies={policies}
-                  defaultPolicy={defaultPolicy}
-                  onChange={handleToolPolicy}
-                  disabled={disabled}
-                />
-              ))}
-            </div>
-          </AdvancedDisclosure>
-        </div>
-      )}
-
-      {/* 4. MCP tools grouped per-server */}
+      {/* 3. MCP tools grouped per-server */}
       {mcpTools.length > 0 && (
         <div className="space-y-2" data-testid="mcp-tools-section">
           <p className="text-xs font-medium text-[var(--color-muted)]">MCP server tools</p>
@@ -414,10 +394,7 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled }: ToolPolic
             {Object.entries(groupedMcp).map(([server, serverTools]) => (
               <AdvancedDisclosure
                 key={server}
-                title={
-                  // Inline server label with source badge
-                  `${server}`
-                }
+                title={`${server}`}
                 summary={`${serverTools.length} tool${serverTools.length !== 1 ? 's' : ''} from MCP server`}
               >
                 {/* Source badge in the expanded content */}
@@ -449,15 +426,16 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled }: ToolPolic
         </div>
       )}
 
-      {/* 5. Customize per tool (advanced) — raw grid for ALL non-system, non-MCP tools */}
+      {/* 4. Customize defaults (advanced) — default policy control only.
+              No per-tool re-listing here; each tool already appears exactly once
+              in the category grid above (AC5 / FR-103). */}
       {tools.length > 0 && (
         <AdvancedDisclosure
-          title="Customize per tool (advanced)"
+          title="Customize defaults (advanced)"
           summary={`${Object.keys(policies).length} override${Object.keys(policies).length !== 1 ? 's' : ''} active`}
         >
-          {/* Default policy control */}
-          <div className="space-y-1.5 mb-3">
-            <p className="text-[11px] text-[var(--color-muted)]">Default policy (for tools not listed below)</p>
+          <div className="space-y-1.5">
+            <p className="text-[11px] text-[var(--color-muted)]">Default policy (applies to any tool without an explicit override)</p>
             <div className="flex gap-1.5">
               {ALL_POLICIES.map((p) => (
                 <PolicyBadge
@@ -469,20 +447,6 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled }: ToolPolic
                 />
               ))}
             </div>
-          </div>
-
-          {/* Raw per-tool grid — all tools (including system) */}
-          <div className="space-y-0.5" data-testid="raw-tool-grid">
-            {tools.map((tool) => (
-              <CategoryToolRow
-                key={tool.name}
-                tool={tool}
-                policies={policies}
-                defaultPolicy={defaultPolicy}
-                onChange={handleToolPolicy}
-                disabled={disabled}
-              />
-            ))}
           </div>
         </AdvancedDisclosure>
       )}

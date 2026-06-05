@@ -1,8 +1,18 @@
 /**
- * ToolPolicyEditor.test.tsx — Issue #318 ACs.
+ * ToolPolicyEditor.test.tsx — US-1 / AC1 / AC4 / AC5 / AC6 / FR-103 / Issue #357.
  *
  * Tests use the REAL ToolRegistryEntry payload shape (category / source / scope
  * fields all present) — not a mock that omits category (spec §0 F-01 note).
+ *
+ * Key invariants verified here:
+ *   - Each tool appears EXACTLY ONCE across the whole editor (no duplicates).
+ *   - General builtins (exec, web_search) carrying category='core' are present.
+ *   - No raw category key 'system' or 'core' is shown as a user-facing heading.
+ *   - Allow/ask/deny control is present for sampled tools.
+ *   - MCP tools are in their own per-server section, not the builtin grid.
+ *   - Per-call-site coverage: global (GlobalToolPoliciesSection) and per-agent
+ *     (ToolsAndPermissions) both render the flat list (AC6 — tested in
+ *     AgentTools.test.tsx and ToolsAndPermissions.test.tsx).
  */
 
 import { describe, it, expect, vi } from 'vitest'
@@ -23,7 +33,24 @@ function makeTool(overrides: Partial<RegistryTool> & { name: string }): Registry
   }
 }
 
-/** A realistic slice of the /api/v1/tools payload (41 tools, all category:'system', scope:'core'). */
+/**
+ * General builtins — these carry category='core' in the real backend payload
+ * (un-recategorized). The editor must render them under "General" (not drop them
+ * and not show the raw key 'core' as a heading).
+ *
+ * Spec note (F-21): mock uses the REAL category values the backend emits
+ * ('core' for un-recategorized) — not 'file'.
+ */
+const GENERAL_TOOLS: RegistryTool[] = [
+  makeTool({ name: 'exec', category: 'core', scope: 'core' }),
+  makeTool({ name: 'web_search', category: 'core', scope: 'core' }),
+  makeTool({ name: 'web_fetch', category: 'core', scope: 'core' }),
+]
+
+/**
+ * system.* tools — category='system'; they MUST appear in the main category
+ * grid under the "System" label, NOT in a separate disclosure section.
+ */
 const SYSTEM_TOOLS: RegistryTool[] = [
   makeTool({ name: 'system.config_read', category: 'system', scope: 'core' }),
   makeTool({ name: 'system.config_write', category: 'system', scope: 'core' }),
@@ -62,7 +89,8 @@ const MCP_TOOL_NO_CATEGORY: RegistryTool = makeTool({
   scope: 'general',
 })
 
-const ALL_TOOLS = [...SYSTEM_TOOLS, ...FILE_TOOLS, ...BROWSER_TOOLS, ...MCP_TOOLS]
+// Mixed payload: system.*, general (core), file, browser, MCP tools.
+const ALL_TOOLS = [...SYSTEM_TOOLS, ...GENERAL_TOOLS, ...FILE_TOOLS, ...BROWSER_TOOLS, ...MCP_TOOLS]
 
 const SAFE_VALUE: ToolPolicyValue = { default_policy: 'allow', policies: {} }
 
@@ -74,7 +102,154 @@ function renderEditor(
   return render(<ToolPolicyEditor tools={tools} value={value} onChange={onChange} />)
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────────
+// ── US-1 / AC1: each tool appears exactly once — no duplicates ─────────────────
+
+describe('ToolPolicyEditor — no duplicate tool ids (US-1 / AC1)', () => {
+  it('each tool appears exactly once across the whole editor (ALL_TOOLS payload)', () => {
+    renderEditor(ALL_TOOLS)
+    // Collect all tool-row data-testid values in the DOM.
+    // Each tool-row has data-testid="tool-row-<name>".
+    const toolRows = document.querySelectorAll('[data-testid^="tool-row-"]')
+    const ids = Array.from(toolRows).map((el) => el.getAttribute('data-testid'))
+    // The category grid is collapsed by default; only the outer editor is checked.
+    // But we need to assert uniqueness: if a tool appeared twice it would have
+    // two elements with the same data-testid. Check for duplicates.
+    const seen = new Set<string>()
+    for (const id of ids) {
+      expect(seen.has(id!), `tool ${id} appeared more than once`).toBe(false)
+      seen.add(id!)
+    }
+  })
+
+  it('no duplicate tool-row ids after expanding ALL category sections', async () => {
+    const user = userEvent.setup()
+    renderEditor(ALL_TOOLS)
+    // Expand every CategorySection trigger so all builtin tool rows are visible.
+    const categoryButtons = document.querySelectorAll('[data-testid="category-grid"] button[aria-expanded]')
+    for (const btn of categoryButtons) {
+      await user.click(btn as HTMLElement)
+    }
+    // Now collect all visible tool rows.
+    const toolRows = document.querySelectorAll('[data-testid^="tool-row-"]')
+    const ids = Array.from(toolRows).map((el) => el.getAttribute('data-testid'))
+    const seen = new Set<string>()
+    for (const id of ids) {
+      expect(seen.has(id!), `tool ${id} appeared more than once`).toBe(false)
+      seen.add(id!)
+    }
+  })
+})
+
+// ── US-1 / AC1: general builtins (core category) are present ──────────────────
+
+describe('ToolPolicyEditor — general builtins present (US-1 / AC1 / AC4)', () => {
+  it('exec is present in the category grid', async () => {
+    const user = userEvent.setup()
+    renderEditor(GENERAL_TOOLS)
+    // Expand the "General" (core) category section.
+    const categoryGrid = screen.getByTestId('category-grid')
+    const coreBtn = within(categoryGrid).getByRole('button', { name: /general/i })
+    await user.click(coreBtn)
+    expect(screen.getByTestId('tool-row-exec')).toBeInTheDocument()
+  })
+
+  it('web_search is present in the category grid', async () => {
+    const user = userEvent.setup()
+    renderEditor(GENERAL_TOOLS)
+    const categoryGrid = screen.getByTestId('category-grid')
+    const coreBtn = within(categoryGrid).getByRole('button', { name: /general/i })
+    await user.click(coreBtn)
+    expect(screen.getByTestId('tool-row-web_search')).toBeInTheDocument()
+  })
+
+  it('the category pill for core tools uses the key "core" (maps to "General" label)', () => {
+    renderEditor(GENERAL_TOOLS)
+    // The category pill data-testid is "category-pill-core"
+    expect(screen.getByTestId('category-pill-core')).toBeInTheDocument()
+  })
+})
+
+// ── US-1 / AC4 / FR-103: no raw 'system' or 'core' shown as a heading ─────────
+
+describe('ToolPolicyEditor — no raw category key as user-facing heading (AC4 / FR-103)', () => {
+  it('no heading element has text content equal to the raw key "system"', () => {
+    renderEditor(ALL_TOOLS)
+    // Check all button text in the category grid — none should equal raw "system" exactly.
+    const categoryGrid = screen.getByTestId('category-grid')
+    const buttons = within(categoryGrid).getAllByRole('button')
+    for (const btn of buttons) {
+      // The text may contain the word "system" as part of a label like "System Tools"
+      // but must NOT be the bare raw key "system" as the entire button label.
+      const text = btn.textContent?.trim() ?? ''
+      expect(text).not.toBe('system')
+    }
+  })
+
+  it('no heading element has text content equal to the raw key "core"', () => {
+    renderEditor([...GENERAL_TOOLS, ...FILE_TOOLS])
+    const categoryGrid = screen.getByTestId('category-grid')
+    const buttons = within(categoryGrid).getAllByRole('button')
+    for (const btn of buttons) {
+      const text = btn.textContent?.trim() ?? ''
+      expect(text).not.toBe('core')
+    }
+  })
+
+  it('system.* tools appear in the category grid (not in a separate system disclosure)', () => {
+    renderEditor(SYSTEM_TOOLS)
+    // There must be a category-grid (not absent because system tools exist).
+    expect(screen.getByTestId('category-grid')).toBeInTheDocument()
+    // There must NOT be a system-disclosure-wrapper (the old §3 section is removed).
+    expect(screen.queryByTestId('system-disclosure-wrapper')).not.toBeInTheDocument()
+    // The "system" category pill must be present in the category grid.
+    expect(screen.getByTestId('category-pill-system')).toBeInTheDocument()
+  })
+
+  it('system.* tools can be expanded from the category grid', async () => {
+    const user = userEvent.setup()
+    renderEditor(SYSTEM_TOOLS)
+    const categoryGrid = screen.getByTestId('category-grid')
+    const systemBtn = within(categoryGrid).getByRole('button', { name: /system/i })
+    await user.click(systemBtn)
+    // After expanding, system tool rows must be visible.
+    for (const tool of SYSTEM_TOOLS) {
+      expect(screen.getByTestId(`tool-row-${tool.name}`)).toBeInTheDocument()
+    }
+  })
+})
+
+// ── US-1 / AC5: allow/ask/deny control present per tool ───────────────────────
+
+describe('ToolPolicyEditor — allow/ask/deny controls present (AC5)', () => {
+  it('allow/ask/deny badges are present for a file tool after expanding', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    renderEditor(FILE_TOOLS, SAFE_VALUE, onChange)
+    const categoryGrid = screen.getByTestId('category-grid')
+    const fileBtn = within(categoryGrid).getByRole('button', { name: /file/i })
+    await user.click(fileBtn)
+    const readFileRow = screen.getByTestId('tool-row-read_file')
+    expect(within(readFileRow).getByRole('button', { name: /allow/i })).toBeInTheDocument()
+    expect(within(readFileRow).getByRole('button', { name: /ask/i })).toBeInTheDocument()
+    expect(within(readFileRow).getByRole('button', { name: /deny/i })).toBeInTheDocument()
+  })
+
+  it('clicking deny on a file tool calls onChange with the correct override', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    renderEditor(FILE_TOOLS, SAFE_VALUE, onChange)
+    const categoryGrid = screen.getByTestId('category-grid')
+    await user.click(within(categoryGrid).getByRole('button', { name: /file/i }))
+    const readFileRow = screen.getByTestId('tool-row-read_file')
+    await user.click(within(readFileRow).getByRole('button', { name: /deny/i }))
+    expect(onChange).toHaveBeenCalledWith({
+      default_policy: 'allow',
+      policies: { read_file: 'deny' },
+    })
+  })
+})
+
+// ── Preset application ─────────────────────────────────────────────────────────
 
 describe('ToolPolicyEditor — preset application', () => {
   it('renders all three preset buttons', () => {
@@ -119,41 +294,7 @@ describe('ToolPolicyEditor — preset application', () => {
   })
 })
 
-describe('ToolPolicyEditor — system.* separation (B-1 / O-1)', () => {
-  it('system.* tools appear ONLY in the Advanced/system disclosure, NOT the primary category grid', () => {
-    renderEditor(ALL_TOOLS)
-
-    // The primary category grid must not contain system tool names
-    const grid = screen.getByTestId('category-grid')
-    SYSTEM_TOOLS.forEach((tool) => {
-      expect(within(grid).queryByTestId(`tool-row-${tool.name}`)).not.toBeInTheDocument()
-    })
-  })
-
-  it('the system disclosure wrapper is rendered when system tools exist', () => {
-    renderEditor(ALL_TOOLS)
-    expect(screen.getByTestId('system-disclosure-wrapper')).toBeInTheDocument()
-  })
-
-  it('system tool rows are inside the system disclosure (after expanding)', async () => {
-    const user = userEvent.setup()
-    renderEditor(ALL_TOOLS)
-    // Expand the system disclosure (it is closed by default)
-    const systemDisclosureTrigger = within(screen.getByTestId('system-disclosure-wrapper')).getByTestId(
-      'advanced-disclosure-trigger',
-    )
-    await user.click(systemDisclosureTrigger)
-    const systemList = screen.getByTestId('system-tools-list')
-    SYSTEM_TOOLS.forEach((tool) => {
-      expect(within(systemList).getByTestId(`tool-row-${tool.name}`)).toBeInTheDocument()
-    })
-  })
-
-  it('system disclosure is NOT rendered when there are no system tools', () => {
-    renderEditor(FILE_TOOLS)
-    expect(screen.queryByTestId('system-disclosure-wrapper')).not.toBeInTheDocument()
-  })
-})
+// ── Category rollup pills ──────────────────────────────────────────────────────
 
 describe('ToolPolicyEditor — category rollup pills (M-9)', () => {
   it('shows a single pill when all tools in a category have the same policy', () => {
@@ -193,36 +334,52 @@ describe('ToolPolicyEditor — category rollup pills (M-9)', () => {
   })
 })
 
-describe('ToolPolicyEditor — raw tool grid behind Advanced', () => {
-  it('raw-tool-grid is NOT visible by default', () => {
-    renderEditor()
+// ── Default policy control ─────────────────────────────────────────────────────
+
+describe('ToolPolicyEditor — default policy control (advanced)', () => {
+  it('default policy control is accessible inside the Customize defaults section', async () => {
+    const user = userEvent.setup()
+    const onChange = vi.fn()
+    renderEditor(FILE_TOOLS, SAFE_VALUE, onChange)
+    // Find the "Customize defaults (advanced)" trigger button
+    const customizeTrigger = screen.getByRole('button', { name: /customize defaults/i })
+    await user.click(customizeTrigger)
+    // Default policy badges must now be visible
+    expect(screen.getAllByRole('button', { name: /allow/i }).length).toBeGreaterThan(0)
+  })
+
+  it('there is NO raw-tool-grid that re-lists all tools', async () => {
+    const user = userEvent.setup()
+    renderEditor(ALL_TOOLS)
+    // Even after opening Customize defaults, no raw-tool-grid data-testid should exist.
+    const customizeTrigger = screen.getByRole('button', { name: /customize defaults/i })
+    await user.click(customizeTrigger)
     expect(screen.queryByTestId('raw-tool-grid')).not.toBeInTheDocument()
   })
 
-  it('raw-tool-grid becomes visible after expanding "Customize per tool (advanced)"', async () => {
+  it('changing default policy calls onChange dropping overrides that now match', async () => {
     const user = userEvent.setup()
-    renderEditor()
-    // Find the "Customize per tool (advanced)" trigger button
-    const customizeTrigger = screen.getByRole('button', { name: /customize per tool/i })
-    await user.click(customizeTrigger)
-    expect(screen.getByTestId('raw-tool-grid')).toBeInTheDocument()
-  })
-
-  it('raw-tool-grid contains all tools (including system tools)', async () => {
-    const user = userEvent.setup()
-    renderEditor(ALL_TOOLS)
-    await user.click(screen.getByRole('button', { name: /customize per tool/i }))
-    const grid = screen.getByTestId('raw-tool-grid')
-    // All tools (including system) should appear in the raw grid
-    ALL_TOOLS.forEach((tool) => {
-      expect(within(grid).getByTestId(`tool-row-${tool.name}`)).toBeInTheDocument()
-    })
+    const onChange = vi.fn()
+    const valueWithOverride: ToolPolicyValue = {
+      default_policy: 'allow',
+      policies: { read_file: 'ask' },
+    }
+    renderEditor(FILE_TOOLS, valueWithOverride, onChange)
+    // Open customize defaults
+    await user.click(screen.getByRole('button', { name: /customize defaults/i }))
+    // Click "Ask" on the default policy — the 'ask' override for read_file should be dropped
+    // since it now matches the new default.
+    const defaultPolicyBadges = screen.getAllByRole('button', { name: /^ask$/i })
+    await user.click(defaultPolicyBadges[0])
+    expect(onChange).toHaveBeenCalledWith({ default_policy: 'ask', policies: {} })
   })
 })
 
+// ── Policy round-trip ──────────────────────────────────────────────────────────
+
 describe('ToolPolicyEditor — policy round-trip', () => {
-  it('loading an existing per-tool override value and calling onChange untouched emits the same payload', async () => {
-    const user = userEvent.setup()
+  it('loading an existing per-tool override and not touching the UI emits no spurious calls', () => {
+    const onChange = vi.fn()
     const existingValue: ToolPolicyValue = {
       default_policy: 'allow',
       policies: {
@@ -231,19 +388,12 @@ describe('ToolPolicyEditor — policy round-trip', () => {
         write_file: 'ask',
       },
     }
-    const onChange = vi.fn()
     renderEditor(FILE_TOOLS, existingValue, onChange)
-    // Expand "Customize per tool (advanced)"
-    await user.click(screen.getByRole('button', { name: /customize per tool/i }))
-    // Click the currently-active policy for write_file to "toggle" — should produce same result
-    const grid = screen.getByTestId('raw-tool-grid')
-    // The write_file row should be present (override is loaded correctly)
-    expect(within(grid).getByTestId('tool-row-write_file')).toBeInTheDocument()
-    // onChange not called yet (no user interaction)
+    // onChange must not be called just from rendering.
     expect(onChange).not.toHaveBeenCalled()
   })
 
-  it('clicking a policy badge that matches an existing override removes it (round-trip clean)', async () => {
+  it('clicking a policy badge that matches default_policy removes the override', async () => {
     const user = userEvent.setup()
     const existingValue: ToolPolicyValue = {
       default_policy: 'allow',
@@ -251,15 +401,17 @@ describe('ToolPolicyEditor — policy round-trip', () => {
     }
     const onChange = vi.fn()
     renderEditor(FILE_TOOLS, existingValue, onChange)
-    await user.click(screen.getByRole('button', { name: /customize per tool/i }))
-    const grid = screen.getByTestId('raw-tool-grid')
-    // Click Allow on read_file (= the default_policy) — should remove the override
-    const readFileRow = within(grid).getByTestId('tool-row-read_file')
-    const allowBadge = within(readFileRow).getByRole('button', { name: /allow/i })
-    await user.click(allowBadge)
+    // Expand the 'file' category
+    const categoryGrid = screen.getByTestId('category-grid')
+    await user.click(within(categoryGrid).getByRole('button', { name: /file/i }))
+    const readFileRow = screen.getByTestId('tool-row-read_file')
+    // Click Allow (= the default_policy) — should remove the override.
+    await user.click(within(readFileRow).getByRole('button', { name: /allow/i }))
     expect(onChange).toHaveBeenCalledWith({ default_policy: 'allow', policies: {} })
   })
 })
+
+// ── MCP tools (F-G06 guard) ────────────────────────────────────────────────────
 
 describe('ToolPolicyEditor — MCP tools (F-G06 guard)', () => {
   it('MCP tools appear in the MCP section, not the primary category grid', () => {
@@ -273,16 +425,16 @@ describe('ToolPolicyEditor — MCP tools (F-G06 guard)', () => {
     })
   })
 
-  it('MCP tools are NOT swept into the system disclosure', () => {
+  it('MCP tools are NOT swept into the category grid alongside system tools', () => {
     renderEditor([...SYSTEM_TOOLS, ...MCP_TOOLS])
-    // System disclosure should exist for system tools
-    expect(screen.getByTestId('system-disclosure-wrapper')).toBeInTheDocument()
-    // But MCP section should also exist and be separate
+    // Category grid should exist (for system tools)
+    expect(screen.getByTestId('category-grid')).toBeInTheDocument()
+    // MCP section should also exist and be separate
     expect(screen.getByTestId('mcp-tools-section')).toBeInTheDocument()
-    // MCP tools must be in the MCP section, not the system disclosure
-    const systemWrapper = screen.getByTestId('system-disclosure-wrapper')
+    // MCP tools must NOT be in the category grid
+    const grid = screen.getByTestId('category-grid')
     MCP_TOOLS.forEach((tool) => {
-      expect(within(systemWrapper).queryByTestId(`tool-row-${tool.name}`)).not.toBeInTheDocument()
+      expect(within(grid).queryByTestId(`tool-row-${tool.name}`)).not.toBeInTheDocument()
     })
   })
 
@@ -297,12 +449,12 @@ describe('ToolPolicyEditor — MCP tools (F-G06 guard)', () => {
     expect(screen.getAllByText('MCP').length).toBeGreaterThan(0)
   })
 
-  it('an MCP tool with category unset (fallback: other) is not swallowed by the system filter', () => {
+  it('an MCP tool with category unset (fallback: other) is not swallowed by the category filter', () => {
     renderEditor([MCP_TOOL_NO_CATEGORY])
     // Must appear in MCP section
     expect(screen.getByTestId('mcp-tools-section')).toBeInTheDocument()
-    // Must NOT appear in system disclosure (which shouldn't even exist)
-    expect(screen.queryByTestId('system-disclosure-wrapper')).not.toBeInTheDocument()
+    // Must NOT appear in the builtin category grid
+    expect(screen.queryByTestId('category-grid')).not.toBeInTheDocument()
   })
 
   /**
@@ -356,8 +508,10 @@ describe('ToolPolicyEditor — MCP tools (F-G06 guard)', () => {
   })
 })
 
+// ── Glob-keyed policies (Blocker 4) ───────────────────────────────────────────
+
 describe('ToolPolicyEditor — glob-keyed policies (Blocker 4)', () => {
-  it('system.* glob key resolves correctly for system tools in the Advanced disclosure', async () => {
+  it('system.* glob key resolves correctly for system tools in the category grid', async () => {
     const user = userEvent.setup()
     // Seeded privilege rail: default_policy='allow', system.*='deny'
     const valueWithGlob: ToolPolicyValue = {
@@ -365,15 +519,14 @@ describe('ToolPolicyEditor — glob-keyed policies (Blocker 4)', () => {
       policies: { 'system.*': 'deny' },
     }
     renderEditor(SYSTEM_TOOLS, valueWithGlob)
-    // Expand the system disclosure
-    const systemWrapper = screen.getByTestId('system-disclosure-wrapper')
-    const trigger = within(systemWrapper).getByTestId('advanced-disclosure-trigger')
-    await user.click(trigger)
+    // The category grid shows the 'system' category pill
+    expect(screen.getByTestId('category-pill-system')).toBeInTheDocument()
+    // Expand the system category
+    const categoryGrid = screen.getByTestId('category-grid')
+    await user.click(within(categoryGrid).getByRole('button', { name: /system/i }))
     // All three system tools should now be visible and resolved to 'deny'
-    // (because system.* matches system.config_read, system.config_write, system.policy_list)
-    const systemList = screen.getByTestId('system-tools-list')
     for (const tool of SYSTEM_TOOLS) {
-      const row = within(systemList).getByTestId(`tool-row-${tool.name}`)
+      const row = screen.getByTestId(`tool-row-${tool.name}`)
       // The 'Deny' badge must be active (aria-pressed="true")
       const denyBadge = within(row).getByRole('button', { name: /deny/i })
       expect(denyBadge).toHaveAttribute('aria-pressed', 'true')
@@ -399,14 +552,13 @@ describe('ToolPolicyEditor — glob-keyed policies (Blocker 4)', () => {
       policies: { 'system.*': 'deny', 'system.config_read': 'allow' },
     }
     renderEditor(SYSTEM_TOOLS, valueWithBoth)
-    const systemWrapper = screen.getByTestId('system-disclosure-wrapper')
-    await user.click(within(systemWrapper).getByTestId('advanced-disclosure-trigger'))
-    const systemList = screen.getByTestId('system-tools-list')
+    const categoryGrid = screen.getByTestId('category-grid')
+    await user.click(within(categoryGrid).getByRole('button', { name: /system/i }))
     // system.config_read → allow (exact match wins)
-    const readRow = within(systemList).getByTestId('tool-row-system.config_read')
+    const readRow = screen.getByTestId('tool-row-system.config_read')
     expect(within(readRow).getByRole('button', { name: /allow/i })).toHaveAttribute('aria-pressed', 'true')
     // system.config_write → deny (glob applies)
-    const writeRow = within(systemList).getByTestId('tool-row-system.config_write')
+    const writeRow = screen.getByTestId('tool-row-system.config_write')
     expect(within(writeRow).getByRole('button', { name: /deny/i })).toHaveAttribute('aria-pressed', 'true')
   })
 })
