@@ -436,7 +436,8 @@ func (t *ReadFileTool) Description() string {
 		"characters of extracted text rather than raw bytes."
 }
 
-func (t *ReadFileTool) Scope() ToolScope { return ScopeGeneral }
+func (t *ReadFileTool) Scope() ToolScope       { return ScopeGeneral }
+func (t *ReadFileTool) Category() ToolCategory { return CategoryFile }
 
 func (t *ReadFileTool) Parameters() map[string]any {
 	return map[string]any{
@@ -775,7 +776,8 @@ func (t *WriteFileTool) Description() string {
 	return "Write content to a file. If the file already exists, you must set overwrite=true to replace it."
 }
 
-func (t *WriteFileTool) Scope() ToolScope { return ScopeCore }
+func (t *WriteFileTool) Scope() ToolScope       { return ScopeCore }
+func (t *WriteFileTool) Category() ToolCategory { return CategoryFile }
 
 func (t *WriteFileTool) Parameters() map[string]any {
 	return map[string]any{
@@ -856,7 +858,8 @@ func (t *ListDirTool) Description() string {
 	return "List files and directories in a path"
 }
 
-func (t *ListDirTool) Scope() ToolScope { return ScopeGeneral }
+func (t *ListDirTool) Scope() ToolScope       { return ScopeGeneral }
+func (t *ListDirTool) Category() ToolCategory { return CategoryFile }
 
 func (t *ListDirTool) Parameters() map[string]any {
 	return map[string]any{
