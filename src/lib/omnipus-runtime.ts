@@ -166,8 +166,8 @@ function buildContentParts(
 
     return parts;
   } catch (err) {
-    console.error('[omnipus-runtime] buildContentParts failed:', err)
-    return [{ type: "text", text: msg.content ?? "[Error rendering message]" }]
+    console.error('[omnipus-runtime] buildContentParts failed:', err);
+    return [{ type: "text", text: msg.content ?? "[Error rendering message]" }];
   }
 }
 

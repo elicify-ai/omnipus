@@ -103,16 +103,16 @@ When implementing features: (1) read the relevant BRD section(s); (2) `/plan-spe
 
 Follow `docs/internal/issue-and-board-conventions.md` (applies to lead + every subagent). Essentials:
 
-- **Type** (exactly one, the "kind" axis): **Bug / Feature / Task / Epic** — set the org-level Issue Type, not a label. `bug`/`enhancement` labels are retired; never recreate.
-- **`gh` has no `--type` flag** — set Type via GraphQL `updateIssueIssueType` after `gh issue create` (recipe + IDs in the doc), or use UI templates.
-- **Labels are cross-cutting only**: `priority:*` (one), `area:*` (one+), plus `security`/`tech-debt`/`test-coverage`/`documentation`. `type:*` labels are PR/changelog only — never on issues.
-- **Board #3 automation**: new issues auto-add as `Backlog`, closing auto-sets `Done`. Don't manually add or hand-set initial/`Done` status. You DO set **Sprint** and promote Status.
-- **Bundle related work** under an **Epic** with real sub-issues (`addSubIssue`); a sprint = Epic + sub-issues sharing one Sprint value.
-- **Every PR MUST close its issues via keyword in the PR *description*** (mandatory): e.g. `Closes #264, closes #289`.
-  - Repeat the keyword per issue — `Closes #1, #2` only closes `#1`. Keywords: `close[s|d]`/`fix[es|ed]`/`resolve[s|d]`.
-  - Auto-close fires only when the PR merges into the **default** branch (`main`). Non-`main` base → links but doesn't close; closure rides along when that branch merges to `main`.
-  - Keywords must be in the PR description, not just commit messages (squash-merge drops commit keywords).
-  - Non-`main`-base PRs must still reference every resolved issue; the merger closes them with a comment citing the PR.
+- **Type is the "kind" axis** (exactly one): **Bug / Feature / Task / Epic** — set the org-level Issue Type, not a label. The `bug`/`enhancement` labels are **retired/deleted**; never recreate them.
+- **`gh` has no `--type` flag** — set the Type via GraphQL `updateIssueIssueType` after `gh issue create` (or use the issue templates in the UI, which set `type:` automatically). Type IDs and the exact recipe are in the doc.
+- **Labels are cross-cutting only**: `priority:*` (one), `area:*` (one+), plus `security`/`tech-debt`/`test-coverage`/`documentation`. The `type:*` labels are **PR/changelog only** (release-drafter) — never put them on issues.
+- **Board #3 automation does the rote work**: new issues auto-add as `Backlog`; closing auto-sets `Done`. Do **not** manually add issues to the board or hand-set initial/`Done` status. You do set **Sprint** (single-select) and promote Status as work proceeds.
+- **Bundle related work** under an **Epic** with real sub-issues (`addSubIssue`); sprints are an Epic + its sub-issues sharing one Sprint value.
+- **Every PR MUST close its issues via keyword (mandatory).** A PR that resolves issues MUST list a closing keyword **per issue** in the **PR description** (not just commit messages) — e.g. `Closes #264, closes #289, closes #283`. This is non-negotiable: the only acceptable reason an issue stays open after its fix merges is that the work genuinely isn't done. Rules that bite us:
+  - **Repeat the keyword for each issue.** `Closes #1, #2` only closes `#1`. Write `Closes #1, closes #2`. Keywords: `close[s|d]` / `fix[es|ed]` / `resolve[s|d]`.
+  - **Auto-close only fires when the PR merges into the *default* branch (`main`).** A PR merged into a non-default base (e.g. a release/hotfix branch) links but does **not** close — the closure happens when that branch later merges to `main`, and only if the keywords ride along in that merge's PR body. Target `main` whenever you want the issues closed on merge.
+  - **Put keywords in the PR *description*, not only commit messages.** On squash-merge, commit-message keywords are unreliable; the PR body is what GitHub honors. (This is why Sprint #258 / PR #292 left 8 issues open despite shipping their fixes.)
+  - If a PR can't use auto-close (non-`main` base), it MUST still reference every issue it resolves, and whoever merges is responsible for closing them with a comment citing the PR.
 
 ## Subagent Workflow
 
@@ -127,15 +127,27 @@ You (the lead) orchestrate all work by spawning subagents via the Agent tool (no
 
 Runs **twice**: after EACH feature (before its PR merges to base) AND on the WHOLE epic diff before the final `→ main` PR. All seven must be clean or each finding explicitly deferred with a tracked issue. Hard release rule, on par with Constraint #7.
 
-1. `pr-review-toolkit:code-reviewer` — CLAUDE.md compliance, bugs, quality
-2. `pr-review-toolkit:code-simplifier` — clarity/maintainability
-3. `pr-review-toolkit:comment-analyzer` — comment accuracy
-4. `pr-review-toolkit:pr-test-analyzer` — test coverage
-5. `pr-review-toolkit:silent-failure-hunter` — silent failures / bad error handling
-6. `pr-review-toolkit:type-design-analyzer` — type/interface design
-7. **Architect pass via `/grill-code`** — correctness, security, error handling, tests, observability, overcomplexity, + spec/task compliance when available.
+### Which subagents to spawn per task type
+- **Frontend-only work:** frontend-lead → qa-lead
+- **Backend-only work:** backend-lead → qa-lead
+- **Security work:** security-lead + backend-lead → qa-lead
+- **Full-stack features:** frontend-lead + backend-lead (parallel) → qa-lead
+- **Design questions:** architect
 
-Run 1–6 in parallel; run `/grill-code` (7) as its own read-only audit. Resolve findings (fix via the relevant subagent, or defer-with-issue), re-run any failed reviewer, merge only when all seven pass.
+### Review pipeline — the 7-reviewer quality gate (MANDATORY)
+
+**This gate runs twice: after EACH completed feature (before its PR merges to its base branch) AND again on the WHOLE epic diff before the final `→ main` PR.** All seven must be clean (or every finding explicitly deferred with a tracked issue) before merging. This is a hard release rule, on par with Hard Constraint #7.
+
+**The 7 reviewers:**
+1. `pr-review-toolkit:code-reviewer` — CLAUDE.md compliance, bugs, quality
+2. `pr-review-toolkit:code-simplifier` — simplify for clarity and maintainability
+3. `pr-review-toolkit:comment-analyzer` — verify comment accuracy
+4. `pr-review-toolkit:pr-test-analyzer` — test coverage quality
+5. `pr-review-toolkit:silent-failure-hunter` — find silent failures, bad error handling
+6. `pr-review-toolkit:type-design-analyzer` — type/interface design quality
+7. **Architect pass via the `/grill-code` skill** — correctness, security, error handling, testing quality, observability, overcomplexity, and (when a spec/tasks exist) spec compliance + task completeness. Run `/grill-code` over the change as the 7th reviewer.
+
+Run reviewers 1–6 in parallel; run the `/grill-code` architect pass (7) as its own read-only audit. **Resolve findings:** fix (spawn the relevant implementing subagent) or defer-with-issue; re-run any failed reviewer after fixes. Only open/merge the PR when all seven pass.
 
 ## Quality Gates
 
