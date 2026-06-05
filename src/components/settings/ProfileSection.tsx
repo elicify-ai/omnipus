@@ -63,7 +63,14 @@ export function ProfileSection() {
 
   const [name, setName] = useState(() => loadPref<string>('name', ''))
   const [timezone, setTimezone] = useState(() => loadPref<string>('timezone', 'UTC'))
-  const [fontSize, setFontSize] = useState(() => loadPref<number>('font_size', 14))
+  const [fontSize, setFontSize] = useState(() => {
+    const v = loadPref<number>('font_size', 14)
+    // Persist the loaded (or default) value immediately so the preference is
+    // always present in localStorage — avoids a gap where the auto-save hasn't
+    // fired yet (it skips the initial render by design).
+    savePref('font_size', v)
+    return v
+  })
   const [userContent, setUserContent] = useState('')
 
   // Change password form state

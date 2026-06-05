@@ -1,5 +1,10 @@
 /**
- * McpServerModal — Add MCP Server dialog.
+ * McpServerModal — Add MCP Server slide-out.
+ *
+ * FR-110 / US-7: converted from Dialog to Sheet (slide-out), matching
+ * ChannelConfigPanel. The Sheet uses Radix DialogPrimitive under the hood,
+ * which provides native focus-trap, ESC dismiss, and focus-restore on close
+ * (a11y F-16 — all satisfied by the primitive; no hand-wiring needed).
  *
  * Replaces the raw transport dropdown with a two-mode picker:
  *   - "Local program" (stdio): requires Command; Args, Env, Command under
@@ -12,20 +17,20 @@
  *     non-loopback hosts; shows an inline SSRF caution for RFC1918/link-local
  *     literal addresses (heuristic — the real guard is backend F-G07).
  *
- * Issues #336.
+ * Issues #336, #356.
  */
 
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Warning, Globe, Terminal } from '@phosphor-icons/react'
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '@/components/ui/dialog'
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+} from '@/components/ui/sheet'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -230,11 +235,21 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add MCP Server</DialogTitle>
-            <DialogDescription>
+      {/*
+        Sheet — FR-110 / US-7.
+        Focus-trap, ESC dismiss, and focus-restore are provided natively by
+        Radix DialogPrimitive (the Sheet primitive is built on it).
+        a11y F-16: all three behaviours are satisfied without any custom wiring.
+      */}
+      <Sheet open={open} onOpenChange={onOpenChange}>
+        <SheetContent
+          side="right"
+          className="w-full sm:max-w-md flex flex-col overflow-y-auto"
+          data-testid="mcp-sheet"
+        >
+          <SheetHeader className="pb-4 border-b border-[var(--color-border)]">
+            <SheetTitle>Add MCP Server</SheetTitle>
+            <SheetDescription>
               Connect a Model Context Protocol server to extend agent capabilities.{' '}
               <a
                 href="https://modelcontextprotocol.io/docs"
@@ -244,10 +259,10 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
               >
                 Learn more
               </a>
-            </DialogDescription>
-          </DialogHeader>
+            </SheetDescription>
+          </SheetHeader>
 
-          <div className="space-y-4">
+          <div className="flex-1 py-4 space-y-4">
             {/* Server name */}
             <div className="space-y-1">
               <label className="text-xs text-[var(--color-muted)]">Name</label>
@@ -391,7 +406,7 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
             )}
           </div>
 
-          <DialogFooter>
+          <SheetFooter className="pt-4 border-t border-[var(--color-border)]">
             <Button
               variant="outline"
               size="sm"
@@ -408,9 +423,9 @@ export function McpServerModal({ open, onOpenChange }: McpServerModalProps) {
             >
               {isPending ? 'Adding...' : 'Add server'}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
 
       {/* Stdio safety confirmation dialog */}
       <AlertDialog

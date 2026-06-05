@@ -1,14 +1,13 @@
 /**
- * GatewaySection tests — US-B2 risky controls: auth_mode + bind_address.
+ * GatewaySection tests — FR-107 + FR-107b (US-4).
  *
- * Covers the highest-blast-radius controls (no login / all-interface exposure):
- * - Standing badge derives from the PERSISTED config value (not local draft).
- * - Badge shows immediately on load when value is already unsafe.
- * - Safe fallback when config is undefined: both controls default to safe value.
- * - auth_mode 'none' → badge; auth_mode 'token' → no badge.
- * - bind_address '0.0.0.0' → badge; bind_address '127.0.0.1' → no badge.
- * - Clicking a risky option opens the AlertDialog (safe cancel button default).
- * - selectedValue drives the active highlight independently of persistedValue.
+ * Covers:
+ * - No auth_mode:none option in the UI (FR-107 / US-4 AC1).
+ * - No hot-reload toggle in the UI (US-4 AC2).
+ * - Persistent unauth banner when auth_mode=none (FR-107b).
+ * - Persistent unauth banner when dev_mode_bypass=true (FR-107b).
+ * - No banner when auth_mode=token and dev_mode_bypass=false (clean state).
+ * - US-B2: bind_address risky control (standing badge for 0.0.0.0).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -41,15 +40,20 @@ import { GatewaySection } from './GatewaySection'
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
-function makeConfig(overrides: { auth_mode?: 'none' | 'token'; bind_address?: string } = {}) {
+function makeConfig(overrides: {
+  auth_mode?: 'none' | 'token'
+  bind_address?: string
+  dev_mode_bypass?: boolean
+} = {}) {
   return {
     gateway: {
       bind_address: overrides.bind_address ?? '127.0.0.1',
       port: 5000,
       auth_mode: overrides.auth_mode ?? 'token',
       token: 'test-token',
-      hot_reload: false,
+      hot_reload: true,
       log_level: 'info',
+      dev_mode_bypass: overrides.dev_mode_bypass ?? false,
     },
     agents: { defaults: { default_agent_id: '' } },
     security: {
@@ -66,8 +70,6 @@ function makeConfig(overrides: { auth_mode?: 'none' | 'token'; bind_address?: st
     },
   }
 }
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeClient() {
   return new QueryClient({
@@ -92,119 +94,109 @@ beforeEach(() => {
   vi.mocked(fetchAgents).mockResolvedValue([])
 })
 
-// ── auth_mode badge ───────────────────────────────────────────────────────────
+// ── FR-107: no auth_mode:none option ─────────────────────────────────────────
 
-describe('GatewaySection — auth_mode risky control (US-B2)', () => {
-  it('shows standing badge when persisted auth_mode is "none"', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ auth_mode: 'none' }) as never)
-
-    renderSection()
-
-    await waitFor(() => {
-      // Multiple risky controls render badges; at least one for auth_mode=none
-      const badges = screen.getAllByTestId('risky-standing-badge')
-      expect(badges.length).toBeGreaterThan(0)
-    })
-  })
-
-  it('does NOT show standing badge when persisted auth_mode is "token" (safe)', async () => {
+describe('GatewaySection — FR-107: auth_mode:none removed from UI', () => {
+  it('does not render "None (no login)" option (auth_mode:none removed)', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ auth_mode: 'token' }) as never)
-
     renderSection()
-
-    // Wait for the section to render
     await waitFor(() => {
-      expect(screen.getByText(/login requirement/i)).toBeInTheDocument()
+      expect(screen.getByText(/bind address/i)).toBeInTheDocument()
     })
-
-    // Confirm no auth-mode badge (bind_address is also safe)
-    await waitFor(() => {
-      expect(screen.queryByTestId('risky-standing-badge')).not.toBeInTheDocument()
-    }, { timeout: 2000 })
+    expect(screen.queryByText(/none.*no login/i)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('risky-option-none')).not.toBeInTheDocument()
   })
 
-  it('safe fallback: when config is undefined, auth_mode defaults to safe "token" (no badge)', async () => {
-    // Simulate a slow load — config never resolves during this test
-    vi.mocked(fetchConfig).mockReturnValue(new Promise(() => {}))
-
-    renderSection()
-
-    // Section shows loading state — no badge
-    expect(screen.queryByTestId('risky-standing-badge')).not.toBeInTheDocument()
-  })
-
-  it('"Bearer token" option has a Recommended pill (safe option marker)', async () => {
+  it('does not show auth mode selector at all (token is always on)', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ auth_mode: 'token' }) as never)
-
     renderSection()
-
     await waitFor(() => {
-      const pills = screen.getAllByTestId('recommended-pill')
-      expect(pills.length).toBeGreaterThanOrEqual(1)
+      expect(screen.getByText(/log level/i)).toBeInTheDocument()
     })
-  })
-
-  it('clicking "None (no login)" option opens AlertDialog with safe cancel button', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ auth_mode: 'token' }) as never)
-
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('risky-option-none')).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByTestId('risky-option-none'))
-
-    await waitFor(() => {
-      // The cancel/safe button must be the default action
-      expect(screen.getByText(/keep login on/i)).toBeInTheDocument()
-    })
-  })
-
-  it('cancelling the dialog leaves auth_mode unchanged (no badge)', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ auth_mode: 'token' }) as never)
-
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('risky-option-none')).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByTestId('risky-option-none'))
-    await waitFor(() => {
-      expect(screen.getByText(/keep login on/i)).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByText(/keep login on/i))
-
-    await waitFor(() => {
-      expect(screen.queryByText(/keep login on/i)).not.toBeInTheDocument()
-    })
-
-    // Badge must NOT appear — persisted value is still 'token'
-    expect(screen.queryByTestId('risky-standing-badge')).not.toBeInTheDocument()
-  })
-
-  it('badge appears immediately on load when auth_mode is already "none"', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ auth_mode: 'none' }) as never)
-
-    renderSection()
-
-    // Badge appears without any user interaction
-    await waitFor(() => {
-      expect(screen.getAllByTestId('risky-standing-badge').length).toBeGreaterThan(0)
-    })
+    expect(screen.queryByText(/login requirement/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/bearer token.*login required/i)).not.toBeInTheDocument()
   })
 })
 
-// ── bind_address badge ────────────────────────────────────────────────────────
+// ── US-4 AC2: no hot-reload toggle ────────────────────────────────────────────
+
+describe('GatewaySection — US-4 AC2: no hot-reload toggle', () => {
+  it('does not render a hot reload switch', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(makeConfig() as never)
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByText(/log level/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/hot reload/i)).not.toBeInTheDocument()
+    // Ensure no switch for hot-reload is in the DOM
+    // The bind-address risky control is still there but the hot-reload Switch is gone
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+  })
+})
+
+// ── FR-107b: unauth banner ─────────────────────────────────────────────────────
+
+describe('GatewaySection — FR-107b: unauthenticated access banner', () => {
+  it('shows persistent banner when auth_mode=none', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ auth_mode: 'none' }) as never)
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByTestId('unauth-banner')).toBeInTheDocument()
+    })
+    expect(screen.getByText(/unauthenticated access is enabled/i)).toBeInTheDocument()
+  })
+
+  it('shows persistent banner when dev_mode_bypass=true', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(
+      makeConfig({ auth_mode: 'token', dev_mode_bypass: true }) as never
+    )
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByTestId('unauth-banner')).toBeInTheDocument()
+    })
+    expect(screen.getByText(/unauthenticated access is enabled/i)).toBeInTheDocument()
+  })
+
+  it('shows banner when BOTH auth_mode=none and dev_mode_bypass=true', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(
+      makeConfig({ auth_mode: 'none', dev_mode_bypass: true }) as never
+    )
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByTestId('unauth-banner')).toBeInTheDocument()
+    })
+  })
+
+  it('does NOT show banner when auth_mode=token and dev_mode_bypass=false', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(
+      makeConfig({ auth_mode: 'token', dev_mode_bypass: false }) as never
+    )
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByText(/log level/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('unauth-banner')).not.toBeInTheDocument()
+  })
+
+  it('does NOT show banner when dev_mode_bypass is absent (undefined)', async () => {
+    const cfg = makeConfig({ auth_mode: 'token' })
+    // Remove dev_mode_bypass to simulate old gateway not sending it
+    delete (cfg.gateway as Record<string, unknown>).dev_mode_bypass
+    vi.mocked(fetchConfig).mockResolvedValue(cfg as never)
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByText(/log level/i)).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('unauth-banner')).not.toBeInTheDocument()
+  })
+})
+
+// ── US-B2: bind_address risky control ────────────────────────────────────────
 
 describe('GatewaySection — bind_address risky control (US-B2)', () => {
   it('shows standing badge when persisted bind_address is "0.0.0.0"', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ bind_address: '0.0.0.0' }) as never)
-
     renderSection()
-
     await waitFor(() => {
       const badges = screen.getAllByTestId('risky-standing-badge')
       expect(badges.length).toBeGreaterThan(0)
@@ -213,13 +205,10 @@ describe('GatewaySection — bind_address risky control (US-B2)', () => {
 
   it('does NOT show standing badge when bind_address is "127.0.0.1" (safe)', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ bind_address: '127.0.0.1' }) as never)
-
     renderSection()
-
     await waitFor(() => {
       expect(screen.getByText(/bind address/i)).toBeInTheDocument()
     })
-
     await waitFor(() => {
       expect(screen.queryByTestId('risky-standing-badge')).not.toBeInTheDocument()
     }, { timeout: 2000 })
@@ -227,77 +216,23 @@ describe('GatewaySection — bind_address risky control (US-B2)', () => {
 
   it('"Localhost only" option has a Recommended pill', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ bind_address: '127.0.0.1' }) as never)
-
     renderSection()
-
     await waitFor(() => {
       expect(screen.getByTestId('risky-option-127.0.0.1')).toBeInTheDocument()
     })
-
     const pills = screen.getAllByTestId('recommended-pill')
     expect(pills.length).toBeGreaterThanOrEqual(1)
   })
 
   it('clicking "All interfaces" option opens AlertDialog', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ bind_address: '127.0.0.1' }) as never)
-
     renderSection()
-
     await waitFor(() => {
       expect(screen.getByTestId('risky-option-0.0.0.0')).toBeInTheDocument()
     })
-
     fireEvent.click(screen.getByTestId('risky-option-0.0.0.0'))
-
     await waitFor(() => {
-      // Cancel / safe button in the dialog
       expect(screen.getByText(/keep localhost only/i)).toBeInTheDocument()
-    })
-  })
-
-  it('both controls show badges when both settings are risky simultaneously', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue(
-      makeConfig({ auth_mode: 'none', bind_address: '0.0.0.0' }) as never
-    )
-
-    renderSection()
-
-    await waitFor(() => {
-      const badges = screen.getAllByTestId('risky-standing-badge')
-      expect(badges).toHaveLength(2)
-    })
-  })
-})
-
-// ── selectedValue drives active highlight (debounce fix) ──────────────────────
-
-describe('GatewaySection — active highlight updates immediately (debounce fix)', () => {
-  it('confirming dialog highlights the risky option immediately (before save completes)', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ auth_mode: 'token' }) as never)
-
-    // updateConfig never resolves — simulates the debounce window
-    const { updateConfig } = await import('@/lib/api')
-    vi.mocked(updateConfig).mockReturnValue(new Promise(() => {}))
-
-    renderSection()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('risky-option-none')).toBeInTheDocument()
-    })
-
-    // Click risky option → dialog opens
-    fireEvent.click(screen.getByTestId('risky-option-none'))
-    await waitFor(() => {
-      expect(screen.getByText(/remove login anyway/i)).toBeInTheDocument()
-    })
-
-    // Confirm the weakening
-    fireEvent.click(screen.getByText(/remove login anyway/i))
-
-    // The "none" button should be highlighted immediately (selectedValue = local draft)
-    await waitFor(() => {
-      const noneBtn = screen.getByTestId('risky-option-none')
-      expect(noneBtn).toHaveAttribute('aria-pressed', 'true')
     })
   })
 })
