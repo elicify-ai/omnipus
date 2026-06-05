@@ -162,22 +162,33 @@ make verify-contracts  # exit 0
 
 ## Build & E2E Testing
 
-### Host resource constraints (this dev box) — MANDATORY
+### Testing & building — CI is the authority (MANDATORY)
 
-This dev host is **15 GB RAM / 4 cores / 77 GB root disk chronically ~96 % full** (the
-swapfile, Go/npm caches, and `~/.claude` transcripts all live on root). It is easy to crash
-the tmux/Claude session here via **OOM** or **ENOSPC** (a full root disk crashes Claude's
-transcript write *and* hangs `sudo`, which can't write its audit log).
+**Rule: CI is the source of truth for Go test/build results. Never run the full Go test
+suite (especially `pkg/gateway`) locally.** This runs in an **ephemeral, resource-constrained
+devpod** — recreated on demand with varying specs (seen: 2–4 cores, 3.8–15 GB RAM, and a
+root disk that has been as full as ~96 %). Linking and running the full gateway *test binary*
+— which pulls in the pure-Go OLM crypto via the `goolm` tag — can OOM-kill or stall the
+session. CI runs on 16 GB runners; trust it. Push and read the checks rather than reproducing
+the suite here.
 
-- **Do NOT run the full `pkg/gateway` Go test suite locally.** Run at most one narrowly-scoped
-  single test (`-run '^TestName$' -parallel 1`), or **validate via CI (16 GB runners) — CI is
-  the authority.** Clean baseline: the epic-base `pkg/gateway` suite is only ~86 MB / ~60 s.
-- **Never run multiple Go test suites in parallel** on this box (each subagent running
-  `go test ./...` simultaneously is what exhausts RAM → OOM-kills tmux/Claude).
-- **Do NOT use `MemoryMax` cgroup caps with swap enabled** — they thrash into multi-minute
-  unkillable zombies. If you must cap, use `MemorySwapMax=0` so a runaway dies instantly.
-- Watch root disk before/after builds (`df -h /`); clearing `~/.cache/go-build` forces a
-  multi-GB recompile that can refill it. Biggest reclaimable: `~/.local`, `/var`.
+**Always build/test through `make` (or pass the build tags) — never raw `go test ./...`.**
+The Matrix channel (`pkg/channels/matrix`) is gated behind `//go:build goolm`, and the gateway
+imports it, so **without the tags the package will not even compile** — you get the misleading
+`build constraints exclude all Go files in .../pkg/channels/matrix → [setup failed]`. That is
+**not** a flake, an OOM, or a real bug — it is a missing build tag. Canonical tags (`Makefile`,
+`GO_BUILD_TAGS`): **`goolm,stdjson`**.
+- `make test` / `make build` inject `-tags goolm,stdjson` automatically — prefer them.
+- Raw invocation MUST carry the tags: `CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/...`.
+
+- **To validate backend changes: push and let CI run** — do not run the full suite here.
+- **At most one narrowly-scoped local test** when you must (`-tags goolm,stdjson -run '^TestName$' -p 1`).
+  A single scoped `pkg/gateway` test is cheap (~86 MB / ~60 s clean); the *full* suite or a
+  parallel `./...` is what exhausts RAM → OOM-kills the session.
+- **Never run multiple Go test suites in parallel.** **Do NOT use `MemoryMax` cgroup caps with
+  swap enabled** — they thrash into unkillable zombies; if you must cap, use `MemorySwapMax=0`
+  so a runaway dies instantly. Watch root disk around builds (`df -h /`); clearing
+  `~/.cache/go-build` forces a multi-GB recompile.
 - Full session/Spec-1 context: `docs/internal/specs/uxh-spec1-STATUS-2026-06-04.md`.
 
 ### SPA Embed Pipeline
