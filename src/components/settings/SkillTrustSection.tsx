@@ -1,3 +1,15 @@
+/**
+ * SkillTrustSection — Block / Warn-unverified / Allow-all tri-state radio.
+ *
+ * Restart-required wiring (MEDIUM fix):
+ *   The local `restartRequired` useState was lost on unmount/collapse and
+ *   was also dead (the backend always returns requires_restart=false for skill
+ *   trust). Replaced with `queryClient.invalidateQueries(PENDING_RESTART_QUERY_KEY)`
+ *   on every successful save so the shared RestartBanner reflects any future
+ *   backend change without component-local state. The banner is data-driven from
+ *   the pending-restart poll; SkillTrustSection no longer tracks it locally.
+ */
+
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Package, Warning } from '@phosphor-icons/react'
@@ -6,6 +18,7 @@ import type { SkillTrustLevel } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useAuthStore } from '@/store/auth'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
+import { PENDING_RESTART_QUERY_KEY } from '@/store/restart'
 
 // ── Level metadata ────────────────────────────────────────────────────────────
 
@@ -54,7 +67,6 @@ export function SkillTrustSection(): React.ReactElement {
   })
 
   const [selected, setSelected] = useState<SkillTrustLevel>('warn_unverified')
-  const [restartRequired, setRestartRequired] = useState(false)
 
   const { state: saveState, setState: setSaveState, errorMessage, setErrorMessage } = useSaveStatus()
 
@@ -68,8 +80,13 @@ export function SkillTrustSection(): React.ReactElement {
     onMutate: () => setSaveState('saving'),
     onSuccess: (resp) => {
       setSaveState('saved')
-      if (resp.requires_restart) setRestartRequired(true)
       queryClient.setQueryData(['skill-trust'], { level: resp.applied_level })
+      // Wire any requires_restart signal into the shared pending-restart store
+      // so RestartBanner picks it up cross-cutting, rather than losing it when
+      // this component unmounts or the Advanced disclosure collapses.
+      if (resp.requires_restart) {
+        void queryClient.invalidateQueries({ queryKey: [...PENDING_RESTART_QUERY_KEY] })
+      }
     },
     onError: (err: Error) => {
       setSaveState('error')
@@ -100,11 +117,6 @@ export function SkillTrustSection(): React.ReactElement {
         <h3 className="text-sm font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
           <Package size={14} className="text-[var(--color-muted)]" />
           Skill Trust
-          {restartRequired && (
-            <span className="ml-2 text-[10px] uppercase tracking-wider text-[var(--color-warning)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 rounded px-1.5 py-0.5">
-              Restart required
-            </span>
-          )}
         </h3>
         <SaveStatus state={saveState} errorMessage={errorMessage} />
       </div>

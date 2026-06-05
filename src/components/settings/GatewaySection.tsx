@@ -1,16 +1,79 @@
+/**
+ * GatewaySection — Settings → Gateway tab.
+ *
+ * FR-107: auth_mode UI option removed (token auth is the only mode; backend
+ *   capability preserved — do NOT re-add the 'none' control).
+ * FR-107b: when backend reports auth_mode=none OR dev_mode_bypass=true, a
+ *   loud persistent banner warns the operator.
+ * US-B2 / #328:
+ * - bind_address 0.0.0.0 wrapped in RiskySettingControl (safe = '127.0.0.1').
+ * - Standing badge derives from persisted config values (fetchConfig → ['config'] query).
+ * - Badge clears on save of the safe value (queryClient.invalidateQueries clears it).
+ * Hot-reload is always on (FR-106); the toggle is removed.
+ */
+
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Copy, ArrowsClockwise, CheckCircle, CaretDown, CaretRight } from '@phosphor-icons/react'
-import { Switch } from '@/components/ui/switch'
+import { Copy, ArrowsClockwise, CheckCircle, CaretDown, CaretRight, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
-import { fetchConfig, updateConfig, rotateGatewayToken, fetchGatewayStatus, fetchAgents, isApiError } from '@/lib/api'
+import { fetchConfig, updateConfig, rotateGatewayToken, fetchGatewayStatus, fetchAgents, isApiError, type Config } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
+import { RiskySettingControl } from '@/components/shared/RiskySettingControl'
+
+// ── Risky-control copy bundles (US-B2) ────────────────────────────────────────
+
+const BIND_ADDRESS_COPY = {
+  dialogTitle: 'Listen on all network interfaces?',
+  dialogDescription:
+    'Setting bind address to 0.0.0.0 makes the gateway reachable from any network interface, not just your local machine. If this server is on a public network, other devices may be able to reach your Omnipus — make sure login is required and your firewall is configured.',
+  confirmLabel: 'Listen on all interfaces anyway',
+  cancelLabel: 'Keep localhost only (safer)',
+}
+
+// ── UnauthenticatedBanner (FR-107b) ───────────────────────────────────────────
+
+interface UnauthBannerProps {
+  authModeNone: boolean
+  devModeBypass: boolean
+}
+
+function UnauthenticatedBanner({ authModeNone, devModeBypass }: UnauthBannerProps) {
+  if (!authModeNone && !devModeBypass) return null
+  const reason = authModeNone
+    ? 'auth_mode is set to "none" in config.json'
+    : 'dev_mode_bypass is enabled in config.json'
+  return (
+    <div
+      role="alert"
+      data-testid="unauth-banner"
+      className="flex items-start gap-3 rounded-lg border border-[var(--color-error)]/60 bg-[var(--color-error)]/10 px-4 py-3"
+    >
+      <Warning size={18} weight="fill" className="shrink-0 mt-0.5 text-[var(--color-error)]" />
+      <div className="space-y-1">
+        <p className="text-sm font-semibold text-[var(--color-error)]">
+          Unauthenticated access is enabled
+        </p>
+        <p className="text-xs text-[var(--color-error)]/80">
+          Anyone who can reach this server has admin access ({reason}). To fix this, set
+          <code className="mx-1 font-mono text-[10px] bg-[var(--color-error)]/10 px-1 rounded">
+            gateway.auth_mode: token
+          </code>
+          and
+          <code className="mx-1 font-mono text-[10px] bg-[var(--color-error)]/10 px-1 rounded">
+            gateway.dev_mode_bypass: false
+          </code>
+          in config.json, then restart the gateway.
+        </p>
+      </div>
+    </div>
+  )
+}
 
 export function GatewaySection() {
   const { addToast } = useUiStore()
@@ -34,8 +97,6 @@ export function GatewaySection() {
 
   const [bindAddress, setBindAddress] = useState('127.0.0.1')
   const [port, setPort] = useState('8080')
-  const [authMode, setAuthMode] = useState<'none' | 'token'>('none')
-  const [hotReload, setHotReload] = useState(false)
   const [logLevel, setLogLevel] = useState('info')
   const [defaultAgentId, setDefaultAgentId] = useState('')
 
@@ -49,8 +110,6 @@ export function GatewaySection() {
     if (isDirtyRef.current) return
     setBindAddress(config.gateway.bind_address)
     setPort(config.gateway.port.toString())
-    setAuthMode(config.gateway.auth_mode)
-    setHotReload(config.gateway.hot_reload ?? false)
     setLogLevel(config.gateway.log_level ?? 'info')
     setDefaultAgentId(config.agents?.defaults?.default_agent_id ?? '')
   }, [config])
@@ -58,23 +117,23 @@ export function GatewaySection() {
   const gatewayFormData = useMemo(() => ({
     bind_address: bindAddress,
     port,
-    auth_mode: authMode,
-    hot_reload: hotReload,
     log_level: logLevel,
     default_agent_id: defaultAgentId,
-  }), [bindAddress, port, authMode, hotReload, logLevel, defaultAgentId])
+  }), [bindAddress, port, logLevel, defaultAgentId])
 
   const { status: saveStatus, error: saveError } = useAutoSave(
     gatewayFormData,
     async () => {
+      // FR-107: auth_mode is intentionally not sent — the UI no longer controls it.
+      // FR-106: hot_reload is intentionally not sent — always-on backend-side.
+      // We cast to satisfy the Partial<Config> signature; frontendToRawConfig
+      // guards each field with `!== undefined` so absent fields are skipped.
       await updateConfig({
         gateway: {
           bind_address: bindAddress,
           port: parseInt(port, 10),
-          auth_mode: authMode,
-          hot_reload: hotReload,
           log_level: logLevel,
-        },
+        } as unknown as Config['gateway'],
         agents: {
           defaults: {
             default_agent_id: defaultAgentId || undefined,
@@ -124,33 +183,46 @@ export function GatewaySection() {
     )
   }
 
+  // US-B2: badges derive from the PERSISTED config values (not local draft state).
+  const persistedBindAddress = config?.gateway.bind_address ?? '127.0.0.1'
+
+  // FR-107b: unauth conditions from persisted config
+  const authModeNone = config?.gateway.auth_mode === 'none'
+  const devModeBypass = config?.gateway.dev_mode_bypass === true
+
   return (
     <div className="space-y-6">
+      {/* FR-107b: persistent unauthenticated-access banner */}
+      <UnauthenticatedBanner authModeNone={authModeNone} devModeBypass={devModeBypass} />
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Gateway</h2>
           <p className="text-xs text-[var(--color-muted)] mt-0.5">
-            Configure how the gateway listens. Restart required for changes to take effect.
+            Configure how the gateway listens. Restart required for port changes.
           </p>
         </div>
         <AutoSaveIndicator status={saveStatus} error={saveError} />
       </div>
 
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
-        {/* Bind address */}
-        <div className="flex items-center justify-between">
+        {/* Bind address — risky when 0.0.0.0 (US-B2) */}
+        <div className="space-y-2">
           <div>
             <p className="text-sm text-[var(--color-secondary)]">Bind address</p>
-            <p className="text-xs text-[var(--color-muted)]">Where the gateway listens</p>
+            <p className="text-xs text-[var(--color-muted)]">Which network interfaces the gateway listens on</p>
           </div>
-          <SmartSelect
-            value={bindAddress}
-            onValueChange={(v) => { markDirty(); setBindAddress(v) }}
-            triggerClassName="w-[160px] h-8 text-xs font-mono"
-            items={[
-              { value: '127.0.0.1', label: '127.0.0.1 (localhost only)' },
-              { value: '0.0.0.0', label: '0.0.0.0 (all interfaces)' },
+          <RiskySettingControl
+            options={[
+              { value: '127.0.0.1', label: 'Localhost only (127.0.0.1)' },
+              { value: '0.0.0.0', label: 'All interfaces (0.0.0.0)' },
             ]}
+            currentValue={persistedBindAddress}
+            selectedValue={bindAddress}
+            safeValue="127.0.0.1"
+            copy={BIND_ADDRESS_COPY}
+            onConfirm={(v) => { markDirty(); setBindAddress(v) }}
+            onSelectSafe={(v) => { markDirty(); setBindAddress(v) }}
           />
         </div>
 
@@ -166,23 +238,6 @@ export function GatewaySection() {
             value={port}
             onChange={(e) => { markDirty(); setPort(e.target.value) }}
             className="w-24 h-8 text-xs font-mono"
-          />
-        </div>
-
-        {/* Auth mode */}
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-[var(--color-secondary)]">Auth mode</p>
-            <p className="text-xs text-[var(--color-muted)]">Require a bearer token for API access</p>
-          </div>
-          <SmartSelect
-            value={authMode}
-            onValueChange={(v) => { markDirty(); setAuthMode(v as 'none' | 'token') }}
-            triggerClassName="w-[120px] h-8 text-xs"
-            items={[
-              { value: 'none', label: 'None' },
-              { value: 'token', label: 'Bearer token' },
-            ]}
           />
         </div>
 
@@ -205,55 +260,41 @@ export function GatewaySection() {
         </div>
 
         {/* Token management */}
-        {authMode === 'token' && (
-          <div className="pt-2 border-t border-[var(--color-border)] space-y-2">
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-[var(--color-secondary)]">Gateway token</p>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 px-2 gap-1 text-xs"
-                  onClick={copyToken}
-                  disabled={!config?.gateway.token}
-                >
-                  {copied ? <CheckCircle size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
-                  {copied ? 'Copied' : 'Copy'}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 px-2 gap-1 text-xs"
-                  onClick={() => doRotate()}
-                  disabled={isRotating}
-                >
-                  <ArrowsClockwise size={11} className={isRotating ? 'animate-spin' : ''} />
-                  Rotate
-                </Button>
-              </div>
+        <div className="pt-2 border-t border-[var(--color-border)] space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-[var(--color-secondary)]">Gateway token</p>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 gap-1 text-xs"
+                onClick={copyToken}
+                disabled={!config?.gateway.token}
+              >
+                {copied ? <CheckCircle size={11} className="text-[var(--color-success)]" /> : <Copy size={11} />}
+                {copied ? 'Copied' : 'Copy'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 gap-1 text-xs"
+                onClick={() => doRotate()}
+                disabled={isRotating}
+              >
+                <ArrowsClockwise size={11} className={isRotating ? 'animate-spin' : ''} />
+                Rotate
+              </Button>
             </div>
-            {config?.gateway.token && (
-              <p className="font-mono text-[10px] text-[var(--color-muted)] truncate">
-                {config.gateway.token.slice(0, 20)}...
-              </p>
-            )}
           </div>
-        )}
-
-        {/* Hot reload */}
-        <div className="flex items-center justify-between pt-2 border-t border-[var(--color-border)]">
-          <div>
-            <p className="text-sm text-[var(--color-secondary)]">Hot reload</p>
-            <p className="text-xs text-[var(--color-muted)]">Reload config without restarting the gateway</p>
-          </div>
-          <Switch
-            checked={hotReload}
-            onCheckedChange={(v) => { markDirty(); setHotReload(v) }}
-          />
+          {config?.gateway.token && (
+            <p className="font-mono text-[10px] text-[var(--color-muted)] truncate">
+              {config.gateway.token.slice(0, 20)}...
+            </p>
+          )}
         </div>
 
         {/* Log level */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between border-t border-[var(--color-border)] pt-2">
           <div>
             <p className="text-sm text-[var(--color-secondary)]">Log level</p>
             <p className="text-xs text-[var(--color-muted)]">Verbosity of gateway logs</p>

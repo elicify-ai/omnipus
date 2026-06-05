@@ -1151,6 +1151,11 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 		ag.Soul = soul
 		ag.Default = boolPtr(ac.Default)
+		if len(ac.Skills) > 0 {
+			skills := make([]string, len(ac.Skills))
+			copy(skills, ac.Skills)
+			ag.Skills = &skills
+		}
 		agents = append(agents, ag)
 	}
 
@@ -1197,6 +1202,11 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			ag.Heartbeat = heartbeat
 			ag.Instructions = instructions
 			ag.Default = boolPtr(ac.Default)
+			if len(ac.Skills) > 0 {
+				skills := make([]string, len(ac.Skills))
+				copy(skills, ac.Skills)
+				ag.Skills = &skills
+			}
 			jsonOK(w, ag)
 			return
 		}
@@ -1214,6 +1224,13 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if req.Name == "" {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
 		return
+	}
+	// Referential validation: reject unknown skill IDs before doing any work.
+	if req.Skills != nil && len(*req.Skills) > 0 {
+		if errMsg := a.validateSkillIDs(*req.Skills); errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
+			return
+		}
 	}
 	description := ""
 	if req.Description != nil {
@@ -1237,6 +1254,10 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Model != nil && *req.Model != "" {
 		ac.Model = &config.AgentModelConfig{Primary: *req.Model}
+	}
+	if req.Skills != nil && len(*req.Skills) > 0 {
+		ac.Skills = make([]string, len(*req.Skills))
+		copy(ac.Skills, *req.Skills)
 	}
 	// Seed the privilege rail (FR-008/FR-022): custom agents always get
 	// system.*: deny unless the caller explicitly overrides it.
@@ -1328,6 +1349,9 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			}
 			newAgent["tools"] = toolsCfg
 		}
+		if len(ac.Skills) > 0 {
+			newAgent["skills"] = ac.Skills
+		}
 		agents["list"] = append(list, newAgent)
 		return nil
 	}); err != nil {
@@ -1368,6 +1392,11 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	ag.Type = gen.AgentTypeCustom
 	ag.Model = &model
 	ag.Status = gen.AgentStatusDraft
+	if len(ac.Skills) > 0 {
+		skills := make([]string, len(ac.Skills))
+		copy(skills, ac.Skills)
+		ag.Skills = &skills
+	}
 	if createReloadWarning != "" {
 		ag.Warning = &createReloadWarning
 	}
@@ -1477,11 +1506,20 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	foundAgent := cfg.Agents.List[foundIdx]
 	if foundAgent.Locked {
 		// Protected: name, description, soul (prompt content), heartbeat (HEARTBEAT.md content),
-		// instructions, color, and icon are identity fields — reject on locked agents.
+		// instructions, color, icon, and skills are identity/capability fields — reject on locked agents.
+		// Skills are included here (B-2 defense-in-depth): core agents have compiled-in capability
+		// sets; allowing runtime skill assignment would silently override that invariant.
 		if req.Name != nil || req.Description != nil ||
 			req.Soul != nil || req.Heartbeat != nil || req.Instructions != nil ||
-			req.Color != nil || req.Icon != nil {
+			req.Color != nil || req.Icon != nil || req.Skills != nil {
 			jsonErr(w, http.StatusForbidden, "cannot modify locked agent identity or prompt")
+			return
+		}
+	}
+	// Referential validation: reject unknown skill IDs before doing any work.
+	if req.Skills != nil && len(*req.Skills) > 0 {
+		if errMsg := a.validateSkillIDs(*req.Skills); errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
 		}
 	}
@@ -1645,6 +1683,15 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 						tcMap["mcp"] = mcpMap
 					}
 					agentMap["tools_cfg"] = tcMap
+				}
+				// Skills: replace the agent's skill list when the caller sends the field.
+				// An explicit empty array removes all skills. Nil (absent) leaves unchanged.
+				if req.Skills != nil {
+					if len(*req.Skills) > 0 {
+						agentMap["skills"] = *req.Skills
+					} else {
+						delete(agentMap, "skills")
+					}
 				}
 				break
 			}
@@ -1823,12 +1870,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	if reloadWarning != "" {
 		ag.Warning = &reloadWarning
 	}
-	// Populate Default from the live config after the write (handles both the
-	// req.Default=true case and the leave-unchanged case).
+	// Populate Default and Skills from the live config after the write (handles
+	// both the req.Default=true case and the leave-unchanged case).
 	if liveCfg := a.agentLoop.GetConfig(); liveCfg != nil {
 		for _, ac := range liveCfg.Agents.List {
 			if ac.ID == agentID {
 				ag.Default = boolPtr(ac.Default)
+				if len(ac.Skills) > 0 {
+					skills := make([]string, len(ac.Skills))
+					copy(skills, ac.Skills)
+					ag.Skills = &skills
+				}
 				break
 			}
 		}
@@ -2288,6 +2340,48 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 	jsonOK(w, result)
 }
 
+// installedSkillIDs returns the set of skill IDs currently known to the agent
+// loop (same source as GET /api/v1/skills). An empty map is returned when no
+// skills are installed, which lets the validation below produce a proper 400
+// ("unknown skill id") rather than silently accepting any string.
+func (a *restAPI) installedSkillIDs() map[string]struct{} {
+	info := a.agentLoop.GetStartupInfo()
+	skillsInfo, ok := info["skills"].(map[string]any)
+	if !ok {
+		return map[string]struct{}{}
+	}
+	names, _ := skillsInfo["names"].([]string)
+	result := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		result[n] = struct{}{}
+	}
+	return result
+}
+
+// validateSkillIDs returns an error string (for a 400 response) if any of the
+// supplied skill IDs are not present in the installed-skills registry.
+// Returns "" when all IDs are valid or when no skills are installed at all
+// (to avoid false rejections in environments where the skills directory hasn't
+// been populated yet — the agent loop's runtime filter is the final gate).
+func (a *restAPI) validateSkillIDs(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	installed := a.installedSkillIDs()
+	// Skip validation when the installed set is empty: the skills directory may
+	// not exist yet (fresh install, test environment). Accept any id and let the
+	// agent loop's skill filter gate unknown ids at runtime.
+	if len(installed) == 0 {
+		return ""
+	}
+	for _, id := range ids {
+		if _, ok := installed[id]; !ok {
+			return fmt.Sprintf("unknown skill id: %q", id)
+		}
+	}
+	return ""
+}
+
 func (a *restAPI) searchSkills(w http.ResponseWriter, _ *http.Request) {
 	jsonErr(w, http.StatusNotImplemented, "ClawHub search not yet implemented")
 }
@@ -2421,7 +2515,9 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"severity":       "high",
 			"title":          "No LLM models configured",
 			"description":    "No models are configured in model_list. The agent cannot generate responses without at least one model.",
-			"recommendation": "Add at least one model to config.json model_list with a valid API key in credentials.json.",
+			"recommendation": "Go to Settings → Providers and add an API key.",
+			"action_link":    "/settings?tab=providers",
+			"action_label":   "Configure providers",
 		})
 	}
 
@@ -2433,8 +2529,10 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"id":             "no-custom-agents",
 			"severity":       "low",
 			"title":          "No custom agents configured",
-			"description":    "Only the system agent is available. Custom agents can be defined in config.json.",
-			"recommendation": "Add agent configurations to personalize your assistant.",
+			"description":    "Only the built-in agents are available. Custom agents can be defined to personalise your assistant.",
+			"recommendation": "Go to Settings → Agents and create a custom agent.",
+			"action_link":    "/settings?tab=agents",
+			"action_label":   "Manage agents",
 		})
 	}
 
@@ -2447,7 +2545,9 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 			"severity":       "medium",
 			"title":          "Sandbox is disabled",
 			"description":    "Filesystem and process sandboxing is not enabled. Agent tool executions run without confinement.",
-			"recommendation": "Open Settings → Process Sandbox to enable sandbox mode for production use.",
+			"recommendation": "Go to Settings → Security → Advanced to enable sandbox mode.",
+			"action_link":    "/settings?tab=security",
+			"action_label":   "Open security settings",
 		})
 	}
 
@@ -3345,10 +3445,18 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 					models = []string{}
 				}
 			}
+			// FR-104: report Connected only when the provider's API key resolves to
+			// a non-empty credential. providerAPIKeys is populated above for every
+			// provider that has either a resolvable api_key_ref or an inline api_key;
+			// absence from the map means no key was found.
+			status := gen.ProviderStatusDisconnected
+			if _, hasKey := providerAPIKeys[name]; hasKey {
+				status = gen.ProviderStatusConnected
+			}
 			p := gen.Provider{
 				Id:     name,
 				Name:   name,
-				Status: gen.ProviderStatusConnected,
+				Status: status,
 				Models: models,
 			}
 			if modelFetchWarning != "" {
@@ -3676,6 +3784,30 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
+	// Per-transport field validation: stdio requires command; sse/http require url.
+	// The MCP manager (pkg/mcp/manager.go ConnectServer) hard-fails on missing
+	// cfg.URL for sse/http and missing cfg.Command for stdio — catch it here so the
+	// error surfaces as a 422 rather than a silent connection failure.
+	switch transport {
+	case "stdio":
+		if req.Command == nil || *req.Command == "" {
+			jsonErr(w, http.StatusUnprocessableEntity, "command is required for stdio transport")
+			return
+		}
+	case "sse", "http":
+		if req.Url == nil || *req.Url == "" {
+			jsonErr(w, http.StatusUnprocessableEntity, "url is required for sse/http transport")
+			return
+		}
+		// Mirror SPA isValidUrlScheme: https always accepted; http only for
+		// loopback (localhost, 127.x.x.x, ::1). Any other http:// URL is
+		// rejected so the SPA validation cannot be bypassed via direct API call.
+		if !mcpURLSchemeValid(*req.Url) {
+			jsonErr(w, http.StatusUnprocessableEntity,
+				"url must use https, or http for loopback addresses only (localhost, 127.x.x.x, ::1)")
+			return
+		}
+	}
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		tools, _ := m["tools"].(map[string]any)
 		if tools == nil {
@@ -3697,8 +3829,16 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		}
 		entry := map[string]any{
 			"enabled": true,
-			"command": req.Command,
 			"type":    transport,
+		}
+		// Write the correct config field for each transport so the MCP manager
+		// (pkg/mcp/manager.go ConnectServer) can connect: stdio uses cfg.Command,
+		// sse/http use cfg.URL.
+		switch transport {
+		case "stdio":
+			entry["command"] = *req.Command
+		case "sse", "http":
+			entry["url"] = *req.Url
 		}
 		if req.Args != nil && len(*req.Args) > 0 {
 			entry["args"] = *req.Args
@@ -3735,6 +3875,36 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 		ToolCount: 0,
 	}
 	jsonCreated(w, resp)
+}
+
+// mcpURLSchemeValid reports whether rawURL is acceptable for an sse/http MCP
+// server endpoint. It mirrors the SPA's isValidUrlScheme function
+// (src/components/skills/McpServerModal.tsx) so the contract described in
+// McpServerCreate.yaml is enforced server-side and cannot be bypassed via
+// direct API calls.
+//
+// Rules:
+//   - https:// is always accepted.
+//   - http:// is accepted only for loopback hosts: "localhost", any 127.x.x.x
+//     address, or "::1" / "[::1]".
+//   - Any other scheme (http:// to a public host, ws://, ftp://, etc.) is rejected.
+func mcpURLSchemeValid(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	switch parsed.Scheme {
+	case "https":
+		return true
+	case "http":
+		host := strings.ToLower(parsed.Hostname())
+		return host == "localhost" ||
+			strings.HasPrefix(host, "127.") ||
+			host == "::1" ||
+			host == "[::1]"
+	default:
+		return false
+	}
 }
 
 func (a *restAPI) deleteMCPServer(w http.ResponseWriter, id string) {
@@ -4412,6 +4582,28 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
+	// #358: persisting channels.<id>.enabled via safeUpdateConfigJSON only swaps the
+	// in-memory config pointer (refreshConfigAndRewireServices → SwapConfig); it does
+	// NOT start or stop the channel. Reload so ChannelManager.Reload applies the diff —
+	// starting a newly-enabled channel (e.g. whatsapp_native, which then emits its
+	// pairing QR over the whatsapp_pairing WS frame) or stopping a disabled one. The
+	// Reload path is crash-safe and name-correct as of #313. awaitReload treats an
+	// unwired reload pipeline (the unit-test environment) as a no-op and only returns an
+	// error on a genuine reload failure, which we surface rather than reporting a false
+	// success (the flag persisted but the channel did not start).
+	if a.agentLoop != nil {
+		if err := a.awaitReload(); err != nil {
+			verb := "start"
+			if !enabled {
+				verb = "stop"
+			}
+			slog.Error("rest: channel reload after enable toggle failed",
+				"channel", channelID, "enabled", enabled, "error", err)
+			jsonErr(w, http.StatusInternalServerError,
+				fmt.Sprintf("channel %s saved but failed to %s: %v", channelID, verb, err))
+			return
+		}
+	}
 	jsonOK(w, gen.ChannelEnabledResponse{Id: gen.ChannelEnabledResponseId(channelID), Enabled: enabled})
 }
 
@@ -4433,7 +4625,7 @@ var channelSensitiveFields = map[gen.ChannelId][]string{
 	gen.Irc:        {"password", "nickserv_password", "sasl_password"},
 	gen.Weixin:     {"token"},
 	gen.Whatsapp:   {},
-	gen.GoogleChat: {"service_account_json"},
+	gen.GoogleChat: {"webhook_url", "service_account_json"},
 }
 
 // channelRequiredFields maps channel IDs to fields that must be non-empty for the channel to work.

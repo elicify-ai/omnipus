@@ -185,7 +185,15 @@ describe('SkillTrustSection — autosave', () => {
     })
   })
 
-  it('shows restart-required badge when server returns requires_restart: true', async () => {
+  it('invalidates pending-restart query (not a local badge) when server returns requires_restart: true', async () => {
+    // The "restart required" signal is now wired through the shared pending-restart
+    // store (queryClient.invalidateQueries) rather than a component-local badge that
+    // would be lost on unmount or Advanced-disclosure collapse. Verify that
+    // invalidation is triggered when the response carries requires_restart: true.
+    const { QueryClient: QC } = await import('@tanstack/react-query')
+    const client = new QC({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    const invalidateSpy = vi.spyOn(client, 'invalidateQueries')
+
     vi.mocked(fetchSkillTrust).mockResolvedValue({ level: 'warn_unverified' })
     vi.mocked(updateSkillTrust).mockResolvedValue({
       saved: true,
@@ -193,13 +201,23 @@ describe('SkillTrustSection — autosave', () => {
       applied_level: 'block_unverified',
     })
 
-    renderSection()
+    const { render: testRender } = await import('@testing-library/react')
+    const { QueryClientProvider: QCP } = await import('@tanstack/react-query')
+    const { SkillTrustSection: STS } = await import('./SkillTrustSection')
+
+    testRender(
+      <QCP client={client}>
+        <STS />
+      </QCP>
+    )
 
     await waitFor(() => screen.getAllByRole('radio'))
     fireEvent.click(screen.getAllByRole('radio')[0])
 
     await waitFor(() => {
-      expect(screen.getByText(/restart required/i)).toBeInTheDocument()
+      expect(invalidateSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: expect.arrayContaining(['pending-restart']) })
+      )
     })
   })
 

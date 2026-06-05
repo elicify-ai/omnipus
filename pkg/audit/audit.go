@@ -52,6 +52,12 @@ const (
 	EventShutdown          = "shutdown"
 	EventBootAbort         = "boot.abort"
 	EventProcessKillFailed = "process_kill_failed"
+	// EventChannelPairing records device-pairing lifecycle transitions for
+	// channels with an interactive pairing flow (WhatsApp linked-device QR, #358).
+	// The pairing status rides in Details; Decision is allow (linked) or error
+	// (failed/expired). The QR-bearing "code" state is never logged (it is a
+	// scannable secret).
+	EventChannelPairing = "channel.pairing"
 )
 
 // Decision values for audit entries. Values are Decision-compatible
@@ -92,6 +98,7 @@ func IsValidEventName(e EventName) bool {
 		EventShutdown,
 		EventBootAbort,
 		EventProcessKillFailed,
+		EventChannelPairing,
 		// Tool Registry redesign event names from events.go. These are
 		// emitted from the agent loop and the policy package.
 		EventToolPolicyDenyAttempted,

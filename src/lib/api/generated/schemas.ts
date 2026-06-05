@@ -110,6 +110,7 @@ type Agent = {
   rate_limits?: AgentRateLimits | undefined;
   stats?: AgentStats | undefined;
   default?: boolean | undefined;
+  skills?: Array<string> | undefined;
 };
 type AgentToolsCfg = Partial<{
   builtin: Partial<{
@@ -167,6 +168,7 @@ type AgentCreateRequest = {
         max_cost_per_day: number;
       }>
     | undefined;
+  skills?: Array<string> | undefined;
 };
 type AgentUpdateRequest = Partial<{
   name: string;
@@ -202,6 +204,7 @@ type AgentUpdateRequest = Partial<{
   }>;
   tools_cfg: AgentToolsCfg;
   default: boolean;
+  skills: Array<string>;
 }>;
 type ChannelEntry = {
   id: ChannelId;
@@ -741,6 +744,7 @@ export const Agent: z.ZodType<Agent> = z
     rate_limits: AgentRateLimits.optional(),
     stats: AgentStats.optional(),
     default: z.boolean().optional(),
+    skills: z.array(z.string()).optional(),
   })
   .passthrough();
 export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
@@ -770,6 +774,7 @@ export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
     .partial()
     .passthrough()
     .optional(),
+  skills: z.array(z.string()).optional(),
 });
 export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
   .object({
@@ -815,6 +820,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
       .passthrough(),
     tools_cfg: AgentToolsCfg,
     default: z.boolean(),
+    skills: z.array(z.string()),
   })
   .partial();
 export const AgentOwnershipUpdateRequest = z
@@ -1352,7 +1358,8 @@ export const McpServer = z
   .passthrough();
 export const McpServerCreate = z.object({
   name: z.string(),
-  command: z.string(),
+  command: z.string().optional(),
+  url: z.string().optional(),
   args: z.array(z.string()).optional(),
   transport: z.enum(["stdio", "sse", "http"]),
   env: z.record(z.string()).optional(),

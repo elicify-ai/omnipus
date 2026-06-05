@@ -2805,6 +2805,9 @@ type Agent struct {
 		EnableDenyPatterns *bool `json:"enable_deny_patterns,omitempty"`
 	} `json:"shell_policy,omitempty"`
 
+	// Skills List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
+	Skills *[]string `json:"skills,omitempty"`
+
 	// Soul Contents of SOUL.md — the agent's system prompt. Empty string for locked core agents (prompt is compiled in, not exposed via API). Empty string for draft agents (no SOUL.md written yet). Always present (never null).
 	Soul string `json:"soul"`
 
@@ -2927,6 +2930,9 @@ type AgentCreateRequest struct {
 		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
+
+	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
+	Skills *[]string `json:"skills,omitempty"`
 
 	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	ToolsCfg *struct {
@@ -3267,6 +3273,9 @@ type AgentUpdateRequest struct {
 		CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
 		EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
 	} `json:"shell_policy,omitempty"`
+
+	// Skills Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills.
+	Skills *[]string `json:"skills,omitempty"`
 
 	// Soul New SOUL.md content (agent system prompt). Rejected on locked agents. Writing this triggers a config reload.
 	Soul *string `json:"soul,omitempty"`
@@ -3834,13 +3843,13 @@ type McpServerStatus string
 // McpServerTransport Transport mechanism used by this MCP server. "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers.
 type McpServerTransport string
 
-// McpServerCreate Request body for POST /mcp-servers. Adds a new MCP server to the gateway config.
+// McpServerCreate Request body for POST /mcp-servers. Adds a new MCP server to the gateway config. For stdio transport, `command` is required. For sse/http transport, `url` is required. Exactly one of `command` or `url` must be supplied depending on the transport.
 type McpServerCreate struct {
-	// Args Command-line arguments to pass to the server process.
+	// Args Command-line arguments to pass to the server process. Only applicable for stdio transport.
 	Args *[]string `json:"args,omitempty"`
 
-	// Command Command to start the MCP server process (stdio transport).
-	Command string `json:"command"`
+	// Command Command to start the MCP server process. Required when transport is "stdio". Must be omitted or empty when transport is "sse" or "http".
+	Command *string `json:"command,omitempty"`
 
 	// Env Environment variable overrides passed to the MCP server process. Only applicable for stdio transport. Each key-value pair is injected into the server process environment at startup.
 	Env *map[string]string `json:"env,omitempty"`
@@ -3850,6 +3859,9 @@ type McpServerCreate struct {
 
 	// Transport Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).
 	Transport McpServerCreateTransport `json:"transport"`
+
+	// Url Endpoint URL for remote MCP servers. Required when transport is "sse" or "http". Must be an https:// URL, or http:// for loopback addresses only (localhost, 127.x.x.x, or ::1). Any other http:// URL is rejected with 422 by both the SPA and the backend. Must be omitted when transport is "stdio".
+	Url *string `json:"url,omitempty"`
 }
 
 // McpServerCreateTransport Transport mechanism to use for this MCP server. Use "stdio" for local process-based servers, "sse" or "http" for remote HTTP-based servers (both are handled identically by the gateway).

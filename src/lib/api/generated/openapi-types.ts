@@ -2610,6 +2610,13 @@ export interface components {
              * @example false
              */
             default?: boolean;
+            /**
+             * @description List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
+             * @example [
+             *       "web-research"
+             *     ]
+             */
+            skills?: string[];
         };
         /**
          * AgentModelParams
@@ -2863,6 +2870,13 @@ export interface components {
                  */
                 max_cost_per_day?: number;
             };
+            /**
+             * @description Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
+             * @example [
+             *       "web-research"
+             *     ]
+             */
+            skills?: string[];
         };
         /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400. */
         AgentUpdateRequest: {
@@ -3011,6 +3025,13 @@ export interface components {
              * @example false
              */
             default?: boolean;
+            /**
+             * @description Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills.
+             * @example [
+             *       "web-research"
+             *     ]
+             */
+            skills?: string[];
         };
         /** @description Minimal session summary as returned by GET /agents/{id}/sessions. Maps to the AgentSession interface in src/lib/api.ts. This is the same underlying session.UnifiedMeta object, but the SPA consumes it through the AgentSession interface which reads id, title, created_at, and updated_at directly. */
         AgentSession: {
@@ -4023,7 +4044,7 @@ export interface components {
         };
         /**
          * McpServerCreate
-         * @description Request body for POST /mcp-servers. Adds a new MCP server to the gateway config.
+         * @description Request body for POST /mcp-servers. Adds a new MCP server to the gateway config. For stdio transport, `command` is required. For sse/http transport, `url` is required. Exactly one of `command` or `url` must be supplied depending on the transport.
          */
         McpServerCreate: {
             /**
@@ -4032,12 +4053,17 @@ export interface components {
              */
             name: string;
             /**
-             * @description Command to start the MCP server process (stdio transport).
+             * @description Command to start the MCP server process. Required when transport is "stdio". Must be omitted or empty when transport is "sse" or "http".
              * @example npx @modelcontextprotocol/server-everything
              */
-            command: string;
+            command?: string;
             /**
-             * @description Command-line arguments to pass to the server process.
+             * @description Endpoint URL for remote MCP servers. Required when transport is "sse" or "http". Must be an https:// URL, or http:// for loopback addresses only (localhost, 127.x.x.x, or ::1). Any other http:// URL is rejected with 422 by both the SPA and the backend. Must be omitted when transport is "stdio".
+             * @example https://mcp.example.com/sse
+             */
+            url?: string;
+            /**
+             * @description Command-line arguments to pass to the server process. Only applicable for stdio transport.
              * @example [
              *       "--port",
              *       "3000"

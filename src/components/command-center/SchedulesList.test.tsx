@@ -99,9 +99,9 @@ describe('SchedulesList — card feed (#264 US6 AS1)', () => {
     // status badges
     expect(screen.getByText('Enabled')).toBeInTheDocument()
     expect(screen.getByText('Paused')).toBeInTheDocument()
-    // session-mode badges
-    expect(screen.getByText('isolated')).toBeInTheDocument()
-    expect(screen.getByText('continue')).toBeInTheDocument()
+    // session-mode badges (human labels — not raw enum strings, per US-A3 AC5)
+    expect(screen.getByText('Fresh session per run')).toBeInTheDocument()
+    expect(screen.getByText('Keeps full thread')).toBeInTheDocument()
     // owner names resolved from agents
     expect(screen.getByText(/Owner: Mia/)).toBeInTheDocument()
     expect(screen.getByText(/Owner: Max/)).toBeInTheDocument()

@@ -1078,9 +1078,10 @@ func FixtureMcpServer_NilToolsAllowed() McpServer {
 
 func FixtureMcpServerCreate_Populated() McpServerCreate {
 	args := []string{"--port", "3000"}
+	cmd := "npx @modelcontextprotocol/server-everything"
 	return McpServerCreate{
 		Name:      "My MCP Server",
-		Command:   "npx @modelcontextprotocol/server-everything",
+		Command:   &cmd,
 		Args:      &args,
 		Transport: McpServerCreateTransport("stdio"),
 	}
@@ -1092,11 +1093,12 @@ func FixtureMcpServerCreate_ZeroValue() McpServerCreate {
 	return McpServerCreate{}
 }
 
-// FixtureMcpServerCreate_Edge — no args (optional), SSE transport, unicode name.
+// FixtureMcpServerCreate_Edge — no args (optional), SSE transport with URL, unicode name.
 func FixtureMcpServerCreate_Edge() McpServerCreate {
+	sseURL := "https://mcp.example.com/sse"
 	return McpServerCreate{
 		Name:      "remote-server-sse-world",
-		Command:   "python -m mcp_server",
+		Url:       &sseURL,
 		Args:      nil, // args is optional per schema
 		Transport: McpServerCreateTransport("sse"),
 	}

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Robot,
   Brain,
@@ -20,12 +20,13 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { ModelSelector } from '@/components/ui/model-selector'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { useQuery } from '@tanstack/react-query'
 import { useUiStore } from '@/store/ui'
-import { createAgent, fetchProviders, isApiError } from '@/lib/api'
-import type { Agent, AgentCreateRequest, AgentToolsCfg } from '@/lib/api'
+import { createAgent, fetchProviders, fetchRegistryTools, fetchSkills, isApiError } from '@/lib/api'
+import type { Agent, AgentCreateRequest, AgentToolsCfg, Skill } from '@/lib/api'
 import { AVATAR_COLORS } from '@/lib/constants'
-import { ToolsAndPermissions } from './ToolsAndPermissions'
+import { ToolPolicyEditor } from '@/components/shared/ToolPolicyEditor'
+import type { ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
+import { applyRolePreset } from '@/lib/toolPolicyPresets'
 
 const ICON_OPTIONS = [
   { name: 'Robot', component: Robot },
@@ -46,7 +47,50 @@ function getIconComponent(name: IconName) {
   return ICON_OPTIONS.find((o) => o.name === name)?.component ?? Robot
 }
 
-// Fallback model list when no providers are connected
+// ── CreateAgentToolsTab ────────────────────────────────────────────────────────
+//
+// #334 (US-D1): Renders the shared ToolPolicyEditor inside the Create-Agent
+// modal. Fetches the tool registry itself (no agentId → no per-agent tools
+// endpoint needed). Handles loading and error states inline.
+
+function CreateAgentToolsTab({
+  value,
+  onChange,
+}: {
+  value: ToolPolicyValue
+  onChange: (next: ToolPolicyValue) => void
+}) {
+  const { data: registryTools = [], isLoading, isError } = useQuery({
+    queryKey: ['registry-tools'],
+    queryFn: fetchRegistryTools,
+  })
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2 py-4">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="h-9 rounded-md bg-[var(--color-surface-2)] animate-pulse" />
+        ))}
+      </div>
+    )
+  }
+
+  if (isError) {
+    return (
+      <p className="text-xs text-[var(--color-error)] py-4">
+        Failed to load tool list. Check that the backend is running.
+      </p>
+    )
+  }
+
+  return (
+    <ToolPolicyEditor
+      tools={registryTools}
+      value={value}
+      onChange={onChange}
+    />
+  )
+}
 
 interface CreateAgentModalProps {
   /** Override modal open state (optional — defaults to Zustand store) */
@@ -69,6 +113,14 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
     queryFn: fetchProviders,
     enabled: isOpen,
   })
+
+  // US-E6: fetch installed skills so the picker can show available options.
+  const { data: availableSkills = [] } = useQuery<Skill[]>({
+    queryKey: ['skills'],
+    queryFn: fetchSkills,
+    enabled: isOpen,
+    staleTime: 60_000,
+  })
   const providers = Array.isArray(providersData) ? providersData : []
   const connectedProviders = providers.filter((p) => p.status === 'connected')
   const availableModels = connectedProviders.flatMap((p) => p.models ?? [])
@@ -84,9 +136,12 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
   const [temperature, setTemperature] = useState(1.0)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [nameError, setNameError] = useState('')
-  const [toolsState, setToolsState] = useState<AgentToolsCfg>({
-    builtin: { default_policy: 'allow' },
-  })
+  // US-E6: per-agent skill assignment; new agent defaults to none (opt-in).
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([])
+
+  // #334 (US-D1): new agent defaults to Balanced (not default_policy:'allow').
+  const BALANCED_DEFAULT: ToolPolicyValue = applyRolePreset('balanced')
+  const [toolsPolicyValue, setToolsPolicyValue] = useState<ToolPolicyValue>(BALANCED_DEFAULT)
 
   const resetForm = () => {
     setName('')
@@ -97,7 +152,8 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
     setTemperature(1.0)
     setAdvancedOpen(false)
     setNameError('')
-    setToolsState({ builtin: { default_policy: 'allow' } })
+    setSelectedSkills([])
+    setToolsPolicyValue(applyRolePreset('balanced'))
   }
 
   // Reset form state whenever the modal opens so stale values are not shown
@@ -134,6 +190,13 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
       setNameError('Name is required')
       return
     }
+    // Build the AgentToolsCfg wire shape from the ToolPolicyValue editor state.
+    const toolsCfg: AgentToolsCfg = {
+      builtin: {
+        default_policy: toolsPolicyValue.default_policy,
+        policies: toolsPolicyValue.policies,
+      },
+    }
     doCreate({
       name: name.trim(),
       description: description || undefined,
@@ -141,7 +204,9 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
       color,
       icon,
       model_params: { temperature },
-      tools_cfg: toolsState,
+      tools_cfg: toolsCfg,
+      // US-E6: only include skills when at least one is selected (opt-in, default none).
+      skills: selectedSkills.length > 0 ? selectedSkills : undefined,
     })
   }
 
@@ -274,7 +339,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                   />
                 </div>
 
-                {/* Advanced model params */}
+                {/* Advanced model params + skills */}
                 <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
                   <button
                     type="button"
@@ -285,23 +350,62 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                     {advancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
                   </button>
                   {advancedOpen && (
-                    <div className="px-3 pb-3 border-t border-[var(--color-border)] pt-3 space-y-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-[var(--color-muted)]">Temperature</span>
-                        <span className="text-xs font-mono text-[var(--color-secondary)]">{temperature.toFixed(2)}</span>
+                    <div className="px-3 pb-3 border-t border-[var(--color-border)] pt-3 space-y-3">
+                      {/* Temperature */}
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-[var(--color-muted)]">Temperature</span>
+                          <span className="text-xs font-mono text-[var(--color-secondary)]">{temperature.toFixed(2)}</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={2}
+                          step={0.05}
+                          value={temperature}
+                          onChange={(e) => setTemperature(Number(e.target.value))}
+                          className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
+                          style={{
+                            background: `linear-gradient(to right, var(--color-accent) 0%, var(--color-accent) ${(temperature / 2) * 100}%, var(--color-border) ${(temperature / 2) * 100}%, var(--color-border) 100%)`,
+                          }}
+                        />
                       </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={2}
-                        step={0.05}
-                        value={temperature}
-                        onChange={(e) => setTemperature(Number(e.target.value))}
-                        className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
-                        style={{
-                          background: `linear-gradient(to right, var(--color-accent) 0%, var(--color-accent) ${(temperature / 2) * 100}%, var(--color-border) ${(temperature / 2) * 100}%, var(--color-border) 100%)`,
-                        }}
-                      />
+
+                      {/* US-E6: Skills picker — opt-in, default none */}
+                      {availableSkills.length > 0 && (
+                        <div className="space-y-1.5 pt-1 border-t border-[var(--color-border)]">
+                          <p className="text-xs font-medium text-[var(--color-secondary)] pt-1">
+                            Skills
+                            <span className="ml-1.5 font-normal text-[var(--color-muted)]">(opt-in)</span>
+                          </p>
+                          <p className="text-[11px] text-[var(--color-muted)]">
+                            Grant installed skills to this agent. Unselected = no skills.
+                          </p>
+                          <div className="space-y-1">
+                            {availableSkills.map((skill) => (
+                              <label
+                                key={skill.id}
+                                className="flex items-center gap-2 text-xs cursor-pointer py-0.5"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selectedSkills.includes(skill.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedSkills((prev) => [...prev, skill.id])
+                                    } else {
+                                      setSelectedSkills((prev) => prev.filter((s) => s !== skill.id))
+                                    }
+                                  }}
+                                  className="accent-[var(--color-accent)]"
+                                  data-testid={`create-skill-checkbox-${skill.id}`}
+                                />
+                                <span className="text-[var(--color-secondary)]">{skill.name}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -309,11 +413,11 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
             </TabsContent>
 
             <TabsContent value="tools" className="flex-1 overflow-y-auto min-h-0 mt-0 pr-1">
-              <ToolsAndPermissions
-                agentId={null}
-                agentType="custom"
-                tools={toolsState}
-                onChange={setToolsState}
+              {/* #334 (US-D1): shared ToolPolicyEditor with Balanced default.
+                  Tool list from registry — new agent has no agentId yet. */}
+              <CreateAgentToolsTab
+                value={toolsPolicyValue}
+                onChange={setToolsPolicyValue}
               />
             </TabsContent>
           </Tabs>

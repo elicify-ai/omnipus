@@ -194,6 +194,22 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 		ctx2 = tools.WithProcessTracker(ctx2, func(pid int) { r.procTrack(sid, pid) })
 	}
 
+	// O-3 / F-13 / issue #342: inject the schedule identity into the run
+	// context so the agent loop's auto-deny path can include the job id and
+	// name when emitting audit entries for ask-gated tools that are
+	// auto-denied during this headless run.
+	//
+	// The schedule identity (job_id, job_name) appears in two places per
+	// auto-deny event:
+	//   1. The tool.policy.deny.attempted entry — via emitPolicyDenyAudit's
+	//      extra Details map (schedule_job_id / schedule_job_name fields).
+	//   2. The structured INFO log line in emitScheduledAutoDenyAudit.
+	//
+	// Note: the companion tool.policy.ask.denied entry (emitted via
+	// EmitToolPolicyAskDenied) does NOT carry the schedule identity fields —
+	// EmitToolPolicyAskDenied has a fixed field set without them.
+	ctx2 = agent.WithScheduledJobContext(ctx2, job.ID, job.Name)
+
 	// Run the owning agent's turn. If the deadline fires while the turn is
 	// still going, force-abort it via RequestCancel(CancelScope{SessionID}) and
 	// allow a short cleanup window, then return a deadline error so the lane

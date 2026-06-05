@@ -5,7 +5,7 @@
  *   Case A — QR renders end-to-end (positive path, #283/#298):
  *     A `whatsapp_pairing` frame with status:'code' arriving over the WS causes
  *     the Configure WhatsApp panel to render the QR code in the DOM
- *     ([data-testid="whatsapp-qr"] containing an <svg> and "Scan with" text).
+ *     ([data-testid="whatsapp-qr"] containing an <svg> and "Link a Device" text).
  *
  *   Case B — Capability gating (negative path, #299 regression):
  *     When the channels API reports native_available:false for WhatsApp, the
@@ -217,7 +217,7 @@ async function mockWebSocket(page: import('@playwright/test').Page): Promise<voi
 //      And the WS delivers a whatsapp_pairing frame with status:'code'
 //      Then [data-testid="whatsapp-qr"] is visible in the DOM
 //      And the QR container contains an <svg> element
-//      And the text "Scan with" is visible
+//      And the text "Link a Device" is visible
 //
 // Traces to: whatsapp-qr.spec.ts (this file) — case A; GitHub #283/#298
 
@@ -260,9 +260,10 @@ test(
     const svg = qrContainer.locator('svg')
     await expect(svg).toHaveCount(1)
 
-    // "Scan with" instructions must be visible — proves the 'code' status
-    // branch rendered, not the 'waiting' branch.
-    await expect(page.getByText('Scan with', { exact: false })).toBeVisible({ timeout: 5_000 })
+    // The "Link a Device" instructions must be visible — proves the 'code'
+    // status branch rendered, not the 'waiting' branch. (Copy updated in #325:
+    // the QR step text is now "Settings → Linked Devices → Link a Device".)
+    await expect(page.getByText('Link a Device', { exact: false })).toBeVisible({ timeout: 5_000 })
 
     // ── Negative assertion: the unavailable hint must NOT appear in this case.
     await expect(page.getByTestId('native-unavailable-hint')).toHaveCount(0)

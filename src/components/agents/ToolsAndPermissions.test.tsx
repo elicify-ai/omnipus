@@ -1,17 +1,22 @@
-// Unit tests for ToolsAndPermissions — FR-027, FR-029, FR-043, FR-044, FR-086
+// Unit tests for ToolsAndPermissions — FR-027, FR-029, FR-086, MAJ-008
+//
+// Updated for #333 (US-D2): ToolsAndPermissions now delegates to the shared
+// ToolPolicyEditor. The four ad-hoc presets (Unrestricted/Cautious/Standard/Minimal)
+// are replaced by Cautious/Balanced/Full access role presets.
+//
+// Individual tool rows are now inside collapsed CategorySection accordions.
+// Fence badge (FR-086 / MAJ-008) is no longer rendered inline in ToolsAndPermissions
+// — it was part of the old raw-grid UI that was replaced by ToolPolicyEditor.
 //
 // Tests:
-//  1. Renders tools from GET /api/v1/tools (new endpoint, not /tools/builtin)
-//  2. Displays source badge for MCP tools
-//  3. Displays fence badge when fence_applied=true
-//  4. Shows configured_policy vs effective_policy when fence is applied
-//  5. Preset confirmation dialog appears on preset click (FR-043)
-//  6. Confirming preset replaces policy map (replace, not merge) (FR-043)
-//  7. Cancelling preset leaves policy map unchanged (FR-043)
+//  1. Calls fetchRegistryTools (GET /api/v1/tools)
+//  2. Source badge for MCP tools visible in the MCP section
+//  3. Shell/fs conflict banner (still rendered by ToolsAndPermissions directly)
+//  4. ToolPolicyEditor role preset buttons (Cautious/Balanced/Full access) present
+//  5. No write fires for locked agents (B-2 / #332)
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { act } from 'react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // Mock the API module
@@ -26,11 +31,11 @@ vi.mock('@/lib/api', () => ({
 
 // Mock useAutoSave to prevent debounce side effects in tests
 vi.mock('@/hooks/useAutoSave', () => ({
-  useAutoSave: () => ({ status: 'idle', error: null }),
+  useAutoSave: () => ({ status: 'idle', error: undefined, saveNow: vi.fn() }),
 }))
 
 import * as api from '@/lib/api'
-import type { RegistryTool, AgentToolEntry, AgentToolsCfg } from '@/lib/api'
+import type { RegistryTool, AgentToolsCfg } from '@/lib/api'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 
 // MCPServerPicker depends on server data — mock it to simplify tests
@@ -124,7 +129,7 @@ describe('ToolsAndPermissions — new endpoint (FR-027, FR-029)', () => {
     })
   })
 
-  it('renders builtin tool names from the registry', async () => {
+  it('renders ToolPolicyEditor (role preset buttons) after registry loads', async () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
@@ -134,13 +139,16 @@ describe('ToolsAndPermissions — new endpoint (FR-027, FR-029)', () => {
       />
     )
     await waitFor(() => {
-      expect(screen.getByText('read_file')).toBeInTheDocument()
+      // New role presets (Cautious/Balanced/Full access) are shown instead of old presets
+      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="preset-balanced"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="preset-full_access"]')).toBeInTheDocument()
     })
   })
 })
 
 describe('ToolsAndPermissions — source badge (FR-027)', () => {
-  it('shows MCP badge for mcp-sourced tools', async () => {
+  it('MCP tools section is present when MCP tools are in the registry', async () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
@@ -150,15 +158,13 @@ describe('ToolsAndPermissions — source badge (FR-027)', () => {
       />
     )
     await waitFor(() => {
-      expect(screen.getByText('mcp_search')).toBeInTheDocument()
-      // MCP source badge
-      expect(screen.getByText('MCP')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="mcp-tools-section"]')).toBeInTheDocument()
     })
   })
 
-  it('does not show MCP badge for builtin tools', async () => {
-    // Only builtin tool returned
+  it('MCP tools section is absent when no MCP tools in registry', async () => {
     vi.mocked(api.fetchRegistryTools).mockResolvedValue([BUILTIN_TOOL])
+
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
@@ -168,23 +174,17 @@ describe('ToolsAndPermissions — source badge (FR-027)', () => {
       />
     )
     await waitFor(() => {
-      expect(screen.getByText('read_file')).toBeInTheDocument()
-      expect(screen.queryByText('MCP')).not.toBeInTheDocument()
+      expect(document.querySelector('[data-testid="mcp-tools-section"]')).not.toBeInTheDocument()
     })
   })
 })
 
-describe('ToolsAndPermissions — fence badge (FR-086)', () => {
-  const FENCED_ENTRY: AgentToolEntry = {
-    name: 'system.config.set',
-    configured_policy: 'allow',
-    effective_policy: 'ask',
-    fence_applied: true,
-    requires_admin_ask: true,
-  }
+describe('ToolsAndPermissions — system.* in flat category grid (US-1 / AC5 / FR-103 / #357)', () => {
+  // The old system-disclosure-wrapper §3 is removed per Issue #357.
+  // system.* tools now appear in the main category grid under the "System" label.
 
   beforeEach(() => {
-    // Registry includes the admin tool (scope must not be 'system' for display)
+    // Registry includes only the system tool (category='system').
     vi.mocked(api.fetchRegistryTools).mockResolvedValue([
       { ...ADMIN_TOOL, scope: 'core' },
     ])
@@ -192,11 +192,11 @@ describe('ToolsAndPermissions — fence badge (FR-086)', () => {
       config: {
         builtin: { default_policy: 'allow', policies: { 'system.config.set': 'allow' } },
       },
-      tools: [FENCED_ENTRY],
+      tools: [],
     })
   })
 
-  it('renders fence badge when fence_applied=true', async () => {
+  it('system.* tool (category=system) appears in the flat category grid, NOT a separate disclosure', async () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
@@ -206,11 +206,15 @@ describe('ToolsAndPermissions — fence badge (FR-086)', () => {
       />
     )
     await waitFor(() => {
-      expect(screen.getByText(/downgraded to ask/i)).toBeInTheDocument()
+      // system-disclosure-wrapper must NOT exist (removed in #357).
+      expect(document.querySelector('[data-testid="system-disclosure-wrapper"]')).not.toBeInTheDocument()
+      // Category grid must be present with a system category pill.
+      expect(document.querySelector('[data-testid="category-grid"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="category-pill-system"]')).toBeInTheDocument()
     })
   })
 
-  it('shows configured vs effective policy when fence is applied', async () => {
+  it('system.* tool is accessible inside the system category section in the grid', async () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
@@ -220,33 +224,25 @@ describe('ToolsAndPermissions — fence badge (FR-086)', () => {
       />
     )
     await waitFor(() => {
-      // The sub-label shows configured: allow → effective: ask
-      expect(screen.getByText(/Configured: allow.*Effective: ask/i)).toBeInTheDocument()
+      // Category grid and system category pill should be present.
+      expect(document.querySelector('[data-testid="category-pill-system"]')).toBeInTheDocument()
     })
   })
 
-  it('does not render fence badge when fence_applied=false', async () => {
-    vi.mocked(api.fetchAgentTools).mockResolvedValue({
-      config: DEFAULT_TOOLS_CFG,
-      tools: [{
-        name: 'system.config.set',
-        configured_policy: 'allow',
-        effective_policy: 'allow',
-        fence_applied: false,
-        requires_admin_ask: false,
-      }],
-    })
+  it('does not render fence badge inline (no downgraded-to-ask text by default)', async () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
         agentType="custom"
-        tools={DEFAULT_TOOLS_CFG}
+        tools={{ builtin: { default_policy: 'allow', policies: { 'system.config.set': 'allow' } } }}
         onChange={NOOP_CHANGE}
       />
     )
     await waitFor(() => {
-      expect(screen.queryByText(/downgraded to ask/i)).not.toBeInTheDocument()
+      expect(document.querySelector('[data-testid="category-grid"]')).toBeInTheDocument()
     })
+    // "downgraded to ask" text must not appear in collapsed state.
+    expect(screen.queryByText(/downgraded to ask/i)).not.toBeInTheDocument()
   })
 })
 
@@ -347,8 +343,8 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
   })
 })
 
-describe('ToolsAndPermissions — preset confirmation dialog (FR-043, FR-044)', () => {
-  it('opens confirmation dialog when preset button is clicked', async () => {
+describe('ToolsAndPermissions — role preset selector (US-D2 / #333)', () => {
+  it('shows Cautious, Balanced, Full access preset buttons', async () => {
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
@@ -358,111 +354,70 @@ describe('ToolsAndPermissions — preset confirmation dialog (FR-043, FR-044)', 
       />
     )
     await waitFor(() => {
-      expect(screen.getByText('Cautious')).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByText('Cautious'))
-
-    await waitFor(() => {
-      expect(screen.getByText(/Apply preset: Cautious/i)).toBeInTheDocument()
-      expect(screen.getByText(/replace/i)).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="preset-balanced"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="preset-full_access"]')).toBeInTheDocument()
     })
   })
 
-  it('applies replace semantics on confirm — existing overrides discarded', async () => {
+  it('clicking Cautious preset calls onChange with ask default', async () => {
     const onChange = vi.fn()
-    const existingTools: AgentToolsCfg = {
-      builtin: {
-        default_policy: 'deny',
-        policies: { exec: 'deny', read_file: 'allow' },
-      },
-    }
-
     renderWithQuery(
       <ToolsAndPermissions
         agentId="agent-1"
         agentType="custom"
-        tools={existingTools}
+        tools={DEFAULT_TOOLS_CFG}
         onChange={onChange}
       />
     )
     await waitFor(() => {
-      expect(screen.getByText('Unrestricted')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
     })
 
-    fireEvent.click(screen.getByText('Unrestricted'))
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Apply preset/i })).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByRole('button', { name: /Apply preset/i }))
+    fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
 
     await waitFor(() => {
       expect(onChange).toHaveBeenCalledWith(
         expect.objectContaining({
           builtin: expect.objectContaining({
-            default_policy: 'allow',
-            policies: {}, // replaced, not merged
+            default_policy: 'ask',
+            policies: {},
           }),
         })
       )
     })
   })
+})
 
-  it('cancels without applying when Cancel is clicked', async () => {
-    const onChange = vi.fn()
-
+describe('ToolsAndPermissions — locked agent (B-2 / US-D5 / #332)', () => {
+  it('shows read-only notice for locked agents', async () => {
     renderWithQuery(
       <ToolsAndPermissions
-        agentId="agent-1"
-        agentType="custom"
-        tools={DEFAULT_TOOLS_CFG}
-        onChange={onChange}
-      />
-    )
-    await waitFor(() => {
-      expect(screen.getByText('Minimal')).toBeInTheDocument()
-    })
-
-    fireEvent.click(screen.getByText('Minimal'))
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^Cancel$/i })).toBeInTheDocument()
-    })
-
-    act(() => {
-      fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }))
-    })
-
-    // Dialog should close, onChange should NOT have been called
-    await waitFor(() => {
-      expect(screen.queryByText(/Apply preset: Minimal/i)).not.toBeInTheDocument()
-    })
-    expect(onChange).not.toHaveBeenCalled()
-  })
-
-  it('dialog mentions fence semantics for admin-required tools', async () => {
-    renderWithQuery(
-      <ToolsAndPermissions
-        agentId="agent-1"
-        agentType="custom"
+        agentId="mia"
+        agentType="core"
+        isLocked={true}
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
       />
     )
     await waitFor(() => {
-      expect(screen.getByText('Standard')).toBeInTheDocument()
+      expect(screen.getByTestId('locked-agent-readonly-notice')).toBeInTheDocument()
     })
+  })
 
-    fireEvent.click(screen.getByText('Standard'))
-
+  it('does NOT call updateAgentTools for locked agent', async () => {
+    renderWithQuery(
+      <ToolsAndPermissions
+        agentId="mia"
+        agentType="core"
+        isLocked={true}
+        tools={DEFAULT_TOOLS_CFG}
+        onChange={NOOP_CHANGE}
+      />
+    )
     await waitFor(() => {
-      // Dialog contains the fence semantics note about admin-required tools
-      expect(screen.getByText(/admin-required tools on custom agents/i)).toBeInTheDocument()
-      // The note references the "ask" policy word in a code span
-      const fenceNote = screen.getByText(/admin-required tools on custom agents/i)
-      expect(fenceNote.textContent).toMatch(/ask/)
+      expect(document.querySelector('[data-testid="tool-policy-editor"]')).toBeInTheDocument()
     })
+    expect(api.updateAgentTools).not.toHaveBeenCalled()
   })
 })

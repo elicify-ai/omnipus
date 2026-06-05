@@ -1,3 +1,14 @@
+/**
+ * DiagnosticsSection — Security Score + issue list.
+ *
+ * US-B4 / #330:
+ * - Score = 100 shows "You're protected" reassurance, no deduction list.
+ * - Populated state: "You're protected. N things could be stronger."
+ * - Each IssueCard renders an action link (action_link / action_label) that
+ *   navigates to its in-place fix control.
+ * - The plain text "Excellent / Good / At risk / Critical" label remains.
+ */
+
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -89,17 +100,23 @@ export function DiagnosticsSection() {
 
   const securityColor = result ? getSecurityColor(result.score) : undefined
 
+  // US-B4: plain reassurance string
+  function getReassuranceMessage(_score: number, issueCount: number): string {
+    if (issueCount === 0) return "You're protected."
+    return `You're protected. ${issueCount} thing${issueCount !== 1 ? 's' : ''} could be stronger.`
+  }
+
   return (
     <section className="space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wider"
             style={{ color: 'var(--color-muted)' }}>
-            Diagnostics
+            Security health
           </h3>
           {result && (
             <p className="text-[10px] mt-0.5" style={{ color: 'var(--color-muted)' }}>
-              Last run:{' '}
+              Last checked:{' '}
               {new Date(result.checked_at).toLocaleString(undefined, {
                 month: 'short',
                 day: 'numeric',
@@ -119,12 +136,12 @@ export function DiagnosticsSection() {
           {isRunning ? (
             <>
               <SpinnerGap size={11} className="animate-spin" />
-              Running...
+              Checking...
             </>
           ) : (
             <>
               <ArrowCounterClockwise size={11} />
-              Run diagnostics
+              Check now
             </>
           )}
         </Button>
@@ -148,7 +165,7 @@ export function DiagnosticsSection() {
         >
           <XCircle size={16} weight="fill" style={{ color: 'var(--color-error)' }} />
           <p className="text-sm" style={{ color: 'var(--color-error)' }}>
-            Could not load diagnostics. Run diagnostics to check your security posture.
+            Could not load diagnostics. Click "Check now" to run a security scan.
           </p>
         </div>
       ) : result ? (
@@ -206,6 +223,15 @@ export function DiagnosticsSection() {
               </div>
             </div>
 
+            {/* US-B4: reassurance message */}
+            <p
+              className="text-xs"
+              data-testid="score-reassurance"
+              style={{ color: result.score >= 67 ? 'var(--color-success)' : 'var(--color-warning)' }}
+            >
+              {getReassuranceMessage(result.score, issues.length)}
+            </p>
+
             {issuesByGroup && (
               <div className="flex items-center gap-4 pt-0.5">
                 <div className="flex items-center gap-1.5 text-xs"
@@ -227,44 +253,11 @@ export function DiagnosticsSection() {
             )}
           </div>
 
-          {result.issues.length > 0 && issuesByGroup && (
-            <div className="space-y-3">
-              {(['high', 'medium', 'low'] as const).map((severity) => {
-                const issues = issuesByGroup[severity]
-                if (issues.length === 0) return null
-                const cfg = SEVERITY_CONFIG[severity]
-
-                return (
-                  <div key={severity} className="space-y-1.5">
-                    <div className="flex items-center gap-1.5">
-                      <cfg.Icon size={11} weight="fill" style={{ color: cfg.color }} />
-                      <span
-                        className="text-[10px] font-semibold uppercase tracking-wider"
-                        style={{ color: cfg.color }}
-                      >
-                        {cfg.label} — {issues.length} issue{issues.length !== 1 ? 's' : ''}
-                      </span>
-                    </div>
-                    {issues.map((issue) => (
-                      <IssueCard
-                        key={issue.id}
-                        issue={issue}
-                        config={cfg}
-                        expanded={expandedIssue === issue.id}
-                        onToggle={() =>
-                          setExpandedIssue(expandedIssue === issue.id ? null : issue.id)
-                        }
-                      />
-                    ))}
-                  </div>
-                )
-              })}
-            </div>
-          )}
-
-          {result.issues.length === 0 && (
+          {/* US-B4: score = 100 shows "protected" panel; otherwise show issue list */}
+          {result.issues.length === 0 ? (
             <div
               className="flex items-center gap-2.5 p-4 rounded-lg border"
+              data-testid="all-clear-panel"
               style={{
                 borderColor: 'rgba(16,185,129,0.25)',
                 backgroundColor: 'rgba(16,185,129,0.06)',
@@ -272,9 +265,44 @@ export function DiagnosticsSection() {
             >
               <ShieldCheck size={16} weight="fill" style={{ color: 'var(--color-success)' }} />
               <p className="text-sm" style={{ color: 'var(--color-success)' }}>
-                No issues found — your security configuration looks great.
+                You're protected — no issues found.
               </p>
             </div>
+          ) : (
+            issuesByGroup && (
+              <div className="space-y-3">
+                {(['high', 'medium', 'low'] as const).map((severity) => {
+                  const sev = issuesByGroup[severity]
+                  if (sev.length === 0) return null
+                  const cfg = SEVERITY_CONFIG[severity]
+
+                  return (
+                    <div key={severity} className="space-y-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <cfg.Icon size={11} weight="fill" style={{ color: cfg.color }} />
+                        <span
+                          className="text-[10px] font-semibold uppercase tracking-wider"
+                          style={{ color: cfg.color }}
+                        >
+                          {cfg.label} — {sev.length} issue{sev.length !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                      {sev.map((issue) => (
+                        <IssueCard
+                          key={issue.id}
+                          issue={issue}
+                          config={cfg}
+                          expanded={expandedIssue === issue.id}
+                          onToggle={() =>
+                            setExpandedIssue(expandedIssue === issue.id ? null : issue.id)
+                          }
+                        />
+                      ))}
+                    </div>
+                  )
+                })}
+              </div>
+            )
           )}
         </div>
       ) : (
@@ -285,10 +313,10 @@ export function DiagnosticsSection() {
           <ShieldWarning size={28} weight="duotone" style={{ color: 'var(--color-muted)' }} />
           <div>
             <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>
-              No diagnostics run yet
+              No security scan yet
             </p>
             <p className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>
-              Run the doctor to check your security posture
+              Click "Check now" to see your security posture
             </p>
           </div>
         </div>
@@ -316,6 +344,7 @@ function IssueCard({
       onClick={onToggle}
       onKeyDown={(e) => e.key === 'Enter' && onToggle()}
       className="rounded-lg border p-3 space-y-0 cursor-pointer transition-opacity"
+      data-testid={`issue-card-${issue.id}`}
       style={{
         borderColor: config.borderColor,
         backgroundColor: config.bgColor,
@@ -343,16 +372,18 @@ function IssueCard({
               className="text-[10px] font-semibold uppercase tracking-wider mb-1"
               style={{ color: 'var(--color-muted)' }}
             >
-              Recommendation
+              How to fix this
             </p>
             <p className="text-xs leading-relaxed" style={{ color: 'var(--color-secondary)' }}>
               {issue.recommendation}
             </p>
           </div>
+          {/* US-B4: action link links directly to the in-place fix */}
           {issue.action_link && (
             <a
               href={issue.action_link}
               onClick={(e) => e.stopPropagation()}
+              data-testid={`issue-action-link-${issue.id}`}
               className="inline-flex items-center gap-1 text-xs font-medium hover:underline underline-offset-2"
               style={{ color: config.color }}
             >

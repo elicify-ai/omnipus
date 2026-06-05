@@ -25,6 +25,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/channels"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/identity"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
@@ -70,7 +71,27 @@ type GoogleChatChannel struct {
 }
 
 // NewGoogleChatChannel creates a new Google Chat channel.
-func NewGoogleChatChannel(cfg config.GoogleChatConfig, b *bus.MessageBus) (*GoogleChatChannel, error) {
+//
+// Secrets (webhook_url, service_account_json) are credential-store-routed
+// (SEC-23 / #289): when the corresponding <field>_ref is set, the plaintext is
+// resolved from the SecretBundle and never lives in config.json. For
+// backward-compat / env-injected configs that still carry an inline
+// SecureString, the inline value is used as a fallback when the ref is empty.
+func NewGoogleChatChannel(
+	cfg config.GoogleChatConfig,
+	secrets credentials.SecretBundle,
+	b *bus.MessageBus,
+) (*GoogleChatChannel, error) {
+	// Resolve secrets ref-first, inline-fallback. cfg is a value copy, so
+	// mutating its SecureString fields here is local to this channel instance
+	// and keeps every downstream read (sendWebhook, initBotAuth) unchanged.
+	if cfg.WebhookURLRef != "" {
+		cfg.WebhookURL.Set(secrets.GetString(cfg.WebhookURLRef))
+	}
+	if cfg.ServiceAccountJSONRef != "" {
+		cfg.ServiceAccountJSON.Set(secrets.GetString(cfg.ServiceAccountJSONRef))
+	}
+
 	mode := strings.ToLower(strings.TrimSpace(cfg.Mode))
 	if mode == "" && cfg.WebhookURL.String() != "" {
 		mode = "webhook"

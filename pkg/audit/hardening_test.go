@@ -512,6 +512,56 @@ func TestEmitEntry_LogFailure_BumpsIncSkipped(t *testing.T) {
 		"EmitEntry must bump IncSkipped when Log fails (CRIT-6); before=%d after=%d", before, after)
 }
 
+// TestEmit_LogFailure_BumpsIncSkipped verifies CRIT-6 for the Emit path
+// (used by EmitToolPolicyAskDenied and EmitToolPolicyAskGranted): when the
+// logger's writeLine fails (degraded mode), Emit bumps IncSkipped so /health
+// audit_degraded reflects the gap.
+//
+// This is the Emit analog of TestEmitEntry_LogFailure_BumpsIncSkipped, which
+// covers the EmitEntry path. Both paths share the same CRIT-6 contract —
+// covered separately here because Emit calls writeLine directly (bypassing
+// Logger.Log) and the IncSkipped label is the event name, not Entry.Tool.
+func TestEmit_LogFailure_BumpsIncSkipped(t *testing.T) {
+	audit.ResetSkippedForTest()
+	before := audit.SnapshotSkipped().Total
+
+	dir := t.TempDir()
+	logger, err := audit.NewLogger(audit.LoggerConfig{
+		Dir:           dir,
+		RetentionDays: 90,
+	})
+	require.NoError(t, err)
+
+	// Close the logger — sets degraded=true so the next writeLine call returns
+	// "operating in degraded mode" deterministically.
+	require.NoError(t, logger.Close())
+
+	// Confirm the degraded path fires: a direct Log call must fail after Close.
+	logErr := logger.Log(&audit.Entry{Event: audit.EventToolCall, Decision: audit.DecisionAllow})
+	if logErr == nil {
+		t.Skip(
+			"Log on a closed logger did not return an error on this platform — cannot exercise the Emit failure path",
+		)
+	}
+
+	// Call audit.Emit against the closed (degraded) logger using the same event
+	// that EmitToolPolicyAskDenied uses. writeLine will fail → IncSkipped bumped.
+	audit.Emit(
+		t.Context(),
+		logger,
+		audit.EventToolPolicyAskDenied,
+		audit.SeverityInfo,
+		map[string]any{
+			"tool_name": "test_tool",
+			"reason":    string(audit.AskDenyReasonScheduled),
+		},
+	)
+
+	after := audit.SnapshotSkipped().Total
+	assert.Greaterf(t, after, before,
+		"Emit must bump IncSkipped when writeLine fails (CRIT-6); before=%d after=%d", before, after)
+}
+
 // TestRecoverCorruption_HoldsLock verifies that recoverCorruption acquires the
 // Logger mutex by attempting to call NewLogger from two goroutines on the
 // same directory. The first call must complete before the second starts
