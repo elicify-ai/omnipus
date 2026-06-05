@@ -617,8 +617,21 @@ export function ChannelConfigPanel({
       isDirtyRef.current = false
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       queryClient.invalidateQueries({ queryKey: ['channel-config', channelId] })
-      addToast({ message: 'Channel configured and enabled', variant: 'success' })
-      onOpenChange(false)
+      // #358: channels with a live pairing flow (WhatsApp native) must keep the panel
+      // open after enable so the QR — pushed over the whatsapp_pairing WS frame once the
+      // backend starts the channel — can render in WhatsAppNativeNotice. Closing here
+      // unmounts the notice and drops its subscription before any QR frame arrives, which
+      // is why "Enable & Save" never showed a code. Other channels have no pairing step.
+      const hasPairingFlow = channelId === 'whatsapp'
+      addToast({
+        message: hasPairingFlow
+          ? 'Channel enabled — scan the QR code below to link your device'
+          : 'Channel configured and enabled',
+        variant: 'success',
+      })
+      if (!hasPairingFlow) {
+        onOpenChange(false)
+      }
     },
     onError: (err: unknown) => {
       const rawMsg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to enable channel'

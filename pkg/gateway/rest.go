@@ -4582,6 +4582,26 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
+	// #358: persisting channels.<id>.enabled via safeUpdateConfigJSON only swaps the
+	// in-memory config pointer (refreshConfigAndRewireServices → SwapConfig); it does
+	// NOT start or stop the channel. Trigger a reload so ChannelManager.Reload applies
+	// the diff — starting a newly-enabled channel (e.g. whatsapp_native, which then
+	// emits its pairing QR over the whatsapp_pairing WS frame) or stopping a disabled
+	// one. The Reload path is crash-safe and name-correct as of #313. Mirrors the
+	// TriggerReload pattern used by HandleCreateAgent (rest.go:1369) and others.
+	if a.agentLoop != nil {
+		if err := a.agentLoop.TriggerReload(); err != nil {
+			verb := "start"
+			if !enabled {
+				verb = "stop"
+			}
+			slog.Error("rest: channel reload after enable toggle failed",
+				"channel", channelID, "enabled", enabled, "error", err)
+			jsonErr(w, http.StatusInternalServerError,
+				fmt.Sprintf("channel %s saved but failed to %s: %v", channelID, verb, err))
+			return
+		}
+	}
 	jsonOK(w, gen.ChannelEnabledResponse{Id: gen.ChannelEnabledResponseId(channelID), Enabled: enabled})
 }
 

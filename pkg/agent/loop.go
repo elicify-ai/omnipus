@@ -2078,6 +2078,22 @@ func (al *AgentLoop) EmitWhatsAppPairing(channelID string, status channels.Pairi
 		QR:        qr,
 		Message:   message,
 	})
+	// FR-111 (#358): audit-log device-pairing lifecycle transitions so linking a new
+	// WhatsApp device leaves a tamper-evident trail. We deliberately do NOT log the
+	// `code`/`connecting` states (high-frequency, and the QR itself is a scannable
+	// secret that must never reach the audit file) — only the terminal outcomes.
+	switch status {
+	case channels.PairingStatusLinked, channels.PairingStatusError, channels.PairingStatusTimeout:
+		audit.EmitEntry(al.auditLogger, &audit.Entry{
+			Timestamp: time.Now().UTC(),
+			Event:     "channel.pairing." + string(status),
+			Decision:  string(status),
+			Details: map[string]any{
+				"channel": channelID,
+				"message": message,
+			},
+		})
+	}
 }
 
 // EmitNotification publishes a user-facing notification onto the event bus so

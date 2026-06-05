@@ -101,6 +101,7 @@ import {
   getChannelRouting,
   fetchAgents,
   configureChannel,
+  enableChannel,
 } from '@/lib/api'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { ChannelConfigPanel } from './ChannelConfigPanel'
@@ -651,5 +652,50 @@ describe('ChannelConfigPanel — non-whatsapp channels', () => {
     })
     expect(screen.queryByTestId('whatsapp-qr')).not.toBeInTheDocument()
     expect(screen.queryByText(/Generating your QR code/i)).not.toBeInTheDocument()
+  })
+})
+
+// #358: "Save & Enable" must keep the Configure panel OPEN for WhatsApp so the QR
+// (pushed over the whatsapp_pairing WS frame once the channel starts) can render in
+// WhatsAppNativeNotice. For channels without a pairing flow the panel closes as before.
+describe('ChannelConfigPanel — Save & Enable panel close behavior (#358)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockUiStore()
+    vi.mocked(fetchChannelConfig).mockResolvedValue({})
+    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchAgents).mockResolvedValue([])
+    vi.mocked(configureChannel).mockResolvedValue(undefined as never)
+    vi.mocked(enableChannel).mockResolvedValue(undefined as never)
+    vi.mocked(useWhatsAppPairingStore).mockImplementation(
+      ((selector: (s: { byChannel: Record<string, unknown>; clear: () => void }) => unknown) =>
+        selector({ byChannel: {}, clear: vi.fn() })) as never,
+    )
+  })
+
+  it('keeps the panel open after Save & Enable for WhatsApp (QR can render)', async () => {
+    const { onOpenChange } = renderPanel('whatsapp', 'WhatsApp', true)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Save & Enable/i }))
+    })
+
+    await waitFor(() => {
+      expect(vi.mocked(enableChannel)).toHaveBeenCalledWith('whatsapp')
+    })
+    // The panel must NOT be closed — onOpenChange(false) would unmount the QR notice.
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
+  })
+
+  it('closes the panel after Save & Enable for a non-pairing channel (Telegram)', async () => {
+    const { onOpenChange } = renderPanel('telegram', 'Telegram')
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Save & Enable/i }))
+    })
+
+    await waitFor(() => {
+      expect(onOpenChange).toHaveBeenCalledWith(false)
+    })
   })
 })
