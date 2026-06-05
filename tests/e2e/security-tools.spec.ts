@@ -58,26 +58,12 @@ const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 test('(AC2/SC-101) GET /api/v1/tools returns > 41 entries including exec and web_search', async ({
   request,
 }) => {
-  // Auth token from storageState is in localStorage, not the request context.
-  // The /api/v1/tools endpoint requires auth — read the token from the pre-seeded
-  // auth file that global-setup wrote (same token the page contexts use).
-  //
-  // We use the OMNIPUS_AUTH_TOKEN env var if available (set by CI), otherwise
-  // fall back to the global-setup seeded file.
-  //
-  // The simplest approach that works with Playwright's request fixture (which
-  // does not inherit page localStorage) is to re-login via the API in this test.
-  // This is consistent with the loginAPI() pattern in setup.ts.
-  const loginRes = await request.post(`${BASE_URL}/api/v1/auth/login`, {
-    data: { username: 'admin', password: 'admin123' },
-  })
-  expect(loginRes.ok(), `Login failed: ${loginRes.status()}`).toBe(true)
-  const { token } = (await loginRes.json()) as { token: string }
-  expect(token, 'Login response must contain a token').toBeTruthy()
-
-  const toolsRes = await request.get(`${BASE_URL}/api/v1/tools`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
+  // The gateway runs with dev_mode_bypass: true in CI (set by global-setup).
+  // In bypass mode all requests pass through unauthenticated — no login call
+  // needed. Calling POST /api/v1/auth/login here would rotate the admin's token
+  // hash, invalidating the storageState bearer token used by all subsequent page
+  // tests, causing them to land on the login screen instead of the app.
+  const toolsRes = await request.get(`${BASE_URL}/api/v1/tools`)
   expect(toolsRes.ok(), `GET /api/v1/tools failed: ${toolsRes.status()}`).toBe(true)
 
   const tools = (await toolsRes.json()) as Array<{ name: string; category?: string }>

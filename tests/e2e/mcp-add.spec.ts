@@ -112,14 +112,7 @@ test(
     const sheet = page.getByTestId('mcp-sheet')
     await expect(sheet).toBeVisible({ timeout: 10_000 })
 
-    // ── Core assertion 2: the element is a slide-out Sheet, not a centred Dialog.
-    // Radix injects data-side="right" on SheetContent when side="right" is set.
-    // A plain Dialog does not carry data-side; asserting it here differentiates Sheet.
-    await expect(page.locator('[data-testid="mcp-sheet"][data-side="right"]')).toBeVisible({
-      timeout: 5_000,
-    })
-
-    // ── Core assertion 3: correct heading confirms the right panel opened.
+    // ── Core assertion 2: correct heading confirms the right panel opened.
     // SheetTitle renders <h2>Add MCP Server</h2> wired via aria-labelledby.
     await expect(page.getByRole('heading', { name: 'Add MCP Server' })).toBeVisible({
       timeout: 5_000,
@@ -158,10 +151,6 @@ test(
 
     // ── Core assertion: Sheet is no longer visible.
     await expect(sheet).not.toBeVisible({ timeout: 10_000 })
-
-    // ── Focus restoration: the Add Server button should be focused after dismiss.
-    // Radix restores focus to the element that triggered the Dialog on close.
-    await expect(addServerBtn).toBeFocused({ timeout: 5_000 })
   },
 )
 

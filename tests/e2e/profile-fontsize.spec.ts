@@ -257,12 +257,25 @@ test(
 test(
   'font-size preference persists across page reload (18px survives reload)',
   async ({ page }) => {
-    // Seed at 14 for a predictable starting point.
-    await page.addInitScript(() => {
-      localStorage.setItem('omnipus_pref_font_size', '14')
-    })
+    // Navigate first so we are on the correct origin and can set localStorage
+    // via page.evaluate(). We deliberately do NOT use addInitScript here because
+    // addInitScript re-runs on every navigation — including page.reload() — which
+    // would reset the stored value back to 14 and defeat the persistence assertion.
+    await page.goto(`${BASE_URL}/#/settings`)
+    await expect(page).toHaveURL(/settings/, { timeout: 10_000 })
 
-    await openProfileTab(page)
+    // Seed localStorage to 14 for a predictable starting point, then reload so
+    // the ProfileSection mounts fresh with the seeded value.
+    await page.evaluate(() => localStorage.setItem('omnipus_pref_font_size', '14'))
+    await page.reload()
+    await expect(page).toHaveURL(/settings/, { timeout: 10_000 })
+
+    // Open the Profile tab — slider starts at 14.
+    const profileTab = page.locator('button[role="tab"]', { hasText: 'Profile' })
+    await expect(profileTab).toBeVisible({ timeout: 10_000 })
+    await profileTab.click()
+    const profilePanel = page.locator('[role="tabpanel"][data-state="active"]').first()
+    await expect(profilePanel).toBeVisible({ timeout: 10_000 })
 
     const slider = page.getByRole('slider')
     await expect(slider).toBeVisible({ timeout: 10_000 })
@@ -275,18 +288,20 @@ test(
     expect(await getRootFontSizeVar(page)).toBe('18px')
 
     // ── Persistence check: reload and re-open Profile tab.
-    // The useAutoSave hook debounces and persists to localStorage. On state
-    // change the value is saved synchronously via savePref (ProfileSection.tsx:
-    // line 70 — savePref is called in the useState initialiser, and the
-    // useAutoSave fires on the next settled state). Wait briefly so the
-    // debounced save has had time to write before reloading.
+    // The useAutoSave hook debounces and persists to localStorage. Wait briefly
+    // so the debounced save has had time to write before reloading.
     await page.waitForTimeout(600)
 
     await page.reload()
     await expect(page).toHaveURL(/settings/, { timeout: 10_000 })
 
-    // Re-activate Profile tab after reload.
-    await openProfileTab(page)
+    // Re-activate Profile tab after reload — openProfileTab navigates to
+    // /#/settings internally, but since we are already there we just click the tab.
+    const profileTabAfter = page.locator('button[role="tab"]', { hasText: 'Profile' })
+    await expect(profileTabAfter).toBeVisible({ timeout: 10_000 })
+    await profileTabAfter.click()
+    const profilePanelAfter = page.locator('[role="tabpanel"][data-state="active"]').first()
+    await expect(profilePanelAfter).toBeVisible({ timeout: 10_000 })
 
     const sliderAfterReload = page.getByRole('slider')
     await expect(sliderAfterReload).toBeVisible({ timeout: 10_000 })
