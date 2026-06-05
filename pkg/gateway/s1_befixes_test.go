@@ -75,7 +75,12 @@ func TestHandleProviders_NoKey_IsDisconnected(t *testing.T) {
 			},
 		},
 		Providers: []*config.ModelConfig{
-			{ModelName: "claude-sonnet-4-6", Provider: "anthropic", Model: "claude-sonnet-4-6", APIKeyRef: "ANTHROPIC_API_KEY"},
+			{
+				ModelName: "claude-sonnet-4-6",
+				Provider:  "anthropic",
+				Model:     "claude-sonnet-4-6",
+				APIKeyRef: "ANTHROPIC_API_KEY",
+			},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -205,12 +210,9 @@ func TestHandleProviders_EnvVarKey_IsConnected(t *testing.T) {
 func TestHandleProviders_CredStoreRef_EmptyRef_IsDisconnected(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	t.Setenv("OMNIPUS_KEY_FILE", "")
-	// Use a fresh master key so the cred store opens but has no matching entry.
-	masterKey := make([]byte, 32)
-	_, err := os.ReadFile("/dev/urandom")
-	_ = err // best-effort for test randomness
-	masterKey = []byte("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")
-	t.Setenv("OMNIPUS_MASTER_KEY", string(masterKey))
+	// Use a fixed master key so the cred store opens but has no matching entry.
+	masterKey := "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+	t.Setenv("OMNIPUS_MASTER_KEY", masterKey)
 	// Ensure the env var for the ref is not set.
 	t.Setenv("GEMINI_API_KEY", "")
 
@@ -392,8 +394,9 @@ func TestRestartGatedKeys_GatewayUsersNotGated(t *testing.T) {
 	for _, key := range RestartGatedKeys {
 		if key == config.GatewayUsers {
 			t.Errorf("config.GatewayUsers must NOT be in RestartGatedKeys (FR-105/US-3): "+
-				"gateway.users is hot (auth reads GetConfig() live); adding it caused the fresh-install restart banner.\n"+
-				"Found at position in RestartGatedKeys: %v", RestartGatedKeys)
+				"gateway.users is hot (auth reads GetConfig() live); adding it caused the "+
+				"fresh-install restart banner.\nFound at position in RestartGatedKeys: %v",
+				RestartGatedKeys)
 		}
 	}
 }
