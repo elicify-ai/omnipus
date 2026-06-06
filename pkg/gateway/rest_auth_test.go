@@ -1592,3 +1592,88 @@ func TestHandleValidateToken_TriggerReloadNotConfigured(t *testing.T) {
 	assert.Equal(t, "testuser", resp["username"])
 	assert.Equal(t, "admin", resp["role"])
 }
+
+// TestHandleChangePassword_InvalidatesExistingToken verifies that after a
+// successful password change, the existing token is invalidated:
+//  1. token_hash and session_token_hash are cleared in config.json on disk.
+//  2. The old bearer token, when presented to HandleValidateToken without an
+//     active user context (as withAuth behaves when no hash matches), returns 401.
+//
+// BDD: Given a user "tknuser" with password "OldTokenPass1",
+// When POST /auth/login succeeds (token_hash written to config.json)
+// AND POST /auth/change-password with correct current_password succeeds,
+// Then: (a) token_hash is empty in config.json on disk,
+//
+//	(b) session_token_hash is empty in config.json on disk,
+//	(c) the old bearer token presented to /auth/validate (no context user)
+//	    returns 401 Unauthorized.
+//
+// This test is designed to FAIL on code where HandleChangePassword did NOT clear
+// token_hash / session_token_hash, and PASS on the fixed code that clears them.
+func TestHandleChangePassword_InvalidatesExistingToken(t *testing.T) {
+	api, tmpDir := newTestRestAPIWithUser(t, "tknuser", "OldTokenPass1")
+
+	// Step 1: Login to obtain a token and write token_hash to config.json.
+	loginBody := `{"username":"tknuser","password":"OldTokenPass1"}`
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginW := httptest.NewRecorder()
+	api.HandleLogin(loginW, loginReq)
+	require.Equal(t, http.StatusOK, loginW.Code, "login must succeed before password change")
+	var loginResp map[string]any
+	require.NoError(t, json.Unmarshal(loginW.Body.Bytes(), &loginResp))
+	oldToken := loginResp["token"].(string)
+	require.NotEmpty(t, oldToken, "login must return a non-empty token")
+
+	// Confirm token_hash is non-empty on disk after login.
+	diskDataBefore, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
+	require.NoError(t, err)
+	var diskCfgBefore map[string]any
+	require.NoError(t, json.Unmarshal(diskDataBefore, &diskCfgBefore))
+	gwBefore := diskCfgBefore["gateway"].(map[string]any)
+	usersBefore := gwBefore["users"].([]any)
+	require.Len(t, usersBefore, 1)
+	userMapBefore := usersBefore[0].(map[string]any)
+	require.NotEmpty(t, userMapBefore["token_hash"],
+		"token_hash must be written to disk after login (precondition)")
+
+	// Step 2: Change password — must clear token_hash and session_token_hash.
+	cpBody := `{"current_password":"OldTokenPass1","new_password":"NewTokenPass2"}`
+	cpReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", strings.NewReader(cpBody))
+	cpReq.Header.Set("Content-Type", "application/json")
+	cpReq = injectUser(cpReq, "tknuser", config.UserRoleAdmin)
+	cpW := httptest.NewRecorder()
+	api.HandleChangePassword(cpW, cpReq)
+	require.Equal(t, http.StatusOK, cpW.Code,
+		"change-password must succeed (got %s)", cpW.Body.String())
+
+	// Step 3a: Verify token_hash and session_token_hash are cleared on disk.
+	diskDataAfter, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
+	require.NoError(t, err)
+	var diskCfgAfter map[string]any
+	require.NoError(t, json.Unmarshal(diskDataAfter, &diskCfgAfter))
+	gwAfter, ok := diskCfgAfter["gateway"].(map[string]any)
+	require.True(t, ok, "gateway key must be present in config.json after change-password")
+	usersAfter, ok := gwAfter["users"].([]any)
+	require.True(t, ok, "users array must be present in config.json after change-password")
+	require.Len(t, usersAfter, 1)
+	userMapAfter, ok := usersAfter[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "", userMapAfter["token_hash"],
+		"token_hash must be cleared in config.json after password change — "+
+			"old token must be invalidated")
+	assert.Equal(t, "", userMapAfter["session_token_hash"],
+		"session_token_hash must be cleared in config.json after password change")
+
+	// Step 3b: The old token, presented without a matching user in context (as
+	// withAuth behaves when the token hash no longer matches any user), must
+	// yield 401 from HandleValidateToken.
+	validateReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/validate", nil)
+	validateReq.Header.Set("Authorization", "Bearer "+oldToken)
+	// Deliberately no user injected — simulates the state after withAuth fails to
+	// match the stale token against the (now empty) token_hash in config.
+	validateW := httptest.NewRecorder()
+	api.HandleValidateToken(validateW, validateReq)
+	assert.Equal(t, http.StatusUnauthorized, validateW.Code,
+		"old bearer token must be rejected after password change (token_hash cleared)")
+}

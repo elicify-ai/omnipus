@@ -819,6 +819,70 @@ func TestHandleOnboardingProbeProvider_MissingFields(t *testing.T) {
 	}
 }
 
+// TestHandleCompleteOnboarding_BadRequest_ReleasesReservation verifies that
+// when HandleCompleteOnboarding returns 400 (bad request body — validation
+// failure before the config write), the onboarding reservation is released
+// so that a subsequent valid attempt can succeed.
+//
+// BDD: Given a fresh install (onboarding not complete),
+// When POST /api/v1/onboarding/complete with a missing admin.username (400 path),
+// Then: (a) HTTP 400 is returned, AND
+//
+//	(b) the onboarding manager is not in the "reserved" state so a second
+//	    valid POST succeeds with 200 (not 409 Conflict).
+//
+// This test is designed to FAIL on code where the defer guard was absent
+// (reservation held permanently after a 400) and PASS on the fixed code
+// (defer releases reservation on every non-committed return path).
+func TestHandleCompleteOnboarding_BadRequest_ReleasesReservation(t *testing.T) {
+	tmpDir := t.TempDir()
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := newOnboardingTestAPI(t, tmpDir, al)
+
+	// Step 1: Send a bad request — admin.username is empty, which triggers a 400
+	// before the config write. The reservation must be released in the defer.
+	badBody := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"","password":"secret123"}}`
+	badReq := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(badBody))
+	badReq.Header.Set("Content-Type", "application/json")
+	badW := httptest.NewRecorder()
+
+	api.HandleCompleteOnboarding(badW, badReq)
+
+	require.Equal(t, http.StatusBadRequest, badW.Code,
+		"bad request with empty username must return 400")
+
+	// Step 2: Verify the reservation was released by confirming IsComplete is still
+	// false and a second valid request succeeds with 200 (not 409).
+	// If the reservation were still held, ReserveComplete would return
+	// ErrAlreadyComplete and the handler would return 409.
+	require.False(t, api.onboardingMgr.IsComplete(),
+		"onboarding must NOT be complete after a 400 response")
+
+	goodBody := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	goodReq := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(goodBody))
+	goodReq.Header.Set("Content-Type", "application/json")
+	goodW := httptest.NewRecorder()
+
+	api.HandleCompleteOnboarding(goodW, goodReq)
+
+	require.Equal(t, http.StatusOK, goodW.Code,
+		"second valid onboarding request must succeed after reservation released (got %s)", goodW.Body.String())
+}
+
 // TestHandleOnboardingProbeProvider_WrongMethod ensures non-POST verbs are rejected.
 func TestHandleOnboardingProbeProvider_WrongMethod(t *testing.T) {
 	tmpDir := t.TempDir()
