@@ -18,7 +18,10 @@ This document is the single canonical reference for all WebSocket frame types in
 2. Client immediately sends an `auth` frame (if `OMNIPUS_BEARER_TOKEN` is configured).
 3. Server authenticates; connection is ready for message exchange.
 4. Client sends keep-alive `ping` frames every 30 seconds via the connection manager.
-5. On disconnect, client reconnects with exponential backoff (1s, 2s, 4s — max 3 retries, then manual retry).
+5. On disconnect, the client reconnects with a two-phase backoff (`src/lib/ws.ts:366-372`):
+   - **Fast phase** — `MAX_FAST_ATTEMPTS = 10` retries with exponential backoff (`2^attempt * 1000 ms`) capped at `MAX_FAST_DELAY_MS = 30_000` ms.
+   - **Slow phase** — `MAX_SLOW_ATTEMPTS = 20` retries at a fixed `SLOW_RETRY_DELAY_MS = 60_000` ms interval.
+   - **Give up** — after 30 total attempts the connection surfaces an error and the user must click "Reconnect now" in the SPA.
 
 ---
 
@@ -40,7 +43,7 @@ Authenticates the WebSocket connection. Must be sent immediately after connectio
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"auth"` |
-| token | string | yes | The bearer token from `localStorage['omnipus_auth_token']` |
+| token | string | yes | The bearer token. The SPA reads it as `sessionStorage.getItem('omnipus_auth_token') ?? localStorage.getItem('omnipus_auth_token')` (`src/lib/ws.ts:688-689`); `sessionStorage` is preferred (XSS protection) and `localStorage` is the legacy fallback. |
 
 **Producer**: `WsConnection._createSocket()` in `src/lib/ws.ts`
 **Consumer**: Gateway auth middleware in `pkg/gateway/rest.go`
@@ -131,7 +134,7 @@ Keep-alive ping sent every 30 seconds to prevent proxy/firewall timeout. No resp
 | type | string | yes | Always `"ping"` |
 
 **Producer**: `WsConnection._startHeartbeat()` in `src/lib/ws.ts`
-**Consumer**: Gateway WebSocket handler (silently acknowledged or echoed as `pong`)
+**Consumer**: The server emits a `pong` frame in response (see `PongFrame` below); the SPA consumes that for liveness tracking and **does not** surface the `pong` to the chat reducers (`src/lib/ws.ts:591`). The `ping` itself is consumed by the SPA's `_startHeartbeat` after send.
 
 ---
 
@@ -169,6 +172,7 @@ A single token chunk from a streaming LLM response. Tokens are appended to the c
 ```json
 {
   "type": "token",
+  "session_id": "sess_abc123",
   "content": "Hello"
 }
 ```
@@ -176,6 +180,7 @@ A single token chunk from a streaming LLM response. Tokens are appended to the c
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"token"` |
+| session_id | string | yes | The session this token belongs to. Required by the AsyncAPI component schema (`TokenFrame`, `contracts/asyncapi.yaml:1033-1053`). |
 | content | string | yes | The token text to append to the current assistant message |
 
 **Producer**: Agent loop streaming path in `pkg/agent/`
@@ -241,6 +246,7 @@ Signals that the agent has invoked a tool and execution is beginning. Renders an
 ```json
 {
   "type": "tool_call_start",
+  "session_id": "sess_abc123",
   "tool": "bash",
   "call_id": "call_abc123",
   "params": {
@@ -252,9 +258,10 @@ Signals that the agent has invoked a tool and execution is beginning. Renders an
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"tool_call_start"` |
+| session_id | string | yes | The session this tool call belongs to. Required by the AsyncAPI component schema (`ToolCallStartFrame`, `contracts/asyncapi.yaml:1127-1162`). |
 | tool | string | yes | Tool name (e.g., `"bash"`, `"read_file"`, `"web_search"`) |
 | call_id | string | yes | Unique identifier for this tool invocation |
-| params | object | yes | Tool input parameters (tool-specific schema) |
+| params | object | yes | Tool input parameters (tool-specific schema). **Always an object — never `null`** (nil-safety contract enforced in `ToolCallStartFrame`, `contracts/asyncapi.yaml:1130-1131`). |
 
 **Producer**: Tool execution layer in `pkg/tools/`
 **Consumer**: Tool call badge component — shows tool name + spinner, collapsed by default
@@ -268,6 +275,7 @@ Signals that a tool invocation has completed. Updates the tool call badge with r
 ```json
 {
   "type": "tool_call_result",
+  "session_id": "sess_abc123",
   "tool": "bash",
   "call_id": "call_abc123",
   "result": "file1.txt\nfile2.txt\n",
@@ -280,6 +288,7 @@ Signals that a tool invocation has completed. Updates the tool call badge with r
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"tool_call_result"` |
+| session_id | string | yes | The session this tool call belongs to. Required by the AsyncAPI component schema (`ToolCallResultFrame`, `contracts/asyncapi.yaml:1220-1268`). |
 | tool | string | yes | Tool name — matches the corresponding `tool_call_start` |
 | call_id | string | yes | Tool invocation ID — matches the corresponding `tool_call_start` |
 | result | any | yes | Tool output (type depends on tool; may be string, object, or null) |
@@ -299,6 +308,7 @@ Requests explicit user approval before executing a potentially dangerous command
 ```json
 {
   "type": "exec_approval_request",
+  "session_id": "sess_abc123",
   "id": "approval_xyz789",
   "command": "rm -rf /tmp/cache",
   "working_dir": "/home/user/project",
@@ -309,6 +319,7 @@ Requests explicit user approval before executing a potentially dangerous command
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"exec_approval_request"` |
+| session_id | string | yes | The session this approval belongs to. Required by the AsyncAPI component schema (`ExecApprovalRequestFrame`, `contracts/asyncapi.yaml:1348-1391`). |
 | id | string | yes | Unique approval request ID — must be echoed in the `exec_approval_response` |
 | command | string | yes | The full command string requiring approval |
 | working_dir | string | no | The working directory in which the command will execute |
@@ -326,6 +337,7 @@ Notifies the frontend that a pending approval request expired without a response
 ```json
 {
   "type": "exec_approval_expired",
+  "session_id": "sess_abc123",
   "id": "approval_xyz789"
 }
 ```
@@ -333,6 +345,7 @@ Notifies the frontend that a pending approval request expired without a response
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"exec_approval_expired"` |
+| session_id | string | yes | The session this expired approval belongs to. Required by the AsyncAPI component schema (`ExecApprovalExpiredFrame`, `contracts/asyncapi.yaml:1884-1904`). |
 | id | string | yes | The approval request ID that expired |
 
 **Producer**: Exec approval timeout handler in `pkg/policy/` or `pkg/agent/`
@@ -391,8 +404,9 @@ Notifies the frontend that a task's status has changed, enabling real-time task 
 ```json
 {
   "type": "task_status_changed",
+  "session_id": "sess_abc123",
   "task_id": "task_abc123",
-  "status": "running",
+  "status": "assigned",
   "agent_id": "agent_def456",
   "updated_at": "2026-04-01T12:34:56Z"
 }
@@ -401,8 +415,9 @@ Notifies the frontend that a task's status has changed, enabling real-time task 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | type | string | yes | Always `"task_status_changed"` |
+| session_id | string | yes | The session the task belongs to. Required by the AsyncAPI component schema (`TaskStatusChangedFrame`, `contracts/asyncapi.yaml:1393-1422`). |
 | task_id | string | yes | The ID of the task whose status changed |
-| status | string | yes | New status: one of `"queued"`, `"running"`, `"completed"`, `"failed"` |
+| status | string | yes | New status: one of `"queued"`, `"assigned"`, `"running"`, `"completed"`, `"failed"` (five-value enum per `contracts/asyncapi.yaml:1413-1420`) |
 | agent_id | string | yes | The agent the task is assigned to |
 | updated_at | string | yes | ISO 8601 timestamp of the status change |
 
@@ -447,18 +462,45 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | C→S | `cancel` | Cancel in-progress turn |
 | C→S | `exec_approval_response` | Respond to exec approval request |
 | C→S | `ping` | Keep-alive |
+| C→S | `attach_session` | Attach to an existing session and replay its transcript (with optional `since` for incremental replay) |
+| C→S | `device_pairing_response` | Admin approval/rejection of a pending device pairing request |
+| C→S | `session_close` | Explicit session close request (server replies with `session_close_ack`) |
 | C→S | `whatsapp_pairing_subscribe` | Start/stop receiving WhatsApp pairing frames on this connection (#283) |
+| S→C | `session_started` | New session ID minted by the server (response to a `message` without `session_id`) |
 | S→C | `token` | LLM response token chunk |
 | S→C | `done` | Turn complete, with usage stats |
-| S→C | `error` | Unrecoverable error |
+| S→C | `error` | Unrecoverable error (does not terminate the connection) |
 | S→C | `tool_call_start` | Tool invocation began |
 | S→C | `tool_call_result` | Tool invocation completed |
+| S→C | `subagent_start` | Subagent span opened (FR-H-004) |
+| S→C | `subagent_end` | Subagent span closed (FR-H-004) |
 | S→C | `exec_approval_request` | Approval required before command execution |
 | S→C | `exec_approval_expired` | Pending approval timed out |
+| S→C | `exec_approval_response_ack` | Server acknowledgement that an `exec_approval_response` was resolved |
+| S→C | `task_status_changed` | Task status updated (MAJ-004) |
+| S→C | `replay_message` | One replayed transcript entry during an `attach_session` |
+| S→C | `rate_limit` | Rate-limit denial applied to an agent action (SEC-26) |
+| S→C | `media` | One or more media attachments from a tool (parts array, never null) |
+| S→C | `agent_switched` | Active agent for a session changed (handoff or return_to_default) |
+| S→C | `tool_approval_required` | Tool call paused for ask-policy approval (FR-011, FR-082); `args` always an object, never null |
+| S→C | `session_state` | One-shot approval-state snapshot on every WS reconnect (FR-052, FR-073, FR-081) |
+| S→C | `system_overload` | System at capacity — an agent action was blocked (FR-016, MAJ-009) |
+| S→C | `replay_warning` | Transcript contained duplicate `tool_call_id`s during replay |
+| S→C | `cancel_stage` | Cancel progress notification (B3) — `graceful`, `hard`, or `detached` |
+| S→C | `pong` | Server-originated heartbeat reply to a client `ping` (consumed by SPA for liveness; not surfaced to reducers) |
+| S→C | `session_close_ack` | Acknowledgement that a `session_close` request was processed |
+| S→C | `device_pairing_request` | A remote device requests pairing; SPA shows the approval modal |
 | S→C | `timeout` | System-initiated turn timeout (MAJ-004) |
 | S→C | `compaction` | Context window compacted (MAJ-004) |
-| S→C | `task_status_changed` | Task status updated (MAJ-004) |
 | S→C | `whatsapp_pairing` | WhatsApp linked-device pairing QR/status (#283) |
+| S→C | `notification` | User-facing notification raised for the recipient user (#264); delivered only to that user's connections |
+
+The complete type set, including required fields and per-field constraints, is
+defined in `contracts/asyncapi.yaml` (components: `WsFrameType` enum at
+`contracts/asyncapi.yaml:803-835`, and the per-frame component schemas
+thereafter) and is the implementation reference in `src/lib/ws.ts:14-57`
+(generated AsyncAPI TypeScript types). Any new frame type must be added to
+the AsyncAPI spec first, then to this document.
 
 ---
 

@@ -2,9 +2,7 @@
 
 # WhatsApp Native (whatsmeow)
 
-This document covers **native mode** — the transport used when `use_native: true`. Omnipus connects directly to WhatsApp servers using the [whatsmeow](https://github.com/tulir/whatsmeow) library in-process. No external bridge process is required. Session state is stored in a local SQLite database via `modernc.org/sqlite` (pure Go, no CGo).
-
-For the external bridge mode, see [docs/channels/whatsapp.md](whatsapp.md). Set `use_native: false` (or omit the field) to select that mode instead.
+Omnipus connects to WhatsApp directly using the [whatsmeow](https://github.com/tulir/whatsmeow) library in-process. No external bridge process is required. Session state is stored in a local SQLite database via `modernc.org/sqlite` (pure Go, no CGo).
 
 ## Build requirement
 
@@ -16,7 +14,7 @@ go build ./cmd/...        # native WhatsApp included
 
 `modernc.org/sqlite` is pure Go and does not require CGo, so `CGO_ENABLED=0` builds are supported. The whatsmeow + SQLite stack adds roughly 58 MB to the binary.
 
-> **Lite variant.** If you need the smaller binary and don't use native WhatsApp, build with `-tags lite` (`make build-lite`). The lite build omits whatsmeow; with it, `NewWhatsAppNativeChannel` returns an error and `use_native: true` will fail to start the channel. Use bridge mode (`use_native: false`) on a lite build. The planned UI gating for the lite variant is tracked in [#299](https://github.com/elicify-ai/omnipus/issues/299).
+> **Lite variant.** If you need the smaller binary and don't use native WhatsApp, build with `-tags lite` (`make build-lite`). The lite build omits whatsmeow; with it, `NewWhatsAppNativeChannel` returns an error and the channel will fail to start. The planned UI gating for the lite variant is tracked in [#299](https://github.com/elicify-ai/omnipus/issues/299).
 
 ## Configuration
 
@@ -25,31 +23,25 @@ go build ./cmd/...        # native WhatsApp included
   "channels": {
     "whatsapp": {
       "enabled": true,
-      "use_native": true,
       "session_store_path": "",
       "allow_from": [],
       "reasoning_channel_id": "",
       "group_trigger": {
         "mention_only": false,
         "prefixes": []
-      },
-      "bridge_url": ""
+      }
     }
   }
 }
 ```
 
-Both bridge mode and native mode share the `WhatsAppConfig` struct. Fields relevant to native mode are listed below.
-
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `enabled` | bool | Yes | Activate the WhatsApp channel. The manager also checks `use_native` to select the factory. |
-| `use_native` | bool | Yes | Must be `true` to select the whatsmeow factory. |
+| `enabled` | bool | Yes | Activate the WhatsApp channel. |
 | `session_store_path` | string | No | Directory for the SQLite session database (`store.db`). Defaults to `<workspace>/whatsapp` when empty (typically `~/.omnipus/workspace/whatsapp`). |
 | `allow_from` | []string | No | Allowlist of WhatsApp JIDs (sender phone numbers or group IDs). Empty means all senders are accepted. |
 | `reasoning_channel_id` | string | No | Chat ID where extended reasoning traces are sent separately. |
-| `group_trigger` | object | No | Controls when the bot responds in group chats. `mention_only: true` restricts to @-mentions (reads `ContextInfo.MentionedJID`); `prefixes` lists additional trigger strings. |
-| `bridge_url` | string | No | Unused in native mode; leave empty. |
+| `group_trigger` | object | No | Controls when the bot responds in group chats. `mention_only: true` restricts responses to @-mentions (reads `ContextInfo.MentionedJID`); `prefixes` lists additional trigger strings. |
 
 ## Setup
 

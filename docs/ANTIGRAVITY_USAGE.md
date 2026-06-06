@@ -34,12 +34,14 @@ You can change the default model in `~/.omnipus/config.json` or override it via 
 
 ```bash
 # Override for a single command
-omnipus agent -m "Hello" --model claude-opus-4-6-thinking
+omnipus agent -m "Hello" --model antigravity/gemini-3-flash
 ```
 
 ## 3. Real-World Usage (Coolify/Docker)
 
-Set the `OMNIPUS_AGENTS_DEFAULTS_MODEL` environment variable to select the model, for example `OMNIPUS_AGENTS_DEFAULTS_MODEL=gemini-flash`.
+Set the `OMNIPUS_AGENTS_DEFAULTS_MODEL_NAME` environment variable to select the model, for example `OMNIPUS_AGENTS_DEFAULTS_MODEL_NAME=antigravity/gemini-3-flash`.
+
+> Note: `OMNIPUS_AGENTS_DEFAULTS_MODEL` is the v0 schema form. In a default v1 install the v0 key is not declared on the v1 `AgentsDefaultsConfig.Model` field (`pkg/config/config.go:646`), so a value set there is silently ignored. Use the v1 `..._MODEL_NAME` env var above (or the corresponding `agents.defaults.model_name` JSON key).
 
 For authentication persistence, if you've logged in locally you can copy your credentials to the server:
 
@@ -53,7 +55,7 @@ Alternatively, run the `auth login` command once on the server if you have termi
 
 ### Empty Response
 
-If a model returns an empty reply, it may be restricted for your project. Try `gemini-3-flash` or `claude-opus-4-6-thinking`.
+If a model returns an empty reply, it may be restricted for your project. Try `antigravity/gemini-3-flash` (the only antigravity model string hard-coded in the repo, per `pkg/providers/antigravity_provider.go:21` and `cmd/omnipus/internal/auth/helpers.go:144`).
 
 ### 429 Rate Limit
 
@@ -63,10 +65,10 @@ Antigravity has strict quotas. Omnipus will display the "reset time" in the erro
 
 Ensure you are using a model ID from the `omnipus auth models` list. Use the short ID (e.g., `gemini-3-flash`) not the full path.
 
-## 5. Summary of Working Models
+## 5. Supported Antigravity Models
 
-| Model | Character |
+The only antigravity model string hard-coded in the repository is `gemini-3-flash` (used as the default in `pkg/providers/antigravity_provider.go:21` and as the seed value in `cmd/omnipus/internal/auth/helpers.go:144`). Any other model id returned by `omnipus auth models` is whatever Google's Cloud Code Assist backend reports for the authenticated project at request time — verify against that listing, not this table.
+
+| Model string | Source |
 |---|---|
-| `gemini-3-flash` | Fast, highly available |
-| `gemini-2.5-flash-lite` | Lightweight |
-| `claude-opus-4-6-thinking` | Powerful, includes reasoning |
+| `antigravity/gemini-3-flash` | `pkg/providers/antigravity_provider.go:21` (`antigravityDefaultModel`); `cmd/omnipus/internal/auth/helpers.go:144` |

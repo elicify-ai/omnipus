@@ -79,7 +79,7 @@ Always file via the issue templates — they set the issue **Type** (Bug / Featu
 
 ### Prerequisites
 
-- Go 1.26.3 or later (`go.mod` pins `go 1.26.3`)
+- Go 1.26.4 or later (`go.mod` pins `go 1.26.4`)
 - Node.js 24 or later
 - `make`
 

@@ -65,15 +65,13 @@ Onboarding flow, sandbox behaviour, and the rest of this guide apply identically
 | Local build (`docker build -f docker/Dockerfile .`) | Multi-stage SPA + Go build | `omnipus start` directly |
 | Local build (`docker build -f docker/Dockerfile.heavy .`) | Same SPA + Go build, chromium + python + uv runtime | `omnipus start` directly |
 
-The release image uses `entrypoint.sh` as a first-run guard (see [First-run behavior](#first-run-behavior)). Locally-built images (minimal and heavy) start the gateway directly — they self-bootstrap on the first run.
+The release image uses `entrypoint.sh`, which is now a thin `exec omnipus gateway "$@"` wrapper (no first-run gate). Locally-built images (minimal and heavy) start the gateway directly — they self-bootstrap on the first run.
 
 ---
 
 ## Before you start
 
-> **The release image (`ghcr.io/elicify-ai/omnipus:latest`) will not start without a pre-supplied `config.json`.** Its entrypoint runs a first-run gate that calls `omnipus onboard` (a stub that only prints instructions) and exits cleanly. You must drop a minimal `config.json` into the data volume before the gateway will ever run — both quick-starts below assume this. See [First-run behavior](#first-run-behavior) for the full explanation.
-
-The locally-built image (`docker build -f docker/Dockerfile .`) self-bootstraps via `datamodel.Init()` and does not need a pre-supplied config.
+> The release image (`ghcr.io/elicify-ai/omnipus:latest`) starts the gateway directly on every boot. The previous first-run gate that called `omnipus onboard` and exited was removed (see `docker/entrypoint.sh`); onboarding is now driven from the web UI at `/onboarding` (visit once the gateway is up) or from `docker exec -it <ctr> omnipus onboard`. The default `CMD` includes `--allow-empty` so the gateway comes up before any provider is configured — the SPA onboarding wizard adds the first one. See [First-run behavior](#first-run-behavior) for the full explanation.
 
 ---
 
@@ -82,17 +80,6 @@ The locally-built image (`docker build -f docker/Dockerfile .`) self-bootstraps 
 ```bash
 # Create a local data directory first.
 mkdir -p ./data
-
-# Write a minimal config.json so the gateway can start.
-# Pick a port and use it consistently in both the file and the host mapping.
-cat > ./data/config.json <<'EOF'
-{
-  "version": 1,
-  "gateway": { "host": "127.0.0.1", "port": 5000 },
-  "agents": { "defaults": {}, "list": [] },
-  "providers": []
-}
-EOF
 
 docker run -d \
   -p 127.0.0.1:5000:5000 \
@@ -127,11 +114,10 @@ docker run -d \
 The compose file is at `docker/docker-compose.yml`. Run from the repo root:
 
 ```bash
-# First: create data directory and config.json (same as above), then:
 docker compose -f docker/docker-compose.yml --profile gateway up -d
 ```
 
-The compose file maps `127.0.0.1:5000:5000` and `127.0.0.1:5001:5001` and sets `OMNIPUS_GATEWAY_PORT=5000` + `OMNIPUS_GATEWAY_PREVIEW_PORT=5001` on the gateway service, so the in-container listener matches the host port out of the box. The gateway still requires a pre-supplied `config.json` (same gate as the `docker run` quick-start above).
+The compose file maps `127.0.0.1:5000:5000` and `127.0.0.1:5001:5001` and sets `OMNIPUS_GATEWAY_PORT=5000` + `OMNIPUS_GATEWAY_PREVIEW_PORT=5001` on the gateway service, so the in-container listener matches the host port out of the box. The gateway self-bootstraps on first run (seeded port `5000`, no providers) — the onboarding wizard at `/onboarding` adds the first provider.
 
 Check logs:
 
@@ -157,21 +143,20 @@ docker compose -f docker/docker-compose.yml run --rm omnipus-agent -m "What is 2
 
 ## First-run behavior
 
-The release image (`ghcr.io/elicify-ai/omnipus:latest`) uses `docker/entrypoint.sh`. On every start it checks:
+The release image (`ghcr.io/elicify-ai/omnipus:latest`) uses `docker/entrypoint.sh`, which has been simplified to a single line:
 
+```sh
+exec omnipus gateway "$@"
 ```
-if no workspace/ dir AND no config.json → print setup instructions and exit 0
-else → exec omnipus start
-```
 
-**The check is a gate, not a bootstrapper.** The `omnipus onboard` command is a stub that prints instructions; it does not create a `config.json`. You must supply a `config.json` via volume mount before the gateway will start. Without it, the container exits cleanly on every run.
+There is **no first-run gate**. The container boots straight into the gateway on every start. The image's `CMD` includes `--allow-empty` so the gateway comes up even before any provider is configured — the SPA onboarding wizard at `/onboarding` adds the first one. If you prefer to drive onboarding from the terminal, run `docker exec -it <ctr> omnipus onboard` against the running container.
 
-> The `workspace/` test in the gate is vestigial — `datamodel.Init()` never creates a top-level `~/.omnipus/workspace/` directory, so in practice only the presence of `config.json` matters. Don't waste time creating a `workspace/` directory hoping to satisfy the gate; provide `config.json` instead. (Re-visit this callout when the v0.3 "Rooms" redesign lands — it reintroduces a top-level workspace concept and will change the gate semantics.)
+The previous first-run gate (which called `omnipus onboard` and exited before the gateway could start) was removed; that command was a print-only stub. See issue #159 for the history.
 
-The local-build image has no `entrypoint.sh`. It runs `omnipus start` directly. On the first start the gateway:
+The local-build images (`docker/Dockerfile`, `docker/Dockerfile.heavy`) don't use `entrypoint.sh` — they `exec` the `omnipus` binary directly with `CMD ["gateway", "--allow-empty"]`. On the first start the gateway:
 
-1. Calls `datamodel.Init()`, which creates `~/.omnipus/` subdirectories and writes a minimal `config.json` (seeded port `3000`, no providers).
-2. Boots into onboarding mode. Visit `http://localhost:3000/onboarding` (the seeded port) to complete setup, or override via `OMNIPUS_GATEWAY_PORT`.
+1. Calls `datamodel.Init()`, which creates `~/.omnipus/` subdirectories and writes a minimal `config.json` (seeded port `5000`, no providers).
+2. Boots into onboarding mode. Visit `http://localhost:5000/onboarding` (the seeded port) to complete setup, or override via `OMNIPUS_GATEWAY_PORT`.
 
 ---
 
@@ -183,18 +168,19 @@ The data path inside the container depends on which image you use:
 |---|---|---|
 | `ghcr.io/elicify-ai/omnipus:latest` (release) | `root` | `/root/.omnipus` |
 | Local build (`docker build -f docker/Dockerfile .`) | `omnipus` (UID 1000) | `/home/omnipus/.omnipus` |
+| Local build (`docker build -f docker/Dockerfile.heavy .`) | `omnipus` (UID 1000) | `/home/omnipus/.omnipus` |
 
 The `docker run` and compose examples above use `/root/.omnipus` because they target the release image. If you bind-mount against a locally-built image, change the right-hand side accordingly:
 
 ```bash
 docker run -d \
-  -p 127.0.0.1:3000:3000 \
-  -p 127.0.0.1:3001:3001 \
+  -p 127.0.0.1:5000:5000 \
+  -p 127.0.0.1:5001:5001 \
   -v "$PWD/data:/home/omnipus/.omnipus" \
   omnipus:local
 ```
 
-(The local-build image self-bootstraps via `datamodel.Init()` and uses the seeded port `3000` unless overridden — that's why the example above shows `3000` instead of the release image's `5000` convention.)
+(The local-build image self-bootstraps via `datamodel.Init()` and uses the seeded port `5000` unless overridden.)
 
 Either way, the directory layout is the same:
 

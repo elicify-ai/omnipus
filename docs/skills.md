@@ -103,7 +103,7 @@ Defined at `pkg/tools/skills_install.go:39-179`. Downloads and extracts a skill 
 | `version`  | string  | no       | Defaults to `latest`.                                          |
 | `force`    | boolean | no       | If `true`, removes any existing install before re-installing.  |
 
-The tool holds a process-wide mutex while installing (`pkg/tools/skills_install.go:77-78`). It refuses to overwrite an existing directory unless `force=true`, then delegates to `registry.DownloadAndInstall` (`pkg/skills/clawhub_registry.go:230-308`). That call fetches metadata for the slug, streams the ZIP to a temp file capped at `MaxZipSize` bytes (default 50 MiB, `pkg/skills/clawhub_registry.go:21,400-403`), verifies the SHA-256 of the ZIP against `latestVersion.sha256` from the metadata (`pkg/skills/clawhub_registry.go:288-300`, SEC-09) — on mismatch the install aborts with `hash verification failed` — then extracts via `utils.ExtractZipFile`, which rejects path-traversal entries and any entry with the symlink bit set (`pkg/utils/zip.go:17,53-55`), and finally returns an `InstallResult` with `Verified`, `IsMalwareBlocked`, `IsSuspicious`, and `Summary`. The caller blocks malware-flagged installs outright and surfaces a warning for `IsSuspicious`.
+The tool holds a per-`InstallSkillTool` `sync.Mutex` (declared at `pkg/tools/skills_install.go:25,35`, taken at `pkg/tools/skills_install.go:77-78`) while installing — not a process-wide mutex, so distinct tool instances installed in the same process are not serialized. It refuses to overwrite an existing directory unless `force=true`, then delegates to `registry.DownloadAndInstall` (`pkg/skills/clawhub_registry.go:230-308`). That call fetches metadata for the slug, streams the ZIP to a temp file capped at `MaxZipSize` bytes (default 50 MiB, `pkg/skills/clawhub_registry.go:21,400-403`), verifies the SHA-256 of the ZIP against `latestVersion.sha256` from the metadata (`pkg/skills/clawhub_registry.go:288-300`, SEC-09) — on mismatch the install aborts with `hash verification failed: expected <X> got <Y> — skill may have been tampered with` (`pkg/skills/clawhub_registry.go:295`) — then extracts via `utils.ExtractZipFile`, which rejects path-traversal entries and any entry with the symlink bit set (`pkg/utils/zip.go:17,53-55`), and finally returns an `InstallResult` with `Verified`, `IsMalwareBlocked`, `IsSuspicious`, and `Summary`. The caller blocks malware-flagged installs outright and surfaces a warning for `IsSuspicious`.
 
 Successful installs also write `.skill-origin.json` into the skill directory (`pkg/tools/skills_install.go:181-206`) recording the registry, slug, installed version, and install timestamp — `omnipus skills update` uses this to re-resolve the source registry.
 
@@ -117,7 +117,7 @@ ClawHub is the community-curated skill index, baked into the default config at `
 | Skill metadata       | `/api/v1/skills/{slug}` | GET | Returns slug, display name, summary, `latestVersion.sha256`, moderation flags. |
 | Download             | `/api/v1/download`  | GET    | `?slug=<slug>&version=<ver>`. Returns `application/zip`.         |
 
-Per-registry settings live under `tools.skills.registries.clawhub` (`pkg/config/config.go:1521-1544`): `enabled`, `base_url`, `auth_token_ref` (env-var name resolved at boot), `search_path`, `skills_path`, `download_path`, `timeout`, `max_zip_size`, `max_response_size`. Search responses are size-limited to `MaxResponseSize` bytes (default 2 MiB).
+Per-registry settings live under `tools.skills.registries.clawhub`. The `SkillsRegistriesConfig` struct is at `pkg/config/config.go:1553-1555` and the `ClawHubRegistryConfig` struct (the actual per-registry fields) is at `pkg/config/config.go:1564-1575`: `enabled`, `base_url`, `auth_token_ref` (env-var name resolved at boot), `search_path`, `skills_path`, `download_path`, `timeout`, `max_zip_size`, `max_response_size`. Search responses are size-limited to `MaxResponseSize` bytes (default 2 MiB).
 
 Outbound calls go through `utils.DoRequestWithRetry` and — when the gateway is the caller — an SSRF-safe HTTP client (`pkg/skills/clawhub_registry.go:71-84`, `pkg/skills/installer.go:50-78`) that blocks RFC1918 / metadata-endpoint targets per SEC-24.
 
@@ -152,9 +152,9 @@ The SPA has a top-level **Skills & Tools** route at `/skills` (`src/routes/_app/
 
 `SkillBrowser` is currently a **stub**: it shows "ClawHub registry not yet available" and only supports "Install from file" (uploading a SKILL.md / ZIP). It hard-codes the unavailable message even though the backend `find_skills` tool talks to a live ClawHub. Tracked as issue [#14](https://github.com/elicify-ai/omnipus/issues/14).
 
-The Security settings tab includes a `SkillTrustSection` (`src/components/settings/SkillTrustSection.tsx`) that reads and writes `sandbox.skill_trust` via `GET`/`PUT /api/v1/settings/skill-trust` (`pkg/gateway/rest_skill_trust.go`). All three levels — `block_unverified`, `warn_unverified`, `allow_all` — are selectable, with copy describing the trade-off.
+The Security settings tab includes a `SkillTrustSection` (`src/components/settings/SkillTrustSection.tsx`) that reads and writes `sandbox.skill_trust` via `GET`/`PUT /api/v1/security/skill-trust` (`pkg/gateway/rest_skill_trust.go:31`). All three levels — `block_unverified`, `warn_unverified`, `allow_all` — are selectable, with copy describing the trade-off.
 
-The gateway-side REST API surface for skills is `pkg/gateway/rest.go:2084-2160`: `GET /api/v1/skills` (list), `POST /api/v1/skills/search` (returns 501 today), `POST /api/v1/skills/install` (returns 501), and `DELETE /api/v1/skills/{name}`. The CLI and the `install_skill` tool are the supported install paths until the REST surface lands.
+The gateway-side REST API surface for skills is `pkg/gateway/rest.go:2298` (`HandleSkills`, dispatching on the URL suffix): `GET /api/v1/skills` (list), `POST /api/v1/skills/search` (returns 501 at `pkg/gateway/rest.go:2386`), `POST /api/v1/skills/install` (returns 501 at `pkg/gateway/rest.go:2399`), and `DELETE /api/v1/skills/{name}`. The CLI and the `install_skill` tool are the supported install paths until the REST surface lands.
 
 ## Security
 
@@ -208,7 +208,7 @@ The **Browse Skills** modal in the SPA is a stub. The backend `find_skills` tool
 
 #### REST install endpoints return 501
 
-`POST /api/v1/skills/search` and `POST /api/v1/skills/install` return HTTP 501 (`pkg/gateway/rest.go:2129-2143`). Use the CLI or the in-loop `install_skill` tool.
+`POST /api/v1/skills/search` and `POST /api/v1/skills/install` return HTTP 501 (at `pkg/gateway/rest.go:2386` and `pkg/gateway/rest.go:2399` respectively). Use the CLI or the in-loop `install_skill` tool.
 
 #### GitHub installs are not hash-verified
 

@@ -10,7 +10,7 @@ You don't enable these. They run on every install, by default, with no extra ser
 
 ## Session transcript
 
-Each session has a day-partitioned JSONL file at `~/.omnipus/sessions/<session_id>/<YYYY-MM-DD>.jsonl`. One line per entry, append-only, atomic writes via temp-file-rename.
+Each session has a single JSONL file at `~/.omnipus/agents/<agentID>/sessions/<session-id>/transcript.jsonl` (one line per entry, append-only, atomic writes via temp-file-rename). Note that this is the **unified** store path used by the live runtime; the older `pkg/session/daypartition.go::PartitionStore` writes day-partitioned files under a `sessions/<session_id>/<YYYY-MM-DD>.jsonl` layout for the legacy backend. The replay APIs surface the unified store.
 
 ### Entry types (`pkg/session/daypartition.go:30-40`)
 
@@ -61,11 +61,11 @@ When a turn is cancelled, a dedicated `turn_canceled` entry is appended carrying
 
 ### Replay
 
-The SPA reads the transcript from disk on demand. There's no separate "chat history" database — the JSONL **is** the history. To replay a session in code or in tests, `store.ReadTranscript(sessionID)` returns the entries in order.
+The SPA reads the transcript from disk on demand. There's no separate "chat history" database — the JSONL **is** the history. To replay a session in code or in tests, call `UnifiedStore.ReadTranscript(sessionID)` (`pkg/session/unified.go:555`) — this is the live runtime store, not the legacy `PartitionStore` day-partitioned backend. `ReadTranscript` returns the entries in order.
 
 ## Live event stream
 
-While a turn is running, the agent loop emits typed events into the in-process event bus (`pkg/agent/events.go`). 24 event kinds (`pkg/agent/events.go::EventKind`):
+While a turn is running, the agent loop emits typed events into the in-process event bus (`pkg/agent/events.go`). 26 event kinds (`pkg/agent/events.go::EventKind`, names from `eventKindNames` at `pkg/agent/events.go:84-110`):
 
 | Category | Events |
 |---|---|
@@ -73,9 +73,10 @@ While a turn is running, the agent loop emits typed events into the in-process e
 | **LLM lifecycle** | `llm_request`, `llm_delta`, `llm_response`, `llm_retry`, `empty_response_retry` |
 | **Context management** | `context_compress`, `compaction_retry`, `session_summarize` |
 | **Tool execution** | `tool_exec_start`, `tool_exec_end`, `tool_exec_skipped` |
-| **Sub-turns (sub-agents, spawn)** | `sub_turn_spawn`, `sub_turn_end`, `sub_turn_result_delivered`, `sub_turn_orphan` |
+| **Sub-turns (sub-agents, spawn)** | `subturn_spawn`, `subturn_end`, `subturn_result_delivered`, `subturn_orphan` |
 | **Steering / interrupt** | `steering_injected`, `follow_up_queued`, `interrupt_received` |
 | **System / errors** | `error`, `rate_limit`, `background_process_kill` |
+| **Channel / user-facing** | `whatsapp_pairing`, `notification` |
 
 ### Who consumes the events
 
@@ -97,13 +98,24 @@ Every event carries:
 
 ```go
 type Event struct {
-    Kind      EventKind                  // canonical string on the wire
-    Timestamp time.Time
-    SessionID string
-    AgentID   string
-    Payload   map[string]any             // event-specific fields
+    Kind    EventKind                  // canonical string on the wire
+    Time    time.Time                  // JSON tag "Time"
+    Meta    EventMeta                  // JSON tag "Meta" — see below
+    Payload any                        // event-specific fields
+}
+
+type EventMeta struct {
+    AgentID      string `json:"AgentID"`
+    TurnID       string `json:"TurnID"`
+    ParentTurnID string `json:"ParentTurnID"`
+    SessionKey   string `json:"SessionKey"` // NOT "SessionID"
+    Iteration    int    `json:"Iteration"`
+    TracePath    string `json:"TracePath"`
+    Source       string `json:"Source"`
 }
 ```
+
+Note: the Go struct uses the field name `SessionKey` (not `SessionID`) on the `Meta` substruct. The legacy `SessionID` field on the top-level `Event` struct is no longer present — call sites that read correlation IDs use `Meta.SessionKey`. The wire field is a JSON object (`"Meta": {...}`), not flat top-level keys.
 
 For `tool_exec_start` the payload includes the tool name, arguments preview, and iteration. For `llm_request` the payload includes the model, message count, token budget, and tool list size. Full reference: read the call sites of `eventBus.Publish` in `pkg/agent/loop.go`.
 

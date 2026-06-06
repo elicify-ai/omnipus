@@ -142,7 +142,10 @@ is required unless a default is listed.
 | `cerebras/` | `https://api.cerebras.ai/v1` |
 | `qwen/` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | `qwen-intl/` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
+| `qwen-international/` | (alias of `qwen-intl/`) |
+| `dashscope-intl/` | (alias of `qwen-intl/`) |
 | `qwen-us/` | `https://dashscope-us.aliyuncs.com/compatible-mode/v1` |
+| `dashscope-us/` | (alias of `qwen-us/`) |
 | `mistral/` | `https://api.mistral.ai/v1` |
 | `volcengine/` | `https://ark.cn-beijing.volces.com/api/v3` |
 | `vllm/` | `http://localhost:8000/v1` |
@@ -154,7 +157,10 @@ is required unless a default is listed.
 | `shengsuanyun/` | `https://router.shengsuanyun.com/api/v1` |
 | `vivgrid/` | `https://api.vivgrid.com/v1` |
 | `coding-plan/` | `https://coding-intl.dashscope.aliyuncs.com/v1` |
+| `alibaba-coding/` | (alias of `coding-plan/`) |
+| `qwen-coding/` | (alias of `coding-plan/`) |
 | `coding-plan-anthropic/` | Alibaba Coding Plan with Anthropic-compatible API |
+| `alibaba-coding-anthropic/` | (alias of `coding-plan-anthropic/`) |
 | `mimo/` | `https://api.xiaomimimo.com/v1` |
 
 If no prefix is specified, `openai` is used as the default.
@@ -301,12 +307,14 @@ Set the credential with `omnipus credentials set NAME value` and add
 `ollama`, `vllm`), supplying only `api_base` to a local server is also
 accepted.
 
-### `api_key` field silently ignored
+### `api_key` field is dropped from v1
 
 The `api_key` plaintext field exists only in the v0 `modelConfigV0` struct
-used during migration. The current v1 `ModelConfig` has no `api_key` JSON
-field — a key written there will be silently dropped by the JSON decoder. Use
-`api_key_ref` instead.
+(`pkg/config/config_old.go:496`) used during migration. The current v1
+`ModelConfig` (`pkg/config/config.go:1067`) has **no** `api_key` JSON field
+at all — there is no `omitempty` or sentinel entry. A key written at
+`providers[i].api_key` is dropped (not just ignored) by the JSON decoder.
+Use `api_key_ref` instead.
 
 ## Need Help?
 
