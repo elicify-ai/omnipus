@@ -1079,17 +1079,11 @@ func setupAndStartServices(
 
 	agentLoop.SetChannelManager(runningServices.ChannelManager)
 	agentLoop.SetMediaStore(runningServices.MediaStore)
-	// Wire the agent loop as the CancelInterceptor so Tier B channels can fire
-	// /cancel via text-parsing (FR-2). Must happen after SetChannelManager so
-	// the Manager already has its channels map populated.
-	runningServices.ChannelManager.SetCancelInterceptor(agentLoop)
-	// #283: bridge WhatsApp native pairing (QR/status) → agent event bus so the
-	// per-connection WS forwarder broadcasts a whatsapp_pairing frame to the SPA.
-	runningServices.ChannelManager.SetPairingObserver(
-		func(channelID string, status channels.PairingStatus, qr, message string) {
-			agentLoop.EmitWhatsAppPairing(channelID, status, qr, message)
-		},
-	)
+	// Wire all observer callbacks (CancelInterceptor, PairingObserver, …) via
+	// the shared helper so this path stays in sync with restartServices.
+	// Must happen after SetChannelManager so the Manager's channels map is
+	// already populated when SetCancelInterceptor is called.
+	wireChannelManager(runningServices.ChannelManager, agentLoop)
 
 	if transcriber := voice.DetectTranscriber(cfg, runningServices.bundle); transcriber != nil {
 		agentLoop.SetTranscriber(transcriber)
@@ -1598,6 +1592,29 @@ func handleConfigReload(
 	return nil
 }
 
+// wireChannelManager consolidates all observer wiring that must be (re-)applied
+// whenever a ChannelManager becomes active — both at initial startup and after
+// every ChannelManager.Reload() call in restartServices.
+//
+// Callers are responsible for calling SetChannelManager on the agent loop
+// before invoking this helper, because SetCancelInterceptor requires that the
+// Manager's channels map is already populated.
+func wireChannelManager(cm *channels.Manager, al *agent.AgentLoop) {
+	// Wire the agent loop as the CancelInterceptor so Tier B channels can fire
+	// /cancel via text-parsing (FR-2).
+	cm.SetCancelInterceptor(al)
+	// #283 / #368: bridge WhatsApp native pairing (QR/status) → agent event bus
+	// so the per-connection WS forwarder broadcasts a whatsapp_pairing frame to
+	// the SPA.  Re-wiring on reload ensures the observer survives channel restarts
+	// (the Manager creates new channel instances on Reload, which clears the old
+	// observer pointer).
+	cm.SetPairingObserver(
+		func(channelID string, status channels.PairingStatus, qr, message string) {
+			al.EmitWhatsAppPairing(channelID, status, qr, message)
+		},
+	)
+}
+
 func restartServices(
 	al *agent.AgentLoop,
 	runningServices *services,
@@ -1679,11 +1696,18 @@ func restartServices(
 	}
 
 	al.SetChannelManager(runningServices.ChannelManager)
-	runningServices.ChannelManager.SetCancelInterceptor(al)
+	// Wire observers before Reload so channels started by Reload already have
+	// the CancelInterceptor and PairingObserver set.  Re-wire after Reload as
+	// well: Reload may create new channel instances whose observer pointer was
+	// cleared, so we call wireChannelManager again to ensure the observers are
+	// always live after the reload completes.
+	wireChannelManager(runningServices.ChannelManager, al)
 
 	if err = runningServices.ChannelManager.Reload(context.Background(), cfg, runningServices.bundle); err != nil {
 		return fmt.Errorf("error reload channels: %w", err)
 	}
+	// Re-wire after Reload: channel instances may have been recreated.
+	wireChannelManager(runningServices.ChannelManager, al)
 	fmt.Println("  ✓ Channels restarted.")
 
 	enabledChannels := runningServices.ChannelManager.GetEnabledChannels()

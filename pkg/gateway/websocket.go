@@ -27,6 +27,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/agent"
 	"github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/channels"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/media"
 	"github.com/dapicom-ai/omnipus/pkg/pairing"
@@ -134,6 +135,14 @@ type WSHandler struct {
 	// Set by the gateway after construction (nil = disabled, which is the test default).
 	toolStore *toolResultStore
 
+	// lastPairingState caches the most-recently-emitted whatsapp_pairing frame
+	// bytes for each channelID (key: string, value: []byte).  Written by the
+	// eventForwarder when status=="code"; deleted on terminal statuses (linked,
+	// timeout, error).  Used by subscribePairingInterest to re-emit the cached
+	// QR to late subscribers so the SPA doesn't have to wait for the next QR
+	// rotation before showing a code (#368).
+	lastPairingState sync.Map
+
 	upgrader websocket.Upgrader
 }
 
@@ -198,6 +207,32 @@ func (c *wsConn) setPairingInterest(channelID string, active bool) {
 		return
 	}
 	delete(c.pairingSubs, channelID)
+}
+
+// subscribePairingInterest registers or clears this connection's interest in
+// channelID's whatsapp_pairing frames, and immediately re-emits the cached QR
+// frame (if any) when active==true so late subscribers don't wait for the next
+// QR rotation (#368).
+func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, active bool) {
+	wc.setPairingInterest(channelID, active)
+	if !active {
+		return
+	}
+	// Re-emit the last-seen QR frame for this channel, if one is cached and the
+	// QR is still "live" (terminal states are deleted from the map by the
+	// eventForwarder).  Non-blocking: if the send buffer is full we skip — the
+	// next natural QR rotation will deliver the code.
+	if cached, ok := h.lastPairingState.Load(channelID); ok {
+		frameBytes, ok := cached.([]byte)
+		if ok && len(frameBytes) > 0 {
+			select {
+			case wc.sendCh <- frameBytes:
+			default:
+				slog.Warn("ws: could not re-emit cached pairing QR to late subscriber — send buffer full",
+					"channel_id", channelID)
+			}
+		}
+	}
 }
 
 // wantsPairing reports whether this connection has subscribed to channelID's
@@ -800,7 +835,7 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 				})
 				continue
 			}
-			wc.setPairingInterest(f.ChannelId, f.Active)
+			h.subscribePairingInterest(wc, f.ChannelId, f.Active)
 		default:
 			slog.Debug("ws: unknown frame type ignored", "type", peek.Type, "chat_id", chatID)
 		}
@@ -2201,9 +2236,6 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			if !ok {
 				continue
 			}
-			if !wc.wantsPairing(p.ChannelID) {
-				continue
-			}
 			pairF := generated.WhatsAppPairingFrame{
 				Type:      string(generated.WsFrameTypeWhatsappPairing),
 				ChannelId: p.ChannelID,
@@ -2216,6 +2248,22 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			if p.Message != "" {
 				msg := p.Message
 				pairF.Message = &msg
+			}
+			// #368: maintain the per-channel QR cache so late subscribers (e.g.
+			// a tab that opens the pairing UI after the first QR fires) receive
+			// the last-seen code immediately on subscribe rather than waiting for
+			// the next QR rotation.  Only "code" (QR available) is cached;
+			// terminal states are evicted so stale QRs are not re-emitted.
+			switch p.Status {
+			case channels.PairingStatusCode:
+				if frameBytes, merr := json.Marshal(pairF); merr == nil {
+					h.lastPairingState.Store(p.ChannelID, frameBytes)
+				}
+			case channels.PairingStatusLinked, channels.PairingStatusTimeout, channels.PairingStatusError:
+				h.lastPairingState.Delete(p.ChannelID)
+			}
+			if !wc.wantsPairing(p.ChannelID) {
+				continue
 			}
 			sendConnGenFrame(wc, string(generated.WsFrameTypeWhatsappPairing), pairF)
 		case agent.EventKindNotification:
