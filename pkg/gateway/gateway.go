@@ -126,9 +126,9 @@ type services struct {
 
 	// restAPIRef holds a pointer to the restAPI constructed by setupAndStartServices.
 	// Used by RunContextWithOptions to update builtinRegistry after live-deps are wired
-	// (the M16 re-population at line ~689 creates a fresh *BuiltinRegistry that must
-	// reach the already-constructed restAPI; storing the ref here avoids
-	// a larger refactor of setupAndStartServices).
+	// (the M16 live-deps re-population in RunContextWithOptions creates a fresh
+	// *BuiltinRegistry that must reach the already-constructed restAPI; storing the
+	// ref here avoids a larger refactor of setupAndStartServices).
 	restAPIRef *restAPI
 }
 
@@ -907,7 +907,8 @@ func executeReload(
 	// Defers run LIFO: ClearReloadPending fires first (unblocks triggerReloadAndWait pollers),
 	// then reloading fires (allows the next CAS to succeed). A concurrent TriggerReload
 	// that races between these two defers gets ErrReloadAlreadyInProgress and polls — safe
-	// because triggerReloadAndWait treats that error as "poll anyway" (see Fix 3).
+	// because triggerReloadAndWait polls through ErrReloadAlreadyInProgress so the pending
+	// flag is never cleared prematurely.
 	defer runningServices.reloading.Store(false)
 	defer agentLoop.ClearReloadPending()
 
@@ -1335,8 +1336,8 @@ func setupAndStartServices(
 		notifStore:      runningServices.notifStore,      // #264: notification center
 	}
 	// Stash the api ref so RunContextWithOptions can update builtinRegistry
-	// after the M16 live-deps re-population (the :689 reassignment creates a fresh
-	// *BuiltinRegistry that would otherwise not reach the already-constructed api).
+	// after the M16 live-deps re-population (which creates a fresh *BuiltinRegistry
+	// that would otherwise not reach the already-constructed api).
 	runningServices.restAPIRef = api
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/sessions", api.withAuth(api.HandleSessions))
 	// /api/v1/sessions/ handles: sessions CRUD AND the tool-results sub-resource
@@ -1593,8 +1594,8 @@ func handleConfigReload(
 }
 
 // wireChannelManager consolidates all observer wiring that must be (re-)applied
-// whenever a ChannelManager becomes active.  It is called TWICE per reload in
-// restartServices:
+// whenever a ChannelManager becomes active.  It is called once at initial boot
+// (in setupAndStartServices) and twice per reload (in restartServices):
 //
 //  1. Before ChannelManager.Reload() — so channels whose Start() runs inside
 //     Reload already have the CancelInterceptor and PairingObserver set when

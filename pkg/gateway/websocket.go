@@ -138,15 +138,17 @@ type WSHandler struct {
 	// lastPairingState caches the most-recently-emitted whatsapp_pairing frame
 	// bytes for each channelID (key: string, value: []byte).  Written by the
 	// eventForwarder when status=="code"; deleted on terminal statuses (linked,
-	// timeout, error) and on any unrecognised status so stale codes are never
-	// shown.  Used by subscribePairingInterest to re-emit the cached QR to late
-	// subscribers (#368).
+	// error), non-terminal QR-rotation status (timeout — a fresh code follows
+	// immediately), known waiting status, and any future unknown status so stale
+	// codes are never shown.  Used by subscribePairingInterest to re-emit the
+	// cached QR to late subscribers (#368).
 	//
 	// WHY a cache is necessary: whatsmeow is not request-driven — it emits QR
-	// codes on its own ~20-second rotation schedule.  A browser tab that opens
-	// the pairing UI after the first QR has fired would otherwise have to wait
-	// up to 20 s before seeing any code.  The cache delivers the last-seen code
-	// immediately on subscribe via subscribePairingInterest.
+	// codes on its own rotation schedule (up to ~60 s for the first code, ~20 s
+	// for subsequent codes on whatsmeow's rotation schedule).  A browser tab
+	// that opens the pairing UI after the first QR has fired would otherwise
+	// have to wait up to ~60 s before seeing any code.  The cache delivers the
+	// last-seen code immediately on subscribe via subscribePairingInterest.
 	lastPairingState sync.Map
 
 	upgrader websocket.Upgrader
@@ -220,11 +222,12 @@ func (c *wsConn) setPairingInterest(channelID string, active bool) {
 // frame (if any) when active==true so late subscribers don't wait for the next
 // QR rotation (#368).
 //
-// WHY the cache is needed: whatsmeow emits QR codes on its own ~20-second
-// rotation schedule and is not request-driven — there is no way to ask it to
-// re-send the current QR on demand.  A subscriber that arrives between
-// rotations would otherwise wait up to 20 s before seeing a code.  The cache
-// lets us deliver the last-seen code immediately on subscribe.
+// WHY the cache is needed: whatsmeow emits QR codes on its own rotation
+// schedule (up to ~60 s for the first code, ~20 s for subsequent codes on
+// whatsmeow's rotation schedule) and is not request-driven — there is no way
+// to ask it to re-send the current QR on demand.  A subscriber that arrives
+// between rotations would otherwise wait up to ~60 s before seeing a code.
+// The cache lets us deliver the last-seen code immediately on subscribe.
 func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, active bool) {
 	wc.setPairingInterest(channelID, active)
 	if !active {
@@ -240,6 +243,8 @@ func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, activ
 		frameBytes, ok := cached.([]byte)
 		if ok && len(frameBytes) > 0 {
 			sendRawFrameBytes(wc, string(generated.WsFrameTypeWhatsappPairing), frameBytes)
+		} else if !ok {
+			slog.Error("ws: lastPairingState held non-[]byte value, skipping re-emit", "channel_id", channelID)
 		}
 	}
 }
@@ -830,6 +835,13 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 			// #283 (Option B): scope whatsapp_pairing frames to the connection(s)
 			// viewing a channel's pairing UI so the QR secret isn't broadcast to
 			// every admin tab. active=true subscribes this conn; false clears it.
+			if wc.role != config.UserRoleAdmin {
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type:    string(generated.WsFrameTypeError),
+					Message: "whatsapp_pairing_subscribe requires admin role",
+				})
+				continue
+			}
 			var f generated.WhatsAppPairingSubscribeFrame
 			if err := json.Unmarshal(data, &f); err != nil {
 				slog.Warn("ws: malformed whatsapp_pairing_subscribe frame", "error", err)
