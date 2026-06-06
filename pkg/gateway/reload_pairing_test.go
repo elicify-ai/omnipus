@@ -97,8 +97,6 @@ func TestLastPairingState_Eviction(t *testing.T) {
 		status := status
 		t.Run("evict_on_"+string(status), func(t *testing.T) {
 			b := agent.NewEventBus()
-			defer b.Close()
-
 			h := makeMinimalHandler()
 			wc, _ := makeForwarderTestConn(64)
 			done := runForwarder(h, wc, "chat-x", b)
@@ -239,6 +237,7 @@ func TestWireChannelManager_ObserverSurvivesChannelRecreation(t *testing.T) {
 
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	t.Cleanup(func() { al.Stop() })
 
 	// NewManagerForTesting creates a Manager with no channels (no credentials needed).
 	// The pairingObserver field starts nil.
