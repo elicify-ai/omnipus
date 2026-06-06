@@ -377,7 +377,7 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	// Reload in-memory config so withAuth middleware picks up the new token hash.
 	// Reload failure is non-fatal for login — the token is on disk and will be
 	// picked up on the next config poll.
-	if err := a.awaitReload(); err != nil {
+	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Warn("auth: hot-reload after login failed; token active after next restart", "error", err)
 	}
 
@@ -529,7 +529,7 @@ func (a *restAPI) HandleRegisterAdmin(w http.ResponseWriter, r *http.Request) {
 
 	// Reload in-memory config so withAuth middleware picks up the new token hash immediately.
 	// Reload failure is non-fatal — token is on disk and active after next config poll.
-	if err := a.awaitReload(); err != nil {
+	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Warn("auth: hot-reload after register-admin failed; token active after next restart", "error", err)
 	}
 
@@ -593,7 +593,7 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "logout failed")
 		return
 	}
-	if err := a.awaitReload(); err != nil {
+	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Warn("auth: hot-reload after logout failed", "error", err)
 	}
 	// Revoke both browser-side cookies (session + CSRF). Defense-in-depth:
@@ -661,6 +661,10 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 				return ErrInvalidCredentials
 			}
 			um["password_hash"] = string(newHash)
+			// Invalidate all existing sessions so the user must re-authenticate
+			// with the new password. Clearing both hashes mimics HandleLogout.
+			um["token_hash"] = ""
+			um["session_token_hash"] = ""
 			return nil
 		}
 		return ErrUserNotFound
@@ -677,10 +681,15 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "password change failed")
 		return
 	}
-	if err := a.awaitReload(); err != nil {
+	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Warn("auth: hot-reload after change-password failed", "error", err)
 	}
-	jsonOK(w, gen.OperationResult{Success: true})
+	// Revoke the caller's browser-side cookies. Old bearer tokens and session
+	// cookies are now invalid (hashes cleared above). The SPA must redirect to
+	// login. HTTP 205 Reset Content signals that the client should reset its view.
+	middleware.ClearSessionCookie(w, r)
+	middleware.ClearCSRFCookie(w, r)
+	w.WriteHeader(http.StatusResetContent)
 }
 
 // generateUserToken creates a random bearer token for authentication.
@@ -692,15 +701,16 @@ func generateUserToken(_ string) (string, error) {
 	return "omnipus_" + hex.EncodeToString(bytes), nil
 }
 
-// awaitReload triggers a config reload and waits briefly for it to complete.
-// Returns an error when reload fails so callers can surface requires_restart to
-// the admin — disk write succeeded, but in-memory state is not yet updated.
+// triggerReloadAndWait triggers a config reload and polls until the in-memory
+// config has been updated (up to a 5-second deadline). Returns an error when
+// the reload fails to start; reload-completion timeout is treated as best-effort
+// (we return nil so callers are not blocked indefinitely).
 //
 // The special case "reload not configured" (reloadFunc == nil) is treated as a
 // no-op rather than an error: this condition is normal in unit tests where the
 // full gateway reload pipeline is not wired. Production always configures the
 // reload function during startup.
-func (a *restAPI) awaitReload() error {
+func (a *restAPI) triggerReloadAndWait() error {
 	if err := a.agentLoop.TriggerReload(); err != nil {
 		if errors.Is(err, agent.ErrReloadNotConfigured) {
 			// Unit-test environment — no reload pipeline wired; treat as no-op.
@@ -709,6 +719,13 @@ func (a *restAPI) awaitReload() error {
 		slog.Error("config reload failed", "error", err)
 		return err
 	}
-	time.Sleep(100 * time.Millisecond)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !a.agentLoop.IsReloadPending() {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// Reload may still be running; return nil so callers are not blocked indefinitely.
 	return nil
 }

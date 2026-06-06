@@ -204,9 +204,10 @@ func SeedConfig(cfg *config.Config) bool {
 		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
 		// Ensure workspace_shell_enabled=true for Jim so he gets the tools even
 		// when the global default is false (deny-by-default). Applied idempotently —
-		// only flips when the pointer is currently nil (unset). Operator explicit
-		// false is left unchanged.
-		if ca.ID == IDJim && cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil {
+		// fires when nil (unset) OR when currently false so that upgrades from
+		// validator.go's old nil→&false materialization are also fixed.
+		// Operator explicit false can always be re-set after seeding.
+		if ca.ID == IDJim && (cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil || !*cfg.Sandbox.Experimental.WorkspaceShellEnabled) {
 			t := true
 			cfg.Sandbox.Experimental.WorkspaceShellEnabled = &t
 			modified = true
@@ -246,9 +247,8 @@ func SeedConfig(cfg *config.Config) bool {
 		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
 		// Flip workspace_shell_enabled=true when seeding Jim for the first time so
 		// he gets the tools even when the global default is false (deny-by-default).
-		// Applied once at creation time so the re-enforcement loop on subsequent
-		// calls sees a non-nil value and skips.
-		if ca.ID == IDJim && cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil {
+		// Fires when nil OR false (covers upgrades from old validator.go materialization).
+		if ca.ID == IDJim && (cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil || !*cfg.Sandbox.Experimental.WorkspaceShellEnabled) {
 			t := true
 			cfg.Sandbox.Experimental.WorkspaceShellEnabled = &t
 		}

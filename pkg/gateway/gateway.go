@@ -903,6 +903,7 @@ func executeReload(
 	allowEmptyStartup bool,
 ) error {
 	defer runningServices.reloading.Store(false)
+	defer agentLoop.ClearReloadPending()
 
 	// Snapshot all service fields that restartServices mutates so they can be
 	// restored atomically if the reload fails. bundle and ChannelManager are
@@ -960,6 +961,12 @@ func executeReload(
 			newCfg.RegisterSensitiveValues(reloadValues)
 		}
 	}
+	// Apply default agent configuration (Jim workspace_shell, Mia default flag, etc.)
+	// so hot-reload has the same seeding guarantees as initial boot.
+	if modified := coreagent.SeedConfig(newCfg); modified {
+		slog.Info("config reload: SeedConfig applied default agent configuration")
+	}
+
 	if err := handleConfigReload(
 		ctx,
 		agentLoop,

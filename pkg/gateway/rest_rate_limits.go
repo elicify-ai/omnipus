@@ -137,7 +137,7 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if reloadErr := a.awaitReload(); reloadErr != nil {
+	if reloadErr := a.triggerReloadAndWait(); reloadErr != nil {
 		if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
 			newCfg := a.agentLoop.GetConfig().Sandbox.RateLimits
 			if err := audit.EmitSecuritySettingChange(

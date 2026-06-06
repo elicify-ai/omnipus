@@ -170,7 +170,7 @@ func (a *restAPI) HandleUserCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.awaitReload(); err != nil {
+	if err := a.triggerReloadAndWait(); err != nil {
 		emitUserAudit(r, a, "gateway.users."+body.Username, nil, map[string]any{
 			"username": body.Username,
 			"role":     string(body.Role),
@@ -282,7 +282,7 @@ func (a *restAPI) HandleUserDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if reloadErr := a.awaitReload(); reloadErr != nil {
+	if reloadErr := a.triggerReloadAndWait(); reloadErr != nil {
 		// Old value contains {username, role} only — no hash fields.
 		emitUserAudit(r, a, "gateway.users."+username, map[string]any{
 			"username": username,
@@ -380,7 +380,7 @@ func (a *restAPI) HandleUserChangeRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if reloadErr := a.awaitReload(); reloadErr != nil {
+	if reloadErr := a.triggerReloadAndWait(); reloadErr != nil {
 		emitUserAudit(r, a, "gateway.users."+username+".role", oldRole, string(body.Role))
 		slog.Info(
 			"rest: user role changed (restart required)",
@@ -478,7 +478,7 @@ func (a *restAPI) HandleUserResetPassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if reloadErr := a.awaitReload(); reloadErr != nil {
+	if reloadErr := a.triggerReloadAndWait(); reloadErr != nil {
 		emitUserAudit(r, a, "gateway.users."+username+".password",
 			map[string]any{"password": ""},
 			map[string]any{"password": body.Password},

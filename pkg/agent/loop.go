@@ -94,7 +94,8 @@ type AgentLoop struct {
 	// diagnostics; incremented atomically from resolveMediaRefs hot path.
 	mediaRefsDropped atomic.Int64
 
-	reloadFunc func() error
+	reloadFunc    func() error
+	reloadPending atomic.Bool // set by TriggerReload; cleared by ClearReloadPending (called from gateway executeReload)
 
 	// Task management
 	taskStore    *taskstore.TaskStore
@@ -1120,7 +1121,7 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 		// The tool is per-agent because it needs the agent's workspace path,
 		// sandbox profile, and shell policy — the same reason web_serve dev
 		// mode is wired here rather than in the process-level BuiltinRegistry.
-		if resolveBoolWithDefault(cfg.Sandbox.Experimental.WorkspaceShellEnabled, true) {
+		if resolveBoolWithDefault(cfg.Sandbox.Experimental.WorkspaceShellEnabled, false) {
 			// Resolve SandboxProfile for this agent from the global config.
 			// We scan cfg.Agents.List for a matching entry; if not found we
 			// use the global DefaultProfile (which itself defaults to workspace).
@@ -1212,7 +1213,7 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 		"served_subdirs_ready":      deps.ServedSubdirs != nil,
 		"dev_server_registry_ready": deps.DevServerRegistry != nil,
 		"egress_proxy_ready":        deps.EgressProxy != nil,
-		"workspace_shell_enabled":   resolveBoolWithDefault(cfg.Sandbox.Experimental.WorkspaceShellEnabled, true),
+		"workspace_shell_enabled":   resolveBoolWithDefault(cfg.Sandbox.Experimental.WorkspaceShellEnabled, false),
 	})
 }
 
@@ -2814,11 +2815,31 @@ func (al *AgentLoop) wireSysagentDepsLocked(registry *AgentRegistry, deps *systo
 // an atomic CompareAndSwap that serializes concurrent calls — only one reload
 // can be in flight at a time. A second concurrent call returns an error
 // ("reload already in progress") rather than queuing a second reload.
+//
+// Sets reloadPending=true so callers can poll IsReloadPending() to wait for
+// completion. The gateway's executeReload calls ClearReloadPending when done.
 func (al *AgentLoop) TriggerReload() error {
 	if al.reloadFunc == nil {
 		return ErrReloadNotConfigured
 	}
-	return al.reloadFunc()
+	al.reloadPending.Store(true)
+	if err := al.reloadFunc(); err != nil {
+		al.reloadPending.Store(false)
+		return err
+	}
+	return nil
+}
+
+// IsReloadPending reports whether a config reload is currently in flight.
+// Returns false once ClearReloadPending is called by the executing reload.
+func (al *AgentLoop) IsReloadPending() bool {
+	return al.reloadPending.Load()
+}
+
+// ClearReloadPending marks the in-flight reload as complete.
+// Called by gateway.executeReload (via defer) after the reload finishes.
+func (al *AgentLoop) ClearReloadPending() {
+	al.reloadPending.Store(false)
 }
 
 var audioAnnotationRe = regexp.MustCompile(`\[(voice|audio)(?::[^\]]*)?\]`)

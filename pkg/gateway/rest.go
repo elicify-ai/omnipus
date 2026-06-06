@@ -1449,10 +1449,10 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 		return
 	}
 	// Reload the live config so the deleted agent is no longer in memory.
-	// awaitReload sleeps 100ms after triggering so the in-memory config is
+	// triggerReloadAndWait polls until reload completes (or 5s deadline) so the in-memory config is
 	// updated before the 204 response is sent back to the caller (prevents a
 	// race where an immediate GET /sessions/:id still sees agent_removed=false).
-	if err := a.awaitReload(); err != nil {
+	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Error("rest: deleteAgent: reload failed", "agent_id", id, "error", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -4587,12 +4587,12 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 	// NOT start or stop the channel. Reload so ChannelManager.Reload applies the diff —
 	// starting a newly-enabled channel (e.g. whatsapp_native, which then emits its
 	// pairing QR over the whatsapp_pairing WS frame) or stopping a disabled one. The
-	// Reload path is crash-safe and name-correct as of #313. awaitReload treats an
+	// Reload path is crash-safe and name-correct as of #313. triggerReloadAndWait treats an
 	// unwired reload pipeline (the unit-test environment) as a no-op and only returns an
 	// error on a genuine reload failure, which we surface rather than reporting a false
 	// success (the flag persisted but the channel did not start).
 	if a.agentLoop != nil {
-		if err := a.awaitReload(); err != nil {
+		if err := a.triggerReloadAndWait(); err != nil {
 			verb := "start"
 			if !enabled {
 				verb = "stop"
