@@ -484,7 +484,7 @@ func TestWorkspaceShellEnabled_NilPassthrough(t *testing.T) {
 	// nil must survive validateBootConfig — per-agent resolution handles the default.
 	if cfg.Sandbox.Experimental.WorkspaceShellEnabled != nil {
 		t.Errorf(
-			"validateBootConfig must not materialise nil WorkspaceShellEnabled; got %v",
+			"validateBootConfig must not materialize nil WorkspaceShellEnabled; got %v",
 			*cfg.Sandbox.Experimental.WorkspaceShellEnabled,
 		)
 	}

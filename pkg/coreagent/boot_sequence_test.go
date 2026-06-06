@@ -5,7 +5,7 @@
 package coreagent_test
 
 // boot_sequence_test.go covers the Wave 4 hotfix/v0.1.1 ordering fix:
-// validateBootConfig must NOT materialise nil → &false for WorkspaceShellEnabled
+// validateBootConfig must NOT materialize nil → &false for WorkspaceShellEnabled
 // (tested separately in pkg/config/sandbox_test.go::TestWorkspaceShellEnabled_NilPassthrough),
 // AND SeedConfig must flip both nil AND &false to &true for Jim.
 //
@@ -26,7 +26,7 @@ import (
 // Scenario A — nil initial state (fresh install / fixed validator):
 // SeedConfig must set WorkspaceShellEnabled = &true for Jim when the field is nil.
 //
-// Scenario B — &false initial state (old-validator materialisation):
+// Scenario B — &false initial state (old-validator materialization):
 // SeedConfig must flip &false → &true for Jim so upgrades from the broken
 // validator.go (which wrote &false) are also healed.
 //
@@ -37,7 +37,7 @@ func TestSeedConfig_JimGetsWorkspaceShell(t *testing.T) {
 	t.Run("nil_initial_state_jim_gets_true", func(t *testing.T) {
 		cfg := config.DefaultConfig()
 		// Precondition: WorkspaceShellEnabled is nil (fresh install,
-		// or validator correctly passed nil through without materialising &false).
+		// or validator correctly passed nil through without materializing &false).
 		cfg.Sandbox.Experimental.WorkspaceShellEnabled = nil
 
 		// Add Jim to the list so the re-enforcement branch fires
@@ -102,7 +102,7 @@ func TestSeedConfig_JimGetsWorkspaceShell(t *testing.T) {
 //
 // This test uses a config with only a non-core custom agent. SeedConfig will
 // add all 5 core agents (including Jim) on the new-agent path, which will also
-// set the flag — that is the EXPECTED correct behaviour. What we assert here is
+// set the flag — that is the EXPECTED correct behavior. What we assert here is
 // that (a) the validator does not set it before SeedConfig, and (b) after
 // SeedConfig the flag is true because Jim was seeded, which is correct.
 //
@@ -155,7 +155,7 @@ func TestSeedConfig_NonJimAgent_WorkspaceShellPassthrough(t *testing.T) {
 		// Verify custom agent is not locked by SeedConfig.
 		coreagent.SeedConfig(cfg)
 
-		// Jim was seeded fresh → flag must be &true (expected correct behaviour).
+		// Jim was seeded fresh → flag must be &true (expected correct behavior).
 		if cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil {
 			t.Fatal("SeedConfig must set WorkspaceShellEnabled=true when Jim is newly seeded")
 		}

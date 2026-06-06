@@ -94,7 +94,6 @@ func TestLastPairingState_Eviction(t *testing.T) {
 	}
 
 	for _, status := range evictStatuses {
-		status := status
 		t.Run("evict_on_"+string(status), func(t *testing.T) {
 			b := agent.NewEventBus()
 			h := makeMinimalHandler()
@@ -165,7 +164,9 @@ func TestWSHandler_PairingSubscribe_RequiresAdmin(t *testing.T) {
 
 	// Pre-seed the cache so we can confirm subscribePairingInterest was NOT called
 	// (if it were called, the cached frame would appear in sendCh).
-	h.lastPairingState.Store("whatsapp_native", []byte(`{"type":"whatsapp_pairing","qr":"SHOULD-NOT-DELIVER","status":"code","channel_id":"whatsapp_native"}`))
+	h.lastPairingState.Store("whatsapp_native", []byte(
+		`{"type":"whatsapp_pairing","qr":"SHOULD-NOT-DELIVER","status":"code","channel_id":"whatsapp_native"}`,
+	))
 
 	// Create a non-admin wsConn.
 	wc, ch := makeForwarderTestConn(64)

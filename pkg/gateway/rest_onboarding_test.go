@@ -236,7 +236,6 @@ func TestHandleCompleteOnboarding_RejectsInvalidUsername(t *testing.T) {
 	}
 
 	for _, tc := range invalidCases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			api := newTestRestAPIWithHomeAuth(t)
 
@@ -271,7 +270,8 @@ func TestHandleCompleteOnboarding_RejectsInvalidUsername(t *testing.T) {
 			var resp map[string]any
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 			errMsg, _ := resp["error"].(string)
-			assert.NotEqual(t, usernameInvalidMsg, errMsg, "valid username 'ab' must not be rejected by username validation")
+			assert.NotEqual(t, usernameInvalidMsg, errMsg,
+				"valid username 'ab' must not be rejected by username validation")
 		}
 	})
 }
