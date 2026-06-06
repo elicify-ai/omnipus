@@ -138,9 +138,15 @@ type WSHandler struct {
 	// lastPairingState caches the most-recently-emitted whatsapp_pairing frame
 	// bytes for each channelID (key: string, value: []byte).  Written by the
 	// eventForwarder when status=="code"; deleted on terminal statuses (linked,
-	// timeout, error).  Used by subscribePairingInterest to re-emit the cached
-	// QR to late subscribers so the SPA doesn't have to wait for the next QR
-	// rotation before showing a code (#368).
+	// timeout, error) and on any unrecognised status so stale codes are never
+	// shown.  Used by subscribePairingInterest to re-emit the cached QR to late
+	// subscribers (#368).
+	//
+	// WHY a cache is necessary: whatsmeow is not request-driven — it emits QR
+	// codes on its own ~20-second rotation schedule.  A browser tab that opens
+	// the pairing UI after the first QR has fired would otherwise have to wait
+	// up to 20 s before seeing any code.  The cache delivers the last-seen code
+	// immediately on subscribe via subscribePairingInterest.
 	lastPairingState sync.Map
 
 	upgrader websocket.Upgrader
@@ -213,6 +219,12 @@ func (c *wsConn) setPairingInterest(channelID string, active bool) {
 // channelID's whatsapp_pairing frames, and immediately re-emits the cached QR
 // frame (if any) when active==true so late subscribers don't wait for the next
 // QR rotation (#368).
+//
+// WHY the cache is needed: whatsmeow emits QR codes on its own ~20-second
+// rotation schedule and is not request-driven — there is no way to ask it to
+// re-send the current QR on demand.  A subscriber that arrives between
+// rotations would otherwise wait up to 20 s before seeing a code.  The cache
+// lets us deliver the last-seen code immediately on subscribe.
 func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, active bool) {
 	wc.setPairingInterest(channelID, active)
 	if !active {
@@ -220,17 +232,14 @@ func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, activ
 	}
 	// Re-emit the last-seen QR frame for this channel, if one is cached and the
 	// QR is still "live" (terminal states are deleted from the map by the
-	// eventForwarder).  Non-blocking: if the send buffer is full we skip — the
-	// next natural QR rotation will deliver the code.
+	// eventForwarder).  Route through sendRawFrameBytes so the replay-divert
+	// invariant (isReplayingLive / replayDivertCh) is respected — a direct
+	// wc.sendCh write would bypass the divert and interleave with a replay
+	// stream (#368 + Wave 2 review).
 	if cached, ok := h.lastPairingState.Load(channelID); ok {
 		frameBytes, ok := cached.([]byte)
 		if ok && len(frameBytes) > 0 {
-			select {
-			case wc.sendCh <- frameBytes:
-			default:
-				slog.Warn("ws: could not re-emit cached pairing QR to late subscriber — send buffer full",
-					"channel_id", channelID)
-			}
+			sendRawFrameBytes(wc, string(generated.WsFrameTypeWhatsappPairing), frameBytes)
 		}
 	}
 }
@@ -2258,8 +2267,16 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			case channels.PairingStatusCode:
 				if frameBytes, merr := json.Marshal(pairF); merr == nil {
 					h.lastPairingState.Store(p.ChannelID, frameBytes)
+				} else {
+					slog.Error("ws: failed to marshal whatsapp_pairing frame for cache",
+						"channel_id", p.ChannelID, "error", merr)
 				}
 			case channels.PairingStatusLinked, channels.PairingStatusTimeout, channels.PairingStatusError:
+				h.lastPairingState.Delete(p.ChannelID)
+			default:
+				// PairingStatusWaiting and any future statuses that are not
+				// "code" must not leave a stale QR in the cache — evict so a
+				// late subscriber is not shown an outdated code.
 				h.lastPairingState.Delete(p.ChannelID)
 			}
 			if !wc.wantsPairing(p.ChannelID) {

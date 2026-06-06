@@ -1593,8 +1593,17 @@ func handleConfigReload(
 }
 
 // wireChannelManager consolidates all observer wiring that must be (re-)applied
-// whenever a ChannelManager becomes active — both at initial startup and after
-// every ChannelManager.Reload() call in restartServices.
+// whenever a ChannelManager becomes active.  It is called TWICE per reload in
+// restartServices:
+//
+//  1. Before ChannelManager.Reload() — so channels whose Start() runs inside
+//     Reload already have the CancelInterceptor and PairingObserver set when
+//     they first emit events.
+//
+//  2. After ChannelManager.Reload() — because Reload may recreate channel
+//     instances (new struct value with nil fields), which clears the observer
+//     pointer set in the pre-Reload call.  Re-wiring guarantees the observers
+//     are always live after the reload completes.
 //
 // Callers are responsible for calling SetChannelManager on the agent loop
 // before invoking this helper, because SetCancelInterceptor requires that the
@@ -1696,17 +1705,18 @@ func restartServices(
 	}
 
 	al.SetChannelManager(runningServices.ChannelManager)
-	// Wire observers before Reload so channels started by Reload already have
-	// the CancelInterceptor and PairingObserver set.  Re-wire after Reload as
-	// well: Reload may create new channel instances whose observer pointer was
-	// cleared, so we call wireChannelManager again to ensure the observers are
-	// always live after the reload completes.
+	// Pre-Reload wire: set observers before Reload() so that channels whose
+	// Start() runs *inside* Reload() already have the CancelInterceptor and
+	// PairingObserver set when they first emit events.
 	wireChannelManager(runningServices.ChannelManager, al)
 
 	if err = runningServices.ChannelManager.Reload(context.Background(), cfg, runningServices.bundle); err != nil {
 		return fmt.Errorf("error reload channels: %w", err)
 	}
-	// Re-wire after Reload: channel instances may have been recreated.
+	// Post-Reload re-wire: Reload() may have recreated channel instances (new
+	// struct value with nil fields), which clears the observer pointer set
+	// above.  Re-wiring here ensures the observers are always live once the
+	// reload completes, regardless of whether instances were recreated.
 	wireChannelManager(runningServices.ChannelManager, al)
 	fmt.Println("  ✓ Channels restarted.")
 
