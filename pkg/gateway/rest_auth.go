@@ -701,10 +701,11 @@ func generateUserToken(_ string) (string, error) {
 	return "omnipus_" + hex.EncodeToString(bytes), nil
 }
 
-// triggerReloadAndWait triggers a config reload and polls until the in-memory
-// config has been updated (up to a 5-second deadline). Returns an error when
-// the reload fails to start; reload-completion timeout is treated as best-effort
-// (we return nil so callers are not blocked indefinitely).
+// triggerReloadAndWait triggers a config reload and polls until
+// IsReloadPending() clears (indicating the in-memory config has been updated),
+// up to a 5-second deadline. Returns an error when the reload fails to start;
+// reload-completion timeout is treated as best-effort (we return nil so callers
+// are not blocked indefinitely).
 //
 // The special case "reload not configured" (reloadFunc == nil) is treated as a
 // no-op rather than an error: this condition is normal in unit tests where the

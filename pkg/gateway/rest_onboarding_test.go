@@ -220,6 +220,62 @@ func TestHandleCompleteOnboarding_MissingAdminPassword(t *testing.T) {
 	assert.Equal(t, "admin.password is required", resp["error"])
 }
 
+// TestHandleCompleteOnboarding_RejectsInvalidUsername verifies that POST /api/v1/onboarding/complete
+// rejects usernames that fail usernameRE validation with 400.
+// BDD: Given an admin.username that violates the username constraints,
+// When POST /api/v1/onboarding/complete is called,
+// Then 400 with an error containing "username".
+func TestHandleCompleteOnboarding_RejectsInvalidUsername(t *testing.T) {
+	invalidCases := []struct {
+		name     string
+		username string
+	}{
+		{"too short (single char)", "a"},
+		{"starts with dot", ".admin"},
+		{"contains space", "admin user"},
+	}
+
+	for _, tc := range invalidCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			api := newTestRestAPIWithHomeAuth(t)
+
+			body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"` + tc.username + `","password":"secret123"}}`
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			api.HandleCompleteOnboarding(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code, "username %q should be rejected", tc.username)
+			var resp map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			errMsg, _ := resp["error"].(string)
+			assert.Contains(t, errMsg, "username", "error should mention username for input %q", tc.username)
+		})
+	}
+
+	// Positive case: a valid 2-char username must NOT be rejected by username validation.
+	// It may fail for other reasons (e.g. provider validation) but must not return usernameInvalidMsg.
+	t.Run("valid 2-char username passes username check", func(t *testing.T) {
+		api := newTestRestAPIWithHomeAuth(t)
+
+		body := `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"ab","password":"secret123"}}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		api.HandleCompleteOnboarding(w, req)
+
+		if w.Code == http.StatusBadRequest {
+			var resp map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			errMsg, _ := resp["error"].(string)
+			assert.NotEqual(t, usernameInvalidMsg, errMsg, "valid username 'ab' must not be rejected by username validation")
+		}
+	})
+}
+
 // TestHandleCompleteOnboarding_WeakPassword verifies that POST /api/v1/onboarding/complete
 // with a password shorter than 8 characters returns 400.
 // BDD: Given admin.password is "short" (less than 8 characters),

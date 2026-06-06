@@ -102,6 +102,8 @@ import {
   fetchAgents,
   configureChannel,
   enableChannel,
+  testChannel,
+  setChannelRouting,
 } from '@/lib/api'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { ChannelConfigPanel } from './ChannelConfigPanel'
@@ -789,5 +791,139 @@ describe('ChannelConfigPanel — Save & Enable panel close behavior (#358)', () 
     await waitFor(() => {
       expect(onOpenChange).toHaveBeenCalledWith(false)
     })
+  })
+})
+
+// F7: doSave.onSuccess and doSaveAndEnable.onSuccess clear the Connection-test badge
+describe('ChannelConfigPanel — test result badge cleared on save (F7)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockUiStore()
+    vi.mocked(fetchChannelConfig).mockResolvedValue({})
+    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    vi.mocked(fetchAgents).mockResolvedValue([])
+    vi.mocked(configureChannel).mockResolvedValue(undefined as never)
+    vi.mocked(enableChannel).mockResolvedValue(undefined as never)
+    vi.mocked(testChannel).mockResolvedValue({ success: true, message: 'OK' })
+  })
+
+  it('doSave.onSuccess: clears the test result badge after a successful save', async () => {
+    renderPanel('telegram', 'Telegram')
+
+    // Wait for the form to be ready
+    await waitFor(() => {
+      expect(document.getElementById('field-token')).not.toBeNull()
+    })
+
+    // Trigger a connection test so the badge appears
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Test$/i }))
+    })
+
+    // Badge must be visible
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    // Trigger Save — onSuccess calls setTestResult(null)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/i }))
+    })
+
+    // Badge must be gone
+    await waitFor(() => {
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    })
+  })
+
+  it('doSaveAndEnable.onSuccess: clears the test result badge after Save & Enable', async () => {
+    renderPanel('telegram', 'Telegram')
+
+    await waitFor(() => {
+      expect(document.getElementById('field-token')).not.toBeNull()
+    })
+
+    // Trigger a connection test so the badge appears
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Test$/i }))
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toBeInTheDocument()
+    })
+
+    // Trigger Save & Enable — onSuccess calls setTestResult(null)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Save & Enable/i }))
+    })
+
+    // Badge must be gone
+    await waitFor(() => {
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    })
+  })
+})
+
+// F8: routingDebounceRef cleanup — unmounting cancels the pending routing auto-save
+describe('ChannelConfigPanel — RoutingDebounce', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    // Remove scrollIntoView polyfill if added
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('cancels the pending routing auto-save timer on unmount', async () => {
+    vi.clearAllMocks()
+    mockUiStore()
+    vi.mocked(fetchChannelConfig).mockResolvedValue({})
+    vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
+    // Provide one real agent so the SmartSelect renders a second selectable option
+    vi.mocked(fetchAgents).mockResolvedValue([{ id: 'agent-1', name: 'Agent One' }] as never)
+    vi.mocked(setChannelRouting).mockResolvedValue({ default_agent_id: 'agent-1' } as never)
+
+    // Polyfill scrollIntoView — jsdom does not implement it; Radix Select calls
+    // it when opening the listbox to scroll the current item into view.
+    Element.prototype.scrollIntoView = vi.fn()
+
+    const { unmount } = renderPanel('telegram', 'Telegram')
+
+    // Wait for the routing section to be ready (agents loaded, select rendered)
+    await waitFor(() => {
+      expect(screen.getByRole('combobox')).toBeInTheDocument()
+    })
+
+    // Switch to fake timers AFTER the initial render/queries settle so we don't
+    // intercept TanStack Query's internal setInterval polling.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+    // Open the Radix Select listbox by clicking its trigger.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('combobox'))
+    })
+
+    // Radix renders SelectContent into a portal at document.body.
+    // Find and click the "Agent One" option to trigger onValueChange (and thus
+    // start the 400ms debounce timer).
+    await act(async () => {
+      const agentOption = document.querySelector('[role="option"][data-radix-select-item]') ??
+        Array.from(document.querySelectorAll('[role="option"]')).find(
+          (el) => el.textContent?.includes('Agent One'),
+        )
+      if (agentOption) {
+        fireEvent.click(agentOption)
+      }
+    })
+
+    // Unmount BEFORE the 400ms debounce fires — cleanup effect clears the timer.
+    unmount()
+
+    // Advance past 400ms. If cleanup failed, doSaveRouting would fire and call
+    // setChannelRouting. With correct cleanup it must NOT be called.
+    await act(async () => {
+      vi.advanceTimersByTime(500)
+    })
+
+    // setChannelRouting must NOT have been called — the timer was cancelled.
+    expect(vi.mocked(setChannelRouting)).not.toHaveBeenCalled()
   })
 })

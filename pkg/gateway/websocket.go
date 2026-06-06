@@ -138,10 +138,11 @@ type WSHandler struct {
 	// lastPairingState caches the most-recently-emitted whatsapp_pairing frame
 	// bytes for each channelID (key: string, value: []byte).  Written by the
 	// eventForwarder when status=="code"; deleted on terminal statuses (linked,
-	// error), non-terminal QR-rotation status (timeout — a fresh code follows
-	// immediately), known waiting status, and any future unknown status so stale
-	// codes are never shown.  Used by subscribePairingInterest to re-emit the
-	// cached QR to late subscribers (#368).
+	// error), non-terminal QR-rotation status (timeout — a fresh code typically
+	// follows within the next whatsmeow rotation cycle, ~20 s), known waiting
+	// status, and any future unknown status so stale codes are never shown.
+	// Used by subscribePairingInterest to re-emit the cached QR to late
+	// subscribers (#368).
 	//
 	// WHY a cache is necessary: whatsmeow is not request-driven — it emits QR
 	// codes on its own rotation schedule (up to ~60 s for the first code, ~20 s
