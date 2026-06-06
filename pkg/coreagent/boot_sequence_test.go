@@ -20,7 +20,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 )
 
-// TestValidateBootConfig_ThenSeedConfig_JimGetsWorkspaceShell verifies the
+// TestSeedConfig_JimGetsWorkspaceShell verifies the
 // boot ordering fix end-to-end from the SeedConfig side.
 //
 // Scenario A — nil initial state (fresh install / fixed validator):
@@ -33,7 +33,7 @@ import (
 // These tests FAIL on SeedConfig code that only checked for nil and did not
 // also handle the false case, and PASS on the fixed code that checks
 // "nil || !*value".
-func TestValidateBootConfig_ThenSeedConfig_JimGetsWorkspaceShell(t *testing.T) {
+func TestSeedConfig_JimGetsWorkspaceShell(t *testing.T) {
 	t.Run("nil_initial_state_jim_gets_true", func(t *testing.T) {
 		cfg := config.DefaultConfig()
 		// Precondition: WorkspaceShellEnabled is nil (fresh install,
@@ -96,7 +96,7 @@ func TestValidateBootConfig_ThenSeedConfig_JimGetsWorkspaceShell(t *testing.T) {
 	})
 }
 
-// TestValidateBootConfig_NonJimAgent_WorkspaceShellOff verifies that SeedConfig
+// TestSeedConfig_NonJimAgent_WorkspaceShellPassthrough verifies that SeedConfig
 // does NOT set WorkspaceShellEnabled=true when Jim is absent from the config.
 // Only Jim's seeding (new-agent or re-enforcement) should trigger the flag.
 //
@@ -109,7 +109,7 @@ func TestValidateBootConfig_ThenSeedConfig_JimGetsWorkspaceShell(t *testing.T) {
 // For the pure "no Jim in list" isolation: we verify that the custom-agent
 // re-enforcement loop does NOT set the flag (i.e., SeedConfig's
 // WorkspaceShellEnabled assignment is Jim-specific, not global).
-func TestValidateBootConfig_NonJimAgent_WorkspaceShellOff(t *testing.T) {
+func TestSeedConfig_NonJimAgent_WorkspaceShellPassthrough(t *testing.T) {
 	t.Run("re-enforcement_loop_non_jim_does_not_set_flag", func(t *testing.T) {
 		cfg := config.DefaultConfig()
 		// Start with flag already true so we can detect if any non-Jim branch clears it.

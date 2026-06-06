@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1665,15 +1666,122 @@ func TestHandleChangePassword_InvalidatesExistingToken(t *testing.T) {
 	assert.Equal(t, "", userMapAfter["session_token_hash"],
 		"session_token_hash must be cleared in config.json after password change")
 
-	// Step 3b: The old token, presented without a matching user in context (as
-	// withAuth behaves when the token hash no longer matches any user), must
-	// yield 401 from HandleValidateToken.
+	// Step 3b: The old token, routed through withAuth (which calls checkBearerAuth
+	// and bcrypt-compares against token_hash in the in-memory config), must yield
+	// 401 because HandleChangePassword cleared token_hash above.
+	//
+	// safeUpdateConfigJSON calls refreshConfigAndRewireServices after every write,
+	// so GetConfig() already reflects the empty token_hash — no process restart
+	// required. This assertion FAILS if HandleChangePassword does NOT clear
+	// token_hash (the hash still matches → withAuth injects the user → 200).
+	validateHandler := api.withAuth(api.HandleValidateToken)
 	validateReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/validate", nil)
 	validateReq.Header.Set("Authorization", "Bearer "+oldToken)
-	// Deliberately no user injected — simulates the state after withAuth fails to
-	// match the stale token against the (now empty) token_hash in config.
 	validateW := httptest.NewRecorder()
-	api.HandleValidateToken(validateW, validateReq)
+	validateHandler(validateW, validateReq)
 	assert.Equal(t, http.StatusUnauthorized, validateW.Code,
 		"old bearer token must be rejected after password change (token_hash cleared)")
+}
+
+// --- triggerReloadAndWait tests (B5 poll loop) ---
+
+// newTestRestAPIForReload builds a minimal restAPI backed by a temp dir and
+// returns both the api and the underlying AgentLoop so tests can configure
+// SetReloadFunc and drive ClearReloadPending.
+func newTestRestAPIForReload(t *testing.T) (*restAPI, *agentLoopWrapper) {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	apiObj := &restAPI{
+		agentLoop:     al,
+		homePath:      tmpDir,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		taskStore:     taskstore.New(tmpDir + "/tasks"),
+	}
+	return apiObj, &agentLoopWrapper{al: al}
+}
+
+// agentLoopWrapper gives access to reload control methods in tests without
+// importing agent.AgentLoop directly (the interface enforces only what we need).
+type agentLoopWrapper struct {
+	al interface {
+		SetReloadFunc(fn func() error)
+		ClearReloadPending()
+	}
+}
+
+// TestTriggerReloadAndWait_PollsUntilNotPending verifies that triggerReloadAndWait
+// returns nil once IsReloadPending() clears — i.e., the polling loop unblocks
+// when a goroutine calls ClearReloadPending after ~50ms.
+//
+// BDD: Given a reloadFunc that keeps reloadPending=true until ClearReloadPending
+// is called by a goroutine, when triggerReloadAndWait is called,
+// then it blocks briefly and returns nil once the pending flag clears.
+func TestTriggerReloadAndWait_PollsUntilNotPending(t *testing.T) {
+	apiObj, wrap := newTestRestAPIForReload(t)
+
+	// reloadFunc simply returns nil; TriggerReload sets reloadPending=true before
+	// calling it. The goroutine below clears the flag after 50ms so the poll loop
+	// has something real to wait for.
+	wrap.al.SetReloadFunc(func() error {
+		return nil
+	})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		wrap.al.ClearReloadPending()
+	}()
+
+	start := time.Now()
+	err := apiObj.triggerReloadAndWait()
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "triggerReloadAndWait must return nil when reload completes")
+	// Must have polled for at least 40ms (pending was set), but well under 5s deadline.
+	assert.GreaterOrEqual(t, elapsed.Milliseconds(), int64(40),
+		"triggerReloadAndWait must poll until the pending flag clears")
+	assert.Less(t, elapsed, 5*time.Second,
+		"triggerReloadAndWait must return well before the 5s deadline")
+}
+
+// TestTriggerReloadAndWait_AlreadyInProgress_PollsThrough verifies that when
+// TriggerReload returns ErrReloadAlreadyInProgress, triggerReloadAndWait falls
+// through to the polling loop and returns nil when IsReloadPending() clears.
+//
+// BDD: Given a reloadFunc that simulates "already in progress", when
+// triggerReloadAndWait is called, then it polls until the pending flag is
+// cleared and returns nil.
+func TestTriggerReloadAndWait_AlreadyInProgress_PollsThrough(t *testing.T) {
+	apiObj, wrap := newTestRestAPIForReload(t)
+
+	// reloadFunc returns the "already in progress" sentinel string. TriggerReload
+	// sets reloadPending=true before calling it, so the poll loop will see pending=true.
+	wrap.al.SetReloadFunc(func() error {
+		return fmt.Errorf("reload already in progress")
+	})
+
+	// Clear the pending flag from a goroutine after ~50ms.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		wrap.al.ClearReloadPending()
+	}()
+
+	err := apiObj.triggerReloadAndWait()
+	require.NoError(t, err,
+		"triggerReloadAndWait must return nil on ErrReloadAlreadyInProgress poll-through")
 }
