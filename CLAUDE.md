@@ -26,6 +26,14 @@ Three-phase plan locked 2026-05-03.
 
 **Routing rule:** when new work comes up, ask which phase it belongs to first. Pentest findings → v0.2 unless structural (→ v0.3). Memory/projects/tasks/room-topology → v0.3. Anything else not completing v0.1 → flag the scope question.
 
+## Merging to main (MANDATORY)
+
+**Never force-merge, admin-bypass, or auto-merge PRs to `main` without explicit human approval.** A human must review and approve the PR before it lands on `main`, regardless of CI status.
+
+- Do **NOT** use `gh pr merge --admin`, `--auto`, or any mechanism that bypasses branch protection or skips required reviews.
+- If CI is green but no human has approved: wait. Ask the user whether to proceed.
+- Why: the v0.1.0 hotfix PR (#363) was merged with `--admin` flag before the user had a chance to review. The user explicitly stated this is unacceptable.
+
 ## Git commit authorship (MANDATORY)
 
 **Always author commits as the human running the work — never as the agent.** Author *and* committer must be that human's own GitHub identity, using their GitHub no-reply email.
