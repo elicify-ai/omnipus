@@ -5,6 +5,7 @@ import type { SessionChatState } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useWhatsAppPairingStore } from './whatsappPairing'
+import { useUiStore } from './ui'
 
 // test_chat_store (test #22)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: User sends message and receives streaming response
@@ -2046,6 +2047,124 @@ describe('eviction-leak regression — tool_call_result burst triggers eviction 
         `textAtToolCallStart has a dangling entry for "${callId}" not in toolCallOrder`,
       ).toBe(true)
     }
+  })
+})
+
+// ── exec_approval_expired frame handler ───────────────────────────────────────
+//
+// Verifies that an exec_approval_expired frame removes the matching approval from
+// pendingApprovals and dispatches a toast to the UI store. Also verifies that a
+// frame with a non-matching ID does nothing (no removal, no toast).
+//
+// Traces to: hotfix/v0.1.1 Wave 4 — exec_approval_expired removes pending approval and shows toast
+
+describe('chat store — exec_approval_expired frame', () => {
+  beforeEach(() => {
+    // Reset the UI store so toasts don't leak between tests.
+    act(() => {
+      useUiStore.setState({ toasts: [] })
+    })
+  })
+
+  it('removes the matching approval from pendingApprovals when exec_approval_expired arrives', () => {
+    // Seed a pending approval via exec_approval_request.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'exec_approval_request',
+        session_id: TEST_SESSION_ID,
+        id: 'appr_expire_1',
+        command: 'rm -rf /tmp/test',
+      })
+    })
+
+    // Verify the approval is in the queue.
+    expect(useChatStore.getState().pendingApprovals).toHaveLength(1)
+    expect(useChatStore.getState().pendingApprovals[0].id).toBe('appr_expire_1')
+
+    // Send the expired frame.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'exec_approval_expired',
+        session_id: TEST_SESSION_ID,
+        id: 'appr_expire_1',
+      })
+    })
+
+    // The approval must be removed.
+    expect(useChatStore.getState().pendingApprovals).toHaveLength(0)
+  })
+
+  it('dispatches a toast when the matching approval is expired', () => {
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'exec_approval_request',
+        session_id: TEST_SESSION_ID,
+        id: 'appr_expire_2',
+        command: 'git push --force',
+      })
+    })
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'exec_approval_expired',
+        session_id: TEST_SESSION_ID,
+        id: 'appr_expire_2',
+      })
+    })
+
+    // A toast must have been added.
+    const toasts = useUiStore.getState().toasts
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0].variant).toBe('error')
+    // The message must mention timeout/timed out/denied.
+    expect(toasts[0].message.toLowerCase()).toMatch(/timed? ?out|denied/)
+  })
+
+  it('leaves pendingApprovals unchanged when expired id does not match any pending approval', () => {
+    // Seed two approvals.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'exec_approval_request',
+        session_id: TEST_SESSION_ID,
+        id: 'appr_stay_1',
+        command: 'npm install',
+      })
+      useChatStore.getState().handleFrame({
+        type: 'exec_approval_request',
+        session_id: TEST_SESSION_ID,
+        id: 'appr_stay_2',
+        command: 'make build',
+      })
+    })
+
+    expect(useChatStore.getState().pendingApprovals).toHaveLength(2)
+
+    // Send an expired frame with a non-matching ID.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'exec_approval_expired',
+        session_id: TEST_SESSION_ID,
+        id: 'appr_nonexistent',
+      })
+    })
+
+    // pendingApprovals must be unchanged.
+    expect(useChatStore.getState().pendingApprovals).toHaveLength(2)
+  })
+
+  it('dispatches NO toast when the expired id does not match any pending approval', () => {
+    // Do NOT seed any approval — empty queue.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'exec_approval_expired',
+        session_id: TEST_SESSION_ID,
+        id: 'appr_no_match',
+      })
+    })
+
+    // No toast should have been added.
+    const toasts = useUiStore.getState().toasts
+    expect(toasts).toHaveLength(0)
   })
 })
 
