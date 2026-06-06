@@ -6,6 +6,7 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useWhatsAppPairingStore } from './whatsappPairing'
 import { useUiStore } from './ui'
+import type { ExecApprovalRequestFrame, ExecApprovalExpiredFrame, WhatsAppPairingFrame } from '@/lib/api/generated/asyncapi-types'
 
 // test_chat_store (test #22)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: User sends message and receives streaming response
@@ -2068,13 +2069,14 @@ describe('chat store — exec_approval_expired frame', () => {
 
   it('removes the matching approval from pendingApprovals when exec_approval_expired arrives', () => {
     // Seed a pending approval via exec_approval_request.
+    const reqFrame1: ExecApprovalRequestFrame = {
+      type: 'exec_approval_request',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_expire_1',
+      command: 'rm -rf /tmp/test',
+    }
     act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'exec_approval_request',
-        session_id: TEST_SESSION_ID,
-        id: 'appr_expire_1',
-        command: 'rm -rf /tmp/test',
-      })
+      useChatStore.getState().handleFrame(reqFrame1)
     })
 
     // Verify the approval is in the queue.
@@ -2082,12 +2084,13 @@ describe('chat store — exec_approval_expired frame', () => {
     expect(useChatStore.getState().pendingApprovals[0].id).toBe('appr_expire_1')
 
     // Send the expired frame.
+    const expiredFrame1: ExecApprovalExpiredFrame = {
+      type: 'exec_approval_expired',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_expire_1',
+    }
     act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'exec_approval_expired',
-        session_id: TEST_SESSION_ID,
-        id: 'appr_expire_1',
-      })
+      useChatStore.getState().handleFrame(expiredFrame1)
     })
 
     // The approval must be removed.
@@ -2095,21 +2098,23 @@ describe('chat store — exec_approval_expired frame', () => {
   })
 
   it('dispatches a toast when the matching approval is expired', () => {
+    const reqFrame2: ExecApprovalRequestFrame = {
+      type: 'exec_approval_request',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_expire_2',
+      command: 'git push --force',
+    }
     act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'exec_approval_request',
-        session_id: TEST_SESSION_ID,
-        id: 'appr_expire_2',
-        command: 'git push --force',
-      })
+      useChatStore.getState().handleFrame(reqFrame2)
     })
 
+    const expiredFrame2: ExecApprovalExpiredFrame = {
+      type: 'exec_approval_expired',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_expire_2',
+    }
     act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'exec_approval_expired',
-        session_id: TEST_SESSION_ID,
-        id: 'appr_expire_2',
-      })
+      useChatStore.getState().handleFrame(expiredFrame2)
     })
 
     // A toast must have been added.
@@ -2122,30 +2127,33 @@ describe('chat store — exec_approval_expired frame', () => {
 
   it('leaves pendingApprovals unchanged when expired id does not match any pending approval', () => {
     // Seed two approvals.
+    const stayFrame1: ExecApprovalRequestFrame = {
+      type: 'exec_approval_request',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_stay_1',
+      command: 'npm install',
+    }
+    const stayFrame2: ExecApprovalRequestFrame = {
+      type: 'exec_approval_request',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_stay_2',
+      command: 'make build',
+    }
     act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'exec_approval_request',
-        session_id: TEST_SESSION_ID,
-        id: 'appr_stay_1',
-        command: 'npm install',
-      })
-      useChatStore.getState().handleFrame({
-        type: 'exec_approval_request',
-        session_id: TEST_SESSION_ID,
-        id: 'appr_stay_2',
-        command: 'make build',
-      })
+      useChatStore.getState().handleFrame(stayFrame1)
+      useChatStore.getState().handleFrame(stayFrame2)
     })
 
     expect(useChatStore.getState().pendingApprovals).toHaveLength(2)
 
     // Send an expired frame with a non-matching ID.
+    const noMatchExpired: ExecApprovalExpiredFrame = {
+      type: 'exec_approval_expired',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_nonexistent',
+    }
     act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'exec_approval_expired',
-        session_id: TEST_SESSION_ID,
-        id: 'appr_nonexistent',
-      })
+      useChatStore.getState().handleFrame(noMatchExpired)
     })
 
     // pendingApprovals must be unchanged.
@@ -2154,12 +2162,13 @@ describe('chat store — exec_approval_expired frame', () => {
 
   it('dispatches NO toast when the expired id does not match any pending approval', () => {
     // Do NOT seed any approval — empty queue.
+    const noMatchExpired2: ExecApprovalExpiredFrame = {
+      type: 'exec_approval_expired',
+      session_id: TEST_SESSION_ID,
+      id: 'appr_no_match',
+    }
     act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'exec_approval_expired',
-        session_id: TEST_SESSION_ID,
-        id: 'appr_no_match',
-      })
+      useChatStore.getState().handleFrame(noMatchExpired2)
     })
 
     // No toast should have been added.
@@ -2170,14 +2179,15 @@ describe('chat store — exec_approval_expired frame', () => {
 
 describe('chat store — whatsapp_pairing routing (#283)', () => {
   it('handleFrame(whatsapp_pairing) routes the QR to the pairing store', () => {
+    const pairingFrame: WhatsAppPairingFrame = {
+      type: 'whatsapp_pairing',
+      channel_id: 'whatsapp_native',
+      status: 'code',
+      qr: 'QR-ROUTED',
+    }
     act(() => {
       useWhatsAppPairingStore.setState({ byChannel: {} })
-      useChatStore.getState().handleFrame({
-        type: 'whatsapp_pairing',
-        channel_id: 'whatsapp_native',
-        status: 'code',
-        qr: 'QR-ROUTED',
-      })
+      useChatStore.getState().handleFrame(pairingFrame)
     })
     expect(useWhatsAppPairingStore.getState().byChannel['whatsapp_native']).toEqual({
       status: 'code',
