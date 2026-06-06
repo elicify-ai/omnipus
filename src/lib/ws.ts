@@ -667,8 +667,9 @@ export class WsConnection {
     // Expose live WebSocket on window so tests can deterministically simulate a
     // network drop by calling ws.close() — there is no other reliable hook for
     // closing only the SPA's WS without disabling the entire network context.
-    // See tests/e2e/ws-reconnect.spec.ts.
-    if (typeof window !== 'undefined') {
+    // See tests/e2e/ws-reconnect.spec.ts. Guard behind DEV/test so production
+    // builds don't accumulate stale WebSocket references in the global scope.
+    if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'test')) {
       const w = window as unknown as { __ws_instances?: WebSocket[] }
       w.__ws_instances ??= []
       w.__ws_instances.push(this.ws)
@@ -737,7 +738,7 @@ export class WsConnection {
 
     this.ws.onclose = (event: CloseEvent) => {
       // Drop this socket from the test-visible registry before nulling.
-      if (typeof window !== 'undefined') {
+      if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'test')) {
         const w = window as unknown as { __ws_instances?: WebSocket[] }
         if (w.__ws_instances && this.ws) {
           const idx = w.__ws_instances.indexOf(this.ws)

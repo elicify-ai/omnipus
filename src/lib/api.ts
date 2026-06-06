@@ -105,6 +105,7 @@ import {
   ScheduleRunResult as ScheduleRunResultSchema,
   // #264 Notifications (contract-first #8):
   NotificationList as NotificationListSchema,
+  RotateTokenResponse as RotateTokenResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -993,6 +994,8 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
   agents?: {
     defaults?: {
       default_agent_id?: string
+      model_name?: string
+      provider?: string
     }
   }
 }
@@ -1057,6 +1060,8 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
     agents: {
       defaults: {
         default_agent_id: agentDefaults.default_agent_id as string | undefined,
+        model_name: agentDefaults.model_name as string | undefined,
+        provider: agentDefaults.provider as string | undefined,
       },
     },
   }
@@ -1153,7 +1158,7 @@ export function testProvider(id: string): Promise<OperationResult> {
 }
 
 export function rotateGatewayToken(): Promise<{ token: string }> {
-  return request('/config/gateway/rotate-token', { method: 'POST' })
+  return request('/config/gateway/rotate-token', { method: 'POST' }, RotateTokenResponseSchema as ZodType<{ token: string }>)
 }
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────

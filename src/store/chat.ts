@@ -7,7 +7,7 @@ import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay }
 import { queryClient } from '@/lib/queryClient'
 import type { Message, ToolCall } from '@/lib/api'
 import type { WsReceiveFrame, WsExecApprovalRequestFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
-import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame } from '@/lib/api/generated/asyncapi-types'
+import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame, ExecApprovalExpiredFrame } from '@/lib/api/generated/asyncapi-types'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
@@ -498,7 +498,7 @@ const EMPTY_BUCKET = emptySessionState()
 const SESSION_SCOPED_FRAME_TYPES = new Set([
   'token', 'done', 'tool_call_start', 'tool_call_result',
   'subagent_start', 'subagent_end', 'replay_message', 'replay_done',
-  'agent_switched', 'task_status_changed', 'exec_approval_request',
+  'agent_switched', 'task_status_changed', 'exec_approval_request', 'exec_approval_expired',
   'tool_approval_required', 'rate_limit', 'media', 'session_started',
   'system_overload', 'session_close_ack', 'cancel_stage',
 ])
@@ -2015,6 +2015,20 @@ export const useChatStore = create<ChatStore>((set, get) => {
             }))
           }
           break
+
+        case 'exec_approval_expired': {
+          const expiredFrame = frame as ExecApprovalExpiredFrame
+          if (targetSid) {
+            withBucket(targetSid, (b) => ({
+              pendingApprovals: b.pendingApprovals.filter((a) => a.id !== expiredFrame.id),
+            }))
+          }
+          useUiStore.getState().addToast({
+            message: 'Approval timed out — the tool call was denied automatically.',
+            variant: 'error',
+          })
+          break
+        }
 
         case 'task_status_changed':
           queryClient.invalidateQueries({ queryKey: ['tasks'] })

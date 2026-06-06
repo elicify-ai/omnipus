@@ -341,6 +341,14 @@ export function ChannelConfigPanel({
       queryClient.invalidateQueries({ queryKey: ['channel-routing', channelId] })
     },
   })
+  const routingDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const doSaveRoutingDebounced = (agentId: string | undefined) => {
+    if (routingDebounceRef.current) clearTimeout(routingDebounceRef.current)
+    routingDebounceRef.current = setTimeout(() => {
+      routingDebounceRef.current = null
+      doSaveRouting(agentId)
+    }, 400)
+  }
 
   // Populate form when config loads — skip if user has unsaved edits.
   // For google-chat, also detect which auth group is pre-configured.
@@ -363,6 +371,7 @@ export function ChannelConfigPanel({
     mutationFn: () => configureChannel(channelId, buildSubmitPayload()),
     onSuccess: () => {
       isDirtyRef.current = false
+      setTestResult(null)
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       queryClient.invalidateQueries({ queryKey: ['channel-config', channelId] })
       addToast({ message: 'Configuration saved', variant: 'success' })
@@ -380,6 +389,7 @@ export function ChannelConfigPanel({
     },
     onSuccess: () => {
       isDirtyRef.current = false
+      setTestResult(null)
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       queryClient.invalidateQueries({ queryKey: ['channel-config', channelId] })
       // #358: channels with a live pairing flow (WhatsApp native) must keep the panel
@@ -655,7 +665,7 @@ export function ChannelConfigPanel({
                         onValueChange={(v) => {
                           const next = v === '__none__' ? undefined : v
                           setSelectedAgentId(v)
-                          doSaveRouting(next)
+                          doSaveRoutingDebounced(next)
                         }}
                         placeholder="(Global default)"
                         items={[
