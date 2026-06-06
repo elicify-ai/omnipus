@@ -105,6 +105,7 @@ import {
 } from '@/lib/api'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { ChannelConfigPanel } from './ChannelConfigPanel'
+import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -375,6 +376,90 @@ describe('ChannelConfigPanel — WhatsApp Retry bounded timeout (MAJOR fix)', ()
 
     expect(screen.getByText(/Pairing failed/i)).toBeInTheDocument()
     expect(screen.getByTestId('whatsapp-retry')).toBeInTheDocument()
+  })
+})
+
+describe('WhatsAppNativeNotice — 15s initial timeout (#368)', () => {
+  // When the panel opens and no whatsapp_pairing WS frame arrives within 15s,
+  // TIMEOUT_STATE is surfaced ("QR code timed out — click Retry") instead of
+  // an infinite spinner. Tested directly against WhatsAppNativeNotice to avoid
+  // TanStack Query async timing issues.
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('shows TIMEOUT_STATE message and Retry button after 15s with no QR frame', async () => {
+    // beforeEach in the parent sets up the useWhatsAppPairingStore mock as empty
+    // (pairing undefined). Clear and reset it here for isolation.
+    vi.clearAllMocks()
+    vi.mocked(useWhatsAppPairingStore).mockImplementation(
+      ((selector: (s: { byChannel: Record<string, unknown>; apply: () => void; clear: () => void }) => unknown) =>
+        selector({ byChannel: {}, apply: vi.fn(), clear: vi.fn() })) as never,
+    )
+    // Wire getState so the component's imperative calls work.
+    const mockStore = vi.mocked(useWhatsAppPairingStore)
+    ;(mockStore as unknown as { getState: () => unknown }).getState = () => ({
+      byChannel: {},
+      apply: vi.fn(),
+      clear: vi.fn(),
+    })
+
+    // Use fake timers for the entire test — WhatsAppNativeNotice has no TanStack Query.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+    // Render under act() to flush mount effects synchronously.
+    await act(async () => {
+      render(<WhatsAppNativeNotice />)
+    })
+
+    // Initial state: spinner shown, no retry button.
+    expect(screen.getByText(/Generating your QR code/i)).toBeInTheDocument()
+    expect(screen.queryByTestId('whatsapp-retry')).not.toBeInTheDocument()
+
+    // Advance past 15s — fake setTimeout fires, setTimedOut(true), React re-renders.
+    await act(async () => {
+      vi.advanceTimersByTime(15_001)
+    })
+
+    // Timeout state: WhatsAppPairingBody renders its hardcoded timeout message
+    // and the Retry affordance. The TIMEOUT_STATE.status='timeout' drives this.
+    expect(screen.getByText(/QR expired/i)).toBeInTheDocument()
+    expect(screen.getByTestId('whatsapp-retry')).toBeInTheDocument()
+    // Spinner must be gone.
+    expect(screen.queryByText(/Generating your QR code/i)).not.toBeInTheDocument()
+  })
+
+  it('does not trigger TIMEOUT_STATE after unmount (no setState on unmounted component)', async () => {
+    vi.clearAllMocks()
+    vi.mocked(useWhatsAppPairingStore).mockImplementation(
+      ((selector: (s: { byChannel: Record<string, unknown>; apply: () => void; clear: () => void }) => unknown) =>
+        selector({ byChannel: {}, apply: vi.fn(), clear: vi.fn() })) as never,
+    )
+    const mockStore = vi.mocked(useWhatsAppPairingStore)
+    ;(mockStore as unknown as { getState: () => unknown }).getState = () => ({
+      byChannel: {},
+      apply: vi.fn(),
+      clear: vi.fn(),
+    })
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+    const { unmount } = render(<WhatsAppNativeNotice />)
+
+    // Flush effects so the timer is registered.
+    await act(async () => {})
+
+    // Unmount before the fake 15s timer fires — effect cleanup cancels the timer.
+    unmount()
+
+    // Advance past 15s — the cancelled timer must NOT call setTimedOut.
+    await act(async () => {
+      vi.advanceTimersByTime(15_001)
+    })
+
+    // Component is gone — no timeout text in the DOM.
+    expect(screen.queryByText(/QR expired/i)).not.toBeInTheDocument()
   })
 })
 

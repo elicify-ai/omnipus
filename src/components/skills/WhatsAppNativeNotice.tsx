@@ -56,8 +56,9 @@ export function WhatsAppNativeNotice() {
       setTimedOut(false)
       return
     }
-    // pairing still undefined: arm the timer once (guard against double-arm).
-    if (initialTimerRef.current !== null) return
+    // pairing still undefined: arm the timer. The effect only runs when pairing
+    // changes identity (dependency array), and the cleanup below cancels any
+    // prior timer, so no double-arm guard is needed here.
     initialTimerRef.current = setTimeout(() => {
       initialTimerRef.current = null
       setTimedOut(true)
@@ -131,9 +132,13 @@ export function WhatsAppNativeNotice() {
     // Clear the stale pairing state so we show the spinner immediately.
     clear(WHATSAPP_NATIVE_CHANNEL_ID)
 
-    // Toggle subscribe interest: false then true restores forwarding to this
-    // connection. Note: this does NOT make whatsmeow mint a new QR — it only
-    // re-enables delivery of any QR frames the backend emits on its own schedule.
+    // Toggle subscribe interest: false then true re-registers this connection
+    // with the backend's subscribePairingInterest handler, which immediately
+    // re-emits the cached last-seen QR frame if one exists — so the retry often
+    // delivers a fresh frame without waiting for the next whatsmeow rotation
+    // cycle. If no cached frame exists (e.g. after an `error` state where the
+    // QR loop is terminal), no frame is re-emitted and the 30s fallback timer
+    // eventually reverts the UI.
     useConnectionStore.getState().connection?.send({
       type: 'whatsapp_pairing_subscribe',
       channel_id: WHATSAPP_NATIVE_CHANNEL_ID,
