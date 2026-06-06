@@ -7,12 +7,7 @@ import {
   Play,
   Lightning,
   Warning,
-  CheckCircle,
-  Clock,
-  ArrowsClockwise,
-  Spinner,
 } from '@phosphor-icons/react'
-import { QRCodeSVG } from 'qrcode.react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -33,8 +28,8 @@ import {
 import { getChannelFields, type ChannelField } from '@/lib/channel-fields'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
-import { useConnectionStore } from '@/store/connection'
-import { useWhatsAppPairingStore, type WhatsAppPairingState } from '@/store/whatsappPairing'
+import { WHATSAPP_NATIVE_CHANNEL_ID } from './whatsappChannelId'
+import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
 
 interface ChannelConfigPanelProps {
   channelId: string
@@ -150,236 +145,6 @@ function HelperLink({ field }: { field: ChannelField }) {
         </a>
       )}
     </p>
-  )
-}
-
-// WhatsAppPairingBody renders the inner QR/status block for the linked-device
-// notice (#283 / US-C3). Implements the full 5-state machine by real wire names:
-// waiting | code | linked | timeout | error
-function WhatsAppPairingBody({
-  pairing,
-  onRetry,
-}: {
-  pairing?: WhatsAppPairingState
-  onRetry?: () => void
-}) {
-  // Shared spinner — used for both the explicit 'waiting' state and any
-  // unexpected/unknown status that falls through the switch below.
-  const generatingSpinner = (
-    <div className="flex items-center gap-2 text-[var(--color-muted)]">
-      <Spinner size={14} className="animate-spin" />
-      <p className="text-xs">Generating your QR code&hellip;</p>
-    </div>
-  )
-
-  // waiting: no frame yet, or explicit waiting state — show spinner
-  if (!pairing || pairing.status === 'waiting') {
-    return generatingSpinner
-  }
-
-  // code: QR delivered — show scannable QR + exact Linked Devices steps
-  if (pairing.status === 'code' && pairing.qr) {
-    return (
-      <>
-        {/* QR must sit on a light background to scan reliably in dark mode. */}
-        <div data-testid="whatsapp-qr" className="rounded-md bg-white p-3">
-          <QRCodeSVG value={pairing.qr} size={184} level="L" />
-        </div>
-        <p className="text-xs text-[var(--color-secondary)] text-center">
-          Open <span className="font-medium">WhatsApp</span> on your phone, go to{' '}
-          <span className="font-medium">Settings &rarr; Linked Devices &rarr; Link a Device</span>,
-          then scan this code. It refreshes every 20s.
-        </p>
-      </>
-    )
-  }
-
-  switch (pairing.status) {
-    case 'linked':
-      return (
-        <div className="flex items-center gap-2 text-[var(--color-success)]">
-          <CheckCircle size={16} weight="fill" />
-          <p className="text-xs font-medium">Linked successfully.</p>
-        </div>
-      )
-    case 'timeout':
-      return (
-        <div className="flex flex-col items-center gap-3">
-          <div className="flex items-center gap-2 text-[var(--color-muted)]">
-            <Clock size={14} />
-            <p className="text-xs">QR expired &mdash; tap to get a fresh one.</p>
-          </div>
-          {onRetry && (
-            <button
-              type="button"
-              onClick={onRetry}
-              data-testid="whatsapp-retry"
-              className="flex items-center gap-1.5 text-xs text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors"
-            >
-              <ArrowsClockwise size={13} />
-              Retry
-            </button>
-          )}
-        </div>
-      )
-    case 'error':
-      return (
-        <div className="flex flex-col items-center gap-3">
-          <div className="flex items-center gap-2 text-[var(--color-error)]">
-            <Warning size={14} weight="fill" />
-            <p className="text-xs">Pairing failed &mdash; tap to retry.</p>
-          </div>
-          {onRetry && (
-            <button
-              type="button"
-              onClick={onRetry}
-              data-testid="whatsapp-retry"
-              className="flex items-center gap-1.5 text-xs text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors"
-            >
-              <ArrowsClockwise size={13} />
-              Retry
-            </button>
-          )}
-        </div>
-      )
-    default:
-      // Fallback for any unexpected status — show spinner
-      return generatingSpinner
-  }
-}
-
-// RETRY_TIMEOUT_MS is the bounded window after a user presses Retry during which
-// we wait for a fresh `code` frame from the backend. The subscribe toggle only
-// controls forwarding interest — it does NOT make whatsmeow mint a new QR.
-// For a `timeout` state whatsmeow may emit a new code automatically; for `error`
-// the QR loop is terminal and no new code will arrive. If no `code` frame arrives
-// within this window, we revert to the original fallback state with the Retry
-// affordance so the user is never stranded in an endless spinner.
-const RETRY_TIMEOUT_MS = 30_000
-
-// WhatsAppNativeNotice renders the live linked-device pairing QR + status in the
-// browser (#283 / US-C3), fed by the whatsapp_pairing WS frame. The native channel
-// emits under channel_id "whatsapp_native". Replaces the old "check the gateway
-// terminal" text — no terminal access required.
-function WhatsAppNativeNotice() {
-  const pairing = useWhatsAppPairingStore((s) => s.byChannel['whatsapp_native'])
-  const clear = useWhatsAppPairingStore((s) => s.clear)
-  const isConnected = useConnectionStore((s) => s.isConnected)
-
-  // retryFallbackState holds the status to revert to if the bounded retry timer
-  // fires without a fresh `code` frame arriving. null = not in retry mode.
-  const [retryFallbackState, setRetryFallbackState] = useState<'timeout' | 'error' | null>(null)
-  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  // When a `code` frame arrives while we're in retry mode, cancel the fallback
-  // timer and exit retry mode. This is the success path.
-  useEffect(() => {
-    if (pairing?.status === 'code' && retryFallbackState !== null) {
-      if (retryTimerRef.current !== null) {
-        clearTimeout(retryTimerRef.current)
-        retryTimerRef.current = null
-      }
-      setRetryFallbackState(null)
-    }
-  }, [pairing?.status, retryFallbackState])
-
-  // #283 (Option B): tell the gateway this connection is viewing WhatsApp
-  // pairing so the QR is delivered only here, not broadcast to every admin tab.
-  // Re-subscribe whenever the socket (re)connects while the panel is open —
-  // per-connection interest is lost across a reconnect.
-  useEffect(() => {
-    if (!isConnected) return
-    useConnectionStore.getState().connection?.send({
-      type: 'whatsapp_pairing_subscribe',
-      channel_id: 'whatsapp_native',
-      active: true,
-    })
-  }, [isConnected])
-
-  // On unmount (panel closed): cancel any pending retry timer, unsubscribe and
-  // drop the QR/pairing secret from the store so it doesn't linger in memory
-  // past the pairing flow (#283).
-  useEffect(
-    () => () => {
-      if (retryTimerRef.current !== null) {
-        clearTimeout(retryTimerRef.current)
-        retryTimerRef.current = null
-      }
-      useConnectionStore.getState().connection?.send({
-        type: 'whatsapp_pairing_subscribe',
-        channel_id: 'whatsapp_native',
-        active: false,
-      })
-      clear('whatsapp_native')
-    },
-    [clear],
-  )
-
-  function handleRetry() {
-    const fallback = pairing?.status === 'error' ? 'error' : 'timeout'
-
-    // Clear the stale pairing state so we show the spinner immediately.
-    clear('whatsapp_native')
-
-    // Toggle subscribe interest: false then true restores forwarding to this
-    // connection. Note: this does NOT make whatsmeow mint a new QR — it only
-    // re-enables delivery of any QR frames the backend emits on its own schedule.
-    useConnectionStore.getState().connection?.send({
-      type: 'whatsapp_pairing_subscribe',
-      channel_id: 'whatsapp_native',
-      active: false,
-    })
-    useConnectionStore.getState().connection?.send({
-      type: 'whatsapp_pairing_subscribe',
-      channel_id: 'whatsapp_native',
-      active: true,
-    })
-
-    // Enter retry mode: record the fallback state so WhatsAppPairingBody still
-    // renders the spinner (retryFallbackState != null → pairing is undefined in
-    // the store after clear()).
-    setRetryFallbackState(fallback)
-
-    // Bounded timeout: if no `code` frame arrives within RETRY_TIMEOUT_MS, revert
-    // to the original state with the Retry affordance (no endless spinner).
-    if (retryTimerRef.current !== null) {
-      clearTimeout(retryTimerRef.current)
-    }
-    retryTimerRef.current = setTimeout(() => {
-      retryTimerRef.current = null
-      // Re-inject the fallback into the store BEFORE clearing retryFallbackState so
-      // the store holds the correct state when the re-render fires (effectivePairing
-      // switches from undefined to the store value in the same synchronous batch).
-      useWhatsAppPairingStore.getState().apply({
-        type: 'whatsapp_pairing',
-        channel_id: 'whatsapp_native',
-        status: fallback,
-        message: fallback === 'timeout'
-          ? 'the QR code expired before it was scanned'
-          : 'enable multi-device in WhatsApp, then scan the code again',
-      })
-      setRetryFallbackState(null)
-    }, RETRY_TIMEOUT_MS)
-  }
-
-  // While in retry mode (retryFallbackState is set), the store has been cleared,
-  // so `pairing` is undefined. We show the spinner by passing undefined as pairing
-  // (the WhatsAppPairingBody default), not the stale pre-clear value.
-  const effectivePairing = retryFallbackState !== null ? undefined : pairing
-
-  return (
-    <div className="space-y-2 mt-1">
-      <div className="flex flex-col items-center gap-3 p-4 rounded-lg bg-[var(--color-surface-1)] border border-[var(--color-border)]">
-        <WhatsAppPairingBody pairing={effectivePairing} onRetry={handleRetry} />
-      </div>
-      <div className="flex gap-2 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-error)]/30">
-        <Warning size={14} className="text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" />
-        <p className="text-xs text-[var(--color-muted)]">
-          WhatsApp native mode stores sessions locally. The gateway must keep running for the session
-          to stay active.
-        </p>
-      </div>
-    </div>
   )
 }
 
@@ -622,7 +387,7 @@ export function ChannelConfigPanel({
       // backend starts the channel — can render in WhatsAppNativeNotice. Closing here
       // unmounts the notice and drops its subscription before any QR frame arrives, which
       // is why "Enable & Save" never showed a code. Other channels have no pairing step.
-      const hasPairingFlow = channelId === 'whatsapp'
+      const hasPairingFlow = channelId === WHATSAPP_NATIVE_CHANNEL_ID
       addToast({
         message: hasPairingFlow
           ? 'Channel enabled — scan the QR code below to link your device'
@@ -732,7 +497,7 @@ export function ChannelConfigPanel({
   // build the backend reports native_available:false on the whatsapp ChannelEntry,
   // and we must NOT show a QR that can never pair. Only `false` gates;
   // `undefined`/`true` default to available.
-  const isWhatsApp = channelId === 'whatsapp'
+  const isWhatsApp = channelId === WHATSAPP_NATIVE_CHANNEL_ID
   const whatsAppNativeUnavailable = isWhatsApp && nativeAvailable === false
 
   const isBusy = saving || savingAndEnabling

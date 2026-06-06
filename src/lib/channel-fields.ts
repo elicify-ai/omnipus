@@ -620,5 +620,11 @@ export function getChannelFields(channelId: string): ChannelField[] {
   // CHANNEL_FIELDS is keyed by the generated ChannelId enum (drift-guard). The
   // caller passes an arbitrary string, so cast at the lookup site; an unknown id
   // simply falls through to the empty default.
-  return CHANNEL_FIELDS[channelId.toLowerCase() as ChannelId] ?? []
+  //
+  // 'whatsapp_native' is the internal registry name for the whatsmeow channel;
+  // the REST API uses 'whatsapp' as the canonical ChannelId (normalised in the
+  // backend). Both names must resolve to the same field descriptor so the config
+  // panel works regardless of which ID the caller holds.
+  const normalised = channelId.toLowerCase() === 'whatsapp_native' ? 'whatsapp' : channelId.toLowerCase()
+  return CHANNEL_FIELDS[normalised as ChannelId] ?? []
 }
