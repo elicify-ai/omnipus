@@ -341,7 +341,11 @@ export function ChannelConfigPanel({
       queryClient.invalidateQueries({ queryKey: ['channel-routing', channelId] })
     },
   })
+  // useRef (not useState) — timer ID mutation must not trigger re-render
   const routingDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (routingDebounceRef.current !== null) clearTimeout(routingDebounceRef.current)
+  }, [])
   const doSaveRoutingDebounced = (agentId: string | undefined) => {
     if (routingDebounceRef.current) clearTimeout(routingDebounceRef.current)
     routingDebounceRef.current = setTimeout(() => {

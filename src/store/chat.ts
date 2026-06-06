@@ -2016,17 +2016,26 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }
           break
 
+        // Server-side approval timeout: remove from pendingApprovals and notify the user
         case 'exec_approval_expired': {
           const expiredFrame = frame as ExecApprovalExpiredFrame
+          let removed = false
           if (targetSid) {
-            withBucket(targetSid, (b) => ({
-              pendingApprovals: b.pendingApprovals.filter((a) => a.id !== expiredFrame.id),
-            }))
+            withBucket(targetSid, (b) => {
+              const prevLength = b.pendingApprovals.length
+              const nextApprovals = b.pendingApprovals.filter((a) => a.id !== expiredFrame.id)
+              if (nextApprovals.length < prevLength) {
+                removed = true
+              }
+              return { pendingApprovals: nextApprovals }
+            })
           }
-          useUiStore.getState().addToast({
-            message: 'Approval timed out — the tool call was denied automatically.',
-            variant: 'error',
-          })
+          if (removed) {
+            useUiStore.getState().addToast({
+              message: 'Approval timed out — the tool call was denied automatically.',
+              variant: 'error',
+            })
+          }
           break
         }
 

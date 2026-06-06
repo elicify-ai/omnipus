@@ -994,6 +994,7 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
   agents?: {
     defaults?: {
       default_agent_id?: string
+      // Previously missing — silently stripped by rawToFrontendConfig/frontendToRawConfig before this fix
       model_name?: string
       provider?: string
     }
