@@ -686,10 +686,10 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	// Revoke the caller's browser-side cookies. Old bearer tokens and session
 	// cookies are now invalid (hashes cleared above). The SPA must redirect to
-	// login. HTTP 205 Reset Content signals that the client should reset its view.
+	// login. Cookie-clearing headers must be written before the JSON body.
 	middleware.ClearSessionCookie(w, r)
 	middleware.ClearCSRFCookie(w, r)
-	w.WriteHeader(http.StatusResetContent)
+	jsonOK(w, gen.OperationResult{Success: true})
 }
 
 // generateUserToken creates a random bearer token for authentication.
@@ -716,8 +716,14 @@ func (a *restAPI) triggerReloadAndWait() error {
 			// Unit-test environment — no reload pipeline wired; treat as no-op.
 			return nil
 		}
-		slog.Error("config reload failed", "error", err)
-		return err
+		if errors.Is(err, agent.ErrReloadAlreadyInProgress) {
+			// Another reload is in flight; poll until it completes rather than
+			// returning an error — the result will include our config change.
+			// Fall through to the polling loop below.
+		} else {
+			slog.Error("config reload failed", "error", err)
+			return err
+		}
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

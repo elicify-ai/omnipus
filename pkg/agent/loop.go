@@ -337,6 +337,11 @@ const (
 // unexpected and log accordingly.
 var ErrReloadNotConfigured = errors.New("reload not configured")
 
+// ErrReloadAlreadyInProgress is returned by TriggerReload when a reload is
+// already running. The caller should treat this as "poll anyway" — the in-flight
+// reload will call ClearReloadPending when it completes, unblocking any poller.
+var ErrReloadAlreadyInProgress = errors.New("reload already in progress")
+
 // RecapModelBootError is returned by NewAgentLoop when AutoRecapEnabled is true
 // and the resolved recap model is not in the cheap-model allow-list (FR-029a).
 // Callers should map this to a non-zero exit code and log the message.
@@ -2824,6 +2829,12 @@ func (al *AgentLoop) TriggerReload() error {
 	}
 	al.reloadPending.Store(true)
 	if err := al.reloadFunc(); err != nil {
+		// Only clear the pending flag if this was a genuine failure.
+		// If another reload is already in progress, that reload owns the flag —
+		// clearing it here would prematurely unblock any concurrent poller.
+		if strings.Contains(err.Error(), "already in progress") {
+			return ErrReloadAlreadyInProgress
+		}
 		al.reloadPending.Store(false)
 		return err
 	}

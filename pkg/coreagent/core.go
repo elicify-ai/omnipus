@@ -206,7 +206,7 @@ func SeedConfig(cfg *config.Config) bool {
 		// when the global default is false (deny-by-default). Applied idempotently —
 		// fires when nil (unset) OR when currently false so that upgrades from
 		// validator.go's old nil→&false materialization are also fixed.
-		// Operator explicit false can always be re-set after seeding.
+		// Jim always has workspace.shell enabled; setting WorkspaceShellEnabled=false in config.json for Jim is not supported while the gateway is running.
 		if ca.ID == IDJim && (cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil || !*cfg.Sandbox.Experimental.WorkspaceShellEnabled) {
 			t := true
 			cfg.Sandbox.Experimental.WorkspaceShellEnabled = &t

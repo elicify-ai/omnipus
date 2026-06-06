@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"regexp"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -21,11 +20,6 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 )
-
-// usernameRe enforces the admin username constraints:
-// 2–63 chars, starts with alphanumeric, contains only A-Z a-z 0-9 . _ -
-// Compiled at package init to avoid per-request allocation.
-var usernameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$`)
 
 // HandleCompleteOnboarding handles POST /api/v1/onboarding/complete.
 //
@@ -102,9 +96,8 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// Enforce username constraints regardless of ValidateInbound schema validation.
-	if !usernameRe.MatchString(body.Admin.Username) {
-		jsonErr(w, http.StatusBadRequest,
-			`username must be 2-63 characters, start with alphanumeric, and contain only A-Z a-z 0-9 . _ -`)
+	if !usernameRE.MatchString(body.Admin.Username) {
+		jsonErr(w, http.StatusBadRequest, usernameInvalidMsg)
 		return
 	}
 	if body.Admin.Password == "" {
@@ -311,8 +304,9 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		// Do NOT return an error to the caller — config is committed.
 		// The admin user exists and the token is valid.
 	}
-	// Phase-2 complete: mark committed so the defer does NOT release the reservation.
-	// From this point on, onboarding is persisted and retries are no longer valid.
+	// Phase-2 complete: config.json is committed. Mark committed so the defer does NOT release the reservation.
+	// Note: state.json may have failed above (logged as non-fatal) — the process-level reservation correctly
+	// stays held since config.json represents the canonical commit.
 	committed = true
 
 	// Trigger a reload so the in-memory config picks up the new user.

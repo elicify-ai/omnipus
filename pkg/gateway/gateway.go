@@ -844,11 +844,13 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			newCfg, err := config.LoadConfigWithStore(configPath, credStore)
 			if err != nil {
 				logger.Errorf("Error loading config for manual reload: %v", err)
+				agentLoop.ClearReloadPending()
 				runningServices.reloading.Store(false)
 				continue
 			}
 			if err = newCfg.ValidateProviders(); err != nil {
 				logger.Errorf("Config validation failed: %v", err)
+				agentLoop.ClearReloadPending()
 				runningServices.reloading.Store(false)
 				continue
 			}
@@ -902,6 +904,10 @@ func executeReload(
 	msgBus *bus.MessageBus,
 	allowEmptyStartup bool,
 ) error {
+	// Defers run LIFO: ClearReloadPending fires first (unblocks triggerReloadAndWait pollers),
+	// then reloading fires (allows the next CAS to succeed). A concurrent TriggerReload
+	// that races between these two defers gets ErrReloadAlreadyInProgress and polls — safe
+	// because triggerReloadAndWait treats that error as "poll anyway" (see Fix 3).
 	defer runningServices.reloading.Store(false)
 	defer agentLoop.ClearReloadPending()
 
@@ -961,12 +967,6 @@ func executeReload(
 			newCfg.RegisterSensitiveValues(reloadValues)
 		}
 	}
-	// Apply default agent configuration (Jim workspace_shell, Mia default flag, etc.)
-	// so hot-reload has the same seeding guarantees as initial boot.
-	if modified := coreagent.SeedConfig(newCfg); modified {
-		slog.Info("config reload: SeedConfig applied default agent configuration")
-	}
-
 	if err := handleConfigReload(
 		ctx,
 		agentLoop,
