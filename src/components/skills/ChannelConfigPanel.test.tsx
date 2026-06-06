@@ -175,7 +175,8 @@ describe('ChannelConfigPanel — WhatsApp QR 5-state machine (#325 / US-C3)', ()
 
   it('AC1: no frame → shows spinner with "Generating your QR code…"', async () => {
     // No pairing frame in store → waiting state (the default when the notice mounts).
-    renderPanel('whatsapp_native', 'WhatsApp')
+    // Uses the REST-facing channel id ('whatsapp') as ChannelsScreen would pass it.
+    renderPanel('whatsapp', 'WhatsApp')
     await waitFor(() => {
       expect(screen.getByText(/Generating your QR code/i)).toBeInTheDocument()
     })
@@ -183,7 +184,7 @@ describe('ChannelConfigPanel — WhatsApp QR 5-state machine (#325 / US-C3)', ()
 
   it('AC2: state "waiting" → shows spinner "Generating your QR code…"', async () => {
     mockPairingState('waiting')
-    renderPanel('whatsapp_native', 'WhatsApp')
+    renderPanel('whatsapp', 'WhatsApp')
     await waitFor(() => {
       expect(screen.getByText(/Generating your QR code/i)).toBeInTheDocument()
     })
@@ -192,7 +193,7 @@ describe('ChannelConfigPanel — WhatsApp QR 5-state machine (#325 / US-C3)', ()
 
   it('AC2: state "code" → renders QR + Linked Devices steps + refresh note', async () => {
     mockPairingState('code', 'https://example.com/test-qr')
-    renderPanel('whatsapp_native', 'WhatsApp')
+    renderPanel('whatsapp', 'WhatsApp')
     await waitFor(() => {
       expect(screen.getByTestId('whatsapp-qr')).toBeInTheDocument()
     })
@@ -202,7 +203,7 @@ describe('ChannelConfigPanel — WhatsApp QR 5-state machine (#325 / US-C3)', ()
 
   it('AC3: state "linked" → success message', async () => {
     mockPairingState('linked')
-    renderPanel('whatsapp_native', 'WhatsApp')
+    renderPanel('whatsapp', 'WhatsApp')
     await waitFor(() => {
       expect(screen.getByText(/Linked successfully/i)).toBeInTheDocument()
     })
@@ -211,7 +212,7 @@ describe('ChannelConfigPanel — WhatsApp QR 5-state machine (#325 / US-C3)', ()
 
   it('AC4: state "timeout" → distinct expired copy + Retry button', async () => {
     mockPairingState('timeout')
-    renderPanel('whatsapp_native', 'WhatsApp')
+    renderPanel('whatsapp', 'WhatsApp')
     await waitFor(() => {
       expect(screen.getByText(/QR expired/i)).toBeInTheDocument()
     })
@@ -220,7 +221,7 @@ describe('ChannelConfigPanel — WhatsApp QR 5-state machine (#325 / US-C3)', ()
 
   it('AC4: state "error" → distinct pairing-failed copy + Retry button', async () => {
     mockPairingState('error')
-    renderPanel('whatsapp_native', 'WhatsApp')
+    renderPanel('whatsapp', 'WhatsApp')
     await waitFor(() => {
       expect(screen.getByText(/Pairing failed/i)).toBeInTheDocument()
     })
@@ -230,7 +231,7 @@ describe('ChannelConfigPanel — WhatsApp QR 5-state machine (#325 / US-C3)', ()
   it('AC4: timeout and error render distinct copy from each other', async () => {
     // First render timeout
     mockPairingState('timeout')
-    const { unmount } = renderPanel('whatsapp_native', 'WhatsApp')
+    const { unmount } = renderPanel('whatsapp', 'WhatsApp')
     await waitFor(() => {
       expect(screen.getByText(/QR expired/i)).toBeInTheDocument()
     })
@@ -244,7 +245,7 @@ describe('ChannelConfigPanel — WhatsApp QR 5-state machine (#325 / US-C3)', ()
     vi.mocked(getChannelRouting).mockResolvedValue({ default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([])
     mockPairingState('error')
-    renderPanel('whatsapp_native', 'WhatsApp')
+    renderPanel('whatsapp', 'WhatsApp')
     await waitFor(() => {
       expect(screen.getByText(/Pairing failed/i)).toBeInTheDocument()
     })
@@ -310,14 +311,15 @@ describe('ChannelConfigPanel — WhatsApp Retry bounded timeout (MAJOR fix)', ()
     // Use real timers for initial render + interaction, then fake for the timer advance.
     vi.useRealTimers()
 
-    // Seed timeout state.
+    // Seed timeout state. pairingByChannel uses the WS/store key 'whatsapp_native'.
     pairingByChannel['whatsapp_native'] = { status: 'timeout', qr: '', message: 'expired' }
     vi.mocked(useWhatsAppPairingStore).mockImplementation(
       ((selector: (s: unknown) => unknown) =>
         selector({ byChannel: pairingByChannel, clear: clearFn, apply: applyFn })) as never,
     )
 
-    renderPanel('whatsapp_native', 'WhatsApp')
+    // renderPanel uses the REST-facing id ('whatsapp') as ChannelsScreen would pass it.
+    renderPanel('whatsapp', 'WhatsApp')
     await waitFor(() => {
       expect(screen.getByText(/QR expired/i)).toBeInTheDocument()
     })
@@ -347,13 +349,15 @@ describe('ChannelConfigPanel — WhatsApp Retry bounded timeout (MAJOR fix)', ()
   it('Retry on error → spinner immediately; after 30s reverts to error + Retry', async () => {
     vi.useRealTimers()
 
+    // pairingByChannel uses the WS/store key 'whatsapp_native'.
     pairingByChannel['whatsapp_native'] = { status: 'error', qr: '', message: 'auth failed' }
     vi.mocked(useWhatsAppPairingStore).mockImplementation(
       ((selector: (s: unknown) => unknown) =>
         selector({ byChannel: pairingByChannel, clear: clearFn, apply: applyFn })) as never,
     )
 
-    renderPanel('whatsapp_native', 'WhatsApp')
+    // renderPanel uses the REST-facing id ('whatsapp') as ChannelsScreen would pass it.
+    renderPanel('whatsapp', 'WhatsApp')
     await waitFor(() => {
       expect(screen.getByText(/Pairing failed/i)).toBeInTheDocument()
     })
@@ -389,14 +393,15 @@ describe('ChannelConfigPanel — WhatsApp is always native (#283)', () => {
 
   it('renders the live linked-device pairing notice for whatsapp (no use_native gate)', async () => {
     // nativeAvailable is omitted → undefined → default-available.
-    renderPanel('whatsapp_native', 'WhatsApp')
+    // Uses the REST-facing channel id ('whatsapp') as ChannelsScreen would pass it.
+    renderPanel('whatsapp', 'WhatsApp')
     await waitFor(() => {
       expect(screen.getByText(/Generating your QR code/i)).toBeInTheDocument()
     })
   })
 
   it('does NOT render a use_native field (the toggle was removed)', async () => {
-    renderPanel('whatsapp_native', 'WhatsApp')
+    renderPanel('whatsapp', 'WhatsApp')
     await waitFor(() => {
       expect(screen.getByText(/Generating your QR code/i)).toBeInTheDocument()
     })
@@ -405,14 +410,14 @@ describe('ChannelConfigPanel — WhatsApp is always native (#283)', () => {
 
   it('renders the QR container when the pairing WS frame delivers a QR code', async () => {
     mockPairingState('code', 'https://example.com/test-qr')
-    renderPanel('whatsapp_native', 'WhatsApp')
+    renderPanel('whatsapp', 'WhatsApp')
     await waitFor(() => {
       expect(screen.getByTestId('whatsapp-qr')).toBeInTheDocument()
     })
   })
 
   it('renders the QR notice when native_available:true is explicitly passed', async () => {
-    renderPanel('whatsapp_native', 'WhatsApp', true)
+    renderPanel('whatsapp', 'WhatsApp', true)
     await waitFor(() => {
       expect(screen.getByText(/Generating your QR code/i)).toBeInTheDocument()
     })
@@ -421,7 +426,7 @@ describe('ChannelConfigPanel — WhatsApp is always native (#283)', () => {
 
   it('capability gating (#299): native_available:false shows the hint and NOT the QR notice', async () => {
     mockPairingState('code', 'https://example.com/test-qr')
-    renderPanel('whatsapp_native', 'WhatsApp', false)
+    renderPanel('whatsapp', 'WhatsApp', false)
     await waitFor(() => {
       expect(screen.getByTestId('native-unavailable-hint')).toBeInTheDocument()
     })
@@ -674,14 +679,16 @@ describe('ChannelConfigPanel — Save & Enable panel close behavior (#358)', () 
   })
 
   it('keeps the panel open after Save & Enable for WhatsApp (QR can render)', async () => {
-    const { onOpenChange } = renderPanel('whatsapp_native', 'WhatsApp', true)
+    // Use the REST-facing id ('whatsapp') — that is what ChannelsScreen passes as channelId.
+    const { onOpenChange } = renderPanel('whatsapp', 'WhatsApp', true)
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /Save & Enable/i }))
     })
 
     await waitFor(() => {
-      expect(vi.mocked(enableChannel)).toHaveBeenCalledWith('whatsapp_native')
+      // enableChannel is called with the same channelId the panel received.
+      expect(vi.mocked(enableChannel)).toHaveBeenCalledWith('whatsapp')
     })
     // The panel must NOT be closed — onOpenChange(false) would unmount the QR notice.
     expect(onOpenChange).not.toHaveBeenCalledWith(false)

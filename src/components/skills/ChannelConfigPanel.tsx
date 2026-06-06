@@ -28,7 +28,7 @@ import {
 import { getChannelFields, type ChannelField } from '@/lib/channel-fields'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
-import { WHATSAPP_NATIVE_CHANNEL_ID } from './whatsappChannelId'
+import { WHATSAPP_CHANNEL_ID } from './whatsappChannelId'
 import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
 
 interface ChannelConfigPanelProps {
@@ -387,7 +387,8 @@ export function ChannelConfigPanel({
       // backend starts the channel — can render in WhatsAppNativeNotice. Closing here
       // unmounts the notice and drops its subscription before any QR frame arrives, which
       // is why "Enable & Save" never showed a code. Other channels have no pairing step.
-      const hasPairingFlow = channelId === WHATSAPP_NATIVE_CHANNEL_ID
+      // Uses the REST-facing id ('whatsapp') that channel.id carries from GET /channels.
+      const hasPairingFlow = channelId === WHATSAPP_CHANNEL_ID
       addToast({
         message: hasPairingFlow
           ? 'Channel enabled — scan the QR code below to link your device'
@@ -497,7 +498,8 @@ export function ChannelConfigPanel({
   // build the backend reports native_available:false on the whatsapp ChannelEntry,
   // and we must NOT show a QR that can never pair. Only `false` gates;
   // `undefined`/`true` default to available.
-  const isWhatsApp = channelId === WHATSAPP_NATIVE_CHANNEL_ID
+  // Uses the REST-facing id ('whatsapp') that channel.id carries from GET /channels.
+  const isWhatsApp = channelId === WHATSAPP_CHANNEL_ID
   const whatsAppNativeUnavailable = isWhatsApp && nativeAvailable === false
 
   const isBusy = saving || savingAndEnabling

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Warning } from '@phosphor-icons/react'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
+import type { WhatsAppPairingState } from '@/store/whatsappPairing'
 import { useConnectionStore } from '@/store/connection'
 import { WhatsAppPairingBody } from './WhatsAppPairingBody'
 import { WHATSAPP_NATIVE_CHANNEL_ID } from './whatsappChannelId'
@@ -17,6 +18,14 @@ const RETRY_TIMEOUT_MS = 30_000
 // QR_INITIAL_TIMEOUT_MS: if no QR frame arrives within this window from mount,
 // surface a "timed out — click Retry" message. Prevents infinite spinner (#368).
 const QR_INITIAL_TIMEOUT_MS = 15_000
+
+// TIMEOUT_STATE: synthetic pairing state surfaced when the 15s initial-load timer
+// fires with no QR frame. Avoids an inline object literal at the effectivePairing site.
+const TIMEOUT_STATE: WhatsAppPairingState = {
+  status: 'timeout',
+  qr: '',
+  message: 'QR code timed out — click Retry',
+}
 
 // WhatsAppNativeNotice renders the live linked-device pairing QR + status in the
 // browser (#283 / US-C3), fed by the whatsapp_pairing WS frame. The native channel
@@ -159,6 +168,9 @@ export function WhatsAppNativeNotice() {
           ? 'the QR code expired before it was scanned'
           : 'enable multi-device in WhatsApp, then scan the code again',
       })
+      // Reset timedOut so it does not re-assert the timeout banner on top of the
+      // freshly-injected fallback state from the store.
+      setTimedOut(false)
       setRetryFallbackState(null)
     }, RETRY_TIMEOUT_MS)
   }
@@ -171,7 +183,7 @@ export function WhatsAppNativeNotice() {
     retryFallbackState !== null
       ? undefined
       : timedOut && pairing === undefined
-        ? { status: 'timeout' as const, qr: '', message: 'QR code timed out — click Retry' }
+        ? TIMEOUT_STATE
         : pairing
 
   return (

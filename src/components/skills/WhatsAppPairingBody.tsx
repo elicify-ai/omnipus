@@ -5,8 +5,43 @@ import {
   Spinner,
   Warning,
 } from '@phosphor-icons/react'
+import type { Icon } from '@phosphor-icons/react'
 import { QRCodeSVG } from 'qrcode.react'
 import type { WhatsAppPairingState } from '@/store/whatsappPairing'
+
+// RetryableState: shared layout for the timeout and error cases — both show an
+// icon + message line above a Retry button. Deduplicates the two identical blocks.
+function RetryableState({
+  icon: IconComponent,
+  iconProps,
+  message,
+  onRetry,
+}: {
+  icon: Icon
+  iconProps?: React.ComponentProps<Icon>
+  message: string
+  onRetry?: () => void
+}) {
+  return (
+    <div className="flex flex-col items-center gap-3">
+      <div className={`flex items-center gap-2 ${iconProps?.className ?? ''}`}>
+        <IconComponent size={14} {...iconProps} className={undefined} />
+        <p className="text-xs">{message}</p>
+      </div>
+      {onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          data-testid="whatsapp-retry"
+          className="flex items-center gap-1.5 text-xs text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors"
+        >
+          <ArrowsClockwise size={13} />
+          Retry
+        </button>
+      )}
+    </div>
+  )
+}
 
 // WhatsAppPairingBody renders the inner QR/status block for the linked-device
 // notice (#283 / US-C3). Implements the full 5-state machine by real wire names:
@@ -59,43 +94,21 @@ export function WhatsAppPairingBody({
       )
     case 'timeout':
       return (
-        <div className="flex flex-col items-center gap-3">
-          <div className="flex items-center gap-2 text-[var(--color-muted)]">
-            <Clock size={14} />
-            <p className="text-xs">QR expired &mdash; tap to get a fresh one.</p>
-          </div>
-          {onRetry && (
-            <button
-              type="button"
-              onClick={onRetry}
-              data-testid="whatsapp-retry"
-              className="flex items-center gap-1.5 text-xs text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors"
-            >
-              <ArrowsClockwise size={13} />
-              Retry
-            </button>
-          )}
-        </div>
+        <RetryableState
+          icon={Clock}
+          iconProps={{ className: 'text-[var(--color-muted)]' }}
+          message="QR expired — tap to get a fresh one."
+          onRetry={onRetry}
+        />
       )
     case 'error':
       return (
-        <div className="flex flex-col items-center gap-3">
-          <div className="flex items-center gap-2 text-[var(--color-error)]">
-            <Warning size={14} weight="fill" />
-            <p className="text-xs">Pairing failed &mdash; tap to retry.</p>
-          </div>
-          {onRetry && (
-            <button
-              type="button"
-              onClick={onRetry}
-              data-testid="whatsapp-retry"
-              className="flex items-center gap-1.5 text-xs text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors"
-            >
-              <ArrowsClockwise size={13} />
-              Retry
-            </button>
-          )}
-        </div>
+        <RetryableState
+          icon={Warning}
+          iconProps={{ weight: 'fill', className: 'text-[var(--color-error)]' }}
+          message="Pairing failed — tap to retry."
+          onRetry={onRetry}
+        />
       )
     default:
       // Fallback for any unexpected status — show spinner
