@@ -48,7 +48,7 @@ const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
 // ── Shared stub data ──────────────────────────────────────────────────────────
 
-/** Minimal WhatsApp channel entry, native_available=true (case A). */
+/** Minimal WhatsApp channel entry, native_available=true, enabled=true (case A). */
 const WHATSAPP_CHANNEL_NATIVE_AVAILABLE = {
   id: 'whatsapp',
   name: 'WhatsApp',
@@ -62,6 +62,12 @@ const WHATSAPP_CHANNEL_NATIVE_AVAILABLE = {
 const WHATSAPP_CHANNEL_NATIVE_UNAVAILABLE = {
   ...WHATSAPP_CHANNEL_NATIVE_AVAILABLE,
   native_available: false,
+}
+
+/** WhatsApp channel entry, native_available=true but enabled=false (case C). */
+const WHATSAPP_CHANNEL_DISABLED = {
+  ...WHATSAPP_CHANNEL_NATIVE_AVAILABLE,
+  enabled: false,
 }
 
 /** A second channel so the list is never empty. */
@@ -96,15 +102,19 @@ const TEST_QR_PAYLOAD = '2@E2E_TEST_QR_PAYLOAD_DO_NOT_SCAN'
  * when opened for WhatsApp.
  *
  * @param nativeAvailable Controls the native_available field on the WhatsApp
- *   channel entry. Pass true for case A, false for case B.
+ *   channel entry. Pass true for case A/C, false for case B.
+ * @param channelEnabled Controls the enabled field on the WhatsApp channel entry.
+ *   Defaults to true (cases A/B). Pass false for case C.
  */
 async function stubChannelsRest(
   page: import('@playwright/test').Page,
   nativeAvailable: boolean,
+  channelEnabled = true,
 ): Promise<void> {
-  const whatsappEntry = nativeAvailable
+  const base = nativeAvailable
     ? WHATSAPP_CHANNEL_NATIVE_AVAILABLE
     : WHATSAPP_CHANNEL_NATIVE_UNAVAILABLE
+  const whatsappEntry = channelEnabled ? base : { ...base, enabled: false }
 
   // GET /api/v1/channels — channel list (feeds the Channels screen cards)
   await page.route('**/api/v1/channels', async (route: Route) => {
@@ -316,5 +326,58 @@ test(
     // A hardcoded or ungated implementation would render the QR even when
     // native_available:false — this assertion catches that regression.
     await expect(page.getByTestId('whatsapp-qr')).toHaveCount(0)
+  },
+)
+
+// ── Case C: channel not yet enabled (enable-prompt UX fix) ───────────────────
+// BDD: Given the SPA is on the Channels screen
+//      And the channels API reports native_available:true for WhatsApp
+//      But the channel entry has enabled:false
+//      When the user opens the Configure WhatsApp panel
+//      Then [data-testid="whatsapp-enable-prompt"] is visible in the DOM
+//      And [data-testid="whatsapp-qr"] does NOT exist in the DOM
+//
+// Rationale: whatsmeow only generates a QR code after the channel is enabled.
+// Opening the panel on a disabled channel previously started a 15-second countdown
+// that always ended in "QR code timed out — click Retry" with no guidance.
+// This case validates the UX fix: show an informational prompt instead.
+//
+// Traces to: whatsapp-qr.spec.ts (this file) — case C
+
+test(
+  '(C) enabled:false shows the enable-prompt and does NOT render the QR',
+  async ({ page }) => {
+    // Mock the WS so isConnected works normally; no QR frame should be requested
+    // because WhatsAppNativeNotice is not mounted when the channel is disabled.
+    await mockWebSocket(page)
+    await stubChannelsRest(page, /* nativeAvailable */ true, /* channelEnabled */ false)
+
+    await page.goto(`${BASE_URL}/#/channels`)
+    await expect(page).toHaveURL(/channels/, { timeout: 10_000 })
+
+    const configureBtn = page.getByRole('button', { name: /configure whatsapp/i })
+    await expect(configureBtn).toBeVisible({ timeout: 15_000 })
+    await configureBtn.click()
+
+    const sheet = page.locator('[role="dialog"]')
+    await expect(sheet).toBeVisible({ timeout: 10_000 })
+    await expect(sheet).toContainText(/configure whatsapp/i)
+
+    // ── Core assertion A: the enable-prompt is visible.
+    // Waits for the config skeleton to resolve and the panel to render its
+    // WhatsApp section — which must show the prompt, not the QR notice.
+    const enablePrompt = page.getByTestId('whatsapp-enable-prompt')
+    await expect(enablePrompt).toBeVisible({ timeout: 10_000 })
+    await expect(enablePrompt).toContainText(/save.*enable whatsapp/i)
+
+    // ── Core assertion B: no QR container in the DOM.
+    // If the gating is removed, WhatsAppNativeNotice mounts and the QR timeout
+    // fires. This assertion ensures the notice is suppressed for disabled channels.
+    await expect(page.getByTestId('whatsapp-qr')).toHaveCount(0)
+
+    // ── Negative assertion: the capability-unavailable hint must NOT appear.
+    // Case C is about enabled:false, not native_available:false — both hints
+    // must not coexist.
+    await expect(page.getByTestId('native-unavailable-hint')).toHaveCount(0)
   },
 )

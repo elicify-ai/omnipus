@@ -43,6 +43,13 @@ interface ChannelConfigPanelProps {
    * the QR renders by default ("the UI must only offer what the binary can do").
    */
   nativeAvailable?: boolean
+  /**
+   * Whether the channel is currently enabled. Used to gate the WhatsApp QR
+   * pairing UI: whatsmeow only starts the QR handshake after the channel is
+   * enabled, so we show an informational prompt when enabled is false/undefined
+   * rather than starting the 15-second QR timeout with no chance of a QR arriving.
+   */
+  enabled?: boolean
 }
 
 // #326: Map raw snake_case API field keys to human-readable labels using the
@@ -285,6 +292,7 @@ export function ChannelConfigPanel({
   open,
   onOpenChange,
   nativeAvailable,
+  enabled,
 }: ChannelConfigPanelProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
@@ -630,7 +638,10 @@ export function ChannelConfigPanel({
             {/* WhatsApp is always native (whatsmeow): show the live linked-device
                 QR pairing UI (#283) — but only when the server build can run
                 native WhatsApp. On a lite/stub build (native_available:false) show
-                a hint instead of a QR that can never pair (#299). */}
+                a hint instead of a QR that can never pair (#299).
+                When the channel is not yet enabled, show an informational prompt
+                instead of starting the 15-second QR timeout: whatsmeow only
+                generates a QR after the channel is enabled. */}
             {isWhatsApp &&
               (whatsAppNativeUnavailable ? (
                 <p
@@ -640,8 +651,15 @@ export function ChannelConfigPanel({
                   WhatsApp requires the native build (whatsmeow); this server build
                   doesn&apos;t include it, so linked-device pairing is unavailable.
                 </p>
-              ) : (
+              ) : enabled ? (
                 <WhatsAppNativeNotice />
+              ) : (
+                <p
+                  data-testid="whatsapp-enable-prompt"
+                  className="text-xs text-[var(--color-muted)] leading-relaxed mt-1 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]"
+                >
+                  Save &amp; Enable WhatsApp to start pairing. Once enabled, the QR code will appear here automatically.
+                </p>
               ))}
 
             {/* Routing — hidden for webchat (no agent-routing concept) */}
