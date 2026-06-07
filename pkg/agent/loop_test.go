@@ -180,18 +180,21 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	if listErr != nil {
 		t.Fatalf("ListSessions after processMessage failed: %v", listErr)
 	}
-	if len(sessions) != 1 {
-		t.Fatalf("expected 1 channel session in shared store, got %d", len(sessions))
+	// Filter to just the session created by this test (channel=discord, peerID=group-1).
+	// The shared store may contain sessions from other parallel tests that share the
+	// same OS temp parent directory, so we cannot assert an exact total count.
+	foundIdx := -1
+	for i := range sessions {
+		if sessions[i].Channel == "discord" && sessions[i].PeerID == "group-1" {
+			foundIdx = i
+			break
+		}
 	}
-	s := sessions[0]
-	if s.Channel != "discord" {
-		t.Errorf("channel session Channel = %q, want %q", s.Channel, "discord")
+	if foundIdx == -1 {
+		t.Fatalf("no channel session with Channel=discord PeerID=group-1 found in shared store (got %d sessions)", len(sessions))
 	}
-	if string(s.Type) != "channel" {
-		t.Errorf("channel session Type = %q, want %q", s.Type, "channel")
-	}
-	if s.PeerID != "group-1" {
-		t.Errorf("channel session PeerID = %q, want %q", s.PeerID, "group-1")
+	if string(sessions[foundIdx].Type) != "channel" {
+		t.Errorf("channel session Type = %q, want %q", sessions[foundIdx].Type, "channel")
 	}
 }
 
