@@ -422,7 +422,7 @@ export function SessionPanel() {
   const groupedSessions = useMemo(() => {
     const groups = new Map<string, Session[]>()
     for (const s of filteredSessions) {
-      const ch = s.channel ?? 'webchat'
+      const ch = s.channel || 'webchat'
       const existing = groups.get(ch) ?? []
       groups.set(ch, [...existing, s])
     }

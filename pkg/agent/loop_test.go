@@ -167,6 +167,32 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	if lastMessage.Role != "user" || lastMessage.Content != "hello" {
 		t.Fatalf("last provider message = %+v, want unchanged user message", lastMessage)
 	}
+
+	// Channel-session routing: the non-webchat discord message must have caused a
+	// shared channel session to be created in the shared store.
+	//
+	// Traces to: pkg/agent/loop.go processMessage channel-session block
+	//            (channel session routing feature)
+	if al.sharedSessionStore == nil {
+		t.Fatal("sharedSessionStore must be initialized after NewAgentLoop")
+	}
+	sessions, listErr := al.sharedSessionStore.ListSessions()
+	if listErr != nil {
+		t.Fatalf("ListSessions after processMessage failed: %v", listErr)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 channel session in shared store, got %d", len(sessions))
+	}
+	s := sessions[0]
+	if s.Channel != "discord" {
+		t.Errorf("channel session Channel = %q, want %q", s.Channel, "discord")
+	}
+	if string(s.Type) != "channel" {
+		t.Errorf("channel session Type = %q, want %q", s.Type, "channel")
+	}
+	if s.PeerID != "group-1" {
+		t.Errorf("channel session PeerID = %q, want %q", s.PeerID, "group-1")
+	}
 }
 
 func TestProcessMessage_UseCommandLoadsRequestedSkill(t *testing.T) {
