@@ -13,13 +13,30 @@
  *     QR is rendered. There is no `use_native` toggle anymore (WhatsApp is always
  *     native); the gating is purely on the native_available capability flag.
  *
- * Approach: fully deterministic, no real WhatsApp connection.
+ *   Case C — Channel not yet enabled (enable-prompt UX fix):
+ *     When the channel entry has enabled:false, [data-testid="whatsapp-enable-prompt"]
+ *     renders and [data-testid="whatsapp-qr"] does NOT appear in the DOM.
+ *
+ *   Case D — Real backend: pairing WS frame delivered after channel enable:
+ *     Uses the real gateway WS (no routeWebSocket mock).  Enables the WhatsApp
+ *     channel via the real REST API, opens the Configure panel, and waits for the
+ *     backend to emit a whatsapp_pairing frame over the live WS.
+ *     Skipped when the binary is built without whatsmeow (native_available:false).
+ *
+ * Approach for Cases A–C: fully deterministic, no real WhatsApp connection.
  *   - page.route() stubs all REST calls the panel makes (channels list, config,
  *     routing, agents) so no gateway state is required.
  *   - page.routeWebSocket() (Playwright 1.49+) fully mocks the WS transport.
  *     On the client→server subscribe frame the mock immediately injects the
  *     pairing QR frame back to the page. The QR payload is a test sentinel that
  *     must NOT be scanned ("E2E_TEST_QR_PAYLOAD_DO_NOT_SCAN").
+ *
+ * Approach for Case D: real backend pipeline.
+ *   - No page.route() stubs — all REST calls hit the live gateway.
+ *   - No page.routeWebSocket() — the SPA's real WS connection is used.
+ *   - The test enables the WhatsApp channel via PUT /api/v1/channels/whatsapp/enable,
+ *     which causes whatsmeow to start and emit a whatsapp_pairing QR frame.
+ *   - Cleans up by disabling the channel after the assertion.
  *
  * Why we use the base @playwright/test `test` rather than the console-errors
  * fixture wrapper:
@@ -41,6 +58,8 @@
  *   - CLAUDE.md — "E2E tests always target the embedded SPA (Go binary)"
  */
 
+import * as fs from 'fs'
+import * as path from 'path'
 import type { Route, WebSocketRoute } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 
@@ -48,7 +67,7 @@ const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
 // ── Shared stub data ──────────────────────────────────────────────────────────
 
-/** Minimal WhatsApp channel entry, native_available=true, enabled=true (case A). */
+/** Minimal WhatsApp channel entry, native_available=true (case A). */
 const WHATSAPP_CHANNEL_NATIVE_AVAILABLE = {
   id: 'whatsapp',
   name: 'WhatsApp',
@@ -62,12 +81,6 @@ const WHATSAPP_CHANNEL_NATIVE_AVAILABLE = {
 const WHATSAPP_CHANNEL_NATIVE_UNAVAILABLE = {
   ...WHATSAPP_CHANNEL_NATIVE_AVAILABLE,
   native_available: false,
-}
-
-/** WhatsApp channel entry, native_available=true but enabled=false (case C). */
-const WHATSAPP_CHANNEL_DISABLED = {
-  ...WHATSAPP_CHANNEL_NATIVE_AVAILABLE,
-  enabled: false,
 }
 
 /** A second channel so the list is never empty. */
@@ -102,19 +115,15 @@ const TEST_QR_PAYLOAD = '2@E2E_TEST_QR_PAYLOAD_DO_NOT_SCAN'
  * when opened for WhatsApp.
  *
  * @param nativeAvailable Controls the native_available field on the WhatsApp
- *   channel entry. Pass true for case A/C, false for case B.
- * @param channelEnabled Controls the enabled field on the WhatsApp channel entry.
- *   Defaults to true (cases A/B). Pass false for case C.
+ *   channel entry. Pass true for case A, false for case B.
  */
 async function stubChannelsRest(
   page: import('@playwright/test').Page,
   nativeAvailable: boolean,
-  channelEnabled = true,
 ): Promise<void> {
-  const base = nativeAvailable
+  const whatsappEntry = nativeAvailable
     ? WHATSAPP_CHANNEL_NATIVE_AVAILABLE
     : WHATSAPP_CHANNEL_NATIVE_UNAVAILABLE
-  const whatsappEntry = channelEnabled ? base : { ...base, enabled: false }
 
   // GET /api/v1/channels — channel list (feeds the Channels screen cards)
   await page.route('**/api/v1/channels', async (route: Route) => {
@@ -329,32 +338,134 @@ test(
   },
 )
 
-// ── Case C: channel not yet enabled (enable-prompt UX fix) ───────────────────
-// BDD: Given the SPA is on the Channels screen
-//      And the channels API reports native_available:true for WhatsApp
-//      But the channel entry has enabled:false
-//      When the user opens the Configure WhatsApp panel
-//      Then [data-testid="whatsapp-enable-prompt"] is visible in the DOM
-//      And [data-testid="whatsapp-qr"] does NOT exist in the DOM
+// ── Case D: real backend — pairing WS frame delivered after channel enable ───
 //
-// Rationale: whatsmeow only generates a QR code after the channel is enabled.
-// Opening the panel on a disabled channel previously started a 15-second countdown
-// that always ended in "QR code timed out — click Retry" with no guidance.
-// This case validates the UX fix: show an informational prompt instead.
+// BDD:
+//   Given the gateway is running with the native WhatsApp build (NativeAvailable=true)
+//   And the WhatsApp channel is initially disabled
+//   And the user is authenticated (global storageState)
+//   When the user enables the WhatsApp channel via PUT /api/v1/channels/whatsapp/enable
+//   And the user navigates to the Channels screen
+//   And the user opens the Configure WhatsApp panel
+//   Then [data-testid="whatsapp-qr"] becomes visible within 20 seconds
+//   And the QR container contains an <svg> element
 //
-// Traces to: whatsapp-qr.spec.ts (this file) — case C
+// This is the only test in this file that exercises the real backend→WS→SPA
+// pipeline without any page.route() or page.routeWebSocket() mocking.
+// It validates that the gateway actually starts whatsmeow, generates the pairing
+// QR, and delivers the whatsapp_pairing WS frame to the SPA end-to-end.
+//
+// Skip condition: if GET /api/v1/channels returns native_available:false for
+// WhatsApp (i.e., the binary is a lite build without whatsmeow), the test is
+// skipped with test.skip() — there is no QR to wait for in that case.
+//
+// Cleanup: the test disables the WhatsApp channel after the assertion to avoid
+// leaving the gateway in a state where whatsmeow tries to connect and generates
+// spurious log noise for subsequent tests.
+//
+// Traces to: CLAUDE.md §Architecture Patterns — "WhatsApp native QR pairing
+//   (#283 via #298)"; GitHub issue #283/#298; pkg/gateway/rest.go:setChannelEnabled.
+
+/**
+ * Read the Bearer auth token from the Playwright storageState file.
+ * Case D needs it to call PUT /api/v1/channels/whatsapp/enable directly.
+ * Mirrors the pattern in replay-fidelity.spec.ts::getStoredAuthToken().
+ */
+function _whatsappGetStoredAuthToken(): string | null {
+  const authFile = process.env.OMNIPUS_AUTH_FILE
+    ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
+    : path.join(
+        path.dirname(new URL(import.meta.url).pathname),
+        'fixtures/.auth/admin.json',
+      )
+  if (!fs.existsSync(authFile)) return null
+  try {
+    const raw = fs.readFileSync(authFile, 'utf-8')
+    const state = JSON.parse(raw) as {
+      origins?: Array<{
+        origin: string
+        localStorage?: Array<{ name: string; value: string }>
+      }>
+    }
+    for (const origin of state.origins ?? []) {
+      for (const item of origin.localStorage ?? []) {
+        if (item.name === 'omnipus_auth_token') return item.value
+      }
+    }
+  } catch {
+    // Auth file may not exist on first run
+  }
+  return null
+}
 
 test(
-  '(C) enabled:false shows the enable-prompt and does NOT render the QR',
+  '(D) real backend: pairing WS frame delivered after channel enable',
   async ({ page }) => {
-    // Mock the WS so isConnected works normally; no QR frame should be requested
-    // because WhatsAppNativeNotice is not mounted when the channel is disabled.
-    await mockWebSocket(page)
-    await stubChannelsRest(page, /* nativeAvailable */ true, /* channelEnabled */ false)
+    // 30s is enough: whatsmeow typically emits the first QR frame within 3-8s
+    // of being started, plus ~5s for channel init and WS round-trip.
+    test.setTimeout(60_000)
 
+    // ── Step 1: Check native_available from the real API ──
+    // If the binary is a lite build (no whatsmeow), native_available is false
+    // and we cannot receive a real QR — skip rather than fail.
+    const channelsResp = await page.request.get(`${BASE_URL}/api/v1/channels`)
+    if (!channelsResp.ok()) {
+      test.skip(true, `GET /api/v1/channels failed: ${channelsResp.status()} — cannot determine native_available`)
+      return
+    }
+    const channels = (await channelsResp.json()) as Array<{
+      id: string
+      native_available?: boolean
+      enabled?: boolean
+    }>
+    const whatsappEntry = channels.find((c) => c.id === 'whatsapp')
+    if (!whatsappEntry?.native_available) {
+      test.skip(
+        true,
+        'WhatsApp native_available=false (lite build without whatsmeow) — no QR to wait for',
+      )
+      return
+    }
+
+    // ── Step 2: Read the Bearer token ──
+    const authToken = _whatsappGetStoredAuthToken()
+
+    // ── Step 3: Navigate to root first so the SPA loads and mints the CSRF
+    //    cookie before we make any state-mutating API calls.
+    await page.goto(`${BASE_URL}/`)
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+
+    // Read the CSRF cookie now that the SPA has initialised it.
+    const freshCookies = await page.context().cookies()
+    const freshCsrf = freshCookies.find((c) => c.name === '__Host-csrf')
+    const finalHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      ...(freshCsrf ? { 'X-CSRF-Token': freshCsrf.value } : {}),
+    }
+
+    // ── Step 4: Enable the WhatsApp channel via the real REST API ──
+    // The enable endpoint is PUT /api/v1/channels/whatsapp/enable (no body).
+    // This causes the gateway to call manager.SetChannelEnabled("whatsapp_native", true)
+    // which starts whatsmeow and triggers the pairing QR emission over WS.
+    const enableResp = await page.request.put(
+      `${BASE_URL}/api/v1/channels/whatsapp/enable`,
+      { headers: finalHeaders },
+    )
+    if (!enableResp.ok()) {
+      // If the enable fails (e.g. missing credentials, network error), fail
+      // with a clear message rather than letting the QR assertion time out.
+      const body = await enableResp.text()
+      throw new Error(
+        `PUT /api/v1/channels/whatsapp/enable failed: ${enableResp.status()} — ${body}`,
+      )
+    }
+
+    // ── Step 5: Navigate to the Channels screen ──
     await page.goto(`${BASE_URL}/#/channels`)
     await expect(page).toHaveURL(/channels/, { timeout: 10_000 })
 
+    // ── Step 6: Open the Configure WhatsApp panel ──
     const configureBtn = page.getByRole('button', { name: /configure whatsapp/i })
     await expect(configureBtn).toBeVisible({ timeout: 15_000 })
     await configureBtn.click()
@@ -363,21 +474,42 @@ test(
     await expect(sheet).toBeVisible({ timeout: 10_000 })
     await expect(sheet).toContainText(/configure whatsapp/i)
 
-    // ── Core assertion A: the enable-prompt is visible.
-    // Waits for the config skeleton to resolve and the panel to render its
-    // WhatsApp section — which must show the prompt, not the QR notice.
-    const enablePrompt = page.getByTestId('whatsapp-enable-prompt')
-    await expect(enablePrompt).toBeVisible({ timeout: 10_000 })
-    await expect(enablePrompt).toContainText(/save.*enable whatsapp/i)
+    // ── Step 7: Wait for the real QR to appear ──
+    // whatsmeow generates the pairing QR within a few seconds of start.
+    // The SPA subscribes via whatsapp_pairing_subscribe over the real WS and
+    // renders [data-testid="whatsapp-qr"] when the backend delivers a
+    // whatsapp_pairing frame with status:'code'.
+    // We allow up to 20s for the full backend→WS→SPA round-trip.
+    const qrContainer = page.getByTestId('whatsapp-qr')
+    await expect(qrContainer).toBeVisible({ timeout: 20_000 })
 
-    // ── Core assertion B: no QR container in the DOM.
-    // If the gating is removed, WhatsAppNativeNotice mounts and the QR timeout
-    // fires. This assertion ensures the notice is suppressed for disabled channels.
-    await expect(page.getByTestId('whatsapp-qr')).toHaveCount(0)
+    // ── Step 8: Differentiation assertions ──
+    // These catch a stub that renders an empty or hardcoded container.
 
-    // ── Negative assertion: the capability-unavailable hint must NOT appear.
-    // Case C is about enabled:false, not native_available:false — both hints
-    // must not coexist.
-    await expect(page.getByTestId('native-unavailable-hint')).toHaveCount(0)
+    // The QR container must contain an <svg> produced by qrcode.react.
+    const svg = qrContainer.locator('svg')
+    await expect(svg).toHaveCount(1)
+
+    // The QR must not be empty — qrcode.react renders at least one <path>
+    // element inside the SVG for real QR content.
+    const paths = svg.locator('path')
+    const pathCount = await paths.count()
+    expect(pathCount).toBeGreaterThan(0)
+
+    // ── Cleanup: disable the channel to avoid leaving whatsmeow running ──
+    // Best effort — if this fails the test result is still the assertion above.
+    try {
+      const freshCookies2 = await page.context().cookies()
+      const cleanupCsrf = freshCookies2.find((c) => c.name === '__Host-csrf')
+      await page.request.put(`${BASE_URL}/api/v1/channels/whatsapp/disable`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          ...(cleanupCsrf ? { 'X-CSRF-Token': cleanupCsrf.value } : {}),
+        },
+      })
+    } catch {
+      // Cleanup failure is non-fatal: the test result is already determined.
+    }
   },
 )

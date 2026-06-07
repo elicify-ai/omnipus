@@ -646,6 +646,109 @@ test(
   },
 )
 
+// ── Test (f): real-session replay: tool_call badges survive session reopen ────
+//
+// This test drives a real LLM session (no seeded transcript) to validate that
+// tool_call badges recorded during a live streaming turn are reproduced
+// faithfully when the session is reopened via the replay path.
+//
+// Contract under test: the badge count rendered by the SPA after replay must
+// equal the badge count observed during the live turn.  A discrepancy would
+// indicate that the replay path drops, duplicates, or reorders tool_call frames.
+//
+// BDD:
+//   Given an authenticated session is open
+//   When the user sends a prompt that causes the agent to call at least one tool
+//   And the agent turn completes (done frame arrives)
+//   And the user captures the live badge count
+//   And the user navigates away from the session
+//   And the user navigates back to the same session URL
+//   And the replay completes (done frame arrives)
+//   Then the badge count after replay equals the live badge count
+//
+// Traces to: sprint-i-historical-replay-fidelity-spec.md BDD Scenario 1 (tool-call
+//   fidelity) and Scenario 2 (tool attribute values survive reopen); TDD row 23.
+//   Complements test (a) which seeds its transcript from disk — this test uses
+//   a real backend LLM turn so streaming-path frame ordering is exercised.
+
+test(
+  '(f) real-session replay: tool_call badges survive session reopen',
+  async ({ page }) => {
+    // test.slow() triples the global timeout (90s → 270s).
+    // Real LLM tool calls under suite load take 20-60s; the navigation +
+    // replay adds another ~10s on top.
+    test.slow()
+
+    await page.goto('/')
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+
+    // Wait for WS connection so the chat input is usable.
+    await waitForWsConnected(page)
+
+    // ── Step 1: Create and name a fresh session ──
+    const sessionId = await createSession(page)
+    const sessionTitle = `replay-fidelity-test-f-${Date.now()}`
+    await renameSession(page, sessionId, sessionTitle)
+
+    // ── Step 2: Open the session and send a prompt that forces at least one tool call ──
+    // We use the `exec` tool (available on all core agents, including Mia) to
+    // guarantee a tool_call_badge appears.  The exact tool name is specified to
+    // reduce LLM variance.  Temperature is not directly controllable here, but
+    // the deterministic instruction ("Call exec NOW") is sufficient in practice.
+    await openSession(page, sessionTitle)
+    await waitForReplayDone(page)
+
+    const input = chatInput(page)
+    await expect(input).toBeEnabled({ timeout: 10_000 })
+    await input.fill(
+      'Call the `exec` tool EXACTLY ONCE right now with action="run" and ' +
+        'command="echo replay-badge-test". After the tool result arrives, ' +
+        'reply with the single word "done". Do not call any other tool.',
+    )
+    await input.press('Enter')
+
+    // ── Step 3: Wait for the live turn to complete ──
+    // We wait for the stop button to appear (turn started), then disappear
+    // (turn done), then verify the chat input is enabled (isStreaming=false).
+    const stopBtn = page.locator('[data-testid="stop-btn"]')
+    await expect(stopBtn).toBeVisible({ timeout: 60_000 })
+    await expect(stopBtn).not.toBeVisible({ timeout: 120_000 })
+    await expect(input).toBeEnabled({ timeout: 15_000 })
+
+    // ── Step 4: Capture the live badge count ──
+    // The exec call must have produced exactly one tool-call-badge.
+    // We wait on the badge to appear (it may lag the done frame slightly).
+    const badgeLocator = page.locator('[data-testid="tool-call-badge"]')
+    await expect(badgeLocator.first()).toBeVisible({ timeout: 15_000 })
+    const liveBadgeCount = await badgeLocator.count()
+    expect(liveBadgeCount).toBeGreaterThanOrEqual(1)
+
+    // ── Step 5: Navigate away ──
+    await page.goto('/')
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 10_000 })
+    await waitForWsConnected(page)
+
+    // ── Step 6: Navigate back to the same session via the session panel ──
+    await openSession(page, sessionTitle)
+    await waitForReplayDone(page)
+
+    // ── Step 7: Assert badge count after replay matches live count ──
+    // This is the core contract: replay must reproduce the same tool_call
+    // badges with the same count as the live session.
+    const replayedBadges = page.locator('[data-testid="tool-call-badge"]')
+    await expect(replayedBadges).toHaveCount(liveBadgeCount, { timeout: 15_000 })
+
+    // Differentiation assertion: verify each replayed badge carries a
+    // data-tool attribute with a non-empty string.
+    // A hardcoded stub returning N empty divs would fail this assertion.
+    for (let i = 0; i < liveBadgeCount; i++) {
+      const badge = replayedBadges.nth(i)
+      const dataTool = await badge.getAttribute('data-tool')
+      expect(dataTool).toBeTruthy()
+    }
+  },
+)
+
 // ── Test (e): send button disabled during replay ──────────────────────────────
 //
 // T0.1: Promoted from test.fixme — issue #133 was previously used to suppress
