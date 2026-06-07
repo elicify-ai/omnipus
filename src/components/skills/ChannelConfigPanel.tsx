@@ -303,6 +303,11 @@ export function ChannelConfigPanel({
 
   const [formValues, setFormValues] = useState<Record<string, unknown>>({})
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  // Tracks whether Save & Enable was just clicked in this panel session. Needed because
+  // the `enabled` prop comes from the parent's stale state after Save & Enable keeps the
+  // dialog open — without this, the panel would keep showing the enable-prompt even after
+  // the channel was just enabled in this session.
+  const [wasJustEnabled, setWasJustEnabled] = useState(false)
 
   // #324 — Google Chat auth method picker. Switching method clears the other
   // group's useState value so a stale secret cannot be resurrected on switch-back (F-G08).
@@ -349,6 +354,11 @@ export function ChannelConfigPanel({
       queryClient.invalidateQueries({ queryKey: ['channel-routing', channelId] })
     },
   })
+  // Reset wasJustEnabled when the dialog closes so next open starts fresh.
+  useEffect(() => {
+    if (!open) setWasJustEnabled(false)
+  }, [open])
+
   // useRef (not useState) — timer ID mutation must not trigger re-render
   const routingDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => {
@@ -417,7 +427,9 @@ export function ChannelConfigPanel({
           : 'Channel configured and enabled',
         variant: 'success',
       })
-      if (!hasPairingFlow) {
+      if (hasPairingFlow) {
+        setWasJustEnabled(true)
+      } else {
         onOpenChange(false)
       }
     },
@@ -651,7 +663,7 @@ export function ChannelConfigPanel({
                   WhatsApp requires the native build (whatsmeow); this server build
                   doesn&apos;t include it, so linked-device pairing is unavailable.
                 </p>
-              ) : enabled ? (
+              ) : (enabled || wasJustEnabled) ? (
                 <WhatsAppNativeNotice />
               ) : (
                 <p
