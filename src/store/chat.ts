@@ -1633,14 +1633,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   msg.isStreaming = false
                   msg.status = msg.status === 'interrupted' ? 'interrupted' : 'done'
                 }
-                // End-of-replay bake: gateway emits tool_call_start + tool_call_result
-                // frames for each persisted ToolCall during replay (pkg/gateway/replay.go),
-                // and the last turn's done frame is the only signal that those frames are
-                // complete. The replay_message bake (~1964) only fires when a *next*
-                // replay_message arrives, so tool calls in the final assistant entry
-                // are never baked onto message.tool_calls — VirtualAssistantMessageRow
-                // then renders no tool block / no iframe.
-                if (wasReplaying && lastMsgId && draft.toolCallOrder.length > 0) {
+                // Bake any pending tool calls into the last assistant message so
+                // VirtualAssistantMessageRow can render them from message.tool_calls.
+                // This covers two cases:
+                //   1. Replay: replay_message coalesces into the empty placeholder and
+                //      returns before baking; done is the only signal that all frames
+                //      for the final entry are complete.
+                //   2. Live turns: tool calls stay in toolCallOrder until the next
+                //      sendMessage bakes them, causing them to disappear the moment
+                //      isStreaming goes false and the message moves to the historical
+                //      renderer (VirtualAssistantMessageRow reads message.tool_calls, not
+                //      the bucket live map).
+                if (lastMsgId && draft.toolCallOrder.length > 0) {
                   const baked = draft.toolCallOrder
                     .filter((id) => draft.toolCalls[id])
                     .map((id) => {

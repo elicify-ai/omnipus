@@ -879,13 +879,14 @@ describe('ChatStore_ReplaySequence_MatchesLiveSequence', () => {
     // Extract the single assistant message
     const liveAssistant = liveState.messages.find((m) => m.role === 'assistant')
     expect(liveAssistant).toBeDefined()
-    const liveContent = liveAssistant!.content           // "AB"
-    const liveToolCallOrder = liveState.toolCallOrder    // ['tc_live_1']
-    const liveToolCall = liveState.toolCalls['tc_live_1']
+    const liveContent = liveAssistant!.content
+    // After done, tool calls are baked into message.tool_calls and live map is cleared.
+    const liveBakedToolCalls = liveAssistant!.tool_calls ?? []
     expect(liveContent).toBe('AB')
-    expect(liveToolCallOrder).toHaveLength(1)
-    expect(liveToolCall.tool).toBe('shell')
-    expect(liveToolCall.status).toBe('success')
+    expect(liveBakedToolCalls).toHaveLength(1)
+    expect(liveBakedToolCalls[0].tool).toBe('shell')
+    expect(liveBakedToolCalls[0].status).toBe('success')
+    expect(liveState.toolCallOrder).toHaveLength(0)
     // Live sequence: streaming flags settled
     expect(liveAssistant!.isStreaming).toBe(false)
 
@@ -936,13 +937,13 @@ describe('ChatStore_ReplaySequence_MatchesLiveSequence', () => {
     // Content must match
     expect(replayAssistant!.content).toBe(liveContent)
 
-    // Tool-call count must match
-    expect(replayState.toolCallOrder).toHaveLength(liveToolCallOrder.length)
+    // Tool-call count must match (both baked into message.tool_calls after done)
+    const replayBakedToolCalls = replayAssistant!.tool_calls ?? []
+    expect(replayBakedToolCalls).toHaveLength(liveBakedToolCalls.length)
 
     // Tool-call properties must match
-    const replayToolCall = replayState.toolCalls['tc_replay_1']
-    expect(replayToolCall.tool).toBe(liveToolCall.tool)
-    expect(replayToolCall.status).toBe(liveToolCall.status)
+    expect(replayBakedToolCalls[0].tool).toBe(liveBakedToolCalls[0].tool)
+    expect(replayBakedToolCalls[0].status).toBe(liveBakedToolCalls[0].status)
 
     // Cursor/streaming flags: replay_message arrives as a completed message (no cursor)
     // Live message: also settled after done. Both must be false.
