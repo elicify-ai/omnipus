@@ -3253,7 +3253,9 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// For non-webchat channel messages arriving without a session ID, create or
 	// resume a persistent shared session so they appear in the session history panel.
 	if msg.SessionID == "" && msg.Channel != "webchat" && msg.Channel != "system" && msg.Channel != "" {
-		if sid := al.resolveOrCreateChannelSession(msg.Channel, msg.ChatID, agent.ID, msg.Sender.DisplayName); sid != "" {
+		if sid := al.resolveOrCreateChannelSession(
+			msg.Channel, msg.ChatID, agent.ID, msg.Sender.DisplayName,
+		); sid != "" {
 			msg.SessionID = sid
 		}
 	}
