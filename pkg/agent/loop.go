@@ -251,6 +251,10 @@ type AgentLoop struct {
 	// Resource-aware admission (CPU load, RSS, goroutine count) is out of
 	// scope for v0.1 and filed as a follow-up.
 	admission *AdmissionController
+
+	// channelSessionIdx maps "channel/chatID" → shared session ID for fast per-peer
+	// session resumption. Built on startup and updated on every new channel session.
+	channelSessionIdx sync.Map
 }
 
 // processOptions configures how a message is processed
@@ -440,6 +444,7 @@ func NewAgentLoop(
 				map[string]any{"dir": sharedDir, "error": ssErr.Error()})
 		} else {
 			al.sharedSessionStore = sharedStore
+			al.rebuildChannelSessionIndex()
 		}
 	}
 
@@ -2576,6 +2581,45 @@ func (al *AgentLoop) getLegacyAgentStore(agentID string) *session.UnifiedStore {
 	return al.GetAgentStore(agentID)
 }
 
+// rebuildChannelSessionIndex populates channelSessionIdx from existing shared sessions.
+// Called once after sharedSessionStore is initialized.
+func (al *AgentLoop) rebuildChannelSessionIndex() {
+	if al.sharedSessionStore == nil {
+		return
+	}
+	sessions, _ := al.sharedSessionStore.ListSessions()
+	for _, s := range sessions {
+		if s.Channel != "" && s.Channel != "webchat" && s.PeerID != "" {
+			al.channelSessionIdx.Store(s.Channel+"/"+s.PeerID, s.ID)
+		}
+	}
+}
+
+// resolveOrCreateChannelSession returns the shared session ID for (channel, chatID),
+// creating a new session in the shared store if none exists yet.
+// Returns "" if the shared store is unavailable or inputs are empty.
+func (al *AgentLoop) resolveOrCreateChannelSession(channel, chatID, agentID, displayName string) string {
+	if al.sharedSessionStore == nil || channel == "" || chatID == "" {
+		return ""
+	}
+	key := channel + "/" + chatID
+	if v, ok := al.channelSessionIdx.Load(key); ok {
+		return v.(string)
+	}
+	title := displayName
+	if title == "" {
+		title = chatID
+	}
+	meta, err := al.sharedSessionStore.NewChannelSession(channel, chatID, agentID, title)
+	if err != nil {
+		logger.WarnCF("agent", "Failed to create channel session",
+			map[string]any{"channel": channel, "chat_id": chatID, "error": err.Error()})
+		return ""
+	}
+	al.channelSessionIdx.Store(key, meta.ID)
+	return meta.ID
+}
+
 // ResolveSessionStore finds which UnifiedStore owns the given sessionID.
 // Checks the shared store first, then the main agent's legacy store, then
 // all other per-agent stores. Returns nil if the session cannot be found.
@@ -2820,9 +2864,6 @@ func (al *AgentLoop) wireSysagentDepsLocked(registry *AgentRegistry, deps *systo
 // an atomic CompareAndSwap that serializes concurrent calls — only one reload
 // can be in flight at a time. A second concurrent call returns an error
 // ("reload already in progress") rather than queuing a second reload.
-//
-// Sets reloadPending=true so callers can poll IsReloadPending() to wait for
-// completion. The gateway's executeReload calls ClearReloadPending when done.
 func (al *AgentLoop) TriggerReload() error {
 	if al.reloadFunc == nil {
 		return ErrReloadNotConfigured
@@ -3208,6 +3249,14 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			"route_agent":   route.AgentID,
 			"route_channel": route.Channel,
 		})
+
+	// For non-webchat channel messages arriving without a session ID, create or
+	// resume a persistent shared session so they appear in the session history panel.
+	if msg.SessionID == "" && msg.Channel != "webchat" && msg.Channel != "system" && msg.Channel != "" {
+		if sid := al.resolveOrCreateChannelSession(msg.Channel, msg.ChatID, agent.ID, msg.Sender.DisplayName); sid != "" {
+			msg.SessionID = sid
+		}
+	}
 
 	// Resolve transcript store for tool call recording. SessionID is now
 	// authoritative — populated directly by the gateway from frame.SessionID.

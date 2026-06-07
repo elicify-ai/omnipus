@@ -581,6 +581,9 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   message_count: number
   total_tokens?: number
   total_cost?: number
+  // Channel identifier that initiated this session (e.g. "webchat", "telegram").
+  // Legacy sessions may omit this field; callers should treat undefined as "webchat".
+  channel?: string
   // Multi-agent session fields — present on sessions created with the joined
   // session model. For legacy single-agent sessions these are absent; callers
   // should fall back to [agent_id] when agent_ids is undefined.
@@ -597,6 +600,7 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   task_id?: string
   created_at: string
   updated_at: string
+  channel?: string
   agent_ids?: string[]
   active_agent_id?: string
   stats?: {
@@ -626,6 +630,7 @@ function rawToSession(raw: RawSession): Session {
     message_count: raw.stats?.message_count ?? 0,
     total_tokens: raw.stats?.tokens_total,
     total_cost: raw.stats?.cost,
+    channel: raw.channel,
     agent_ids: raw.agent_ids,
     active_agent_id: raw.active_agent_id,
   }

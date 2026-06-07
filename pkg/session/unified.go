@@ -218,6 +218,25 @@ func (us *UnifiedStore) NewSession(
 	return us.createSessionLocked(sessionID, sessionType, channel, creatingAgentID)
 }
 
+// NewChannelSession creates a new shared session for (channel, peerID).
+// Unlike NewSession it writes PeerID and Title atomically so the caller does
+// not need a follow-up SetMeta call.
+func (us *UnifiedStore) NewChannelSession(channel, peerID, agentID, title string) (*UnifiedMeta, error) {
+	meta, err := us.NewSession(SessionTypeChannel, channel, agentID)
+	if err != nil {
+		return nil, err
+	}
+	meta.PeerID = peerID
+	meta.Title = title
+	us.mu.Lock()
+	err = us.writeMetaLocked(meta.ID, meta)
+	us.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return meta, nil
+}
+
 // createSessionLocked creates a session directory with the EXACT supplied id,
 // meta.json, and an empty transcript. Caller must hold us.mu.
 func (us *UnifiedStore) createSessionLocked(

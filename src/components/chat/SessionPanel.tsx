@@ -1,6 +1,23 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
-import { Circle, ListChecks, Trash, MagnifyingGlass } from '@phosphor-icons/react'
+import {
+  Circle,
+  ListChecks,
+  Trash,
+  MagnifyingGlass,
+  ChatCircle,
+  PaperPlaneTilt,
+  DiscordLogo,
+  SlackLogo,
+  WhatsappLogo,
+  Hash,
+  Terminal,
+  GoogleLogo,
+  ChatDots,
+  CaretDown,
+  CaretRight,
+} from '@phosphor-icons/react'
+import type { Icon } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Badge } from '@/components/ui/badge'
@@ -18,6 +35,41 @@ function sessionButtonClass(isActive: boolean): string {
 }
 
 const UNTITLED_SESSION = 'Untitled Session'
+
+// ── Channel metadata helper ────────────────────────────────────────────────────
+
+interface ChannelMeta {
+  icon: Icon
+  label: string
+}
+
+function getChannelMeta(channel: string): ChannelMeta {
+  switch (channel) {
+    case 'webchat':
+      return { icon: ChatCircle, label: 'Web Chat' }
+    case 'telegram':
+      return { icon: PaperPlaneTilt, label: 'Telegram' }
+    case 'discord':
+      return { icon: DiscordLogo, label: 'Discord' }
+    case 'slack':
+      return { icon: SlackLogo, label: 'Slack' }
+    case 'whatsapp_native':
+      return { icon: WhatsappLogo, label: 'WhatsApp' }
+    case 'matrix':
+      return { icon: Hash, label: 'Matrix' }
+    case 'irc':
+      return { icon: Terminal, label: 'IRC' }
+    case 'google-chat':
+      return { icon: GoogleLogo, label: 'Google Chat' }
+    default: {
+      // Capitalise first letter, replace hyphens/underscores with spaces
+      const label = channel
+        .replace(/[-_]/g, ' ')
+        .replace(/^\w/, (c) => c.toUpperCase())
+      return { icon: ChatDots, label }
+    }
+  }
+}
 
 // ── Agent participation badges ────────────────────────────────────────────────
 
@@ -283,6 +335,8 @@ export function SessionPanel() {
   const [searchValue, setSearchValue] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Collapsed channel group keys; default: all expanded (empty set)
+  const [collapsedChannels, setCollapsedChannels] = useState<Set<string>>(() => new Set())
 
   const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value
@@ -363,8 +417,40 @@ export function SessionPanel() {
       })
     : sortedSessions
 
+  // Group sessions by channel: webchat first, then other channels alphabetically.
+  // Sessions without a channel field default to "webchat".
+  const groupedSessions = useMemo(() => {
+    const groups = new Map<string, Session[]>()
+    for (const s of filteredSessions) {
+      const ch = s.channel ?? 'webchat'
+      const existing = groups.get(ch) ?? []
+      groups.set(ch, [...existing, s])
+    }
+    // Sort: webchat first, then alphabetical
+    return [...groups.entries()].sort(([a], [b]) => {
+      if (a === 'webchat') return -1
+      if (b === 'webchat') return 1
+      return a.localeCompare(b)
+    })
+  }, [filteredSessions])
+
+  const toggleChannel = (ch: string) => {
+    setCollapsedChannels((prev) => {
+      const next = new Set(prev)
+      if (next.has(ch)) {
+        next.delete(ch)
+      } else {
+        next.add(ch)
+      }
+      return next
+    })
+  }
+
   // Resolve the default agent ID (used for active indicator in header)
   const activeAgent = agents.find((a) => a.id === activeAgentId)
+
+  // Whether to render grouped view: only when more than one distinct channel exists
+  const showGroups = groupedSessions.length > 1
 
   return (
     <Sheet open={sessionPanelOpen} onOpenChange={(open) => !open && closeSessionPanel()}>
@@ -416,7 +502,57 @@ export function SessionPanel() {
             <div className="px-4 py-6 text-xs text-[var(--color-muted)] text-center">
               {searchLower ? 'No results.' : 'No sessions yet. Start a conversation to begin.'}
             </div>
+          ) : showGroups ? (
+            // Multi-channel view: collapsible group headers + sessions within each group
+            <div className="py-1">
+              {groupedSessions.map(([ch, groupSessions]) => {
+                const meta = getChannelMeta(ch)
+                const ChannelIcon = meta.icon
+                const isCollapsed = collapsedChannels.has(ch)
+                return (
+                  <div key={ch}>
+                    {/* Group header */}
+                    <button
+                      type="button"
+                      onClick={() => toggleChannel(ch)}
+                      className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--color-muted)] uppercase tracking-wider hover:text-[var(--color-secondary)] transition-colors"
+                      aria-expanded={!isCollapsed}
+                      aria-label={`${meta.label} sessions, ${isCollapsed ? 'expand' : 'collapse'}`}
+                    >
+                      {isCollapsed ? (
+                        <CaretRight size={10} className="shrink-0 transition-transform" />
+                      ) : (
+                        <CaretDown size={10} className="shrink-0 transition-transform" />
+                      )}
+                      <ChannelIcon size={14} className="shrink-0" />
+                      <span className="flex-1 text-left truncate">{meta.label}</span>
+                      <Badge variant="secondary" className="text-[9px] h-4 px-1.5 rounded-full shrink-0">
+                        {groupSessions.length}
+                      </Badge>
+                    </button>
+
+                    {/* Sessions within this group */}
+                    {!isCollapsed && (
+                      <div className="space-y-0.5 px-2 pb-1">
+                        {groupSessions.map((session) => (
+                          <SessionItem
+                            key={session.id}
+                            session={session}
+                            agents={agents}
+                            isActive={session.id === activeSessionId}
+                            isStreaming={sessionsById[session.id]?.isStreaming ?? false}
+                            onSelect={() => handleSelectSession(session)}
+                            onDeleted={handleSessionDeleted}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
           ) : (
+            // Single-channel view: flat list, no headers (no regression)
             <div className="py-1 space-y-0.5 px-2">
               {filteredSessions.map((session) => (
                 <SessionItem
