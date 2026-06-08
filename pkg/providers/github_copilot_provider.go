@@ -108,7 +108,7 @@ func (p *GitHubCopilotProvider) Chat(
 	}
 	msgData, ok := resp.Data.(*copilot.AssistantMessageData)
 	if !ok || msgData.Content == "" {
-		return nil, fmt.Errorf("no content in copilot response (event type %q)", resp.Type)
+		return nil, fmt.Errorf("no content in copilot response (event type %q)", resp.Type())
 	}
 	content := msgData.Content
 
