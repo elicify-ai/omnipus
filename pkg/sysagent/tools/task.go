@@ -144,6 +144,10 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
 			"Use system.task.list to see available tasks"))
 	}
+	if !gtdStatusSet[tk.Status] {
+		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No GTD task %q", id),
+			"Use system.task.list to see available tasks"))
+	}
 	updated := []string{}
 	if v, ok := args["name"].(string); ok && v != "" {
 		tk.Name = v
@@ -212,8 +216,17 @@ func (t *TaskDeleteTool) Execute(_ context.Context, args map[string]any) *tools.
 		return tools.ErrorResult(errorJSON("CONFIRMATION_REQUIRED",
 			"confirm must be true to delete a task", ""))
 	}
+	var tk task
+	if err := readEntity(tasksDir(t.deps.Home), id, &tk); err != nil {
+		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
+			"Use system.task.list to see available tasks"))
+	}
+	if !gtdStatusSet[tk.Status] {
+		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No GTD task %q", id),
+			"Use system.task.list to see available tasks"))
+	}
 	if err := deleteEntity(tasksDir(t.deps.Home), id); err != nil {
-		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", err.Error(),
+		return tools.ErrorResult(errorJSON("DELETE_FAILED", err.Error(),
 			"Use system.task.list to see available tasks"))
 	}
 	return tools.NewToolResult(successJSON(map[string]any{"id": id, "deleted": true}))
