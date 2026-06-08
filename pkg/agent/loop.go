@@ -421,6 +421,15 @@ func NewAgentLoop(
 	al.taskStore = taskstore.New(filepath.Join(homePath, "tasks"))
 	al.taskExecutor = newTaskExecutor(al, al.taskStore)
 
+	// Register project session linker: auto-links sessions to projects on task create/update.
+	if err := al.hooks.Mount(NamedHook("project-session-linker", &projectLinkerAdapter{
+		linker: systools.NewProjectSessionLinker(homePath),
+	})); err != nil {
+		logger.WarnCF("agent", "Failed to mount project-session-linker hook", map[string]any{
+			"error": err.Error(),
+		})
+	}
+
 	// Initialize shared session store at $OMNIPUS_HOME/sessions/.
 	// All new chat sessions are created here (joined session model).
 	sharedDir := filepath.Join(homePath, "sessions")
