@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
 
 // JSDOM does not implement window.matchMedia — Sidebar uses it for pin breakpoint detection.
@@ -37,6 +38,39 @@ vi.mock('@tanstack/react-router', () => ({
 // Mock SVG URL import
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/mock-avatar.svg' }))
 
+// Mock fetchProjects so the Sidebar's useQuery never hits the network in tests.
+vi.mock('@/lib/api', () => ({
+  fetchProjects: () => Promise.resolve([]),
+  projectsQueryKeys: {
+    list: (params?: unknown) => ['projects', params],
+  },
+}))
+
+// Mock useProjectsStore used by Sidebar
+vi.mock('@/store/projectsStore', () => ({
+  useProjectsStore: (selector?: (s: unknown) => unknown) => {
+    const state = { activeProjectId: null, setActiveProjectId: vi.fn() }
+    return selector ? selector(state) : state
+  },
+}))
+
+// Mock useAuthStore used by Sidebar (handleLogout)
+vi.mock('@/store/auth', () => ({
+  useAuthStore: { getState: () => ({ clearAuth: vi.fn() }) },
+}))
+
+// Mock NewProjectSlideOver — it imports more dependencies we don't need in these tests
+vi.mock('@/components/projects/NewProjectSlideOver', () => ({
+  NewProjectSlideOver: () => null,
+}))
+
+function makeWrapper() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return function Wrapper({ children }: { children: React.ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  }
+}
+
 // Mock Framer Motion — AnimatePresence/motion renders children without animation
 vi.mock('framer-motion', () => ({
   motion: {
@@ -63,7 +97,7 @@ beforeEach(() => {
 describe('Sidebar — overlay rendering when open', () => {
   it('renders navigation items when sidebar is open', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper: makeWrapper() })
 
     // All nav item labels must be present (now 6 items including Channels).
     expect(screen.getByText('Chat')).toBeTruthy()
@@ -76,14 +110,14 @@ describe('Sidebar — overlay rendering when open', () => {
 
   it('shows "Omnipus" brand name in sidebar', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper: makeWrapper() })
     expect(screen.getByText('Omnipus')).toBeTruthy()
   })
 
   it('renders nothing visible when sidebar is closed', () => {
     // Sidebar closed + unpinned: overlay motion aside should not render
     act(() => { useSidebarStore.setState({ isOpen: false, isPinned: false }) })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper: makeWrapper() })
     // Nav labels should not be in the DOM when closed.
     expect(screen.queryByText('Chat')).toBeNull()
     expect(screen.queryByText('Agents')).toBeNull()
@@ -100,7 +134,7 @@ describe('Sidebar — pin icon visibility on mobile', () => {
 
   it('shows PushPinSlash icon title when pinned', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
-    const { container } = render(<Sidebar />)
+    const { container } = render(<Sidebar />, { wrapper: makeWrapper() })
 
     const pinButton = container.querySelector('button[title="Unpin sidebar"]')
     expect(pinButton).not.toBeNull()
@@ -109,7 +143,7 @@ describe('Sidebar — pin icon visibility on mobile', () => {
 
   it('shows PushPin icon title when unpinned', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    const { container } = render(<Sidebar />)
+    const { container } = render(<Sidebar />, { wrapper: makeWrapper() })
 
     const pinButton = container.querySelector('button[title="Pin sidebar"]')
     expect(pinButton).not.toBeNull()
@@ -120,7 +154,7 @@ describe('Sidebar — pin icon visibility on mobile', () => {
 describe('Sidebar — pinned mode rendering', () => {
   it('renders pinned sidebar as aside element', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
-    const { container } = render(<Sidebar />)
+    const { container } = render(<Sidebar />, { wrapper: makeWrapper() })
 
     // Pinned mode renders a permanent aside (not inside AnimatePresence).
     // The old test looked for 'aside.hidden.md:flex' — that CSS class no longer exists;
@@ -142,7 +176,7 @@ describe('Sidebar — Channels nav item (sprint/258)', () => {
     // In the real app, TanStack Router HashRouter renders "/#/channels" — the mock
     // uses the plain route path. We assert on href="/channels" to match the mock.
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    const { container } = render(<Sidebar />)
+    const { container } = render(<Sidebar />, { wrapper: makeWrapper() })
 
     // The label text must be "Channels".
     expect(screen.getByText('Channels')).toBeTruthy()
@@ -155,7 +189,7 @@ describe('Sidebar — Channels nav item (sprint/258)', () => {
   it('Channels link is NOT rendered when sidebar is closed', () => {
     // Differentiation test: nav items only appear in the open sidebar.
     act(() => { useSidebarStore.setState({ isOpen: false, isPinned: false }) })
-    render(<Sidebar />)
+    render(<Sidebar />, { wrapper: makeWrapper() })
     expect(screen.queryByText('Channels')).toBeNull()
   })
 })

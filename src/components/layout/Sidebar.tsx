@@ -14,8 +14,13 @@ import {
   SignOut,
   Plus,
   Folder,
+  CaretDown,
+  CaretRight,
+  MagnifyingGlass,
+  WarningCircle,
+  ArrowClockwise,
 } from '@phosphor-icons/react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
 import { useChatStore } from '@/store/chat'
 import { useAuthStore } from '@/store/auth'
@@ -44,8 +49,13 @@ export function Sidebar() {
   const navigate = useNavigate()
   const { activeProjectId, setActiveProjectId } = useProjectsStore()
 
+  const queryClient = useQueryClient()
   const [newProjectOpen, setNewProjectOpen] = useState(false)
   const [projectsExpanded, setProjectsExpanded] = useState(false)
+  const [archiveOpen, setArchiveOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [showSearch, setShowSearch] = useState(false)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   // Track whether the viewport is wide enough to allow pinning (≥1024px).
   const [canPin, setCanPin] = useState<boolean>(
@@ -66,11 +76,19 @@ export function Sidebar() {
   }, [navigate])
 
   // Projects query — refetch every 30s
-  const { data: projects = [], isLoading: projectsLoading } = useQuery({
+  const { data: projects = [], isLoading: projectsLoading, isError: projectsError } = useQuery({
     queryKey: projectsQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchProjects({ status: 'active' }),
     staleTime: 30_000,
     refetchInterval: 30_000,
+  })
+
+  // Archived projects query — only enabled when archive section is open
+  const { data: archivedProjects = [] } = useQuery({
+    queryKey: projectsQueryKeys.list({ status: 'archived' }),
+    queryFn: () => fetchProjects({ status: 'archived' }),
+    enabled: archiveOpen,
+    staleTime: 30_000,
   })
 
   // API returns pinned-first then newest-first already; just respect that.
@@ -179,7 +197,19 @@ export function Sidebar() {
         })}
 
         {/* Projects section */}
-        <div className="mt-3 mb-1">
+        <div
+          className="mt-3 mb-1"
+          role="group"
+          aria-label="Projects"
+          tabIndex={-1}
+          onKeyDown={(e: React.KeyboardEvent<HTMLDivElement>) => {
+            if (e.key === '/' && !showSearch) {
+              e.preventDefault()
+              setShowSearch(true)
+              setTimeout(() => searchInputRef.current?.focus(), 0)
+            }
+          }}
+        >
           {/* Section header */}
           <div className="flex items-center justify-between px-4 py-1">
             <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
@@ -195,6 +225,51 @@ export function Sidebar() {
             </button>
           </div>
 
+          {/* Inline search input (Fix 10) */}
+          {showSearch && (
+            <div className="px-3 pb-1">
+              <div className="flex items-center gap-1.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-1">
+                <MagnifyingGlass size={12} className="text-[var(--color-muted)] flex-shrink-0" />
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      setSearchQuery('')
+                      setShowSearch(false)
+                    }
+                    e.stopPropagation()
+                  }}
+                  onBlur={() => {
+                    setSearchQuery('')
+                    setShowSearch(false)
+                  }}
+                  placeholder="Filter projects…"
+                  aria-label="Filter projects"
+                  className="flex-1 bg-transparent text-xs text-[var(--color-secondary)] outline-none placeholder:text-[var(--color-muted)]"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Error state (Fix 6) */}
+          {projectsError && (
+            <div className="px-4 py-1.5 flex items-center gap-1.5">
+              <WarningCircle size={14} className="text-[var(--color-error)] flex-shrink-0" />
+              <span className="text-xs text-[var(--color-error)] flex-1">Could not load projects</span>
+              <button
+                type="button"
+                onClick={() => queryClient.refetchQueries({ queryKey: ['projects'] })}
+                aria-label="Retry loading projects"
+                className="rounded p-0.5 text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+              >
+                <ArrowClockwise size={12} />
+              </button>
+            </div>
+          )}
+
           {/* Loading skeleton */}
           {projectsLoading && (
             <div className="flex flex-col gap-1 px-4 py-1">
@@ -209,7 +284,7 @@ export function Sidebar() {
           )}
 
           {/* Empty state */}
-          {!projectsLoading && projects.length === 0 && (
+          {!projectsLoading && !projectsError && projects.length === 0 && (
             <div className="px-4 py-1.5">
               <span className="text-xs text-[var(--color-muted)]">No projects yet — </span>
               <button
@@ -222,8 +297,10 @@ export function Sidebar() {
             </div>
           )}
 
-          {/* Project list */}
-          {!projectsLoading && visibleProjects.map((project) => {
+          {/* Project list — filtered by search query when showSearch is active */}
+          {!projectsLoading && visibleProjects
+            .filter((p) => !showSearch || p.name.toLowerCase().includes(searchQuery.toLowerCase()))
+            .map((project) => {
             const isActive = activeProjectId === project.id
             return (
               <button
@@ -261,7 +338,7 @@ export function Sidebar() {
           })}
 
           {/* Show more / less toggle */}
-          {!projectsLoading && hasMore && (
+          {!projectsLoading && hasMore && !showSearch && (
             <button
               type="button"
               onClick={() => setProjectsExpanded((v) => !v)}
@@ -272,6 +349,53 @@ export function Sidebar() {
                 : `${unpinnedProjects.length - PROJECT_COLLAPSE_THRESHOLD} more…`}
             </button>
           )}
+
+          {/* Archive section (Fix 9) */}
+          <button
+            type="button"
+            onClick={() => setArchiveOpen((v) => !v)}
+            className="flex items-center gap-1.5 w-full px-4 py-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors mt-1"
+            aria-expanded={archiveOpen}
+          >
+            {archiveOpen ? <CaretDown size={10} /> : <CaretRight size={10} />}
+            Archive
+          </button>
+
+          {archiveOpen && archivedProjects.map((project) => {
+            const isActive = activeProjectId === project.id
+            return (
+              <button
+                key={project.id}
+                type="button"
+                onClick={() => {
+                  setActiveProjectId(isActive ? null : project.id)
+                  navigate({ to: '/tasks' })
+                  if (!effectivelyPinned) close()
+                }}
+                className={cn(
+                  'flex items-center gap-2 w-full px-4 py-2 mx-0 text-sm transition-colors text-left opacity-70',
+                  isActive
+                    ? 'text-[var(--color-accent)] font-medium'
+                    : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
+                )}
+              >
+                {isActive ? (
+                  <span
+                    className="w-2 h-2 rounded-full bg-[var(--color-accent)] animate-pulse flex-shrink-0"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Folder size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
+                )}
+                <span className="flex-1 truncate">{project.name}</span>
+                {project.task_count > 0 && (
+                  <span className="text-[10px] text-[var(--color-muted)] flex-shrink-0">
+                    {project.task_count}
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </div>
       </div>
 

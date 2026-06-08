@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Plus,
@@ -27,6 +27,7 @@ import {
 import {
   fetchBoardTasks,
   createBoardTask,
+  updateBoardTask,
   deleteBoardTask,
   boardTasksQueryKeys,
   fetchProjects,
@@ -83,6 +84,11 @@ function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
   })
   const [nameError, setNameError] = useState('')
 
+  // Sync form.project_id when activeProjectId changes while slide-over is open
+  useEffect(() => {
+    setForm((f) => ({ ...f, project_id: activeProjectId ?? '' }))
+  }, [activeProjectId])
+
   const mutation = useMutation({
     mutationFn: () =>
       createBoardTask({
@@ -93,6 +99,7 @@ function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
       addToast({ message: 'Task created', variant: 'success' })
       setForm({ name: '', description: '', status: 'inbox', project_id: activeProjectId ?? '' })
       setNameError('')
@@ -251,10 +258,12 @@ function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
 interface TaskCardProps {
   task: BoardTask
   onDelete: (id: string) => void
+  onStatusChange: (id: string, status: BoardStatus) => void
   isDeleting: boolean
+  isUpdating: boolean
 }
 
-function TaskCard({ task, onDelete, isDeleting }: TaskCardProps) {
+function TaskCard({ task, onDelete, onStatusChange, isDeleting, isUpdating }: TaskCardProps) {
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -286,17 +295,37 @@ function TaskCard({ task, onDelete, isDeleting }: TaskCardProps) {
       )}
 
       {expanded && (
-        <div className="mt-2 border-t border-[var(--color-border)] pt-2" onClick={(e) => e.stopPropagation()}>
+        <div className="mt-2 border-t border-[var(--color-border)] pt-2 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
           {task.description && (
-            <p className="text-xs text-[var(--color-muted)] whitespace-pre-wrap mb-2">
+            <p className="text-xs text-[var(--color-muted)] whitespace-pre-wrap">
               {task.description}
             </p>
           )}
+          {/* Inline status change (US-7) */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-[var(--color-muted)]">Status</span>
+            <Select
+              value={task.status}
+              onValueChange={(v) => onStatusChange(task.id, v as BoardStatus)}
+              disabled={isUpdating}
+            >
+              <SelectTrigger className="h-7 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] flex-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {COLUMNS.map((col) => (
+                  <SelectItem key={col.status} value={col.status} className="text-xs">
+                    {col.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <button
             type="button"
             onClick={() => onDelete(task.id)}
             disabled={isDeleting}
-            className="flex items-center gap-1 text-xs text-[var(--color-error)] hover:underline disabled:opacity-50"
+            className="flex items-center gap-1 text-xs text-[var(--color-error)] hover:underline disabled:opacity-50 self-start"
             aria-label={`Delete task ${task.name}`}
           >
             <Trash size={12} />
@@ -314,10 +343,12 @@ interface ColumnProps {
   label: string
   tasks: BoardTask[]
   onDelete: (id: string) => void
+  onStatusChange: (id: string, status: BoardStatus) => void
   deletingIds: Set<string>
+  updatingIds: Set<string>
 }
 
-function Column({ label, tasks, onDelete, deletingIds }: ColumnProps) {
+function Column({ label, tasks, onDelete, onStatusChange, deletingIds, updatingIds }: ColumnProps) {
   return (
     <div className="flex flex-col min-w-[220px] flex-1 bg-[var(--color-surface-1)] rounded-xl border border-[var(--color-border)]">
       {/* Column header */}
@@ -338,7 +369,9 @@ function Column({ label, tasks, onDelete, deletingIds }: ColumnProps) {
               key={task.id}
               task={task}
               onDelete={onDelete}
+              onStatusChange={onStatusChange}
               isDeleting={deletingIds.has(task.id)}
+              isUpdating={updatingIds.has(task.id)}
             />
           ))
         )}
@@ -358,6 +391,7 @@ export function TasksScreen() {
   const { activeProjectId, setActiveProjectId } = useProjectsStore()
   const [createTaskOpen, setCreateTaskOpen] = useState(false)
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set())
+  const [updatingIds, setUpdatingIds] = useState<Set<string>>(new Set())
 
   // Fetch projects for filter pill label
   const { data: projects = [] } = useQuery({
@@ -381,6 +415,7 @@ export function TasksScreen() {
     onMutate: (id) => setDeletingIds((prev) => new Set([...prev, id])),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
       addToast({ message: 'Task deleted', variant: 'success' })
     },
     onError: (err) => {
@@ -388,6 +423,24 @@ export function TasksScreen() {
       addToast({ message: `Failed to delete task: ${msg}`, variant: 'error' })
     },
     onSettled: (_data, _err, id) => setDeletingIds((prev) => { const n = new Set(prev); n.delete(id); return n }),
+  })
+
+  // Update mutation (status change from TaskCard expanded panel)
+  const updateMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: BoardStatus }) =>
+      updateBoardTask(id, { status }),
+    onMutate: ({ id }) => setUpdatingIds((prev) => new Set([...prev, id])),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+    },
+    onError: (err) => {
+      const msg = isApiError(err) ? err.message : 'Unexpected error'
+      addToast({ message: `Failed to update task: ${msg}`, variant: 'error' })
+    },
+    onSettled: (_data, _err, variables) => {
+      setUpdatingIds((prev) => { const n = new Set(prev); n.delete(variables.id); return n })
+    },
   })
 
   return (
@@ -463,7 +516,9 @@ export function TasksScreen() {
               label={col.label}
               tasks={tasks.filter((t) => t.status === col.status)}
               onDelete={(id) => deleteMutation.mutate(id)}
+              onStatusChange={(id, status) => updateMutation.mutate({ id, status })}
               deletingIds={deletingIds}
+              updatingIds={updatingIds}
             />
           ))}
         </div>

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Sheet,
   SheetContent,
@@ -11,7 +11,15 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { createProject, isApiError } from '@/lib/api'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { X } from '@phosphor-icons/react'
+import { createProject, fetchAgents, isApiError } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
 interface NewProjectSlideOverProps {
@@ -23,15 +31,22 @@ interface FormState {
   name: string
   description: string
   repository: string
+  core_team: string[]
 }
 
-const INITIAL_FORM: FormState = { name: '', description: '', repository: '' }
+const INITIAL_FORM: FormState = { name: '', description: '', repository: '', core_team: [] }
 
 export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
-  const [fieldErrors, setFieldErrors] = useState<Partial<FormState>>({})
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof FormState, string>>>({})
+
+  const { data: agents = [] } = useQuery({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+    staleTime: 60_000,
+  })
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -39,6 +54,7 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
         name: form.name.trim(),
         description: form.description.trim() || undefined,
         repository: form.repository.trim() || undefined,
+        core_team: form.core_team.length > 0 ? form.core_team : undefined,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] })
@@ -54,7 +70,7 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
   })
 
   function validate(): boolean {
-    const errors: Partial<FormState> = {}
+    const errors: Partial<Record<keyof FormState, string>> = {}
     if (!form.name.trim()) {
       errors.name = 'Name is required'
     } else if (form.name.trim().length > 200) {
@@ -158,6 +174,63 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
               </p>
             )}
           </div>
+
+          {/* Core team — agent multi-select (US-10 AC #5) */}
+          {agents.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-[var(--color-secondary)]">
+                Core team
+              </Label>
+              {/* Selected agent chips */}
+              {form.core_team.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {form.core_team.map((agentId) => {
+                    const agent = agents.find((a) => a.id === agentId)
+                    return (
+                      <span
+                        key={agentId}
+                        className="flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-secondary)]"
+                      >
+                        {agent?.name ?? agentId}
+                        <button
+                          type="button"
+                          onClick={() => setForm((s) => ({ ...s, core_team: s.core_team.filter((id) => id !== agentId) }))}
+                          aria-label={`Remove ${agent?.name ?? agentId} from core team`}
+                          className="rounded-full text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+                        >
+                          <X size={10} />
+                        </button>
+                      </span>
+                    )
+                  })}
+                </div>
+              )}
+              <Select
+                value=""
+                onValueChange={(agentId) => {
+                  if (!form.core_team.includes(agentId)) {
+                    setForm((s) => ({ ...s, core_team: [...s.core_team, agentId] }))
+                  }
+                }}
+              >
+                <SelectTrigger
+                  id="new-project-core-team"
+                  className="bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)]"
+                >
+                  <SelectValue placeholder="Add agent to core team" />
+                </SelectTrigger>
+                <SelectContent>
+                  {agents
+                    .filter((a) => !form.core_team.includes(a.id))
+                    .map((agent) => (
+                      <SelectItem key={agent.id} value={agent.id}>
+                        {agent.name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           <div className="flex-1" />
 

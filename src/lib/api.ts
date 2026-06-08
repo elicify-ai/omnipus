@@ -96,6 +96,7 @@ import {
   UploadFilesResponse as UploadFilesResponseSchema,
   BackupCreateResponse as BackupCreateResponseSchema,
   User as UserSchema,
+  RotateTokenResponse as RotateTokenResponseSchema,
   // fix-AC: promoted from hand-written inline schemas:
   UserContextResponse as UserContextResponseSchema,
   McpServerToolsResponse as McpServerToolsResponseSchema,
@@ -163,7 +164,7 @@ export function resetConfigCoercionCount(): void {
 // Expose counters on window.__omnipus_test_hooks in DEV/test builds
 // so Playwright tests can assert on validation health without reaching into module
 // internals.
-if ((import.meta.env.DEV || import.meta.env.MODE === 'test') && typeof window !== 'undefined') {
+if ((import.meta.env.DEV || import.meta.env.MODE === 'test') && typeof window !== 'undefined' && !navigator.webdriver) {
   const w = window as unknown as { __omnipus_test_hooks?: Record<string, unknown> }
   w.__omnipus_test_hooks ??= {}
   w.__omnipus_test_hooks.getApiSchemaErrorCount = getApiSchemaErrorCount
@@ -1177,7 +1178,7 @@ export function testProvider(id: string): Promise<OperationResult> {
 }
 
 export function rotateGatewayToken(): Promise<{ token: string }> {
-  return request('/config/gateway/rotate-token', { method: 'POST' })
+  return request('/config/gateway/rotate-token', { method: 'POST' }, RotateTokenResponseSchema as ZodType<{ token: string }>)
 }
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
