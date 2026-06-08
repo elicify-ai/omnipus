@@ -334,11 +334,16 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if projectID != "" {
-			if _, projErr := readProjectFile(a.homePath, projectID); projErr != nil {
-				if errors.Is(projErr, errProjectNotFound) {
-					jsonErr(w, http.StatusBadRequest, "invalid project_id: project not found")
-					return
-				}
+			if err := validateEntityID(projectID); err != nil {
+				jsonErr(w, http.StatusBadRequest, "invalid project_id")
+				return
+			}
+			if _, projErr := readProjectFile(a.homePath, projectID); errors.Is(projErr, errProjectNotFound) || errors.Is(projErr, os.ErrNotExist) {
+				jsonErr(w, http.StatusBadRequest, "project not found")
+				return
+			} else if projErr != nil {
+				jsonErr(w, http.StatusInternalServerError, "failed to validate project_id")
+				return
 			}
 		}
 	}
@@ -439,11 +444,16 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 			return
 		}
 		if *req.ProjectId != "" {
-			if _, projErr := readProjectFile(a.homePath, *req.ProjectId); projErr != nil {
-				if errors.Is(projErr, errProjectNotFound) {
-					jsonErr(w, http.StatusBadRequest, "invalid project_id: project not found")
-					return
-				}
+			if err := validateEntityID(*req.ProjectId); err != nil {
+				jsonErr(w, http.StatusBadRequest, "invalid project_id")
+				return
+			}
+			if _, projErr := readProjectFile(a.homePath, *req.ProjectId); errors.Is(projErr, errProjectNotFound) || errors.Is(projErr, os.ErrNotExist) {
+				jsonErr(w, http.StatusBadRequest, "project not found")
+				return
+			} else if projErr != nil {
+				jsonErr(w, http.StatusInternalServerError, "failed to validate project_id")
+				return
 			}
 		}
 		existing.ProjectID = *req.ProjectId

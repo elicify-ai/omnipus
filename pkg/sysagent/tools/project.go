@@ -78,7 +78,9 @@ func sanitizeCoreTeam(raw []any) ([]string, error) {
 	return out, nil
 }
 
-// computeTaskCount counts tasks on disk with matching project_id.
+// computeTaskCount counts GTD tasks on disk with matching project_id.
+// Only GTD tasks (status ∈ {inbox,next,active,waiting,done}) are counted;
+// workflow tasks (queued/assigned/running/completed/failed) are excluded.
 // Single-pass: called per-project only (list endpoint does its own single-pass; see computeTaskCounts).
 func computeTaskCount(home, projectID string) int {
 	tasks, err := listEntities[task](tasksDir(home))
@@ -87,6 +89,9 @@ func computeTaskCount(home, projectID string) int {
 	}
 	n := 0
 	for i := range tasks {
+		if !gtdStatusSet[tasks[i].Status] {
+			continue
+		}
 		if tasks[i].ProjectID == projectID {
 			n++
 		}
@@ -95,6 +100,8 @@ func computeTaskCount(home, projectID string) int {
 }
 
 // computeTaskCounts returns a map[projectID]count from a single listEntities call.
+// Only GTD tasks (status ∈ {inbox,next,active,waiting,done}) are counted;
+// workflow tasks (queued/assigned/running/completed/failed) are excluded.
 // Use this for list responses to avoid O(N×M) disk reads.
 func computeTaskCounts(home string) map[string]int {
 	counts := make(map[string]int)
@@ -103,6 +110,9 @@ func computeTaskCounts(home string) map[string]int {
 		return counts
 	}
 	for i := range tasks {
+		if !gtdStatusSet[tasks[i].Status] {
+			continue
+		}
 		if tasks[i].ProjectID != "" {
 			counts[tasks[i].ProjectID]++
 		}

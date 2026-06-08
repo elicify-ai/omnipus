@@ -6,9 +6,7 @@ package systools
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/oklog/ulid/v2"
@@ -90,11 +88,11 @@ func (t *TaskCreateTool) Execute(_ context.Context, args map[string]any) *tools.
 		tk.Description = v
 	}
 	if v, ok := args["project_id"].(string); ok && v != "" {
-		projectPath := filepath.Join(t.deps.Home, "projects", v+".json")
-		if _, statErr := os.Stat(projectPath); statErr != nil {
-			if errors.Is(statErr, os.ErrNotExist) {
-				return tools.ErrorResult(errorJSON("INVALID_INPUT", "project not found", "project_id"))
-			}
+		if err := validateID(v); err != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid project_id: not found", "project_id"))
+		}
+		if _, projErr := readProjectFromDisk(t.deps.Home, v); projErr != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid project_id: not found", "project_id"))
 		}
 		tk.ProjectID = v
 	}
@@ -165,11 +163,11 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 	}
 	if v, ok := args["project_id"].(string); ok {
 		if v != "" {
-			projectPath := filepath.Join(t.deps.Home, "projects", v+".json")
-			if _, statErr := os.Stat(projectPath); statErr != nil {
-				if errors.Is(statErr, os.ErrNotExist) {
-					return tools.ErrorResult(errorJSON("INVALID_INPUT", "project not found", "project_id"))
-				}
+			if err := validateID(v); err != nil {
+				return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid project_id: not found", "project_id"))
+			}
+			if _, projErr := readProjectFromDisk(t.deps.Home, v); projErr != nil {
+				return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid project_id: not found", "project_id"))
 			}
 		}
 		tk.ProjectID = v
