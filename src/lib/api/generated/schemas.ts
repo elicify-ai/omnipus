@@ -1510,16 +1510,16 @@ export const Project = z
   .passthrough();
 export const ProjectCreateRequest = z
   .object({
-    name: z.string().min(1),
-    description: z.string().optional(),
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000).optional(),
     core_team: z.array(z.string()).max(20).optional(),
     repository: z.string().optional(),
   })
   .passthrough();
 export const ProjectUpdateRequest = z
   .object({
-    name: z.string().min(1),
-    description: z.string(),
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000),
     status: z.enum(["active", "archived"]),
     pinned: z.boolean(),
     pin_order: z.number().int(),
@@ -2222,6 +2222,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
     response: BoardTaskListResponse,
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
@@ -3139,6 +3144,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
     response: z.array(Project),
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
@@ -4517,6 +4527,11 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     ],
     response: TokenUsageSummary,
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,

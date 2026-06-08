@@ -3794,11 +3794,11 @@ type BoardTaskUpdateRequest struct {
 	Name        *string `json:"name,omitempty"`
 	ProjectId   *string `json:"project_id,omitempty"`
 
-	// Status Defaults to inbox if absent.
+	// Status If absent, the existing value is unchanged (partial update).
 	Status *BoardTaskUpdateRequestStatus `json:"status,omitempty"`
 }
 
-// BoardTaskUpdateRequestStatus Defaults to inbox if absent.
+// BoardTaskUpdateRequestStatus If absent, the existing value is unchanged (partial update).
 type BoardTaskUpdateRequestStatus string
 
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
@@ -6241,7 +6241,7 @@ type UpdateBoardTaskJSONBody struct {
 	Name        *string `json:"name,omitempty"`
 	ProjectId   *string `json:"project_id,omitempty"`
 
-	// Status Defaults to inbox if absent.
+	// Status If absent, the existing value is unchanged (partial update).
 	Status *UpdateBoardTaskJSONBodyStatus `json:"status,omitempty"`
 }
 

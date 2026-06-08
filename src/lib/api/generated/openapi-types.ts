@@ -5651,7 +5651,7 @@ export interface components {
             name?: string;
             description?: string;
             /**
-             * @description Defaults to inbox if absent.
+             * @description If absent, the existing value is unchanged (partial update).
              * @enum {string}
              */
             status?: "inbox" | "next" | "active" | "waiting" | "done";
@@ -9587,6 +9587,7 @@ export interface operations {
                     "application/json": components["schemas"]["Project"][];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
         };
     };
@@ -9745,6 +9746,7 @@ export interface operations {
                     "application/json": components["schemas"]["BoardTaskListResponse"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
         };
     };
@@ -9872,6 +9874,7 @@ export interface operations {
                     "application/json": components["schemas"]["TokenUsageSummary"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
         };
     };

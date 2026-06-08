@@ -10,7 +10,7 @@ properties:
   status:
     type: string
     enum: [inbox, next, active, waiting, done]
-    description: Defaults to inbox if absent.
+    description: If absent, the existing value is unchanged (partial update).
   project_id:
     type: string
   agent_id:

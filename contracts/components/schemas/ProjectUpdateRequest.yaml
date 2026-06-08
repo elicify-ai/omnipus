@@ -6,8 +6,10 @@ properties:
   name:
     type: string
     minLength: 1
+    maxLength: 200
   description:
     type: string
+    maxLength: 2000
   status:
     type: string
     enum: [active, archived]
