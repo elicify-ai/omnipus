@@ -356,6 +356,80 @@ func TestHandleBoardTasks_Boundaries(t *testing.T) {
 		"GET /board/tasks?status=bogus must return 400; body=%s", wBogus.Body.String())
 }
 
+// TestHandleBoardTasks_FKValidation verifies that POST and PUT /api/v1/board/tasks
+// enforce FK integrity on the project_id field.
+//
+// BDD: Given a POST /api/v1/board/tasks with a project_id that does not exist,
+// When the request is handled,
+// Then 400 with a body containing "project".
+//
+// BDD: Given a valid board task (no project_id),
+// When PUT /api/v1/board/tasks/{id} is called with a project_id that does not exist,
+// Then 400 with a body containing "project".
+//
+// BDD: Given a POST /api/v1/board/tasks with project_id containing path-traversal characters,
+// When the request is handled,
+// Then 400 (validateEntityID rejects the value before any filesystem access).
+//
+// Traces to: project-task-management-level1-spec.md FK validation (B4-001)
+func TestHandleBoardTasks_FKValidation(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	nonExistentProjectID := "01JXNOEXISTPROJECT000001"
+
+	// --- POST with non-existent project_id → 400 containing "project" ---
+	postBody := `{"name":"Task with bad project","project_id":"` + nonExistentProjectID + `"}`
+	wPost := httptest.NewRecorder()
+	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(postBody))
+	rPost.Header.Set("Content-Type", "application/json")
+	rPost.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wPost, rPost)
+
+	assert.Equal(t, http.StatusBadRequest, wPost.Code,
+		"POST /board/tasks with non-existent project_id must return 400; body=%s", wPost.Body.String())
+	assert.Contains(t, strings.ToLower(wPost.Body.String()), "project",
+		"400 body for non-existent project_id must mention 'project'; body=%s", wPost.Body.String())
+
+	// --- PUT with non-existent project_id → 400 ---
+	// First create a valid task without a project_id.
+	existingTask := createBoardTaskViaAPI(t, api, "TaskForPUTFKTest", "inbox")
+
+	putBody := `{"project_id":"` + nonExistentProjectID + `"}`
+	wPut := httptest.NewRecorder()
+	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+existingTask.Id, strings.NewReader(putBody))
+	rPut.Header.Set("Content-Type", "application/json")
+	rPut.URL.Path = "/api/v1/board/tasks/" + existingTask.Id
+	api.HandleBoardTasks(wPut, rPut)
+
+	assert.Equal(t, http.StatusBadRequest, wPut.Code,
+		"PUT /board/tasks/{id} with non-existent project_id must return 400; body=%s", wPut.Body.String())
+	assert.Contains(t, strings.ToLower(wPut.Body.String()), "project",
+		"400 body for non-existent project_id (PUT) must mention 'project'; body=%s", wPut.Body.String())
+
+	// --- POST with path-traversal project_id → 400 (validateEntityID catches it) ---
+	traversalCases := []struct {
+		name      string
+		projectID string
+	}{
+		{"dotdot-slash", "../etc/passwd"},
+		{"deep-traversal", "../../etc/shadow"},
+	}
+	for _, tc := range traversalCases {
+		t.Run("path_traversal_"+tc.name, func(t *testing.T) {
+			body := `{"name":"traversal test","project_id":"` + tc.projectID + `"}`
+			wTrav := httptest.NewRecorder()
+			rTrav := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body))
+			rTrav.Header.Set("Content-Type", "application/json")
+			rTrav.URL.Path = "/api/v1/board/tasks"
+			api.HandleBoardTasks(wTrav, rTrav)
+
+			assert.Equal(t, http.StatusBadRequest, wTrav.Code,
+				"POST /board/tasks with path-traversal project_id=%q must return 400; body=%s",
+				tc.projectID, wTrav.Body.String())
+		})
+	}
+}
+
 // TestHandleBoardTasks_TaskCount_ExcludesWorkflowTasks verifies project task_count
 // only counts GTD tasks, not workflow tasks.
 // BDD: Given a project with one GTD task and one workflow task,
