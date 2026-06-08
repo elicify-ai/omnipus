@@ -185,6 +185,157 @@ describe('deleteProject', () => {
   })
 })
 
+// ── updateProject ─────────────────────────────────────────────────────────────
+
+describe('updateProject', () => {
+  it('calls PUT /api/v1/projects/{id} and returns the updated Project', async () => {
+    // BDD: Given an existing project id and a valid ProjectUpdateRequest,
+    // When updateProject("proj-123", { name: "Renamed" }) is called,
+    // Then PUT /api/v1/projects/proj-123 is requested with the correct body,
+    // And the updated project is returned.
+    // Traces to: project-task-management-level1-spec.md — updateProject shape
+    const updated = {
+      id: 'proj-123',
+      name: 'Renamed',
+      status: 'active',
+      pinned: false,
+      pin_order: 0,
+      task_count: 0,
+      created_at: '2026-06-01T00:00:00Z',
+      updated_at: '2026-06-08T00:00:00Z',
+    }
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse(updated))
+
+    const { updateProject } = await import('./api')
+    const result = await updateProject('proj-123', { name: 'Renamed' })
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/projects/proj-123')
+    expect((init as RequestInit).method).toBe('PUT')
+
+    // Verify request body contains the update fields.
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(body.name).toBe('Renamed')
+
+    // Verify returned project has the updated fields.
+    expect(result.id).toBe('proj-123')
+    expect(result.name).toBe('Renamed')
+    expect(result.status).toBe('active')
+  })
+
+  it('differentiation test: updating two different projects returns different results', async () => {
+    // Anti-hardcode: two PUT calls with different ids and bodies must produce different results.
+    // Traces to: project-task-management-level1-spec.md — updateProject differentiation
+    const first = { id: 'id-one', name: 'First Updated', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-08T01:00:00Z' }
+    const second = { id: 'id-two', name: 'Archived Project', status: 'archived', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-08T02:00:00Z' }
+
+    fetchSpy
+      .mockResolvedValueOnce(makeJsonResponse(first))
+      .mockResolvedValueOnce(makeJsonResponse(second))
+
+    const { updateProject } = await import('./api')
+    const r1 = await updateProject('id-one', { name: 'First Updated' })
+    const r2 = await updateProject('id-two', { status: 'archived' })
+
+    expect(r1.id).toBe('id-one')
+    expect(r2.id).toBe('id-two')
+    expect(r1.name).not.toBe(r2.name)
+    expect(r1.status).not.toBe(r2.status)
+  })
+
+  it('throws ApiError on 404 response', async () => {
+    // BDD: Given a project id that does not exist,
+    // When updateProject is called,
+    // Then an ApiError with status 404 is thrown.
+    // Traces to: project-task-management-level1-spec.md — updateProject error path
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'project not found' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { updateProject, ApiError, isApiError } = await import('./api')
+    let thrown: unknown
+    try {
+      await updateProject('missing-id', { name: 'Ghost' })
+    } catch (err) {
+      thrown = err
+    }
+    expect(isApiError(thrown)).toBe(true)
+    expect(thrown instanceof ApiError && thrown.status).toBe(404)
+  })
+})
+
+// ── fetchProjectSessions ──────────────────────────────────────────────────────
+
+describe('fetchProjectSessions', () => {
+  it('calls GET /api/v1/projects/{id}/sessions and returns ProjectSessionLink array', async () => {
+    // BDD: Given a project id with linked sessions,
+    // When fetchProjectSessions("proj-abc") is called,
+    // Then GET /api/v1/projects/proj-abc/sessions is requested,
+    // And the returned array contains the session links.
+    // Traces to: project-task-management-level1-spec.md — fetchProjectSessions shape
+    const payload: { session_id: string; created_at: string }[] = [
+      { session_id: 'sess_001', created_at: '2026-06-01T10:00:00Z' },
+      { session_id: 'sess_002', created_at: '2026-06-01T11:00:00Z' },
+    ]
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse(payload))
+
+    const { fetchProjectSessions } = await import('./api')
+    const result = await fetchProjectSessions('proj-abc')
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/projects/proj-abc/sessions')
+    // GET request — no method override needed, but should not be a mutating method.
+    expect((init as RequestInit | undefined)?.method).toBeUndefined()
+
+    // Verify result is an array with the expected session links.
+    expect(Array.isArray(result)).toBe(true)
+    expect(result).toHaveLength(2)
+    expect(result[0].session_id).toBe('sess_001')
+    expect(result[1].session_id).toBe('sess_002')
+    expect(result[0].created_at).toBe('2026-06-01T10:00:00Z')
+  })
+
+  it('differentiation test: two different project ids produce different session lists', async () => {
+    // Anti-hardcode: two GET calls with different project ids must return different results.
+    // Traces to: project-task-management-level1-spec.md — fetchProjectSessions differentiation
+    const sessions1 = [{ session_id: 'sess_alpha', created_at: '2026-06-01T10:00:00Z' }]
+    const sessions2 = [
+      { session_id: 'sess_beta', created_at: '2026-06-02T10:00:00Z' },
+      { session_id: 'sess_gamma', created_at: '2026-06-02T11:00:00Z' },
+    ]
+
+    fetchSpy
+      .mockResolvedValueOnce(makeJsonResponse(sessions1))
+      .mockResolvedValueOnce(makeJsonResponse(sessions2))
+
+    const { fetchProjectSessions } = await import('./api')
+    const r1 = await fetchProjectSessions('proj-x')
+    const r2 = await fetchProjectSessions('proj-y')
+
+    expect(r1).toHaveLength(1)
+    expect(r2).toHaveLength(2)
+    expect(r1[0].session_id).not.toBe(r2[0].session_id)
+  })
+
+  it('returns empty array when project has no linked sessions', async () => {
+    // BDD: Given a project with no sessions,
+    // When fetchProjectSessions is called,
+    // Then an empty array is returned without error.
+    // Traces to: project-task-management-level1-spec.md — fetchProjectSessions empty
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse([]))
+
+    const { fetchProjectSessions } = await import('./api')
+    const result = await fetchProjectSessions('proj-empty')
+
+    expect(result).toEqual([])
+  })
+})
+
 // ── fetchBoardTasks ───────────────────────────────────────────────────────────
 
 describe('fetchBoardTasks', () => {
@@ -233,5 +384,266 @@ describe('fetchBoardTasks', () => {
     expect(url).not.toContain('status=')
     expect(url).not.toContain('project_id=')
     expect(result).toEqual([])
+  })
+})
+
+// ── createBoardTask ───────────────────────────────────────────────────────────
+
+describe('createBoardTask', () => {
+  it('calls POST /api/v1/board/tasks and returns the created BoardTask', async () => {
+    // BDD: Given a valid BoardTaskCreateRequest,
+    // When createBoardTask({ name: "New task", status: "inbox" }) is called,
+    // Then POST /api/v1/board/tasks is requested with the correct body,
+    // And the created BoardTask is returned.
+    // Traces to: project-task-management-level1-spec.md — createBoardTask shape
+    const created = {
+      id: 'task-001',
+      name: 'New task',
+      status: 'inbox',
+      created_at: '2026-06-08T10:00:00Z',
+      updated_at: '2026-06-08T10:00:00Z',
+    }
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse(created, 201))
+
+    const { createBoardTask } = await import('./api')
+    const result = await createBoardTask({ name: 'New task', status: 'inbox' })
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/board/tasks')
+    expect((init as RequestInit).method).toBe('POST')
+
+    // Verify request body contains name and status.
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(body.name).toBe('New task')
+    expect(body.status).toBe('inbox')
+
+    // Verify the returned BoardTask has correct fields.
+    expect(result.id).toBe('task-001')
+    expect(result.name).toBe('New task')
+    expect(result.status).toBe('inbox')
+  })
+
+  it('differentiation test: creating two different tasks returns different BoardTasks', async () => {
+    // Anti-hardcode: two POST calls with different names must produce different results.
+    // Traces to: project-task-management-level1-spec.md — createBoardTask differentiation
+    const task1 = { id: 'task-alpha', name: 'Alpha task', status: 'inbox', created_at: '2026-06-08T10:00:00Z', updated_at: '2026-06-08T10:00:00Z' }
+    const task2 = { id: 'task-beta', name: 'Beta task', status: 'next', created_at: '2026-06-08T11:00:00Z', updated_at: '2026-06-08T11:00:00Z' }
+
+    fetchSpy
+      .mockResolvedValueOnce(makeJsonResponse(task1, 201))
+      .mockResolvedValueOnce(makeJsonResponse(task2, 201))
+
+    const { createBoardTask } = await import('./api')
+    const r1 = await createBoardTask({ name: 'Alpha task', status: 'inbox' })
+    const r2 = await createBoardTask({ name: 'Beta task', status: 'next' })
+
+    expect(r1.id).toBe('task-alpha')
+    expect(r2.id).toBe('task-beta')
+    expect(r1.id).not.toBe(r2.id)
+    expect(r1.name).not.toBe(r2.name)
+    expect(r1.status).not.toBe(r2.status)
+  })
+
+  it('throws ApiError on 400 response', async () => {
+    // BDD: Given an invalid request body,
+    // When createBoardTask is called,
+    // Then an ApiError with status 400 is thrown.
+    // Traces to: project-task-management-level1-spec.md — createBoardTask error path
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'name is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { createBoardTask, ApiError, isApiError } = await import('./api')
+    let thrown: unknown
+    try {
+      await createBoardTask({ name: '' })
+    } catch (err) {
+      thrown = err
+    }
+    expect(isApiError(thrown)).toBe(true)
+    expect(thrown instanceof ApiError && thrown.status).toBe(400)
+  })
+})
+
+// ── updateBoardTask ───────────────────────────────────────────────────────────
+
+describe('updateBoardTask', () => {
+  it('calls PUT /api/v1/board/tasks/{id} and returns the updated BoardTask', async () => {
+    // BDD: Given an existing task id and a BoardTaskUpdateRequest,
+    // When updateBoardTask("task-001", { status: "next" }) is called,
+    // Then PUT /api/v1/board/tasks/task-001 is requested with the correct body,
+    // And the updated BoardTask is returned.
+    // Traces to: project-task-management-level1-spec.md — updateBoardTask shape
+    const updated = {
+      id: 'task-001',
+      name: 'Fix bug',
+      status: 'next',
+      created_at: '2026-06-08T10:00:00Z',
+      updated_at: '2026-06-08T12:00:00Z',
+    }
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse(updated))
+
+    const { updateBoardTask } = await import('./api')
+    const result = await updateBoardTask('task-001', { status: 'next' })
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/board/tasks/task-001')
+    expect((init as RequestInit).method).toBe('PUT')
+
+    // Verify request body contains the update fields.
+    const body = JSON.parse((init as RequestInit).body as string)
+    expect(body.status).toBe('next')
+
+    // Verify the returned BoardTask has updated status.
+    expect(result.id).toBe('task-001')
+    expect(result.status).toBe('next')
+  })
+
+  it('differentiation test: updating two different tasks returns different results', async () => {
+    // Anti-hardcode: two PUT calls with different ids must produce different results.
+    // Traces to: project-task-management-level1-spec.md — updateBoardTask differentiation
+    const t1 = { id: 'task-x', name: 'Task X', status: 'active', created_at: '2026-06-08T10:00:00Z', updated_at: '2026-06-08T13:00:00Z' }
+    const t2 = { id: 'task-y', name: 'Task Y Done', status: 'done', created_at: '2026-06-08T10:00:00Z', updated_at: '2026-06-08T14:00:00Z' }
+
+    fetchSpy
+      .mockResolvedValueOnce(makeJsonResponse(t1))
+      .mockResolvedValueOnce(makeJsonResponse(t2))
+
+    const { updateBoardTask } = await import('./api')
+    const r1 = await updateBoardTask('task-x', { status: 'active' })
+    const r2 = await updateBoardTask('task-y', { status: 'done' })
+
+    expect(r1.id).toBe('task-x')
+    expect(r2.id).toBe('task-y')
+    expect(r1.status).not.toBe(r2.status)
+  })
+})
+
+// ── deleteBoardTask ───────────────────────────────────────────────────────────
+
+describe('deleteBoardTask', () => {
+  it('calls DELETE /api/v1/board/tasks/{id} and resolves without error', async () => {
+    // BDD: Given an existing task id,
+    // When deleteBoardTask("task-del-001") is called,
+    // Then DELETE /api/v1/board/tasks/task-del-001 is requested,
+    // And the function resolves without throwing.
+    // Traces to: project-task-management-level1-spec.md — deleteBoardTask shape
+    // Note: request() calls res.json(); mock returns {} so it parses cleanly.
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse({}, 200))
+
+    const { deleteBoardTask } = await import('./api')
+    await expect(deleteBoardTask('task-del-001')).resolves.not.toThrow()
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/board/tasks/task-del-001')
+    expect((init as RequestInit).method).toBe('DELETE')
+  })
+
+  it('sends the correct encoded id in the URL', async () => {
+    // BDD: Given a task id,
+    // When deleteBoardTask is called,
+    // Then the URL contains the exact id.
+    // Traces to: project-task-management-level1-spec.md — deleteBoardTask URL encoding
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse({}, 200))
+
+    const { deleteBoardTask } = await import('./api')
+    await deleteBoardTask('board-task-xyz-999')
+
+    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('board-task-xyz-999')
+  })
+})
+
+// ── fetchTokenStats ───────────────────────────────────────────────────────────
+
+describe('fetchTokenStats', () => {
+  it('calls GET /api/v1/stats/tokens?period=month and returns TokenUsageSummary', async () => {
+    // BDD: Given a server that returns a token usage summary,
+    // When fetchTokenStats() is called,
+    // Then GET /api/v1/stats/tokens?period=month is requested,
+    // And the returned value has period_start, period_end, and agents array.
+    // Traces to: project-task-management-level1-spec.md — fetchTokenStats shape
+    const payload = {
+      agents: [
+        { agent_id: 'mia', agent_name: 'Mia', tokens_in: 1000, tokens_out: 500, tokens_total: 1500 },
+        { agent_id: 'jim', agent_name: 'Jim', tokens_in: 2000, tokens_out: 1000, tokens_total: 3000 },
+      ],
+      period_start: '2026-06-01T00:00:00Z',
+      period_end: '2026-07-01T00:00:00Z',
+    }
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse(payload))
+
+    const { fetchTokenStats } = await import('./api')
+    const result = await fetchTokenStats()
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain('/api/v1/stats/tokens')
+    expect(url).toContain('period=month')
+
+    // Verify returned summary has correct structure and content.
+    expect(result.period_start).toBe('2026-06-01T00:00:00Z')
+    expect(result.period_end).toBe('2026-07-01T00:00:00Z')
+    expect(Array.isArray(result.agents)).toBe(true)
+    expect(result.agents).toHaveLength(2)
+    expect(result.agents[0].agent_id).toBe('mia')
+    expect(result.agents[0].tokens_total).toBe(1500)
+    expect(result.agents[1].agent_id).toBe('jim')
+  })
+
+  it('differentiation test: two different summary responses return different data', async () => {
+    // Anti-hardcode: two calls must return distinct data.
+    // Traces to: project-task-management-level1-spec.md — fetchTokenStats differentiation
+    const summary1 = {
+      agents: [{ agent_id: 'mia', agent_name: 'Mia', tokens_in: 100, tokens_out: 50, tokens_total: 150 }],
+      period_start: '2026-05-01T00:00:00Z',
+      period_end: '2026-06-01T00:00:00Z',
+    }
+    const summary2 = {
+      agents: [{ agent_id: 'ava', agent_name: 'Ava', tokens_in: 9999, tokens_out: 4000, tokens_total: 13999 }],
+      period_start: '2026-06-01T00:00:00Z',
+      period_end: '2026-07-01T00:00:00Z',
+    }
+
+    fetchSpy
+      .mockResolvedValueOnce(makeJsonResponse(summary1))
+      .mockResolvedValueOnce(makeJsonResponse(summary2))
+
+    const { fetchTokenStats } = await import('./api')
+    const r1 = await fetchTokenStats()
+    const r2 = await fetchTokenStats()
+
+    expect(r1.period_start).not.toBe(r2.period_start)
+    expect(r1.agents[0].agent_id).not.toBe(r2.agents[0].agent_id)
+    expect(r1.agents[0].tokens_total).not.toBe(r2.agents[0].tokens_total)
+  })
+
+  it('throws ApiError on 500 response', async () => {
+    // BDD: Given a server error,
+    // When fetchTokenStats is called,
+    // Then an ApiError with status 500 is thrown.
+    // Traces to: project-task-management-level1-spec.md — fetchTokenStats error path
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'internal server error' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchTokenStats, ApiError, isApiError } = await import('./api')
+    let thrown: unknown
+    try {
+      await fetchTokenStats()
+    } catch (err) {
+      thrown = err
+    }
+    expect(isApiError(thrown)).toBe(true)
+    expect(thrown instanceof ApiError && thrown.status).toBe(500)
   })
 })
