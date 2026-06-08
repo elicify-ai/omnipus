@@ -10,9 +10,7 @@ properties:
     type: string
     maxLength: 2000
   status:
-    type: string
-    enum: [inbox, next, active, waiting, done]
-    description: Defaults to inbox if absent.
+    $ref: './GTDBoardTaskStatus.yaml'
   project_id:
     type: string
   agent_id:

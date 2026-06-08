@@ -272,8 +272,11 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 			Id:          wt.Id,
 			Name:        wt.Name,
 			ProjectId:   wt.ProjectId,
-			Status:      gen.BoardTaskListResponseItemsStatus(wt.Status),
-			UpdatedAt:   wt.UpdatedAt,
+			// t.Status is a validated GTD status string (readBoardTask/listBoardTasks
+			// reject non-GTD values); convert via the source string rather than an
+			// enum-to-enum cast.
+			Status:    gen.BoardTaskListResponseItemsStatus(t.Status),
+			UpdatedAt: wt.UpdatedAt,
 		})
 	}
 

@@ -397,19 +397,46 @@ type Notification = {
   session_id?: string | undefined;
   agent_id?: string | undefined;
 };
-type BoardTaskListResponse = {
-  items: Array<BoardTask>;
-  total: number;
-};
 type BoardTask = {
   id: string;
   name: string;
   description?: string | undefined;
-  status: "inbox" | "next" | "active" | "waiting" | "done";
+  status: GTDBoardTaskStatus;
   project_id?: string | undefined;
   agent_id?: string | undefined;
   created_at: string;
   updated_at: string;
+};
+type GTDBoardTaskStatus = "inbox" | "next" | "active" | "waiting" | "done";
+type BoardTaskListResponse = {
+  items: Array<BoardTask>;
+  total: number;
+};
+type BoardTaskCreateRequest = {
+  name: string;
+  description?: string | undefined;
+  status?: GTDBoardTaskStatus | undefined;
+  project_id?: string | undefined;
+  agent_id?: string | undefined;
+};
+type BoardTaskUpdateRequest = Partial<{
+  name: string;
+  description: string;
+  status: GTDBoardTaskStatus;
+  project_id: string;
+  agent_id: string;
+}>;
+type TokenUsageSummary = {
+  agents: Array<AgentTokenEntry>;
+  period_start: string;
+  period_end: string;
+};
+type AgentTokenEntry = {
+  agent_id: string;
+  agent_name: string;
+  tokens_in: number;
+  tokens_out: number;
+  tokens_total: number;
 };
 
 export const LoginRequest = z.object({
@@ -1534,12 +1561,19 @@ export const ProjectSessionLink = z
     created_at: z.string().datetime({ offset: true }),
   })
   .passthrough();
+export const GTDBoardTaskStatus = z.enum([
+  "inbox",
+  "next",
+  "active",
+  "waiting",
+  "done",
+]);
 export const BoardTask: z.ZodType<BoardTask> = z
   .object({
     id: z.string(),
     name: z.string().min(1),
     description: z.string().max(2000).optional(),
-    status: z.enum(["inbox", "next", "active", "waiting", "done"]),
+    status: GTDBoardTaskStatus,
     project_id: z.string().optional(),
     agent_id: z.string().optional(),
     created_at: z.string().datetime({ offset: true }),
@@ -1549,38 +1583,37 @@ export const BoardTask: z.ZodType<BoardTask> = z
 export const BoardTaskListResponse: z.ZodType<BoardTaskListResponse> = z
   .object({ items: z.array(BoardTask), total: z.number().int() })
   .passthrough();
-export const BoardTaskCreateRequest = z
+export const BoardTaskCreateRequest: z.ZodType<BoardTaskCreateRequest> = z
   .object({
     name: z.string().min(1).max(200),
     description: z.string().max(2000).optional(),
-    status: z.enum(["inbox", "next", "active", "waiting", "done"]).optional(),
+    status: GTDBoardTaskStatus.optional(),
     project_id: z.string().optional(),
     agent_id: z.string().optional(),
   })
   .passthrough();
-export const BoardTaskUpdateRequest = z
+export const BoardTaskUpdateRequest: z.ZodType<BoardTaskUpdateRequest> = z
   .object({
     name: z.string().min(1).max(200),
     description: z.string().max(2000),
-    status: z.enum(["inbox", "next", "active", "waiting", "done"]),
+    status: GTDBoardTaskStatus,
     project_id: z.string(),
     agent_id: z.string(),
   })
   .partial()
   .passthrough();
-export const TokenUsageSummary = z
+export const AgentTokenEntry: z.ZodType<AgentTokenEntry> = z
   .object({
-    agents: z.array(
-      z
-        .object({
-          agent_id: z.string(),
-          agent_name: z.string(),
-          tokens_in: z.number().int(),
-          tokens_out: z.number().int(),
-          tokens_total: z.number().int(),
-        })
-        .passthrough()
-    ),
+    agent_id: z.string(),
+    agent_name: z.string(),
+    tokens_in: z.number().int(),
+    tokens_out: z.number().int(),
+    tokens_total: z.number().int(),
+  })
+  .passthrough();
+export const TokenUsageSummary: z.ZodType<TokenUsageSummary> = z
+  .object({
+    agents: z.array(AgentTokenEntry),
     period_start: z.string().datetime({ offset: true }),
     period_end: z.string().datetime({ offset: true }),
   })

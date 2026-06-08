@@ -5586,6 +5586,11 @@ export interface components {
             core_team?: string[];
             repository?: string;
         };
+        /**
+         * @description GTD board task status.
+         * @enum {string}
+         */
+        GTDBoardTaskStatus: "inbox" | "next" | "active" | "waiting" | "done";
         /** @description A GTD board task stored in ~/.omnipus/tasks/. Distinct from workflow tasks (pkg/taskstore, /api/v1/tasks) which have different statuses and semantics. */
         BoardTask: {
             /**
@@ -5600,12 +5605,7 @@ export interface components {
             name: string;
             /** @description Optional task description. */
             description?: string;
-            /**
-             * @description GTD status. inbox: unprocessed. next: next action. active: in progress. waiting: blocked on someone/something. done: completed.
-             * @example inbox
-             * @enum {string}
-             */
-            status: "inbox" | "next" | "active" | "waiting" | "done";
+            status: components["schemas"]["GTDBoardTaskStatus"];
             /**
              * @description Optional project this task belongs to. Must be an existing project ID. If absent, task is unassigned.
              * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
@@ -5639,22 +5639,14 @@ export interface components {
         BoardTaskCreateRequest: {
             name: string;
             description?: string;
-            /**
-             * @description Defaults to inbox if absent.
-             * @enum {string}
-             */
-            status?: "inbox" | "next" | "active" | "waiting" | "done";
+            status?: components["schemas"]["GTDBoardTaskStatus"];
             project_id?: string;
             agent_id?: string;
         };
         BoardTaskUpdateRequest: {
             name?: string;
             description?: string;
-            /**
-             * @description If absent, the existing value is unchanged (partial update).
-             * @enum {string}
-             */
-            status?: "inbox" | "next" | "active" | "waiting" | "done";
+            status?: components["schemas"]["GTDBoardTaskStatus"];
             project_id?: string;
             agent_id?: string;
         };
@@ -5672,20 +5664,22 @@ export interface components {
              */
             created_at: string;
         };
+        /** @description Per-agent token usage entry within a TokenUsageSummary. */
+        AgentTokenEntry: {
+            /** @example mia */
+            agent_id: string;
+            /** @example Mia */
+            agent_name: string;
+            /** @example 12345 */
+            tokens_in: number;
+            /** @example 6789 */
+            tokens_out: number;
+            /** @example 19134 */
+            tokens_total: number;
+        };
         /** @description Per-agent token usage summary for a given time period. Aggregated from SessionMeta.Stats across all session files. */
         TokenUsageSummary: {
-            agents: {
-                /** @example mia */
-                agent_id: string;
-                /** @example Mia */
-                agent_name: string;
-                /** @example 12345 */
-                tokens_in: number;
-                /** @example 6789 */
-                tokens_out: number;
-                /** @example 19134 */
-                tokens_total: number;
-            }[];
+            agents: components["schemas"]["AgentTokenEntry"][];
             /**
              * Format: date-time
              * @description Start of the aggregation period (inclusive), UTC.
@@ -10017,9 +10011,11 @@ export type NotificationList = components["schemas"]["NotificationList"];
 export type Project = components["schemas"]["Project"];
 export type ProjectCreateRequest = components["schemas"]["ProjectCreateRequest"];
 export type ProjectUpdateRequest = components["schemas"]["ProjectUpdateRequest"];
+export type GTDBoardTaskStatus = components["schemas"]["GTDBoardTaskStatus"];
 export type BoardTask = components["schemas"]["BoardTask"];
 export type BoardTaskListResponse = components["schemas"]["BoardTaskListResponse"];
 export type BoardTaskCreateRequest = components["schemas"]["BoardTaskCreateRequest"];
 export type BoardTaskUpdateRequest = components["schemas"]["BoardTaskUpdateRequest"];
 export type ProjectSessionLink = components["schemas"]["ProjectSessionLink"];
+export type AgentTokenEntry = components["schemas"]["AgentTokenEntry"];
 export type TokenUsageSummary = components["schemas"]["TokenUsageSummary"];

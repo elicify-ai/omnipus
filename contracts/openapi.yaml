@@ -382,6 +382,8 @@ components:
       $ref: ./components/schemas/ProjectCreateRequest.yaml
     ProjectUpdateRequest:
       $ref: ./components/schemas/ProjectUpdateRequest.yaml
+    GTDBoardTaskStatus:
+      $ref: ./components/schemas/GTDBoardTaskStatus.yaml
     BoardTask:
       $ref: ./components/schemas/BoardTask.yaml
     BoardTaskListResponse:
@@ -392,6 +394,8 @@ components:
       $ref: ./components/schemas/BoardTaskUpdateRequest.yaml
     ProjectSessionLink:
       $ref: ./components/schemas/ProjectSessionLink.yaml
+    AgentTokenEntry:
+      $ref: ./components/schemas/AgentTokenEntry.yaml
     TokenUsageSummary:
       $ref: ./components/schemas/TokenUsageSummary.yaml
   responses:

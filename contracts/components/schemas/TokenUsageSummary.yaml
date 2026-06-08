@@ -10,29 +10,7 @@ properties:
   agents:
     type: array
     items:
-      type: object
-      required:
-        - agent_id
-        - agent_name
-        - tokens_in
-        - tokens_out
-        - tokens_total
-      properties:
-        agent_id:
-          type: string
-          example: "mia"
-        agent_name:
-          type: string
-          example: "Mia"
-        tokens_in:
-          type: integer
-          example: 12345
-        tokens_out:
-          type: integer
-          example: 6789
-        tokens_total:
-          type: integer
-          example: 19134
+      $ref: './AgentTokenEntry.yaml'
   period_start:
     type: string
     format: date-time

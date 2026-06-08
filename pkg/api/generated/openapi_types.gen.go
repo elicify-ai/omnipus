@@ -910,6 +910,33 @@ func (e DoctorResultIssuesSeverity) Valid() bool {
 	}
 }
 
+// Defines values for GTDBoardTaskStatus.
+const (
+	GTDBoardTaskStatusActive  GTDBoardTaskStatus = "active"
+	GTDBoardTaskStatusDone    GTDBoardTaskStatus = "done"
+	GTDBoardTaskStatusInbox   GTDBoardTaskStatus = "inbox"
+	GTDBoardTaskStatusNext    GTDBoardTaskStatus = "next"
+	GTDBoardTaskStatusWaiting GTDBoardTaskStatus = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the GTDBoardTaskStatus enum.
+func (e GTDBoardTaskStatus) Valid() bool {
+	switch e {
+	case GTDBoardTaskStatusActive:
+		return true
+	case GTDBoardTaskStatusDone:
+		return true
+	case GTDBoardTaskStatusInbox:
+		return true
+	case GTDBoardTaskStatusNext:
+		return true
+	case GTDBoardTaskStatusWaiting:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GlobalToolPoliciesDefaultPolicy.
 const (
 	GlobalToolPoliciesDefaultPolicyAllow GlobalToolPoliciesDefaultPolicy = "allow"
@@ -2778,19 +2805,19 @@ func (e DeleteCredential200JSONResponseBodyStatus) Valid() bool {
 
 // Defines values for ListProjectsParamsStatus.
 const (
-	ListProjectsParamsStatusActive   ListProjectsParamsStatus = "active"
-	ListProjectsParamsStatusAll      ListProjectsParamsStatus = "all"
-	ListProjectsParamsStatusArchived ListProjectsParamsStatus = "archived"
+	Active   ListProjectsParamsStatus = "active"
+	All      ListProjectsParamsStatus = "all"
+	Archived ListProjectsParamsStatus = "archived"
 )
 
 // Valid indicates whether the value is a known member of the ListProjectsParamsStatus enum.
 func (e ListProjectsParamsStatus) Valid() bool {
 	switch e {
-	case ListProjectsParamsStatusActive:
+	case Active:
 		return true
-	case ListProjectsParamsStatusAll:
+	case All:
 		return true
-	case ListProjectsParamsStatusArchived:
+	case Archived:
 		return true
 	default:
 		return false
@@ -3310,6 +3337,15 @@ type AgentStats struct {
 	TotalTokens int `json:"total_tokens"`
 }
 
+// AgentTokenEntry Per-agent token usage entry within a TokenUsageSummary.
+type AgentTokenEntry struct {
+	AgentId     string `json:"agent_id"`
+	AgentName   string `json:"agent_name"`
+	TokensIn    int    `json:"tokens_in"`
+	TokensOut   int    `json:"tokens_out"`
+	TokensTotal int    `json:"tokens_total"`
+}
+
 // AgentToolEntry Per-tool entry returned by GET /api/v1/agents/{id}/tools (FR-086, MAJ-008). Exposes both the configured policy and the effective (post-fence) policy so the SPA can display policy downgrades.
 type AgentToolEntry struct {
 	// ConfiguredPolicy The policy as written in the agent's config (before fence application).
@@ -3734,12 +3770,12 @@ type BoardTask struct {
 	// ProjectId Optional project this task belongs to. Must be an existing project ID. If absent, task is unassigned.
 	ProjectId *string `json:"project_id,omitempty"`
 
-	// Status GTD status. inbox: unprocessed. next: next action. active: in progress. waiting: blocked on someone/something. done: completed.
+	// Status GTD board task status.
 	Status    BoardTaskStatus `json:"status"`
 	UpdatedAt time.Time       `json:"updated_at"`
 }
 
-// BoardTaskStatus GTD status. inbox: unprocessed. next: next action. active: in progress. waiting: blocked on someone/something. done: completed.
+// BoardTaskStatus GTD board task status.
 type BoardTaskStatus string
 
 // BoardTaskCreateRequest defines model for BoardTaskCreateRequest.
@@ -3749,11 +3785,11 @@ type BoardTaskCreateRequest struct {
 	Name        string  `json:"name"`
 	ProjectId   *string `json:"project_id,omitempty"`
 
-	// Status Defaults to inbox if absent.
+	// Status GTD board task status.
 	Status *BoardTaskCreateRequestStatus `json:"status,omitempty"`
 }
 
-// BoardTaskCreateRequestStatus Defaults to inbox if absent.
+// BoardTaskCreateRequestStatus GTD board task status.
 type BoardTaskCreateRequestStatus string
 
 // BoardTaskListResponse Paginated list response for GET /board/tasks
@@ -3775,7 +3811,7 @@ type BoardTaskListResponse struct {
 		// ProjectId Optional project this task belongs to. Must be an existing project ID. If absent, task is unassigned.
 		ProjectId *string `json:"project_id,omitempty"`
 
-		// Status GTD status. inbox: unprocessed. next: next action. active: in progress. waiting: blocked on someone/something. done: completed.
+		// Status GTD board task status.
 		Status    BoardTaskListResponseItemsStatus `json:"status"`
 		UpdatedAt time.Time                        `json:"updated_at"`
 	} `json:"items"`
@@ -3784,7 +3820,7 @@ type BoardTaskListResponse struct {
 	Total int `json:"total"`
 }
 
-// BoardTaskListResponseItemsStatus GTD status. inbox: unprocessed. next: next action. active: in progress. waiting: blocked on someone/something. done: completed.
+// BoardTaskListResponseItemsStatus GTD board task status.
 type BoardTaskListResponseItemsStatus string
 
 // BoardTaskUpdateRequest defines model for BoardTaskUpdateRequest.
@@ -3794,11 +3830,11 @@ type BoardTaskUpdateRequest struct {
 	Name        *string `json:"name,omitempty"`
 	ProjectId   *string `json:"project_id,omitempty"`
 
-	// Status If absent, the existing value is unchanged (partial update).
+	// Status GTD board task status.
 	Status *BoardTaskUpdateRequestStatus `json:"status,omitempty"`
 }
 
-// BoardTaskUpdateRequestStatus If absent, the existing value is unchanged (partial update).
+// BoardTaskUpdateRequestStatus GTD board task status.
 type BoardTaskUpdateRequestStatus string
 
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
@@ -4092,6 +4128,9 @@ type ExecProxyStatus struct {
 	// Running Whether the proxy listener is currently bound and running.
 	Running bool `json:"running"`
 }
+
+// GTDBoardTaskStatus GTD board task status.
+type GTDBoardTaskStatus string
 
 // GatewayStatus Gateway runtime status as returned by GET /status (polled by the frontend StatusBar every 15 seconds). Summarises the number of configured agents and channels plus a daily cost accumulator.
 type GatewayStatus struct {
@@ -6227,7 +6266,7 @@ type CreateBoardTaskJSONBody struct {
 	Name        string  `json:"name"`
 	ProjectId   *string `json:"project_id,omitempty"`
 
-	// Status Defaults to inbox if absent.
+	// Status GTD board task status.
 	Status *CreateBoardTaskJSONBodyStatus `json:"status,omitempty"`
 }
 
@@ -6241,7 +6280,7 @@ type UpdateBoardTaskJSONBody struct {
 	Name        *string `json:"name,omitempty"`
 	ProjectId   *string `json:"project_id,omitempty"`
 
-	// Status If absent, the existing value is unchanged (partial update).
+	// Status GTD board task status.
 	Status *UpdateBoardTaskJSONBodyStatus `json:"status,omitempty"`
 }
 

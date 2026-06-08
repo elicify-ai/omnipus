@@ -23,12 +23,7 @@ properties:
     maxLength: 2000
     description: Optional task description.
   status:
-    type: string
-    enum: [inbox, next, active, waiting, done]
-    description: >
-      GTD status. inbox: unprocessed. next: next action. active: in progress.
-      waiting: blocked on someone/something. done: completed.
-    example: "inbox"
+    $ref: './GTDBoardTaskStatus.yaml'
   project_id:
     type: string
     description: >
