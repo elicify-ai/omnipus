@@ -30,7 +30,7 @@ func NewGitHubCopilotProvider(uri string, connectMode string, model string) (*Gi
 		return nil, fmt.Errorf("stdio mode not implemented for GitHub Copilot provider; please use 'grpc' mode instead")
 	case "grpc":
 		client := copilot.NewClient(&copilot.ClientOptions{
-			CLIUrl: uri,
+			Connection: copilot.URIConnection{URL: uri},
 		})
 		if err := client.Start(context.Background()); err != nil {
 			return nil, fmt.Errorf(
@@ -110,9 +110,6 @@ func (p *GitHubCopilotProvider) Chat(
 	if resp == nil {
 		return nil, fmt.Errorf("empty response from copilot")
 	}
-	// SDK 0.2.0 moved SessionEvent.Data to an interface (SessionEventData). The
-	// final event from SendAndWait on a message turn is typed as AssistantMessageData,
-	// where Content is now a plain string (not *string).
 	msgData, ok := resp.Data.(*copilot.AssistantMessageData)
 	if !ok || msgData.Content == "" {
 		return nil, fmt.Errorf("no content in copilot response (event type %q)", resp.Type)
