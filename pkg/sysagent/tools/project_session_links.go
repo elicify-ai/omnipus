@@ -13,10 +13,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 )
 
 const (
-	compactLineThreshold = 100_000
 	compactByteThreshold = int64(10 * 1024 * 1024) // 10 MB
 	lruMaxSize           = 1000
 )
@@ -144,20 +145,14 @@ func RemoveLinksForProject(home, projectID string) {
 		content = []byte(strings.Join(kept, "\n") + "\n")
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, content, 0600); err != nil {
-		slog.Warn("project_session_links: failed to write temp file during rewrite",
-			"error", err, "project_id", projectID)
-		return
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		slog.Warn("project_session_links: failed to rename temp file during rewrite",
+	if err := fileutil.WriteFileAtomic(path, content, 0600); err != nil {
+		slog.Warn("project_session_links: failed to rewrite link file",
 			"error", err, "project_id", projectID)
 	}
 }
 
 // compactLinksIfNeeded triggers a background dedup-rewrite when the link file
-// exceeds compactLineThreshold lines or compactByteThreshold bytes.
+// exceeds compactByteThreshold bytes.
 // Runs in a goroutine so it never blocks the caller.
 func compactLinksIfNeeded(home string) {
 	go func() {
@@ -205,13 +200,8 @@ func compactLinks(home string) {
 		content = []byte(strings.Join(kept, "\n") + "\n")
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, content, 0600); err != nil {
+	if err := fileutil.WriteFileAtomic(path, content, 0600); err != nil {
 		slog.Warn("project_session_links: compaction write failed", "error", err)
-		return
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		slog.Warn("project_session_links: compaction rename failed", "error", err)
 	}
 }
 

@@ -14,8 +14,8 @@ import (
 
 // HandleTokenStats handles GET /api/v1/stats/tokens.
 // It returns per-agent token usage aggregated from SessionMeta.Stats across
-// all sessions. Only the mandatory ?period=month value is accepted; absent
-// or unrecognised values default to "month" per the OpenAPI spec.
+// all sessions. The ?period query parameter must be "month" or absent (defaults
+// to "month"). Unrecognised period values are rejected with 400.
 //
 // Token attribution: tokens are charged to sm.ActiveAgentID (the most-recent
 // agent active in the session). For sessions that pre-date the multi-agent
@@ -47,7 +47,6 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 		name         string
 		inputTokens  int
 		outputTokens int
-		sessionCount int
 	}
 	byAgent := make(map[string]*agentAccum)
 
@@ -92,7 +91,6 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 		}
 		acc.inputTokens += sm.Stats.TokensIn
 		acc.outputTokens += sm.Stats.TokensOut
-		acc.sessionCount++
 	}
 
 	// Build the wire response using local structs whose JSON tags match the

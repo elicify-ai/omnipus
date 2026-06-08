@@ -107,6 +107,8 @@ func listProjectFiles(home string) ([]storedProject, error) {
 
 // computeProjectTaskCounts returns a map[projectID]count by doing a single pass
 // over all task files in ~/.omnipus/tasks/. Used by list (O(N) for all projects).
+// Only GTD tasks (status ∈ {inbox,next,active,waiting,done}) are counted; workflow
+// tasks from pkg/taskstore share the same directory and are excluded.
 func computeProjectTaskCounts(home string) (map[string]int, error) {
 	tasksDir := filepath.Join(home, "tasks")
 	entries, err := os.ReadDir(tasksDir)
@@ -126,6 +128,13 @@ func computeProjectTaskCounts(home string) (map[string]int, error) {
 		if json.Unmarshal(data, &raw) != nil {
 			continue
 		}
+		// Skip workflow tasks (taskstore) by checking GTD status.
+		if statusRaw, ok := raw["status"]; ok {
+			var status string
+			if json.Unmarshal(statusRaw, &status) == nil && !isGTDTask(status) {
+				continue
+			}
+		}
 		if pidRaw, ok := raw["project_id"]; ok {
 			var pid string
 			if json.Unmarshal(pidRaw, &pid) == nil && pid != "" {
@@ -136,8 +145,9 @@ func computeProjectTaskCounts(home string) (map[string]int, error) {
 	return counts, nil
 }
 
-// countTasksForProject counts tasks belonging to a single project. O(N tasks)
+// countTasksForProject counts GTD tasks belonging to a single project. O(N tasks)
 // but avoids building the full map — used by single-project GET/PUT.
+// Only GTD tasks (status ∈ {inbox,next,active,waiting,done}) are counted.
 func countTasksForProject(home, projectID string) int {
 	tasksDir := filepath.Join(home, "tasks")
 	entries, _ := os.ReadDir(tasksDir)
@@ -153,6 +163,13 @@ func countTasksForProject(home, projectID string) int {
 		var raw map[string]json.RawMessage
 		if json.Unmarshal(data, &raw) != nil {
 			continue
+		}
+		// Skip workflow tasks (taskstore) by checking GTD status.
+		if statusRaw, ok := raw["status"]; ok {
+			var status string
+			if json.Unmarshal(statusRaw, &status) == nil && !isGTDTask(status) {
+				continue
+			}
 		}
 		if pidRaw, ok := raw["project_id"]; ok {
 			var pid string

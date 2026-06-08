@@ -2738,7 +2738,7 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/devices", a.adminWrap(a.HandleDevices))
 
 	// GTD board task endpoints (Wave 2b, Level 1 Project & Task Mgmt).
-	// Read-only REST surface; mutations go through agent tools (system.task.*).
+	// Full CRUD — GET list/item, POST create, PUT update, DELETE remove.
 	// Traces to: contracts/components/schemas/BoardTask.yaml, BoardTaskListResponse.yaml.
 	cm.RegisterHTTPHandler("/api/v1/board/tasks", a.withAuth(a.HandleBoardTasks))
 	cm.RegisterHTTPHandler("/api/v1/board/tasks/", a.withAuth(a.HandleBoardTasks))

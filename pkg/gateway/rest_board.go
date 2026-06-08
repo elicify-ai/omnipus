@@ -93,8 +93,8 @@ func (a *restAPI) readBoardTask(id string) (boardTask, error) {
 }
 
 // listBoardTasks reads all GTD task JSON files from the tasks directory.
-// Workflow tasks (status ∈ {queued,assigned,running,completed,failed}) and
-// malformed/unreadable files are skipped with a Warn log.
+// Unreadable/corrupt files are logged at Warn. Workflow tasks (status ∈
+// {queued,assigned,running,completed,failed}) are silently skipped.
 func (a *restAPI) listBoardTasks() ([]boardTask, error) {
 	dir := a.boardTasksDir()
 	entries, err := os.ReadDir(dir)
@@ -154,8 +154,16 @@ func toWireBoardTask(t boardTask) gen.BoardTask {
 		agentID = &ag
 	}
 
-	createdAt, _ := time.Parse(time.RFC3339, t.CreatedAt)
-	updatedAt, _ := time.Parse(time.RFC3339, t.UpdatedAt)
+	createdAt, err := time.Parse(time.RFC3339, t.CreatedAt)
+	if err != nil {
+		slog.Warn("rest: board task: invalid created_at timestamp", "id", t.ID, "raw", t.CreatedAt)
+		createdAt = time.Now().UTC()
+	}
+	updatedAt, err := time.Parse(time.RFC3339, t.UpdatedAt)
+	if err != nil {
+		slog.Warn("rest: board task: invalid updated_at timestamp", "id", t.ID, "raw", t.UpdatedAt)
+		updatedAt = time.Now().UTC()
+	}
 
 	return gen.BoardTask{
 		Id:          t.ID,
@@ -292,9 +300,9 @@ func (a *restAPI) handleBoardTaskGet(w http.ResponseWriter, r *http.Request, id 
 
 // handleBoardTaskPost handles POST /api/v1/board/tasks → 201 Created.
 func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var req gen.CreateBoardTaskJSONBody
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeAndValidate(w, r, "CreateBoardTaskJSONBody", &req, validateEnabled) {
 		return
 	}
 
@@ -376,9 +384,9 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var req gen.UpdateBoardTaskJSONBody
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid request body")
+	if !decodeAndValidate(w, r, "UpdateBoardTaskJSONBody", &req, validateEnabled) {
 		return
 	}
 
