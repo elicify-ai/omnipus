@@ -6,9 +6,11 @@ properties:
   name:
     type: string
     minLength: 1
+    maxLength: 200
     description: Project name. Required. Not unique.
   description:
     type: string
+    maxLength: 2000
     description: Optional description.
   core_team:
     type: array

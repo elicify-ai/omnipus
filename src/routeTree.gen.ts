@@ -14,10 +14,10 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as LandingRouteImport } from './routes/landing'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AppTasksRouteImport } from './routes/_app/tasks'
 import { Route as AppSkillsRouteImport } from './routes/_app/skills'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppPoliciesRouteImport } from './routes/_app/policies'
-import { Route as AppTasksRouteImport } from './routes/_app/tasks'
 import { Route as AppMonitorRouteImport } from './routes/_app/monitor'
 import { Route as AppCommandCenterRouteImport } from './routes/_app/command-center'
 import { Route as AppChannelsRouteImport } from './routes/_app/channels'
@@ -50,6 +50,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppTasksRoute = AppTasksRouteImport.update({
+  id: '/tasks',
+  path: '/tasks',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppSkillsRoute = AppSkillsRouteImport.update({
   id: '/skills',
   path: '/skills',
@@ -63,11 +68,6 @@ const AppSettingsRoute = AppSettingsRouteImport.update({
 const AppPoliciesRoute = AppPoliciesRouteImport.update({
   id: '/policies',
   path: '/policies',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppTasksRoute = AppTasksRouteImport.update({
-  id: '/tasks',
-  path: '/tasks',
   getParentRoute: () => AppRoute,
 } as any)
 const AppMonitorRoute = AppMonitorRouteImport.update({
@@ -114,11 +114,11 @@ export interface FileRoutesByFullPath {
   '/agents': typeof AppAgentsRouteWithChildren
   '/channels': typeof AppChannelsRoute
   '/command-center': typeof AppCommandCenterRoute
-  '/tasks': typeof AppTasksRoute
   '/monitor': typeof AppMonitorRoute
   '/policies': typeof AppPoliciesRoute
   '/settings': typeof AppSettingsRoute
   '/skills': typeof AppSkillsRoute
+  '/tasks': typeof AppTasksRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/agents/': typeof AppAgentsIndexRoute
@@ -129,11 +129,11 @@ export interface FileRoutesByTo {
   '/onboarding': typeof OnboardingRoute
   '/channels': typeof AppChannelsRoute
   '/command-center': typeof AppCommandCenterRoute
-  '/tasks': typeof AppTasksRoute
   '/monitor': typeof AppMonitorRoute
   '/policies': typeof AppPoliciesRoute
   '/settings': typeof AppSettingsRoute
   '/skills': typeof AppSkillsRoute
+  '/tasks': typeof AppTasksRoute
   '/': typeof AppIndexRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
@@ -148,11 +148,11 @@ export interface FileRoutesById {
   '/_app/agents': typeof AppAgentsRouteWithChildren
   '/_app/channels': typeof AppChannelsRoute
   '/_app/command-center': typeof AppCommandCenterRoute
-  '/_app/tasks': typeof AppTasksRoute
   '/_app/monitor': typeof AppMonitorRoute
   '/_app/policies': typeof AppPoliciesRoute
   '/_app/settings': typeof AppSettingsRoute
   '/_app/skills': typeof AppSkillsRoute
+  '/_app/tasks': typeof AppTasksRoute
   '/_app/': typeof AppIndexRoute
   '/_app/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/_app/sessions/$sessionId': typeof AppSessionsSessionIdRoute
@@ -168,11 +168,11 @@ export interface FileRouteTypes {
     | '/agents'
     | '/channels'
     | '/command-center'
-    | '/tasks'
     | '/monitor'
     | '/policies'
     | '/settings'
     | '/skills'
+    | '/tasks'
     | '/agents/$agentId'
     | '/sessions/$sessionId'
     | '/agents/'
@@ -183,11 +183,11 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/channels'
     | '/command-center'
-    | '/tasks'
     | '/monitor'
     | '/policies'
     | '/settings'
     | '/skills'
+    | '/tasks'
     | '/'
     | '/agents/$agentId'
     | '/sessions/$sessionId'
@@ -201,11 +201,11 @@ export interface FileRouteTypes {
     | '/_app/agents'
     | '/_app/channels'
     | '/_app/command-center'
-    | '/_app/tasks'
     | '/_app/monitor'
     | '/_app/policies'
     | '/_app/settings'
     | '/_app/skills'
+    | '/_app/tasks'
     | '/_app/'
     | '/_app/agents/$agentId'
     | '/_app/sessions/$sessionId'
@@ -256,6 +256,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/tasks': {
+      id: '/_app/tasks'
+      path: '/tasks'
+      fullPath: '/tasks'
+      preLoaderRoute: typeof AppTasksRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/skills': {
       id: '/_app/skills'
       path: '/skills'
@@ -277,25 +284,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPoliciesRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/command-center': {
-      id: '/_app/command-center'
-      path: '/command-center'
-      fullPath: '/command-center'
-      preLoaderRoute: typeof AppCommandCenterRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/tasks': {
-      id: '/_app/tasks'
-      path: '/tasks'
-      fullPath: '/tasks'
-      preLoaderRoute: typeof AppTasksRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/monitor': {
       id: '/_app/monitor'
       path: '/monitor'
       fullPath: '/monitor'
       preLoaderRoute: typeof AppMonitorRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/command-center': {
+      id: '/_app/command-center'
+      path: '/command-center'
+      fullPath: '/command-center'
+      preLoaderRoute: typeof AppCommandCenterRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/channels': {
@@ -354,11 +354,11 @@ interface AppRouteChildren {
   AppAgentsRoute: typeof AppAgentsRouteWithChildren
   AppChannelsRoute: typeof AppChannelsRoute
   AppCommandCenterRoute: typeof AppCommandCenterRoute
-  AppTasksRoute: typeof AppTasksRoute
   AppMonitorRoute: typeof AppMonitorRoute
   AppPoliciesRoute: typeof AppPoliciesRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppSkillsRoute: typeof AppSkillsRoute
+  AppTasksRoute: typeof AppTasksRoute
   AppIndexRoute: typeof AppIndexRoute
   AppSessionsSessionIdRoute: typeof AppSessionsSessionIdRoute
 }
@@ -367,11 +367,11 @@ const AppRouteChildren: AppRouteChildren = {
   AppAgentsRoute: AppAgentsRouteWithChildren,
   AppChannelsRoute: AppChannelsRoute,
   AppCommandCenterRoute: AppCommandCenterRoute,
-  AppTasksRoute: AppTasksRoute,
   AppMonitorRoute: AppMonitorRoute,
   AppPoliciesRoute: AppPoliciesRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppSkillsRoute: AppSkillsRoute,
+  AppTasksRoute: AppTasksRoute,
   AppIndexRoute: AppIndexRoute,
   AppSessionsSessionIdRoute: AppSessionsSessionIdRoute,
 }
