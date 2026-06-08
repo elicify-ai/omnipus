@@ -281,6 +281,60 @@ func TestHandleBoardTasks_Create_NameRequired(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code, "POST /board/tasks without name must return 400")
 }
 
+// TestHandleBoardTasks_Boundaries verifies field-length and status validation on
+// POST and GET /api/v1/board/tasks.
+// BDD: Given POST /api/v1/board/tasks with name > 200 chars,
+// When the request is handled,
+// Then 400.
+// Given GET /api/v1/board/tasks?status=queued (a workflow-only status),
+// When the request is handled,
+// Then 400.
+// Given GET /api/v1/board/tasks?status=bogus (an unrecognised status),
+// When the request is handled,
+// Then 400.
+// Traces to: project-task-management-level1-spec.md FG-M7, FG-M13
+func TestHandleBoardTasks_Boundaries(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// POST with name > 200 chars → 400.
+	longName := strings.Repeat("x", 201)
+	longNameBody := fmt.Sprintf(`{"name":%q}`, longName)
+	wLong := httptest.NewRecorder()
+	rLong := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(longNameBody))
+	rLong.Header.Set("Content-Type", "application/json")
+	rLong.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wLong, rLong)
+	assert.Equal(t, http.StatusBadRequest, wLong.Code,
+		"POST /board/tasks with name > 200 chars must return 400; body=%s", wLong.Body.String())
+
+	// POST with name exactly 200 chars → 201 (at the limit is accepted).
+	exactName := strings.Repeat("y", 200)
+	exactNameBody := fmt.Sprintf(`{"name":%q}`, exactName)
+	wExact := httptest.NewRecorder()
+	rExact := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(exactNameBody))
+	rExact.Header.Set("Content-Type", "application/json")
+	rExact.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wExact, rExact)
+	assert.Equal(t, http.StatusCreated, wExact.Code,
+		"POST /board/tasks with name exactly 200 chars must return 201; body=%s", wExact.Body.String())
+
+	// GET ?status=queued → 400 (queued is a workflow task status, not a valid GTD status filter).
+	wQueued := httptest.NewRecorder()
+	rQueued := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks?status=queued", nil)
+	rQueued.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wQueued, rQueued)
+	assert.Equal(t, http.StatusBadRequest, wQueued.Code,
+		"GET /board/tasks?status=queued must return 400 (workflow status rejected); body=%s", wQueued.Body.String())
+
+	// GET ?status=bogus → 400 (completely unrecognised status).
+	wBogus := httptest.NewRecorder()
+	rBogus := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks?status=bogus", nil)
+	rBogus.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wBogus, rBogus)
+	assert.Equal(t, http.StatusBadRequest, wBogus.Code,
+		"GET /board/tasks?status=bogus must return 400; body=%s", wBogus.Body.String())
+}
+
 // TestHandleBoardTasks_TaskCount_ExcludesWorkflowTasks verifies project task_count
 // only counts GTD tasks, not workflow tasks.
 // BDD: Given a project with one GTD task and one workflow task,

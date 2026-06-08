@@ -351,3 +351,145 @@ func TestHandleProjects_MethodNotAllowed(t *testing.T) {
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code, "PATCH /projects must return 405")
 }
+
+// TestHandleProjects_Boundaries verifies field-length validation on POST and PUT /api/v1/projects.
+// BDD: Given POST /api/v1/projects with name > 200 chars,
+// When the request is handled,
+// Then 400.
+// Given PUT /api/v1/projects/{id} with description > 2000 chars,
+// When the request is handled,
+// Then 400.
+// Traces to: project-task-management-level1-spec.md FG-M7
+func TestHandleProjects_Boundaries(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// POST with name > 200 chars → 400.
+	longName := strings.Repeat("x", 201)
+	body, err := json.Marshal(map[string]any{"name": longName})
+	require.NoError(t, err)
+	wLong := httptest.NewRecorder()
+	rLong := httptest.NewRequest(http.MethodPost, "/api/v1/projects", strings.NewReader(string(body)))
+	rLong.Header.Set("Content-Type", "application/json")
+	rLong.URL.Path = "/api/v1/projects"
+	api.HandleProjects(wLong, rLong)
+	assert.Equal(t, http.StatusBadRequest, wLong.Code,
+		"POST /projects with name > 200 chars must return 400; body=%s", wLong.Body.String())
+
+	// POST with name exactly 200 chars → 201 (boundary: exactly at limit is accepted).
+	exactName := strings.Repeat("y", 200)
+	body200, err := json.Marshal(map[string]any{"name": exactName})
+	require.NoError(t, err)
+	wExact := httptest.NewRecorder()
+	rExact := httptest.NewRequest(http.MethodPost, "/api/v1/projects", strings.NewReader(string(body200)))
+	rExact.Header.Set("Content-Type", "application/json")
+	rExact.URL.Path = "/api/v1/projects"
+	api.HandleProjects(wExact, rExact)
+	assert.Equal(t, http.StatusCreated, wExact.Code,
+		"POST /projects with name exactly 200 chars must return 201; body=%s", wExact.Body.String())
+
+	// Create a project and then PUT with description > 2000 chars → 400.
+	projID := createProjectViaAPI(t, api, "BoundaryProject", "initial description")
+	longDesc := strings.Repeat("d", 2001)
+	updateBody, err := json.Marshal(map[string]any{"name": "BoundaryProject", "description": longDesc})
+	require.NoError(t, err)
+	wDesc := httptest.NewRecorder()
+	rDesc := httptest.NewRequest(http.MethodPut, "/api/v1/projects/"+projID, strings.NewReader(string(updateBody)))
+	rDesc.Header.Set("Content-Type", "application/json")
+	rDesc.URL.Path = "/api/v1/projects/" + projID
+	api.HandleProjects(wDesc, rDesc)
+	assert.Equal(t, http.StatusBadRequest, wDesc.Code,
+		"PUT /projects/{id} with description > 2000 chars must return 400; body=%s", wDesc.Body.String())
+
+	// PUT with description exactly 2000 chars → 200 (boundary: at limit is accepted).
+	exactDesc := strings.Repeat("e", 2000)
+	exactDescBody, err := json.Marshal(map[string]any{"name": "BoundaryProject", "description": exactDesc})
+	require.NoError(t, err)
+	wExactDesc := httptest.NewRecorder()
+	rExactDesc := httptest.NewRequest(http.MethodPut, "/api/v1/projects/"+projID, strings.NewReader(string(exactDescBody)))
+	rExactDesc.Header.Set("Content-Type", "application/json")
+	rExactDesc.URL.Path = "/api/v1/projects/" + projID
+	api.HandleProjects(wExactDesc, rExactDesc)
+	assert.Equal(t, http.StatusOK, wExactDesc.Code,
+		"PUT /projects/{id} with description exactly 2000 chars must return 200; body=%s", wExactDesc.Body.String())
+}
+
+// TestHandleProjects_InvalidStatusFilter verifies GET /api/v1/projects?status=garbage returns 400.
+// BDD: Given GET /api/v1/projects?status=garbage (an unrecognised status value),
+// When the request is handled,
+// Then 400.
+// Traces to: project-task-management-level1-spec.md FG-M13
+func TestHandleProjects_InvalidStatusFilter(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/projects?status=garbage", nil)
+	r.URL.Path = "/api/v1/projects"
+	api.HandleProjects(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"GET /projects?status=garbage must return 400; body=%s", w.Body.String())
+}
+
+// TestHandleProjects_CascadeDelete_TasksAndLinksGone verifies that DELETE /api/v1/projects/{id}
+// removes the project, all its associated board tasks, and all its session links.
+// BDD: Given a project P, a board task T associated with P, and a session link for P,
+// When DELETE /api/v1/projects/{P} is called,
+// Then 204, task file T is gone, ReadLinks for P returns nil, GET /projects/{P} returns 404.
+// Traces to: project-task-management-level1-spec.md FG-M8
+func TestHandleProjects_CascadeDelete_TasksAndLinksGone(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// Step 1: Create a project via REST → get project ID P.
+	projID := createProjectViaAPI(t, api, "CascadeProject", "cascade test project")
+
+	// Step 2: Create a board task via REST with project_id=P → get task ID T.
+	taskBody := fmt.Sprintf(`{"name":"CascadeTask","project_id":%q}`, projID)
+	wTask := httptest.NewRecorder()
+	rTask := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(taskBody))
+	rTask.Header.Set("Content-Type", "application/json")
+	rTask.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wTask, rTask)
+	require.Equal(t, http.StatusCreated, wTask.Code, "create board task must return 201; body=%s", wTask.Body.String())
+	var createdTask gen.BoardTask
+	require.NoError(t, json.Unmarshal(wTask.Body.Bytes(), &createdTask))
+	taskID := createdTask.Id
+	require.NotEmpty(t, taskID, "created board task must have non-empty id")
+
+	// Verify the task file exists before delete.
+	taskPath := filepath.Join(api.homePath, "tasks", taskID+".json")
+	_, statErr := os.Stat(taskPath)
+	require.NoError(t, statErr, "task file must exist before cascade delete; path=%s", taskPath)
+
+	// Step 3: Link a session to the project using the systools linker.
+	linker := systools.NewProjectSessionLinker(api.homePath)
+	linker.LinkSession(projID, "sess-cascade-1")
+
+	// Verify the link exists before delete.
+	linksBefore := systools.ReadLinks(api.homePath, projID)
+	require.NotEmpty(t, linksBefore, "session links must exist before cascade delete")
+
+	// Step 4: DELETE /api/v1/projects/{P} → 204.
+	wDel := httptest.NewRecorder()
+	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/projects/"+projID, nil)
+	rDel.URL.Path = "/api/v1/projects/" + projID
+	api.HandleProjects(wDel, rDel)
+	require.Equal(t, http.StatusNoContent, wDel.Code, "DELETE /projects/{id} must return 204; body=%s", wDel.Body.String())
+
+	// Step 5: Assert task file at tasks/{T}.json does NOT exist.
+	_, statAfterErr := os.Stat(taskPath)
+	assert.True(t, os.IsNotExist(statAfterErr),
+		"task file must be removed by cascade delete; path=%s, stat error=%v", taskPath, statAfterErr)
+
+	// Step 6: Assert ReadLinks returns nil or empty for the deleted project.
+	linksAfter := systools.ReadLinks(api.homePath, projID)
+	assert.Empty(t, linksAfter,
+		"session links must be removed by cascade delete; got %d links", len(linksAfter))
+
+	// Step 7: Assert GET /api/v1/projects/{P} returns 404.
+	wGet := httptest.NewRecorder()
+	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+projID, nil)
+	rGet.URL.Path = "/api/v1/projects/" + projID
+	api.HandleProjects(wGet, rGet)
+	assert.Equal(t, http.StatusNotFound, wGet.Code,
+		"GET /projects/{id} after delete must return 404; body=%s", wGet.Body.String())
+}
