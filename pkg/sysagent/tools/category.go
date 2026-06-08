@@ -63,6 +63,7 @@ func (*ProjectCreateTool) Category() tools.ToolCategory { return tools.CategoryS
 func (*ProjectUpdateTool) Category() tools.ToolCategory { return tools.CategorySystem }
 func (*ProjectDeleteTool) Category() tools.ToolCategory { return tools.CategorySystem }
 func (*ProjectListTool) Category() tools.ToolCategory   { return tools.CategorySystem }
+func (*ProjectGetTool) Category() tools.ToolCategory    { return tools.CategorySystem }
 
 // Provider tools
 

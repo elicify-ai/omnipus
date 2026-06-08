@@ -68,6 +68,7 @@ func (*ProjectCreateTool) RequiresAdminAsk() bool { return true }
 func (*ProjectUpdateTool) RequiresAdminAsk() bool { return true }
 func (*ProjectDeleteTool) RequiresAdminAsk() bool { return true }
 func (*ProjectListTool) RequiresAdminAsk() bool   { return true }
+func (*ProjectGetTool) RequiresAdminAsk() bool    { return true }
 
 // Provider tools
 

@@ -25,11 +25,12 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 		NewAgentReadMetadataTool(d),
 		NewAgentWriteMetadataTool(d),
 
-		// Project management (4)
+		// Project management (5)
 		NewProjectCreateTool(d),
 		NewProjectUpdateTool(d),
 		NewProjectDeleteTool(d),
 		NewProjectListTool(d),
+		NewProjectGetTool(d),
 
 		// Task management (4)
 		NewTaskCreateTool(d),
@@ -78,7 +79,7 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 	}
 }
 
-// BuildRegistry creates a ToolRegistry containing all 41 system tools.
+// BuildRegistry creates a ToolRegistry containing all system tools.
 // Use this registry as the backing store for the SystemToolHandler.
 func BuildRegistry(d *Deps, navCb NavigateCallback) *tools.ToolRegistry {
 	reg := tools.NewToolRegistry()
