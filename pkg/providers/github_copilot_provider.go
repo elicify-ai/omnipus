@@ -2,7 +2,6 @@ package providers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -76,22 +75,19 @@ func (p *GitHubCopilotProvider) Chat(
 	model string,
 	options map[string]any,
 ) (*LLMResponse, error) {
-	type tempMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+	// The Copilot SDK session is stateful — it maintains server-side history.
+	// SendAndWait expects a single new user-turn string, not the full history.
+	var prompt string
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			prompt = messages[i].Content
+			break
+		}
 	}
-	out := make([]tempMessage, 0, len(messages))
-	for _, msg := range messages {
-		out = append(out, tempMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
+	if prompt == "" {
+		return nil, fmt.Errorf("no user message found in conversation")
 	}
 
-	fullcontent, err := json.Marshal(out)
-	if err != nil {
-		return nil, fmt.Errorf("marshal messages: %w", err)
-	}
 	p.mu.Lock()
 	session := p.session
 	p.mu.Unlock()
@@ -101,7 +97,7 @@ func (p *GitHubCopilotProvider) Chat(
 	}
 
 	resp, err := session.SendAndWait(ctx, copilot.MessageOptions{
-		Prompt: string(fullcontent),
+		Prompt: prompt,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to send message to copilot: %w", err)
