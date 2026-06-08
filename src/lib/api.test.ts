@@ -1480,6 +1480,216 @@ describe('enableChannel / disableChannel: ChannelEnabledResponse validation (fix
   })
 })
 
+// ── rawToFrontendConfig / frontendToRawConfig round-trip for model_name / provider ──
+//
+// Regression guard: agents.defaults.model_name and agents.defaults.provider were
+// previously not threaded through the mapping functions, causing them to be silently
+// dropped when settings were read from the backend or saved back.
+//
+// Traces to: hotfix/v0.1.1 Wave 4 — api round-trip
+
+describe('rawToFrontendConfig: preserves agents.defaults.model_name and provider', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  function stubCookieLocal3(value: string) {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => value,
+    })
+  }
+
+  function restoreCookieLocal3() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (document as any).cookie
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    stubCookieLocal3('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookieLocal3()
+    vi.resetModules()
+  })
+
+  it('rawToFrontendConfig preserves agents.defaults.model_name and provider', async () => {
+    // Traces to: hotfix/v0.1.1 — agents.defaults fields must survive rawToFrontendConfig
+    const wireConfig = {
+      gateway: { host: '127.0.0.1', port: 8080 },
+      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      storage: { retention: { session_days: 90 } },
+      agents: {
+        defaults: {
+          model_name: 'claude-3-haiku',
+          provider: 'anthropic',
+        },
+      },
+    }
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireConfig), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchConfig } = await import('./api')
+    const config = await fetchConfig()
+
+    expect(config.agents?.defaults?.model_name).toBe('claude-3-haiku')
+    expect(config.agents?.defaults?.provider).toBe('anthropic')
+  })
+
+  it('frontendToRawConfig round-trips model_name and provider without dropping them', async () => {
+    // Traces to: hotfix/v0.1.1 — agents.defaults must survive the full fetchConfig→updateConfig round-trip
+    const wireConfig = {
+      gateway: { host: '127.0.0.1', port: 8080 },
+      security: { policy_mode: 'deny', exec_approval: 'ask' },
+      storage: { retention: { session_days: 90 } },
+      agents: {
+        defaults: {
+          model_name: 'claude-3-haiku',
+          provider: 'anthropic',
+        },
+      },
+    }
+
+    // Mock GET /config response
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireConfig), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    // Mock PUT /config response (echo back the same config)
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wireConfig), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchConfig, updateConfig } = await import('./api')
+    const fetchedConfig = await fetchConfig()
+
+    // Confirm the fetched config has the fields.
+    expect(fetchedConfig.agents?.defaults?.model_name).toBe('claude-3-haiku')
+    expect(fetchedConfig.agents?.defaults?.provider).toBe('anthropic')
+
+    // Send the config back via updateConfig — the round-trip must preserve the fields
+    // in the wire body sent to the backend.
+    await updateConfig({ agents: fetchedConfig.agents })
+
+    // Inspect the PUT request body (second fetch call).
+    const [, putInit] = fetchSpy.mock.calls[1] as [string, RequestInit]
+    const putBody = JSON.parse(putInit.body as string) as Record<string, unknown>
+
+    // The wire body must contain agents.defaults with both fields intact.
+    const putAgents = putBody.agents as Record<string, unknown>
+    const putDefaults = putAgents?.defaults as Record<string, unknown>
+    expect(putDefaults?.model_name).toBe('claude-3-haiku')
+    expect(putDefaults?.provider).toBe('anthropic')
+  })
+})
+
+// ── rotateGatewayToken schema validation ──────────────────────────────────────
+//
+// Verifies that rotateGatewayToken() enforces the RotateTokenResponse Zod schema:
+// - rejects responses where `token` is the wrong type or malformed
+// - accepts a well-formed 72-character `omnipus_<hex64>` token
+//
+// Traces to: hotfix/v0.1.1 Wave 4 — rotateGatewayToken schema validates response
+
+describe('rotateGatewayToken: schema validation', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  function stubCookieLocal4(value: string) {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get: () => value,
+    })
+  }
+
+  function restoreCookieLocal4() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (document as any).cookie
+  }
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    stubCookieLocal4('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookieLocal4()
+    vi.resetModules()
+  })
+
+  it('rejects when token is a number (wrong type) — throws ApiSchemaError', async () => {
+    // { token: 123 } fails RotateTokenResponse — token must be a string.
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ token: 123 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { rotateGatewayToken, ApiSchemaError: ApiSchemaErrorClass } = await import('./api')
+    await expect(rotateGatewayToken()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+  })
+
+  it('rejects when token field is missing — throws ApiSchemaError', async () => {
+    // {} fails RotateTokenResponse — token is required.
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { rotateGatewayToken, ApiSchemaError: ApiSchemaErrorClass } = await import('./api')
+    await expect(rotateGatewayToken()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+  })
+
+  it('resolves with {token} when a valid 72-char omnipus_<hex64> token is returned', async () => {
+    // Valid token: 'omnipus_' (8 chars) + 64 lowercase hex chars = 72 chars total.
+    const validToken = 'omnipus_' + 'a'.repeat(64)
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ token: validToken }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { rotateGatewayToken } = await import('./api')
+    const result = await rotateGatewayToken()
+    expect(result.token).toBe(validToken)
+  })
+
+  it('rejects when token is a valid 72-char string but does not match omnipus_<hex64> pattern', async () => {
+    // Length 72, but wrong format: no "omnipus_" prefix and not lowercase hex.
+    const wrongFormat = 'X'.repeat(72)
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ token: wrongFormat }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { rotateGatewayToken, ApiSchemaError: ApiSchemaErrorClass } = await import('./api')
+    await expect(rotateGatewayToken()).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+  })
+})
+
 // ── validEnum / _configCoercionCount integration tests ────────────────────────
 //
 // Verifies that rawToFrontendConfig calls validEnum which increments _configCoercionCount
