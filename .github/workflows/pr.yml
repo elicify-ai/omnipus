@@ -33,6 +33,45 @@ jobs:
       - name: Run TypeScript type check
         run: npm run typecheck
 
+  vitest:
+    name: Vitest — ${{ matrix.group }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Group A: lib, store, routes, test — fast pure-logic units
+          - group: lib-store
+            patterns: "src/lib/ src/store/ src/routes/ src/test/"
+          # Group B: chat components — heaviest component group
+          - group: components-chat
+            patterns: "src/components/chat/"
+          # Group C: agents + settings + skills + shared + ui components
+          - group: components-agents-settings
+            patterns: "src/components/agents/ src/components/settings/ src/components/skills/ src/components/shared/ src/components/ui/"
+          # Group D: layout + command-center + projects components
+          - group: components-layout-projects
+            patterns: "src/components/layout/ src/components/command-center/ src/components/projects/"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run Vitest (${{ matrix.group }})
+        env:
+          VITEST_PATTERNS: ${{ matrix.patterns }}
+        # word-split $VITEST_PATTERNS intentionally — each space-separated token
+        # becomes a separate vitest path filter (substring match against full path)
+        run: npx vitest run --reporter=verbose $VITEST_PATTERNS
+
   wire-types-lint:
     name: Wire-Types Lint
     # Enforces hard-constraint #8 (CLAUDE.md contract-first rule): every wire-
