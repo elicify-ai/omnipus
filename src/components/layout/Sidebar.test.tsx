@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
+import { fetchProjects } from '@/lib/api'
 
 // JSDOM does not implement window.matchMedia — Sidebar uses it for pin breakpoint detection.
 // Return matches: true so canPin=true and the pin toggle button renders in tests.
@@ -39,8 +40,9 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/mock-avatar.svg' }))
 
 // Mock fetchProjects so the Sidebar's useQuery never hits the network in tests.
+// Using vi.fn() so individual tests can override the resolved value with mockResolvedValueOnce.
 vi.mock('@/lib/api', () => ({
-  fetchProjects: () => Promise.resolve([]),
+  fetchProjects: vi.fn().mockResolvedValue([]),
   projectsQueryKeys: {
     list: (params?: unknown) => ['projects', params],
   },
@@ -90,6 +92,8 @@ beforeEach(() => {
   act(() => {
     useSidebarStore.setState({ isOpen: false, isPinned: false })
   })
+  // Reset fetchProjects to the default empty-list response before each test.
+  vi.mocked(fetchProjects).mockResolvedValue([])
 })
 
 // test_sidebar_overlay_rendering
@@ -99,9 +103,10 @@ describe('Sidebar — overlay rendering when open', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // All nav item labels must be present (now 6 items including Channels).
+    // All nav item labels must be present (7 items: Command Center replaced by Tasks + Monitor).
     expect(screen.getByText('Chat')).toBeTruthy()
-    expect(screen.getByText('Command Center')).toBeTruthy()
+    expect(screen.getByText('Tasks')).toBeTruthy()
+    expect(screen.getByText('Monitor')).toBeTruthy()
     expect(screen.getByText('Agents')).toBeTruthy()
     expect(screen.getByText('Channels')).toBeTruthy()
     expect(screen.getByText('Skills & Tools')).toBeTruthy()
@@ -191,5 +196,221 @@ describe('Sidebar — Channels nav item (sprint/258)', () => {
     act(() => { useSidebarStore.setState({ isOpen: false, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
     expect(screen.queryByText('Channels')).toBeNull()
+  })
+})
+
+// ── Wave 2b — Archive section (F7-F06) ────────────────────────────────────────
+// Traces to: project-task-management-level1-spec.md line 1033 (FR-029)
+//            A8: Archive section as collapsible "▸ Archive" at bottom of sidebar Projects area; hidden by default
+
+describe('Sidebar — Archive section (F7-F06)', () => {
+  it('Archive toggle button is present but archived projects not shown by default', () => {
+    // BDD: Given sidebar is open
+    // BDD: When rendered with no interaction
+    // BDD: Then the "Archive" toggle button exists (it is always rendered) but expanded=false
+    // Traces to: project-task-management-level1-spec.md line 1033 — "hidden by default"
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    // The Archive toggle button is always present in the DOM
+    const archiveToggle = screen.getByRole('button', { name: /archive/i })
+    expect(archiveToggle).toBeTruthy()
+
+    // It must NOT be expanded by default
+    expect(archiveToggle.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('Archive section shows archived project names when toggle is clicked', async () => {
+    // BDD: Given sidebar is open and there is one archived project "Old Project"
+    // BDD: When user clicks the Archive toggle button
+    // BDD: Then "Old Project" appears in the sidebar
+    // Traces to: project-task-management-level1-spec.md line 1033 (FR-029 — archived projects shown in sidebar section)
+
+    // Active-projects query returns empty; archived-projects query returns one project.
+    // fetchProjects is called with { status: 'active' } for the main list and
+    // { status: 'archived' } for the archive section (enabled only after archiveOpen=true).
+    vi.mocked(fetchProjects).mockImplementation((params?: { status?: string }) => {
+      if (params?.status === 'archived') {
+        return Promise.resolve([
+          {
+            id: 'p-archived',
+            name: 'Old Project',
+            status: 'archived',
+            pinned: false,
+            pin_order: 0,
+            task_count: 0,
+            created_at: '2026-01-01T00:00:00Z',
+            updated_at: '2026-01-01T00:00:00Z',
+          },
+        ])
+      }
+      return Promise.resolve([])
+    })
+
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    // Each test needs a fresh QueryClient so the archived-projects query is not cached.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}><Sidebar /></QueryClientProvider>
+    )
+
+    // Differentiation test — before clicking, "Old Project" must NOT be visible
+    expect(screen.queryByText('Old Project')).toBeNull()
+
+    // Click the Archive toggle to expand the section
+    const archiveToggle = screen.getByRole('button', { name: /archive/i })
+    act(() => { fireEvent.click(archiveToggle) })
+
+    // Content test — "Old Project" must now appear after the query resolves
+    await waitFor(() => {
+      expect(screen.getByText('Old Project')).toBeTruthy()
+    })
+
+    // The toggle must now show aria-expanded=true
+    expect(archiveToggle.getAttribute('aria-expanded')).toBe('true')
+  })
+})
+
+// ── Wave 2b — Inline search (F7-F07) ──────────────────────────────────────────
+// Traces to: project-task-management-level1-spec.md line 684
+//            Scenario: Inline search filters project list (case-insensitive substring)
+
+describe('Sidebar — Inline search (F7-F07)', () => {
+  it('pressing "/" on the Projects section reveals a search input', async () => {
+    // BDD: Given sidebar is open with two projects
+    // BDD: When user presses "/" on the Projects section
+    // BDD: Then a search input (aria-label "Filter projects") appears
+    // Traces to: project-task-management-level1-spec.md line 684
+
+    vi.mocked(fetchProjects).mockResolvedValue([
+      { id: 'p1', name: 'Alpha Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+      { id: 'p2', name: 'Beta Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+    ])
+
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={queryClient}><Sidebar /></QueryClientProvider>)
+
+    // Wait for projects to load
+    await waitFor(() => { expect(screen.getByText('Alpha Project')).toBeTruthy() })
+
+    // The search input must NOT be visible before "/" is pressed
+    expect(screen.queryByRole('textbox', { name: /filter projects/i })).toBeNull()
+
+    // Fire "/" keydown on the Projects group
+    const projectsSection = screen.getByRole('group', { name: 'Projects' })
+    act(() => { fireEvent.keyDown(projectsSection, { key: '/', code: 'Slash' }) })
+
+    // Search input must now appear
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: /filter projects/i })).toBeTruthy()
+    })
+  })
+
+  it('projects list filters by case-insensitive substring when search query is typed', async () => {
+    // BDD: Given projects "Alpha Project" and "Beta Project" in sidebar
+    // BDD: When user presses "/" then types "alpha"
+    // BDD: Then only "Alpha Project" remains visible
+    // BDD: And "Beta Project" is NOT visible
+    // Traces to: project-task-management-level1-spec.md line 684 — case-insensitive substring
+
+    vi.mocked(fetchProjects).mockResolvedValue([
+      { id: 'p1', name: 'Alpha Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+      { id: 'p2', name: 'Beta Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+    ])
+
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={queryClient}><Sidebar /></QueryClientProvider>)
+
+    // Wait for both projects to load
+    await waitFor(() => {
+      expect(screen.getByText('Alpha Project')).toBeTruthy()
+      expect(screen.getByText('Beta Project')).toBeTruthy()
+    })
+
+    // Open search
+    const projectsSection = screen.getByRole('group', { name: 'Projects' })
+    act(() => { fireEvent.keyDown(projectsSection, { key: '/', code: 'Slash' }) })
+
+    const searchInput = await screen.findByRole('textbox', { name: /filter projects/i })
+
+    // Type "alpha" — differentiation test: two different inputs produce two different outputs
+    act(() => { fireEvent.change(searchInput, { target: { value: 'alpha' } }) })
+
+    // Content test: Alpha Project is visible, Beta Project is not
+    expect(screen.getByText('Alpha Project')).toBeTruthy()
+    expect(screen.queryByText('Beta Project')).toBeNull()
+  })
+
+  it('uppercase search query still filters case-insensitively', async () => {
+    // BDD: Given projects in sidebar
+    // BDD: When user types "ALPHA" (uppercase)
+    // BDD: Then "Alpha Project" still matches (case-insensitive)
+    // Traces to: project-task-management-level1-spec.md line 692 — "typing 'MOB' would also match"
+
+    vi.mocked(fetchProjects).mockResolvedValue([
+      { id: 'p1', name: 'Alpha Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+      { id: 'p2', name: 'Beta Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+    ])
+
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={queryClient}><Sidebar /></QueryClientProvider>)
+
+    await waitFor(() => { expect(screen.getByText('Alpha Project')).toBeTruthy() })
+
+    const projectsSection = screen.getByRole('group', { name: 'Projects' })
+    act(() => { fireEvent.keyDown(projectsSection, { key: '/', code: 'Slash' }) })
+
+    const searchInput = await screen.findByRole('textbox', { name: /filter projects/i })
+    act(() => { fireEvent.change(searchInput, { target: { value: 'ALPHA' } }) })
+
+    // Differentiation test: uppercase input still matches, Beta does not
+    expect(screen.getByText('Alpha Project')).toBeTruthy()
+    expect(screen.queryByText('Beta Project')).toBeNull()
+  })
+
+  it('pressing Escape clears search and shows all projects again', async () => {
+    // BDD: Given search is open with "alpha" typed
+    // BDD: When user presses Escape
+    // BDD: Then search input disappears and both projects are visible
+    // Traces to: project-task-management-level1-spec.md line 684 (Sidebar inline search scenario)
+
+    vi.mocked(fetchProjects).mockResolvedValue([
+      { id: 'p1', name: 'Alpha Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+      { id: 'p2', name: 'Beta Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+    ])
+
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={queryClient}><Sidebar /></QueryClientProvider>)
+
+    await waitFor(() => {
+      expect(screen.getByText('Alpha Project')).toBeTruthy()
+      expect(screen.getByText('Beta Project')).toBeTruthy()
+    })
+
+    // Open search and type
+    const projectsSection = screen.getByRole('group', { name: 'Projects' })
+    act(() => { fireEvent.keyDown(projectsSection, { key: '/', code: 'Slash' }) })
+
+    const searchInput = await screen.findByRole('textbox', { name: /filter projects/i })
+    act(() => { fireEvent.change(searchInput, { target: { value: 'alpha' } }) })
+
+    // Beta is hidden while filtering
+    expect(screen.queryByText('Beta Project')).toBeNull()
+
+    // Press Escape on the input
+    act(() => { fireEvent.keyDown(searchInput, { key: 'Escape', code: 'Escape' }) })
+
+    // Search input must be gone
+    await waitFor(() => {
+      expect(screen.queryByRole('textbox', { name: /filter projects/i })).toBeNull()
+    })
+
+    // Both projects must be visible again
+    expect(screen.getByText('Alpha Project')).toBeTruthy()
+    expect(screen.getByText('Beta Project')).toBeTruthy()
   })
 })
