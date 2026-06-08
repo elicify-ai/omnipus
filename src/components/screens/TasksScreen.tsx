@@ -85,7 +85,7 @@ function CreateTaskSlideOver({ open, onOpenChange, defaultProjectId }: CreateTas
         project_id: form.project_id || undefined,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
       addToast({ message: 'Task created', variant: 'success' })
       setForm({ name: '', description: '', status: 'inbox', project_id: defaultProjectId ?? '' })
       setNameError('')
@@ -296,10 +296,10 @@ interface ColumnProps {
   label: string
   tasks: BoardTask[]
   onDelete: (id: string) => void
-  deletingId: string | null
+  deletingIds: Set<string>
 }
 
-function Column({ label, tasks, onDelete, deletingId }: ColumnProps) {
+function Column({ label, tasks, onDelete, deletingIds }: ColumnProps) {
   return (
     <div className="flex flex-col min-w-[220px] flex-1 bg-[var(--color-surface-1)] rounded-xl border border-[var(--color-border)]">
       {/* Column header */}
@@ -320,7 +320,7 @@ function Column({ label, tasks, onDelete, deletingId }: ColumnProps) {
               key={task.id}
               task={task}
               onDelete={onDelete}
-              isDeleting={deletingId === task.id}
+              isDeleting={deletingIds.has(task.id)}
             />
           ))
         )}
@@ -339,7 +339,7 @@ export function TasksScreen() {
   const addToast = useUiStore((s) => s.addToast)
   const { activeProjectId, setActiveProjectId } = useProjectsStore()
   const [createTaskOpen, setCreateTaskOpen] = useState(false)
-  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set())
 
   // Fetch projects for filter pill label
   const { data: projects = [] } = useQuery({
@@ -360,16 +360,16 @@ export function TasksScreen() {
   // Delete mutation
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteBoardTask(id),
-    onMutate: (id) => setDeletingId(id),
+    onMutate: (id) => setDeletingIds((prev) => new Set([...prev, id])),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
       addToast({ message: 'Task deleted', variant: 'success' })
     },
     onError: (err) => {
       const msg = isApiError(err) ? err.message : 'Unexpected error'
       addToast({ message: `Failed to delete task: ${msg}`, variant: 'error' })
     },
-    onSettled: () => setDeletingId(null),
+    onSettled: (_data, _err, id) => setDeletingIds((prev) => { const n = new Set(prev); n.delete(id); return n }),
   })
 
   return (
@@ -442,7 +442,7 @@ export function TasksScreen() {
               label={col.label}
               tasks={tasks.filter((t) => t.status === col.status)}
               onDelete={(id) => deleteMutation.mutate(id)}
-              deletingId={deletingId}
+              deletingIds={deletingIds}
             />
           ))}
         </div>

@@ -2090,7 +2090,7 @@ export function fetchProjectSessions(id: string): Promise<ProjectSessionLink[]> 
 // openapi-types (contract-first #8). See contracts/components/schemas/BoardTask*.yaml.
 
 export const boardTasksQueryKeys = {
-  list: (params?: { project_id?: string; status?: string }) => ['board-tasks', params] as const,
+  list: (params?: { project_id?: string; status?: string }) => ['board-tasks', params ?? {}] as const,
   detail: (id: string) => ['board-tasks', id] as const,
 }
 

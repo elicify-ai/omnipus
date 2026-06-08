@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { createProject, projectsQueryKeys, isApiError } from '@/lib/api'
+import { createProject, isApiError } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
 interface NewProjectSlideOverProps {
@@ -41,7 +41,7 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
         repository: form.repository.trim() || undefined,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: projectsQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
       addToast({ message: 'Project created', variant: 'success' })
       setForm(INITIAL_FORM)
       setFieldErrors({})
