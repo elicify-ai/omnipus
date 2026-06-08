@@ -7,27 +7,27 @@
 package gateway
 
 import (
-	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/oklog/ulid/v2"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 )
 
-// projectLinkFileMu serialises all writes to project_session_links.jsonl from
-// the gateway layer. Must be held (write lock) for any write/rewrite; RLock is
-// sufficient for read-only access.
-var projectLinkFileMu sync.RWMutex
+// errProjectNotFound is returned by readProjectFile when the project file does
+// not exist on disk. Callers use errors.Is(err, errProjectNotFound).
+var errProjectNotFound = errors.New("project not found")
 
 // storedProject mirrors the on-disk format of ~/.omnipus/projects/{id}.json.
 // not-wire-format
@@ -44,22 +44,14 @@ type storedProject struct { // not-wire-format
 	UpdatedAt   string   `json:"updated_at"`
 }
 
-// storedLink mirrors one line in ~/.omnipus/project_session_links.jsonl.
-// not-wire-format
-type storedLink struct { // not-wire-format
-	ProjectID string `json:"project_id"`
-	SessionID string `json:"session_id"`
-	CreatedAt string `json:"created_at"`
-}
-
 // readProjectFile reads and parses ~/.omnipus/projects/{id}.json, applying the
 // legacy "agent_ids" → "core_team" migration if needed.
 func readProjectFile(home, id string) (storedProject, error) {
 	path := filepath.Join(home, "projects", id+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return storedProject{}, fmt.Errorf("NOT_FOUND: %s", id)
+		if errors.Is(err, os.ErrNotExist) {
+			return storedProject{}, fmt.Errorf("%w: %s", errProjectNotFound, id)
 		}
 		return storedProject{}, fmt.Errorf("read project %s: %w", id, err)
 	}
@@ -81,7 +73,7 @@ func readProjectFile(home, id string) (storedProject, error) {
 	}
 	// Legacy files without status field default to active.
 	if p.Status == "" {
-		p.Status = "active"
+		p.Status = string(gen.ProjectStatusActive)
 	}
 	return p, nil
 }
@@ -92,7 +84,7 @@ func listProjectFiles(home string) ([]storedProject, error) {
 	dir := filepath.Join(home, "projects")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("list projects: %w", err)
@@ -114,11 +106,11 @@ func listProjectFiles(home string) ([]storedProject, error) {
 }
 
 // computeProjectTaskCounts returns a map[projectID]count by doing a single pass
-// over all task files in ~/.omnipus/tasks/.
+// over all task files in ~/.omnipus/tasks/. Used by list (O(N) for all projects).
 func computeProjectTaskCounts(home string) (map[string]int, error) {
 	tasksDir := filepath.Join(home, "tasks")
 	entries, err := os.ReadDir(tasksDir)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read tasks dir: %w", err)
 	}
 	counts := make(map[string]int)
@@ -144,6 +136,34 @@ func computeProjectTaskCounts(home string) (map[string]int, error) {
 	return counts, nil
 }
 
+// countTasksForProject counts tasks belonging to a single project. O(N tasks)
+// but avoids building the full map — used by single-project GET/PUT.
+func countTasksForProject(home, projectID string) int {
+	tasksDir := filepath.Join(home, "tasks")
+	entries, _ := os.ReadDir(tasksDir)
+	count := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(tasksDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var raw map[string]json.RawMessage
+		if json.Unmarshal(data, &raw) != nil {
+			continue
+		}
+		if pidRaw, ok := raw["project_id"]; ok {
+			var pid string
+			if json.Unmarshal(pidRaw, &pid) == nil && pid == projectID {
+				count++
+			}
+		}
+	}
+	return count
+}
+
 // writeProjectFile atomically writes p to ~/.omnipus/projects/{id}.json.
 func writeProjectFile(home string, p storedProject) error {
 	dir := filepath.Join(home, "projects")
@@ -159,10 +179,18 @@ func writeProjectFile(home string, p storedProject) error {
 }
 
 // projectToWire converts a storedProject to the gen.Project wire type.
-// taskCount is passed in (computed in a single pass by the caller).
+// taskCount is passed in (computed by the caller).
 func projectToWire(p storedProject, taskCount int) gen.Project {
-	createdAt, _ := time.Parse(time.RFC3339, p.CreatedAt)
-	updatedAt, _ := time.Parse(time.RFC3339, p.UpdatedAt)
+	createdAt, err := time.Parse(time.RFC3339, p.CreatedAt)
+	if err != nil {
+		slog.Warn("rest: project: invalid created_at timestamp", "id", p.ID, "raw", p.CreatedAt)
+		createdAt = time.Now().UTC()
+	}
+	updatedAt, err := time.Parse(time.RFC3339, p.UpdatedAt)
+	if err != nil {
+		slog.Warn("rest: project: invalid updated_at timestamp", "id", p.ID, "raw", p.UpdatedAt)
+		updatedAt = time.Now().UTC()
+	}
 
 	w := gen.Project{
 		Id:        p.ID,
@@ -188,90 +216,6 @@ func projectToWire(p storedProject, taskCount int) gen.Project {
 	return w
 }
 
-// readProjectSessionLinks returns deduplicated links for the given projectID by
-// reading ~/.omnipus/project_session_links.jsonl. Uses projectLinkFileMu (read).
-func readProjectSessionLinks(home, projectID string) []storedLink {
-	projectLinkFileMu.RLock()
-	defer projectLinkFileMu.RUnlock()
-
-	path := filepath.Join(home, "project_session_links.jsonl")
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close() //nolint:errcheck
-
-	seen := make(map[string]struct{})
-	var out []storedLink
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 256*1024), 256*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		var link storedLink
-		if json.Unmarshal([]byte(line), &link) != nil {
-			continue
-		}
-		if link.ProjectID != projectID {
-			continue
-		}
-		key := link.ProjectID + ":" + link.SessionID
-		if _, dup := seen[key]; dup {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, link)
-	}
-	return out
-}
-
-// rewriteLinksExcluding rewrites project_session_links.jsonl omitting all entries
-// for the given projectID. Uses projectLinkFileMu (write).
-func rewriteLinksExcluding(home, projectID string) {
-	projectLinkFileMu.Lock()
-	defer projectLinkFileMu.Unlock()
-
-	path := filepath.Join(home, "project_session_links.jsonl")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			slog.Warn("rest: project cascade: cannot read link file",
-				"error", err, "project_id", projectID)
-		}
-		return
-	}
-
-	var kept []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var link storedLink
-		if err := json.Unmarshal([]byte(line), &link); err != nil || link.ProjectID == projectID {
-			continue
-		}
-		kept = append(kept, line)
-	}
-
-	var content []byte
-	if len(kept) > 0 {
-		content = []byte(strings.Join(kept, "\n") + "\n")
-	}
-	tmp := path + ".gw.tmp"
-	if err := os.WriteFile(tmp, content, 0o600); err != nil {
-		slog.Warn("rest: project cascade: failed to write link temp file",
-			"error", err, "project_id", projectID)
-		return
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		slog.Warn("rest: project cascade: failed to rename link temp file",
-			"error", err, "project_id", projectID)
-	}
-}
-
 // deleteTasksForProject removes all task files whose project_id matches projectID.
 func deleteTasksForProject(home, projectID string) {
 	tasksDir := filepath.Join(home, "tasks")
@@ -295,7 +239,7 @@ func deleteTasksForProject(home, projectID string) {
 		if pidRaw, ok := raw["project_id"]; ok {
 			var pid string
 			if json.Unmarshal(pidRaw, &pid) == nil && pid == projectID {
-				if err := os.Remove(taskPath); err != nil && !os.IsNotExist(err) {
+				if err := os.Remove(taskPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 					slog.Warn("rest: project cascade: failed to delete task",
 						"file", e.Name(), "error", err)
 				}
@@ -323,6 +267,11 @@ func (a *restAPI) HandleProjects(w http.ResponseWriter, r *http.Request) {
 	// /api/v1/projects/{id}
 	if len(rest) > 1 {
 		id := strings.TrimPrefix(rest, "/")
+		// Unknown sub-paths like /projects/{id}/anything return 404.
+		if strings.Contains(id, "/") {
+			http.NotFound(w, r)
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 			a.handleProjectGet(w, r, id)
@@ -350,13 +299,13 @@ func (a *restAPI) HandleProjects(w http.ResponseWriter, r *http.Request) {
 func (a *restAPI) handleProjectList(w http.ResponseWriter, r *http.Request) {
 	statusFilter := r.URL.Query().Get("status")
 	if statusFilter == "" {
-		statusFilter = "active"
+		statusFilter = string(gen.ProjectStatusActive)
 	}
 
 	projects, err := listProjectFiles(a.homePath)
 	if err != nil {
 		slog.Error("rest: list projects", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list projects: %v", err))
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -376,6 +325,21 @@ func (a *restAPI) handleProjectList(w http.ResponseWriter, r *http.Request) {
 	if result == nil {
 		result = []gen.Project{}
 	}
+
+	// Sort: pinned items first (ascending pin_order), then unpinned newest-first.
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Pinned != result[j].Pinned {
+			return result[i].Pinned
+		}
+		if result[i].Pinned && result[j].Pinned {
+			if result[i].PinOrder != result[j].PinOrder {
+				return result[i].PinOrder < result[j].PinOrder
+			}
+			return result[i].CreatedAt.Before(result[j].CreatedAt)
+		}
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
+
 	jsonOK(w, result)
 }
 
@@ -411,7 +375,7 @@ func (a *restAPI) handleProjectPost(w http.ResponseWriter, r *http.Request) {
 	p := storedProject{
 		ID:        ulid.Make().String(),
 		Name:      req.Name,
-		Status:    "active",
+		Status:    string(gen.ProjectStatusActive),
 		Pinned:    false,
 		PinOrder:  0,
 		CreatedAt: now,
@@ -429,7 +393,7 @@ func (a *restAPI) handleProjectPost(w http.ResponseWriter, r *http.Request) {
 
 	if err := writeProjectFile(a.homePath, p); err != nil {
 		slog.Error("rest: create project", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save project: %v", err))
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	jsonCreated(w, projectToWire(p, 0))
@@ -442,20 +406,15 @@ func (a *restAPI) handleProjectGet(w http.ResponseWriter, r *http.Request, id st
 	}
 	p, err := readProjectFile(a.homePath, id)
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "NOT_FOUND:") {
+		if errors.Is(err, errProjectNotFound) {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("project %q not found", id))
 			return
 		}
 		slog.Error("rest: get project", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read project: %v", err))
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	taskCounts, err := computeProjectTaskCounts(a.homePath)
-	if err != nil {
-		slog.Warn("rest: get project: could not compute task counts", "error", err)
-		taskCounts = make(map[string]int)
-	}
-	jsonOK(w, projectToWire(p, taskCounts[p.ID]))
+	jsonOK(w, projectToWire(p, countTasksForProject(a.homePath, id)))
 }
 
 func (a *restAPI) handleProjectPut(w http.ResponseWriter, r *http.Request, id string) {
@@ -499,51 +458,64 @@ func (a *restAPI) handleProjectPut(w http.ResponseWriter, r *http.Request, id st
 
 	p, err := readProjectFile(a.homePath, id)
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "NOT_FOUND:") {
+		if errors.Is(err, errProjectNotFound) {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("project %q not found", id))
 			return
 		}
 		slog.Error("rest: update project: read", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read project: %v", err))
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
-	// Apply partial update (merge semantics).
-	if req.Name != nil {
+	// Apply partial update (merge semantics) — track whether anything changed.
+	changed := false
+	if req.Name != nil && *req.Name != p.Name {
 		p.Name = *req.Name
+		changed = true
 	}
-	if req.Description != nil {
+	if req.Description != nil && *req.Description != p.Description {
 		p.Description = *req.Description
+		changed = true
 	}
-	if req.Repository != nil {
+	if req.Repository != nil && *req.Repository != p.Repository {
 		p.Repository = *req.Repository
+		changed = true
 	}
 	if req.CoreTeam != nil {
-		p.CoreTeam = deduplicateStrings(*req.CoreTeam)
+		deduped := deduplicateStrings(*req.CoreTeam)
+		if !stringSlicesEqual(deduped, p.CoreTeam) {
+			p.CoreTeam = deduped
+			changed = true
+		}
 	}
-	if req.Status != nil {
+	if req.Status != nil && string(*req.Status) != p.Status {
 		p.Status = string(*req.Status)
+		changed = true
 	}
-	if req.Pinned != nil {
+	if req.Pinned != nil && *req.Pinned != p.Pinned {
 		p.Pinned = *req.Pinned
+		changed = true
 	}
-	if req.PinOrder != nil {
+	if req.PinOrder != nil && *req.PinOrder != p.PinOrder {
 		p.PinOrder = *req.PinOrder
+		changed = true
 	}
+
+	// No-op: nothing changed — return current state without writing.
+	if !changed {
+		jsonOK(w, projectToWire(p, countTasksForProject(a.homePath, id)))
+		return
+	}
+
 	p.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
 	if err := writeProjectFile(a.homePath, p); err != nil {
 		slog.Error("rest: update project: write", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save project: %v", err))
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
-	taskCounts, err := computeProjectTaskCounts(a.homePath)
-	if err != nil {
-		slog.Warn("rest: update project: could not compute task counts", "error", err)
-		taskCounts = make(map[string]int)
-	}
-	jsonOK(w, projectToWire(p, taskCounts[p.ID]))
+	jsonOK(w, projectToWire(p, countTasksForProject(a.homePath, id)))
 }
 
 func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id string) {
@@ -551,34 +523,30 @@ func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id
 		jsonErr(w, http.StatusBadRequest, "invalid project ID")
 		return
 	}
-	if r.URL.Query().Get("confirm") != "true" {
-		jsonErr(w, http.StatusBadRequest, `confirm=true query parameter required to delete a project`)
-		return
-	}
 
 	// Verify the project exists before cascading.
 	if _, err := readProjectFile(a.homePath, id); err != nil {
-		if strings.HasPrefix(err.Error(), "NOT_FOUND:") {
+		if errors.Is(err, errProjectNotFound) {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("project %q not found", id))
 			return
 		}
 		slog.Error("rest: delete project: read", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read project: %v", err))
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
 	// Cascade: tasks → link entries → project file.
 	deleteTasksForProject(a.homePath, id)
-	rewriteLinksExcluding(a.homePath, id)
+	systools.RemoveLinksForProject(a.homePath, id)
 
 	path := filepath.Join(a.homePath, "projects", id+".json")
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		slog.Error("rest: delete project: remove file", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not delete project: %v", err))
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
-	jsonOK(w, map[string]string{"deleted": id})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *restAPI) handleProjectSessions(w http.ResponseWriter, r *http.Request, id string) {
@@ -589,19 +557,24 @@ func (a *restAPI) handleProjectSessions(w http.ResponseWriter, r *http.Request, 
 
 	// Verify project exists.
 	if _, err := readProjectFile(a.homePath, id); err != nil {
-		if strings.HasPrefix(err.Error(), "NOT_FOUND:") {
+		if errors.Is(err, errProjectNotFound) {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("project %q not found", id))
 			return
 		}
 		slog.Error("rest: project sessions: read project", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read project: %v", err))
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
-	links := readProjectSessionLinks(a.homePath, id)
+	links := systools.ReadLinks(a.homePath, id)
 	result := make([]gen.ProjectSessionLink, 0, len(links))
 	for _, l := range links {
-		createdAt, _ := time.Parse(time.RFC3339, l.CreatedAt)
+		createdAt, err := time.Parse(time.RFC3339, l.CreatedAt)
+		if err != nil {
+			slog.Warn("rest: project sessions: invalid link created_at",
+				"project_id", id, "session_id", l.SessionID, "raw", l.CreatedAt)
+			createdAt = time.Now().UTC()
+		}
 		result = append(result, gen.ProjectSessionLink{
 			SessionId: l.SessionID,
 			CreatedAt: createdAt,
@@ -625,4 +598,18 @@ func deduplicateStrings(in []string) []string {
 		}
 	}
 	return out
+}
+
+// stringSlicesEqual returns true if a and b contain the same elements in the
+// same order.
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

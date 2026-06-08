@@ -21,8 +21,10 @@ const (
 	lruMaxSize           = 1000
 )
 
-// projectSessionLink is one line in project_session_links.jsonl.
-type projectSessionLink struct {
+// ProjectSessionLink is one line in project_session_links.jsonl.
+// Exported so that the REST gateway layer can call ReadLinks without
+// duplicating the mutex or file-format logic.
+type ProjectSessionLink struct {
 	ProjectID string `json:"project_id"`
 	SessionID string `json:"session_id"`
 	CreatedAt string `json:"created_at"`
@@ -36,7 +38,7 @@ func linksFilePath(home string) string {
 // linkFileMu serialises ALL writes to project_session_links.jsonl:
 // the linker-hook append path, the cascade-delete rewrite path, and compaction.
 // Must be held (write lock) for the full duration of any write or rewrite operation.
-// RLock is sufficient for read-only access via readLinks.
+// RLock is sufficient for read-only access via ReadLinks.
 var linkFileMu sync.RWMutex
 
 // appendLink appends one (projectID, sessionID) entry to the link file.
@@ -53,7 +55,7 @@ func appendLink(home, projectID, sessionID string) error {
 	}
 	defer f.Close()
 
-	entry := projectSessionLink{
+	entry := ProjectSessionLink{
 		ProjectID: projectID,
 		SessionID: sessionID,
 		CreatedAt: nowISO(),
@@ -66,11 +68,11 @@ func appendLink(home, projectID, sessionID string) error {
 	return err
 }
 
-// readLinks returns deduplicated links for a given projectID.
-// TODO: consumed by the GET /api/v1/projects/{id}/sessions REST handler (Wave 2).
+// ReadLinks returns deduplicated links for a given projectID.
+// Exported for use by the REST gateway layer without duplicating mutex or I/O.
 // Dedup key: (project_id, session_id) pair — keeps earliest entry (first seen).
 // Returns nil when the file is absent or empty (not an error condition).
-func readLinks(home, projectID string) []projectSessionLink {
+func ReadLinks(home, projectID string) []ProjectSessionLink {
 	linkFileMu.RLock()
 	defer linkFileMu.RUnlock()
 
@@ -82,7 +84,7 @@ func readLinks(home, projectID string) []projectSessionLink {
 	defer f.Close()
 
 	seen := make(map[string]struct{})
-	var out []projectSessionLink
+	var out []ProjectSessionLink
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 256*1024), 256*1024) // 256 KiB max line
 	for scanner.Scan() {
@@ -90,7 +92,7 @@ func readLinks(home, projectID string) []projectSessionLink {
 		if line == "" {
 			continue
 		}
-		var link projectSessionLink
+		var link ProjectSessionLink
 		if json.Unmarshal([]byte(line), &link) != nil {
 			continue // skip malformed lines
 		}
@@ -107,10 +109,10 @@ func readLinks(home, projectID string) []projectSessionLink {
 	return out
 }
 
-// removeLinksForProject rewrites the link file excluding all entries for projectID.
+// RemoveLinksForProject rewrites the link file excluding all entries for projectID.
 // Called during cascade delete (project.delete tool).
 // A missing file is a no-op; write failures are logged at Warn level (best-effort).
-func removeLinksForProject(home, projectID string) {
+func RemoveLinksForProject(home, projectID string) {
 	linkFileMu.Lock()
 	defer linkFileMu.Unlock()
 
@@ -130,7 +132,7 @@ func removeLinksForProject(home, projectID string) {
 		if line == "" {
 			continue
 		}
-		var link projectSessionLink
+		var link ProjectSessionLink
 		if err := json.Unmarshal([]byte(line), &link); err != nil || link.ProjectID == projectID {
 			continue // skip malformed and matching entries
 		}
@@ -187,7 +189,7 @@ func compactLinks(home string) {
 		if line == "" {
 			continue
 		}
-		var link projectSessionLink
+		var link ProjectSessionLink
 		if json.Unmarshal([]byte(line), &link) != nil {
 			continue
 		}

@@ -354,7 +354,7 @@ func (t *ProjectDeleteTool) Execute(_ context.Context, args map[string]any) *too
 	}
 
 	// Step 2: remove session links for this project
-	removeLinksForProject(t.deps.Home, id)
+	RemoveLinksForProject(t.deps.Home, id)
 
 	// Step 3: delete the project file (last)
 	if err := deleteEntity(projectsDir(t.deps.Home), id); err != nil {
