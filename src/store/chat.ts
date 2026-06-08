@@ -1640,7 +1640,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // replay_message arrives, so tool calls in the final assistant entry
                 // are never baked onto message.tool_calls — VirtualAssistantMessageRow
                 // then renders no tool block / no iframe.
-                if (lastMsgId && draft.toolCallOrder.length > 0) {
+                //
+                // GUARD: only bake during replay. For a LIVE turn the live
+                // toolCallOrder/toolCalls maps must survive `done` so the
+                // runtime adapter (buildContentParts) keeps rendering them as
+                // live tool calls on the last assistant; they get baked into
+                // message.tool_calls when the NEXT turn's sendMessage runs
+                // (see the prevAssistant bake in sendMessage). Baking on a live
+                // done instead clears the maps and drops the call count to 0.
+                if (wasReplaying && lastMsgId && draft.toolCallOrder.length > 0) {
                   const baked = draft.toolCallOrder
                     .filter((id) => draft.toolCalls[id])
                     .map((id) => {
@@ -2086,6 +2094,27 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   m.status = 'done'
                   m.isStreaming = false
                   if (replayAgentId) m.agentId = replayAgentId
+                  // Coalesce path: this empty placeholder was created by the
+                  // turn's own tool_call_start frames, so any pending live tool
+                  // calls belong to THIS assistant. Bake them in before the early
+                  // return — otherwise toolCallOrder leaks into the next turn and
+                  // all calls get attributed to the LAST assistant at `done`.
+                  // Mirrors the non-coalesce bake path immediately below.
+                  if (draft.toolCallOrder.length > 0) {
+                    const baked = draft.toolCallOrder
+                      .filter((id) => draft.toolCalls[id])
+                      .map((id) => {
+                        const tc = draft.toolCalls[id]
+                        return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
+                      })
+                    const existing = m.tool_calls ?? []
+                    const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+                    for (const tc of baked) mergedById.set(tc.id, tc)
+                    m.tool_calls = Array.from(mergedById.values())
+                    draft.toolCalls = {}
+                    draft.toolCallOrder = []
+                    draft.textAtToolCallStart = {}
+                  }
                   return
                 }
                 // T1.10: Bake any live tool calls from the previous turn.
