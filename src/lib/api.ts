@@ -1018,6 +1018,8 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
   agents?: {
     defaults?: {
       default_agent_id?: string
+      model_name?: string
+      provider?: string
     }
   }
 }
@@ -1082,6 +1084,8 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
     agents: {
       defaults: {
         default_agent_id: agentDefaults.default_agent_id as string | undefined,
+        model_name: agentDefaults.model_name as string | undefined,
+        provider: agentDefaults.provider as string | undefined,
       },
     },
   }
