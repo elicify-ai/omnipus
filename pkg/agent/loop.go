@@ -3281,7 +3281,10 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// turn starts (websocket.go); this path covers every other channel
 	// (Telegram, Slack, Discord, etc.) so that replays show the user's prompt
 	// alongside tool calls and assistant responses.
-	if transcriptStore != nil && msg.Channel != "webchat" && msg.Channel != "system" && strings.TrimSpace(msg.Content) != "" {
+	channelNeedsTranscript := transcriptStore != nil &&
+		msg.Channel != "webchat" && msg.Channel != "system" &&
+		strings.TrimSpace(msg.Content) != ""
+	if channelNeedsTranscript {
 		entry := session.TranscriptEntry{
 			ID:        fmt.Sprintf("user-%d", time.Now().UnixNano()),
 			Role:      "user",

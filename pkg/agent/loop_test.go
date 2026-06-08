@@ -191,7 +191,10 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 		}
 	}
 	if foundIdx == -1 {
-		t.Fatalf("no channel session with Channel=discord PeerID=group-1 found in shared store (got %d sessions)", len(sessions))
+		t.Fatalf(
+			"no channel session with Channel=discord PeerID=group-1 found in shared store (got %d sessions)",
+			len(sessions),
+		)
 	}
 	if string(sessions[foundIdx].Type) != "channel" {
 		t.Errorf("channel session Type = %q, want %q", sessions[foundIdx].Type, "channel")
