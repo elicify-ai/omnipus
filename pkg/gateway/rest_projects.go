@@ -418,7 +418,13 @@ func (a *restAPI) handleProjectPost(w http.ResponseWriter, r *http.Request) {
 	}
 	wire := projectToWire(p, 0)
 	if a.auditor != nil {
-		_ = a.auditor.Log(&audit.Entry{Event: "project.create", Decision: "allowed", Details: map[string]any{"id": p.ID, "name": p.Name}})
+		_ = a.auditor.Log(
+			&audit.Entry{
+				Event:    "project.create",
+				Decision: "allowed",
+				Details:  map[string]any{"id": p.ID, "name": p.Name},
+			},
+		)
 	}
 	jsonCreated(w, wire)
 }

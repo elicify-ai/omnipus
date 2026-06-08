@@ -79,7 +79,7 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 	}
 }
 
-// BuildRegistry creates a ToolRegistry containing all system tools.
+// BuildRegistry creates a ToolRegistry containing all 42 system tools.
 // Use this registry as the backing store for the SystemToolHandler.
 func BuildRegistry(d *Deps, navCb NavigateCallback) *tools.ToolRegistry {
 	reg := tools.NewToolRegistry()

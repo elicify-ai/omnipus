@@ -341,7 +341,8 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, http.StatusBadRequest, "invalid project_id")
 				return
 			}
-			if _, projErr := readProjectFile(a.homePath, projectID); errors.Is(projErr, errProjectNotFound) || errors.Is(projErr, os.ErrNotExist) {
+			if _, projErr := readProjectFile(a.homePath, projectID); errors.Is(projErr, errProjectNotFound) ||
+				errors.Is(projErr, os.ErrNotExist) {
 				jsonErr(w, http.StatusBadRequest, "project not found")
 				return
 			} else if projErr != nil {
@@ -384,7 +385,9 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(&audit.Entry{Event: "board_task.create", Decision: "allowed", Details: map[string]any{"id": t.ID}})
+		_ = a.auditor.Log(
+			&audit.Entry{Event: "board_task.create", Decision: "allowed", Details: map[string]any{"id": t.ID}},
+		)
 	}
 	jsonCreated(w, toWireBoardTask(t))
 }
@@ -451,7 +454,8 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 				jsonErr(w, http.StatusBadRequest, "invalid project_id")
 				return
 			}
-			if _, projErr := readProjectFile(a.homePath, *req.ProjectId); errors.Is(projErr, errProjectNotFound) || errors.Is(projErr, os.ErrNotExist) {
+			if _, projErr := readProjectFile(a.homePath, *req.ProjectId); errors.Is(projErr, errProjectNotFound) ||
+				errors.Is(projErr, os.ErrNotExist) {
 				jsonErr(w, http.StatusBadRequest, "project not found")
 				return
 			} else if projErr != nil {
@@ -474,7 +478,9 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(&audit.Entry{Event: "board_task.update", Decision: "allowed", Details: map[string]any{"id": id}})
+		_ = a.auditor.Log(
+			&audit.Entry{Event: "board_task.update", Decision: "allowed", Details: map[string]any{"id": id}},
+		)
 	}
 	jsonOK(w, toWireBoardTask(existing))
 }
@@ -510,7 +516,9 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(&audit.Entry{Event: "board_task.delete", Decision: "allowed", Details: map[string]any{"id": id}})
+		_ = a.auditor.Log(
+			&audit.Entry{Event: "board_task.delete", Decision: "allowed", Details: map[string]any{"id": id}},
+		)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

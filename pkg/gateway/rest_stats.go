@@ -18,7 +18,7 @@ import (
 // HandleTokenStats handles GET /api/v1/stats/tokens.
 // It returns per-agent token usage aggregated from SessionMeta.Stats across
 // all sessions. The ?period query parameter must be "month" or absent (defaults
-// to "month"). Unrecognised period values are rejected with 400.
+// to "month"). Unrecognized period values are rejected with 400.
 //
 // Token attribution: tokens are charged to sm.ActiveAgentID (the most-recent
 // agent active in the session). For sessions that pre-date the multi-agent
@@ -45,7 +45,7 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 	periodEnd := periodStart.AddDate(0, 1, 0)
 
 	// agentAccum accumulates per-agent token counts during session traversal.
-	type agentAccum struct { // not-wire-format: internal accumulator only, never serialised over the wire
+	type agentAccum struct { // not-wire-format: internal accumulator only, never serialized over the wire
 		name         string
 		inputTokens  int
 		outputTokens int

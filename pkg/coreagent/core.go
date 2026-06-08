@@ -204,9 +204,10 @@ func SeedConfig(cfg *config.Config) bool {
 		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
 		// Ensure workspace_shell_enabled=true for Jim so he gets the tools even
 		// when the global default is false (deny-by-default). Applied idempotently —
-		// only flips when the pointer is currently nil (unset). Operator explicit
-		// false is left unchanged.
-		if ca.ID == IDJim && cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil {
+		// flips when the pointer is nil OR when it was materialised as &false by the
+		// pre-fix validateBootConfig (heals upgrades from the broken validator).
+		if ca.ID == IDJim &&
+			(cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil || !*cfg.Sandbox.Experimental.WorkspaceShellEnabled) {
 			t := true
 			cfg.Sandbox.Experimental.WorkspaceShellEnabled = &t
 			modified = true
@@ -244,11 +245,10 @@ func SeedConfig(cfg *config.Config) bool {
 			},
 		})
 		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
-		// Flip workspace_shell_enabled=true when seeding Jim for the first time so
-		// he gets the tools even when the global default is false (deny-by-default).
-		// Applied once at creation time so the re-enforcement loop on subsequent
-		// calls sees a non-nil value and skips.
-		if ca.ID == IDJim && cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil {
+		// Flip workspace_shell_enabled=true on first seed — also heals &false written
+		// by the old validateBootConfig before the boot-ordering fix.
+		if ca.ID == IDJim &&
+			(cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil || !*cfg.Sandbox.Experimental.WorkspaceShellEnabled) {
 			t := true
 			cfg.Sandbox.Experimental.WorkspaceShellEnabled = &t
 		}

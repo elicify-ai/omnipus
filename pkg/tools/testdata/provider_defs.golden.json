@@ -196,6 +196,13 @@
     "source": "builtin"
   },
   {
+    "name": "system.project.get",
+    "description": "Get a single project by ID including its live task count. Use this to refresh project data after creating tasks.\nParameters: id (required, from system.project.list).",
+    "scope": "core",
+    "category": "system",
+    "source": "builtin"
+  },
+  {
     "name": "system.project.list",
     "description": "List all projects with task counts. No parameters required.",
     "scope": "core",

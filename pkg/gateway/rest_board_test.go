@@ -48,7 +48,8 @@ func writeWorkflowTaskFile(t *testing.T, homePath, taskID, projectID string) {
 	require.NoError(t, os.MkdirAll(tasksDir, 0o700))
 	data := fmt.Sprintf(
 		`{"id":%q,"title":"workflow task","status":"queued","project_id":%q,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
-		taskID, projectID,
+		taskID,
+		projectID,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, taskID+".json"), []byte(data), 0o600))
 }
@@ -289,7 +290,7 @@ func TestHandleBoardTasks_Create_NameRequired(t *testing.T) {
 // Given GET /api/v1/board/tasks?status=queued (a workflow-only status),
 // When the request is handled,
 // Then 400.
-// Given GET /api/v1/board/tasks?status=bogus (an unrecognised status),
+// Given GET /api/v1/board/tasks?status=bogus (an unrecognized status),
 // When the request is handled,
 // Then 400.
 // Traces to: project-task-management-level1-spec.md FG-M7, FG-M13
@@ -332,7 +333,11 @@ func TestHandleBoardTasks_Boundaries(t *testing.T) {
 	descTask := createBoardTaskViaAPI(t, api, "desc-test-task", "inbox")
 	longDescPut := fmt.Sprintf(`{"description":%q}`, strings.Repeat("d", 2001))
 	wPutLongDesc := httptest.NewRecorder()
-	rPutLongDesc := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+descTask.Id, strings.NewReader(longDescPut))
+	rPutLongDesc := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/board/tasks/"+descTask.Id,
+		strings.NewReader(longDescPut),
+	)
 	rPutLongDesc.Header.Set("Content-Type", "application/json")
 	rPutLongDesc.URL.Path = "/api/v1/board/tasks/" + descTask.Id
 	api.HandleBoardTasks(wPutLongDesc, rPutLongDesc)
@@ -347,7 +352,7 @@ func TestHandleBoardTasks_Boundaries(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, wQueued.Code,
 		"GET /board/tasks?status=queued must return 400 (workflow status rejected); body=%s", wQueued.Body.String())
 
-	// GET ?status=bogus → 400 (completely unrecognised status).
+	// GET ?status=bogus → 400 (completely unrecognized status).
 	wBogus := httptest.NewRecorder()
 	rBogus := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks?status=bogus", nil)
 	rBogus.URL.Path = "/api/v1/board/tasks"
@@ -452,7 +457,8 @@ func TestHandleBoardTasks_TaskCount_ExcludesWorkflowTasks(t *testing.T) {
 	require.NoError(t, os.MkdirAll(tasksDir, 0o700))
 	workflowData := fmt.Sprintf(
 		`{"id":%q,"title":"workflow task","status":"queued","project_id":%q,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
-		workflowTaskID, projID,
+		workflowTaskID,
+		projID,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, workflowTaskID+".json"), []byte(workflowData), 0o600))
 

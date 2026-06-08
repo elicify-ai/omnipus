@@ -103,9 +103,14 @@ func TestHandleTokenStats_MethodNotAllowed(t *testing.T) {
 }
 
 // writeTestSessionMeta writes a meta.json for a session into the shared session store directory
-// (filepath.Dir(homePath)/sessions/{sessionID}/). This matches where NewAgentLoop initialises
+// (filepath.Dir(homePath)/sessions/{sessionID}/). This matches where NewAgentLoop initializes
 // sharedSessionStore when cfg.Agents.Defaults.Workspace == homePath.
-func writeTestSessionMeta(t *testing.T, homePath, sessionID, agentID string, tokensIn, tokensOut int, updatedAt time.Time) {
+func writeTestSessionMeta(
+	t *testing.T,
+	homePath, sessionID, agentID string,
+	tokensIn, tokensOut int,
+	updatedAt time.Time,
+) {
 	t.Helper()
 	// The agent loop sets homePath = filepath.Dir(cfg.WorkspacePath()) = filepath.Dir(homePath).
 	// sharedSessionStore is at agentLoopHome/sessions/ = filepath.Dir(homePath)/sessions/.

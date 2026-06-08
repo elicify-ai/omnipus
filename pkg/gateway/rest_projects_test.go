@@ -30,7 +30,9 @@ func writeTaskFile(t *testing.T, homePath, taskID, projectID, status string) {
 	require.NoError(t, os.MkdirAll(tasksDir, 0o700))
 	data := fmt.Sprintf(
 		`{"id":%q,"name":"Task","status":%q,"project_id":%q,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
-		taskID, status, projectID,
+		taskID,
+		status,
+		projectID,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, taskID+".json"), []byte(data), 0o600))
 }
@@ -405,7 +407,11 @@ func TestHandleProjects_Boundaries(t *testing.T) {
 	exactDescBody, err := json.Marshal(map[string]any{"name": "BoundaryProject", "description": exactDesc})
 	require.NoError(t, err)
 	wExactDesc := httptest.NewRecorder()
-	rExactDesc := httptest.NewRequest(http.MethodPut, "/api/v1/projects/"+projID, strings.NewReader(string(exactDescBody)))
+	rExactDesc := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/projects/"+projID,
+		strings.NewReader(string(exactDescBody)),
+	)
 	rExactDesc.Header.Set("Content-Type", "application/json")
 	rExactDesc.URL.Path = "/api/v1/projects/" + projID
 	api.HandleProjects(wExactDesc, rExactDesc)
@@ -414,7 +420,7 @@ func TestHandleProjects_Boundaries(t *testing.T) {
 }
 
 // TestHandleProjects_InvalidStatusFilter verifies GET /api/v1/projects?status=garbage returns 400.
-// BDD: Given GET /api/v1/projects?status=garbage (an unrecognised status value),
+// BDD: Given GET /api/v1/projects?status=garbage (an unrecognized status value),
 // When the request is handled,
 // Then 400.
 // Traces to: project-task-management-level1-spec.md FG-M13
@@ -473,7 +479,13 @@ func TestHandleProjects_CascadeDelete_TasksAndLinksGone(t *testing.T) {
 	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/projects/"+projID, nil)
 	rDel.URL.Path = "/api/v1/projects/" + projID
 	api.HandleProjects(wDel, rDel)
-	require.Equal(t, http.StatusNoContent, wDel.Code, "DELETE /projects/{id} must return 204; body=%s", wDel.Body.String())
+	require.Equal(
+		t,
+		http.StatusNoContent,
+		wDel.Code,
+		"DELETE /projects/{id} must return 204; body=%s",
+		wDel.Body.String(),
+	)
 
 	// Step 5: Assert task file at tasks/{T}.json does NOT exist.
 	_, statAfterErr := os.Stat(taskPath)
