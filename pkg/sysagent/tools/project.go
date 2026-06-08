@@ -22,7 +22,7 @@ type project struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
 	Description string   `json:"description,omitempty"`
-	Status      string   `json:"status"`             // "active" | "archived"
+	Status      string   `json:"status"` // "active" | "archived"
 	Pinned      bool     `json:"pinned"`
 	PinOrder    int      `json:"pin_order"`           // 0 = unpinned
 	CoreTeam    []string `json:"core_team,omitempty"` // replaces "agent_ids"
@@ -58,13 +58,13 @@ func projectFromFile(data []byte) (project, error) {
 }
 
 // sanitizeCoreTeam deduplicates (case-sensitive) and enforces max 20 entries.
-// Returns an error if the limit is exceeded (after dedup).
+// Returns an error if the limit is exceeded (after dedup). Empty strings are silently dropped.
 func sanitizeCoreTeam(raw []any) ([]string, error) {
 	seen := make(map[string]struct{})
 	var out []string
 	for _, v := range raw {
 		s, ok := v.(string)
-		if !ok {
+		if !ok || s == "" {
 			continue
 		}
 		if _, dup := seen[s]; !dup {
@@ -160,6 +160,9 @@ func (t *ProjectCreateTool) Execute(_ context.Context, args map[string]any) *too
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
+	if len(name) > 200 {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name exceeds 200 characters", ""))
+	}
 	p := project{
 		ID:        ulid.Make().String(),
 		Name:      name,
@@ -170,6 +173,9 @@ func (t *ProjectCreateTool) Execute(_ context.Context, args map[string]any) *too
 		UpdatedAt: nowISO(),
 	}
 	if v, ok := args["description"].(string); ok {
+		if len(v) > 2000 {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", "description exceeds 2000 characters", ""))
+		}
 		p.Description = v
 	}
 	if raw, ok := args["core_team"].([]any); ok {
@@ -180,14 +186,19 @@ func (t *ProjectCreateTool) Execute(_ context.Context, args map[string]any) *too
 		p.CoreTeam = team
 	}
 	if v, ok := args["repository"].(string); ok {
+		if len(v) > 500 {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", "repository exceeds 500 characters", ""))
+		}
 		p.Repository = v
 	}
 	if err := writeEntity(projectsDir(t.deps.Home), p.ID, p); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
 	return tools.NewToolResult(successJSON(map[string]any{
-		"id": p.ID, "name": p.Name, "status": p.Status,
-		"task_count": 0, "created_at": p.CreatedAt,
+		"id": p.ID, "name": p.Name, "description": p.Description,
+		"status": p.Status, "pinned": p.Pinned, "pin_order": p.PinOrder,
+		"core_team": p.CoreTeam, "repository": p.Repository,
+		"task_count": 0, "created_at": p.CreatedAt, "updated_at": p.UpdatedAt,
 	}))
 }
 
@@ -235,9 +246,15 @@ func (t *ProjectUpdateTool) Execute(_ context.Context, args map[string]any) *too
 	}
 
 	if v, ok := args["name"].(string); ok && v != "" {
+		if len(v) > 200 {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", "name exceeds 200 characters", ""))
+		}
 		p.Name = v
 	}
 	if v, ok := args["description"].(string); ok {
+		if len(v) > 2000 {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", "description exceeds 2000 characters", ""))
+		}
 		p.Description = v
 	}
 	if v, ok := args["status"].(string); ok {
@@ -261,6 +278,9 @@ func (t *ProjectUpdateTool) Execute(_ context.Context, args map[string]any) *too
 		p.CoreTeam = team
 	}
 	if v, ok := args["repository"].(string); ok {
+		if len(v) > 500 {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", "repository exceeds 500 characters", ""))
+		}
 		p.Repository = v
 	}
 
@@ -305,9 +325,18 @@ func (t *ProjectDeleteTool) Execute(_ context.Context, args map[string]any) *too
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
+	if err := validateID(id); err != nil {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
+	}
 	if !confirm {
 		return tools.ErrorResult(errorJSON("CONFIRMATION_REQUIRED",
 			"confirm must be true to delete a project", ""))
+	}
+
+	// Guard: verify the project exists before any irreversible mutations (FR-007).
+	if _, err := readProjectFromDisk(t.deps.Home, id); err != nil {
+		return tools.ErrorResult(errorJSON("PROJECT_NOT_FOUND", fmt.Sprintf("No project %q", id),
+			"Use system.project.list to see available projects"))
 	}
 
 	// Step 1: cascade-delete tasks
@@ -400,16 +429,20 @@ func (t *ProjectListTool) Execute(_ context.Context, args map[string]any) *tools
 		projects = append(projects, p)
 	}
 
-	// Sort: pinned first by pin_order ascending, then by created_at descending.
+	// Sort: pinned first by pin_order ascending (oldest-first tiebreaker per FR-010),
+	// then unpinned by created_at descending (newest first).
 	sort.Slice(projects, func(i, j int) bool {
 		pi, pj := projects[i], projects[j]
 		if pi.Pinned != pj.Pinned {
 			return pi.Pinned // pinned before unpinned
 		}
-		if pi.Pinned && pj.Pinned && pi.PinOrder != pj.PinOrder {
-			return pi.PinOrder < pj.PinOrder
+		if pi.Pinned && pj.Pinned {
+			if pi.PinOrder != pj.PinOrder {
+				return pi.PinOrder < pj.PinOrder
+			}
+			return pi.CreatedAt < pj.CreatedAt // pinned same pin_order: oldest first (FR-010)
 		}
-		return pi.CreatedAt > pj.CreatedAt // newest first
+		return pi.CreatedAt > pj.CreatedAt // unpinned: newest first
 	})
 
 	// Build response list attaching computed task counts.

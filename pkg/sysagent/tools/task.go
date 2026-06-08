@@ -44,7 +44,7 @@ func NewTaskCreateTool(d *Deps) *TaskCreateTool  { return &TaskCreateTool{deps: 
 func (t *TaskCreateTool) Name() string           { return "system.task.create" }
 func (t *TaskCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskCreateTool) Description() string {
-	return "Create a task on the GTD board.\nParameters: name (required), description, project_id, agent_id, status (inbox/next/active/waiting/done)."
+	return "Create a task on the GTD board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a project name, call system.project.list first to get the project_id.\nParameters: name (required, the task title), description (optional), project_id (optional, from system.project.list), agent_id (optional, agent to assign), status (optional: inbox=new/unscheduled, next=prioritized for soon, active=in-progress, waiting=blocked/waiting, done=complete — defaults to inbox)."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -104,7 +104,7 @@ func NewTaskUpdateTool(d *Deps) *TaskUpdateTool  { return &TaskUpdateTool{deps: 
 func (t *TaskUpdateTool) Name() string           { return "system.task.update" }
 func (t *TaskUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskUpdateTool) Description() string {
-	return "Update a task's status, assignment, or details.\nParameters: id (required), name, description, status, agent_id, project_id."
+	return "Update an existing GTD board task. Call this to change status, reassign, rename, or link to a project. Use system.task.list first to find the task id. If linking to a project by name, call system.project.list first to get the project_id.\nParameters: id (required, from system.task.list), name, description, project_id (from system.project.list), agent_id, status (inbox=new/unscheduled, next=prioritized, active=in-progress, waiting=blocked, done=complete). Only provided fields are updated."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
