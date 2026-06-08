@@ -2108,6 +2108,24 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   if (draft.messagesById[draft.messageOrder[i]]?.role === 'assistant') { lastMsgId = draft.messageOrder[i]; break }
                 }
                 if (lastMsgId && (draft.messagesById[lastMsgId].content ?? '') === '') {
+                  // Bake any tool calls that belong to this turn BEFORE taking the early
+                  // return. Without this, toolCallOrder accumulates across turns and ends
+                  // up baked onto the wrong (later) assistant message.
+                  if (draft.toolCallOrder.length > 0) {
+                    const baked = draft.toolCallOrder
+                      .filter((id) => draft.toolCalls[id])
+                      .map((id) => {
+                        const tc = draft.toolCalls[id]
+                        return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
+                      })
+                    const existing = draft.messagesById[lastMsgId].tool_calls ?? []
+                    const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+                    for (const tc of baked) mergedById.set(tc.id, tc)
+                    draft.messagesById[lastMsgId].tool_calls = Array.from(mergedById.values())
+                    draft.toolCalls = {}
+                    draft.toolCallOrder = []
+                    draft.textAtToolCallStart = {}
+                  }
                   const m = draft.messagesById[lastMsgId]
                   m.content = text
                   m.status = 'done'

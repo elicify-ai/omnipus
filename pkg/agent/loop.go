@@ -3276,6 +3276,25 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		}
 	}
 
+	// Write user message to transcript for channel sessions.
+	// Web-chat user messages are written by the WebSocket handler before the
+	// turn starts (websocket.go); this path covers every other channel
+	// (Telegram, Slack, Discord, etc.) so that replays show the user's prompt
+	// alongside tool calls and assistant responses.
+	if transcriptStore != nil && msg.Channel != "webchat" && msg.Channel != "system" && strings.TrimSpace(msg.Content) != "" {
+		entry := session.TranscriptEntry{
+			ID:        fmt.Sprintf("user-%d", time.Now().UnixNano()),
+			Role:      "user",
+			AgentID:   agent.ID,
+			Content:   msg.Content,
+			Timestamp: time.Now().UTC(),
+		}
+		if err := transcriptStore.AppendTranscript(transcriptSessionID, entry); err != nil {
+			logger.WarnCF("agent", "could not record channel user message to transcript",
+				map[string]any{"session_id": transcriptSessionID, "channel": msg.Channel, "error": err.Error()})
+		}
+	}
+
 	opts := processOptions{
 		SessionKey:          sessionKey,
 		Channel:             msg.Channel,
