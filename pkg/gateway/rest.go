@@ -2734,6 +2734,16 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// returns valid empty arrays so the SPA DevicesSection renders its empty state
 	// rather than 404-ing. Traces to: contracts/components/schemas/DevicesResponse.yaml.
 	cm.RegisterHTTPHandler("/api/v1/devices", a.adminWrap(a.HandleDevices))
+
+	// GTD board task endpoints (Wave 2b, Level 1 Project & Task Mgmt).
+	// Read-only REST surface; mutations go through agent tools (system.task.*).
+	// Traces to: contracts/components/schemas/BoardTask.yaml, BoardTaskListResponse.yaml.
+	cm.RegisterHTTPHandler("/api/v1/board/tasks", a.withAuth(a.HandleBoardTasks))
+	cm.RegisterHTTPHandler("/api/v1/board/tasks/", a.withAuth(a.HandleBoardTasks))
+
+	// Token usage stats endpoint (Wave 2b).
+	// Traces to: contracts/components/schemas/TokenUsageSummary.yaml.
+	cm.RegisterHTTPHandler("/api/v1/stats/tokens", a.withAuth(a.HandleTokenStats))
 }
 
 // registerPreviewEndpoints registers /preview/, /serve/, and /dev/ on the
