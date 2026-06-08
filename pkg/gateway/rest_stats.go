@@ -41,9 +41,8 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	periodEnd := periodStart.AddDate(0, 1, 0)
 
-	// agentAccum accumulates per-agent token counts.
-	// not-wire-format
-	type agentAccum struct { // not-wire-format
+	// agentAccum accumulates per-agent token counts during session traversal.
+	type agentAccum struct { // not-wire-format: internal accumulator only, never serialised over the wire
 		name         string
 		inputTokens  int
 		outputTokens int
@@ -97,16 +96,14 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 	// generated gen.TokenUsageSummary shape exactly. The generated type uses
 	// an inline anonymous struct for the Agents element, which cannot be
 	// constructed directly from outside the package.
-	// not-wire-format
-	type agentEntry struct { // not-wire-format
+	type agentEntry struct { // not-wire-format: local shim matching anonymous generated struct item in TokenUsageSummary.Agents
 		AgentId     string `json:"agent_id"`
 		AgentName   string `json:"agent_name"`
 		TokensIn    int    `json:"tokens_in"`
 		TokensOut   int    `json:"tokens_out"`
 		TokensTotal int    `json:"tokens_total"`
 	}
-	// not-wire-format
-	type tokenUsageResp struct { // not-wire-format
+	type tokenUsageResp struct { // not-wire-format: wrapper shim for anonymous inline generated struct, mirrors TokenUsageSummary
 		Agents      []agentEntry `json:"agents"`
 		PeriodEnd   time.Time    `json:"period_end"`
 		PeriodStart time.Time    `json:"period_start"`

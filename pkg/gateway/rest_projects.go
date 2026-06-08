@@ -30,8 +30,7 @@ import (
 var errProjectNotFound = errors.New("project not found")
 
 // storedProject mirrors the on-disk format of ~/.omnipus/projects/{id}.json.
-// not-wire-format
-type storedProject struct { // not-wire-format
+type storedProject struct { // not-wire-format: internal disk-cache struct, mapped to gen.Project before sending over the wire
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
 	Description string   `json:"description,omitempty"`

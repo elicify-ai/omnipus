@@ -25,8 +25,7 @@ import (
 )
 
 // boardTask mirrors the on-disk format of ~/.omnipus/tasks/{id}.json for GTD tasks.
-// not-wire-format
-type boardTask struct { // not-wire-format
+type boardTask struct { // not-wire-format: internal disk-cache struct, never emitted directly over the wire
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
@@ -240,10 +239,9 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 
 	// Build the response. BoardTaskListResponse.Items is an inline anonymous struct
 	// in the generated code, so we use a local shape that is JSON-identical.
-	// TODO: gen.BoardTaskListResponse.Items is an anonymous inline struct; use local shim until
-	// oapi-codegen generates a named type or the contract is updated.
-	// not-wire-format
-	type listItem struct { // not-wire-format
+	// gen.BoardTaskListResponse.Items is an inline anonymous struct in the generated code;
+	// use a local shim until oapi-codegen emits a named type for the item shape.
+	type listItem struct { // not-wire-format: local shim for anonymous generated struct item, not a hand-written wire type
 		AgentId     *string                              `json:"agent_id,omitempty"`
 		CreatedAt   time.Time                            `json:"created_at"`
 		Description *string                              `json:"description,omitempty"`
@@ -253,10 +251,7 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		Status      gen.BoardTaskListResponseItemsStatus `json:"status"`
 		UpdatedAt   time.Time                            `json:"updated_at"`
 	}
-	// TODO: gen.BoardTaskListResponse.Items is an anonymous inline struct; use local shim until
-	// oapi-codegen generates a named type or the contract is updated.
-	// not-wire-format
-	type boardTaskListShim struct { // not-wire-format
+	type boardTaskListShim struct { // not-wire-format: wrapper for anonymous generated struct, mirrors BoardTaskListResponse exactly
 		Items []listItem `json:"items"`
 		Total int        `json:"total"`
 	}

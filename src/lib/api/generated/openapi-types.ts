@@ -5636,6 +5636,28 @@ export interface components {
              */
             total: number;
         };
+        BoardTaskCreateRequest: {
+            name: string;
+            description?: string;
+            /**
+             * @description Defaults to inbox if absent.
+             * @enum {string}
+             */
+            status?: "inbox" | "next" | "active" | "waiting" | "done";
+            project_id?: string;
+            agent_id?: string;
+        };
+        BoardTaskUpdateRequest: {
+            name?: string;
+            description?: string;
+            /**
+             * @description Defaults to inbox if absent.
+             * @enum {string}
+             */
+            status?: "inbox" | "next" | "active" | "waiting" | "done";
+            project_id?: string;
+            agent_id?: string;
+        };
         /** @description A session that has been auto-linked to a project via tool use. */
         ProjectSessionLink: {
             /**
@@ -9614,6 +9636,7 @@ export interface operations {
                     "application/json": components["schemas"]["Project"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
         };
@@ -9665,6 +9688,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
         };
@@ -9689,6 +9713,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProjectSessionLink"][];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
         };
@@ -9732,17 +9757,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    name: string;
-                    description?: string;
-                    /**
-                     * @description Defaults to inbox if absent.
-                     * @enum {string}
-                     */
-                    status?: "inbox" | "next" | "active" | "waiting" | "done";
-                    project_id?: string;
-                    agent_id?: string;
-                };
+                "application/json": components["schemas"]["BoardTaskCreateRequest"];
             };
         };
         responses: {
@@ -9779,6 +9794,7 @@ export interface operations {
                     "application/json": components["schemas"]["BoardTask"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
         };
@@ -9794,14 +9810,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    name?: string;
-                    description?: string;
-                    /** @enum {string} */
-                    status?: "inbox" | "next" | "active" | "waiting" | "done";
-                    project_id?: string;
-                    agent_id?: string;
-                };
+                "application/json": components["schemas"]["BoardTaskUpdateRequest"];
             };
         };
         responses: {
@@ -9837,6 +9846,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
         };
@@ -10006,5 +10016,7 @@ export type ProjectCreateRequest = components["schemas"]["ProjectCreateRequest"]
 export type ProjectUpdateRequest = components["schemas"]["ProjectUpdateRequest"];
 export type BoardTask = components["schemas"]["BoardTask"];
 export type BoardTaskListResponse = components["schemas"]["BoardTaskListResponse"];
+export type BoardTaskCreateRequest = components["schemas"]["BoardTaskCreateRequest"];
+export type BoardTaskUpdateRequest = components["schemas"]["BoardTaskUpdateRequest"];
 export type ProjectSessionLink = components["schemas"]["ProjectSessionLink"];
 export type TokenUsageSummary = components["schemas"]["TokenUsageSummary"];

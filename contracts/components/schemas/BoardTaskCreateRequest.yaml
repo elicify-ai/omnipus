@@ -1,0 +1,19 @@
+type: object
+required:
+  - name
+properties:
+  name:
+    type: string
+    minLength: 1
+    maxLength: 200
+  description:
+    type: string
+    maxLength: 2000
+  status:
+    type: string
+    enum: [inbox, next, active, waiting, done]
+    description: Defaults to inbox if absent.
+  project_id:
+    type: string
+  agent_id:
+    type: string

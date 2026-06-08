@@ -556,6 +556,33 @@ func (e BoardTaskStatus) Valid() bool {
 	}
 }
 
+// Defines values for BoardTaskCreateRequestStatus.
+const (
+	BoardTaskCreateRequestStatusActive  BoardTaskCreateRequestStatus = "active"
+	BoardTaskCreateRequestStatusDone    BoardTaskCreateRequestStatus = "done"
+	BoardTaskCreateRequestStatusInbox   BoardTaskCreateRequestStatus = "inbox"
+	BoardTaskCreateRequestStatusNext    BoardTaskCreateRequestStatus = "next"
+	BoardTaskCreateRequestStatusWaiting BoardTaskCreateRequestStatus = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the BoardTaskCreateRequestStatus enum.
+func (e BoardTaskCreateRequestStatus) Valid() bool {
+	switch e {
+	case BoardTaskCreateRequestStatusActive:
+		return true
+	case BoardTaskCreateRequestStatusDone:
+		return true
+	case BoardTaskCreateRequestStatusInbox:
+		return true
+	case BoardTaskCreateRequestStatusNext:
+		return true
+	case BoardTaskCreateRequestStatusWaiting:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BoardTaskListResponseItemsStatus.
 const (
 	BoardTaskListResponseItemsStatusActive  BoardTaskListResponseItemsStatus = "active"
@@ -577,6 +604,33 @@ func (e BoardTaskListResponseItemsStatus) Valid() bool {
 	case BoardTaskListResponseItemsStatusNext:
 		return true
 	case BoardTaskListResponseItemsStatusWaiting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BoardTaskUpdateRequestStatus.
+const (
+	BoardTaskUpdateRequestStatusActive  BoardTaskUpdateRequestStatus = "active"
+	BoardTaskUpdateRequestStatusDone    BoardTaskUpdateRequestStatus = "done"
+	BoardTaskUpdateRequestStatusInbox   BoardTaskUpdateRequestStatus = "inbox"
+	BoardTaskUpdateRequestStatusNext    BoardTaskUpdateRequestStatus = "next"
+	BoardTaskUpdateRequestStatusWaiting BoardTaskUpdateRequestStatus = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the BoardTaskUpdateRequestStatus enum.
+func (e BoardTaskUpdateRequestStatus) Valid() bool {
+	switch e {
+	case BoardTaskUpdateRequestStatusActive:
+		return true
+	case BoardTaskUpdateRequestStatusDone:
+		return true
+	case BoardTaskUpdateRequestStatusInbox:
+		return true
+	case BoardTaskUpdateRequestStatusNext:
+		return true
+	case BoardTaskUpdateRequestStatusWaiting:
 		return true
 	default:
 		return false
@@ -3688,6 +3742,20 @@ type BoardTask struct {
 // BoardTaskStatus GTD status. inbox: unprocessed. next: next action. active: in progress. waiting: blocked on someone/something. done: completed.
 type BoardTaskStatus string
 
+// BoardTaskCreateRequest defines model for BoardTaskCreateRequest.
+type BoardTaskCreateRequest struct {
+	AgentId     *string `json:"agent_id,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Name        string  `json:"name"`
+	ProjectId   *string `json:"project_id,omitempty"`
+
+	// Status Defaults to inbox if absent.
+	Status *BoardTaskCreateRequestStatus `json:"status,omitempty"`
+}
+
+// BoardTaskCreateRequestStatus Defaults to inbox if absent.
+type BoardTaskCreateRequestStatus string
+
 // BoardTaskListResponse Paginated list response for GET /board/tasks
 type BoardTaskListResponse struct {
 	Items []struct {
@@ -3718,6 +3786,20 @@ type BoardTaskListResponse struct {
 
 // BoardTaskListResponseItemsStatus GTD status. inbox: unprocessed. next: next action. active: in progress. waiting: blocked on someone/something. done: completed.
 type BoardTaskListResponseItemsStatus string
+
+// BoardTaskUpdateRequest defines model for BoardTaskUpdateRequest.
+type BoardTaskUpdateRequest struct {
+	AgentId     *string `json:"agent_id,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Name        *string `json:"name,omitempty"`
+	ProjectId   *string `json:"project_id,omitempty"`
+
+	// Status Defaults to inbox if absent.
+	Status *BoardTaskUpdateRequestStatus `json:"status,omitempty"`
+}
+
+// BoardTaskUpdateRequestStatus Defaults to inbox if absent.
+type BoardTaskUpdateRequestStatus string
 
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
 type ChangePasswordRequest struct {
@@ -6154,11 +6236,13 @@ type CreateBoardTaskJSONBodyStatus string
 
 // UpdateBoardTaskJSONBody defines parameters for UpdateBoardTask.
 type UpdateBoardTaskJSONBody struct {
-	AgentId     *string                        `json:"agent_id,omitempty"`
-	Description *string                        `json:"description,omitempty"`
-	Name        *string                        `json:"name,omitempty"`
-	ProjectId   *string                        `json:"project_id,omitempty"`
-	Status      *UpdateBoardTaskJSONBodyStatus `json:"status,omitempty"`
+	AgentId     *string `json:"agent_id,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Name        *string `json:"name,omitempty"`
+	ProjectId   *string `json:"project_id,omitempty"`
+
+	// Status Defaults to inbox if absent.
+	Status *UpdateBoardTaskJSONBodyStatus `json:"status,omitempty"`
 }
 
 // UpdateBoardTaskJSONBodyStatus defines parameters for UpdateBoardTask.

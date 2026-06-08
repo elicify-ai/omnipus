@@ -20,6 +20,7 @@ properties:
     example: "Fix login bug"
   description:
     type: string
+    maxLength: 2000
     description: Optional task description.
   status:
     type: string

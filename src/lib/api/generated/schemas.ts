@@ -1538,7 +1538,7 @@ export const BoardTask: z.ZodType<BoardTask> = z
   .object({
     id: z.string(),
     name: z.string().min(1),
-    description: z.string().optional(),
+    description: z.string().max(2000).optional(),
     status: z.enum(["inbox", "next", "active", "waiting", "done"]),
     project_id: z.string().optional(),
     agent_id: z.string().optional(),
@@ -1549,19 +1549,19 @@ export const BoardTask: z.ZodType<BoardTask> = z
 export const BoardTaskListResponse: z.ZodType<BoardTaskListResponse> = z
   .object({ items: z.array(BoardTask), total: z.number().int() })
   .passthrough();
-export const createBoardTask_Body = z
+export const BoardTaskCreateRequest = z
   .object({
-    name: z.string().min(1),
-    description: z.string().optional(),
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000).optional(),
     status: z.enum(["inbox", "next", "active", "waiting", "done"]).optional(),
     project_id: z.string().optional(),
     agent_id: z.string().optional(),
   })
   .passthrough();
-export const updateBoardTask_Body = z
+export const BoardTaskUpdateRequest = z
   .object({
-    name: z.string().min(1),
-    description: z.string(),
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000),
     status: z.enum(["inbox", "next", "active", "waiting", "done"]),
     project_id: z.string(),
     agent_id: z.string(),
@@ -2238,7 +2238,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         name: "body",
         type: "Body",
-        schema: createBoardTask_Body,
+        schema: BoardTaskCreateRequest,
       },
     ],
     response: BoardTask,
@@ -2270,6 +2270,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: BoardTask,
     errors: [
       {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 401,
         description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
@@ -2290,7 +2295,7 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         name: "body",
         type: "Body",
-        schema: updateBoardTask_Body,
+        schema: BoardTaskUpdateRequest,
       },
       {
         name: "id",
@@ -2331,6 +2336,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
     response: z.void(),
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
@@ -3177,6 +3187,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: Project,
     errors: [
       {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 401,
         description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
@@ -3239,6 +3254,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: z.void(),
     errors: [
       {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 401,
         description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
@@ -3266,6 +3286,11 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
     response: z.array(ProjectSessionLink),
     errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
