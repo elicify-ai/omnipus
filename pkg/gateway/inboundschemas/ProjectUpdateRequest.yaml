@@ -1,0 +1,25 @@
+type: object
+description: >
+  Request body for PUT /projects/{id}. Uses merge (partial-update) semantics —
+  only fields present in the request body are updated; absent fields are unchanged.
+properties:
+  name:
+    type: string
+    minLength: 1
+  description:
+    type: string
+  status:
+    type: string
+    enum: [active, archived]
+    description: Archive or restore a project.
+  pinned:
+    type: boolean
+  pin_order:
+    type: integer
+  core_team:
+    type: array
+    items:
+      type: string
+    maxItems: 20
+  repository:
+    type: string

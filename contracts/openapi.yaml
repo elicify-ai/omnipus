@@ -49,6 +49,12 @@ tags:
   description: Agent management endpoints
 - name: Settings
   description: Credentials, backup/restore, and storage management
+- name: Projects
+  description: Project management — create, list, update, delete, and session linking.
+- name: Board Tasks
+  description: GTD board tasks — distinct from workflow tasks at /tasks.
+- name: Stats
+  description: Usage statistics and aggregations.
 components:
   securitySchemes:
     BearerAuth:
@@ -370,6 +376,20 @@ components:
       $ref: ./components/schemas/Notification.yaml
     NotificationList:
       $ref: ./components/schemas/NotificationList.yaml
+    Project:
+      $ref: ./components/schemas/Project.yaml
+    ProjectCreateRequest:
+      $ref: ./components/schemas/ProjectCreateRequest.yaml
+    ProjectUpdateRequest:
+      $ref: ./components/schemas/ProjectUpdateRequest.yaml
+    BoardTask:
+      $ref: ./components/schemas/BoardTask.yaml
+    BoardTaskListResponse:
+      $ref: ./components/schemas/BoardTaskListResponse.yaml
+    ProjectSessionLink:
+      $ref: ./components/schemas/ProjectSessionLink.yaml
+    TokenUsageSummary:
+      $ref: ./components/schemas/TokenUsageSummary.yaml
   responses:
     400BadRequest:
       description: "Bad request \u2014 missing or invalid field."
@@ -4018,5 +4038,385 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+
+  /projects:
+    get:
+      operationId: listProjects
+      summary: List projects
+      description: >
+        Returns all projects, newest-first. Excludes archived projects by default.
+        Use ?status=archived to list archived projects or ?status=all for everything.
+        task_count is computed live from the GTD task store.
+      tags:
+      - Projects
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [active, archived, all]
+        description: Filter by project status. Defaults to active.
+      responses:
+        '200':
+          description: Project list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    post:
+      operationId: createProject
+      summary: Create a project
+      tags:
+      - Projects
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCreateRequest'
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
+  /projects/{id}:
+    get:
+      operationId: getProject
+      summary: Get a project by ID
+      tags:
+      - Projects
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Project
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    put:
+      operationId: updateProject
+      summary: Update a project (partial update — absent fields unchanged)
+      tags:
+      - Projects
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectUpdateRequest'
+      responses:
+        '200':
+          description: Updated project
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      operationId: deleteProject
+      summary: Delete a project and cascade-delete its tasks and session links
+      tags:
+      - Projects
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /projects/{id}/sessions:
+    get:
+      operationId: listProjectSessions
+      summary: List sessions auto-linked to this project
+      description: >
+        Returns sessions that were auto-linked when an agent created or updated
+        a GTD task with this project_id. Returns 200 with empty array when project
+        exists but has no links. Returns 404 when project does not exist.
+      tags:
+      - Projects
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Linked sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProjectSessionLink'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /board/tasks:
+    get:
+      operationId: listBoardTasks
+      summary: List GTD board tasks
+      description: >
+        Returns GTD board tasks from ~/.omnipus/tasks/. Distinct from workflow
+        tasks at /tasks. Supports filtering by project_id and status.
+        Default limit 200, max 1000.
+      tags:
+      - Board Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Filter by project ID.
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [inbox, next, active, waiting, done]
+        description: Filter by GTD status.
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 200
+          maximum: 1000
+        description: Maximum items to return.
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 0
+        description: Pagination offset.
+      responses:
+        '200':
+          description: Board task list with total count
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardTaskListResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+    post:
+      operationId: createBoardTask
+      summary: Create a GTD board task
+      tags:
+      - Board Tasks
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                description:
+                  type: string
+                status:
+                  type: string
+                  enum: [inbox, next, active, waiting, done]
+                  description: Defaults to inbox if absent.
+                project_id:
+                  type: string
+                agent_id:
+                  type: string
+      responses:
+        '201':
+          description: Created board task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardTask'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
+  /board/tasks/{id}:
+    get:
+      operationId: getBoardTask
+      summary: Get a GTD board task by ID
+      tags:
+      - Board Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Board task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardTask'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    put:
+      operationId: updateBoardTask
+      summary: Update a GTD board task (partial update)
+      tags:
+      - Board Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                description:
+                  type: string
+                status:
+                  type: string
+                  enum: [inbox, next, active, waiting, done]
+                project_id:
+                  type: string
+                agent_id:
+                  type: string
+      responses:
+        '200':
+          description: Updated board task (full object)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardTask'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      operationId: deleteBoardTask
+      summary: Delete a GTD board task
+      tags:
+      - Board Tasks
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /stats/tokens:
+    get:
+      operationId: getTokenStats
+      summary: Get per-agent token usage summary
+      description: >
+        Aggregates token usage from SessionMeta.Stats across all session files
+        for the requested period. period=month means the current calendar month UTC.
+        No dollar estimates — token counts only.
+      tags:
+      - Stats
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: period
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [month]
+          default: month
+        description: Aggregation period.
+      responses:
+        '200':
+          description: Token usage summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenUsageSummary'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+
 security:
 - BearerAuth: []

@@ -397,6 +397,20 @@ type Notification = {
   session_id?: string | undefined;
   agent_id?: string | undefined;
 };
+type BoardTaskListResponse = {
+  items: Array<BoardTask>;
+  total: number;
+};
+type BoardTask = {
+  id: string;
+  name: string;
+  description?: string | undefined;
+  status: "inbox" | "next" | "active" | "waiting" | "done";
+  project_id?: string | undefined;
+  agent_id?: string | undefined;
+  created_at: string;
+  updated_at: string;
+};
 
 export const LoginRequest = z.object({
   username: z.string().min(1),
@@ -1479,6 +1493,98 @@ export const NotificationList: z.ZodType<NotificationList> = z.object({
   notifications: z.array(Notification),
   unread_count: z.number().int(),
 });
+export const Project = z
+  .object({
+    id: z.string(),
+    name: z.string().min(1),
+    description: z.string().optional(),
+    status: z.enum(["active", "archived"]),
+    pinned: z.boolean(),
+    pin_order: z.number().int(),
+    core_team: z.array(z.string()).max(20).optional(),
+    repository: z.string().optional(),
+    task_count: z.number().int(),
+    created_at: z.string().datetime({ offset: true }),
+    updated_at: z.string().datetime({ offset: true }),
+  })
+  .passthrough();
+export const ProjectCreateRequest = z
+  .object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+    core_team: z.array(z.string()).max(20).optional(),
+    repository: z.string().optional(),
+  })
+  .passthrough();
+export const ProjectUpdateRequest = z
+  .object({
+    name: z.string().min(1),
+    description: z.string(),
+    status: z.enum(["active", "archived"]),
+    pinned: z.boolean(),
+    pin_order: z.number().int(),
+    core_team: z.array(z.string()).max(20),
+    repository: z.string(),
+  })
+  .partial()
+  .passthrough();
+export const ProjectSessionLink = z
+  .object({
+    session_id: z.string(),
+    created_at: z.string().datetime({ offset: true }),
+  })
+  .passthrough();
+export const BoardTask: z.ZodType<BoardTask> = z
+  .object({
+    id: z.string(),
+    name: z.string().min(1),
+    description: z.string().optional(),
+    status: z.enum(["inbox", "next", "active", "waiting", "done"]),
+    project_id: z.string().optional(),
+    agent_id: z.string().optional(),
+    created_at: z.string().datetime({ offset: true }),
+    updated_at: z.string().datetime({ offset: true }),
+  })
+  .passthrough();
+export const BoardTaskListResponse: z.ZodType<BoardTaskListResponse> = z
+  .object({ items: z.array(BoardTask), total: z.number().int() })
+  .passthrough();
+export const createBoardTask_Body = z
+  .object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+    status: z.enum(["inbox", "next", "active", "waiting", "done"]).optional(),
+    project_id: z.string().optional(),
+    agent_id: z.string().optional(),
+  })
+  .passthrough();
+export const updateBoardTask_Body = z
+  .object({
+    name: z.string().min(1),
+    description: z.string(),
+    status: z.enum(["inbox", "next", "active", "waiting", "done"]),
+    project_id: z.string(),
+    agent_id: z.string(),
+  })
+  .partial()
+  .passthrough();
+export const TokenUsageSummary = z
+  .object({
+    agents: z.array(
+      z
+        .object({
+          agent_id: z.string(),
+          agent_name: z.string(),
+          tokens_in: z.number().int(),
+          tokens_out: z.number().int(),
+          tokens_total: z.number().int(),
+        })
+        .passthrough()
+    ),
+    period_start: z.string().datetime({ offset: true }),
+    period_end: z.string().datetime({ offset: true }),
+  })
+  .passthrough();
 export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
   LoginResponse;
 export const AgentSession = z
@@ -2079,6 +2185,160 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/board/tasks",
+    alias: "listBoardTasks",
+    description: `Returns GTD board tasks from ~/.omnipus/tasks/. Distinct from workflow tasks at /tasks. Supports filtering by project_id and status. Default limit 200, max 1000.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "project_id",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+      {
+        name: "status",
+        type: "Query",
+        schema: z
+          .enum(["inbox", "next", "active", "waiting", "done"])
+          .optional(),
+      },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().lte(1000).optional().default(200),
+      },
+      {
+        name: "offset",
+        type: "Query",
+        schema: z.number().int().optional().default(0),
+      },
+    ],
+    response: BoardTaskListResponse,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/board/tasks",
+    alias: "createBoardTask",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: createBoardTask_Body,
+      },
+    ],
+    response: BoardTask,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/board/tasks/:id",
+    alias: "getBoardTask",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: BoardTask,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/board/tasks/:id",
+    alias: "updateBoardTask",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: updateBoardTask_Body,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: BoardTask,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/board/tasks/:id",
+    alias: "deleteBoardTask",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
         schema: ErrorResponse,
       },
     ],
@@ -2849,6 +3109,171 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Token not found or expired.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/projects",
+    alias: "listProjects",
+    description: `Returns all projects, newest-first. Excludes archived projects by default. Use ?status&#x3D;archived to list archived projects or ?status&#x3D;all for everything. task_count is computed live from the GTD task store.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "status",
+        type: "Query",
+        schema: z.enum(["active", "archived", "all"]).optional(),
+      },
+    ],
+    response: z.array(Project),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/projects",
+    alias: "createProject",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ProjectCreateRequest,
+      },
+    ],
+    response: Project,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/projects/:id",
+    alias: "getProject",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Project,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/projects/:id",
+    alias: "updateProject",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ProjectUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Project,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/projects/:id",
+    alias: "deleteProject",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/projects/:id/sessions",
+    alias: "listProjectSessions",
+    description: `Returns sessions that were auto-linked when an agent created or updated a GTD task with this project_id. Returns 200 with empty array when project exists but has no links. Returns 404 when project does not exist.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(ProjectSessionLink),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
         schema: ErrorResponse,
       },
     ],
@@ -4044,6 +4469,29 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         description: `Bad request — missing or invalid field.`,
         schema: ErrorResponse,
       },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/stats/tokens",
+    alias: "getTokenStats",
+    description: `Aggregates token usage from SessionMeta.Stats across all session files for the requested period. period&#x3D;month means the current calendar month UTC. No dollar estimates — token counts only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "period",
+        type: "Query",
+        schema: z.literal("month").optional().default("month"),
+      },
+    ],
+    response: TokenUsageSummary,
+    errors: [
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,

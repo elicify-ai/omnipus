@@ -1,0 +1,45 @@
+type: object
+description: >
+  Per-agent token usage summary for a given time period.
+  Aggregated from SessionMeta.Stats across all session files.
+required:
+  - agents
+  - period_start
+  - period_end
+properties:
+  agents:
+    type: array
+    items:
+      type: object
+      required:
+        - agent_id
+        - agent_name
+        - tokens_in
+        - tokens_out
+        - tokens_total
+      properties:
+        agent_id:
+          type: string
+          example: "mia"
+        agent_name:
+          type: string
+          example: "Mia"
+        tokens_in:
+          type: integer
+          example: 12345
+        tokens_out:
+          type: integer
+          example: 6789
+        tokens_total:
+          type: integer
+          example: 19134
+  period_start:
+    type: string
+    format: date-time
+    description: Start of the aggregation period (inclusive), UTC.
+    example: "2026-06-01T00:00:00Z"
+  period_end:
+    type: string
+    format: date-time
+    description: End of the aggregation period (exclusive), UTC.
+    example: "2026-07-01T00:00:00Z"

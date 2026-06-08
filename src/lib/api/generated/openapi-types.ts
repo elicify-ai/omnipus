@@ -1856,6 +1856,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List projects
+         * @description Returns all projects, newest-first. Excludes archived projects by default. Use ?status=archived to list archived projects or ?status=all for everything. task_count is computed live from the GTD task store.
+         */
+        get: operations["listProjects"];
+        put?: never;
+        /** Create a project */
+        post: operations["createProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a project by ID */
+        get: operations["getProject"];
+        /** Update a project (partial update — absent fields unchanged) */
+        put: operations["updateProject"];
+        post?: never;
+        /** Delete a project and cascade-delete its tasks and session links */
+        delete: operations["deleteProject"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{id}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List sessions auto-linked to this project
+         * @description Returns sessions that were auto-linked when an agent created or updated a GTD task with this project_id. Returns 200 with empty array when project exists but has no links. Returns 404 when project does not exist.
+         */
+        get: operations["listProjectSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/board/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List GTD board tasks
+         * @description Returns GTD board tasks from ~/.omnipus/tasks/. Distinct from workflow tasks at /tasks. Supports filtering by project_id and status. Default limit 200, max 1000.
+         */
+        get: operations["listBoardTasks"];
+        put?: never;
+        /** Create a GTD board task */
+        post: operations["createBoardTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/board/tasks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a GTD board task by ID */
+        get: operations["getBoardTask"];
+        /** Update a GTD board task (partial update) */
+        put: operations["updateBoardTask"];
+        post?: never;
+        /** Delete a GTD board task */
+        delete: operations["deleteBoardTask"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/stats/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get per-agent token usage summary
+         * @description Aggregates token usage from SessionMeta.Stats across all session files for the requested period. period=month means the current calendar month UTC. No dollar estimates — token counts only.
+         */
+        get: operations["getTokenStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -5376,6 +5496,186 @@ export interface components {
             notifications: components["schemas"]["Notification"][];
             /** @description Number of unread notifications for the badge. */
             unread_count: number;
+        };
+        /** @description A Level 1 project record. Projects are lightweight metadata — no filesystem directories or room topology. task_count is computed at read time and never stored. core_team is a default agent roster, not an access gate. */
+        Project: {
+            /**
+             * @description UUID project identifier
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            id: string;
+            /**
+             * @description Human-readable project name. Not unique.
+             * @example website-api
+             */
+            name: string;
+            /**
+             * @description Optional free-text description.
+             * @example Main REST API service
+             */
+            description?: string;
+            /**
+             * @description Project visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
+             * @example active
+             * @enum {string}
+             */
+            status: "active" | "archived";
+            /**
+             * @description Whether this project is pinned to the top of the sidebar.
+             * @example false
+             */
+            pinned: boolean;
+            /**
+             * @description Ascending sort position among pinned projects. 0 for unpinned projects. Last-writer-wins; tiebreak by created_at ascending.
+             * @example 0
+             */
+            pin_order: number;
+            /**
+             * @description Default agent roster for this project. Not an access gate — any agent can work on any project's tasks. Deduplicated at write time. Max 20 entries.
+             * @example [
+             *       "mia",
+             *       "jim"
+             *     ]
+             */
+            core_team?: string[];
+            /**
+             * @description Optional git repository URL. Stored as-is, not validated for reachability. Frontend opens in new tab.
+             * @example https://github.com/org/repo
+             */
+            repository?: string;
+            /**
+             * @description Number of GTD board tasks with this project_id. Computed at read time from ~/.omnipus/tasks/. Never stored in the project JSON file.
+             * @example 3
+             */
+            task_count: number;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC creation timestamp
+             * @example 2026-06-08T14:22:00Z
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC last-update timestamp
+             * @example 2026-06-08T15:00:00Z
+             */
+            updated_at: string;
+        };
+        /** @description Request body for POST /projects */
+        ProjectCreateRequest: {
+            /** @description Project name. Required. Not unique. */
+            name: string;
+            /** @description Optional description. */
+            description?: string;
+            /** @description Optional default agent roster. Deduplicated at write time. */
+            core_team?: string[];
+            /** @description Optional git repository URL. */
+            repository?: string;
+        };
+        /** @description Request body for PUT /projects/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged. */
+        ProjectUpdateRequest: {
+            name?: string;
+            description?: string;
+            /**
+             * @description Archive or restore a project.
+             * @enum {string}
+             */
+            status?: "active" | "archived";
+            pinned?: boolean;
+            pin_order?: number;
+            core_team?: string[];
+            repository?: string;
+        };
+        /** @description A GTD board task stored in ~/.omnipus/tasks/. Distinct from workflow tasks (pkg/taskstore, /api/v1/tasks) which have different statuses and semantics. */
+        BoardTask: {
+            /**
+             * @description UUID task identifier
+             * @example b2c3d4e5-f6a7-8901-bcde-f12345678901
+             */
+            id: string;
+            /**
+             * @description Task name.
+             * @example Fix login bug
+             */
+            name: string;
+            /** @description Optional task description. */
+            description?: string;
+            /**
+             * @description GTD status. inbox: unprocessed. next: next action. active: in progress. waiting: blocked on someone/something. done: completed.
+             * @example inbox
+             * @enum {string}
+             */
+            status: "inbox" | "next" | "active" | "waiting" | "done";
+            /**
+             * @description Optional project this task belongs to. Must be an existing project ID. If absent, task is unassigned.
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            project_id?: string;
+            /**
+             * @description Optional agent responsible for this task.
+             * @example mia
+             */
+            agent_id?: string;
+            /**
+             * Format: date-time
+             * @example 2026-06-08T14:22:00Z
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @example 2026-06-08T15:00:00Z
+             */
+            updated_at: string;
+        };
+        /** @description Paginated list response for GET /board/tasks */
+        BoardTaskListResponse: {
+            items: components["schemas"]["BoardTask"][];
+            /**
+             * @description Total number of tasks matching the filter (before pagination).
+             * @example 42
+             */
+            total: number;
+        };
+        /** @description A session that has been auto-linked to a project via tool use. */
+        ProjectSessionLink: {
+            /**
+             * @description Session identifier.
+             * @example sess_abc123
+             */
+            session_id: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC timestamp when the link was first created.
+             * @example 2026-06-08T14:22:00Z
+             */
+            created_at: string;
+        };
+        /** @description Per-agent token usage summary for a given time period. Aggregated from SessionMeta.Stats across all session files. */
+        TokenUsageSummary: {
+            agents: {
+                /** @example mia */
+                agent_id: string;
+                /** @example Mia */
+                agent_name: string;
+                /** @example 12345 */
+                tokens_in: number;
+                /** @example 6789 */
+                tokens_out: number;
+                /** @example 19134 */
+                tokens_total: number;
+            }[];
+            /**
+             * Format: date-time
+             * @description Start of the aggregation period (inclusive), UTC.
+             * @example 2026-06-01T00:00:00Z
+             */
+            period_start: string;
+            /**
+             * Format: date-time
+             * @description End of the aggregation period (exclusive), UTC.
+             * @example 2026-07-01T00:00:00Z
+             */
+            period_end: string;
         };
     };
     responses: {
@@ -9244,6 +9544,327 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
+    listProjects: {
+        parameters: {
+            query?: {
+                /** @description Filter by project status. Defaults to active. */
+                status?: "active" | "archived" | "all";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project list */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    createProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Project created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    getProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    updateProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated project */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Project"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    listProjectSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Linked sessions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSessionLink"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    listBoardTasks: {
+        parameters: {
+            query?: {
+                /** @description Filter by project ID. */
+                project_id?: string;
+                /** @description Filter by GTD status. */
+                status?: "inbox" | "next" | "active" | "waiting" | "done";
+                /** @description Maximum items to return. */
+                limit?: number;
+                /** @description Pagination offset. */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Board task list with total count */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoardTaskListResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    createBoardTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name: string;
+                    description?: string;
+                    /**
+                     * @description Defaults to inbox if absent.
+                     * @enum {string}
+                     */
+                    status?: "inbox" | "next" | "active" | "waiting" | "done";
+                    project_id?: string;
+                    agent_id?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Created board task */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoardTask"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
+    getBoardTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Board task */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoardTask"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    updateBoardTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    name?: string;
+                    description?: string;
+                    /** @enum {string} */
+                    status?: "inbox" | "next" | "active" | "waiting" | "done";
+                    project_id?: string;
+                    agent_id?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated board task (full object) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoardTask"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteBoardTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    getTokenStats: {
+        parameters: {
+            query?: {
+                /** @description Aggregation period. */
+                period?: "month";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Token usage summary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenUsageSummary"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+        };
+    };
 }
 
 // ── Named type re-exports from components.schemas ────────────────────────────
@@ -9380,3 +10001,10 @@ export type ScheduleList = components["schemas"]["ScheduleList"];
 export type ScheduleRunResult = components["schemas"]["ScheduleRunResult"];
 export type Notification = components["schemas"]["Notification"];
 export type NotificationList = components["schemas"]["NotificationList"];
+export type Project = components["schemas"]["Project"];
+export type ProjectCreateRequest = components["schemas"]["ProjectCreateRequest"];
+export type ProjectUpdateRequest = components["schemas"]["ProjectUpdateRequest"];
+export type BoardTask = components["schemas"]["BoardTask"];
+export type BoardTaskListResponse = components["schemas"]["BoardTaskListResponse"];
+export type ProjectSessionLink = components["schemas"]["ProjectSessionLink"];
+export type TokenUsageSummary = components["schemas"]["TokenUsageSummary"];
