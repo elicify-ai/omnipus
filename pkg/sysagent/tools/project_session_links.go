@@ -36,7 +36,7 @@ func linksFilePath(home string) string {
 	return filepath.Join(home, "project_session_links.jsonl")
 }
 
-// linkFileMu serialises ALL writes to project_session_links.jsonl:
+// linkFileMu serializes ALL writes to project_session_links.jsonl:
 // the linker-hook append path, the cascade-delete rewrite path, and compaction.
 // Must be held (write lock) for the full duration of any write or rewrite operation.
 // RLock is sufficient for read-only access via ReadLinks.
@@ -44,13 +44,13 @@ var linkFileMu sync.RWMutex
 
 // appendLink appends one (projectID, sessionID) entry to the link file.
 // The file is opened with O_APPEND|O_CREATE so concurrent appenders on the same
-// OS stay coherent; linkFileMu ensures our own process is serialised.
+// OS stay coherent; linkFileMu ensures our own process is serialized.
 func appendLink(home, projectID, sessionID string) error {
 	linkFileMu.Lock()
 	defer linkFileMu.Unlock()
 
 	path := linksFilePath(home)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -107,24 +107,26 @@ func ReadLinks(home, projectID string) []ProjectSessionLink {
 		seen[key] = struct{}{}
 		out = append(out, link)
 	}
+	if err := scanner.Err(); err != nil {
+		slog.Warn("project_session_links: ReadLinks scan error — partial result returned",
+			"error", err, "project_id", projectID)
+	}
 	return out
 }
 
-// RemoveLinksForProject rewrites the link file excluding all entries for projectID.
-// Called during cascade delete (project.delete tool).
-// A missing file is a no-op; write failures are logged at Warn level (best-effort).
-func RemoveLinksForProject(home, projectID string) {
+// rewriteLinks rewrites the link file keeping only entries for which keep returns true.
+// Holds linkFileMu (write lock) for the full operation — callers must NOT hold the lock.
+func rewriteLinks(home string, keep func(ProjectSessionLink) bool) error {
 	linkFileMu.Lock()
 	defer linkFileMu.Unlock()
 
 	path := linksFilePath(home)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			slog.Warn("project_session_links: cannot read link file for rewrite",
-				"error", err, "project_id", projectID)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
 		}
-		return
+		return err
 	}
 
 	var kept []string
@@ -134,20 +136,30 @@ func RemoveLinksForProject(home, projectID string) {
 			continue
 		}
 		var link ProjectSessionLink
-		if err := json.Unmarshal([]byte(line), &link); err != nil || link.ProjectID == projectID {
-			continue // skip malformed and matching entries
+		if json.Unmarshal([]byte(line), &link) != nil {
+			continue // drop malformed lines
 		}
-		kept = append(kept, line)
+		if keep(link) {
+			kept = append(kept, line)
+		}
 	}
 
 	var content []byte
 	if len(kept) > 0 {
 		content = []byte(strings.Join(kept, "\n") + "\n")
 	}
+	return fileutil.WriteFileAtomic(path, content, 0o600)
+}
 
-	if err := fileutil.WriteFileAtomic(path, content, 0600); err != nil {
-		slog.Warn("project_session_links: failed to rewrite link file",
-			"error", err, "project_id", projectID)
+// RemoveLinksForProject rewrites the link file excluding all entries for projectID.
+// Called during cascade delete (project.delete tool) and from
+// pkg/gateway/rest_projects.go::handleProjectDelete.
+// A missing file is a no-op; write failures are logged at Warn level (best-effort).
+func RemoveLinksForProject(home, projectID string) {
+	if err := rewriteLinks(home, func(l ProjectSessionLink) bool {
+		return l.ProjectID != projectID
+	}); err != nil {
+		slog.Warn("project_session_links: RemoveLinksForProject failed", "error", err, "project_id", projectID)
 	}
 }
 
@@ -166,51 +178,27 @@ func compactLinksIfNeeded(home string) {
 }
 
 // compactLinks rewrites the link file with duplicate (project_id, session_id) pairs removed.
-// Keeps the earliest entry for each pair. Holds linkFileMu (write lock) for the full operation.
+// Keeps the earliest entry for each pair.
 func compactLinks(home string) {
-	linkFileMu.Lock()
-	defer linkFileMu.Unlock()
-
-	path := linksFilePath(home)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-
 	seen := make(map[string]struct{})
-	var kept []string
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+	if err := rewriteLinks(home, func(l ProjectSessionLink) bool {
+		key := l.ProjectID + ":" + l.SessionID
+		if _, dup := seen[key]; dup {
+			return false
 		}
-		var link ProjectSessionLink
-		if json.Unmarshal([]byte(line), &link) != nil {
-			continue
-		}
-		key := link.ProjectID + ":" + link.SessionID
-		if _, dup := seen[key]; !dup {
-			seen[key] = struct{}{}
-			kept = append(kept, line)
-		}
-	}
-
-	var content []byte
-	if len(kept) > 0 {
-		content = []byte(strings.Join(kept, "\n") + "\n")
-	}
-
-	if err := fileutil.WriteFileAtomic(path, content, 0600); err != nil {
+		seen[key] = struct{}{}
+		return true
+	}); err != nil {
 		slog.Warn("project_session_links: compaction write failed", "error", err)
 	}
 }
 
-// ProjectSessionLinker is instantiated once at gateway start and wired into the
-// agent loop as a ToolInterceptor adapter (in pkg/agent/loop.go, Wave 1c).
-//
-// Because pkg/agent imports pkg/sysagent/tools (cycle), this type does NOT
-// implement agent.ToolInterceptor directly.  Instead it exposes LinkSession,
-// which loop.go calls from a thin private adapter struct.
+// ProjectSessionLinker is instantiated once at gateway start and records which
+// sessions have worked on which projects. Because pkg/agent imports
+// pkg/sysagent/tools, this type cannot implement agent.ToolInterceptor directly
+// (that would create a circular import). Instead it exposes LinkSession, and a
+// thin adapter in pkg/agent/project_linker_hook.go wraps it to satisfy the
+// ToolInterceptor interface without introducing a cycle.
 type ProjectSessionLinker struct {
 	home   string
 	lruMu  sync.Mutex

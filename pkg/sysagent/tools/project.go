@@ -220,9 +220,13 @@ func (t *ProjectUpdateTool) Parameters() map[string]any {
 			"id":          map[string]any{"type": "string", "description": "Project ID from system.project.list"},
 			"name":        map[string]any{"type": "string", "description": "New project title"},
 			"description": map[string]any{"type": "string", "description": "New description"},
-			"status":      map[string]any{"type": "string", "enum": []string{"active", "archived"}, "description": "active or archived"},
-			"pinned":      map[string]any{"type": "boolean", "description": "Pin to top of sidebar"},
-			"pin_order":   map[string]any{"type": "integer", "description": "Sort position among pinned projects"},
+			"status": map[string]any{
+				"type":        "string",
+				"enum":        []string{"active", "archived"},
+				"description": "active or archived",
+			},
+			"pinned":    map[string]any{"type": "boolean", "description": "Pin to top of sidebar"},
+			"pin_order": map[string]any{"type": "integer", "description": "Sort position among pinned projects"},
 			"core_team": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
@@ -312,8 +316,11 @@ func (t *ProjectDeleteTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id":      map[string]any{"type": "string", "description": "Project ID from system.project.list"},
-			"confirm": map[string]any{"type": "boolean", "description": "Must be true to confirm irreversible deletion"},
+			"id": map[string]any{"type": "string", "description": "Project ID from system.project.list"},
+			"confirm": map[string]any{
+				"type":        "boolean",
+				"description": "Must be true to confirm irreversible deletion",
+			},
 		},
 		"required": []string{"id", "confirm"},
 	}

@@ -9,6 +9,7 @@ package gateway
 import (
 	"log/slog"
 	"net/http"
+	"sort"
 	"time"
 )
 
@@ -120,12 +121,7 @@ func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Insertion sort for a stable, deterministic response order by agent_id.
-	for i := 1; i < len(entries); i++ {
-		for j := i; j > 0 && entries[j].AgentId < entries[j-1].AgentId; j-- {
-			entries[j], entries[j-1] = entries[j-1], entries[j]
-		}
-	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].AgentId < entries[j].AgentId })
 
 	jsonOK(w, tokenUsageResp{
 		Agents:      entries,

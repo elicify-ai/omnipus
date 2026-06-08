@@ -21,6 +21,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 )
@@ -58,7 +59,7 @@ func readProjectFile(home, id string) (storedProject, error) {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return storedProject{}, fmt.Errorf("parse project %s: %w", id, err)
 	}
-	// Lazy migration: core_team → agent_ids fallback.
+	// Lazy migration: agent_ids → core_team fallback.
 	if len(p.CoreTeam) == 0 {
 		var raw map[string]json.RawMessage
 		if json.Unmarshal(data, &raw) == nil {
@@ -104,42 +105,52 @@ func listProjectFiles(home string) ([]storedProject, error) {
 	return projects, nil
 }
 
+// scanGTDTasks walks the tasks directory and calls fn for every file that
+// deserialises to a GTD task (status ∈ {inbox,next,active,waiting,done}).
+// Returns the first I/O error; fn errors are not propagated.
+func scanGTDTasks(home string, fn func(id string, raw map[string]any)) error {
+	dir := filepath.Join(home, "tasks")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var raw map[string]any
+		if json.Unmarshal(data, &raw) != nil {
+			continue
+		}
+		status, _ := raw["status"].(string)
+		if !isGTDTask(status) {
+			continue
+		}
+		id := strings.TrimSuffix(e.Name(), ".json")
+		fn(id, raw)
+	}
+	return nil
+}
+
 // computeProjectTaskCounts returns a map[projectID]count by doing a single pass
 // over all task files in ~/.omnipus/tasks/. Used by list (O(N) for all projects).
 // Only GTD tasks (status ∈ {inbox,next,active,waiting,done}) are counted; workflow
 // tasks from pkg/taskstore share the same directory and are excluded.
 func computeProjectTaskCounts(home string) (map[string]int, error) {
-	tasksDir := filepath.Join(home, "tasks")
-	entries, err := os.ReadDir(tasksDir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("read tasks dir: %w", err)
-	}
 	counts := make(map[string]int)
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
+	if err := scanGTDTasks(home, func(_ string, raw map[string]any) {
+		if pid, _ := raw["project_id"].(string); pid != "" {
+			counts[pid]++
 		}
-		data, err := os.ReadFile(filepath.Join(tasksDir, e.Name()))
-		if err != nil {
-			continue
-		}
-		var raw map[string]json.RawMessage
-		if json.Unmarshal(data, &raw) != nil {
-			continue
-		}
-		// Skip workflow tasks (taskstore) by checking GTD status.
-		if statusRaw, ok := raw["status"]; ok {
-			var status string
-			if json.Unmarshal(statusRaw, &status) == nil && !isGTDTask(status) {
-				continue
-			}
-		}
-		if pidRaw, ok := raw["project_id"]; ok {
-			var pid string
-			if json.Unmarshal(pidRaw, &pid) == nil && pid != "" {
-				counts[pid]++
-			}
-		}
+	}); err != nil {
+		return nil, fmt.Errorf("read tasks dir: %w", err)
 	}
 	return counts, nil
 }
@@ -148,35 +159,12 @@ func computeProjectTaskCounts(home string) (map[string]int, error) {
 // but avoids building the full map — used by single-project GET/PUT.
 // Only GTD tasks (status ∈ {inbox,next,active,waiting,done}) are counted.
 func countTasksForProject(home, projectID string) int {
-	tasksDir := filepath.Join(home, "tasks")
-	entries, _ := os.ReadDir(tasksDir)
 	count := 0
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
+	_ = scanGTDTasks(home, func(_ string, raw map[string]any) {
+		if pid, _ := raw["project_id"].(string); pid == projectID {
+			count++
 		}
-		data, err := os.ReadFile(filepath.Join(tasksDir, e.Name()))
-		if err != nil {
-			continue
-		}
-		var raw map[string]json.RawMessage
-		if json.Unmarshal(data, &raw) != nil {
-			continue
-		}
-		// Skip workflow tasks (taskstore) by checking GTD status.
-		if statusRaw, ok := raw["status"]; ok {
-			var status string
-			if json.Unmarshal(statusRaw, &status) == nil && !isGTDTask(status) {
-				continue
-			}
-		}
-		if pidRaw, ok := raw["project_id"]; ok {
-			var pid string
-			if json.Unmarshal(pidRaw, &pid) == nil && pid == projectID {
-				count++
-			}
-		}
-	}
+	})
 	return count
 }
 
@@ -232,36 +220,36 @@ func projectToWire(p storedProject, taskCount int) gen.Project {
 	return w
 }
 
-// deleteTasksForProject removes all task files whose project_id matches projectID.
+// deleteTasksForProject removes all GTD task files whose project_id matches projectID.
+// Only GTD tasks (status ∈ {inbox,next,active,waiting,done}) are deleted; workflow
+// tasks from pkg/taskstore share the same directory and are preserved.
 func deleteTasksForProject(home, projectID string) {
 	tasksDir := filepath.Join(home, "tasks")
-	entries, err := os.ReadDir(tasksDir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		taskPath := filepath.Join(tasksDir, e.Name())
-		data, err := os.ReadFile(taskPath)
-		if err != nil {
-			continue
-		}
-		var raw map[string]json.RawMessage
-		if json.Unmarshal(data, &raw) != nil {
-			continue
-		}
-		if pidRaw, ok := raw["project_id"]; ok {
-			var pid string
-			if json.Unmarshal(pidRaw, &pid) == nil && pid == projectID {
-				if err := os.Remove(taskPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-					slog.Warn("rest: project cascade: failed to delete task",
-						"file", e.Name(), "error", err)
-				}
+	_ = scanGTDTasks(home, func(id string, raw map[string]any) {
+		if pid, _ := raw["project_id"].(string); pid == projectID {
+			taskPath := filepath.Join(tasksDir, id+".json")
+			if err := os.Remove(taskPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				slog.Warn("rest: project cascade: failed to delete task",
+					"file", id+".json", "error", err)
 			}
 		}
+	})
+}
+
+// loadProject reads a project by ID and writes the appropriate HTTP error if absent.
+// Returns (p, true) on success or (_, false) after writing the error response.
+func (a *restAPI) loadProject(w http.ResponseWriter, id string) (storedProject, bool) {
+	p, err := readProjectFile(a.homePath, id)
+	if err != nil {
+		if errors.Is(err, errProjectNotFound) {
+			jsonErr(w, http.StatusNotFound, "project not found")
+			return storedProject{}, false
+		}
+		slog.Error("rest: load project", "error", err, "id", id)
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return storedProject{}, false
 	}
+	return p, true
 }
 
 // HandleProjects dispatches all /api/v1/projects* requests.
@@ -316,6 +304,13 @@ func (a *restAPI) handleProjectList(w http.ResponseWriter, r *http.Request) {
 	statusFilter := r.URL.Query().Get("status")
 	if statusFilter == "" {
 		statusFilter = string(gen.ProjectStatusActive)
+	}
+	switch statusFilter {
+	case string(gen.ProjectStatusActive), string(gen.ProjectStatusArchived), "all":
+		// valid
+	default:
+		jsonErr(w, http.StatusBadRequest, "invalid status filter")
+		return
 	}
 
 	projects, err := listProjectFiles(a.homePath)
@@ -412,7 +407,11 @@ func (a *restAPI) handleProjectPost(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	jsonCreated(w, projectToWire(p, 0))
+	wire := projectToWire(p, 0)
+	jsonCreated(w, wire)
+	if a.auditor != nil {
+		_ = a.auditor.Log(&audit.Entry{Event: "project.create", Decision: "allowed", Details: map[string]any{"id": p.ID, "name": p.Name}})
+	}
 }
 
 func (a *restAPI) handleProjectGet(w http.ResponseWriter, r *http.Request, id string) {
@@ -420,14 +419,8 @@ func (a *restAPI) handleProjectGet(w http.ResponseWriter, r *http.Request, id st
 		jsonErr(w, http.StatusBadRequest, "invalid project ID")
 		return
 	}
-	p, err := readProjectFile(a.homePath, id)
-	if err != nil {
-		if errors.Is(err, errProjectNotFound) {
-			jsonErr(w, http.StatusNotFound, fmt.Sprintf("project %q not found", id))
-			return
-		}
-		slog.Error("rest: get project", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
+	p, ok := a.loadProject(w, id)
+	if !ok {
 		return
 	}
 	jsonOK(w, projectToWire(p, countTasksForProject(a.homePath, id)))
@@ -472,14 +465,8 @@ func (a *restAPI) handleProjectPut(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 
-	p, err := readProjectFile(a.homePath, id)
-	if err != nil {
-		if errors.Is(err, errProjectNotFound) {
-			jsonErr(w, http.StatusNotFound, fmt.Sprintf("project %q not found", id))
-			return
-		}
-		slog.Error("rest: update project: read", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
+	p, ok := a.loadProject(w, id)
+	if !ok {
 		return
 	}
 
@@ -532,6 +519,9 @@ func (a *restAPI) handleProjectPut(w http.ResponseWriter, r *http.Request, id st
 	}
 
 	jsonOK(w, projectToWire(p, countTasksForProject(a.homePath, id)))
+	if a.auditor != nil {
+		_ = a.auditor.Log(&audit.Entry{Event: "project.update", Decision: "allowed", Details: map[string]any{"id": id}})
+	}
 }
 
 func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id string) {
@@ -541,13 +531,7 @@ func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id
 	}
 
 	// Verify the project exists before cascading.
-	if _, err := readProjectFile(a.homePath, id); err != nil {
-		if errors.Is(err, errProjectNotFound) {
-			jsonErr(w, http.StatusNotFound, fmt.Sprintf("project %q not found", id))
-			return
-		}
-		slog.Error("rest: delete project: read", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
+	if _, ok := a.loadProject(w, id); !ok {
 		return
 	}
 
@@ -563,6 +547,9 @@ func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+	if a.auditor != nil {
+		_ = a.auditor.Log(&audit.Entry{Event: "project.delete", Decision: "allowed", Details: map[string]any{"id": id}})
+	}
 }
 
 func (a *restAPI) handleProjectSessions(w http.ResponseWriter, r *http.Request, id string) {
@@ -572,13 +559,7 @@ func (a *restAPI) handleProjectSessions(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// Verify project exists.
-	if _, err := readProjectFile(a.homePath, id); err != nil {
-		if errors.Is(err, errProjectNotFound) {
-			jsonErr(w, http.StatusNotFound, fmt.Sprintf("project %q not found", id))
-			return
-		}
-		slog.Error("rest: project sessions: read project", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
+	if _, ok := a.loadProject(w, id); !ok {
 		return
 	}
 

@@ -21,6 +21,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 )
 
@@ -199,6 +200,11 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if statusFilter != "" && !gtdStatuses[statusFilter] {
+		jsonErr(w, http.StatusBadRequest, "invalid status filter")
+		return
+	}
+
 	all, err := a.listBoardTasks()
 	if err != nil {
 		slog.Error("rest: board task: list failed", "error", err)
@@ -327,6 +333,14 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusBadRequest, "project_id must be 50 characters or fewer")
 			return
 		}
+		if projectID != "" {
+			if _, projErr := readProjectFile(a.homePath, projectID); projErr != nil {
+				if errors.Is(projErr, errProjectNotFound) {
+					jsonErr(w, http.StatusBadRequest, "invalid project_id: project not found")
+					return
+				}
+			}
+		}
 	}
 
 	agentID := ""
@@ -358,6 +372,9 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonCreated(w, toWireBoardTask(t))
+	if a.auditor != nil {
+		_ = a.auditor.Log(&audit.Entry{Event: "board_task.create", Decision: "allowed", Details: map[string]any{"id": t.ID}})
+	}
 }
 
 // handleBoardTaskPut handles PUT /api/v1/board/tasks/{id} → 200 with updated task.
@@ -413,6 +430,14 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 			jsonErr(w, http.StatusBadRequest, "project_id must be 50 characters or fewer")
 			return
 		}
+		if *req.ProjectId != "" {
+			if _, projErr := readProjectFile(a.homePath, *req.ProjectId); projErr != nil {
+				if errors.Is(projErr, errProjectNotFound) {
+					jsonErr(w, http.StatusBadRequest, "invalid project_id: project not found")
+					return
+				}
+			}
+		}
 		existing.ProjectID = *req.ProjectId
 	}
 	if req.AgentId != nil {
@@ -428,6 +453,9 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 	}
 
 	jsonOK(w, toWireBoardTask(existing))
+	if a.auditor != nil {
+		_ = a.auditor.Log(&audit.Entry{Event: "board_task.update", Decision: "allowed", Details: map[string]any{"id": id}})
+	}
 }
 
 // handleBoardTaskDelete handles DELETE /api/v1/board/tasks/{id} → 204 No Content.
@@ -461,6 +489,9 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+	if a.auditor != nil {
+		_ = a.auditor.Log(&audit.Entry{Event: "board_task.delete", Decision: "allowed", Details: map[string]any{"id": id}})
+	}
 }
 
 // HandleBoardTasks dispatches requests for /api/v1/board/tasks and /api/v1/board/tasks/{id}.

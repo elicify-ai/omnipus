@@ -6,7 +6,9 @@ package systools
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/oklog/ulid/v2"
@@ -26,6 +28,12 @@ type task struct {
 }
 
 func tasksDir(home string) string { return filepath.Join(home, "tasks") }
+
+// gtdStatusSet is the set of valid GTD task statuses.
+// Used to exclude workflow/taskstore tasks from agent-visible task lists.
+var gtdStatusSet = map[string]bool{
+	"inbox": true, "next": true, "active": true, "waiting": true, "done": true,
+}
 
 // validTaskStatus returns true for allowed GTD status values.
 func validTaskStatus(s string) bool {
@@ -81,7 +89,13 @@ func (t *TaskCreateTool) Execute(_ context.Context, args map[string]any) *tools.
 	if v, ok := args["description"].(string); ok {
 		tk.Description = v
 	}
-	if v, ok := args["project_id"].(string); ok {
+	if v, ok := args["project_id"].(string); ok && v != "" {
+		projectPath := filepath.Join(t.deps.Home, "projects", v+".json")
+		if _, statErr := os.Stat(projectPath); statErr != nil {
+			if errors.Is(statErr, os.ErrNotExist) {
+				return tools.ErrorResult(errorJSON("INVALID_INPUT", "project not found", "project_id"))
+			}
+		}
 		tk.ProjectID = v
 	}
 	if v, ok := args["agent_id"].(string); ok {
@@ -150,6 +164,14 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 		updated = append(updated, "agent_id")
 	}
 	if v, ok := args["project_id"].(string); ok {
+		if v != "" {
+			projectPath := filepath.Join(t.deps.Home, "projects", v+".json")
+			if _, statErr := os.Stat(projectPath); statErr != nil {
+				if errors.Is(statErr, os.ErrNotExist) {
+					return tools.ErrorResult(errorJSON("INVALID_INPUT", "project not found", "project_id"))
+				}
+			}
+		}
 		tk.ProjectID = v
 		updated = append(updated, "project_id")
 	}
@@ -232,6 +254,9 @@ func (t *TaskListTool) Execute(_ context.Context, args map[string]any) *tools.To
 
 	var filtered []task
 	for _, tk := range all {
+		if !gtdStatusSet[tk.Status] {
+			continue
+		}
 		if projectFilter != "" && tk.ProjectID != projectFilter {
 			continue
 		}

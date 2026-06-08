@@ -1332,6 +1332,7 @@ func setupAndStartServices(
 		allowGodMode:    allowGodMode,                    // god-mode latch (2)
 		cronService:     runningServices.CronService,     // #264: schedules CRUD
 		notifStore:      runningServices.notifStore,      // #264: notification center
+		auditor:         agentLoop.AuditLogger(),         // shared audit logger for REST mutations
 	}
 	// Stash the api ref so RunContextWithOptions can update builtinRegistry
 	// after the M16 live-deps re-population (the :689 reassignment creates a fresh
