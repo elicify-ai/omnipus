@@ -204,7 +204,7 @@ func SeedConfig(cfg *config.Config) bool {
 		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
 		// Ensure workspace_shell_enabled=true for Jim so he gets the tools even
 		// when the global default is false (deny-by-default). Applied idempotently —
-		// flips when the pointer is nil OR when it was materialised as &false by the
+		// flips when the pointer is nil OR when it was materialized as &false by the
 		// pre-fix validateBootConfig (heals upgrades from the broken validator).
 		if ca.ID == IDJim &&
 			(cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil || !*cfg.Sandbox.Experimental.WorkspaceShellEnabled) {
