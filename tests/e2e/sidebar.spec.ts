@@ -9,7 +9,7 @@ import { expectA11yClean } from './fixtures/a11y';
 // matches whether the browser keeps the /#/ fragment or normalizes it away.
 const NAV_ITEMS = [
   { href: '/#/', urlPattern: /\/(#\/)?$/ },
-  { href: '/#/command-center', urlPattern: /command-center/ },
+  { href: '/#/tasks', urlPattern: /tasks/ },
   { href: '/#/agents', urlPattern: /agents/ },
   { href: '/#/skills', urlPattern: /skills/ },
   { href: '/#/settings', urlPattern: /settings/ },
