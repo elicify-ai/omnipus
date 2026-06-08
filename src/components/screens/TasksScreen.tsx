@@ -80,13 +80,13 @@ function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
     name: '',
     description: '',
     status: 'inbox',
-    project_id: activeProjectId ?? '',
+    project_id: activeProjectId ?? '__none__',
   })
   const [nameError, setNameError] = useState('')
 
   // Sync form.project_id when activeProjectId changes while slide-over is open
   useEffect(() => {
-    setForm((f) => ({ ...f, project_id: activeProjectId ?? '' }))
+    setForm((f) => ({ ...f, project_id: activeProjectId ?? '__none__' }))
   }, [activeProjectId])
 
   const mutation = useMutation({
@@ -95,13 +95,13 @@ function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
         name: form.name.trim(),
         description: form.description.trim() || undefined,
         status: form.status,
-        project_id: form.project_id || undefined,
+        project_id: form.project_id === '__none__' ? undefined : form.project_id || undefined,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
       queryClient.invalidateQueries({ queryKey: ['projects'] })
       addToast({ message: 'Task created', variant: 'success' })
-      setForm({ name: '', description: '', status: 'inbox', project_id: activeProjectId ?? '' })
+      setForm({ name: '', description: '', status: 'inbox', project_id: activeProjectId ?? '__none__' })
       setNameError('')
       onOpenChange(false)
     },
@@ -123,7 +123,7 @@ function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
 
   function handleOpenChange(next: boolean) {
     if (!next) {
-      setForm({ name: '', description: '', status: 'inbox', project_id: activeProjectId ?? '' })
+      setForm({ name: '', description: '', status: 'inbox', project_id: activeProjectId ?? '__none__' })
       setNameError('')
     }
     onOpenChange(next)
@@ -206,8 +206,8 @@ function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
                 Project
               </Label>
               <Select
-                value={form.project_id}
-                onValueChange={(v) => setForm((s) => ({ ...s, project_id: v }))}
+                value={form.project_id || '__none__'}
+                onValueChange={(v) => setForm((s) => ({ ...s, project_id: v === '__none__' ? '__none__' : v }))}
               >
                 <SelectTrigger
                   id="new-task-project"
@@ -216,7 +216,7 @@ function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
                   <SelectValue placeholder="No project" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">No project</SelectItem>
+                  <SelectItem value="__none__">No project</SelectItem>
                   {projects.map((p) => (
                     <SelectItem key={p.id} value={p.id}>
                       {p.name}
@@ -400,6 +400,13 @@ export function TasksScreen() {
     staleTime: 30_000,
   })
   const activeProject = activeProjectId ? projects.find((p) => p.id === activeProjectId) : null
+
+  // Clear stale activeProjectId when the project no longer exists in the loaded list
+  useEffect(() => {
+    if (activeProjectId && projects.length > 0 && !projects.find((p) => p.id === activeProjectId)) {
+      setActiveProjectId(null)
+    }
+  }, [activeProjectId, projects, setActiveProjectId])
 
   // Board tasks query — filtered by active project if set
   const { data: tasks = [], isError: tasksError, isLoading } = useQuery({
