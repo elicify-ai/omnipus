@@ -13,14 +13,18 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/oklog/ulid/v2"
+
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 )
 
-// boardTask mirrors the on-disk format of ~/.omnipus/tasks/{id}.json.
+// boardTask mirrors the on-disk format of ~/.omnipus/tasks/{id}.json for GTD tasks.
 // not-wire-format
 type boardTask struct { // not-wire-format
 	ID          string `json:"id"`
@@ -33,13 +37,43 @@ type boardTask struct { // not-wire-format
 	UpdatedAt   string `json:"updated_at"`
 }
 
+// gtdStatuses is the set of valid GTD task status values.
+// Workflow tasks (pkg/taskstore) use queued/assigned/running/completed/failed — never these.
+var gtdStatuses = map[string]bool{
+	"inbox":   true,
+	"next":    true,
+	"active":  true,
+	"waiting": true,
+	"done":    true,
+}
+
+// isGTDTask returns true when status is a known GTD status value.
+func isGTDTask(status string) bool {
+	return gtdStatuses[status]
+}
+
 // boardTasksDir returns the absolute path of ~/.omnipus/tasks/.
 func (a *restAPI) boardTasksDir() string {
 	return filepath.Join(a.homePath, "tasks")
 }
 
-// readBoardTask reads a single task from disk by ID.
-// Returns os.ErrNotExist-wrapped error when the file is absent.
+// writeBoardTask atomically persists a boardTask to disk.
+func (a *restAPI) writeBoardTask(t boardTask) error {
+	dir := a.boardTasksDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(t, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, t.ID+".json")
+	return fileutil.WriteFileAtomic(path, data, 0o600)
+}
+
+// readBoardTask reads a single GTD task from disk by ID.
+// Returns os.ErrNotExist when the file is absent or when the file exists but
+// is not a GTD task (e.g. it is a workflow task with status queued/running/etc.).
 func (a *restAPI) readBoardTask(id string) (boardTask, error) {
 	path := filepath.Join(a.boardTasksDir(), id+".json")
 	data, err := os.ReadFile(path)
@@ -50,11 +84,17 @@ func (a *restAPI) readBoardTask(id string) (boardTask, error) {
 	if err := json.Unmarshal(data, &t); err != nil {
 		return boardTask{}, err
 	}
+	// Reject workflow tasks (status ∈ {queued,assigned,running,completed,failed})
+	// and tasks with no name field — those are taskstore entities, not GTD tasks.
+	if t.Name == "" || !isGTDTask(t.Status) {
+		return boardTask{}, os.ErrNotExist
+	}
 	return t, nil
 }
 
-// listBoardTasks reads all task JSON files from the tasks directory.
-// Malformed or unreadable files are skipped with a Warn log.
+// listBoardTasks reads all GTD task JSON files from the tasks directory.
+// Workflow tasks (status ∈ {queued,assigned,running,completed,failed}) and
+// malformed/unreadable files are skipped with a Warn log.
 func (a *restAPI) listBoardTasks() ([]boardTask, error) {
 	dir := a.boardTasksDir()
 	entries, err := os.ReadDir(dir)
@@ -82,6 +122,10 @@ func (a *restAPI) listBoardTasks() ([]boardTask, error) {
 		var t boardTask
 		if err := json.Unmarshal(data, &t); err != nil {
 			slog.Warn("rest: board task: skipping corrupt file", "file", name, "error", err)
+			continue
+		}
+		// Skip workflow tasks and tasks with no name field.
+		if t.Name == "" || !isGTDTask(t.Status) {
 			continue
 		}
 		if t.ID == "" {
@@ -167,6 +211,13 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		filtered = append(filtered, t)
 	}
 
+	// Sort newest-first by created_at.
+	sort.Slice(filtered, func(i, j int) bool {
+		ti, _ := time.Parse(time.RFC3339, filtered[i].CreatedAt)
+		tj, _ := time.Parse(time.RFC3339, filtered[j].CreatedAt)
+		return ti.After(tj)
+	})
+
 	total := len(filtered)
 
 	// Apply pagination.
@@ -181,6 +232,8 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 
 	// Build the response. BoardTaskListResponse.Items is an inline anonymous struct
 	// in the generated code, so we use a local shape that is JSON-identical.
+	// TODO: gen.BoardTaskListResponse.Items is an anonymous inline struct; use local shim until
+	// oapi-codegen generates a named type or the contract is updated.
 	// not-wire-format
 	type listItem struct { // not-wire-format
 		AgentId     *string                              `json:"agent_id,omitempty"`
@@ -192,8 +245,10 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		Status      gen.BoardTaskListResponseItemsStatus `json:"status"`
 		UpdatedAt   time.Time                            `json:"updated_at"`
 	}
+	// TODO: gen.BoardTaskListResponse.Items is an anonymous inline struct; use local shim until
+	// oapi-codegen generates a named type or the contract is updated.
 	// not-wire-format
-	type boardTaskListResp struct { // not-wire-format
+	type boardTaskListShim struct { // not-wire-format
 		Items []listItem `json:"items"`
 		Total int        `json:"total"`
 	}
@@ -213,7 +268,7 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	jsonOK(w, boardTaskListResp{Items: items, Total: total})
+	jsonOK(w, boardTaskListShim{Items: items, Total: total})
 }
 
 // handleBoardTaskGet handles GET /api/v1/board/tasks/{id}.
@@ -235,131 +290,207 @@ func (a *restAPI) handleBoardTaskGet(w http.ResponseWriter, r *http.Request, id 
 	jsonOK(w, toWireBoardTask(t))
 }
 
-// HandleBoardTasks dispatches GET /api/v1/board/tasks and GET /api/v1/board/tasks/{id}.
-// Write operations (POST/PUT/DELETE) are intentionally not supported here —
-// GTD board tasks are mutated exclusively through agent tools (system.task.*).
+// handleBoardTaskPost handles POST /api/v1/board/tasks → 201 Created.
+func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
+	var req gen.CreateBoardTaskJSONBody
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Name == "" {
+		jsonErr(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if len(req.Name) > 200 {
+		jsonErr(w, http.StatusBadRequest, "name must be 200 characters or fewer")
+		return
+	}
+
+	// Determine status; default to inbox.
+	status := "inbox"
+	if req.Status != nil && string(*req.Status) != "" {
+		status = string(*req.Status)
+	}
+	if !isGTDTask(status) {
+		jsonErr(w, http.StatusBadRequest, "status must be one of: inbox, next, active, waiting, done")
+		return
+	}
+
+	projectID := ""
+	if req.ProjectId != nil {
+		projectID = *req.ProjectId
+		if len(projectID) > 50 {
+			jsonErr(w, http.StatusBadRequest, "project_id must be 50 characters or fewer")
+			return
+		}
+	}
+
+	agentID := ""
+	if req.AgentId != nil {
+		agentID = *req.AgentId
+	}
+
+	description := ""
+	if req.Description != nil {
+		description = *req.Description
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	t := boardTask{
+		ID:          ulid.Make().String(),
+		Name:        req.Name,
+		Description: description,
+		Status:      status,
+		ProjectID:   projectID,
+		AgentID:     agentID,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+
+	if err := a.writeBoardTask(t); err != nil {
+		slog.Error("rest: board task: create failed", "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not create board task")
+		return
+	}
+
+	jsonCreated(w, toWireBoardTask(t))
+}
+
+// handleBoardTaskPut handles PUT /api/v1/board/tasks/{id} → 200 with updated task.
+func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid task ID")
+		return
+	}
+
+	// Read existing task (must be a GTD task — returns 404 if not found or not GTD).
+	existing, err := a.readBoardTask(id)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			jsonErr(w, http.StatusNotFound, "board task not found")
+			return
+		}
+		slog.Error("rest: board task: put read failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read board task")
+		return
+	}
+
+	var req gen.UpdateBoardTaskJSONBody
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Apply partial update (only provided non-nil fields).
+	if req.Name != nil {
+		if *req.Name == "" {
+			jsonErr(w, http.StatusBadRequest, "name must not be empty")
+			return
+		}
+		if len(*req.Name) > 200 {
+			jsonErr(w, http.StatusBadRequest, "name must be 200 characters or fewer")
+			return
+		}
+		existing.Name = *req.Name
+	}
+	if req.Description != nil {
+		existing.Description = *req.Description
+	}
+	if req.Status != nil {
+		newStatus := string(*req.Status)
+		if !isGTDTask(newStatus) {
+			jsonErr(w, http.StatusBadRequest, "status must be one of: inbox, next, active, waiting, done")
+			return
+		}
+		existing.Status = newStatus
+	}
+	if req.ProjectId != nil {
+		if len(*req.ProjectId) > 50 {
+			jsonErr(w, http.StatusBadRequest, "project_id must be 50 characters or fewer")
+			return
+		}
+		existing.ProjectID = *req.ProjectId
+	}
+	if req.AgentId != nil {
+		existing.AgentID = *req.AgentId
+	}
+
+	existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+
+	if err := a.writeBoardTask(existing); err != nil {
+		slog.Error("rest: board task: put write failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not update board task")
+		return
+	}
+
+	jsonOK(w, toWireBoardTask(existing))
+}
+
+// handleBoardTaskDelete handles DELETE /api/v1/board/tasks/{id} → 204 No Content.
+func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid task ID")
+		return
+	}
+
+	// Confirm the file exists and is a GTD task before deleting.
+	_, err := a.readBoardTask(id)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			jsonErr(w, http.StatusNotFound, "board task not found")
+			return
+		}
+		slog.Error("rest: board task: delete read failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read board task")
+		return
+	}
+
+	path := filepath.Join(a.boardTasksDir(), id+".json")
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			jsonErr(w, http.StatusNotFound, "board task not found")
+			return
+		}
+		slog.Error("rest: board task: delete failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not delete board task")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// HandleBoardTasks dispatches requests for /api/v1/board/tasks and /api/v1/board/tasks/{id}.
 func (a *restAPI) HandleBoardTasks(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	rest := strings.TrimPrefix(path, "/api/v1/board/tasks")
 
-	if rest != "" {
+	if len(rest) > 1 {
 		id := strings.TrimPrefix(rest, "/")
-		if r.Method != http.MethodGet {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		// Reject sub-paths (e.g. /api/v1/board/tasks/foo/bar).
+		if strings.Contains(id, "/") {
+			http.NotFound(w, r)
 			return
 		}
-		a.handleBoardTaskGet(w, r, id)
+		switch r.Method {
+		case http.MethodGet:
+			a.handleBoardTaskGet(w, r, id)
+		case http.MethodPut:
+			a.handleBoardTaskPut(w, r, id)
+		case http.MethodDelete:
+			a.handleBoardTaskDelete(w, r, id)
+		default:
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
 		return
 	}
 
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		a.handleBoardTaskList(w, r)
+	case http.MethodPost:
+		a.handleBoardTaskPost(w, r)
+	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
 	}
-	a.handleBoardTaskList(w, r)
-}
-
-// HandleTokenStats handles GET /api/v1/stats/tokens.
-// It returns per-agent token usage aggregated from SessionMeta.Stats across
-// all sessions. The optional ?period=month query param restricts aggregation
-// to the current calendar month (UTC). Absent or unrecognised period values
-// default to "month" per the OpenAPI spec.
-func (a *restAPI) HandleTokenStats(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	now := time.Now().UTC()
-	periodStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	periodEnd := periodStart.AddDate(0, 1, 0)
-
-	// agentAccum accumulates per-agent token counts.
-	// not-wire-format
-	type agentAccum struct { // not-wire-format
-		name      string
-		tokensIn  int
-		tokensOut int
-	}
-	byAgent := make(map[string]*agentAccum)
-
-	// ListAllSessions merges the shared store (new sessions) with all per-agent
-	// legacy stores, deduplicates, and returns a slice of *UnifiedMeta.
-	allSessions, errs := a.agentLoop.ListAllSessions()
-	for _, e := range errs {
-		slog.Warn("rest: token stats: partial session list error", "error", e)
-	}
-
-	registry := a.agentLoop.GetRegistry()
-
-	for _, sm := range allSessions {
-		// Apply month filter: keep sessions whose UpdatedAt falls within [periodStart, periodEnd).
-		if sm.UpdatedAt.Before(periodStart) || !sm.UpdatedAt.Before(periodEnd) {
-			continue
-		}
-
-		// PostLoad backfills AgentIDs from legacy AgentID for sessions that pre-date
-		// the multi-agent model.
-		sm.PostLoad()
-
-		for _, agentID := range sm.AgentIDs {
-			if agentID == "" {
-				continue
-			}
-			acc, ok := byAgent[agentID]
-			if !ok {
-				name, _ := registry.GetAgentName(agentID)
-				if name == "" {
-					name = agentID
-				}
-				acc = &agentAccum{name: name}
-				byAgent[agentID] = acc
-			}
-			acc.tokensIn += sm.Stats.TokensIn
-			acc.tokensOut += sm.Stats.TokensOut
-		}
-	}
-
-	// Build the wire response using local structs whose JSON tags match the
-	// generated gen.TokenUsageSummary shape exactly. The generated type uses
-	// an inline anonymous struct for the Agents element, which cannot be
-	// constructed directly from outside the package.
-	// not-wire-format
-	type agentEntry struct { // not-wire-format
-		AgentId     string `json:"agent_id"`
-		AgentName   string `json:"agent_name"`
-		TokensIn    int    `json:"tokens_in"`
-		TokensOut   int    `json:"tokens_out"`
-		TokensTotal int    `json:"tokens_total"`
-	}
-	// not-wire-format
-	type tokenUsageResp struct { // not-wire-format
-		Agents      []agentEntry `json:"agents"`
-		PeriodEnd   time.Time    `json:"period_end"`
-		PeriodStart time.Time    `json:"period_start"`
-	}
-
-	entries := make([]agentEntry, 0, len(byAgent))
-	for agentID, acc := range byAgent {
-		entries = append(entries, agentEntry{
-			AgentId:     agentID,
-			AgentName:   acc.name,
-			TokensIn:    acc.tokensIn,
-			TokensOut:   acc.tokensOut,
-			TokensTotal: acc.tokensIn + acc.tokensOut,
-		})
-	}
-
-	// Insertion sort for a stable, deterministic response order by agent_id.
-	for i := 1; i < len(entries); i++ {
-		for j := i; j > 0 && entries[j].AgentId < entries[j-1].AgentId; j-- {
-			entries[j], entries[j-1] = entries[j-1], entries[j]
-		}
-	}
-
-	jsonOK(w, tokenUsageResp{
-		Agents:      entries,
-		PeriodEnd:   periodEnd,
-		PeriodStart: periodStart,
-	})
 }
