@@ -380,10 +380,10 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonCreated(w, toWireBoardTask(t))
 	if a.auditor != nil {
 		_ = a.auditor.Log(&audit.Entry{Event: "board_task.create", Decision: "allowed", Details: map[string]any{"id": t.ID}})
 	}
+	jsonCreated(w, toWireBoardTask(t))
 }
 
 // handleBoardTaskPut handles PUT /api/v1/board/tasks/{id} → 200 with updated task.
@@ -470,10 +470,10 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
-	jsonOK(w, toWireBoardTask(existing))
 	if a.auditor != nil {
 		_ = a.auditor.Log(&audit.Entry{Event: "board_task.update", Decision: "allowed", Details: map[string]any{"id": id}})
 	}
+	jsonOK(w, toWireBoardTask(existing))
 }
 
 // handleBoardTaskDelete handles DELETE /api/v1/board/tasks/{id} → 204 No Content.
@@ -506,10 +506,10 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
 	if a.auditor != nil {
 		_ = a.auditor.Log(&audit.Entry{Event: "board_task.delete", Decision: "allowed", Details: map[string]any{"id": id}})
 	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // HandleBoardTasks dispatches requests for /api/v1/board/tasks and /api/v1/board/tasks/{id}.

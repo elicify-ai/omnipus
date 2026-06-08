@@ -123,10 +123,12 @@ func scanGTDTasks(home string, fn func(id string, raw map[string]any)) error {
 		}
 		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
+			slog.Warn("rest_projects: scanGTDTasks: failed to read task file", "file", e.Name(), "error", err)
 			continue
 		}
 		var raw map[string]any
-		if json.Unmarshal(data, &raw) != nil {
+		if err := json.Unmarshal(data, &raw); err != nil {
+			slog.Warn("rest_projects: scanGTDTasks: failed to parse task file", "file", e.Name(), "error", err)
 			continue
 		}
 		status, _ := raw["status"].(string)
@@ -160,11 +162,15 @@ func computeProjectTaskCounts(home string) (map[string]int, error) {
 // Only GTD tasks (status ∈ {inbox,next,active,waiting,done}) are counted.
 func countTasksForProject(home, projectID string) int {
 	count := 0
-	_ = scanGTDTasks(home, func(_ string, raw map[string]any) {
+	if err := scanGTDTasks(home, func(_ string, raw map[string]any) {
 		if pid, _ := raw["project_id"].(string); pid == projectID {
 			count++
 		}
-	})
+	}); err != nil {
+		slog.Warn("rest_projects: countTasksForProject: failed to scan tasks",
+			"project_id", projectID, "error", err)
+		return 0
+	}
 	return count
 }
 
@@ -223,9 +229,9 @@ func projectToWire(p storedProject, taskCount int) gen.Project {
 // deleteTasksForProject removes all GTD task files whose project_id matches projectID.
 // Only GTD tasks (status ∈ {inbox,next,active,waiting,done}) are deleted; workflow
 // tasks from pkg/taskstore share the same directory and are preserved.
-func deleteTasksForProject(home, projectID string) {
+func deleteTasksForProject(home, projectID string) error {
 	tasksDir := filepath.Join(home, "tasks")
-	_ = scanGTDTasks(home, func(id string, raw map[string]any) {
+	if err := scanGTDTasks(home, func(id string, raw map[string]any) {
 		if pid, _ := raw["project_id"].(string); pid == projectID {
 			taskPath := filepath.Join(tasksDir, id+".json")
 			if err := os.Remove(taskPath); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -233,7 +239,10 @@ func deleteTasksForProject(home, projectID string) {
 					"file", id+".json", "error", err)
 			}
 		}
-	})
+	}); err != nil {
+		return fmt.Errorf("scan tasks for cascade delete: %w", err)
+	}
+	return nil
 }
 
 // loadProject reads a project by ID and writes the appropriate HTTP error if absent.
@@ -408,10 +417,10 @@ func (a *restAPI) handleProjectPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wire := projectToWire(p, 0)
-	jsonCreated(w, wire)
 	if a.auditor != nil {
 		_ = a.auditor.Log(&audit.Entry{Event: "project.create", Decision: "allowed", Details: map[string]any{"id": p.ID, "name": p.Name}})
 	}
+	jsonCreated(w, wire)
 }
 
 func (a *restAPI) handleProjectGet(w http.ResponseWriter, r *http.Request, id string) {
@@ -518,10 +527,10 @@ func (a *restAPI) handleProjectPut(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 
-	jsonOK(w, projectToWire(p, countTasksForProject(a.homePath, id)))
 	if a.auditor != nil {
 		_ = a.auditor.Log(&audit.Entry{Event: "project.update", Decision: "allowed", Details: map[string]any{"id": id}})
 	}
+	jsonOK(w, projectToWire(p, countTasksForProject(a.homePath, id)))
 }
 
 func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id string) {
@@ -536,7 +545,13 @@ func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id
 	}
 
 	// Cascade: tasks → link entries → project file.
-	deleteTasksForProject(a.homePath, id)
+	// Abort if the task scan fails — deleting the project file while task files
+	// remain on disk would orphan them (B5-003).
+	if err := deleteTasksForProject(a.homePath, id); err != nil {
+		slog.Error("rest: delete project: cascade tasks", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "failed to scan tasks for cascade delete")
+		return
+	}
 	systools.RemoveLinksForProject(a.homePath, id)
 
 	path := filepath.Join(a.homePath, "projects", id+".json")
@@ -546,10 +561,10 @@ func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
 	if a.auditor != nil {
 		_ = a.auditor.Log(&audit.Entry{Event: "project.delete", Decision: "allowed", Details: map[string]any{"id": id}})
 	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *restAPI) handleProjectSessions(w http.ResponseWriter, r *http.Request, id string) {

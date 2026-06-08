@@ -2614,8 +2614,8 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/status", a.withAuth(a.HandleStatus))
 	cm.RegisterHTTPHandler("/api/v1/tasks", a.withAuth(a.HandleTasks))
 	cm.RegisterHTTPHandler("/api/v1/tasks/", a.withAuth(a.HandleTasks))
-	cm.RegisterHTTPHandler("/api/v1/projects", a.withAuth(a.HandleProjects))
-	cm.RegisterHTTPHandler("/api/v1/projects/", a.withAuth(a.HandleProjects))
+	cm.RegisterHTTPHandler("/api/v1/projects", a.withAuth(withRateLimit(configLimiter, a.HandleProjects)))
+	cm.RegisterHTTPHandler("/api/v1/projects/", a.withAuth(withRateLimit(configLimiter, a.HandleProjects)))
 	cm.RegisterHTTPHandler("/api/v1/providers", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/providers/", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/mcp-servers", a.withAuth(a.HandleMCPServers))
@@ -2745,12 +2745,12 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// GTD board task endpoints (Wave 2b, Level 1 Project & Task Mgmt).
 	// Full CRUD — GET list/item, POST create, PUT update, DELETE remove.
 	// Traces to: contracts/components/schemas/BoardTask.yaml, BoardTaskListResponse.yaml.
-	cm.RegisterHTTPHandler("/api/v1/board/tasks", a.withAuth(a.HandleBoardTasks))
-	cm.RegisterHTTPHandler("/api/v1/board/tasks/", a.withAuth(a.HandleBoardTasks))
+	cm.RegisterHTTPHandler("/api/v1/board/tasks", a.withAuth(withRateLimit(configLimiter, a.HandleBoardTasks)))
+	cm.RegisterHTTPHandler("/api/v1/board/tasks/", a.withAuth(withRateLimit(configLimiter, a.HandleBoardTasks)))
 
 	// Token usage stats endpoint (Wave 2b).
 	// Traces to: contracts/components/schemas/TokenUsageSummary.yaml.
-	cm.RegisterHTTPHandler("/api/v1/stats/tokens", a.withAuth(a.HandleTokenStats))
+	cm.RegisterHTTPHandler("/api/v1/stats/tokens", a.withAuth(withRateLimit(configLimiter, a.HandleTokenStats)))
 }
 
 // registerPreviewEndpoints registers /preview/, /serve/, and /dev/ on the

@@ -357,9 +357,16 @@ func (t *ProjectDeleteTool) Execute(_ context.Context, args map[string]any) *too
 	}
 
 	// Step 1: cascade-delete tasks
-	tasks, _ := listEntities[task](tasksDir(t.deps.Home))
+	tasks, err := listEntities[task](tasksDir(t.deps.Home))
+	if err != nil {
+		slog.Warn("sysagent: project cascade delete: failed to list tasks", "project_id", id, "error", err)
+		// Continue with partial deletion — log but don't abort the project delete
+	}
 	tasksDeleted := 0
 	for _, tk := range tasks {
+		if !gtdStatusSet[tk.Status] {
+			continue
+		}
 		if tk.ProjectID == id {
 			if err := deleteEntity(tasksDir(t.deps.Home), tk.ID); err != nil {
 				slog.Warn("sysagent: project cascade delete: failed to delete task",
