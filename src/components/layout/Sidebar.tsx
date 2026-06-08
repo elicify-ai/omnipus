@@ -84,7 +84,11 @@ export function Sidebar() {
   })
 
   // Archived projects query — only enabled when archive section is open
-  const { data: archivedProjects = [] } = useQuery({
+  const {
+    data: archivedProjects = [],
+    isError: archivedError,
+    refetch: refetchArchived,
+  } = useQuery({
     queryKey: projectsQueryKeys.list({ status: 'archived' }),
     queryFn: () => fetchProjects({ status: 'archived' }),
     enabled: archiveOpen,
@@ -360,6 +364,19 @@ export function Sidebar() {
             {archiveOpen ? <CaretDown size={10} /> : <CaretRight size={10} />}
             Archive
           </button>
+
+          {archiveOpen && archivedError && (
+            <div className="flex items-center justify-between gap-2 px-4 py-2 text-xs text-[var(--color-error)]">
+              <span>Could not load archived projects</span>
+              <button
+                type="button"
+                onClick={() => refetchArchived()}
+                className="text-[var(--color-accent)] hover:underline flex-shrink-0"
+              >
+                Retry
+              </button>
+            </div>
+          )}
 
           {archiveOpen && archivedProjects.map((project) => {
             const isActive = activeProjectId === project.id

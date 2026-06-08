@@ -1640,7 +1640,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // replay_message arrives, so tool calls in the final assistant entry
                 // are never baked onto message.tool_calls — VirtualAssistantMessageRow
                 // then renders no tool block / no iframe.
-                if (wasReplaying && lastMsgId && draft.toolCallOrder.length > 0) {
+                if (lastMsgId && draft.toolCallOrder.length > 0) {
                   const baked = draft.toolCallOrder
                     .filter((id) => draft.toolCalls[id])
                     .map((id) => {

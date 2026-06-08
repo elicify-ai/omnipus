@@ -403,8 +403,8 @@ export function TasksScreen() {
 
   // Board tasks query — filtered by active project if set
   const { data: tasks = [], isError: tasksError, isLoading } = useQuery({
-    queryKey: boardTasksQueryKeys.list({ project_id: activeProjectId ?? undefined }),
-    queryFn: () => fetchBoardTasks({ project_id: activeProjectId ?? undefined }),
+    queryKey: boardTasksQueryKeys.list(activeProjectId ? { project_id: activeProjectId } : undefined),
+    queryFn: () => fetchBoardTasks(activeProjectId ? { project_id: activeProjectId } : undefined),
     refetchInterval: 15_000,
     staleTime: 10_000,
   })

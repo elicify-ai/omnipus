@@ -164,7 +164,7 @@ export function resetConfigCoercionCount(): void {
 // Expose counters on window.__omnipus_test_hooks in DEV/test builds
 // so Playwright tests can assert on validation health without reaching into module
 // internals.
-if ((import.meta.env.DEV || import.meta.env.MODE === 'test') && typeof window !== 'undefined' && !navigator.webdriver) {
+if ((import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver)) && typeof window !== 'undefined') {
   const w = window as unknown as { __omnipus_test_hooks?: Record<string, unknown> }
   w.__omnipus_test_hooks ??= {}
   w.__omnipus_test_hooks.getApiSchemaErrorCount = getApiSchemaErrorCount
@@ -2091,7 +2091,12 @@ export function fetchProjectSessions(id: string): Promise<ProjectSessionLink[]> 
 // openapi-types (contract-first #8). See contracts/components/schemas/BoardTask*.yaml.
 
 export const boardTasksQueryKeys = {
-  list: (params?: { project_id?: string; status?: string }) => ['board-tasks', params ?? {}] as const,
+  list: (params?: { project_id?: string; status?: string }) => {
+    const cleaned = params
+      ? Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined))
+      : {}
+    return ['board-tasks', cleaned] as const
+  },
   detail: (id: string) => ['board-tasks', id] as const,
 }
 

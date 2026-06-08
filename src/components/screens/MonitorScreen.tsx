@@ -100,6 +100,18 @@ export function MonitorScreen() {
         </h2>
       </div>
 
+      {/* Activity section (FR-021) */}
+      <section className="border-b border-[var(--color-border)]">
+        <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
+          <h3 className="text-xs font-semibold uppercase tracking-widest text-[var(--color-muted)]">
+            Activity
+          </h3>
+        </div>
+        <p className="px-4 py-3 text-sm text-[var(--color-muted)]">
+          No recent activity.
+        </p>
+      </section>
+
       {/* Schedules section */}
       <section className="border-b border-[var(--color-border)]">
         <div className="flex items-center justify-between px-4 py-2.5">
@@ -121,13 +133,25 @@ export function MonitorScreen() {
       </section>
 
       {/* Token Usage section */}
-      <section>
+      <section className="border-b border-[var(--color-border)]">
         <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
           <h3 className="text-xs font-semibold uppercase tracking-widest text-[var(--color-muted)]">
             Token Usage (this month)
           </h3>
         </div>
         <TokenUsageSection />
+      </section>
+
+      {/* Audit Log section (FR-021) */}
+      <section>
+        <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
+          <h3 className="text-xs font-semibold uppercase tracking-widest text-[var(--color-muted)]">
+            Audit Log
+          </h3>
+        </div>
+        <p className="px-4 py-3 text-sm text-[var(--color-muted)]">
+          Audit log requires admin access.
+        </p>
       </section>
 
       {/* New schedule slide-over */}

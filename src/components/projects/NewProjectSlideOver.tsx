@@ -42,7 +42,7 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof FormState, string>>>({})
 
-  const { data: agents = [] } = useQuery({
+  const { data: agents = [], isLoading: agentsLoading, isError: agentsError } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
     staleTime: 60_000,
@@ -176,35 +176,66 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
           </div>
 
           {/* Core team — agent multi-select (US-10 AC #5) */}
-          {agents.length > 0 && (
-            <div className="flex flex-col gap-1.5">
-              <Label className="text-[var(--color-secondary)]">
-                Core team
-              </Label>
-              {/* Selected agent chips */}
-              {form.core_team.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {form.core_team.map((agentId) => {
-                    const agent = agents.find((a) => a.id === agentId)
-                    return (
-                      <span
-                        key={agentId}
-                        className="flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-secondary)]"
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="new-project-core-team" className="text-[var(--color-secondary)]">
+              Core team
+            </Label>
+            {/* Selected agent chips */}
+            {form.core_team.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {form.core_team.map((agentId) => {
+                  const agent = agents.find((a) => a.id === agentId)
+                  return (
+                    <span
+                      key={agentId}
+                      className="flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-secondary)]"
+                    >
+                      {agent?.name ?? agentId}
+                      <button
+                        type="button"
+                        onClick={() => setForm((s) => ({ ...s, core_team: s.core_team.filter((id) => id !== agentId) }))}
+                        aria-label={`Remove ${agent?.name ?? agentId} from core team`}
+                        className="rounded-full text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
                       >
-                        {agent?.name ?? agentId}
-                        <button
-                          type="button"
-                          onClick={() => setForm((s) => ({ ...s, core_team: s.core_team.filter((id) => id !== agentId) }))}
-                          aria-label={`Remove ${agent?.name ?? agentId} from core team`}
-                          className="rounded-full text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
-                        >
-                          <X size={10} />
-                        </button>
-                      </span>
-                    )
-                  })}
-                </div>
-              )}
+                        <X size={10} />
+                      </button>
+                    </span>
+                  )
+                })}
+              </div>
+            )}
+            {agentsError ? (
+              <>
+                <p className="text-xs text-[var(--color-error)]">
+                  Could not load agents — enter agent IDs manually
+                </p>
+                <Input
+                  id="new-project-core-team"
+                  value={form.core_team.join(', ')}
+                  onChange={(e) =>
+                    setForm((s) => ({
+                      ...s,
+                      core_team: e.target.value
+                        .split(',')
+                        .map((id) => id.trim())
+                        .filter(Boolean),
+                    }))
+                  }
+                  placeholder="agent-id-1, agent-id-2"
+                  className="bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)]"
+                />
+              </>
+            ) : agentsLoading ? (
+              <Select disabled value="">
+                <SelectTrigger
+                  id="new-project-core-team"
+                  className="bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)]"
+                >
+                  <SelectValue placeholder="Loading agents…" />
+                </SelectTrigger>
+                <SelectContent />
+              </Select>
+            ) : (
               <Select
                 value=""
                 onValueChange={(agentId) => {
@@ -229,8 +260,8 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
                     ))}
                 </SelectContent>
               </Select>
-            </div>
-          )}
+            )}
+          </div>
 
           <div className="flex-1" />
 
