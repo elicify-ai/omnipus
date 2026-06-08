@@ -6,6 +6,7 @@ package agent
 
 import (
 	"context"
+	"log/slog"
 
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
@@ -32,6 +33,11 @@ func (a *projectLinkerAdapter) AfterTool(
 	if result.Tool == "system.task.create" || result.Tool == "system.task.update" {
 		if projectID, _ := result.Arguments["project_id"].(string); projectID != "" {
 			sessionID := tools.ToolTranscriptSessionID(ctx)
+			if sessionID == "" {
+				slog.Warn("project-session-linker: skipping link for non-tracked session",
+					"tool", result.Tool, "project_id", projectID)
+				return result, HookDecision{Action: HookActionContinue}, nil
+			}
 			a.linker.LinkSession(projectID, sessionID)
 		}
 	}

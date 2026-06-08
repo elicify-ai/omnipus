@@ -60,7 +60,7 @@ func TestRegistry_ToolDepsContract(t *testing.T) {
 		}
 	})
 
-	t.Run("AllTools_returns_exactly_41", func(t *testing.T) {
+	t.Run("AllTools_returns_exactly_42", func(t *testing.T) {
 		all := AllTools(nil, nil)
 		if len(all) != 42 {
 			t.Errorf("AllTools(nil, nil) returned %d tools; want == 42 (FR-001/FR-002)", len(all))
