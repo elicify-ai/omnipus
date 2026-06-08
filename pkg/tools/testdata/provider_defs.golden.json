@@ -183,14 +183,14 @@
   },
   {
     "name": "system.project.create",
-    "description": "Create a new project.\nParameters: name (required), description, color, agent_ids.",
+    "description": "Create a new project to group related tasks. Call this when the user mentions starting a new project, initiative, or area of work. Returns the created project's id — pass this id to system.task.create when creating tasks for the project.\nParameters: name (required, project title), description (optional, free text), core_team (optional, list of agent IDs who default to this project — not an access gate), repository (optional, git URL).",
     "scope": "core",
     "category": "system",
     "source": "builtin"
   },
   {
     "name": "system.project.delete",
-    "description": "Delete a project. Parameters: id (required), confirm (bool, must be true).",
+    "description": "Delete a project and all its tasks. This is irreversible — all GTD tasks belonging to the project are permanently deleted. Call system.project.list first to find the project id. Requires confirm:true.\nParameters: id (required), confirm (bool, must be true to prevent accidental deletion).",
     "scope": "core",
     "category": "system",
     "source": "builtin"
@@ -204,14 +204,14 @@
   },
   {
     "name": "system.project.list",
-    "description": "List all projects with task counts. No parameters required.",
+    "description": "List all active projects with their task counts. Call this to find project ids before calling system.task.create, system.task.list, or system.project.update. Returns newest projects first.\nParameters: status (optional: active/archived/all, defaults to active).",
     "scope": "core",
     "category": "system",
     "source": "builtin"
   },
   {
     "name": "system.project.update",
-    "description": "Update an existing project.\nParameters: id (required), name, description, color, agent_ids.",
+    "description": "Update an existing project's name, description, status, pin state, core team, or repository. Call this when the user wants to rename, archive, pin, or reconfigure a project. Use system.project.list first to find the project id.\nParameters: id (required, from system.project.list), name, description, status (active/archived), pinned (bool), pin_order (int), core_team (list of agent IDs), repository (git URL). Only provided fields are updated.",
     "scope": "core",
     "category": "system",
     "source": "builtin"
@@ -267,7 +267,7 @@
   },
   {
     "name": "system.task.create",
-    "description": "Create a task on the GTD board.\nParameters: name (required), description, project_id, agent_id, status (inbox/next/active/waiting/done).",
+    "description": "Create a task on the GTD board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a project name, call system.project.list first to get the project_id.\nParameters: name (required, the task title), description (optional), project_id (optional, from system.project.list), agent_id (optional, agent to assign), status (optional: inbox=new/unscheduled, next=prioritized for soon, active=in-progress, waiting=blocked/waiting, done=complete — defaults to inbox).",
     "scope": "core",
     "category": "system",
     "source": "builtin"
@@ -288,7 +288,7 @@
   },
   {
     "name": "system.task.update",
-    "description": "Update a task's status, assignment, or details.\nParameters: id (required), name, description, status, agent_id, project_id.",
+    "description": "Update an existing GTD board task. Call this to change status, reassign, rename, or link to a project. Use system.task.list first to find the task id. If linking to a project by name, call system.project.list first to get the project_id.\nParameters: id (required, from system.task.list), name, description, project_id (from system.project.list), agent_id, status (inbox=new/unscheduled, next=prioritized, active=in-progress, waiting=blocked, done=complete). Only provided fields are updated.",
     "scope": "core",
     "category": "system",
     "source": "builtin"
