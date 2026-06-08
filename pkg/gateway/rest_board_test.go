@@ -318,6 +318,27 @@ func TestHandleBoardTasks_Boundaries(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, wExact.Code,
 		"POST /board/tasks with name exactly 200 chars must return 201; body=%s", wExact.Body.String())
 
+	// POST with description > 2000 chars → 400.
+	longDesc := fmt.Sprintf(`{"name":"ok","description":%q}`, strings.Repeat("d", 2001))
+	wLongDesc := httptest.NewRecorder()
+	rLongDesc := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(longDesc))
+	rLongDesc.Header.Set("Content-Type", "application/json")
+	rLongDesc.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wLongDesc, rLongDesc)
+	assert.Equal(t, http.StatusBadRequest, wLongDesc.Code,
+		"POST /board/tasks with description > 2000 chars must return 400; body=%s", wLongDesc.Body.String())
+
+	// PUT with description > 2000 chars → 400.
+	descTask := createBoardTaskViaAPI(t, api, "desc-test-task", "inbox")
+	longDescPut := fmt.Sprintf(`{"description":%q}`, strings.Repeat("d", 2001))
+	wPutLongDesc := httptest.NewRecorder()
+	rPutLongDesc := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+descTask.Id, strings.NewReader(longDescPut))
+	rPutLongDesc.Header.Set("Content-Type", "application/json")
+	rPutLongDesc.URL.Path = "/api/v1/board/tasks/" + descTask.Id
+	api.HandleBoardTasks(wPutLongDesc, rPutLongDesc)
+	assert.Equal(t, http.StatusBadRequest, wPutLongDesc.Code,
+		"PUT /board/tasks/{id} with description > 2000 chars must return 400; body=%s", wPutLongDesc.Body.String())
+
 	// GET ?status=queued → 400 (queued is a workflow task status, not a valid GTD status filter).
 	wQueued := httptest.NewRecorder()
 	rQueued := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks?status=queued", nil)

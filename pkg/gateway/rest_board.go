@@ -351,6 +351,10 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 	description := ""
 	if req.Description != nil {
 		description = *req.Description
+		if len(description) > 2000 {
+			jsonErr(w, http.StatusBadRequest, "description must be 2000 characters or fewer")
+			return
+		}
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -415,6 +419,10 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		existing.Name = *req.Name
 	}
 	if req.Description != nil {
+		if len(*req.Description) > 2000 {
+			jsonErr(w, http.StatusBadRequest, "description must be 2000 characters or fewer")
+			return
+		}
 		existing.Description = *req.Description
 	}
 	if req.Status != nil {
