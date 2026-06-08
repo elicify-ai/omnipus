@@ -105,6 +105,14 @@ import {
   ScheduleRunResult as ScheduleRunResultSchema,
   // #264 Notifications (contract-first #8):
   NotificationList as NotificationListSchema,
+  // Level-1 projects + board tasks + token stats (contract-first #8):
+  Project as ProjectSchema,
+  ProjectSessionLink as ProjectSessionLinkSchema,
+  BoardTask as BoardTaskSchema,
+  BoardTaskListResponse as BoardTaskListResponseSchema,
+  TokenUsageSummary as TokenUsageSummarySchema,
+  createBoardTask_Body as CreateBoardTaskBodySchema,
+  updateBoardTask_Body as UpdateBoardTaskBodySchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -259,6 +267,14 @@ import type {
   AgentUpdateRequest,
   AgentCreateRequest,
   ChannelRouting,
+  // Level-1 projects + board tasks + token stats (contract-first #8):
+  Project,
+  ProjectCreateRequest,
+  ProjectUpdateRequest,
+  BoardTask,
+  BoardTaskListResponse,
+  ProjectSessionLink,
+  TokenUsageSummary,
   // #264 Schedules (contract-first #8):
   Schedule,
   ScheduleCreate,
@@ -349,6 +365,14 @@ export type {
   AgentUpdateRequest,
   AgentCreateRequest,
   ChannelRouting,
+  // Level-1 projects + board tasks + token stats:
+  Project,
+  ProjectCreateRequest,
+  ProjectUpdateRequest,
+  BoardTask,
+  BoardTaskListResponse,
+  ProjectSessionLink,
+  TokenUsageSummary,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -2012,5 +2036,109 @@ export function fetchSandboxStatus(): Promise<SandboxStatus> {
 export function fetchToolResult(sessionId: string, ref: string): Promise<unknown> {
   return request<unknown>(
     `/sessions/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(ref)}`,
+  )
+}
+
+// ── Level-1 Projects ──────────────────────────────────────────────────────────
+//
+// Projects are lightweight metadata records (no filesystem dirs). All types are
+// re-exported from generated openapi-types (contract-first #8).
+// See contracts/components/schemas/Project*.yaml.
+
+export const projectsQueryKeys = {
+  list: (params?: { status?: string }) => ['projects', params] as const,
+  detail: (id: string) => ['projects', id] as const,
+  sessions: (id: string) => ['projects', id, 'sessions'] as const,
+}
+
+export function fetchProjects(params?: { status?: string }): Promise<Project[]> {
+  const qs = params?.status ? '?' + new URLSearchParams({ status: params.status }).toString() : ''
+  return request<Project[]>(`/projects${qs}`, undefined, z.array(ProjectSchema) as ZodType<Project[]>)
+}
+
+export function createProject(body: ProjectCreateRequest): Promise<Project> {
+  return request<Project>(
+    '/projects',
+    { method: 'POST', body: JSON.stringify(body) },
+    ProjectSchema as ZodType<Project>,
+  )
+}
+
+export function updateProject(id: string, body: ProjectUpdateRequest): Promise<Project> {
+  return request<Project>(
+    `/projects/${encodeURIComponent(id)}`,
+    { method: 'PUT', body: JSON.stringify(body) },
+    ProjectSchema as ZodType<Project>,
+  )
+}
+
+export function deleteProject(id: string): Promise<void> {
+  return request<void>(`/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export function fetchProjectSessions(id: string): Promise<ProjectSessionLink[]> {
+  return request<ProjectSessionLink[]>(
+    `/projects/${encodeURIComponent(id)}/sessions`,
+    undefined,
+    z.array(ProjectSessionLinkSchema) as ZodType<ProjectSessionLink[]>,
+  )
+}
+
+// ── GTD Board Tasks ───────────────────────────────────────────────────────────
+//
+// Board tasks are the GTD Kanban items. All types are re-exported from generated
+// openapi-types (contract-first #8). See contracts/components/schemas/BoardTask*.yaml.
+
+export const boardTasksQueryKeys = {
+  list: (params?: { project_id?: string; status?: string }) => ['board-tasks', params] as const,
+  detail: (id: string) => ['board-tasks', id] as const,
+}
+
+export function fetchBoardTasks(params?: { project_id?: string; status?: string }): Promise<BoardTask[]> {
+  const search = new URLSearchParams()
+  if (params?.project_id) search.set('project_id', params.project_id)
+  if (params?.status) search.set('status', params.status)
+  const qs = search.toString() ? '?' + search.toString() : ''
+  return request<BoardTaskListResponse>(
+    `/board/tasks${qs}`,
+    undefined,
+    BoardTaskListResponseSchema as ZodType<BoardTaskListResponse>,
+  ).then((res) => res.items)
+}
+
+export function createBoardTask(body: z.infer<typeof CreateBoardTaskBodySchema>): Promise<BoardTask> {
+  return request<BoardTask>(
+    '/board/tasks',
+    { method: 'POST', body: JSON.stringify(body) },
+    BoardTaskSchema as ZodType<BoardTask>,
+  )
+}
+
+export function updateBoardTask(id: string, body: z.infer<typeof UpdateBoardTaskBodySchema>): Promise<BoardTask> {
+  return request<BoardTask>(
+    `/board/tasks/${encodeURIComponent(id)}`,
+    { method: 'PUT', body: JSON.stringify(body) },
+    BoardTaskSchema as ZodType<BoardTask>,
+  )
+}
+
+export function deleteBoardTask(id: string): Promise<void> {
+  return request<void>(`/board/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+// ── Token Usage Stats ─────────────────────────────────────────────────────────
+//
+// Token usage summary by agent for the current month.
+// See contracts/components/schemas/TokenUsageSummary.yaml.
+
+export const tokenStatsQueryKeys = {
+  monthly: () => ['token-stats', 'month'] as const,
+}
+
+export function fetchTokenStats(): Promise<TokenUsageSummary> {
+  return request<TokenUsageSummary>(
+    '/stats/tokens?period=month',
+    undefined,
+    TokenUsageSummarySchema as ZodType<TokenUsageSummary>,
   )
 }

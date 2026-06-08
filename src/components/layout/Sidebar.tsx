@@ -3,7 +3,8 @@ import { Link, useLocation, useNavigate } from '@tanstack/react-router'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ChatCircle,
-  Gauge,
+  CheckSquare,
+  ChartBar,
   Robot,
   PlugsConnected,
   PuzzlePiece,
@@ -11,20 +12,29 @@ import {
   PushPin,
   PushPinSlash,
   SignOut,
+  Plus,
+  Folder,
 } from '@phosphor-icons/react'
+import { useQuery } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
 import { useChatStore } from '@/store/chat'
 import { useAuthStore } from '@/store/auth'
+import { useProjectsStore } from '@/store/projectsStore'
+import { fetchProjects, projectsQueryKeys } from '@/lib/api'
+import { NewProjectSlideOver } from '@/components/projects/NewProjectSlideOver'
 import { cn } from '@/lib/utils'
 import avatarUrl from '@/assets/logo/omnipus-avatar.svg?url'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Chat', Icon: ChatCircle },
-  { to: '/command-center', label: 'Command Center', Icon: Gauge },
+  { to: '/tasks', label: 'Tasks', Icon: CheckSquare },
+  { to: '/monitor', label: 'Monitor', Icon: ChartBar },
   { to: '/agents', label: 'Agents', Icon: Robot },
   { to: '/channels', label: 'Channels', Icon: PlugsConnected },
   { to: '/skills', label: 'Skills & Tools', Icon: PuzzlePiece },
 ] as const
+
+const PROJECT_COLLAPSE_THRESHOLD = 5
 
 // US-5: Sidebar — overlay default, pin option, Framer Motion, Zustand
 export function Sidebar() {
@@ -32,6 +42,10 @@ export function Sidebar() {
   const pendingCount = useChatStore((s) => s.pendingApprovals.length)
   const location = useLocation()
   const navigate = useNavigate()
+  const { activeProjectId, setActiveProjectId } = useProjectsStore()
+
+  const [newProjectOpen, setNewProjectOpen] = useState(false)
+  const [projectsExpanded, setProjectsExpanded] = useState(false)
 
   // Track whether the viewport is wide enough to allow pinning (≥1024px).
   const [canPin, setCanPin] = useState<boolean>(
@@ -50,6 +64,23 @@ export function Sidebar() {
     useAuthStore.getState().clearAuth()
     navigate({ to: '/login' })
   }, [navigate])
+
+  // Projects query — refetch every 30s
+  const { data: projects = [], isLoading: projectsLoading } = useQuery({
+    queryKey: projectsQueryKeys.list({ status: 'active' }),
+    queryFn: () => fetchProjects({ status: 'active' }),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+  })
+
+  // API returns pinned-first then newest-first already; just respect that.
+  const pinnedProjects = projects.filter((p) => p.pinned)
+  const unpinnedProjects = projects.filter((p) => !p.pinned)
+  const hasMore = unpinnedProjects.length > PROJECT_COLLAPSE_THRESHOLD
+  const visibleUnpinned = projectsExpanded
+    ? unpinnedProjects
+    : unpinnedProjects.slice(0, PROJECT_COLLAPSE_THRESHOLD)
+  const visibleProjects = [...pinnedProjects, ...visibleUnpinned]
 
   // US-5: Cmd+B / Ctrl+B keyboard shortcut + Escape to close
   const handleKeydown = useCallback(
@@ -110,11 +141,11 @@ export function Sidebar() {
         </span>
       </div>
 
-      {/* Primary nav */}
+      {/* Primary nav + Projects section */}
       <div className="flex-1 overflow-y-auto py-3">
         {NAV_ITEMS.map(({ to, label, Icon }) => {
           const isActive = location.pathname === to
-          const badge = to === '/command-center' && pendingCount > 0 ? pendingCount : null
+          const badge = to === '/tasks' && pendingCount > 0 ? pendingCount : null
           return (
             <Link
               key={to}
@@ -146,6 +177,102 @@ export function Sidebar() {
             </Link>
           )
         })}
+
+        {/* Projects section */}
+        <div className="mt-3 mb-1">
+          {/* Section header */}
+          <div className="flex items-center justify-between px-4 py-1">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
+              Projects
+            </span>
+            <button
+              type="button"
+              onClick={() => setNewProjectOpen(true)}
+              aria-label="New project"
+              className="rounded p-0.5 text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+            >
+              <Plus size={14} />
+            </button>
+          </div>
+
+          {/* Loading skeleton */}
+          {projectsLoading && (
+            <div className="flex flex-col gap-1 px-4 py-1">
+              {[1, 2, 3].map((i) => (
+                <div
+                  key={i}
+                  className="h-7 rounded bg-[var(--color-surface-2)] animate-pulse"
+                  style={{ width: `${60 + i * 12}%` }}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Empty state */}
+          {!projectsLoading && projects.length === 0 && (
+            <div className="px-4 py-1.5">
+              <span className="text-xs text-[var(--color-muted)]">No projects yet — </span>
+              <button
+                type="button"
+                onClick={() => setNewProjectOpen(true)}
+                className="text-xs text-[var(--color-accent)] hover:underline"
+              >
+                New project
+              </button>
+            </div>
+          )}
+
+          {/* Project list */}
+          {!projectsLoading && visibleProjects.map((project) => {
+            const isActive = activeProjectId === project.id
+            return (
+              <button
+                key={project.id}
+                type="button"
+                onClick={() => {
+                  setActiveProjectId(isActive ? null : project.id)
+                  navigate({ to: '/tasks' })
+                  if (!effectivelyPinned) close()
+                }}
+                className={cn(
+                  'flex items-center gap-2 w-full px-4 py-2 mx-0 text-sm transition-colors text-left',
+                  isActive
+                    ? 'text-[var(--color-accent)] font-medium'
+                    : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
+                )}
+              >
+                {/* Active indicator: gold pulsing dot */}
+                {isActive ? (
+                  <span
+                    className="w-2 h-2 rounded-full bg-[var(--color-accent)] animate-pulse flex-shrink-0"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Folder size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
+                )}
+                <span className="flex-1 truncate">{project.name}</span>
+                {project.task_count > 0 && (
+                  <span className="text-[10px] text-[var(--color-muted)] flex-shrink-0">
+                    {project.task_count}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+
+          {/* Show more / less toggle */}
+          {!projectsLoading && hasMore && (
+            <button
+              type="button"
+              onClick={() => setProjectsExpanded((v) => !v)}
+              className="flex items-center gap-2 w-full px-4 py-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+            >
+              {projectsExpanded
+                ? 'Show fewer'
+                : `${unpinnedProjects.length - PROJECT_COLLAPSE_THRESHOLD} more…`}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Bottom: Settings + Pin toggle */}
@@ -193,6 +320,9 @@ export function Sidebar() {
           </button>
         )}
       </div>
+
+      {/* New project slide-over — rendered inside nav to avoid stacking context issues */}
+      <NewProjectSlideOver open={newProjectOpen} onOpenChange={setNewProjectOpen} />
     </nav>
   )
 
