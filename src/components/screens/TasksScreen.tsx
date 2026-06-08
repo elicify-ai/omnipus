@@ -18,6 +18,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   fetchBoardTasks,
   createBoardTask,
   deleteBoardTask,
@@ -48,7 +55,6 @@ const COLUMNS: { status: BoardStatus; label: string }[] = [
 interface CreateTaskSlideOverProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  defaultProjectId: string | null
 }
 
 interface CreateTaskForm {
@@ -58,21 +64,22 @@ interface CreateTaskForm {
   project_id: string
 }
 
-function CreateTaskSlideOver({ open, onOpenChange, defaultProjectId }: CreateTaskSlideOverProps) {
+function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
+  const activeProjectId = useProjectsStore((s) => s.activeProjectId)
 
   const { data: projects = [] } = useQuery({
     queryKey: projectsQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchProjects({ status: 'active' }),
-    staleTime: 60_000,
+    staleTime: 30_000,
   })
 
   const [form, setForm] = useState<CreateTaskForm>({
     name: '',
     description: '',
     status: 'inbox',
-    project_id: defaultProjectId ?? '',
+    project_id: activeProjectId ?? '',
   })
   const [nameError, setNameError] = useState('')
 
@@ -87,7 +94,7 @@ function CreateTaskSlideOver({ open, onOpenChange, defaultProjectId }: CreateTas
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
       addToast({ message: 'Task created', variant: 'success' })
-      setForm({ name: '', description: '', status: 'inbox', project_id: defaultProjectId ?? '' })
+      setForm({ name: '', description: '', status: 'inbox', project_id: activeProjectId ?? '' })
       setNameError('')
       onOpenChange(false)
     },
@@ -109,7 +116,7 @@ function CreateTaskSlideOver({ open, onOpenChange, defaultProjectId }: CreateTas
 
   function handleOpenChange(next: boolean) {
     if (!next) {
-      setForm({ name: '', description: '', status: 'inbox', project_id: defaultProjectId ?? '' })
+      setForm({ name: '', description: '', status: 'inbox', project_id: activeProjectId ?? '' })
       setNameError('')
     }
     onOpenChange(next)
@@ -165,18 +172,24 @@ function CreateTaskSlideOver({ open, onOpenChange, defaultProjectId }: CreateTas
             <Label htmlFor="new-task-status" className="text-[var(--color-secondary)]">
               Status
             </Label>
-            <select
-              id="new-task-status"
+            <Select
               value={form.status}
-              onChange={(e) => setForm((s) => ({ ...s, status: e.target.value as BoardStatus }))}
-              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-sm text-[var(--color-secondary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
+              onValueChange={(v) => setForm((s) => ({ ...s, status: v as BoardStatus }))}
             >
-              {COLUMNS.map((col) => (
-                <option key={col.status} value={col.status}>
-                  {col.label}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger
+                id="new-task-status"
+                className="bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)]"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {COLUMNS.map((col) => (
+                  <SelectItem key={col.status} value={col.status}>
+                    {col.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Project */}
@@ -185,19 +198,25 @@ function CreateTaskSlideOver({ open, onOpenChange, defaultProjectId }: CreateTas
               <Label htmlFor="new-task-project" className="text-[var(--color-secondary)]">
                 Project
               </Label>
-              <select
-                id="new-task-project"
+              <Select
                 value={form.project_id}
-                onChange={(e) => setForm((s) => ({ ...s, project_id: e.target.value }))}
-                className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-sm text-[var(--color-secondary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
+                onValueChange={(v) => setForm((s) => ({ ...s, project_id: v }))}
               >
-                <option value="">No project</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger
+                  id="new-task-project"
+                  className="bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)]"
+                >
+                  <SelectValue placeholder="No project" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">No project</SelectItem>
+                  {projects.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           )}
 
@@ -292,7 +311,6 @@ function TaskCard({ task, onDelete, isDeleting }: TaskCardProps) {
 // ── Column ────────────────────────────────────────────────────────────────────
 
 interface ColumnProps {
-  status: BoardStatus
   label: string
   tasks: BoardTask[]
   onDelete: (id: string) => void
@@ -382,7 +400,11 @@ export function TasksScreen() {
 
         {/* Active project filter pill */}
         {activeProject && (
-          <div className="flex items-center gap-1.5 rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-surface-2)] px-3 py-1 text-xs text-[var(--color-accent)]">
+          <div
+            role="status"
+            aria-label={`Filtered by project: ${activeProject.name}`}
+            className="flex items-center gap-1.5 rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-surface-2)] px-3 py-1 text-xs text-[var(--color-accent)]"
+          >
             <FolderOpen size={12} />
             <span className="max-w-[140px] truncate">{activeProject.name}</span>
             <button
@@ -438,7 +460,6 @@ export function TasksScreen() {
           {COLUMNS.map((col) => (
             <Column
               key={col.status}
-              status={col.status}
               label={col.label}
               tasks={tasks.filter((t) => t.status === col.status)}
               onDelete={(id) => deleteMutation.mutate(id)}
@@ -452,7 +473,6 @@ export function TasksScreen() {
       <CreateTaskSlideOver
         open={createTaskOpen}
         onOpenChange={setCreateTaskOpen}
-        defaultProjectId={activeProjectId}
       />
     </div>
   )
