@@ -230,22 +230,22 @@ func projectToWire(p storedProject, taskCount int) gen.Project {
 // deleteTasksForProject removes all GTD task files whose project_id matches projectID.
 // Only GTD tasks (status ∈ {inbox,next,active,waiting,done}) are deleted; workflow
 // tasks from pkg/taskstore share the same directory and are preserved.
+// Per FR-007: individual task-file deletion failures are logged and skipped (best-effort);
+// only a scan failure (cannot enumerate the tasks directory) causes a non-nil return.
 func deleteTasksForProject(home, projectID string) error {
 	tasksDir := filepath.Join(home, "tasks")
-	var removeErrs []error
 	if err := scanGTDTasks(home, func(id string, t boardTask) {
 		if t.ProjectID == projectID {
 			taskPath := filepath.Join(tasksDir, id+".json")
 			if err := os.Remove(taskPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 				slog.Warn("rest: project cascade: failed to delete task",
 					"file", id+".json", "error", err)
-				removeErrs = append(removeErrs, err)
 			}
 		}
 	}); err != nil {
 		return fmt.Errorf("scan tasks for cascade delete: %w", err)
 	}
-	return errors.Join(removeErrs...)
+	return nil
 }
 
 // loadProject reads a project by ID and writes the appropriate HTTP error if absent.
@@ -554,8 +554,8 @@ func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id
 	}
 
 	// Cascade: tasks → link entries → project file.
-	// Abort if the task scan fails — deleting the project file while task files
-	// remain on disk would orphan them (B5-003).
+	// Abort only if task scanning fails (cannot enumerate tasks directory) — individual
+	// task-file deletions are best-effort per FR-007 and do not abort the cascade.
 	if err := deleteTasksForProject(a.homePath, id); err != nil {
 		slog.Error("rest: delete project: cascade tasks", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "failed to scan tasks for cascade delete")

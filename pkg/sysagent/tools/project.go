@@ -382,8 +382,7 @@ func (t *ProjectDeleteTool) Execute(_ context.Context, args map[string]any) *too
 
 	// Step 3: delete the project file (last)
 	if err := deleteEntity(projectsDir(t.deps.Home), id); err != nil {
-		return tools.ErrorResult(errorJSON("PROJECT_NOT_FOUND", err.Error(),
-			"Use system.project.list to see available projects"))
+		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
 	return tools.NewToolResult(successJSON(map[string]any{
 		"id": id, "deleted": true, "tasks_deleted": tasksDeleted,

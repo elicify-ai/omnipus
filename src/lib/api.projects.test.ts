@@ -183,6 +183,29 @@ describe('deleteProject', () => {
     const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('proj-xyz-001')
   })
+
+  it('throws ApiError on 404 response', async () => {
+    // BDD: Given a project id that does not exist,
+    // When deleteProject is called,
+    // Then an ApiError with status 404 is thrown.
+    // Traces to: project-task-management-level1-spec.md — deleteProject error path
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'project not found' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { deleteProject, ApiError, isApiError } = await import('./api')
+    let thrown: unknown
+    try {
+      await deleteProject('missing-id')
+    } catch (err) {
+      thrown = err
+    }
+    expect(isApiError(thrown)).toBe(true)
+    expect(thrown instanceof ApiError && thrown.status).toBe(404)
+  })
 })
 
 // ── updateProject ─────────────────────────────────────────────────────────────
@@ -589,6 +612,29 @@ describe('deleteBoardTask', () => {
 
     const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('board-task-xyz-999')
+  })
+
+  it('throws ApiError on 404 response', async () => {
+    // BDD: Given a task id that does not exist,
+    // When deleteBoardTask is called,
+    // Then an ApiError with status 404 is thrown.
+    // Traces to: project-task-management-level1-spec.md — deleteBoardTask error path
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'task not found' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { deleteBoardTask, ApiError, isApiError } = await import('./api')
+    let thrown: unknown
+    try {
+      await deleteBoardTask('missing-task-id')
+    } catch (err) {
+      thrown = err
+    }
+    expect(isApiError(thrown)).toBe(true)
+    expect(thrown instanceof ApiError && thrown.status).toBe(404)
   })
 })
 
