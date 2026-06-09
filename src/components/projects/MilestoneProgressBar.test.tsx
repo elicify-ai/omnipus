@@ -7,7 +7,7 @@
  * Traces to: project-task-management-level1-spec.md — MilestoneProgressBar BDD scenarios
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MilestoneProgressBar } from './MilestoneProgressBar'
 import type { MilestoneWithProgress } from '@/lib/api'
