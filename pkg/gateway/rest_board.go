@@ -701,8 +701,8 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 
-	if existing.Status == "active" || existing.Status == "done" {
-		jsonErr(w, http.StatusConflict, "task already started")
+	if existing.Status == "active" || existing.Status == "done" || existing.Status == "failed" {
+		jsonErr(w, http.StatusConflict, "task already started or completed")
 		return
 	}
 

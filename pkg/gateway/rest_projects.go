@@ -107,7 +107,7 @@ func listProjectFiles(home string) ([]storedProject, error) {
 }
 
 // scanGTDTasks walks the tasks directory and calls fn for every file that
-// deserialises to a GTD task (status ∈ {inbox,next,active,waiting,done}).
+// deserialises to a GTD task (status ∈ {inbox,next,active,waiting,done,failed}).
 // Returns the first I/O error; fn errors are not propagated.
 func scanGTDTasks(home string, fn func(id string, t boardTask)) error {
 	dir := filepath.Join(home, "tasks")
@@ -143,7 +143,7 @@ func scanGTDTasks(home string, fn func(id string, t boardTask)) error {
 
 // computeProjectTaskCounts returns a map[projectID]count by doing a single pass
 // over all task files in ~/.omnipus/tasks/. Used by list (O(N) for all projects).
-// Only GTD tasks (status ∈ {inbox,next,active,waiting,done}) are counted; workflow
+// Only GTD tasks (status ∈ {inbox,next,active,waiting,done,failed}) are counted; workflow
 // tasks from pkg/taskstore share the same directory and are excluded.
 func computeProjectTaskCounts(home string) (map[string]int, error) {
 	counts := make(map[string]int)
@@ -159,7 +159,7 @@ func computeProjectTaskCounts(home string) (map[string]int, error) {
 
 // countTasksForProject counts GTD tasks belonging to a single project. O(N tasks)
 // but avoids building the full map — used by single-project GET/PUT.
-// Only GTD tasks (status ∈ {inbox,next,active,waiting,done}) are counted.
+// Only GTD tasks (status ∈ {inbox,next,active,waiting,done,failed}) are counted.
 func countTasksForProject(home, projectID string) int {
 	count := 0
 	if err := scanGTDTasks(home, func(_ string, t boardTask) {
@@ -233,7 +233,7 @@ func projectToWire(p storedProject, taskCount int) gen.Project {
 }
 
 // deleteTasksForProject removes all GTD task files whose project_id matches projectID.
-// Only GTD tasks (status ∈ {inbox,next,active,waiting,done}) are deleted; workflow
+// Only GTD tasks (status ∈ {inbox,next,active,waiting,done,failed}) are deleted; workflow
 // tasks from pkg/taskstore share the same directory and are preserved.
 // Per FR-007: individual task-file deletion failures are logged and skipped (best-effort);
 // only a scan failure (cannot enumerate the tasks directory) causes a non-nil return.
