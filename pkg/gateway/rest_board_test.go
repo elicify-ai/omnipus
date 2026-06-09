@@ -19,6 +19,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/bus"
+	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/onboarding"
+	"github.com/dapicom-ai/omnipus/pkg/taskstore"
 )
 
 // createBoardTaskViaAPI is a helper that POSTs a board task and returns its id + wire struct.
@@ -151,7 +155,7 @@ func TestHandleBoardTasks_Update(t *testing.T) {
 		"status must be updated to active",
 	)
 
-	// PUT {"status":"active"} WITHOUT agent-context → 400 (FR-L2-006).
+	// PUT {"status":"active"} WITHOUT agent-context → 403 (FR-L2-006).
 	wNoCtx := httptest.NewRecorder()
 	rNoCtx := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
 		strings.NewReader(`{"status":"active"}`))
@@ -160,9 +164,9 @@ func TestHandleBoardTasks_Update(t *testing.T) {
 	api.HandleBoardTasks(wNoCtx, rNoCtx)
 	require.Equal(
 		t,
-		http.StatusBadRequest,
+		http.StatusForbidden,
 		wNoCtx.Code,
-		"PUT active without agent-context must return 400; body=%s",
+		"PUT active without agent-context must return 403; body=%s",
 		wNoCtx.Body.String(),
 	)
 
@@ -934,17 +938,17 @@ func TestHandleBoardTasks_FilterByMilestoneID(t *testing.T) {
 }
 
 // TestHandleBoardTasks_ActiveRequiresAgentContext verifies PUT status=active without
-// X-Omnipus-Agent-Context header returns 400.
+// X-Omnipus-Agent-Context header returns 403.
 // BDD: Given an existing board task with status "inbox",
 // When PUT /api/v1/board/tasks/{id} with {"status":"active"} and no agent-context header,
-// Then 400.
+// Then 403 (the request is syntactically valid; the caller lacks permission).
 // Traces to: project-task-milestone-spec.md — FR-L2-006 (active requires agent context)
 func TestHandleBoardTasks_ActiveRequiresAgentContext(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — FR-L2-006: status "active" may only be set by agent system
 	api := newTestRestAPIWithHome(t)
 	task := createBoardTaskViaAPI(t, api, "ActiveGuardTask", "inbox")
 
-	// PUT {"status":"active"} without agent-context header → 400.
+	// PUT {"status":"active"} without agent-context header → 403.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
 		strings.NewReader(`{"status":"active"}`))
@@ -955,9 +959,9 @@ func TestHandleBoardTasks_ActiveRequiresAgentContext(t *testing.T) {
 
 	assert.Equal(
 		t,
-		http.StatusBadRequest,
+		http.StatusForbidden,
 		w.Code,
-		"PUT status=active without X-Omnipus-Agent-Context must return 400; body=%s",
+		"PUT status=active without X-Omnipus-Agent-Context must return 403; body=%s",
 		w.Body.String(),
 	)
 
@@ -1023,4 +1027,314 @@ func TestHandleBoardTasks_TaskCount_ExcludesWorkflowTasks(t *testing.T) {
 	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &proj))
 	assert.Equal(t, 1, proj.TaskCount,
 		"task_count must be 1 (GTD only); workflow tasks must not be counted")
+}
+
+// newTestRestAPIWithAgent creates a restAPI backed by an agent loop that has one enabled
+// agent in its config. This is required for the /start endpoint's happy path, which
+// resolves the default/first-enabled agent to own the new session.
+func newTestRestAPIWithAgent(t *testing.T) *restAPI {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	agentWorkspace := filepath.Join(tmpDir, "agents", "01JXTESTAGENTSTARTTEST001")
+	require.NoError(t, os.MkdirAll(agentWorkspace, 0o700))
+	agentEnabled := true
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+			List: []config.AgentConfig{
+				{
+					ID:        "01JXTESTAGENTSTARTTEST001",
+					Name:      "Test Agent",
+					Default:   true,
+					Enabled:   &agentEnabled,
+					Type:      config.AgentTypeCustom,
+					Workspace: agentWorkspace,
+				},
+			},
+		},
+	}
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	return &restAPI{
+		agentLoop:     al,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		homePath:      tmpDir,
+		taskStore:     taskstore.New(tmpDir + "/tasks"),
+	}
+}
+
+// postBoardTaskStart calls POST /api/v1/board/tasks/{id}/start and returns the recorder.
+func postBoardTaskStart(t *testing.T, api *restAPI, taskID string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks/"+taskID+"/start", nil)
+	r.URL.Path = "/api/v1/board/tasks/" + taskID + "/start"
+	api.HandleBoardTasks(w, r)
+	return w
+}
+
+// TestHandleBoardTasks_Start verifies POST /api/v1/board/tasks/{id}/start.
+//
+// BDD scenarios:
+//
+//	Scenario 1 — Happy path (200): create inbox task, POST /start → 200, status=active, session_id non-empty.
+//	  GET same task confirms persisted state.
+//	Scenario 2 — 409 active: start task, start again → 409.
+//	Scenario 3 — 409 done: set status=done via PUT, POST /start → 409.
+//	Scenario 4 — 409 failed: set status=failed via PUT, POST /start → 409.
+//	Scenario 5 — 404: POST /start on non-existent task ID → 404.
+//	Scenario 6 — Session uniqueness: start two tasks → distinct session_ids.
+//
+// Traces to: project-task-management-level1-spec.md — FR-L2-006 (start creates session)
+func TestHandleBoardTasks_Start(t *testing.T) {
+	t.Run("happy path 200", func(t *testing.T) {
+		api := newTestRestAPIWithAgent(t)
+		task := createBoardTaskViaAPI(t, api, "StartHappyTask", "inbox")
+
+		w := postBoardTaskStart(t, api, task.Id)
+		require.Equal(
+			t,
+			http.StatusOK,
+			w.Code,
+			"POST /start on inbox task must return 200; body=%s",
+			w.Body.String(),
+		)
+		var started gen.BoardTask
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &started))
+		assert.Equal(
+			t,
+			gen.BoardTaskStatus("active"),
+			started.Status,
+			"status must be active after start",
+		)
+		require.NotNil(t, started.SessionId, "session_id must be non-nil after start")
+		assert.NotEmpty(t, *started.SessionId, "session_id must be non-empty after start")
+
+		// GET same task — state must be persisted to disk.
+		wGet := httptest.NewRecorder()
+		rGet := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks/"+task.Id, nil)
+		rGet.URL.Path = "/api/v1/board/tasks/" + task.Id
+		api.HandleBoardTasks(wGet, rGet)
+		require.Equal(t, http.StatusOK, wGet.Code)
+		var persisted gen.BoardTask
+		require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &persisted))
+		assert.Equal(
+			t,
+			gen.BoardTaskStatus("active"),
+			persisted.Status,
+			"GET: status must persist as active",
+		)
+		require.NotNil(t, persisted.SessionId, "GET: session_id must persist")
+		assert.Equal(
+			t,
+			*started.SessionId,
+			*persisted.SessionId,
+			"GET: persisted session_id must match the one returned by start",
+		)
+	})
+
+	t.Run("409 already active", func(t *testing.T) {
+		api := newTestRestAPIWithAgent(t)
+		task := createBoardTaskViaAPI(t, api, "DoubleStartTask", "inbox")
+
+		// First start → 200.
+		w1 := postBoardTaskStart(t, api, task.Id)
+		require.Equal(
+			t,
+			http.StatusOK,
+			w1.Code,
+			"first POST /start must return 200; body=%s",
+			w1.Body.String(),
+		)
+
+		// Second start → 409.
+		w2 := postBoardTaskStart(t, api, task.Id)
+		assert.Equal(
+			t,
+			http.StatusConflict,
+			w2.Code,
+			"second POST /start on active task must return 409; body=%s",
+			w2.Body.String(),
+		)
+	})
+
+	t.Run("409 done", func(t *testing.T) {
+		// Use the standard scaffold; set status=done via PUT with agent-context header.
+		api := newTestRestAPIWithHome(t)
+		task := createBoardTaskViaAPI(t, api, "DoneTask", "inbox")
+
+		// PUT status=done (agent-context required for "active"; "done" has no such guard).
+		wPut := httptest.NewRecorder()
+		rPut := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
+			strings.NewReader(`{"status":"done"}`))
+		rPut.Header.Set("Content-Type", "application/json")
+		rPut.URL.Path = "/api/v1/board/tasks/" + task.Id
+		api.HandleBoardTasks(wPut, rPut)
+		require.Equal(t, http.StatusOK, wPut.Code, "PUT status=done must return 200")
+
+		// POST /start → 409.
+		w := postBoardTaskStart(t, api, task.Id)
+		assert.Equal(
+			t,
+			http.StatusConflict,
+			w.Code,
+			"POST /start on done task must return 409; body=%s",
+			w.Body.String(),
+		)
+	})
+
+	t.Run("409 failed", func(t *testing.T) {
+		// Set status=failed via PUT (no agent-context required for "failed").
+		api := newTestRestAPIWithHome(t)
+		task := createBoardTaskViaAPI(t, api, "FailedTask", "inbox")
+
+		wPut := httptest.NewRecorder()
+		rPut := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
+			strings.NewReader(`{"status":"failed"}`))
+		rPut.Header.Set("Content-Type", "application/json")
+		rPut.URL.Path = "/api/v1/board/tasks/" + task.Id
+		api.HandleBoardTasks(wPut, rPut)
+		require.Equal(t, http.StatusOK, wPut.Code, "PUT status=failed must return 200")
+
+		w := postBoardTaskStart(t, api, task.Id)
+		assert.Equal(
+			t,
+			http.StatusConflict,
+			w.Code,
+			"POST /start on failed task must return 409; body=%s",
+			w.Body.String(),
+		)
+	})
+
+	t.Run("404 nonexistent", func(t *testing.T) {
+		api := newTestRestAPIWithHome(t)
+		w := postBoardTaskStart(t, api, "01JXNOEXISTTASKSTRTTEST01")
+		assert.Equal(
+			t,
+			http.StatusNotFound,
+			w.Code,
+			"POST /start on non-existent task must return 404; body=%s",
+			w.Body.String(),
+		)
+	})
+
+	t.Run("session uniqueness", func(t *testing.T) {
+		api := newTestRestAPIWithAgent(t)
+		task1 := createBoardTaskViaAPI(t, api, "UniqueSession1", "inbox")
+		task2 := createBoardTaskViaAPI(t, api, "UniqueSession2", "inbox")
+
+		w1 := postBoardTaskStart(t, api, task1.Id)
+		require.Equal(
+			t,
+			http.StatusOK,
+			w1.Code,
+			"start task1 must return 200; body=%s",
+			w1.Body.String(),
+		)
+		w2 := postBoardTaskStart(t, api, task2.Id)
+		require.Equal(
+			t,
+			http.StatusOK,
+			w2.Code,
+			"start task2 must return 200; body=%s",
+			w2.Body.String(),
+		)
+
+		var started1, started2 gen.BoardTask
+		require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &started1))
+		require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &started2))
+
+		require.NotNil(t, started1.SessionId, "task1 session_id must be non-nil")
+		require.NotNil(t, started2.SessionId, "task2 session_id must be non-nil")
+		assert.NotEmpty(t, *started1.SessionId, "task1 session_id must be non-empty")
+		assert.NotEmpty(t, *started2.SessionId, "task2 session_id must be non-empty")
+		assert.NotEqual(
+			t,
+			*started1.SessionId,
+			*started2.SessionId,
+			"two different tasks must get distinct session_ids",
+		)
+	})
+}
+
+// TestEnsureInboxProject verifies the ensureInboxProject function is idempotent and
+// creates the Inbox default project on first call.
+//
+// BDD:
+//
+//	Given a fresh home directory,
+//	When ensureInboxProject is called,
+//	Then GET /api/v1/projects?status=active returns exactly one project with is_default=true and name="Inbox".
+//	When ensureInboxProject is called again,
+//	Then GET /api/v1/projects?status=active still returns exactly one default project (idempotent).
+//
+// Traces to: FR-L2-001 (auto-create Inbox project)
+func TestEnsureInboxProject(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// First call: must create the Inbox project.
+	require.NoError(
+		t,
+		ensureInboxProject(api.homePath),
+		"first ensureInboxProject call must not return an error",
+	)
+
+	// GET /api/v1/projects → must contain exactly one default project named "Inbox".
+	wList := httptest.NewRecorder()
+	rList := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	rList.URL.Path = "/api/v1/projects"
+	api.HandleProjects(wList, rList)
+	require.Equal(t, http.StatusOK, wList.Code, "GET /projects must return 200")
+
+	var projects []gen.Project
+	require.NoError(t, json.Unmarshal(wList.Body.Bytes(), &projects))
+
+	defaultCount := 0
+	for _, p := range projects {
+		if p.IsDefault != nil && *p.IsDefault {
+			defaultCount++
+			assert.Equal(t, "Inbox", p.Name, "default project must be named Inbox")
+			assert.Equal(t, gen.ProjectStatusActive, p.Status, "Inbox must have status=active")
+		}
+	}
+	assert.Equal(t, 1, defaultCount, "exactly one default project must exist after first call")
+
+	// Second call: must be idempotent — still exactly one default project.
+	require.NoError(
+		t,
+		ensureInboxProject(api.homePath),
+		"second ensureInboxProject call must not return an error",
+	)
+
+	wList2 := httptest.NewRecorder()
+	rList2 := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	rList2.URL.Path = "/api/v1/projects"
+	api.HandleProjects(wList2, rList2)
+	require.Equal(t, http.StatusOK, wList2.Code)
+
+	var projects2 []gen.Project
+	require.NoError(t, json.Unmarshal(wList2.Body.Bytes(), &projects2))
+
+	defaultCount2 := 0
+	for _, p := range projects2 {
+		if p.IsDefault != nil && *p.IsDefault {
+			defaultCount2++
+		}
+	}
+	assert.Equal(
+		t,
+		1,
+		defaultCount2,
+		"ensureInboxProject must be idempotent: still exactly one default project after second call",
+	)
 }

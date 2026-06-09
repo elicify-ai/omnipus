@@ -119,7 +119,7 @@ func (a *restAPI) listBoardTasks() ([]boardTask, error) {
 			continue
 		}
 		name := e.Name()
-		if len(name) < 6 || name[len(name)-5:] != ".json" {
+		if !strings.HasSuffix(name, ".json") {
 			continue
 		}
 		id := name[:len(name)-5]
@@ -495,13 +495,19 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(
-			&audit.Entry{
-				Event:    "board_task.create",
-				Decision: audit.DecisionAllow,
-				Details:  map[string]any{"id": t.ID},
-			},
-		)
+		if err := a.auditor.Log(&audit.Entry{
+			Event:    "board_task.create",
+			Decision: audit.DecisionAllow,
+			Details:  map[string]any{"id": t.ID},
+		}); err != nil {
+			slog.Error(
+				"rest: board task: audit log failed",
+				"event",
+				"board_task.create",
+				"error",
+				err,
+			)
+		}
 	}
 	jsonCreated(w, toWireBoardTask(t))
 }
@@ -586,7 +592,7 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		}
 		// active status can only be set by an agent (FR-L2-006).
 		if newStatus == "active" && !isAgentContext {
-			jsonErr(w, http.StatusBadRequest, "status 'active' can only be set by an agent")
+			jsonErr(w, http.StatusForbidden, "status 'active' can only be set by an agent")
 			return
 		}
 		existing.Status = newStatus
@@ -656,13 +662,19 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(
-			&audit.Entry{
-				Event:    "board_task.update",
-				Decision: audit.DecisionAllow,
-				Details:  map[string]any{"id": id},
-			},
-		)
+		if err := a.auditor.Log(&audit.Entry{
+			Event:    "board_task.update",
+			Decision: audit.DecisionAllow,
+			Details:  map[string]any{"id": id},
+		}); err != nil {
+			slog.Error(
+				"rest: board task: audit log failed",
+				"event",
+				"board_task.update",
+				"error",
+				err,
+			)
+		}
 	}
 	jsonOK(w, toWireBoardTask(existing))
 }
@@ -698,13 +710,19 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(
-			&audit.Entry{
-				Event:    "board_task.delete",
-				Decision: audit.DecisionAllow,
-				Details:  map[string]any{"id": id},
-			},
-		)
+		if err := a.auditor.Log(&audit.Entry{
+			Event:    "board_task.delete",
+			Decision: audit.DecisionAllow,
+			Details:  map[string]any{"id": id},
+		}); err != nil {
+			slog.Error(
+				"rest: board task: audit log failed",
+				"event",
+				"board_task.delete",
+				"error",
+				err,
+			)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -751,7 +769,7 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		}
 	}
 	if agentID == "" {
-		jsonErr(w, http.StatusBadRequest, "no agent configured")
+		jsonErr(w, http.StatusInternalServerError, "no agent configured")
 		return
 	}
 
@@ -772,6 +790,14 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 
+	if existing.SessionID != "" {
+		slog.Warn(
+			"rest: board task: start overwrites existing session_id",
+			"id", id,
+			"old_session_id", existing.SessionID,
+			"new_session_id", meta.ID,
+		)
+	}
 	existing.SessionID = meta.ID
 	existing.Status = "active"
 	existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -791,15 +817,21 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(
-			&audit.Entry{
-				Event:     "board_task.start",
-				Decision:  audit.DecisionAllow,
-				AgentID:   agentID,
-				SessionID: meta.ID,
-				Details:   map[string]any{"id": id},
-			},
-		)
+		if err := a.auditor.Log(&audit.Entry{
+			Event:     "board_task.start",
+			Decision:  audit.DecisionAllow,
+			AgentID:   agentID,
+			SessionID: meta.ID,
+			Details:   map[string]any{"id": id},
+		}); err != nil {
+			slog.Error(
+				"rest: board task: audit log failed",
+				"event",
+				"board_task.start",
+				"error",
+				err,
+			)
+		}
 	}
 	jsonOK(w, toWireBoardTask(existing))
 }
