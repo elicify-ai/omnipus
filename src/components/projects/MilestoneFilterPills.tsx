@@ -20,8 +20,19 @@ export function MilestoneFilterPills({
   onSelect,
   onNewMilestone,
 }: MilestoneFilterPillsProps) {
+  const activeLabel =
+    activeMilestoneId === MILESTONE_FILTER_ALL
+      ? 'All'
+      : activeMilestoneId === MILESTONE_FILTER_UNSCHEDULED
+        ? 'Unscheduled'
+        : (milestones.find((m) => m.id === activeMilestoneId)?.name ?? 'All')
+
   return (
-    <div className="flex items-center gap-1.5 px-4 py-2 overflow-x-auto flex-wrap">
+    <div
+      role="group"
+      aria-label={`Active milestone filter: ${activeLabel}`}
+      className="flex items-center gap-1.5 px-4 py-2 overflow-x-auto flex-wrap"
+    >
       {/* All */}
       <Pill
         label="All"
