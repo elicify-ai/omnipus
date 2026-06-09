@@ -144,6 +144,14 @@ type restAPI struct {
 	// board tasks. Sourced from agentLoop.AuditLogger() at construction time;
 	// may be nil when audit logging is disabled (best-effort — nil-safe callers).
 	auditor *audit.Logger
+
+	// taskStripedMu is a 64-shard mutex pool keyed by FNV hash of the task ID.
+	// Held for the full read→mutate→write cycle of a board task to make RMW
+	// atomic (prevents a race between two concurrent /start calls or between
+	// /start and the completion callback). The pool is fixed-size so memory
+	// usage is O(1) regardless of task count, matching the pattern in
+	// pkg/memory/jsonl.go::JSONLStore.
+	taskStripedMu [64]sync.Mutex
 }
 
 // --- CORS / JSON helpers ---
@@ -687,7 +695,15 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if agentID == "" {
-			agentID = "main" // legacy fallback for configs without a marked default
+			// Fall back to the first enabled agent (mirrors handleBoardTaskStart /
+			// resolveDefaultAgentID in pkg/routing/route.go).
+			cfg := a.agentLoop.GetConfig()
+			for _, ag := range cfg.Agents.List {
+				if ag.IsActive() {
+					agentID = ag.ID
+					break
+				}
+			}
 		}
 	}
 	if err := validateEntityID(agentID); err != nil {

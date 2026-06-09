@@ -141,23 +141,22 @@ func TestHandleBoardTasks_CreateAndGet(t *testing.T) {
 
 // TestHandleBoardTasks_Update verifies PUT /api/v1/board/tasks/{id} updates the task.
 // BDD: Given an existing board task,
-// When PUT /api/v1/board/tasks/{id} with {"status":"active"} and agent-context header,
-// Then 200 with status=active.
-// When PUT /api/v1/board/tasks/{id} with {"status":"active"} WITHOUT agent-context header,
-// Then 400 (FR-L2-006: active can only be set by an agent).
+// When PUT /api/v1/board/tasks/{id} with {"status":"next"},
+// Then 200 with status=next.
+// When PUT /api/v1/board/tasks/{id} with {"status":"active"} (even with X-Omnipus-Agent-Context),
+// Then 403 — status=active is blocked unconditionally by PUT; only /start may set it.
 // When PUT to nonexistent ID,
 // Then 404.
-// Traces to: FR-002, FR-L2-006
+// Traces to: FR-002, FR-L2-006 (SEC-3: spoofable header removed)
 func TestHandleBoardTasks_Update(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	task := createBoardTaskViaAPI(t, api, "UpdatableTask", "inbox")
 
-	// PUT {"status":"active"} with agent-context header → 200.
+	// PUT {"status":"next"} → 200.
 	wUp := httptest.NewRecorder()
 	rUp := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
-		strings.NewReader(`{"status":"active"}`))
+		strings.NewReader(`{"status":"next"}`))
 	rUp.Header.Set("Content-Type", "application/json")
-	rUp.Header.Set("X-Omnipus-Agent-Context", "true")
 	rUp.URL.Path = "/api/v1/board/tasks/" + task.Id
 	api.HandleBoardTasks(wUp, rUp)
 
@@ -165,32 +164,38 @@ func TestHandleBoardTasks_Update(t *testing.T) {
 		t,
 		http.StatusOK,
 		wUp.Code,
-		"PUT /board/tasks/{id} with agent-context must return 200; body=%s",
+		"PUT /board/tasks/{id} status=next must return 200; body=%s",
 		wUp.Body.String(),
 	)
 	var updated gen.BoardTask
 	require.NoError(t, json.Unmarshal(wUp.Body.Bytes(), &updated))
 	assert.Equal(
 		t,
-		gen.BoardTaskStatus("active"),
+		gen.BoardTaskStatus("next"),
 		updated.Status,
-		"status must be updated to active",
+		"status must be updated to next",
 	)
 
-	// PUT {"status":"active"} WITHOUT agent-context → 403 (FR-L2-006).
-	wNoCtx := httptest.NewRecorder()
-	rNoCtx := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
-		strings.NewReader(`{"status":"active"}`))
-	rNoCtx.Header.Set("Content-Type", "application/json")
-	rNoCtx.URL.Path = "/api/v1/board/tasks/" + task.Id
-	api.HandleBoardTasks(wNoCtx, rNoCtx)
-	require.Equal(
-		t,
-		http.StatusForbidden,
-		wNoCtx.Code,
-		"PUT active without agent-context must return 403; body=%s",
-		wNoCtx.Body.String(),
-	)
+	// PUT {"status":"active"} — blocked unconditionally (SEC-3: header gate removed).
+	// Neither presence nor absence of X-Omnipus-Agent-Context matters; /start is the only path.
+	for _, withHeader := range []bool{true, false} {
+		wActive := httptest.NewRecorder()
+		rActive := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
+			strings.NewReader(`{"status":"active"}`))
+		rActive.Header.Set("Content-Type", "application/json")
+		if withHeader {
+			rActive.Header.Set("X-Omnipus-Agent-Context", "true")
+		}
+		rActive.URL.Path = "/api/v1/board/tasks/" + task.Id
+		api.HandleBoardTasks(wActive, rActive)
+		require.Equal(
+			t,
+			http.StatusForbidden,
+			wActive.Code,
+			"PUT status=active must always return 403 (withHeader=%v); body=%s",
+			withHeader, wActive.Body.String(),
+		)
+	}
 
 	// Differentiation test: a second PUT with a different status returns a different result.
 	wUp2 := httptest.NewRecorder()
@@ -776,31 +781,37 @@ func TestHandleBoardTasks_Result_TooLong(t *testing.T) {
 // When GET /api/v1/board/tasks?agent_id=A,
 // Then only T1 is returned; T2 is absent.
 // Traces to: project-task-milestone-spec.md — FR-L2-029 (agent_id filter)
+//
+// Note: tasks are written directly to disk (bypassing POST) because the agent IDs used
+// are test fixtures that are not registered in the minimal test agent loop; the filter
+// test's purpose is to verify the GET query filter, not POST agent_id validation (A2).
 func TestHandleBoardTasks_FilterByAgentID(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — FR-L2-029
 	api := newTestRestAPIWithHome(t)
 
-	// Create task with agent_id=agent-alpha.
-	wT1 := httptest.NewRecorder()
-	rT1 := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks",
-		strings.NewReader(`{"name":"Alpha Task","agent_id":"01JXAGENT0ALPHA00000000001"}`))
-	rT1.Header.Set("Content-Type", "application/json")
-	rT1.URL.Path = "/api/v1/board/tasks"
-	api.HandleBoardTasks(wT1, rT1)
-	require.Equal(t, http.StatusCreated, wT1.Code, "create alpha task must return 201")
-	var taskAlpha gen.BoardTask
-	require.NoError(t, json.Unmarshal(wT1.Body.Bytes(), &taskAlpha))
+	const alphaAgentID = "01JXAGENT0ALPHA00000000001"
+	const betaAgentID = "01JXAGENT0BETA000000000002"
 
-	// Create task with agent_id=agent-beta.
-	wT2 := httptest.NewRecorder()
-	rT2 := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks",
-		strings.NewReader(`{"name":"Beta Task","agent_id":"01JXAGENT0BETA000000000002"}`))
-	rT2.Header.Set("Content-Type", "application/json")
-	rT2.URL.Path = "/api/v1/board/tasks"
-	api.HandleBoardTasks(wT2, rT2)
-	require.Equal(t, http.StatusCreated, wT2.Code, "create beta task must return 201")
-	var taskBeta gen.BoardTask
-	require.NoError(t, json.Unmarshal(wT2.Body.Bytes(), &taskBeta))
+	// Write tasks directly to disk so the filter test is decoupled from POST validation.
+	alphaTaskID := "01JXFILTERALPHA0000000001"
+	betaTaskID := "01JXFILTERBET000000000002"
+	tasksDir := filepath.Join(api.homePath, "tasks")
+	require.NoError(t, os.MkdirAll(tasksDir, 0o700))
+	alphaData := fmt.Sprintf(
+		`{"id":%q,"name":"Alpha Task","agent_id":%q,"status":"inbox","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
+		alphaTaskID, alphaAgentID,
+	)
+	betaData := fmt.Sprintf(
+		`{"id":%q,"name":"Beta Task","agent_id":%q,"status":"inbox","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
+		betaTaskID, betaAgentID,
+	)
+	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, alphaTaskID+".json"), []byte(alphaData), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, betaTaskID+".json"), []byte(betaData), 0o600))
+
+	// Build minimal structs for assertions below.
+	type taskRef struct{ Id string }
+	taskAlpha := taskRef{alphaTaskID}
+	taskBeta := taskRef{betaTaskID}
 
 	// GET ?agent_id=alpha → only alpha task returned.
 	wFilter := httptest.NewRecorder()
@@ -959,23 +970,25 @@ func TestHandleBoardTasks_FilterByMilestoneID(t *testing.T) {
 	assert.NotContains(t, m1IDs, task2.ID, "task2 must NOT appear in ?milestone_id=M1 response")
 }
 
-// TestHandleBoardTasks_ActiveRequiresAgentContext verifies PUT status=active without
-// X-Omnipus-Agent-Context header returns 403.
+// TestHandleBoardTasks_ActiveRequiresStart verifies PUT status=active is blocked
+// unconditionally — the spoofable X-Omnipus-Agent-Context header gate is removed (SEC-3).
+// Status "active" may only be set via POST /start; PUT always returns 403.
 // BDD: Given an existing board task with status "inbox",
-// When PUT /api/v1/board/tasks/{id} with {"status":"active"} and no agent-context header,
-// Then 403 (the request is syntactically valid; the caller lacks permission).
-// Traces to: project-task-milestone-spec.md — FR-L2-006 (active requires agent context)
-func TestHandleBoardTasks_ActiveRequiresAgentContext(t *testing.T) {
-	// Traces to: project-task-milestone-spec.md — FR-L2-006: status "active" may only be set by agent system
+// When PUT /api/v1/board/tasks/{id} with {"status":"active"} (with or without header),
+// Then 403 — only POST /start may reach status=active.
+// When POST /api/v1/board/tasks/{id}/start (with agent loop),
+// Then 202 and status=active.
+// Traces to: project-task-milestone-spec.md — FR-L2-006; SEC-3 (header gate removed)
+func TestHandleBoardTasks_ActiveRequiresStart(t *testing.T) {
+	// Traces to: FR-L2-006: status "active" may only be set via /start, not PUT
 	api := newTestRestAPIWithHome(t)
 	task := createBoardTaskViaAPI(t, api, "ActiveGuardTask", "inbox")
 
-	// PUT {"status":"active"} without agent-context header → 403.
+	// PUT {"status":"active"} without header → 403.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
 		strings.NewReader(`{"status":"active"}`))
 	r.Header.Set("Content-Type", "application/json")
-	// Deliberately omit X-Omnipus-Agent-Context header.
 	r.URL.Path = "/api/v1/board/tasks/" + task.Id
 	api.HandleBoardTasks(w, r)
 
@@ -983,23 +996,38 @@ func TestHandleBoardTasks_ActiveRequiresAgentContext(t *testing.T) {
 		t,
 		http.StatusForbidden,
 		w.Code,
-		"PUT status=active without X-Omnipus-Agent-Context must return 403; body=%s",
+		"PUT status=active must return 403 (only /start may set active); body=%s",
 		w.Body.String(),
 	)
 
-	// Differentiation: with agent-context header → 200.
+	// PUT {"status":"active"} WITH the old header → still 403 (header ignored).
+	wHdr := httptest.NewRecorder()
+	rHdr := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
+		strings.NewReader(`{"status":"active"}`))
+	rHdr.Header.Set("Content-Type", "application/json")
+	rHdr.Header.Set("X-Omnipus-Agent-Context", "true")
+	rHdr.URL.Path = "/api/v1/board/tasks/" + task.Id
+	api.HandleBoardTasks(wHdr, rHdr)
+	assert.Equal(
+		t,
+		http.StatusForbidden,
+		wHdr.Code,
+		"PUT status=active WITH X-Omnipus-Agent-Context must also return 403 (header has no effect); body=%s",
+		wHdr.Body.String(),
+	)
+
+	// Differentiation: PUT status=next IS allowed.
 	wOK := httptest.NewRecorder()
 	rOK := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
-		strings.NewReader(`{"status":"active"}`))
+		strings.NewReader(`{"status":"next"}`))
 	rOK.Header.Set("Content-Type", "application/json")
-	rOK.Header.Set("X-Omnipus-Agent-Context", "true")
 	rOK.URL.Path = "/api/v1/board/tasks/" + task.Id
 	api.HandleBoardTasks(wOK, rOK)
 	assert.Equal(
 		t,
 		http.StatusOK,
 		wOK.Code,
-		"PUT status=active WITH X-Omnipus-Agent-Context must return 200; body=%s",
+		"PUT status=next must return 200; body=%s",
 		wOK.Body.String(),
 	)
 }
@@ -1367,8 +1395,8 @@ func TestHandleBoardTasks_Start(t *testing.T) {
 			"POST /start on task with no prompt must return 422; body=%s", wStart.Body.String())
 	})
 
-	// Scenario 9 — 403 clearing session_id on an active task without agent context:
-	// prevents UI from orphaning a live agent session.
+	// Scenario 9 — 403 clearing session_id on an active task:
+	// prevents the UI from orphaning a live agent session.
 	t.Run("403 clear session_id on active task", func(t *testing.T) {
 		api := newTestRestAPIWithAgent(t)
 
@@ -1386,7 +1414,7 @@ func TestHandleBoardTasks_Start(t *testing.T) {
 		wStart := postBoardTaskStart(t, api, task.Id)
 		require.Equal(t, http.StatusAccepted, wStart.Code, "start must return 202; body=%s", wStart.Body.String())
 
-		// Attempt to clear session_id without agent-context header while task is active.
+		// Attempt to clear session_id while task is active → 403 (server-side guard).
 		body, _ := json.Marshal(map[string]any{"session_id": ""})
 		wPut := httptest.NewRecorder()
 		rPut := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id, bytes.NewReader(body))
@@ -1397,37 +1425,56 @@ func TestHandleBoardTasks_Start(t *testing.T) {
 			"clearing session_id on active task must return 403; body=%s", wPut.Body.String())
 	})
 
-	// Scenario 10 — session_id clear on a non-active task (e.g. failed) is allowed
-	// without agent context: this is the doRetry path the UI exercises.
-	t.Run("clear session_id on failed task succeeds without agent context", func(t *testing.T) {
+	// Scenario 10 — session_id auto-cleared on retry: when a failed task is
+	// PUT to status=next, the session_id is cleared automatically (#405).
+	// Setting a non-empty session_id via PUT is no longer permitted (SEC-3).
+	t.Run("session_id auto-cleared on retry status transition", func(t *testing.T) {
 		api := newTestRestAPIWithAgent(t)
 		task := createBoardTaskWithPromptViaAPI(t, api, "FailedRetryTask", "inbox", "Do work")
 
-		// Set status to failed (simulate completed failure) via agent-context PUT.
-		statusFailed := "failed"
-		sessionVal := "some-session-id"
-		failBody, _ := json.Marshal(map[string]any{"status": statusFailed, "session_id": sessionVal})
-		wFail := httptest.NewRecorder()
-		rFail := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id, bytes.NewReader(failBody))
-		rFail.Header.Set("Content-Type", "application/json")
-		rFail.Header.Set("X-Omnipus-Agent-Context", "true")
-		rFail.URL.Path = "/api/v1/board/tasks/" + task.Id
-		api.HandleBoardTasks(wFail, rFail)
-		require.Equal(t, http.StatusOK, wFail.Code, "set failed status must succeed; body=%s", wFail.Body.String())
+		// Start the task to get a session_id populated via /start.
+		wStart := postBoardTaskStart(t, api, task.Id)
+		require.Equal(t, http.StatusAccepted, wStart.Code, "start must return 202; body=%s", wStart.Body.String())
+		var started gen.BoardTask
+		require.NoError(t, json.Unmarshal(wStart.Body.Bytes(), &started))
+		require.NotNil(t, started.SessionId, "session_id must be set after /start")
 
-		// Now clear session_id without agent-context — must be allowed (doRetry path).
-		clearBody, _ := json.Marshal(map[string]any{"session_id": "", "status": "next"})
+		// Directly write a failed status to simulate a completed failure (bypass the
+		// goroutine so the test is synchronous). The task on disk has session_id set.
+		tasksDir := filepath.Join(api.homePath, "tasks")
+		rawPath := filepath.Join(tasksDir, task.Id+".json")
+		rawData, readErr := os.ReadFile(rawPath)
+		require.NoError(t, readErr)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(rawData, &raw))
+		raw["status"] = "failed"
+		patched, marshalErr := json.Marshal(raw)
+		require.NoError(t, marshalErr)
+		require.NoError(t, os.WriteFile(rawPath, patched, 0o600))
+
+		// Now PUT status=next (retry) — session_id must be auto-cleared (#405).
+		clearBody, _ := json.Marshal(map[string]any{"status": "next"})
 		wClear := httptest.NewRecorder()
 		rClear := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id, bytes.NewReader(clearBody))
 		rClear.Header.Set("Content-Type", "application/json")
 		rClear.URL.Path = "/api/v1/board/tasks/" + task.Id
 		api.HandleBoardTasks(wClear, rClear)
 		assert.Equal(t, http.StatusOK, wClear.Code,
-			"clearing session_id on failed task must return 200; body=%s", wClear.Body.String())
+			"PUT status=next on failed task must return 200; body=%s", wClear.Body.String())
 		var updated gen.BoardTask
 		require.NoError(t, json.Unmarshal(wClear.Body.Bytes(), &updated))
 		assert.Equal(t, gen.BoardTaskStatus("next"), updated.Status)
-		assert.Nil(t, updated.SessionId, "session_id must be cleared")
+		assert.Nil(t, updated.SessionId, "session_id must be auto-cleared on retry status transition (#405)")
+
+		// Differentiation: setting a non-empty session_id via PUT is now forbidden (SEC-3).
+		forbidBody, _ := json.Marshal(map[string]any{"session_id": "some-session"})
+		wForbid := httptest.NewRecorder()
+		rForbid := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id, bytes.NewReader(forbidBody))
+		rForbid.Header.Set("Content-Type", "application/json")
+		rForbid.URL.Path = "/api/v1/board/tasks/" + task.Id
+		api.HandleBoardTasks(wForbid, rForbid)
+		assert.Equal(t, http.StatusForbidden, wForbid.Code,
+			"PUT with non-empty session_id must return 403 (SEC-3); body=%s", wForbid.Body.String())
 	})
 }
 

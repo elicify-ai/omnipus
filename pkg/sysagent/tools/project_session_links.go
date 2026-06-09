@@ -42,6 +42,15 @@ func linksFilePath(home string) string {
 // RLock is sufficient for read-only access via ReadLinks.
 var linkFileMu sync.RWMutex
 
+// AppendLinkExported is the exported wrapper around appendLink for use by callers
+// outside this package (e.g. pkg/gateway) that need to record a project↔session
+// link without going through the ProjectSessionLinker's LRU dedup logic.
+// Use this when the caller already knows the (projectID, sessionID) pair is new
+// (e.g. just created a fresh session for a board task).
+func AppendLinkExported(home, projectID, sessionID string) error {
+	return appendLink(home, projectID, sessionID)
+}
+
 // appendLink appends one (projectID, sessionID) entry to the link file.
 // The file is opened with O_APPEND|O_CREATE so concurrent appenders on the same
 // OS stay coherent; linkFileMu ensures our own process is serialized.

@@ -2714,21 +2714,55 @@ func (al *AgentLoop) processTaskDirect(
 
 // ExecuteBoardTask dispatches a GTD board task to the agent loop in a background
 // goroutine. The session must already exist in the per-agent store (via GetAgentStore).
-// onComplete is called with the execution error (nil on success) once the agent finishes;
-// the caller is responsible for persisting the terminal task status.
-func (al *AgentLoop) ExecuteBoardTask(agentID, taskID, sessionID, prompt string, onComplete func(error)) {
+// onComplete is called with the result string and execution error once the agent
+// finishes; the caller is responsible for persisting the terminal task status.
+// The goroutine is tracked in activeRequests so WaitForActiveRequests/Close drains it
+// before the process exits.
+func (al *AgentLoop) ExecuteBoardTask(agentID, taskID, sessionID, prompt string, onComplete func(string, error)) {
+	// Board-task goroutines run on context.Background() — they are detached from the
+	// HTTP request lifecycle and outlive the Run loop. Stop() cancels in-flight LLM
+	// calls via the provider's own context propagation; the goroutine then records the
+	// error via onComplete so the task transitions to "failed" on shutdown.
+	taskCtx := context.Background()
+
+	al.activeRequests.Add(1)
 	go func() {
-		taskCtx := context.Background() // detached — outlives the HTTP request
+		defer al.activeRequests.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				panicMsg := fmt.Sprintf("%v", r)
+				logger.ErrorCF("agent", "ExecuteBoardTask: panic recovered",
+					map[string]any{
+						"task_id":    taskID,
+						"agent_id":   agentID,
+						"session_id": sessionID,
+						"panic":      panicMsg,
+					})
+				if onComplete != nil {
+					onComplete("", fmt.Errorf("panic: %v", r))
+				}
+			}
+		}()
 		sessionKey := fmt.Sprintf("agent:%s:board:%s", agentID, taskID)
 		logger.InfoCF("agent", "ExecuteBoardTask: dispatching",
-			map[string]any{"task_id": taskID, "agent_id": agentID, "session_id": sessionID, "session_key": sessionKey})
-		_, err := al.processTaskDirect(taskCtx, agentID, prompt, sessionKey, sessionID)
+			map[string]any{
+				"task_id":     taskID,
+				"agent_id":    agentID,
+				"session_id":  sessionID,
+				"session_key": sessionKey,
+			})
+		result, err := al.processTaskDirect(taskCtx, agentID, prompt, sessionKey, sessionID)
 		if err != nil {
 			logger.ErrorCF("agent", "ExecuteBoardTask: execution failed",
-				map[string]any{"task_id": taskID, "agent_id": agentID, "session_id": sessionID, "error": err.Error()})
+				map[string]any{
+					"task_id":    taskID,
+					"agent_id":   agentID,
+					"session_id": sessionID,
+					"error":      err.Error(),
+				})
 		}
 		if onComplete != nil {
-			onComplete(err)
+			onComplete(result, err)
 		}
 	}()
 }

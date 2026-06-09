@@ -148,6 +148,12 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 		updated = append(updated, "description")
 	}
 	if v, ok := args["status"].(string); ok && gtdStatusSet[v] {
+		// A4: apply the same transition guard as the REST PUT handler.
+		// Only /start may reach "active"; the tool path cannot bypass this.
+		if v == "active" {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT",
+				"status 'active' can only be set via /start, not by the task.update tool", "status"))
+		}
 		tk.Status = v
 		updated = append(updated, "status")
 	}
