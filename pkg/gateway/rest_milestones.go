@@ -332,7 +332,7 @@ func (a *restAPI) handleMilestonePost(w http.ResponseWriter, r *http.Request, pr
 
 	if a.auditor != nil {
 		_ = a.auditor.Log(
-			&audit.Entry{Event: "milestone.create", Decision: "allowed",
+			&audit.Entry{Event: "milestone.create", Decision: audit.DecisionAllow,
 				Details: map[string]any{"id": m.ID, "project_id": projectID}},
 		)
 	}
@@ -529,7 +529,7 @@ func (a *restAPI) handleMilestonePut(w http.ResponseWriter, r *http.Request, pro
 
 	if a.auditor != nil {
 		_ = a.auditor.Log(
-			&audit.Entry{Event: "milestone.update", Decision: "allowed",
+			&audit.Entry{Event: "milestone.update", Decision: audit.DecisionAllow,
 				Details: map[string]any{"id": milestoneID, "project_id": projectID}},
 		)
 	}
@@ -580,7 +580,7 @@ func (a *restAPI) handleMilestoneDelete(w http.ResponseWriter, r *http.Request, 
 
 	if a.auditor != nil {
 		_ = a.auditor.Log(
-			&audit.Entry{Event: "milestone.delete", Decision: "allowed",
+			&audit.Entry{Event: "milestone.delete", Decision: audit.DecisionAllow,
 				Details: map[string]any{"id": milestoneID, "project_id": projectID}},
 		)
 	}

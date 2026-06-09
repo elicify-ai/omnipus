@@ -489,7 +489,7 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 
 	if a.auditor != nil {
 		_ = a.auditor.Log(
-			&audit.Entry{Event: "board_task.create", Decision: "allowed", Details: map[string]any{"id": t.ID}},
+			&audit.Entry{Event: "board_task.create", Decision: audit.DecisionAllow, Details: map[string]any{"id": t.ID}},
 		)
 	}
 	jsonCreated(w, toWireBoardTask(t))
@@ -639,7 +639,7 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 
 	if a.auditor != nil {
 		_ = a.auditor.Log(
-			&audit.Entry{Event: "board_task.update", Decision: "allowed", Details: map[string]any{"id": id}},
+			&audit.Entry{Event: "board_task.update", Decision: audit.DecisionAllow, Details: map[string]any{"id": id}},
 		)
 	}
 	jsonOK(w, toWireBoardTask(existing))
@@ -677,14 +677,13 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 
 	if a.auditor != nil {
 		_ = a.auditor.Log(
-			&audit.Entry{Event: "board_task.delete", Decision: "allowed", Details: map[string]any{"id": id}},
+			&audit.Entry{Event: "board_task.delete", Decision: audit.DecisionAllow, Details: map[string]any{"id": id}},
 		)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleBoardTaskStart handles POST /api/v1/board/tasks/{id}/start.
-// It creates a new chat session linked to the task, sets status to active, and persists.
 func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid task ID")
@@ -707,15 +706,21 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 
-	// Resolve the agent to use: prefer the task's own agent_id, fall back to the
-	// first enabled agent in config.
 	agentID := existing.AgentID
 	if agentID == "" {
-		cfg := a.agentLoop.GetConfig()
-		for _, ag := range cfg.Agents.List {
-			if ag.IsActive() {
-				agentID = ag.ID
-				break
+		if reg := a.agentLoop.GetRegistry(); reg != nil {
+			if def := reg.GetDefaultAgent(); def != nil {
+				agentID = def.ID
+			}
+		}
+		if agentID == "" {
+			// fall back to first enabled agent
+			cfg := a.agentLoop.GetConfig()
+			for _, ag := range cfg.Agents.List {
+				if ag.IsActive() {
+					agentID = ag.ID
+					break
+				}
 			}
 		}
 	}
@@ -724,7 +729,7 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 
-	// Use the shared session store; fall back to the per-agent store.
+	// GetSessionStore may be nil in test scaffolds or on init failure; fall back to legacy per-agent store.
 	store := a.agentLoop.GetSessionStore()
 	if store == nil {
 		store = a.agentLoop.GetAgentStore(agentID)
@@ -746,14 +751,14 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 	existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
 	if err := a.writeBoardTask(existing); err != nil {
-		slog.Error("rest: board task: start write failed", "id", id, "error", err)
+		slog.Error("rest: board task: start write failed", "id", id, "session_id", meta.ID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "failed to update task")
 		return
 	}
 
 	if a.auditor != nil {
 		_ = a.auditor.Log(
-			&audit.Entry{Event: "board_task.start", Decision: "allowed", Details: map[string]any{"id": id, "session_id": meta.ID}},
+			&audit.Entry{Event: "board_task.start", Decision: audit.DecisionAllow, AgentID: agentID, SessionID: meta.ID, Details: map[string]any{"id": id}},
 		)
 	}
 	jsonOK(w, toWireBoardTask(existing))
@@ -767,8 +772,7 @@ func (a *restAPI) HandleBoardTasks(w http.ResponseWriter, r *http.Request) {
 	if len(rest) > 1 {
 		id := strings.TrimPrefix(rest, "/")
 
-		// POST /api/v1/board/tasks/{id}/start — must be checked before the sub-path
-		// rejection below because the id segment contains a "/".
+		// Must precede the sub-path rejection: id retains "/start" here, which would match strings.Contains below.
 		if strings.HasSuffix(id, "/start") {
 			taskID := strings.TrimSuffix(id, "/start")
 			if r.Method != http.MethodPost {
@@ -779,7 +783,6 @@ func (a *restAPI) HandleBoardTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Reject other sub-paths (e.g. /api/v1/board/tasks/foo/bar).
 		if strings.Contains(id, "/") {
 			http.NotFound(w, r)
 			return

@@ -136,7 +136,19 @@ func IsValidEventName(e EventName) bool {
 		// and RetrospectiveTool.logRateLimited).
 		"memory.remember",
 		"memory.retrospective",
-		"memory.rate_limited":
+		"memory.rate_limited",
+		// Board tasks, projects, and milestones (pkg/gateway/rest_board.go,
+		// rest_projects.go, rest_milestones.go).
+		"board_task.create",
+		"board_task.update",
+		"board_task.delete",
+		"board_task.start",
+		"project.create",
+		"project.update",
+		"project.delete",
+		"milestone.create",
+		"milestone.update",
+		"milestone.delete":
 		return true
 	}
 	return false

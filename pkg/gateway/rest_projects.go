@@ -473,7 +473,7 @@ func (a *restAPI) handleProjectPost(w http.ResponseWriter, r *http.Request) {
 		_ = a.auditor.Log(
 			&audit.Entry{
 				Event:    "project.create",
-				Decision: "allowed",
+				Decision: audit.DecisionAllow,
 				Details:  map[string]any{"id": p.ID, "name": p.Name},
 			},
 		)
@@ -586,7 +586,7 @@ func (a *restAPI) handleProjectPut(w http.ResponseWriter, r *http.Request, id st
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(&audit.Entry{Event: "project.update", Decision: "allowed", Details: map[string]any{"id": id}})
+		_ = a.auditor.Log(&audit.Entry{Event: "project.update", Decision: audit.DecisionAllow, Details: map[string]any{"id": id}})
 	}
 	jsonOK(w, projectToWire(p, countTasksForProject(a.homePath, id)))
 }
@@ -629,7 +629,7 @@ func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(&audit.Entry{Event: "project.delete", Decision: "allowed", Details: map[string]any{"id": id}})
+		_ = a.auditor.Log(&audit.Entry{Event: "project.delete", Decision: audit.DecisionAllow, Details: map[string]any{"id": id}})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
