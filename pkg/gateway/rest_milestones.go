@@ -398,7 +398,7 @@ func (a *restAPI) handleMilestoneGet(w http.ResponseWriter, r *http.Request, pro
 type milestoneUpdateRequest struct { // not-wire-format
 	Name        *string          `json:"name,omitempty"`
 	Description *string          `json:"description,omitempty"`
-	DueDate     *json.RawMessage `json:"due_date,omitempty"` // null clears; absent = no-op; string = new value
+	DueDate     *json.RawMessage `json:"due_date"` // null clears; absent = no-op; string = new value
 }
 
 // handleMilestonePut handles PUT /api/v1/projects/{project_id}/milestones/{id} → 200.
