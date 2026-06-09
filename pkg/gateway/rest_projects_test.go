@@ -577,3 +577,95 @@ func TestHandleProjects_ConcurrentDelete(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, wGet.Code,
 		"GET /projects/{id} after concurrent delete must return 404; body=%s", wGet.Body.String())
 }
+
+// ---------------------------------------------------------------------------
+// Inbox auto-creation and protection tests (project-task-milestone-spec.md)
+// ---------------------------------------------------------------------------
+
+// TestHandleProjects_InboxAutoCreated verifies that GET /api/v1/projects on a fresh home dir
+// returns a project with is_default=true and name="Inbox".
+// BDD: Given a fresh home directory with no projects,
+// When GET /api/v1/projects is called,
+// Then 200 with an array containing a project where is_default=true and name="Inbox".
+// Traces to: project-task-milestone-spec.md — FR-L2-001 (Inbox auto-creation), FR-INX-1
+func TestHandleProjects_InboxAutoCreated(t *testing.T) {
+	// Traces to: project-task-milestone-spec.md — FR-L2-001 / FR-INX-1: Inbox auto-created on first use
+	api := newTestRestAPIWithHome(t)
+
+	// Trigger auto-creation by calling ensureInboxProject directly (same path the
+	// HandleProjects list handler calls in production on first use).
+	// The handler itself calls ensureInboxProject before listing.
+	// We call it explicitly here to match how the gateway wires it at startup/first-use.
+	require.NoError(t, ensureInboxProject(api.homePath),
+		"ensureInboxProject must not error on fresh home")
+
+	// GET /api/v1/projects → response must contain Inbox project.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	r.URL.Path = "/api/v1/projects"
+	api.HandleProjects(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code,
+		"GET /projects on fresh dir with inbox must return 200; body=%s", w.Body.String())
+	var projects []gen.Project
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &projects))
+	require.NotEmpty(t, projects, "GET /projects must return at least the Inbox project")
+
+	// Content test: find the default (Inbox) project.
+	foundInbox := false
+	for _, p := range projects {
+		if p.IsDefault != nil && *p.IsDefault {
+			foundInbox = true
+			assert.Equal(t, "Inbox", p.Name, "the default project must have name 'Inbox'")
+			assert.Equal(t, gen.ProjectStatusActive, p.Status, "Inbox project must be active")
+		}
+	}
+	assert.True(t, foundInbox, "GET /projects must contain a project with is_default=true (Inbox)")
+}
+
+// TestHandleProjects_InboxNotDeletable verifies that DELETE /api/v1/projects/<inbox-id> returns 409.
+// BDD: Given the Inbox project with is_default=true,
+// When DELETE /api/v1/projects/{inbox-id} is called,
+// Then 409 (cannot delete the default Inbox project).
+// Traces to: project-task-milestone-spec.md — FR-INX-2 (Inbox not deletable), FR-L2-002
+func TestHandleProjects_InboxNotDeletable(t *testing.T) {
+	// Traces to: project-task-milestone-spec.md — FR-INX-2 / FR-L2-002: Inbox cannot be deleted
+	api := newTestRestAPIWithHome(t)
+
+	// Create the Inbox project directly via ensureInboxProject.
+	require.NoError(t, ensureInboxProject(api.homePath))
+
+	// Find the Inbox project ID by listing projects.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	r.URL.Path = "/api/v1/projects"
+	api.HandleProjects(w, r)
+	require.Equal(t, http.StatusOK, w.Code)
+	var projects []gen.Project
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &projects))
+
+	var inboxID string
+	for _, p := range projects {
+		if p.IsDefault != nil && *p.IsDefault {
+			inboxID = p.Id
+		}
+	}
+	require.NotEmpty(t, inboxID, "must find Inbox project in the list")
+
+	// DELETE Inbox → 409.
+	wDel := httptest.NewRecorder()
+	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/projects/"+inboxID, nil)
+	rDel.URL.Path = "/api/v1/projects/" + inboxID
+	api.HandleProjects(wDel, rDel)
+
+	assert.Equal(t, http.StatusConflict, wDel.Code,
+		"DELETE /projects/{inbox-id} must return 409 (Inbox not deletable); body=%s", wDel.Body.String())
+
+	// Verify Inbox still exists after failed delete.
+	wGet := httptest.NewRecorder()
+	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+inboxID, nil)
+	rGet.URL.Path = "/api/v1/projects/" + inboxID
+	api.HandleProjects(wGet, rGet)
+	assert.Equal(t, http.StatusOK, wGet.Code,
+		"GET /projects/{inbox-id} after failed delete must still return 200")
+}

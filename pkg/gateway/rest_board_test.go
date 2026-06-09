@@ -447,6 +447,391 @@ func TestHandleBoardTasks_FKValidation(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Extended field and filter tests (project-task-milestone-spec.md Wave 1a)
+// ---------------------------------------------------------------------------
+
+// TestHandleBoardTasks_ExtendedFields verifies that POST /api/v1/board/tasks accepts
+// prompt, priority, and milestone_id and that GET echoes them back.
+// BDD: Given a project P with milestone M,
+// When POST /api/v1/board/tasks with prompt="Do this", priority=2, milestone_id=M,
+// Then 201; GET same task returns prompt="Do this", priority=2, milestone_id=M.
+// Traces to: project-task-milestone-spec.md — extended BoardTask fields (FR-L2-005–FR-L2-008)
+func TestHandleBoardTasks_ExtendedFields(t *testing.T) {
+	// Traces to: project-task-milestone-spec.md — FR-L2-005 prompt, FR-L2-007 priority, FR-L2-008 milestone_id
+	api := newTestRestAPIWithHome(t)
+	projID := createProjectViaAPI(t, api, "ExtendedFieldsProject", "")
+
+	// Create a milestone in the project.
+	midBody := `{"name":"Ext Test Milestone"}`
+	wMil := httptest.NewRecorder()
+	rMil := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+projID+"/milestones", strings.NewReader(midBody))
+	rMil.Header.Set("Content-Type", "application/json")
+	rMil.URL.Path = "/api/v1/projects/" + projID + "/milestones"
+	api.HandleMilestones(wMil, rMil)
+	require.Equal(t, http.StatusCreated, wMil.Code, "create milestone for test must return 201")
+	var milResp struct {
+		ID string `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal(wMil.Body.Bytes(), &milResp))
+	milID := milResp.ID
+
+	// POST task with extended fields.
+	priority := 2
+	body := fmt.Sprintf(`{"name":"Extended Task","project_id":%q,"milestone_id":%q,"prompt":"Do this","priority":%d}`,
+		projID, milID, priority)
+	wPost := httptest.NewRecorder()
+	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body))
+	rPost.Header.Set("Content-Type", "application/json")
+	rPost.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wPost, rPost)
+	require.Equal(t, http.StatusCreated, wPost.Code,
+		"POST /board/tasks with extended fields must return 201; body=%s", wPost.Body.String())
+
+	var created gen.BoardTask
+	require.NoError(t, json.Unmarshal(wPost.Body.Bytes(), &created))
+
+	// Content tests: each field must be echoed back exactly.
+	require.NotNil(t, created.Prompt, "prompt must not be nil in response")
+	assert.Equal(t, "Do this", *created.Prompt, "prompt must match request")
+	require.NotNil(t, created.Priority, "priority must not be nil in response")
+	assert.Equal(t, priority, *created.Priority, "priority must match request")
+	require.NotNil(t, created.MilestoneId, "milestone_id must not be nil in response")
+	assert.Equal(t, milID, *created.MilestoneId, "milestone_id must match request")
+
+	// GET same task — fields must persist.
+	wGet := httptest.NewRecorder()
+	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks/"+created.Id, nil)
+	rGet.URL.Path = "/api/v1/board/tasks/" + created.Id
+	api.HandleBoardTasks(wGet, rGet)
+	require.Equal(t, http.StatusOK, wGet.Code)
+	var got gen.BoardTask
+	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &got))
+	require.NotNil(t, got.Prompt, "GET: prompt must persist")
+	assert.Equal(t, "Do this", *got.Prompt, "GET: prompt must equal created value")
+	require.NotNil(t, got.Priority, "GET: priority must persist")
+	assert.Equal(t, priority, *got.Priority, "GET: priority must equal created value")
+	require.NotNil(t, got.MilestoneId, "GET: milestone_id must persist")
+	assert.Equal(t, milID, *got.MilestoneId, "GET: milestone_id must equal created value")
+}
+
+// TestHandleBoardTasks_Priority_DefaultsToThree verifies POST without priority returns priority=3.
+// BDD: Given a POST body without priority,
+// When POST /api/v1/board/tasks,
+// Then 201; GET returns priority=3.
+// Traces to: project-task-milestone-spec.md — FR-L2-007 (priority defaults to 3)
+func TestHandleBoardTasks_Priority_DefaultsToThree(t *testing.T) {
+	// Traces to: project-task-milestone-spec.md — FR-L2-007: priority defaults to P3 when omitted
+	api := newTestRestAPIWithHome(t)
+
+	wPost := httptest.NewRecorder()
+	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks",
+		strings.NewReader(`{"name":"NoPriorityTask"}`))
+	rPost.Header.Set("Content-Type", "application/json")
+	rPost.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wPost, rPost)
+	require.Equal(t, http.StatusCreated, wPost.Code,
+		"POST /board/tasks without priority must return 201; body=%s", wPost.Body.String())
+
+	var created gen.BoardTask
+	require.NoError(t, json.Unmarshal(wPost.Body.Bytes(), &created))
+	require.NotNil(t, created.Priority, "priority must not be nil in response")
+	assert.Equal(t, 3, *created.Priority, "priority must default to 3 when omitted")
+
+	// GET must also return priority=3 (from disk).
+	wGet := httptest.NewRecorder()
+	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks/"+created.Id, nil)
+	rGet.URL.Path = "/api/v1/board/tasks/" + created.Id
+	api.HandleBoardTasks(wGet, rGet)
+	require.Equal(t, http.StatusOK, wGet.Code)
+	var got gen.BoardTask
+	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &got))
+	require.NotNil(t, got.Priority, "GET: priority must not be nil")
+	assert.Equal(t, 3, *got.Priority, "GET: priority must be 3 when not set on create")
+}
+
+// TestHandleBoardTasks_Priority_Validation verifies that out-of-range priority values are rejected.
+// BDD: Given priority=0 → 400; priority=6 → 400; priority=5 → 201.
+// Traces to: project-task-milestone-spec.md — FR-L2-007 (priority 1–5)
+func TestHandleBoardTasks_Priority_Validation(t *testing.T) {
+	// Traces to: project-task-milestone-spec.md — FR-L2-007 dataset: priority boundaries
+	api := newTestRestAPIWithHome(t)
+
+	tests := []struct {
+		name         string
+		priority     int
+		expectedCode int
+	}{
+		{"priority zero", 0, http.StatusBadRequest},
+		{"priority six", 6, http.StatusBadRequest},
+		{"priority one boundary min", 1, http.StatusCreated},
+		{"priority five boundary max", 5, http.StatusCreated},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"name":"PrioTask %s","priority":%d}`, tc.name, tc.priority)
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body))
+			r.Header.Set("Content-Type", "application/json")
+			r.URL.Path = "/api/v1/board/tasks"
+			api.HandleBoardTasks(w, r)
+			assert.Equal(t, tc.expectedCode, w.Code,
+				"POST /board/tasks with priority=%d must return %d; body=%s",
+				tc.priority, tc.expectedCode, w.Body.String())
+		})
+	}
+}
+
+// TestHandleBoardTasks_Result_TooLong verifies PUT result of 50001 chars returns 400.
+// BDD: Given an existing board task,
+// When PUT /api/v1/board/tasks/{id} with result of 50001 characters,
+// Then 400.
+// Traces to: project-task-milestone-spec.md — FR-L2-009 result maxLength: 50000
+func TestHandleBoardTasks_Result_TooLong(t *testing.T) {
+	// Traces to: project-task-milestone-spec.md — BoardTaskUpdateRequest result maxLength
+	api := newTestRestAPIWithHome(t)
+	task := createBoardTaskViaAPI(t, api, "ResultTask", "inbox")
+
+	longResult := strings.Repeat("r", 50001)
+	body, err := json.Marshal(map[string]any{"result": longResult})
+	require.NoError(t, err)
+
+	wPut := httptest.NewRecorder()
+	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id, strings.NewReader(string(body)))
+	rPut.Header.Set("Content-Type", "application/json")
+	rPut.URL.Path = "/api/v1/board/tasks/" + task.Id
+	api.HandleBoardTasks(wPut, rPut)
+	assert.Equal(t, http.StatusBadRequest, wPut.Code,
+		"PUT /board/tasks/{id} with result > 50000 chars must return 400; body=%s", wPut.Body.String())
+
+	// Boundary: exactly 50000 chars must be accepted.
+	exactResult := strings.Repeat("s", 50000)
+	body50k, err := json.Marshal(map[string]any{"result": exactResult})
+	require.NoError(t, err)
+	wOK := httptest.NewRecorder()
+	rOK := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id, strings.NewReader(string(body50k)))
+	rOK.Header.Set("Content-Type", "application/json")
+	rOK.URL.Path = "/api/v1/board/tasks/" + task.Id
+	api.HandleBoardTasks(wOK, rOK)
+	assert.Equal(t, http.StatusOK, wOK.Code,
+		"PUT /board/tasks/{id} with result exactly 50000 chars must return 200; body=%s", wOK.Body.String())
+}
+
+// TestHandleBoardTasks_FilterByAgentID verifies GET ?agent_id= filter returns only matching tasks.
+// BDD: Given task T1 with agent_id=A and task T2 with agent_id=B,
+// When GET /api/v1/board/tasks?agent_id=A,
+// Then only T1 is returned; T2 is absent.
+// Traces to: project-task-milestone-spec.md — FR-L2-029 (agent_id filter)
+func TestHandleBoardTasks_FilterByAgentID(t *testing.T) {
+	// Traces to: project-task-milestone-spec.md — FR-L2-029
+	api := newTestRestAPIWithHome(t)
+
+	// Create task with agent_id=agent-alpha.
+	wT1 := httptest.NewRecorder()
+	rT1 := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks",
+		strings.NewReader(`{"name":"Alpha Task","agent_id":"01JXAGENT0ALPHA00000000001"}`))
+	rT1.Header.Set("Content-Type", "application/json")
+	rT1.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wT1, rT1)
+	require.Equal(t, http.StatusCreated, wT1.Code, "create alpha task must return 201")
+	var taskAlpha gen.BoardTask
+	require.NoError(t, json.Unmarshal(wT1.Body.Bytes(), &taskAlpha))
+
+	// Create task with agent_id=agent-beta.
+	wT2 := httptest.NewRecorder()
+	rT2 := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks",
+		strings.NewReader(`{"name":"Beta Task","agent_id":"01JXAGENT0BETA000000000002"}`))
+	rT2.Header.Set("Content-Type", "application/json")
+	rT2.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wT2, rT2)
+	require.Equal(t, http.StatusCreated, wT2.Code, "create beta task must return 201")
+	var taskBeta gen.BoardTask
+	require.NoError(t, json.Unmarshal(wT2.Body.Bytes(), &taskBeta))
+
+	// GET ?agent_id=alpha → only alpha task returned.
+	wFilter := httptest.NewRecorder()
+	rFilter := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks?agent_id=01JXAGENT0ALPHA00000000001", nil)
+	rFilter.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wFilter, rFilter)
+	require.Equal(t, http.StatusOK, wFilter.Code)
+
+	var resp struct {
+		Items []struct {
+			ID      string  `json:"id"`
+			AgentID *string `json:"agent_id,omitempty"`
+		} `json:"items"`
+		Total int `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal(wFilter.Body.Bytes(), &resp))
+
+	// Content test: only alpha task must appear.
+	foundAlpha, foundBeta := false, false
+	for _, item := range resp.Items {
+		if item.ID == taskAlpha.Id {
+			foundAlpha = true
+		}
+		if item.ID == taskBeta.Id {
+			foundBeta = true
+		}
+	}
+	assert.True(t, foundAlpha, "alpha task must appear in ?agent_id=alpha response")
+	assert.False(t, foundBeta, "beta task must NOT appear in ?agent_id=alpha response")
+
+	// Differentiation test: ?agent_id=beta returns only the beta task.
+	wFilter2 := httptest.NewRecorder()
+	rFilter2 := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks?agent_id=01JXAGENT0BETA000000000002", nil)
+	rFilter2.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wFilter2, rFilter2)
+	require.Equal(t, http.StatusOK, wFilter2.Code)
+	var resp2 struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(wFilter2.Body.Bytes(), &resp2))
+	betaIDs := make([]string, 0, len(resp2.Items))
+	for _, item := range resp2.Items {
+		betaIDs = append(betaIDs, item.ID)
+	}
+	assert.Contains(t, betaIDs, taskBeta.Id, "beta task must appear in ?agent_id=beta response")
+	assert.NotContains(t, betaIDs, taskAlpha.Id, "alpha task must NOT appear in ?agent_id=beta response")
+
+	// Differentiation test: the two filters return different task sets (not hardcoded).
+	alphaIDs := make([]string, 0, len(resp.Items))
+	for _, item := range resp.Items {
+		alphaIDs = append(alphaIDs, item.ID)
+	}
+	// Alpha filter has alpha task; beta filter has beta task — they must differ.
+	assert.NotEqual(t, alphaIDs, betaIDs,
+		"filter by different agent_id must produce different task sets (not hardcoded)")
+}
+
+// TestHandleBoardTasks_FilterByMilestoneID verifies GET ?milestone_id= returns only matching tasks.
+// BDD: Given task T1 with milestone_id=M1 and task T2 with milestone_id=M2,
+// When GET /api/v1/board/tasks?milestone_id=M1,
+// Then only T1 is returned.
+// Traces to: project-task-milestone-spec.md — FR-L2-030 (milestone_id filter)
+func TestHandleBoardTasks_FilterByMilestoneID(t *testing.T) {
+	// Traces to: project-task-milestone-spec.md — FR-L2-030
+	api := newTestRestAPIWithHome(t)
+
+	// Set up two projects, each with a milestone.
+	proj1ID := createProjectViaAPI(t, api, "MilFilterProj1", "")
+	proj2ID := createProjectViaAPI(t, api, "MilFilterProj2", "")
+
+	// Create milestone M1 in proj1.
+	wM1 := httptest.NewRecorder()
+	rM1 := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+proj1ID+"/milestones",
+		strings.NewReader(`{"name":"Milestone Filter 1"}`))
+	rM1.Header.Set("Content-Type", "application/json")
+	rM1.URL.Path = "/api/v1/projects/" + proj1ID + "/milestones"
+	api.HandleMilestones(wM1, rM1)
+	require.Equal(t, http.StatusCreated, wM1.Code)
+	var m1 struct {
+		ID string `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal(wM1.Body.Bytes(), &m1))
+
+	// Create milestone M2 in proj2.
+	wM2 := httptest.NewRecorder()
+	rM2 := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+proj2ID+"/milestones",
+		strings.NewReader(`{"name":"Milestone Filter 2"}`))
+	rM2.Header.Set("Content-Type", "application/json")
+	rM2.URL.Path = "/api/v1/projects/" + proj2ID + "/milestones"
+	api.HandleMilestones(wM2, rM2)
+	require.Equal(t, http.StatusCreated, wM2.Code)
+	var m2 struct {
+		ID string `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal(wM2.Body.Bytes(), &m2))
+
+	// Create one task per milestone.
+	body1 := fmt.Sprintf(`{"name":"Task for M1","project_id":%q,"milestone_id":%q}`, proj1ID, m1.ID)
+	wT1 := httptest.NewRecorder()
+	rT1 := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body1))
+	rT1.Header.Set("Content-Type", "application/json")
+	rT1.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wT1, rT1)
+	require.Equal(t, http.StatusCreated, wT1.Code)
+	var task1 struct {
+		ID string `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal(wT1.Body.Bytes(), &task1))
+
+	body2 := fmt.Sprintf(`{"name":"Task for M2","project_id":%q,"milestone_id":%q}`, proj2ID, m2.ID)
+	wT2 := httptest.NewRecorder()
+	rT2 := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body2))
+	rT2.Header.Set("Content-Type", "application/json")
+	rT2.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wT2, rT2)
+	require.Equal(t, http.StatusCreated, wT2.Code)
+	var task2 struct {
+		ID string `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal(wT2.Body.Bytes(), &task2))
+
+	// GET ?milestone_id=M1 → only task1 returned.
+	wFilter := httptest.NewRecorder()
+	rFilter := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks?milestone_id="+m1.ID, nil)
+	rFilter.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wFilter, rFilter)
+	require.Equal(t, http.StatusOK, wFilter.Code)
+	var respM1 struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+		Total int `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal(wFilter.Body.Bytes(), &respM1))
+
+	m1IDs := make([]string, 0, len(respM1.Items))
+	for _, item := range respM1.Items {
+		m1IDs = append(m1IDs, item.ID)
+	}
+	assert.Contains(t, m1IDs, task1.ID, "task1 must appear in ?milestone_id=M1 response")
+	assert.NotContains(t, m1IDs, task2.ID, "task2 must NOT appear in ?milestone_id=M1 response")
+}
+
+// TestHandleBoardTasks_ActiveRequiresAgentContext verifies PUT status=active without
+// X-Omnipus-Agent-Context header returns 400.
+// BDD: Given an existing board task with status "inbox",
+// When PUT /api/v1/board/tasks/{id} with {"status":"active"} and no agent-context header,
+// Then 400.
+// Traces to: project-task-milestone-spec.md — FR-L2-006 (active requires agent context)
+func TestHandleBoardTasks_ActiveRequiresAgentContext(t *testing.T) {
+	// Traces to: project-task-milestone-spec.md — FR-L2-006: status "active" may only be set by agent system
+	api := newTestRestAPIWithHome(t)
+	task := createBoardTaskViaAPI(t, api, "ActiveGuardTask", "inbox")
+
+	// PUT {"status":"active"} without agent-context header → 400.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
+		strings.NewReader(`{"status":"active"}`))
+	r.Header.Set("Content-Type", "application/json")
+	// Deliberately omit X-Omnipus-Agent-Context header.
+	r.URL.Path = "/api/v1/board/tasks/" + task.Id
+	api.HandleBoardTasks(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"PUT status=active without X-Omnipus-Agent-Context must return 400; body=%s", w.Body.String())
+
+	// Differentiation: with agent-context header → 200.
+	wOK := httptest.NewRecorder()
+	rOK := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
+		strings.NewReader(`{"status":"active"}`))
+	rOK.Header.Set("Content-Type", "application/json")
+	rOK.Header.Set("X-Omnipus-Agent-Context", "true")
+	rOK.URL.Path = "/api/v1/board/tasks/" + task.Id
+	api.HandleBoardTasks(wOK, rOK)
+	assert.Equal(t, http.StatusOK, wOK.Code,
+		"PUT status=active WITH X-Omnipus-Agent-Context must return 200; body=%s", wOK.Body.String())
+}
+
+// ---------------------------------------------------------------------------
+// End of extended field and filter tests
+// ---------------------------------------------------------------------------
+
 // TestHandleBoardTasks_TaskCount_ExcludesWorkflowTasks verifies project task_count
 // only counts GTD tasks, not workflow tasks.
 // BDD: Given a project with one GTD task and one workflow task,
