@@ -125,8 +125,8 @@ function AuditLogSection() {
 
   return (
     <div className="divide-y divide-[var(--color-border)]">
-      {auditEntries.map((entry, idx) => (
-        <div key={`${idx}-${entry.timestamp}-${entry.event}`} className="px-4 py-2 flex items-start gap-3 text-xs">
+      {auditEntries.map((entry) => (
+        <div key={`${entry.timestamp}-${entry.event}`} className="px-4 py-2 flex items-start gap-3 text-xs">
           <span className="text-[var(--color-muted)] shrink-0 font-mono">
             {new Date(entry.timestamp).toLocaleString()}
           </span>
@@ -159,18 +159,6 @@ export function MonitorScreen() {
           Monitor
         </h2>
       </div>
-
-      {/* Activity section (FR-021) */}
-      <section className="border-b border-[var(--color-border)]">
-        <div className="px-4 py-2.5 border-b border-[var(--color-border)]">
-          <h3 className="text-xs font-semibold uppercase tracking-widest text-[var(--color-muted)]">
-            Activity
-          </h3>
-        </div>
-        <p className="px-4 py-3 text-sm text-[var(--color-muted)]">
-          No recent activity.
-        </p>
-      </section>
 
       {/* Schedules section */}
       <section className="border-b border-[var(--color-border)]">

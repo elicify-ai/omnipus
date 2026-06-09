@@ -38,7 +38,7 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
   const [createMilestoneOpen, setCreateMilestoneOpen] = useState(false)
 
   // Load projects to find this project's metadata
-  const { data: projects = [], isError: projectsError } = useQuery({
+  const { data: projects = [], isError: projectsError, isLoading: projectsLoading } = useQuery({
     queryKey: projectsQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchProjects({ status: 'active' }),
     staleTime: 30_000,
@@ -62,7 +62,7 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
   }, [projectId, setActiveMilestoneId])
 
   // Also try archived projects for direct URL access
-  const { data: archivedProjects = [] } = useQuery({
+  const { data: archivedProjects = [], isLoading: archivedLoading } = useQuery({
     queryKey: projectsQueryKeys.list({ status: 'archived' }),
     queryFn: () => fetchProjects({ status: 'archived' }),
     staleTime: 60_000,
@@ -109,7 +109,7 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
   }
 
   // Show loading skeleton while projects list hasn't resolved yet
-  if (projects.length === 0 && !projectsError) {
+  if (projectsLoading) {
     return (
       <div className="flex flex-col h-full">
         <div className="h-16 bg-[var(--color-surface-1)] border-b border-[var(--color-border)] animate-pulse" />
@@ -122,7 +122,7 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
     )
   }
 
-  if (!project) {
+  if (!project && !archivedLoading) {
     return (
       <div className="flex items-center justify-center h-full p-8 text-[var(--color-muted)] text-sm">
         Project not found.

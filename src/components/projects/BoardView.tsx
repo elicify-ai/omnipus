@@ -108,7 +108,6 @@ function BoardColumn({ config, tasks, milestones, onTaskClick, onNewTask }: Boar
         )}
       </div>
 
-      <span className="sr-only">{config.label} column, {tasks.length} tasks</span>
     </div>
   )
 }

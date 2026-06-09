@@ -2178,38 +2178,50 @@ export const milestonesQueryKeys = {
 /** Milestone with optional computed progress field (0–1, added by backend at read time). */
 export type MilestoneWithProgress = Milestone & { progress?: number } // not-wire-format: extends generated Milestone; progress added server-side, not in schema
 
+// Schema for MilestoneWithProgress: base Milestone fields + optional progress.
+// Cannot use .extend() because the generated MilestoneSchema is typed as
+// ZodType<Milestone> (not ZodObject), so we intersect with a progress-only object.
+const MilestoneWithProgressSchema: ZodType<MilestoneWithProgress> = z.intersection(
+  MilestoneSchema,
+  z.object({ progress: z.number().min(0).max(1).optional() }),
+)
+
+// Schema for MilestoneListResponse where each milestone includes the optional progress field.
+const MilestoneWithProgressListResponseSchema: ZodType<{ milestones: MilestoneWithProgress[]; total: number }> = z.object({
+  milestones: z.array(MilestoneWithProgressSchema),
+  total: z.number().int(),
+}).passthrough()
+
 export function fetchMilestones(projectId: string): Promise<MilestoneWithProgress[]> {
-  // Use the base Milestone schema with passthrough for the computed progress field.
-  // The backend adds progress at read time; the schema does not include it.
-  return request<MilestoneListResponse>(
+  return request<{ milestones: MilestoneWithProgress[]; total: number }>(
     `/projects/${encodeURIComponent(projectId)}/milestones`,
     undefined,
-    MilestoneListResponseSchema as ZodType<MilestoneListResponse>,
-  ).then((res) => res.milestones as MilestoneWithProgress[])
+    MilestoneWithProgressListResponseSchema,
+  ).then((res) => res.milestones)
 }
 
 export function getMilestone(projectId: string, milestoneId: string): Promise<MilestoneWithProgress> {
-  return request<Milestone>(
+  return request<MilestoneWithProgress>(
     `/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}`,
     undefined,
-    MilestoneSchema as ZodType<Milestone>,
-  ) as Promise<MilestoneWithProgress>
+    MilestoneWithProgressSchema,
+  )
 }
 
 export function createMilestone(projectId: string, body: MilestoneCreateRequest): Promise<MilestoneWithProgress> {
-  return request<Milestone>(
+  return request<MilestoneWithProgress>(
     `/projects/${encodeURIComponent(projectId)}/milestones`,
     { method: 'POST', body: JSON.stringify(body) },
-    MilestoneSchema as ZodType<Milestone>,
-  ) as Promise<MilestoneWithProgress>
+    MilestoneWithProgressSchema,
+  )
 }
 
 export function updateMilestone(projectId: string, milestoneId: string, body: MilestoneUpdateRequest): Promise<MilestoneWithProgress> {
-  return request<Milestone>(
+  return request<MilestoneWithProgress>(
     `/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}`,
     { method: 'PUT', body: JSON.stringify(body) },
-    MilestoneSchema as ZodType<Milestone>,
-  ) as Promise<MilestoneWithProgress>
+    MilestoneWithProgressSchema,
+  )
 }
 
 export function deleteMilestone(projectId: string, milestoneId: string): Promise<void> {
