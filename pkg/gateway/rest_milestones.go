@@ -28,7 +28,7 @@ import (
 
 // milestone mirrors the on-disk format of ~/.omnipus/milestones/{id}.json.
 // not-wire-format: internal disk-cache struct, mapped to wire type before serving.
-type milestone struct { // not-wire-format
+type milestone struct { // not-wire-format: on-disk JSON cache; mapped to generated wire type before serving
 	ID          string `json:"id"`
 	ProjectID   string `json:"project_id"`
 	Name        string `json:"name"`
@@ -41,7 +41,7 @@ type milestone struct { // not-wire-format
 // milestoneWithProgress is a milestone plus computed task progress.
 // not-wire-format: local response shim that includes the computed progress field
 // (not stored on disk, computed at read time per FR-L2-010).
-type milestoneWithProgress struct { // not-wire-format
+type milestoneWithProgress struct { // not-wire-format: response shim with computed progress; maps to generated Milestone before wire
 	ID          string    `json:"id"`
 	ProjectID   string    `json:"project_id"`
 	Name        string    `json:"name"`
@@ -119,7 +119,11 @@ func listMilestoneFiles(home string) ([]milestone, error) {
 }
 
 // milestoneToWireWithProgress converts a milestone to a milestoneWithProgress (includes progress field).
-func milestoneToWireWithProgress(m milestone, createdAt, updatedAt time.Time, progress float64) milestoneWithProgress {
+func milestoneToWireWithProgress(
+	m milestone,
+	createdAt, updatedAt time.Time,
+	progress float64,
+) milestoneWithProgress {
 	mwp := milestoneWithProgress{
 		ID:        m.ID,
 		ProjectID: m.ProjectID,
@@ -245,7 +249,13 @@ func (a *restAPI) handleMilestoneList(w http.ResponseWriter, r *http.Request, pr
 	// Single-pass compute progress for all milestones in this project.
 	mCounts, err := computeMilestoneCounts(a.homePath)
 	if err != nil {
-		slog.Warn("rest: milestones: could not compute progress", "project_id", projectID, "error", err)
+		slog.Warn(
+			"rest: milestones: could not compute progress",
+			"project_id",
+			projectID,
+			"error",
+			err,
+		)
 		mCounts = make(map[string][2]int)
 	}
 
@@ -332,8 +342,10 @@ func (a *restAPI) handleMilestonePost(w http.ResponseWriter, r *http.Request, pr
 
 	if a.auditor != nil {
 		_ = a.auditor.Log(
-			&audit.Entry{Event: "milestone.create", Decision: audit.DecisionAllow,
-				Details: map[string]any{"id": m.ID, "project_id": projectID}},
+			&audit.Entry{
+				Event: "milestone.create", Decision: audit.DecisionAllow,
+				Details: map[string]any{"id": m.ID, "project_id": projectID},
+			},
 		)
 	}
 
@@ -344,7 +356,11 @@ func (a *restAPI) handleMilestonePost(w http.ResponseWriter, r *http.Request, pr
 }
 
 // handleMilestoneGet handles GET /api/v1/projects/{project_id}/milestones/{id}.
-func (a *restAPI) handleMilestoneGet(w http.ResponseWriter, r *http.Request, projectID, milestoneID string) {
+func (a *restAPI) handleMilestoneGet(
+	w http.ResponseWriter,
+	r *http.Request,
+	projectID, milestoneID string,
+) {
 	if err := validateEntityID(projectID); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid project ID")
 		return
@@ -374,7 +390,13 @@ func (a *restAPI) handleMilestoneGet(w http.ResponseWriter, r *http.Request, pro
 	// Compute progress for this single milestone.
 	mCounts, err := computeMilestoneCounts(a.homePath)
 	if err != nil {
-		slog.Warn("rest: milestones: get: could not compute progress", "id", milestoneID, "error", err)
+		slog.Warn(
+			"rest: milestones: get: could not compute progress",
+			"id",
+			milestoneID,
+			"error",
+			err,
+		)
 		mCounts = make(map[string][2]int)
 	}
 	counts := mCounts[m.ID]
@@ -395,7 +417,7 @@ func (a *restAPI) handleMilestoneGet(w http.ResponseWriter, r *http.Request, pro
 // milestoneUpdateRequest is a local struct for milestone PUT that supports
 // distinguishing explicit null (clear) from absent (no-op) for due_date.
 // not-wire-format: local decode struct for PUT body; not emitted over the wire.
-type milestoneUpdateRequest struct { // not-wire-format
+type milestoneUpdateRequest struct { // not-wire-format: PUT decode target only; never serialised to any HTTP response
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
 	// DueDate is not decoded here; the PUT handler reads it from the raw body map
@@ -404,7 +426,11 @@ type milestoneUpdateRequest struct { // not-wire-format
 }
 
 // handleMilestonePut handles PUT /api/v1/projects/{project_id}/milestones/{id} → 200.
-func (a *restAPI) handleMilestonePut(w http.ResponseWriter, r *http.Request, projectID, milestoneID string) {
+func (a *restAPI) handleMilestonePut(
+	w http.ResponseWriter,
+	r *http.Request,
+	projectID, milestoneID string,
+) {
 	if err := validateEntityID(projectID); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid project ID")
 		return
@@ -529,8 +555,10 @@ func (a *restAPI) handleMilestonePut(w http.ResponseWriter, r *http.Request, pro
 
 	if a.auditor != nil {
 		_ = a.auditor.Log(
-			&audit.Entry{Event: "milestone.update", Decision: audit.DecisionAllow,
-				Details: map[string]any{"id": milestoneID, "project_id": projectID}},
+			&audit.Entry{
+				Event: "milestone.update", Decision: audit.DecisionAllow,
+				Details: map[string]any{"id": milestoneID, "project_id": projectID},
+			},
 		)
 	}
 
@@ -543,7 +571,11 @@ func (a *restAPI) handleMilestonePut(w http.ResponseWriter, r *http.Request, pro
 }
 
 // handleMilestoneDelete handles DELETE /api/v1/projects/{project_id}/milestones/{id} → 204.
-func (a *restAPI) handleMilestoneDelete(w http.ResponseWriter, r *http.Request, projectID, milestoneID string) {
+func (a *restAPI) handleMilestoneDelete(
+	w http.ResponseWriter,
+	r *http.Request,
+	projectID, milestoneID string,
+) {
 	if err := validateEntityID(projectID); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid project ID")
 		return
@@ -580,8 +612,10 @@ func (a *restAPI) handleMilestoneDelete(w http.ResponseWriter, r *http.Request, 
 
 	if a.auditor != nil {
 		_ = a.auditor.Log(
-			&audit.Entry{Event: "milestone.delete", Decision: audit.DecisionAllow,
-				Details: map[string]any{"id": milestoneID, "project_id": projectID}},
+			&audit.Entry{
+				Event: "milestone.delete", Decision: audit.DecisionAllow,
+				Details: map[string]any{"id": milestoneID, "project_id": projectID},
+			},
 		)
 	}
 	w.WriteHeader(http.StatusNoContent)

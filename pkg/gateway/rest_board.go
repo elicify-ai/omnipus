@@ -384,7 +384,11 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 		status = string(*req.Status)
 	}
 	if !isGTDTask(status) {
-		jsonErr(w, http.StatusBadRequest, "status must be one of: inbox, next, active, waiting, done, failed")
+		jsonErr(
+			w,
+			http.StatusBadRequest,
+			"status must be one of: inbox, next, active, waiting, done, failed",
+		)
 		return
 	}
 
@@ -400,7 +404,10 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, http.StatusBadRequest, "invalid project_id")
 				return
 			}
-			if _, projErr := readProjectFile(a.homePath, projectID); errors.Is(projErr, errProjectNotFound) ||
+			if _, projErr := readProjectFile(a.homePath, projectID); errors.Is(
+				projErr,
+				errProjectNotFound,
+			) ||
 				errors.Is(projErr, os.ErrNotExist) {
 				jsonErr(w, http.StatusBadRequest, "project not found")
 				return
@@ -489,7 +496,11 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 
 	if a.auditor != nil {
 		_ = a.auditor.Log(
-			&audit.Entry{Event: "board_task.create", Decision: audit.DecisionAllow, Details: map[string]any{"id": t.ID}},
+			&audit.Entry{
+				Event:    "board_task.create",
+				Decision: audit.DecisionAllow,
+				Details:  map[string]any{"id": t.ID},
+			},
 		)
 	}
 	jsonCreated(w, toWireBoardTask(t))
@@ -566,7 +577,11 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 	if req.Status != nil {
 		newStatus := string(*req.Status)
 		if !isGTDTask(newStatus) {
-			jsonErr(w, http.StatusBadRequest, "status must be one of: inbox, next, active, waiting, done, failed")
+			jsonErr(
+				w,
+				http.StatusBadRequest,
+				"status must be one of: inbox, next, active, waiting, done, failed",
+			)
 			return
 		}
 		// active status can only be set by an agent (FR-L2-006).
@@ -591,7 +606,10 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 				jsonErr(w, http.StatusBadRequest, "invalid project_id")
 				return
 			}
-			if _, projErr := readProjectFile(a.homePath, *req.ProjectId); errors.Is(projErr, errProjectNotFound) ||
+			if _, projErr := readProjectFile(a.homePath, *req.ProjectId); errors.Is(
+				projErr,
+				errProjectNotFound,
+			) ||
 				errors.Is(projErr, os.ErrNotExist) {
 				jsonErr(w, http.StatusBadRequest, "project not found")
 				return
@@ -639,7 +657,11 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 
 	if a.auditor != nil {
 		_ = a.auditor.Log(
-			&audit.Entry{Event: "board_task.update", Decision: audit.DecisionAllow, Details: map[string]any{"id": id}},
+			&audit.Entry{
+				Event:    "board_task.update",
+				Decision: audit.DecisionAllow,
+				Details:  map[string]any{"id": id},
+			},
 		)
 	}
 	jsonOK(w, toWireBoardTask(existing))
@@ -677,7 +699,11 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 
 	if a.auditor != nil {
 		_ = a.auditor.Log(
-			&audit.Entry{Event: "board_task.delete", Decision: audit.DecisionAllow, Details: map[string]any{"id": id}},
+			&audit.Entry{
+				Event:    "board_task.delete",
+				Decision: audit.DecisionAllow,
+				Details:  map[string]any{"id": id},
+			},
 		)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -751,14 +777,28 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 	existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
 	if err := a.writeBoardTask(existing); err != nil {
-		slog.Error("rest: board task: start write failed", "id", id, "session_id", meta.ID, "error", err)
+		slog.Error(
+			"rest: board task: start write failed",
+			"id",
+			id,
+			"session_id",
+			meta.ID,
+			"error",
+			err,
+		)
 		jsonErr(w, http.StatusInternalServerError, "failed to update task")
 		return
 	}
 
 	if a.auditor != nil {
 		_ = a.auditor.Log(
-			&audit.Entry{Event: "board_task.start", Decision: audit.DecisionAllow, AgentID: agentID, SessionID: meta.ID, Details: map[string]any{"id": id}},
+			&audit.Entry{
+				Event:     "board_task.start",
+				Decision:  audit.DecisionAllow,
+				AgentID:   agentID,
+				SessionID: meta.ID,
+				Details:   map[string]any{"id": id},
+			},
 		)
 	}
 	jsonOK(w, toWireBoardTask(existing))

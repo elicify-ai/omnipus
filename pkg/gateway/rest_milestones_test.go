@@ -43,18 +43,33 @@ type milestoneListResponse struct { // not-wire-format: test-local decode struct
 }
 
 // createMilestoneViaAPI creates a milestone for the given project and returns the decoded response.
-func createMilestoneViaAPI(t *testing.T, api *restAPI, projectID, name string, dueDate *string) milestoneResponse {
+func createMilestoneViaAPI(
+	t *testing.T,
+	api *restAPI,
+	projectID, name string,
+	dueDate *string,
+) milestoneResponse {
 	t.Helper()
 	body := fmt.Sprintf(`{"name":%q}`, name)
 	if dueDate != nil {
 		body = fmt.Sprintf(`{"name":%q,"due_date":%q}`, name, *dueDate)
 	}
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+projectID+"/milestones", strings.NewReader(body))
+	r := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/projects/"+projectID+"/milestones",
+		strings.NewReader(body),
+	)
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/projects/" + projectID + "/milestones"
 	api.HandleMilestones(w, r)
-	require.Equal(t, http.StatusCreated, w.Code, "create milestone must return 201; body=%s", w.Body.String())
+	require.Equal(
+		t,
+		http.StatusCreated,
+		w.Code,
+		"create milestone must return 201; body=%s",
+		w.Body.String(),
+	)
 	var m milestoneResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &m))
 	require.NotEmpty(t, m.ID, "created milestone must have non-empty id")
@@ -62,7 +77,11 @@ func createMilestoneViaAPI(t *testing.T, api *restAPI, projectID, name string, d
 }
 
 // createBoardTaskWithMilestone creates a board task linked to a milestone via REST.
-func createBoardTaskWithMilestone(t *testing.T, api *restAPI, name, projectID, milestoneID, status string) string {
+func createBoardTaskWithMilestone(
+	t *testing.T,
+	api *restAPI,
+	name, projectID, milestoneID, status string,
+) string {
 	t.Helper()
 	body := fmt.Sprintf(`{"name":%q,"project_id":%q,"milestone_id":%q,"status":%q}`,
 		name, projectID, milestoneID, status)
@@ -71,7 +90,13 @@ func createBoardTaskWithMilestone(t *testing.T, api *restAPI, name, projectID, m
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/board/tasks"
 	api.HandleBoardTasks(w, r)
-	require.Equal(t, http.StatusCreated, w.Code, "create board task must return 201; body=%s", w.Body.String())
+	require.Equal(
+		t,
+		http.StatusCreated,
+		w.Code,
+		"create board task must return 201; body=%s",
+		w.Body.String(),
+	)
 	var resp struct {
 		ID string `json:"id"`
 	}
@@ -90,14 +115,28 @@ func setTaskStatusViaAPI(t *testing.T, api *restAPI, taskID, newStatus string) {
 	r.Header.Set("X-Omnipus-Agent-Context", "true")
 	r.URL.Path = "/api/v1/board/tasks/" + taskID
 	api.HandleBoardTasks(w, r)
-	require.Equal(t, http.StatusOK, w.Code, "update board task status must return 200; body=%s", w.Body.String())
+	require.Equal(
+		t,
+		http.StatusOK,
+		w.Code,
+		"update board task status must return 200; body=%s",
+		w.Body.String(),
+	)
 }
 
 // getMilestoneViaAPI fetches a single milestone and returns the response struct.
-func getMilestoneViaAPI(t *testing.T, api *restAPI, projectID, milestoneID string) (milestoneResponse, int) {
+func getMilestoneViaAPI(
+	t *testing.T,
+	api *restAPI,
+	projectID, milestoneID string,
+) (milestoneResponse, int) {
 	t.Helper()
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+projectID+"/milestones/"+milestoneID, nil)
+	r := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/projects/"+projectID+"/milestones/"+milestoneID,
+		nil,
+	)
 	r.URL.Path = "/api/v1/projects/" + projectID + "/milestones/" + milestoneID
 	api.HandleMilestones(w, r)
 	if w.Code != http.StatusOK {
@@ -130,7 +169,13 @@ func TestHandleMilestones_Create(t *testing.T) {
 	r.URL.Path = "/api/v1/projects/" + projID + "/milestones"
 	api.HandleMilestones(w, r)
 
-	require.Equal(t, http.StatusCreated, w.Code, "POST /projects/{id}/milestones must return 201; body=%s", w.Body.String())
+	require.Equal(
+		t,
+		http.StatusCreated,
+		w.Code,
+		"POST /projects/{id}/milestones must return 201; body=%s",
+		w.Body.String(),
+	)
 	var m milestoneResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &m))
 
@@ -166,8 +211,11 @@ func TestHandleMilestones_Create_ProjectNotFound(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/projects/01JXNOEXISTPROJECT000001/milestones",
-		strings.NewReader(`{"name":"Orphan Milestone"}`))
+	r := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/projects/01JXNOEXISTPROJECT000001/milestones",
+		strings.NewReader(`{"name":"Orphan Milestone"}`),
+	)
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/projects/01JXNOEXISTPROJECT000001/milestones"
 	api.HandleMilestones(w, r)
@@ -201,8 +249,13 @@ func TestHandleMilestones_Create_NameTooLong(t *testing.T) {
 	r.URL.Path = "/api/v1/projects/" + projID + "/milestones"
 	api.HandleMilestones(w, r)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code,
-		"POST /projects/{id}/milestones with name > 200 chars must return 400; body=%s", w.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		w.Code,
+		"POST /projects/{id}/milestones with name > 200 chars must return 400; body=%s",
+		w.Body.String(),
+	)
 
 	// Boundary: exactly 200 chars must be accepted.
 	exactName := strings.Repeat("y", 200)
@@ -214,8 +267,13 @@ func TestHandleMilestones_Create_NameTooLong(t *testing.T) {
 	r200.Header.Set("Content-Type", "application/json")
 	r200.URL.Path = "/api/v1/projects/" + projID + "/milestones"
 	api.HandleMilestones(w200, r200)
-	assert.Equal(t, http.StatusCreated, w200.Code,
-		"POST /projects/{id}/milestones with name exactly 200 chars must return 201; body=%s", w200.Body.String())
+	assert.Equal(
+		t,
+		http.StatusCreated,
+		w200.Code,
+		"POST /projects/{id}/milestones with name exactly 200 chars must return 201; body=%s",
+		w200.Body.String(),
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -243,8 +301,13 @@ func TestHandleMilestones_Create_DescriptionTooLong(t *testing.T) {
 	r.URL.Path = "/api/v1/projects/" + projID + "/milestones"
 	api.HandleMilestones(w, r)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code,
-		"POST /projects/{id}/milestones with description > 2000 chars must return 400; body=%s", w.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		w.Code,
+		"POST /projects/{id}/milestones with description > 2000 chars must return 400; body=%s",
+		w.Body.String(),
+	)
 
 	// Boundary: exactly 2000 chars must be accepted.
 	exactDesc := strings.Repeat("e", 2000)
@@ -256,8 +319,13 @@ func TestHandleMilestones_Create_DescriptionTooLong(t *testing.T) {
 	r2000.Header.Set("Content-Type", "application/json")
 	r2000.URL.Path = "/api/v1/projects/" + projID + "/milestones"
 	api.HandleMilestones(w2000, r2000)
-	assert.Equal(t, http.StatusCreated, w2000.Code,
-		"POST /projects/{id}/milestones with description exactly 2000 chars must return 201; body=%s", w2000.Body.String())
+	assert.Equal(
+		t,
+		http.StatusCreated,
+		w2000.Code,
+		"POST /projects/{id}/milestones with description exactly 2000 chars must return 201; body=%s",
+		w2000.Body.String(),
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -301,7 +369,11 @@ func TestHandleMilestones_Get_NotFound(t *testing.T) {
 	projID := createProjectViaAPI(t, api, "GetNotFoundProject", "")
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+projID+"/milestones/01JXNOMILESTONE0000000001", nil)
+	r := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/projects/"+projID+"/milestones/01JXNOMILESTONE0000000001",
+		nil,
+	)
 	r.URL.Path = "/api/v1/projects/" + projID + "/milestones/01JXNOMILESTONE0000000001"
 	api.HandleMilestones(w, r)
 
@@ -330,7 +402,13 @@ func TestHandleMilestones_List(t *testing.T) {
 	r.URL.Path = "/api/v1/projects/" + projID + "/milestones"
 	api.HandleMilestones(w, r)
 
-	require.Equal(t, http.StatusOK, w.Code, "GET /projects/{id}/milestones must return 200; body=%s", w.Body.String())
+	require.Equal(
+		t,
+		http.StatusOK,
+		w.Code,
+		"GET /projects/{id}/milestones must return 200; body=%s",
+		w.Body.String(),
+	)
 	var resp milestoneListResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 
@@ -374,18 +452,42 @@ func TestHandleMilestones_List_SortedByDueDate(t *testing.T) {
 	r.URL.Path = "/api/v1/projects/" + projID + "/milestones"
 	api.HandleMilestones(w, r)
 
-	require.Equal(t, http.StatusOK, w.Code, "GET /projects/{id}/milestones must return 200; body=%s", w.Body.String())
+	require.Equal(
+		t,
+		http.StatusOK,
+		w.Code,
+		"GET /projects/{id}/milestones must return 200; body=%s",
+		w.Body.String(),
+	)
 	var resp milestoneListResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 
 	require.Len(t, resp.Milestones, 3, "must return 3 milestones")
 	// Earlier due date must come before later; no-due-date must be last.
-	assert.Equal(t, mEarlier.ID, resp.Milestones[0].ID,
-		"earliest due_date must be first; got id=%s name=%s", resp.Milestones[0].ID, resp.Milestones[0].Name)
-	assert.Equal(t, mLater.ID, resp.Milestones[1].ID,
-		"later due_date must be second; got id=%s name=%s", resp.Milestones[1].ID, resp.Milestones[1].Name)
-	assert.Equal(t, mNoDueDate.ID, resp.Milestones[2].ID,
-		"no due_date must be last; got id=%s name=%s", resp.Milestones[2].ID, resp.Milestones[2].Name)
+	assert.Equal(
+		t,
+		mEarlier.ID,
+		resp.Milestones[0].ID,
+		"earliest due_date must be first; got id=%s name=%s",
+		resp.Milestones[0].ID,
+		resp.Milestones[0].Name,
+	)
+	assert.Equal(
+		t,
+		mLater.ID,
+		resp.Milestones[1].ID,
+		"later due_date must be second; got id=%s name=%s",
+		resp.Milestones[1].ID,
+		resp.Milestones[1].Name,
+	)
+	assert.Equal(
+		t,
+		mNoDueDate.ID,
+		resp.Milestones[2].ID,
+		"no due_date must be last; got id=%s name=%s",
+		resp.Milestones[2].ID,
+		resp.Milestones[2].Name,
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -441,8 +543,14 @@ func TestHandleMilestones_Progress_FailedCountsAsDenominator(t *testing.T) {
 	require.Equal(t, http.StatusOK, code)
 
 	// Content test: 1 done + 1 failed = 2 total; only done counts toward numerator.
-	assert.InDelta(t, 0.5, got.Progress, 0.001,
-		"progress must be 0.5 (1 done / 2 total, failed counts as denominator only); got %f", got.Progress)
+	assert.InDelta(
+		t,
+		0.5,
+		got.Progress,
+		0.001,
+		"progress must be 0.5 (1 done / 2 total, failed counts as denominator only); got %f",
+		got.Progress,
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -468,7 +576,13 @@ func TestHandleMilestones_Update(t *testing.T) {
 	rUp.URL.Path = "/api/v1/projects/" + projID + "/milestones/" + m.ID
 	api.HandleMilestones(wUp, rUp)
 
-	require.Equal(t, http.StatusOK, wUp.Code, "PUT /projects/{id}/milestones/{mid} must return 200; body=%s", wUp.Body.String())
+	require.Equal(
+		t,
+		http.StatusOK,
+		wUp.Code,
+		"PUT /projects/{id}/milestones/{mid} must return 200; body=%s",
+		wUp.Body.String(),
+	)
 	var updated milestoneResponse
 	require.NoError(t, json.Unmarshal(wUp.Body.Bytes(), &updated))
 	assert.Equal(t, "New Name", updated.Name, "name must be updated to 'New Name'")
@@ -518,7 +632,13 @@ func TestHandleMilestones_Update_ClearDueDate(t *testing.T) {
 	rUp.URL.Path = "/api/v1/projects/" + projID + "/milestones/" + m.ID
 	api.HandleMilestones(wUp, rUp)
 
-	require.Equal(t, http.StatusOK, wUp.Code, "PUT with due_date:null must return 200; body=%s", wUp.Body.String())
+	require.Equal(
+		t,
+		http.StatusOK,
+		wUp.Code,
+		"PUT with due_date:null must return 200; body=%s",
+		wUp.Body.String(),
+	)
 
 	// GET confirms due_date is cleared.
 	// CURRENTLY FAILS: due_date is not cleared because omitempty on *json.RawMessage
@@ -546,7 +666,11 @@ func TestHandleMilestones_Delete(t *testing.T) {
 
 	// DELETE → 204.
 	wDel := httptest.NewRecorder()
-	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/projects/"+projID+"/milestones/"+m.ID, nil)
+	rDel := httptest.NewRequest(
+		http.MethodDelete,
+		"/api/v1/projects/"+projID+"/milestones/"+m.ID,
+		nil,
+	)
 	rDel.URL.Path = "/api/v1/projects/" + projID + "/milestones/" + m.ID
 	api.HandleMilestones(wDel, rDel)
 
@@ -595,11 +719,20 @@ func TestHandleMilestones_Delete_ClearsMilestoneIDOnTasks(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &taskBefore))
 	require.NotNil(t, taskBefore.MilestoneID, "task must have milestone_id before milestone delete")
-	assert.Equal(t, m.ID, *taskBefore.MilestoneID, "task milestone_id must match the created milestone")
+	assert.Equal(
+		t,
+		m.ID,
+		*taskBefore.MilestoneID,
+		"task milestone_id must match the created milestone",
+	)
 
 	// DELETE milestone M → 204.
 	wDel := httptest.NewRecorder()
-	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/projects/"+projID+"/milestones/"+m.ID, nil)
+	rDel := httptest.NewRequest(
+		http.MethodDelete,
+		"/api/v1/projects/"+projID+"/milestones/"+m.ID,
+		nil,
+	)
 	rDel.URL.Path = "/api/v1/projects/" + projID + "/milestones/" + m.ID
 	api.HandleMilestones(wDel, rDel)
 	require.Equal(t, http.StatusNoContent, wDel.Code, "DELETE milestone must return 204")

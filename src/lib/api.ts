@@ -2176,7 +2176,7 @@ export const milestonesQueryKeys = {
 }
 
 /** Milestone with optional computed progress field (0–1, added by backend at read time). */
-export type MilestoneWithProgress = Milestone & { progress?: number }
+export type MilestoneWithProgress = Milestone & { progress?: number } // not-wire-format: extends generated Milestone; progress added server-side, not in schema
 
 export function fetchMilestones(projectId: string): Promise<MilestoneWithProgress[]> {
   // Use the base Milestone schema with passthrough for the computed progress field.

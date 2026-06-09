@@ -430,7 +430,8 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	if allowGodMode && !sandbox.GodModeAvailable {
 		return fmt.Errorf(
 			"gateway: god mode unavailable in this build (compiled with nogodmode); " +
-				"remove --allow-god-mode and restart")
+				"remove --allow-god-mode and restart",
+		)
 	}
 	// Emit a persistent WARN so operators cannot claim they were not warned.
 	if allowGodMode {
@@ -567,7 +568,8 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// source of truth for mode resolution (CLI > config > default); any
 	// discrepancy between the applied mode and the config file is already
 	// visible via result.ApplyState in /api/v1/security/sandbox-status.
-	slog.Info("gateway: sandbox applied",
+	slog.Info(
+		"gateway: sandbox applied",
 		"applied_mode", string(sandboxResult.Mode),
 		"backend", sandboxResult.BackendName,
 		"landlock_enforced", sandboxResult.ApplyState.LandlockEnforced,
@@ -1154,7 +1156,8 @@ func setupAndStartServices(
 					scheme = "https"
 				}
 			}
-			gatewayPreviewBaseURL = fmt.Sprintf("%s://%s",
+			gatewayPreviewBaseURL = fmt.Sprintf(
+				"%s://%s",
 				scheme,
 				net.JoinHostPort(previewHost, strconv.Itoa(previewPort)),
 			)
@@ -1354,8 +1357,8 @@ func setupAndStartServices(
 
 	// Ensure the default Inbox project exists (FR-L2-001). Best-effort: a failure
 	// is logged but does not abort gateway startup.
-	if err := ensureInboxProject(homePath); err != nil {
-		slog.Error("gateway: inbox project auto-creation failed", "error", err)
+	if inboxErr := ensureInboxProject(homePath); inboxErr != nil {
+		slog.Error("gateway: inbox project auto-creation failed", "error", inboxErr)
 	}
 
 	// Register additional endpoints for frontend features.
@@ -1608,7 +1611,8 @@ func restartServices(
 	if runningServices.notifStore == nil {
 		// Derive the home dir from the workspace path (workspace == <home>/workspace).
 		runningServices.notifStore = notifications.NewStore(
-			filepath.Join(filepath.Dir(cfg.WorkspacePath()), "notifications"))
+			filepath.Join(filepath.Dir(cfg.WorkspacePath()), "notifications"),
+		)
 	}
 	var err error
 	runningServices.CronService, err = setupCronTool(
@@ -1977,9 +1981,10 @@ func emitGHSARemovalWarn(cfg *config.Config) {
 	for ch := range enabledRemoteChannels {
 		channels = append(channels, ch)
 	}
-	slog.Warn("exec tool no longer blocked at the channel layer (was GHSA-pv8c-p6jf-3fpp). "+
-		"Agents with remote channels and non-deny exec policy: ["+strings.Join(flagged, ", ")+
-		"]. Review per-agent ToolPolicyCfg or set sandbox_profile.",
+	slog.Warn(
+		"exec tool no longer blocked at the channel layer (was GHSA-pv8c-p6jf-3fpp). "+
+			"Agents with remote channels and non-deny exec policy: ["+strings.Join(flagged, ", ")+
+			"]. Review per-agent ToolPolicyCfg or set sandbox_profile.",
 		"remote_channels", channels,
 		"flagged_agents", flagged,
 	)

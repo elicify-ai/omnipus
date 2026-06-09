@@ -124,12 +124,24 @@ func scanGTDTasks(home string, fn func(id string, t boardTask)) error {
 		}
 		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
-			slog.Warn("rest_projects: scanGTDTasks: failed to read task file", "file", e.Name(), "error", err)
+			slog.Warn(
+				"rest_projects: scanGTDTasks: failed to read task file",
+				"file",
+				e.Name(),
+				"error",
+				err,
+			)
 			continue
 		}
 		var t boardTask
 		if err := json.Unmarshal(data, &t); err != nil {
-			slog.Warn("rest_projects: scanGTDTasks: failed to parse task file", "file", e.Name(), "error", err)
+			slog.Warn(
+				"rest_projects: scanGTDTasks: failed to parse task file",
+				"file",
+				e.Name(),
+				"error",
+				err,
+			)
 			continue
 		}
 		if !isGTDTask(t.Status) {
@@ -586,7 +598,13 @@ func (a *restAPI) handleProjectPut(w http.ResponseWriter, r *http.Request, id st
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(&audit.Entry{Event: "project.update", Decision: audit.DecisionAllow, Details: map[string]any{"id": id}})
+		_ = a.auditor.Log(
+			&audit.Entry{
+				Event:    "project.update",
+				Decision: audit.DecisionAllow,
+				Details:  map[string]any{"id": id},
+			},
+		)
 	}
 	jsonOK(w, projectToWire(p, countTasksForProject(a.homePath, id)))
 }
@@ -629,7 +647,13 @@ func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id
 	}
 
 	if a.auditor != nil {
-		_ = a.auditor.Log(&audit.Entry{Event: "project.delete", Decision: audit.DecisionAllow, Details: map[string]any{"id": id}})
+		_ = a.auditor.Log(
+			&audit.Entry{
+				Event:    "project.delete",
+				Decision: audit.DecisionAllow,
+				Details:  map[string]any{"id": id},
+			},
+		)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -34,7 +34,13 @@ func createBoardTaskViaAPI(t *testing.T, api *restAPI, name, status string) gen.
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/board/tasks"
 	api.HandleBoardTasks(w, r)
-	require.Equal(t, http.StatusCreated, w.Code, "create board task must return 201; body=%s", w.Body.String())
+	require.Equal(
+		t,
+		http.StatusCreated,
+		w.Code,
+		"create board task must return 201; body=%s",
+		w.Body.String(),
+	)
 	var task gen.BoardTask
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &task))
 	require.NotEmpty(t, task.Id)
@@ -129,10 +135,21 @@ func TestHandleBoardTasks_Update(t *testing.T) {
 	rUp.URL.Path = "/api/v1/board/tasks/" + task.Id
 	api.HandleBoardTasks(wUp, rUp)
 
-	require.Equal(t, http.StatusOK, wUp.Code, "PUT /board/tasks/{id} with agent-context must return 200; body=%s", wUp.Body.String())
+	require.Equal(
+		t,
+		http.StatusOK,
+		wUp.Code,
+		"PUT /board/tasks/{id} with agent-context must return 200; body=%s",
+		wUp.Body.String(),
+	)
 	var updated gen.BoardTask
 	require.NoError(t, json.Unmarshal(wUp.Body.Bytes(), &updated))
-	assert.Equal(t, gen.BoardTaskStatus("active"), updated.Status, "status must be updated to active")
+	assert.Equal(
+		t,
+		gen.BoardTaskStatus("active"),
+		updated.Status,
+		"status must be updated to active",
+	)
 
 	// PUT {"status":"active"} WITHOUT agent-context → 400 (FR-L2-006).
 	wNoCtx := httptest.NewRecorder()
@@ -141,7 +158,13 @@ func TestHandleBoardTasks_Update(t *testing.T) {
 	rNoCtx.Header.Set("Content-Type", "application/json")
 	rNoCtx.URL.Path = "/api/v1/board/tasks/" + task.Id
 	api.HandleBoardTasks(wNoCtx, rNoCtx)
-	require.Equal(t, http.StatusBadRequest, wNoCtx.Code, "PUT active without agent-context must return 400; body=%s", wNoCtx.Body.String())
+	require.Equal(
+		t,
+		http.StatusBadRequest,
+		wNoCtx.Code,
+		"PUT active without agent-context must return 400; body=%s",
+		wNoCtx.Body.String(),
+	)
 
 	// Differentiation test: a second PUT with a different status returns a different result.
 	wUp2 := httptest.NewRecorder()
@@ -153,8 +176,18 @@ func TestHandleBoardTasks_Update(t *testing.T) {
 	require.Equal(t, http.StatusOK, wUp2.Code)
 	var updated2 gen.BoardTask
 	require.NoError(t, json.Unmarshal(wUp2.Body.Bytes(), &updated2))
-	assert.Equal(t, gen.BoardTaskStatus("done"), updated2.Status, "second PUT must reflect new status")
-	assert.NotEqual(t, updated.Status, updated2.Status, "different inputs must produce different outputs")
+	assert.Equal(
+		t,
+		gen.BoardTaskStatus("done"),
+		updated2.Status,
+		"second PUT must reflect new status",
+	)
+	assert.NotEqual(
+		t,
+		updated.Status,
+		updated2.Status,
+		"different inputs must produce different outputs",
+	)
 
 	// PUT nonexistent → 404.
 	wNot := httptest.NewRecorder()
@@ -189,7 +222,12 @@ func TestHandleBoardTasks_Delete_Returns204(t *testing.T) {
 	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks/"+task.Id, nil)
 	rGet.URL.Path = "/api/v1/board/tasks/" + task.Id
 	api.HandleBoardTasks(wGet, rGet)
-	assert.Equal(t, http.StatusNotFound, wGet.Code, "GET /board/tasks/{id} after delete must return 404")
+	assert.Equal(
+		t,
+		http.StatusNotFound,
+		wGet.Code,
+		"GET /board/tasks/{id} after delete must return 404",
+	)
 }
 
 // TestHandleBoardTasks_WorkflowTasksExcluded verifies workflow tasks (taskstore) are excluded.
@@ -313,7 +351,11 @@ func TestHandleBoardTasks_Boundaries(t *testing.T) {
 	longName := strings.Repeat("x", 201)
 	longNameBody := fmt.Sprintf(`{"name":%q}`, longName)
 	wLong := httptest.NewRecorder()
-	rLong := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(longNameBody))
+	rLong := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/board/tasks",
+		strings.NewReader(longNameBody),
+	)
 	rLong.Header.Set("Content-Type", "application/json")
 	rLong.URL.Path = "/api/v1/board/tasks"
 	api.HandleBoardTasks(wLong, rLong)
@@ -324,22 +366,40 @@ func TestHandleBoardTasks_Boundaries(t *testing.T) {
 	exactName := strings.Repeat("y", 200)
 	exactNameBody := fmt.Sprintf(`{"name":%q}`, exactName)
 	wExact := httptest.NewRecorder()
-	rExact := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(exactNameBody))
+	rExact := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/board/tasks",
+		strings.NewReader(exactNameBody),
+	)
 	rExact.Header.Set("Content-Type", "application/json")
 	rExact.URL.Path = "/api/v1/board/tasks"
 	api.HandleBoardTasks(wExact, rExact)
-	assert.Equal(t, http.StatusCreated, wExact.Code,
-		"POST /board/tasks with name exactly 200 chars must return 201; body=%s", wExact.Body.String())
+	assert.Equal(
+		t,
+		http.StatusCreated,
+		wExact.Code,
+		"POST /board/tasks with name exactly 200 chars must return 201; body=%s",
+		wExact.Body.String(),
+	)
 
 	// POST with description > 2000 chars → 400.
 	longDesc := fmt.Sprintf(`{"name":"ok","description":%q}`, strings.Repeat("d", 2001))
 	wLongDesc := httptest.NewRecorder()
-	rLongDesc := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(longDesc))
+	rLongDesc := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/board/tasks",
+		strings.NewReader(longDesc),
+	)
 	rLongDesc.Header.Set("Content-Type", "application/json")
 	rLongDesc.URL.Path = "/api/v1/board/tasks"
 	api.HandleBoardTasks(wLongDesc, rLongDesc)
-	assert.Equal(t, http.StatusBadRequest, wLongDesc.Code,
-		"POST /board/tasks with description > 2000 chars must return 400; body=%s", wLongDesc.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		wLongDesc.Code,
+		"POST /board/tasks with description > 2000 chars must return 400; body=%s",
+		wLongDesc.Body.String(),
+	)
 
 	// PUT with description > 2000 chars → 400.
 	descTask := createBoardTaskViaAPI(t, api, "desc-test-task", "inbox")
@@ -353,16 +413,26 @@ func TestHandleBoardTasks_Boundaries(t *testing.T) {
 	rPutLongDesc.Header.Set("Content-Type", "application/json")
 	rPutLongDesc.URL.Path = "/api/v1/board/tasks/" + descTask.Id
 	api.HandleBoardTasks(wPutLongDesc, rPutLongDesc)
-	assert.Equal(t, http.StatusBadRequest, wPutLongDesc.Code,
-		"PUT /board/tasks/{id} with description > 2000 chars must return 400; body=%s", wPutLongDesc.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		wPutLongDesc.Code,
+		"PUT /board/tasks/{id} with description > 2000 chars must return 400; body=%s",
+		wPutLongDesc.Body.String(),
+	)
 
 	// GET ?status=queued → 400 (queued is a workflow task status, not a valid GTD status filter).
 	wQueued := httptest.NewRecorder()
 	rQueued := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks?status=queued", nil)
 	rQueued.URL.Path = "/api/v1/board/tasks"
 	api.HandleBoardTasks(wQueued, rQueued)
-	assert.Equal(t, http.StatusBadRequest, wQueued.Code,
-		"GET /board/tasks?status=queued must return 400 (workflow status rejected); body=%s", wQueued.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		wQueued.Code,
+		"GET /board/tasks?status=queued must return 400 (workflow status rejected); body=%s",
+		wQueued.Body.String(),
+	)
 
 	// GET ?status=bogus → 400 (completely unrecognized status).
 	wBogus := httptest.NewRecorder()
@@ -397,13 +467,22 @@ func TestHandleBoardTasks_FKValidation(t *testing.T) {
 	// --- POST with non-existent project_id → 400 containing "project" ---
 	postBody := `{"name":"Task with bad project","project_id":"` + nonExistentProjectID + `"}`
 	wPost := httptest.NewRecorder()
-	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(postBody))
+	rPost := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/board/tasks",
+		strings.NewReader(postBody),
+	)
 	rPost.Header.Set("Content-Type", "application/json")
 	rPost.URL.Path = "/api/v1/board/tasks"
 	api.HandleBoardTasks(wPost, rPost)
 
-	assert.Equal(t, http.StatusBadRequest, wPost.Code,
-		"POST /board/tasks with non-existent project_id must return 400; body=%s", wPost.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		wPost.Code,
+		"POST /board/tasks with non-existent project_id must return 400; body=%s",
+		wPost.Body.String(),
+	)
 	assert.Contains(t, strings.ToLower(wPost.Body.String()), "project",
 		"400 body for non-existent project_id must mention 'project'; body=%s", wPost.Body.String())
 
@@ -413,15 +492,29 @@ func TestHandleBoardTasks_FKValidation(t *testing.T) {
 
 	putBody := `{"project_id":"` + nonExistentProjectID + `"}`
 	wPut := httptest.NewRecorder()
-	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+existingTask.Id, strings.NewReader(putBody))
+	rPut := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/board/tasks/"+existingTask.Id,
+		strings.NewReader(putBody),
+	)
 	rPut.Header.Set("Content-Type", "application/json")
 	rPut.URL.Path = "/api/v1/board/tasks/" + existingTask.Id
 	api.HandleBoardTasks(wPut, rPut)
 
-	assert.Equal(t, http.StatusBadRequest, wPut.Code,
-		"PUT /board/tasks/{id} with non-existent project_id must return 400; body=%s", wPut.Body.String())
-	assert.Contains(t, strings.ToLower(wPut.Body.String()), "project",
-		"400 body for non-existent project_id (PUT) must mention 'project'; body=%s", wPut.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		wPut.Code,
+		"PUT /board/tasks/{id} with non-existent project_id must return 400; body=%s",
+		wPut.Body.String(),
+	)
+	assert.Contains(
+		t,
+		strings.ToLower(wPut.Body.String()),
+		"project",
+		"400 body for non-existent project_id (PUT) must mention 'project'; body=%s",
+		wPut.Body.String(),
+	)
 
 	// --- POST with path-traversal project_id → 400 (validateEntityID catches it) ---
 	traversalCases := []struct {
@@ -435,7 +528,11 @@ func TestHandleBoardTasks_FKValidation(t *testing.T) {
 		t.Run("path_traversal_"+tc.name, func(t *testing.T) {
 			body := `{"name":"traversal test","project_id":"` + tc.projectID + `"}`
 			wTrav := httptest.NewRecorder()
-			rTrav := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body))
+			rTrav := httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/board/tasks",
+				strings.NewReader(body),
+			)
 			rTrav.Header.Set("Content-Type", "application/json")
 			rTrav.URL.Path = "/api/v1/board/tasks"
 			api.HandleBoardTasks(wTrav, rTrav)
@@ -465,7 +562,11 @@ func TestHandleBoardTasks_ExtendedFields(t *testing.T) {
 	// Create a milestone in the project.
 	midBody := `{"name":"Ext Test Milestone"}`
 	wMil := httptest.NewRecorder()
-	rMil := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+projID+"/milestones", strings.NewReader(midBody))
+	rMil := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/projects/"+projID+"/milestones",
+		strings.NewReader(midBody),
+	)
 	rMil.Header.Set("Content-Type", "application/json")
 	rMil.URL.Path = "/api/v1/projects/" + projID + "/milestones"
 	api.HandleMilestones(wMil, rMil)
@@ -478,8 +579,12 @@ func TestHandleBoardTasks_ExtendedFields(t *testing.T) {
 
 	// POST task with extended fields.
 	priority := 2
-	body := fmt.Sprintf(`{"name":"Extended Task","project_id":%q,"milestone_id":%q,"prompt":"Do this","priority":%d}`,
-		projID, milID, priority)
+	body := fmt.Sprintf(
+		`{"name":"Extended Task","project_id":%q,"milestone_id":%q,"prompt":"Do this","priority":%d}`,
+		projID,
+		milID,
+		priority,
+	)
 	wPost := httptest.NewRecorder()
 	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body))
 	rPost.Header.Set("Content-Type", "application/json")
@@ -572,7 +677,11 @@ func TestHandleBoardTasks_Priority_Validation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			body := fmt.Sprintf(`{"name":"PrioTask %s","priority":%d}`, tc.name, tc.priority)
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body))
+			r := httptest.NewRequest(
+				http.MethodPost,
+				"/api/v1/board/tasks",
+				strings.NewReader(body),
+			)
 			r.Header.Set("Content-Type", "application/json")
 			r.URL.Path = "/api/v1/board/tasks"
 			api.HandleBoardTasks(w, r)
@@ -598,24 +707,42 @@ func TestHandleBoardTasks_Result_TooLong(t *testing.T) {
 	require.NoError(t, err)
 
 	wPut := httptest.NewRecorder()
-	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id, strings.NewReader(string(body)))
+	rPut := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/board/tasks/"+task.Id,
+		strings.NewReader(string(body)),
+	)
 	rPut.Header.Set("Content-Type", "application/json")
 	rPut.URL.Path = "/api/v1/board/tasks/" + task.Id
 	api.HandleBoardTasks(wPut, rPut)
-	assert.Equal(t, http.StatusBadRequest, wPut.Code,
-		"PUT /board/tasks/{id} with result > 50000 chars must return 400; body=%s", wPut.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		wPut.Code,
+		"PUT /board/tasks/{id} with result > 50000 chars must return 400; body=%s",
+		wPut.Body.String(),
+	)
 
 	// Boundary: exactly 50000 chars must be accepted.
 	exactResult := strings.Repeat("s", 50000)
 	body50k, err := json.Marshal(map[string]any{"result": exactResult})
 	require.NoError(t, err)
 	wOK := httptest.NewRecorder()
-	rOK := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id, strings.NewReader(string(body50k)))
+	rOK := httptest.NewRequest(
+		http.MethodPut,
+		"/api/v1/board/tasks/"+task.Id,
+		strings.NewReader(string(body50k)),
+	)
 	rOK.Header.Set("Content-Type", "application/json")
 	rOK.URL.Path = "/api/v1/board/tasks/" + task.Id
 	api.HandleBoardTasks(wOK, rOK)
-	assert.Equal(t, http.StatusOK, wOK.Code,
-		"PUT /board/tasks/{id} with result exactly 50000 chars must return 200; body=%s", wOK.Body.String())
+	assert.Equal(
+		t,
+		http.StatusOK,
+		wOK.Code,
+		"PUT /board/tasks/{id} with result exactly 50000 chars must return 200; body=%s",
+		wOK.Body.String(),
+	)
 }
 
 // TestHandleBoardTasks_FilterByAgentID verifies GET ?agent_id= filter returns only matching tasks.
@@ -651,7 +778,11 @@ func TestHandleBoardTasks_FilterByAgentID(t *testing.T) {
 
 	// GET ?agent_id=alpha → only alpha task returned.
 	wFilter := httptest.NewRecorder()
-	rFilter := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks?agent_id=01JXAGENT0ALPHA00000000001", nil)
+	rFilter := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/board/tasks?agent_id=01JXAGENT0ALPHA00000000001",
+		nil,
+	)
 	rFilter.URL.Path = "/api/v1/board/tasks"
 	api.HandleBoardTasks(wFilter, rFilter)
 	require.Equal(t, http.StatusOK, wFilter.Code)
@@ -680,7 +811,11 @@ func TestHandleBoardTasks_FilterByAgentID(t *testing.T) {
 
 	// Differentiation test: ?agent_id=beta returns only the beta task.
 	wFilter2 := httptest.NewRecorder()
-	rFilter2 := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks?agent_id=01JXAGENT0BETA000000000002", nil)
+	rFilter2 := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/board/tasks?agent_id=01JXAGENT0BETA000000000002",
+		nil,
+	)
 	rFilter2.URL.Path = "/api/v1/board/tasks"
 	api.HandleBoardTasks(wFilter2, rFilter2)
 	require.Equal(t, http.StatusOK, wFilter2.Code)
@@ -695,7 +830,12 @@ func TestHandleBoardTasks_FilterByAgentID(t *testing.T) {
 		betaIDs = append(betaIDs, item.ID)
 	}
 	assert.Contains(t, betaIDs, taskBeta.Id, "beta task must appear in ?agent_id=beta response")
-	assert.NotContains(t, betaIDs, taskAlpha.Id, "alpha task must NOT appear in ?agent_id=beta response")
+	assert.NotContains(
+		t,
+		betaIDs,
+		taskAlpha.Id,
+		"alpha task must NOT appear in ?agent_id=beta response",
+	)
 
 	// Differentiation test: the two filters return different task sets (not hardcoded).
 	alphaIDs := make([]string, 0, len(resp.Items))
@@ -813,8 +953,13 @@ func TestHandleBoardTasks_ActiveRequiresAgentContext(t *testing.T) {
 	r.URL.Path = "/api/v1/board/tasks/" + task.Id
 	api.HandleBoardTasks(w, r)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code,
-		"PUT status=active without X-Omnipus-Agent-Context must return 400; body=%s", w.Body.String())
+	assert.Equal(
+		t,
+		http.StatusBadRequest,
+		w.Code,
+		"PUT status=active without X-Omnipus-Agent-Context must return 400; body=%s",
+		w.Body.String(),
+	)
 
 	// Differentiation: with agent-context header → 200.
 	wOK := httptest.NewRecorder()
@@ -824,8 +969,13 @@ func TestHandleBoardTasks_ActiveRequiresAgentContext(t *testing.T) {
 	rOK.Header.Set("X-Omnipus-Agent-Context", "true")
 	rOK.URL.Path = "/api/v1/board/tasks/" + task.Id
 	api.HandleBoardTasks(wOK, rOK)
-	assert.Equal(t, http.StatusOK, wOK.Code,
-		"PUT status=active WITH X-Omnipus-Agent-Context must return 200; body=%s", wOK.Body.String())
+	assert.Equal(
+		t,
+		http.StatusOK,
+		wOK.Code,
+		"PUT status=active WITH X-Omnipus-Agent-Context must return 200; body=%s",
+		wOK.Body.String(),
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -857,7 +1007,10 @@ func TestHandleBoardTasks_TaskCount_ExcludesWorkflowTasks(t *testing.T) {
 		workflowTaskID,
 		projID,
 	)
-	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, workflowTaskID+".json"), []byte(workflowData), 0o600))
+	require.NoError(
+		t,
+		os.WriteFile(filepath.Join(tasksDir, workflowTaskID+".json"), []byte(workflowData), 0o600),
+	)
 
 	// GET /api/v1/projects/{id} → task_count must be 1 (only GTD task counted).
 	wGet := httptest.NewRecorder()
