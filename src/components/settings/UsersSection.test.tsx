@@ -97,14 +97,16 @@ describe('UsersSection — create user happy path', () => {
 
     await waitFor(() => screen.getByRole('dialog'))
 
-    await user.type(screen.getByLabelText(/username/i), 'bob')
+    // Use fireEvent.change (not user.type) to avoid Radix FocusScope/jsdom focus-loop issues
+    fireEvent.change(screen.getByLabelText(/username/i), { target: { value: 'bob' } })
 
     // Select user role (default is already user, but click it explicitly)
+    // Use fireEvent.click to avoid Radix FocusScope/jsdom focus-loop with radio inputs
     const radios = screen.getAllByRole('radio')
     const userRadio = radios.find((r) => (r as HTMLInputElement).value === 'user')!
-    await user.click(userRadio)
+    fireEvent.click(userRadio)
 
-    await user.type(screen.getByLabelText(/^password$/i), 'securepassword123')
+    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'securepassword123' } })
 
     await user.click(screen.getByRole('button', { name: /create user/i }))
 
@@ -145,8 +147,9 @@ describe('UsersSection — createUser returns unexpected token', () => {
 
     await waitFor(() => screen.getByRole('dialog'))
 
-    await user.type(screen.getByLabelText(/username/i), 'bob')
-    await user.type(screen.getByLabelText(/^password$/i), 'securepass1')
+    // Use fireEvent.change (not user.type) to avoid Radix FocusScope/jsdom focus-loop issues
+    fireEvent.change(screen.getByLabelText(/username/i), { target: { value: 'bob' } })
+    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'securepass1' } })
 
     await user.click(screen.getByRole('button', { name: /create user/i }))
 
@@ -174,8 +177,9 @@ describe('UsersSection — username validation', () => {
 
     await waitFor(() => screen.getByRole('dialog'))
 
-    await user.type(screen.getByLabelText(/username/i), 'alice bob')
-    await user.type(screen.getByLabelText(/^password$/i), 'securepass1')
+    // Use fireEvent.change (not user.type) to avoid Radix FocusScope/jsdom focus-loop issues
+    fireEvent.change(screen.getByLabelText(/username/i), { target: { value: 'alice bob' } })
+    fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'securepass1' } })
 
     await user.click(screen.getByRole('button', { name: /create user/i }))
 
