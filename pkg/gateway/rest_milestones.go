@@ -396,9 +396,11 @@ func (a *restAPI) handleMilestoneGet(w http.ResponseWriter, r *http.Request, pro
 // distinguishing explicit null (clear) from absent (no-op) for due_date.
 // not-wire-format: local decode struct for PUT body; not emitted over the wire.
 type milestoneUpdateRequest struct { // not-wire-format
-	Name        *string          `json:"name,omitempty"`
-	Description *string          `json:"description,omitempty"`
-	DueDate     *json.RawMessage `json:"due_date"` // null clears; absent = no-op; string = new value
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+	// DueDate is not decoded here; the PUT handler reads it from the raw body map
+	// so it can distinguish JSON null (clear) from absent (no-op). Go's json decoder
+	// sets *json.RawMessage to nil for both absent and null, making them indistinguishable.
 }
 
 // handleMilestonePut handles PUT /api/v1/projects/{project_id}/milestones/{id} → 200.
@@ -427,10 +429,30 @@ func (a *restAPI) handleMilestonePut(w http.ResponseWriter, r *http.Request, pro
 		return
 	}
 
-	var req milestoneUpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Decode into raw map first so we can distinguish JSON null (clear due_date)
+	// from absent field (no-op). Go's json decoder sets *json.RawMessage to nil for
+	// both cases, making them indistinguishable when using a typed struct directly.
+	var rawBody map[string]json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&rawBody); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	var req milestoneUpdateRequest
+	if raw, ok := rawBody["name"]; ok {
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			jsonErr(w, http.StatusBadRequest, "name must be a string")
+			return
+		}
+		req.Name = &s
+	}
+	if raw, ok := rawBody["description"]; ok {
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			jsonErr(w, http.StatusBadRequest, "description must be a string")
+			return
+		}
+		req.Description = &s
 	}
 
 	changed := false
@@ -458,10 +480,9 @@ func (a *restAPI) handleMilestonePut(w http.ResponseWriter, r *http.Request, pro
 			changed = true
 		}
 	}
-	if req.DueDate != nil {
-		raw := string(*req.DueDate)
-		if raw == "null" {
-			// Explicit null — clear due_date.
+	if rawDD, ok := rawBody["due_date"]; ok {
+		if string(rawDD) == "null" {
+			// Explicit JSON null — clear due_date.
 			if m.DueDate != "" {
 				m.DueDate = ""
 				changed = true
@@ -469,7 +490,7 @@ func (a *restAPI) handleMilestonePut(w http.ResponseWriter, r *http.Request, pro
 		} else {
 			// Decode as string.
 			var ddStr string
-			if err := json.Unmarshal(*req.DueDate, &ddStr); err != nil {
+			if err := json.Unmarshal(rawDD, &ddStr); err != nil {
 				jsonErr(w, http.StatusBadRequest, "due_date must be a string in YYYY-MM-DD format or null")
 				return
 			}
