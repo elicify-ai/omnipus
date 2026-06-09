@@ -78,11 +78,25 @@ func (t *TaskCreateTool) Execute(_ context.Context, args map[string]any) *tools.
 		if err := validateID(v); err != nil {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid project_id: not found", "project_id"))
 		}
-		if _, projErr := readProjectFromDisk(t.deps.Home, v); projErr != nil {
+		proj, projErr := readProjectFromDisk(t.deps.Home, v)
+		if projErr != nil {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid project_id: not found", "project_id"))
 		}
 		tk.ProjectID = v
+
+		// Sysagent ownership rule (SEC-2), rule 1: if creating a task under an existing
+		// project, inherit that project's owner. This ensures agent-created tasks under
+		// a user-owned project are accessible only by the project's owner (and admins).
+		tk.Owner = proj.Owner
 	}
+	// Sysagent ownership rule (SEC-2), rules 2 & 3:
+	// If no project was provided (or the project had no owner), tk.Owner is still "".
+	//   Rule 2: if the executing agent's session/board-task has a resolvable owner, use it.
+	//     — Deps carries no session/board-task context today; this path is not reachable.
+	//   Rule 3: default owner="" (unowned/shared, visible to all authenticated users).
+	// TODO(ownership): to implement rule 2, the agent loop would need to pass the
+	// triggering board-task's owner (or the HTTP session's user) into Deps. Until that
+	// plumbing exists, tasks without a project context are unowned/shared.
 	if v, ok := args["agent_id"].(string); ok {
 		tk.AgentID = v
 	}

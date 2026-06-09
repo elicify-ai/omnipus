@@ -1549,3 +1549,71 @@ func TestEnsureInboxProject(t *testing.T) {
 		"ensureInboxProject must be idempotent: still exactly one default project after second call",
 	)
 }
+
+// ---------------------------------------------------------------------------
+// Board task ownership scoping tests (SEC-2)
+// ---------------------------------------------------------------------------
+
+// TestHandleBoardTasks_OwnershipScoping verifies SEC-2: user A cannot see user B's task.
+// BDD: Given alice creates task T,
+// When bob (role=user) calls GET /api/v1/board/tasks/{id},
+// Then 404.
+// When bob calls GET /api/v1/board/tasks (list),
+// Then T is absent.
+// When admin calls GET /api/v1/board/tasks/{id},
+// Then 200.
+// Traces to: SEC-2
+func TestHandleBoardTasks_OwnershipScoping(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// Alice creates a board task.
+	wPost := httptest.NewRecorder()
+	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks",
+		strings.NewReader(`{"name":"AliceTask","prompt":"do something"}`))
+	rPost.Header.Set("Content-Type", "application/json")
+	rPost.URL.Path = "/api/v1/board/tasks"
+	rPost = rPost.WithContext(contextWithUserRole(rPost.Context(), "alice", config.UserRoleUser))
+	api.HandleBoardTasks(wPost, rPost)
+	require.Equal(t, http.StatusCreated, wPost.Code, "alice POST must return 201; body=%s", wPost.Body.String())
+	var task gen.BoardTask
+	require.NoError(t, json.Unmarshal(wPost.Body.Bytes(), &task))
+	require.NotEmpty(t, task.Id)
+
+	// Verify owner is set to alice.
+	require.NotNil(t, task.Owner, "owner must be set on create")
+	assert.Equal(t, "alice", *task.Owner, "owner must equal alice")
+
+	// Bob calls GET /api/v1/board/tasks/{id} → 404.
+	wGetBob := httptest.NewRecorder()
+	rGetBob := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks/"+task.Id, nil)
+	rGetBob.URL.Path = "/api/v1/board/tasks/" + task.Id
+	rGetBob = rGetBob.WithContext(contextWithUserRole(rGetBob.Context(), "bob", config.UserRoleUser))
+	api.HandleBoardTasks(wGetBob, rGetBob)
+	assert.Equal(t, http.StatusNotFound, wGetBob.Code,
+		"bob must get 404 on alice's task; body=%s", wGetBob.Body.String())
+
+	// Bob calls GET /api/v1/board/tasks (list) — alice's task must not appear.
+	wListBob := httptest.NewRecorder()
+	rListBob := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks", nil)
+	rListBob.URL.Path = "/api/v1/board/tasks"
+	rListBob = rListBob.WithContext(contextWithUserRole(rListBob.Context(), "bob", config.UserRoleUser))
+	api.HandleBoardTasks(wListBob, rListBob)
+	require.Equal(t, http.StatusOK, wListBob.Code)
+	var listResp struct {
+		Items []gen.BoardTask `json:"items"`
+		Total int             `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal(wListBob.Body.Bytes(), &listResp))
+	for _, item := range listResp.Items {
+		assert.NotEqual(t, task.Id, item.Id, "alice's task must NOT appear in bob's task list")
+	}
+
+	// Admin calls GET /api/v1/board/tasks/{id} → 200.
+	wGetAdmin := httptest.NewRecorder()
+	rGetAdmin := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks/"+task.Id, nil)
+	rGetAdmin.URL.Path = "/api/v1/board/tasks/" + task.Id
+	rGetAdmin = rGetAdmin.WithContext(contextWithUserRole(rGetAdmin.Context(), "admin", config.UserRoleAdmin))
+	api.HandleBoardTasks(wGetAdmin, rGetAdmin)
+	assert.Equal(t, http.StatusOK, wGetAdmin.Code,
+		"admin must get 200 on alice's task; body=%s", wGetAdmin.Body.String())
+}

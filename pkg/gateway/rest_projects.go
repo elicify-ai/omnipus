@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,6 +23,7 @@ import (
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 )
@@ -41,8 +43,59 @@ type storedProject struct { // not-wire-format: internal disk-cache struct, mapp
 	CoreTeam    []string `json:"core_team,omitempty"`
 	Repository  string   `json:"repository,omitempty"`
 	IsDefault   bool     `json:"is_default,omitempty"` // true only for the auto-created Inbox project (FR-INX-4)
-	CreatedAt   string   `json:"created_at"`
-	UpdatedAt   string   `json:"updated_at"`
+	// Owner is the username of the user who created this project. Set at creation;
+	// never updated. Empty string means unowned/shared (legacy data or agent-created).
+	Owner     string `json:"owner,omitempty"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// canAccess returns true when a caller may read or mutate a resource.
+//
+// Access rules (SEC-2):
+//   - Admin callers see and modify everything regardless of owner.
+//   - Resources with empty owner are unowned/shared: accessible by any authenticated user
+//     (back-compat: legacy data written before ownership stamping was introduced).
+//   - Resources with a non-empty owner are only accessible by that owner.
+func canAccess(resourceOwner, callerUsername string, callerRole config.UserRole) bool {
+	if callerRole == config.UserRoleAdmin {
+		return true
+	}
+	// Empty owner means unowned/shared — any authenticated user may access.
+	if resourceOwner == "" {
+		return true
+	}
+	return resourceOwner == callerUsername
+}
+
+// callerIdentity extracts the caller's username and role from the request context.
+// In dev-mode bypass (no UserContextKey set), the caller is treated as admin with
+// an empty username — consistent with how bypass is described in CLAUDE.md.
+func callerIdentity(r *http.Request) (username string, role config.UserRole) {
+	if u, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && u != nil {
+		username = u.Username
+	}
+	if ro, ok := r.Context().Value(RoleContextKey{}).(config.UserRole); ok && ro != "" {
+		role = ro
+	} else {
+		// No role in context → dev-mode bypass or no-auth; treat as admin.
+		role = config.UserRoleAdmin
+	}
+	return username, role
+}
+
+// validateRepositoryURL returns an error when the repository field is non-empty but
+// does not use an http:// or https:// scheme. Empty repository is always accepted
+// (the field is optional). (SEC-5)
+func validateRepositoryURL(repository string) error {
+	if repository == "" {
+		return nil
+	}
+	u, err := url.Parse(repository)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf("repository must be an http:// or https:// URL")
+	}
+	return nil
 }
 
 // readProjectFile reads and parses ~/.omnipus/projects/{id}.json, applying the
@@ -242,6 +295,10 @@ func projectToWire(p storedProject, taskCount int) gen.Project {
 		copy(team, p.CoreTeam)
 		w.CoreTeam = &team
 	}
+	if p.Owner != "" {
+		o := p.Owner
+		w.Owner = &o
+	}
 	return w
 }
 
@@ -382,6 +439,8 @@ func (a *restAPI) handleProjectList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	callerUser, callerRole := callerIdentity(r)
+
 	projects, err := listProjectFiles(a.homePath)
 	if err != nil {
 		slog.Error("rest: list projects", "error", err)
@@ -398,6 +457,10 @@ func (a *restAPI) handleProjectList(w http.ResponseWriter, r *http.Request) {
 	var result []gen.Project
 	for _, p := range projects {
 		if statusFilter != "all" && p.Status != statusFilter {
+			continue
+		}
+		// SEC-2: skip projects the caller cannot access.
+		if !canAccess(p.Owner, callerUser, callerRole) {
 			continue
 		}
 		result = append(result, projectToWire(p, taskCounts[p.ID]))
@@ -451,10 +514,21 @@ func (a *restAPI) handleProjectPost(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "repository exceeds 500 characters")
 		return
 	}
+	// SEC-5: reject non-http/https repository URLs.
+	if req.Repository != nil {
+		if err := validateRepositoryURL(*req.Repository); err != nil {
+			jsonErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	if req.CoreTeam != nil && len(*req.CoreTeam) > 20 {
 		jsonErr(w, http.StatusBadRequest, "core_team may have at most 20 entries")
 		return
 	}
+
+	// SEC-2: stamp the creating user's username as owner. In dev-mode bypass, the
+	// caller is admin with no username — stamp empty string (unowned/shared).
+	callerUser, _ := callerIdentity(r)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	p := storedProject{
@@ -463,6 +537,7 @@ func (a *restAPI) handleProjectPost(w http.ResponseWriter, r *http.Request) {
 		Status:    string(gen.ProjectStatusActive),
 		Pinned:    false,
 		PinOrder:  0,
+		Owner:     callerUser,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -503,6 +578,12 @@ func (a *restAPI) handleProjectGet(w http.ResponseWriter, r *http.Request, id st
 	if !ok {
 		return
 	}
+	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
+	callerUser, callerRole := callerIdentity(r)
+	if !canAccess(p.Owner, callerUser, callerRole) {
+		jsonErr(w, http.StatusNotFound, "project not found")
+		return
+	}
 	jsonOK(w, projectToWire(p, countTasksForProject(a.homePath, id)))
 }
 
@@ -536,6 +617,13 @@ func (a *restAPI) handleProjectPut(w http.ResponseWriter, r *http.Request, id st
 		jsonErr(w, http.StatusBadRequest, "repository exceeds 500 characters")
 		return
 	}
+	// SEC-5: reject non-http/https repository URLs.
+	if req.Repository != nil {
+		if err := validateRepositoryURL(*req.Repository); err != nil {
+			jsonErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	if req.CoreTeam != nil && len(*req.CoreTeam) > 20 {
 		jsonErr(w, http.StatusBadRequest, "core_team may have at most 20 entries")
 		return
@@ -547,6 +635,13 @@ func (a *restAPI) handleProjectPut(w http.ResponseWriter, r *http.Request, id st
 
 	p, ok := a.loadProject(w, id)
 	if !ok {
+		return
+	}
+
+	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
+	callerUser, callerRole := callerIdentity(r)
+	if !canAccess(p.Owner, callerUser, callerRole) {
+		jsonErr(w, http.StatusNotFound, "project not found")
 		return
 	}
 
@@ -622,6 +717,13 @@ func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 
+	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
+	callerUser, callerRole := callerIdentity(r)
+	if !canAccess(p.Owner, callerUser, callerRole) {
+		jsonErr(w, http.StatusNotFound, "project not found")
+		return
+	}
+
 	// Inbox (is_default) cannot be deleted (FR-L2-002 / FR-INX-2).
 	if p.IsDefault {
 		jsonErr(w, http.StatusConflict, "cannot delete the default Inbox project")
@@ -690,7 +792,15 @@ func (a *restAPI) handleProjectSessions(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// Verify project exists.
-	if _, ok := a.loadProject(w, id); !ok {
+	p, ok := a.loadProject(w, id)
+	if !ok {
+		return
+	}
+
+	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
+	callerUser, callerRole := callerIdentity(r)
+	if !canAccess(p.Owner, callerUser, callerRole) {
+		jsonErr(w, http.StatusNotFound, "project not found")
 		return
 	}
 

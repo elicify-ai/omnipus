@@ -34,8 +34,11 @@ type milestone struct { // not-wire-format: on-disk JSON cache; mapped to genera
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	DueDate     string `json:"due_date,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	// Owner is the username of the user who created this milestone. Set at creation;
+	// never updated. Empty string means unowned/shared (legacy data or agent-created).
+	Owner     string `json:"owner,omitempty"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // milestoneWithProgress is a milestone plus computed task progress.
@@ -208,8 +211,15 @@ func (a *restAPI) handleMilestoneList(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 
-	// Verify project exists.
-	if _, ok := a.loadProject(w, projectID); !ok {
+	// Verify project exists and caller can access it.
+	proj, ok := a.loadProject(w, projectID)
+	if !ok {
+		return
+	}
+	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
+	callerUser, callerRole := callerIdentity(r)
+	if !canAccess(proj.Owner, callerUser, callerRole) {
+		jsonErr(w, http.StatusNotFound, "project not found")
 		return
 	}
 
@@ -288,8 +298,15 @@ func (a *restAPI) handleMilestonePost(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 
-	// Verify project exists.
-	if _, ok := a.loadProject(w, projectID); !ok {
+	// Verify project exists and caller can access it.
+	proj, ok := a.loadProject(w, projectID)
+	if !ok {
+		return
+	}
+	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
+	callerUser, callerRole := callerIdentity(r)
+	if !canAccess(proj.Owner, callerUser, callerRole) {
+		jsonErr(w, http.StatusNotFound, "project not found")
 		return
 	}
 
@@ -327,6 +344,9 @@ func (a *restAPI) handleMilestonePost(w http.ResponseWriter, r *http.Request, pr
 		ProjectID: projectID,
 		Name:      req.Name,
 		DueDate:   dueDate,
+		// SEC-2: stamp the creating user's username as owner. In dev-mode bypass,
+		// the caller has no username — stamp empty string (unowned/shared).
+		Owner:     callerUser,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -370,6 +390,17 @@ func (a *restAPI) handleMilestoneGet(
 		return
 	}
 
+	// SEC-2: verify the caller can access the parent project first.
+	proj, ok := a.loadProject(w, projectID)
+	if !ok {
+		return
+	}
+	callerUser, callerRole := callerIdentity(r)
+	if !canAccess(proj.Owner, callerUser, callerRole) {
+		jsonErr(w, http.StatusNotFound, "project not found")
+		return
+	}
+
 	m, err := readMilestoneFile(a.homePath, milestoneID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -381,7 +412,7 @@ func (a *restAPI) handleMilestoneGet(
 		return
 	}
 
-	// Validate project ownership.
+	// Validate milestone belongs to the project.
 	if m.ProjectID != projectID {
 		jsonErr(w, http.StatusNotFound, "milestone not found")
 		return
@@ -437,6 +468,17 @@ func (a *restAPI) handleMilestonePut(
 	}
 	if err := validateEntityID(milestoneID); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid milestone ID")
+		return
+	}
+
+	// SEC-2: verify the caller can access the parent project first.
+	proj, ok := a.loadProject(w, projectID)
+	if !ok {
+		return
+	}
+	callerUser, callerRole := callerIdentity(r)
+	if !canAccess(proj.Owner, callerUser, callerRole) {
+		jsonErr(w, http.StatusNotFound, "project not found")
 		return
 	}
 
@@ -582,6 +624,17 @@ func (a *restAPI) handleMilestoneDelete(
 	}
 	if err := validateEntityID(milestoneID); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid milestone ID")
+		return
+	}
+
+	// SEC-2: verify the caller can access the parent project first.
+	proj, ok := a.loadProject(w, projectID)
+	if !ok {
+		return
+	}
+	callerUser, callerRole := callerIdentity(r)
+	if !canAccess(proj.Owner, callerUser, callerRole) {
+		jsonErr(w, http.StatusNotFound, "project not found")
 		return
 	}
 

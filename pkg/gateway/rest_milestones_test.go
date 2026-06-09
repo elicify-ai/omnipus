@@ -20,6 +20,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
 // milestoneResponse mirrors the JSON shape returned by milestone GET/POST/PUT.
@@ -783,4 +786,75 @@ func TestHandleProjects_Delete_CascadesMilestones(t *testing.T) {
 	_, err = os.Stat(milestoneFile)
 	assert.True(t, os.IsNotExist(err),
 		"milestone file must be deleted by project cascade; stat err: %v", err)
+}
+
+// ---------------------------------------------------------------------------
+// Milestone ownership scoping tests (SEC-2)
+// ---------------------------------------------------------------------------
+
+// TestHandleMilestones_OwnershipScoping verifies SEC-2: user A cannot access
+// milestones belonging to user B's project.
+// BDD: Given alice owns project P and milestone M under P,
+// When bob (role=user) calls GET /api/v1/projects/{P}/milestones,
+// Then 404 (bob cannot see alice's project).
+// When bob calls GET /api/v1/projects/{P}/milestones/{M},
+// Then 404.
+// When admin calls GET /api/v1/projects/{P}/milestones,
+// Then 200.
+// Traces to: SEC-2
+func TestHandleMilestones_OwnershipScoping(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// Alice creates project P.
+	wProj := httptest.NewRecorder()
+	rProj := httptest.NewRequest(http.MethodPost, "/api/v1/projects",
+		strings.NewReader(`{"name":"AliceMilestoneProject"}`))
+	rProj.Header.Set("Content-Type", "application/json")
+	rProj.URL.Path = "/api/v1/projects"
+	rProj = rProj.WithContext(contextWithUserRole(rProj.Context(), "alice", config.UserRoleUser))
+	api.HandleProjects(wProj, rProj)
+	require.Equal(t, http.StatusCreated, wProj.Code,
+		"alice POST project must return 201; body=%s", wProj.Body.String())
+	var proj gen.Project
+	require.NoError(t, json.Unmarshal(wProj.Body.Bytes(), &proj))
+
+	// Alice creates milestone M under P.
+	wMS := httptest.NewRecorder()
+	rMS := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+proj.Id+"/milestones",
+		strings.NewReader(`{"name":"AliceMilestone"}`))
+	rMS.Header.Set("Content-Type", "application/json")
+	rMS.URL.Path = "/api/v1/projects/" + proj.Id + "/milestones"
+	rMS = rMS.WithContext(contextWithUserRole(rMS.Context(), "alice", config.UserRoleUser))
+	api.HandleProjects(wMS, rMS)
+	require.Equal(t, http.StatusCreated, wMS.Code,
+		"alice POST milestone must return 201; body=%s", wMS.Body.String())
+	var ms milestoneResponse
+	require.NoError(t, json.Unmarshal(wMS.Body.Bytes(), &ms))
+
+	// Bob calls GET /api/v1/projects/{P}/milestones → 404 (cannot see alice's project).
+	wListBob := httptest.NewRecorder()
+	rListBob := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+proj.Id+"/milestones", nil)
+	rListBob.URL.Path = "/api/v1/projects/" + proj.Id + "/milestones"
+	rListBob = rListBob.WithContext(contextWithUserRole(rListBob.Context(), "bob", config.UserRoleUser))
+	api.HandleProjects(wListBob, rListBob)
+	assert.Equal(t, http.StatusNotFound, wListBob.Code,
+		"bob must get 404 on alice's project milestones; body=%s", wListBob.Body.String())
+
+	// Bob calls GET /api/v1/projects/{P}/milestones/{M} → 404.
+	wGetBob := httptest.NewRecorder()
+	rGetBob := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+proj.Id+"/milestones/"+ms.ID, nil)
+	rGetBob.URL.Path = "/api/v1/projects/" + proj.Id + "/milestones/" + ms.ID
+	rGetBob = rGetBob.WithContext(contextWithUserRole(rGetBob.Context(), "bob", config.UserRoleUser))
+	api.HandleProjects(wGetBob, rGetBob)
+	assert.Equal(t, http.StatusNotFound, wGetBob.Code,
+		"bob must get 404 on alice's milestone; body=%s", wGetBob.Body.String())
+
+	// Admin calls GET /api/v1/projects/{P}/milestones → 200.
+	wListAdmin := httptest.NewRecorder()
+	rListAdmin := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+proj.Id+"/milestones", nil)
+	rListAdmin.URL.Path = "/api/v1/projects/" + proj.Id + "/milestones"
+	rListAdmin = rListAdmin.WithContext(contextWithUserRole(rListAdmin.Context(), "admin", config.UserRoleAdmin))
+	api.HandleProjects(wListAdmin, rListAdmin)
+	assert.Equal(t, http.StatusOK, wListAdmin.Code,
+		"admin must get 200 on alice's project milestones; body=%s", wListAdmin.Body.String())
 }

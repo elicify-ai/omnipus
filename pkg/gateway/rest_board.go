@@ -304,6 +304,8 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	callerUser, callerRole := callerIdentity(r)
+
 	all, err := a.listBoardTasks()
 	if err != nil {
 		slog.Error("rest: board task: list failed", "error", err)
@@ -311,9 +313,13 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply project_id, status, agent_id, milestone_id filters.
+	// Apply ownership scope, then project_id, status, agent_id, milestone_id filters.
+	// SEC-2: tasks with a non-empty owner that doesn't match the caller are hidden.
 	filtered := make([]boardTask, 0, len(all))
 	for _, t := range all {
+		if !canAccess(t.Owner, callerUser, callerRole) {
+			continue
+		}
 		if projectFilter != "" && t.ProjectID != projectFilter {
 			continue
 		}
@@ -359,6 +365,7 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		Id          string                               `json:"id"`
 		MilestoneId *string                              `json:"milestone_id,omitempty"`
 		Name        string                               `json:"name"`
+		Owner       *string                              `json:"owner,omitempty"`
 		Priority    *int                                 `json:"priority,omitempty"`
 		ProjectId   *string                              `json:"project_id,omitempty"`
 		Prompt      *string                              `json:"prompt,omitempty"`
@@ -382,6 +389,7 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 			Id:          wt.Id,
 			MilestoneId: wt.MilestoneId,
 			Name:        wt.Name,
+			Owner:       wt.Owner,
 			Priority:    wt.Priority,
 			ProjectId:   wt.ProjectId,
 			Prompt:      wt.Prompt,
@@ -412,6 +420,12 @@ func (a *restAPI) handleBoardTaskGet(w http.ResponseWriter, r *http.Request, id 
 		}
 		slog.Error("rest: board task: get failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not read board task")
+		return
+	}
+	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
+	callerUser, callerRole := callerIdentity(r)
+	if !canAccess(t.Owner, callerUser, callerRole) {
+		jsonErr(w, http.StatusNotFound, "board task not found")
 		return
 	}
 	jsonOK(w, toWireBoardTask(t))
@@ -534,6 +548,10 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// SEC-2: stamp the creating user's username as owner. In dev-mode bypass,
+	// the caller has no username — stamp empty string (unowned/shared).
+	callerUser, _ := callerIdentity(r)
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	t := boardTask{
 		ID:          ulid.Make().String(),
@@ -545,6 +563,7 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 		Status:      status,
 		ProjectID:   projectID,
 		AgentID:     agentID,
+		Owner:       callerUser,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -601,6 +620,15 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		}
 		slog.Error("rest: board task: put read failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not read board task")
+		return
+	}
+
+	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
+	// owner is immutable — the stored value is always preserved; any owner field
+	// in the request body is ignored.
+	callerUser, callerRole := callerIdentity(r)
+	if !canAccess(existing.Owner, callerUser, callerRole) {
+		jsonErr(w, http.StatusNotFound, "board task not found")
 		return
 	}
 
@@ -779,7 +807,7 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// Confirm the file exists and is a GTD task before deleting.
-	_, err := a.readBoardTask(id)
+	existing, err := a.readBoardTask(id)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			jsonErr(w, http.StatusNotFound, "board task not found")
@@ -787,6 +815,13 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 		}
 		slog.Error("rest: board task: delete read failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not read board task")
+		return
+	}
+
+	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
+	callerUser, callerRole := callerIdentity(r)
+	if !canAccess(existing.Owner, callerUser, callerRole) {
+		jsonErr(w, http.StatusNotFound, "board task not found")
 		return
 	}
 
@@ -840,6 +875,14 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		}
 		slog.Error("rest: board task: start read failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not read board task")
+		return
+	}
+
+	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
+	callerUser, callerRole := callerIdentity(r)
+	if !canAccess(existing.Owner, callerUser, callerRole) {
+		mu.Unlock()
+		jsonErr(w, http.StatusNotFound, "board task not found")
 		return
 	}
 

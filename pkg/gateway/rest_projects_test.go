@@ -6,6 +6,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -21,8 +22,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/config"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 )
+
+// contextWithUserRole returns a new context that carries the given username (as a
+// *config.UserConfig) and role, matching what the gateway auth middleware injects.
+// Used in ownership-scoping tests to simulate authenticated requests.
+func contextWithUserRole(parent context.Context, username string, role config.UserRole) context.Context {
+	ctx := context.WithValue(parent, UserContextKey{}, &config.UserConfig{Username: username})
+	return context.WithValue(ctx, RoleContextKey{}, role)
+}
 
 // writeTaskFile writes a minimal task JSON file for use in cascade-delete tests.
 func writeTaskFile(t *testing.T, homePath, taskID, projectID, status string) {
@@ -668,4 +678,218 @@ func TestHandleProjects_InboxNotDeletable(t *testing.T) {
 	api.HandleProjects(wGet, rGet)
 	assert.Equal(t, http.StatusOK, wGet.Code,
 		"GET /projects/{inbox-id} after failed delete must still return 200")
+}
+
+// ---------------------------------------------------------------------------
+// Ownership scoping tests (SEC-2)
+// ---------------------------------------------------------------------------
+
+// TestHandleProjects_OwnershipScoping verifies SEC-2: user A cannot see user B's project.
+// BDD: Given user A (alice) creates project P with her credentials,
+// When user B (bob, role=user) calls GET /api/v1/projects/{id} for P,
+// Then 404 (resource enumeration prevention).
+// When bob calls GET /api/v1/projects (list),
+// Then P is absent from the list.
+// When admin calls GET /api/v1/projects/{id} for P,
+// Then 200 (admin sees everything).
+// Traces to: SEC-2
+func TestHandleProjects_OwnershipScoping(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// User alice creates project P.
+	body := `{"name":"AliceProject","description":"owned by alice"}`
+	wPost := httptest.NewRecorder()
+	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/projects", strings.NewReader(body))
+	rPost.Header.Set("Content-Type", "application/json")
+	rPost.URL.Path = "/api/v1/projects"
+	rPost = rPost.WithContext(
+		contextWithUserRole(rPost.Context(), "alice", config.UserRoleUser))
+	api.HandleProjects(wPost, rPost)
+	require.Equal(t, http.StatusCreated, wPost.Code, "alice POST must return 201; body=%s", wPost.Body.String())
+	var proj gen.Project
+	require.NoError(t, json.Unmarshal(wPost.Body.Bytes(), &proj))
+	projID := proj.Id
+	require.NotEmpty(t, projID, "created project must have an id")
+
+	// Verify the owner field is set to alice.
+	require.NotNil(t, proj.Owner, "owner must be set on create")
+	assert.Equal(t, "alice", *proj.Owner, "owner must equal the creating user's username")
+
+	// User bob (role=user) calls GET /api/v1/projects/{id} → 404.
+	wGetBob := httptest.NewRecorder()
+	rGetBob := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+projID, nil)
+	rGetBob.URL.Path = "/api/v1/projects/" + projID
+	rGetBob = rGetBob.WithContext(
+		contextWithUserRole(rGetBob.Context(), "bob", config.UserRoleUser))
+	api.HandleProjects(wGetBob, rGetBob)
+	assert.Equal(t, http.StatusNotFound, wGetBob.Code,
+		"bob must get 404 on alice's project; body=%s", wGetBob.Body.String())
+
+	// User bob calls GET /api/v1/projects (list) — alice's project must not appear.
+	wListBob := httptest.NewRecorder()
+	rListBob := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
+	rListBob.URL.Path = "/api/v1/projects"
+	rListBob = rListBob.WithContext(
+		contextWithUserRole(rListBob.Context(), "bob", config.UserRoleUser))
+	api.HandleProjects(wListBob, rListBob)
+	require.Equal(t, http.StatusOK, wListBob.Code)
+	var bobProjects []gen.Project
+	require.NoError(t, json.Unmarshal(wListBob.Body.Bytes(), &bobProjects))
+	for _, p := range bobProjects {
+		assert.NotEqual(t, projID, p.Id,
+			"alice's project must NOT appear in bob's project list")
+	}
+
+	// Admin calls GET /api/v1/projects/{id} → 200 (admin sees all).
+	wGetAdmin := httptest.NewRecorder()
+	rGetAdmin := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+projID, nil)
+	rGetAdmin.URL.Path = "/api/v1/projects/" + projID
+	rGetAdmin = rGetAdmin.WithContext(
+		contextWithUserRole(rGetAdmin.Context(), "admin", config.UserRoleAdmin))
+	api.HandleProjects(wGetAdmin, rGetAdmin)
+	assert.Equal(t, http.StatusOK, wGetAdmin.Code,
+		"admin must get 200 on alice's project; body=%s", wGetAdmin.Body.String())
+}
+
+// TestHandleProjects_LegacyUnownedAccessible verifies that projects with owner=""
+// (legacy/shared) are readable by any authenticated user. This is the back-compat rule.
+// BDD: Given a project with no owner (legacy data),
+// When any user reads it,
+// Then 200.
+// Traces to: SEC-2 back-compat rule
+func TestHandleProjects_LegacyUnownedAccessible(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// Create a project without a user context (dev-mode bypass → owner="").
+	body := `{"name":"SharedProject"}`
+	wPost := httptest.NewRecorder()
+	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/projects", strings.NewReader(body))
+	rPost.Header.Set("Content-Type", "application/json")
+	rPost.URL.Path = "/api/v1/projects"
+	// No user context injected → callerIdentity returns ("", admin) in dev-mode bypass.
+	api.HandleProjects(wPost, rPost)
+	require.Equal(t, http.StatusCreated, wPost.Code)
+	var proj gen.Project
+	require.NoError(t, json.Unmarshal(wPost.Body.Bytes(), &proj))
+	projID := proj.Id
+
+	// Any user (e.g. "bob") can read an unowned project.
+	wGet := httptest.NewRecorder()
+	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+projID, nil)
+	rGet.URL.Path = "/api/v1/projects/" + projID
+	rGet = rGet.WithContext(
+		contextWithUserRole(rGet.Context(), "bob", config.UserRoleUser))
+	api.HandleProjects(wGet, rGet)
+	assert.Equal(t, http.StatusOK, wGet.Code,
+		"unowned project must be visible to any user; body=%s", wGet.Body.String())
+}
+
+// TestHandleProjects_OwnerImmutableOnPut verifies that an owner field in a PUT body
+// is ignored — the stored owner is never changed.
+// BDD: Given alice owns project P,
+// When alice sends PUT with {"owner":"bob"},
+// Then the returned project still has owner="alice".
+// Traces to: SEC-2
+func TestHandleProjects_OwnerImmutableOnPut(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// Alice creates project.
+	wPost := httptest.NewRecorder()
+	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/projects",
+		strings.NewReader(`{"name":"AliceOwned"}`))
+	rPost.Header.Set("Content-Type", "application/json")
+	rPost.URL.Path = "/api/v1/projects"
+	rPost = rPost.WithContext(
+		contextWithUserRole(rPost.Context(), "alice", config.UserRoleUser))
+	api.HandleProjects(wPost, rPost)
+	require.Equal(t, http.StatusCreated, wPost.Code)
+	var proj gen.Project
+	require.NoError(t, json.Unmarshal(wPost.Body.Bytes(), &proj))
+
+	// Alice PUTs — the request body does not contain owner (immutable field).
+	// Even if a malicious client included it, the handler would ignore it.
+	wPut := httptest.NewRecorder()
+	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/projects/"+proj.Id,
+		strings.NewReader(`{"name":"AliceOwnedRenamed"}`))
+	rPut.Header.Set("Content-Type", "application/json")
+	rPut.URL.Path = "/api/v1/projects/" + proj.Id
+	rPut = rPut.WithContext(
+		contextWithUserRole(rPut.Context(), "alice", config.UserRoleUser))
+	api.HandleProjects(wPut, rPut)
+	require.Equal(t, http.StatusOK, wPut.Code, "alice PUT must return 200")
+	var updated gen.Project
+	require.NoError(t, json.Unmarshal(wPut.Body.Bytes(), &updated))
+	require.NotNil(t, updated.Owner, "owner must still be set after PUT")
+	assert.Equal(t, "alice", *updated.Owner, "owner must remain alice after PUT")
+}
+
+// ---------------------------------------------------------------------------
+// Repository URL scheme validation tests (SEC-5)
+// ---------------------------------------------------------------------------
+
+// TestHandleProjects_RepositorySchemeValidation_POST verifies SEC-5: POST rejects
+// non-http/https repository URLs and accepts valid ones.
+// Traces to: SEC-5
+func TestHandleProjects_RepositorySchemeValidation_POST(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	cases := []struct {
+		name     string
+		repoURL  string
+		wantCode int
+	}{
+		{"http accepted", "http://github.com/foo/bar", http.StatusCreated},
+		{"https accepted", "https://github.com/foo/bar", http.StatusCreated},
+		{"empty accepted", "", http.StatusCreated},
+		{"javascript rejected", "javascript:alert(1)", http.StatusBadRequest},
+		{"data rejected", "data:text/html,<h1>x</h1>", http.StatusBadRequest},
+		{"ftp rejected", "ftp://example.com/repo", http.StatusBadRequest},
+		{"no scheme rejected", "github.com/foo/bar", http.StatusBadRequest},
+	}
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var body string
+			if tc.repoURL == "" {
+				body = fmt.Sprintf(`{"name":"RepoTest%d"}`, i)
+			} else {
+				body = fmt.Sprintf(`{"name":"RepoTest%d","repository":%q}`, i, tc.repoURL)
+			}
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/projects", strings.NewReader(body))
+			r.Header.Set("Content-Type", "application/json")
+			r.URL.Path = "/api/v1/projects"
+			api.HandleProjects(w, r)
+			assert.Equal(t, tc.wantCode, w.Code,
+				"[%s] POST with repository=%q must return %d; body=%s",
+				tc.name, tc.repoURL, tc.wantCode, w.Body.String())
+		})
+	}
+}
+
+// TestHandleProjects_RepositorySchemeValidation_PUT verifies SEC-5: PUT rejects
+// non-http/https repository URLs.
+// Traces to: SEC-5
+func TestHandleProjects_RepositorySchemeValidation_PUT(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	projID := createProjectViaAPI(t, api, "RepoPUTProject", "")
+
+	// Valid https update.
+	wOK := httptest.NewRecorder()
+	rOK := httptest.NewRequest(http.MethodPut, "/api/v1/projects/"+projID,
+		strings.NewReader(`{"repository":"https://github.com/ok/repo"}`))
+	rOK.Header.Set("Content-Type", "application/json")
+	rOK.URL.Path = "/api/v1/projects/" + projID
+	api.HandleProjects(wOK, rOK)
+	assert.Equal(t, http.StatusOK, wOK.Code, "PUT with https URL must return 200; body=%s", wOK.Body.String())
+
+	// Invalid scheme — javascript.
+	wBad := httptest.NewRecorder()
+	rBad := httptest.NewRequest(http.MethodPut, "/api/v1/projects/"+projID,
+		strings.NewReader(`{"repository":"javascript:alert(1)"}`))
+	rBad.Header.Set("Content-Type", "application/json")
+	rBad.URL.Path = "/api/v1/projects/" + projID
+	api.HandleProjects(wBad, rBad)
+	assert.Equal(t, http.StatusBadRequest, wBad.Code,
+		"PUT with javascript: URL must return 400; body=%s", wBad.Body.String())
 }
