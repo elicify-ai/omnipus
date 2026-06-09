@@ -77,7 +77,7 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
     queryKey: milestonesQueryKeys.list(projectId),
     queryFn: () => fetchMilestones(projectId),
     staleTime: 30_000,
-    enabled: !!projectId,
+    enabled: !!projectId && projectId !== 'inbox',
   })
 
   // Board tasks filtered by project
@@ -90,7 +90,7 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
     queryFn: () => fetchBoardTasks({ project_id: projectId }),
     refetchInterval: 15_000,
     staleTime: 10_000,
-    enabled: !!projectId,
+    enabled: !!projectId && projectId !== 'inbox',
   })
 
   // Agents for list view filter
@@ -99,6 +99,11 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
     queryFn: fetchAgents,
     staleTime: 60_000,
   })
+
+  // 'inbox' is a redirect alias — suppress render while the useEffect navigates to the real project ID.
+  // Without this, archivedLoading can flip to false before navigate() completes, causing a crash
+  // on any render path that accesses `project.name` when project is still undefined.
+  if (projectId === 'inbox') return null
 
   if (projectsError) {
     return (
