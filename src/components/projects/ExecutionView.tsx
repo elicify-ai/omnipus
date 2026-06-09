@@ -10,8 +10,6 @@ const EXECUTION_COLUMNS = [
 
 type ExecutionStatus = typeof EXECUTION_COLUMNS[number]['status']
 
-const EXECUTION_STATUSES: ExecutionStatus[] = ['next', 'active', 'done', 'failed']
-
 interface ExecutionViewProps {
   tasks: BoardTask[]
   milestones: MilestoneWithProgress[]
@@ -20,7 +18,7 @@ interface ExecutionViewProps {
 
 export function ExecutionView({ tasks, milestones, onTaskClick }: ExecutionViewProps) {
   const executionTasks = tasks.filter((t): t is BoardTask & { status: ExecutionStatus } =>
-    (EXECUTION_STATUSES as string[]).includes(t.status),
+    EXECUTION_COLUMNS.some((col) => col.status === t.status),
   )
 
   return (
@@ -30,7 +28,7 @@ export function ExecutionView({ tasks, milestones, onTaskClick }: ExecutionViewP
         return (
           <div
             key={col.status}
-            aria-label={`${col.label} column`}
+            aria-label={`${col.label} column, ${colTasks.length} tasks`}
             className="flex flex-col min-w-[200px] flex-1 max-h-full rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)]"
           >
             <div className="flex items-center gap-2 px-3 py-2.5 border-b border-[var(--color-border)] flex-shrink-0">
@@ -54,7 +52,6 @@ export function ExecutionView({ tasks, milestones, onTaskClick }: ExecutionViewP
                 <p className="text-[10px] text-[var(--color-muted)] text-center py-4">No tasks</p>
               )}
             </div>
-            <span className="sr-only">{col.label} column, {colTasks.length} tasks</span>
           </div>
         )
       })}

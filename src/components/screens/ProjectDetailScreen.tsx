@@ -56,6 +56,11 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
     // No default project — fall through so the "not found" state renders below.
   }, [projectId, projects, navigate])
 
+  // Reset milestone filter whenever the active project changes.
+  useEffect(() => {
+    setActiveMilestoneId(null)
+  }, [projectId, setActiveMilestoneId])
+
   // Also try archived projects for direct URL access
   const { data: archivedProjects = [] } = useQuery({
     queryKey: projectsQueryKeys.list({ status: 'archived' }),

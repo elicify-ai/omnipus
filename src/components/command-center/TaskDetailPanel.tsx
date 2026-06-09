@@ -112,6 +112,7 @@ export function TaskDetailPanel(props: TaskDetailPanelProps) {
 function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose: () => void }) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
@@ -126,8 +127,8 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
 
   const { data: projects = [] } = useQuery({
-    queryKey: projectsQueryKeys.list(),
-    queryFn: () => fetchProjects(),
+    queryKey: projectsQueryKeys.list({ status: 'active' }),
+    queryFn: () => fetchProjects({ status: 'active' }),
     staleTime: 30_000,
   })
 
@@ -159,7 +160,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
-      // Stay on board — "Open in Chat" button appears when task.session_id is set
+      addToast({ message: 'Task started.', variant: 'success' })
     },
     onError: (err: unknown) =>
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to start task', variant: 'error' }),
@@ -324,7 +325,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
       </Field>
 
       {/* Start Task button — inbox/next/waiting tasks */}
-      {isStartable && !isFailed && (
+      {isStartable && (
         <Button
           className="w-full gap-2 text-xs h-8"
           onClick={() => doStart()}

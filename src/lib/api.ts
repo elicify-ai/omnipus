@@ -2228,6 +2228,10 @@ export const tokenStatsQueryKeys = {
   monthly: () => ['token-stats', 'month'] as const,
 }
 
+export const auditLogQueryKeys = {
+  list: () => ['audit-log'] as const,
+}
+
 export function fetchTokenStats(): Promise<TokenUsageSummary> {
   return request<TokenUsageSummary>(
     '/stats/tokens?period=month',
