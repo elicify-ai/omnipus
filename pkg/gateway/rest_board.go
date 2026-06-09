@@ -68,7 +68,9 @@ func (a *restAPI) writeBoardTask(t boardTask) error {
 		return err
 	}
 	path := filepath.Join(dir, t.ID+".json")
-	return fileutil.WriteFileAtomic(path, data, 0o600)
+	return fileutil.WithFlock(path, func() error {
+		return fileutil.WriteFileAtomic(path, data, 0o600)
+	})
 }
 
 // readBoardTask reads a single GTD task from disk by ID.
@@ -355,6 +357,16 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 	agentID := ""
 	if req.AgentId != nil {
 		agentID = *req.AgentId
+		if len(agentID) > 50 {
+			jsonErr(w, http.StatusBadRequest, "agent_id must be 50 characters or fewer")
+			return
+		}
+		if agentID != "" {
+			if err := validateEntityID(agentID); err != nil {
+				jsonErr(w, http.StatusBadRequest, "invalid agent_id")
+				return
+			}
+		}
 	}
 
 	description := ""
@@ -466,7 +478,18 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		existing.ProjectID = *req.ProjectId
 	}
 	if req.AgentId != nil {
-		existing.AgentID = *req.AgentId
+		agentID := *req.AgentId
+		if len(agentID) > 50 {
+			jsonErr(w, http.StatusBadRequest, "agent_id must be 50 characters or fewer")
+			return
+		}
+		if agentID != "" {
+			if err := validateEntityID(agentID); err != nil {
+				jsonErr(w, http.StatusBadRequest, "invalid agent_id")
+				return
+			}
+		}
+		existing.AgentID = agentID
 	}
 
 	existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)

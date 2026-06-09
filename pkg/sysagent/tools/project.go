@@ -359,8 +359,8 @@ func (t *ProjectDeleteTool) Execute(_ context.Context, args map[string]any) *too
 	// Step 1: cascade-delete tasks
 	tasks, err := listEntities[task](tasksDir(t.deps.Home))
 	if err != nil {
-		slog.Warn("sysagent: project cascade delete: failed to list tasks", "project_id", id, "error", err)
-		// Continue with partial deletion — log but don't abort the project delete
+		slog.Error("sysagent: project cascade delete: failed to list tasks", "project_id", id, "error", err)
+		return tools.ErrorResult(errorJSON("SAVE_FAILED", "could not list tasks for cascade delete: "+err.Error(), ""))
 	}
 	tasksDeleted := 0
 	for _, tk := range tasks {

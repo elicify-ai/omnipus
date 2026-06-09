@@ -33,15 +33,6 @@ var gtdStatusSet = map[string]bool{
 	"inbox": true, "next": true, "active": true, "waiting": true, "done": true,
 }
 
-// validTaskStatus returns true for allowed GTD status values.
-func validTaskStatus(s string) bool {
-	switch s {
-	case "inbox", "next", "active", "waiting", "done":
-		return true
-	}
-	return false
-}
-
 // ---- system.task.create ----
 
 type TaskCreateTool struct{ deps *Deps }
@@ -73,7 +64,7 @@ func (t *TaskCreateTool) Execute(_ context.Context, args map[string]any) *tools.
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
 	status := "inbox"
-	if v, ok := args["status"].(string); ok && validTaskStatus(v) {
+	if v, ok := args["status"].(string); ok && gtdStatusSet[v] {
 		status = v
 	}
 	id := ulid.Make().String()
@@ -157,7 +148,7 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 		tk.Description = v
 		updated = append(updated, "description")
 	}
-	if v, ok := args["status"].(string); ok && validTaskStatus(v) {
+	if v, ok := args["status"].(string); ok && gtdStatusSet[v] {
 		tk.Status = v
 		updated = append(updated, "status")
 	}

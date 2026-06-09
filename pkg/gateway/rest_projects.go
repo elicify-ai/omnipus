@@ -108,7 +108,7 @@ func listProjectFiles(home string) ([]storedProject, error) {
 // scanGTDTasks walks the tasks directory and calls fn for every file that
 // deserialises to a GTD task (status ∈ {inbox,next,active,waiting,done}).
 // Returns the first I/O error; fn errors are not propagated.
-func scanGTDTasks(home string, fn func(id string, raw map[string]any)) error {
+func scanGTDTasks(home string, fn func(id string, t boardTask)) error {
 	dir := filepath.Join(home, "tasks")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -126,17 +126,16 @@ func scanGTDTasks(home string, fn func(id string, raw map[string]any)) error {
 			slog.Warn("rest_projects: scanGTDTasks: failed to read task file", "file", e.Name(), "error", err)
 			continue
 		}
-		var raw map[string]any
-		if err := json.Unmarshal(data, &raw); err != nil {
+		var t boardTask
+		if err := json.Unmarshal(data, &t); err != nil {
 			slog.Warn("rest_projects: scanGTDTasks: failed to parse task file", "file", e.Name(), "error", err)
 			continue
 		}
-		status, _ := raw["status"].(string)
-		if !isGTDTask(status) {
+		if !isGTDTask(t.Status) {
 			continue
 		}
 		id := strings.TrimSuffix(e.Name(), ".json")
-		fn(id, raw)
+		fn(id, t)
 	}
 	return nil
 }
@@ -147,9 +146,9 @@ func scanGTDTasks(home string, fn func(id string, raw map[string]any)) error {
 // tasks from pkg/taskstore share the same directory and are excluded.
 func computeProjectTaskCounts(home string) (map[string]int, error) {
 	counts := make(map[string]int)
-	if err := scanGTDTasks(home, func(_ string, raw map[string]any) {
-		if pid, _ := raw["project_id"].(string); pid != "" {
-			counts[pid]++
+	if err := scanGTDTasks(home, func(_ string, t boardTask) {
+		if t.ProjectID != "" {
+			counts[t.ProjectID]++
 		}
 	}); err != nil {
 		return nil, fmt.Errorf("read tasks dir: %w", err)
@@ -162,8 +161,8 @@ func computeProjectTaskCounts(home string) (map[string]int, error) {
 // Only GTD tasks (status ∈ {inbox,next,active,waiting,done}) are counted.
 func countTasksForProject(home, projectID string) int {
 	count := 0
-	if err := scanGTDTasks(home, func(_ string, raw map[string]any) {
-		if pid, _ := raw["project_id"].(string); pid == projectID {
+	if err := scanGTDTasks(home, func(_ string, t boardTask) {
+		if t.ProjectID == projectID {
 			count++
 		}
 	}); err != nil {
@@ -185,7 +184,9 @@ func writeProjectFile(home string, p storedProject) error {
 		return fmt.Errorf("marshal project: %w", err)
 	}
 	path := filepath.Join(dir, p.ID+".json")
-	return fileutil.WriteFileAtomic(path, data, 0o600)
+	return fileutil.WithFlock(path, func() error {
+		return fileutil.WriteFileAtomic(path, data, 0o600)
+	})
 }
 
 // projectToWire converts a storedProject to the gen.Project wire type.
@@ -231,18 +232,20 @@ func projectToWire(p storedProject, taskCount int) gen.Project {
 // tasks from pkg/taskstore share the same directory and are preserved.
 func deleteTasksForProject(home, projectID string) error {
 	tasksDir := filepath.Join(home, "tasks")
-	if err := scanGTDTasks(home, func(id string, raw map[string]any) {
-		if pid, _ := raw["project_id"].(string); pid == projectID {
+	var removeErrs []error
+	if err := scanGTDTasks(home, func(id string, t boardTask) {
+		if t.ProjectID == projectID {
 			taskPath := filepath.Join(tasksDir, id+".json")
 			if err := os.Remove(taskPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 				slog.Warn("rest: project cascade: failed to delete task",
 					"file", id+".json", "error", err)
+				removeErrs = append(removeErrs, err)
 			}
 		}
 	}); err != nil {
 		return fmt.Errorf("scan tasks for cascade delete: %w", err)
 	}
-	return nil
+	return errors.Join(removeErrs...)
 }
 
 // loadProject reads a project by ID and writes the appropriate HTTP error if absent.
