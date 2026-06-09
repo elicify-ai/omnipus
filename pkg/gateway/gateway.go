@@ -126,7 +126,7 @@ type services struct {
 
 	// restAPIRef holds a pointer to the restAPI constructed by setupAndStartServices.
 	// Used by RunContextWithOptions to update builtinRegistry after live-deps are wired
-	// (the M16 re-population at line ~689 creates a fresh *BuiltinRegistry that must
+	// (the M16 re-population at ~line 715 creates a fresh *BuiltinRegistry that must
 	// reach the already-constructed restAPI; storing the ref here avoids
 	// a larger refactor of setupAndStartServices).
 	restAPIRef *restAPI
@@ -1338,7 +1338,7 @@ func setupAndStartServices(
 		auditor:         agentLoop.AuditLogger(),         // shared audit logger for REST mutations
 	}
 	// Stash the api ref so RunContextWithOptions can update builtinRegistry
-	// after the M16 live-deps re-population (the :689 reassignment creates a fresh
+	// after the M16 live-deps re-population (the ~line 715 reassignment creates a fresh
 	// *BuiltinRegistry that would otherwise not reach the already-constructed api).
 	runningServices.restAPIRef = api
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/sessions", api.withAuth(api.HandleSessions))
