@@ -309,6 +309,10 @@ func jsonOK(w http.ResponseWriter, body any) { writeJSON(w, http.StatusOK, body)
 // Content-Type and the response is served as text/plain (#96).
 func jsonCreated(w http.ResponseWriter, body any) { writeJSON(w, http.StatusCreated, body) }
 
+// jsonAccepted writes body as a 202 Accepted JSON response. Use for async
+// operations that have been accepted and dispatched but not yet completed.
+func jsonAccepted(w http.ResponseWriter, body any) { writeJSON(w, http.StatusAccepted, body) }
+
 // jsonErr writes an ErrorResponse with the given status. Like writeJSON it sets
 // Content-Type before WriteHeader so error bodies are never served as text/plain
 // (#96). It does not call writeJSON to avoid recursion on a marshal failure.
