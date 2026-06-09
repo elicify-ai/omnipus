@@ -538,8 +538,7 @@ func TestHandleProjects_ConcurrentDelete(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	for i := 0; i < 2; i++ {
-		i := i
+	for i := range 2 {
 		go func() {
 			defer wg.Done()
 			w := httptest.NewRecorder()
