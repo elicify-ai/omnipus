@@ -1087,26 +1087,28 @@ func postBoardTaskStart(t *testing.T, api *restAPI, taskID string) *httptest.Res
 //
 // BDD scenarios:
 //
-//	Scenario 1 — Happy path (200): create inbox task, POST /start → 200, status=active, session_id non-empty.
-//	  GET same task confirms persisted state.
+//	Scenario 1 — Happy path (202): create inbox task, POST /start → 202, status=active, session_id non-empty.
+//	  GET same task confirms persisted state. Session metadata (TaskID, Title) and user-turn
+//	  transcript written synchronously before goroutine dispatch.
 //	Scenario 2 — 409 active: start task, start again → 409.
 //	Scenario 3 — 409 done: set status=done via PUT, POST /start → 409.
 //	Scenario 4 — 409 failed: set status=failed via PUT, POST /start → 409.
 //	Scenario 5 — 404: POST /start on non-existent task ID → 404.
 //	Scenario 6 — Session uniqueness: start two tasks → distinct session_ids.
+//	Scenario 7 — Metadata + transcript: task with prompt gets SetMeta and AppendTranscript written.
 //
 // Traces to: project-task-management-level1-spec.md — FR-L2-006 (start creates session)
 func TestHandleBoardTasks_Start(t *testing.T) {
-	t.Run("happy path 200", func(t *testing.T) {
+	t.Run("happy path 202", func(t *testing.T) {
 		api := newTestRestAPIWithAgent(t)
 		task := createBoardTaskViaAPI(t, api, "StartHappyTask", "inbox")
 
 		w := postBoardTaskStart(t, api, task.Id)
 		require.Equal(
 			t,
-			http.StatusOK,
+			http.StatusAccepted,
 			w.Code,
-			"POST /start on inbox task must return 200; body=%s",
+			"POST /start on inbox task must return 202; body=%s",
 			w.Body.String(),
 		)
 		var started gen.BoardTask
@@ -1147,13 +1149,13 @@ func TestHandleBoardTasks_Start(t *testing.T) {
 		api := newTestRestAPIWithAgent(t)
 		task := createBoardTaskViaAPI(t, api, "DoubleStartTask", "inbox")
 
-		// First start → 200.
+		// First start → 202.
 		w1 := postBoardTaskStart(t, api, task.Id)
 		require.Equal(
 			t,
-			http.StatusOK,
+			http.StatusAccepted,
 			w1.Code,
-			"first POST /start must return 200; body=%s",
+			"first POST /start must return 202; body=%s",
 			w1.Body.String(),
 		)
 
@@ -1236,17 +1238,17 @@ func TestHandleBoardTasks_Start(t *testing.T) {
 		w1 := postBoardTaskStart(t, api, task1.Id)
 		require.Equal(
 			t,
-			http.StatusOK,
+			http.StatusAccepted,
 			w1.Code,
-			"start task1 must return 200; body=%s",
+			"start task1 must return 202; body=%s",
 			w1.Body.String(),
 		)
 		w2 := postBoardTaskStart(t, api, task2.Id)
 		require.Equal(
 			t,
-			http.StatusOK,
+			http.StatusAccepted,
 			w2.Code,
-			"start task2 must return 200; body=%s",
+			"start task2 must return 202; body=%s",
 			w2.Body.String(),
 		)
 
@@ -1264,6 +1266,62 @@ func TestHandleBoardTasks_Start(t *testing.T) {
 			*started2.SessionId,
 			"two different tasks must get distinct session_ids",
 		)
+	})
+
+	// Scenario 7 — Metadata + transcript written synchronously before goroutine dispatch.
+	// The task is created with a prompt so AppendTranscript is exercised.
+	// SetMeta is always called regardless of prompt.
+	t.Run("session metadata and transcript written on start", func(t *testing.T) {
+		api := newTestRestAPIWithAgent(t)
+		const agentID = "01JXTESTAGENTSTARTTEST001"
+
+		// Create a task with a prompt so the user-turn transcript entry is written.
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks",
+			strings.NewReader(`{"name":"MetaTranscriptTask","prompt":"Run the integration suite"}`))
+		r.Header.Set("Content-Type", "application/json")
+		r.URL.Path = "/api/v1/board/tasks"
+		api.HandleBoardTasks(w, r)
+		require.Equal(t, http.StatusCreated, w.Code, "create task must return 201; body=%s", w.Body.String())
+		var task gen.BoardTask
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &task))
+		require.NotEmpty(t, task.Id)
+
+		// POST /start → 202.
+		wStart := postBoardTaskStart(t, api, task.Id)
+		require.Equal(
+			t,
+			http.StatusAccepted,
+			wStart.Code,
+			"POST /start must return 202; body=%s",
+			wStart.Body.String(),
+		)
+		var started gen.BoardTask
+		require.NoError(t, json.Unmarshal(wStart.Body.Bytes(), &started))
+		require.NotNil(t, started.SessionId, "session_id must be non-nil")
+		sessionID := *started.SessionId
+		require.NotEmpty(t, sessionID, "session_id must be non-empty")
+
+		// Resolve the store the same way handleBoardTaskStart does:
+		// GetAgentStore first, fall back to shared store.
+		store := api.agentLoop.GetAgentStore(agentID)
+		if store == nil {
+			store = api.agentLoop.GetSessionStore()
+		}
+		require.NotNil(t, store, "session store must be resolvable in test")
+
+		// Verify SetMeta wrote TaskID and Title.
+		meta, err := store.GetMeta(sessionID)
+		require.NoError(t, err, "GetMeta must succeed for the new session")
+		assert.Equal(t, task.Id, meta.TaskID, "session meta TaskID must match the board task ID")
+		assert.Equal(t, task.Name, meta.Title, "session meta Title must match the board task name")
+
+		// Verify AppendTranscript wrote the user-turn entry.
+		entries, err := store.ReadTranscript(sessionID)
+		require.NoError(t, err, "ReadTranscript must succeed")
+		require.NotEmpty(t, entries, "expected user-turn transcript entry after /start with non-empty prompt")
+		assert.Equal(t, "user", entries[0].Role, "first transcript entry must have role=user")
+		assert.NotEmpty(t, entries[0].Content, "user transcript entry must have non-empty content")
 	})
 }
 
