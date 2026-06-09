@@ -103,9 +103,9 @@ describe('Sidebar — overlay rendering when open', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // All nav item labels must be present (7 items: Command Center replaced by Tasks + Monitor).
+    // All nav item labels must be present (5 items + Settings at bottom): Chat, Monitor, Agents, Channels, Skills & Tools.
+    // Tasks nav item was removed in Wave 1b — Projects is the entry point now.
     expect(screen.getByText('Chat')).toBeTruthy()
-    expect(screen.getByText('Tasks')).toBeTruthy()
     expect(screen.getByText('Monitor')).toBeTruthy()
     expect(screen.getByText('Agents')).toBeTruthy()
     expect(screen.getByText('Channels')).toBeTruthy()

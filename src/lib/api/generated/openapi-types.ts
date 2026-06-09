@@ -1916,6 +1916,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/projects/{id}/milestones": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List milestones for a project */
+        get: operations["listProjectMilestones"];
+        put?: never;
+        /** Create a milestone for a project */
+        post: operations["createProjectMilestone"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{id}/milestones/{milestoneId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a milestone by ID */
+        get: operations["getProjectMilestone"];
+        /** Update a milestone (partial update) */
+        put: operations["updateProjectMilestone"];
+        post?: never;
+        /** Delete a milestone */
+        delete: operations["deleteProjectMilestone"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/board/tasks": {
         parameters: {
             query?: never;
@@ -5590,7 +5627,7 @@ export interface components {
          * @description GTD board task status.
          * @enum {string}
          */
-        GTDBoardTaskStatus: "inbox" | "next" | "active" | "waiting" | "done";
+        GTDBoardTaskStatus: "inbox" | "next" | "active" | "waiting" | "done" | "failed";
         /** @description A GTD board task stored in ~/.omnipus/tasks/. Distinct from workflow tasks (pkg/taskstore, /api/v1/tasks) which have different statuses and semantics. */
         BoardTask: {
             /**
@@ -5616,6 +5653,16 @@ export interface components {
              * @example mia
              */
             agent_id?: string;
+            /** @description Optional agent prompt attached to the task. */
+            prompt?: string;
+            /** @description Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified. */
+            priority?: number;
+            /** @description Optional milestone this task belongs to. */
+            milestone_id?: string;
+            /** @description Optional session linked to this task. */
+            session_id?: string;
+            /** @description Optional task result or output. */
+            result?: string;
             /**
              * Format: date-time
              * @example 2026-06-08T14:22:00Z
@@ -5642,6 +5689,9 @@ export interface components {
             status?: components["schemas"]["GTDBoardTaskStatus"];
             project_id?: string;
             agent_id?: string;
+            prompt?: string;
+            priority?: number;
+            milestone_id?: string;
         };
         BoardTaskUpdateRequest: {
             name?: string;
@@ -5649,6 +5699,11 @@ export interface components {
             status?: components["schemas"]["GTDBoardTaskStatus"];
             project_id?: string;
             agent_id?: string;
+            prompt?: string;
+            priority?: number;
+            milestone_id?: string;
+            session_id?: string;
+            result?: string;
         };
         /** @description A session that has been auto-linked to a project via tool use. */
         ProjectSessionLink: {
@@ -5663,6 +5718,63 @@ export interface components {
              * @example 2026-06-08T14:22:00Z
              */
             created_at: string;
+        };
+        Milestone: {
+            /**
+             * @description UUID milestone identifier
+             * @example c3d4e5f6-a7b8-9012-cdef-123456789012
+             */
+            id: string;
+            /**
+             * @description Project this milestone belongs to.
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            project_id: string;
+            /**
+             * @description Human-readable milestone name.
+             * @example v1.0 Launch
+             */
+            name: string;
+            /** @description Optional free-text description. */
+            description?: string;
+            /**
+             * @description Optional due date (ISO 8601 date string or null).
+             * @example 2026-12-31
+             */
+            due_date?: string | null;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC creation timestamp.
+             * @example 2026-06-08T14:22:00Z
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description RFC3339 UTC last-update timestamp.
+             * @example 2026-06-08T15:00:00Z
+             */
+            updated_at: string;
+        };
+        MilestoneCreateRequest: {
+            /** @description Milestone name. Required. */
+            name: string;
+            /** @description Optional free-text description. */
+            description?: string;
+            /** @description Optional due date (ISO 8601 date string or null). */
+            due_date?: string | null;
+        };
+        MilestoneUpdateRequest: {
+            /** @description Milestone name. */
+            name?: string;
+            /** @description Optional free-text description. */
+            description?: string;
+            /** @description Optional due date (ISO 8601 date string or null). */
+            due_date?: string | null;
+        };
+        MilestoneListResponse: {
+            milestones: components["schemas"]["Milestone"][];
+            /** @description Total number of milestones for this project. */
+            total: number;
         };
         /** @description Per-agent token usage entry within a TokenUsageSummary. */
         AgentTokenEntry: {
@@ -9713,13 +9825,156 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
+    listProjectMilestones: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Milestone list with total count */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MilestoneListResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    createProjectMilestone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MilestoneCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created milestone */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Milestone"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    getProjectMilestone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID. */
+                id: string;
+                /** @description Milestone ID. */
+                milestoneId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Milestone */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Milestone"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    updateProjectMilestone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID. */
+                id: string;
+                /** @description Milestone ID. */
+                milestoneId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MilestoneUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated milestone */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Milestone"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
+    deleteProjectMilestone: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project ID. */
+                id: string;
+                /** @description Milestone ID. */
+                milestoneId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+        };
+    };
     listBoardTasks: {
         parameters: {
             query?: {
                 /** @description Filter by project ID. */
                 project_id?: string;
                 /** @description Filter by GTD status. */
-                status?: "inbox" | "next" | "active" | "waiting" | "done";
+                status?: "inbox" | "next" | "active" | "waiting" | "done" | "failed";
+                /** @description Filter by agent ID. */
+                agent_id?: string;
+                /** @description Filter by milestone ID. */
+                milestone_id?: string;
                 /** @description Maximum items to return. */
                 limit?: number;
                 /** @description Pagination offset. */
@@ -10017,5 +10272,9 @@ export type BoardTaskListResponse = components["schemas"]["BoardTaskListResponse
 export type BoardTaskCreateRequest = components["schemas"]["BoardTaskCreateRequest"];
 export type BoardTaskUpdateRequest = components["schemas"]["BoardTaskUpdateRequest"];
 export type ProjectSessionLink = components["schemas"]["ProjectSessionLink"];
+export type Milestone = components["schemas"]["Milestone"];
+export type MilestoneCreateRequest = components["schemas"]["MilestoneCreateRequest"];
+export type MilestoneUpdateRequest = components["schemas"]["MilestoneUpdateRequest"];
+export type MilestoneListResponse = components["schemas"]["MilestoneListResponse"];
 export type AgentTokenEntry = components["schemas"]["AgentTokenEntry"];
 export type TokenUsageSummary = components["schemas"]["TokenUsageSummary"];

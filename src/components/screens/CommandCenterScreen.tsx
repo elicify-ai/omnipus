@@ -153,6 +153,7 @@ export function CommandCenterScreen() {
 
       {/* Task detail slide-over */}
       <TaskDetailPanel
+        taskMode="workflow"
         task={selectedTask}
         onClose={() => setSelectedTask(null)}
         onTaskSelect={setSelectedTask}

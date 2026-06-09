@@ -83,7 +83,7 @@ const taskWithoutSession: Task = {
 function renderPanel(task: Task | null, onClose = vi.fn()) {
   return render(
     <QueryClientProvider client={makeClient()}>
-      <TaskDetailPanel task={task} onClose={onClose} />
+      <TaskDetailPanel taskMode="workflow" task={task} onClose={onClose} />
     </QueryClientProvider>
   )
 }

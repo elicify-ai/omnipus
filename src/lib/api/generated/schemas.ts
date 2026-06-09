@@ -404,10 +404,21 @@ type BoardTask = {
   status: GTDBoardTaskStatus;
   project_id?: string | undefined;
   agent_id?: string | undefined;
+  prompt?: string | undefined;
+  priority?: number | undefined;
+  milestone_id?: string | undefined;
+  session_id?: string | undefined;
+  result?: string | undefined;
   created_at: string;
   updated_at: string;
 };
-type GTDBoardTaskStatus = "inbox" | "next" | "active" | "waiting" | "done";
+type GTDBoardTaskStatus =
+  | "inbox"
+  | "next"
+  | "active"
+  | "waiting"
+  | "done"
+  | "failed";
 type BoardTaskListResponse = {
   items: Array<BoardTask>;
   total: number;
@@ -418,6 +429,9 @@ type BoardTaskCreateRequest = {
   status?: GTDBoardTaskStatus | undefined;
   project_id?: string | undefined;
   agent_id?: string | undefined;
+  prompt?: string | undefined;
+  priority?: number | undefined;
+  milestone_id?: string | undefined;
 };
 type BoardTaskUpdateRequest = Partial<{
   name: string;
@@ -425,7 +439,25 @@ type BoardTaskUpdateRequest = Partial<{
   status: GTDBoardTaskStatus;
   project_id: string;
   agent_id: string;
+  prompt: string;
+  priority: number;
+  milestone_id: string;
+  session_id: string;
+  result: string;
 }>;
+type MilestoneListResponse = {
+  milestones: Array<Milestone>;
+  total: number;
+};
+type Milestone = {
+  id: string;
+  project_id: string;
+  name: string;
+  description?: string | undefined;
+  due_date?: (string | null) | undefined;
+  created_at: string;
+  updated_at: string;
+};
 type TokenUsageSummary = {
   agents: Array<AgentTokenEntry>;
   period_start: string;
@@ -1561,12 +1593,42 @@ export const ProjectSessionLink = z
     created_at: z.string().datetime({ offset: true }),
   })
   .passthrough();
+export const Milestone: z.ZodType<Milestone> = z
+  .object({
+    id: z.string(),
+    project_id: z.string(),
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000).optional(),
+    due_date: z.string().nullish(),
+    created_at: z.string().datetime({ offset: true }),
+    updated_at: z.string().datetime({ offset: true }),
+  })
+  .passthrough();
+export const MilestoneListResponse: z.ZodType<MilestoneListResponse> = z
+  .object({ milestones: z.array(Milestone), total: z.number().int() })
+  .passthrough();
+export const MilestoneCreateRequest = z
+  .object({
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000).optional(),
+    due_date: z.string().nullish(),
+  })
+  .passthrough();
+export const MilestoneUpdateRequest = z
+  .object({
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000),
+    due_date: z.string().nullable(),
+  })
+  .partial()
+  .passthrough();
 export const GTDBoardTaskStatus = z.enum([
   "inbox",
   "next",
   "active",
   "waiting",
   "done",
+  "failed",
 ]);
 export const BoardTask: z.ZodType<BoardTask> = z
   .object({
@@ -1576,6 +1638,11 @@ export const BoardTask: z.ZodType<BoardTask> = z
     status: GTDBoardTaskStatus,
     project_id: z.string().optional(),
     agent_id: z.string().optional(),
+    prompt: z.string().max(10000).optional(),
+    priority: z.number().int().gte(1).lte(5).optional(),
+    milestone_id: z.string().optional(),
+    session_id: z.string().optional(),
+    result: z.string().max(50000).optional(),
     created_at: z.string().datetime({ offset: true }),
     updated_at: z.string().datetime({ offset: true }),
   })
@@ -1590,6 +1657,9 @@ export const BoardTaskCreateRequest: z.ZodType<BoardTaskCreateRequest> = z
     status: GTDBoardTaskStatus.optional(),
     project_id: z.string().optional(),
     agent_id: z.string().optional(),
+    prompt: z.string().max(10000).optional(),
+    priority: z.number().int().gte(1).lte(5).optional(),
+    milestone_id: z.string().optional(),
   })
   .passthrough();
 export const BoardTaskUpdateRequest: z.ZodType<BoardTaskUpdateRequest> = z
@@ -1599,6 +1669,11 @@ export const BoardTaskUpdateRequest: z.ZodType<BoardTaskUpdateRequest> = z
     status: GTDBoardTaskStatus,
     project_id: z.string(),
     agent_id: z.string(),
+    prompt: z.string().max(10000),
+    priority: z.number().int().gte(1).lte(5),
+    milestone_id: z.string(),
+    session_id: z.string(),
+    result: z.string().max(50000),
   })
   .partial()
   .passthrough();
@@ -2239,8 +2314,18 @@ Includes session_start events from all agent stores and task lifecycle events.
         name: "status",
         type: "Query",
         schema: z
-          .enum(["inbox", "next", "active", "waiting", "done"])
+          .enum(["inbox", "next", "active", "waiting", "done", "failed"])
           .optional(),
+      },
+      {
+        name: "agent_id",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+      {
+        name: "milestone_id",
+        type: "Query",
+        schema: z.string().optional(),
       },
       {
         name: "limit",
@@ -3301,6 +3386,171 @@ Includes session_start events from all agent stores and task lifecycle events.
         description: `Bad request — missing or invalid field.`,
         schema: ErrorResponse,
       },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/projects/:id/milestones",
+    alias: "listProjectMilestones",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: MilestoneListResponse,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/projects/:id/milestones",
+    alias: "createProjectMilestone",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MilestoneCreateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Milestone,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/projects/:id/milestones/:milestoneId",
+    alias: "getProjectMilestone",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "milestoneId",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Milestone,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/projects/:id/milestones/:milestoneId",
+    alias: "updateProjectMilestone",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MilestoneUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "milestoneId",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Milestone,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/projects/:id/milestones/:milestoneId",
+    alias: "deleteProjectMilestone",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "milestoneId",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,

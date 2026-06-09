@@ -112,6 +112,9 @@ import {
   BoardTask as BoardTaskSchema,
   BoardTaskListResponse as BoardTaskListResponseSchema,
   TokenUsageSummary as TokenUsageSummarySchema,
+  // Milestones (contract-first #8):
+  Milestone as MilestoneSchema,
+  MilestoneListResponse as MilestoneListResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -285,6 +288,11 @@ import type {
   // Level-1 board task request types:
   BoardTaskCreateRequest,
   BoardTaskUpdateRequest,
+  // Milestones:
+  Milestone,
+  MilestoneCreateRequest,
+  MilestoneUpdateRequest,
+  MilestoneListResponse,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -377,6 +385,10 @@ export type {
   TokenUsageSummary,
   BoardTaskCreateRequest,
   BoardTaskUpdateRequest,
+  Milestone,
+  MilestoneCreateRequest,
+  MilestoneUpdateRequest,
+  MilestoneListResponse,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -2098,7 +2110,7 @@ export function fetchProjectSessions(id: string): Promise<ProjectSessionLink[]> 
 // openapi-types (contract-first #8). See contracts/components/schemas/BoardTask*.yaml.
 
 export const boardTasksQueryKeys = {
-  list: (params?: { project_id?: string; status?: string }) => {
+  list: (params?: { project_id?: string; status?: string; milestone_id?: string; agent_id?: string }) => {
     const cleaned = params
       ? Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined))
       : {}
@@ -2107,10 +2119,12 @@ export const boardTasksQueryKeys = {
   detail: (id: string) => ['board-tasks', id] as const,
 }
 
-export function fetchBoardTasks(params?: { project_id?: string; status?: string }): Promise<BoardTask[]> {
+export function fetchBoardTasks(params?: { project_id?: string; status?: string; milestone_id?: string; agent_id?: string }): Promise<BoardTask[]> {
   const search = new URLSearchParams()
   if (params?.project_id) search.set('project_id', params.project_id)
   if (params?.status) search.set('status', params.status)
+  if (params?.milestone_id) search.set('milestone_id', params.milestone_id)
+  if (params?.agent_id) search.set('agent_id', params.agent_id)
   const qs = search.toString() ? '?' + search.toString() : ''
   return request<BoardTaskListResponse>(
     `/board/tasks${qs}`,
@@ -2137,6 +2151,64 @@ export function updateBoardTask(id: string, body: BoardTaskUpdateRequest): Promi
 
 export function deleteBoardTask(id: string): Promise<void> {
   return request<void>(`/board/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+// ── Milestones ────────────────────────────────────────────────────────────────
+//
+// Milestones are scoped to a project. All types are re-exported from generated
+// openapi-types (contract-first #8). See contracts/components/schemas/Milestone*.yaml.
+//
+// The generated Milestone type does not include `progress` (computed field added
+// by the backend at read time). Components that display progress should treat it
+// as optional and use a passthrough schema to avoid strict validation failures.
+
+export const milestonesQueryKeys = {
+  list: (projectId: string) => ['milestones', projectId] as const,
+  detail: (projectId: string, milestoneId: string) => ['milestones', projectId, milestoneId] as const,
+}
+
+/** Milestone with optional computed progress field (0–1, added by backend at read time). */
+export type MilestoneWithProgress = Milestone & { progress?: number }
+
+export function fetchMilestones(projectId: string): Promise<MilestoneWithProgress[]> {
+  // Use the base Milestone schema with passthrough for the computed progress field.
+  // The backend adds progress at read time; the schema does not include it.
+  return request<MilestoneListResponse>(
+    `/projects/${encodeURIComponent(projectId)}/milestones`,
+    undefined,
+    MilestoneListResponseSchema as ZodType<MilestoneListResponse>,
+  ).then((res) => res.milestones as MilestoneWithProgress[])
+}
+
+export function getMilestone(projectId: string, milestoneId: string): Promise<MilestoneWithProgress> {
+  return request<Milestone>(
+    `/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}`,
+    undefined,
+    MilestoneSchema as ZodType<Milestone>,
+  ) as Promise<MilestoneWithProgress>
+}
+
+export function createMilestone(projectId: string, body: MilestoneCreateRequest): Promise<MilestoneWithProgress> {
+  return request<Milestone>(
+    `/projects/${encodeURIComponent(projectId)}/milestones`,
+    { method: 'POST', body: JSON.stringify(body) },
+    MilestoneSchema as ZodType<Milestone>,
+  ) as Promise<MilestoneWithProgress>
+}
+
+export function updateMilestone(projectId: string, milestoneId: string, body: MilestoneUpdateRequest): Promise<MilestoneWithProgress> {
+  return request<Milestone>(
+    `/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}`,
+    { method: 'PUT', body: JSON.stringify(body) },
+    MilestoneSchema as ZodType<Milestone>,
+  ) as Promise<MilestoneWithProgress>
+}
+
+export function deleteMilestone(projectId: string, milestoneId: string): Promise<void> {
+  return request<void>(
+    `/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}`,
+    { method: 'DELETE' },
+  )
 }
 
 // ── Token Usage Stats ─────────────────────────────────────────────────────────

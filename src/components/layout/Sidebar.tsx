@@ -3,7 +3,6 @@ import { Link, useLocation, useNavigate } from '@tanstack/react-router'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ChatCircle,
-  CheckSquare,
   ChartBar,
   Robot,
   PlugsConnected,
@@ -14,6 +13,7 @@ import {
   SignOut,
   Plus,
   Folder,
+  Tray,
   CaretDown,
   CaretRight,
   MagnifyingGlass,
@@ -22,7 +22,6 @@ import {
 } from '@phosphor-icons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
-import { useChatStore } from '@/store/chat'
 import { useAuthStore } from '@/store/auth'
 import { useProjectsStore } from '@/store/projectsStore'
 import { fetchProjects, projectsQueryKeys } from '@/lib/api'
@@ -32,7 +31,6 @@ import avatarUrl from '@/assets/logo/omnipus-avatar.svg?url'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Chat', Icon: ChatCircle },
-  { to: '/tasks', label: 'Tasks', Icon: CheckSquare },
   { to: '/monitor', label: 'Monitor', Icon: ChartBar },
   { to: '/agents', label: 'Agents', Icon: Robot },
   { to: '/channels', label: 'Channels', Icon: PlugsConnected },
@@ -44,7 +42,6 @@ const PROJECT_COLLAPSE_THRESHOLD = 5
 // US-5: Sidebar — overlay default, pin option, Framer Motion, Zustand
 export function Sidebar() {
   const { isOpen, isPinned, close, toggle, togglePin } = useSidebarStore()
-  const pendingCount = useChatStore((s) => s.pendingApprovals.length)
   const location = useLocation()
   const navigate = useNavigate()
   const { activeProjectId, setActiveProjectId } = useProjectsStore()
@@ -95,14 +92,22 @@ export function Sidebar() {
     staleTime: 30_000,
   })
 
-  // API returns pinned-first then newest-first already; just respect that.
-  const pinnedProjects = projects.filter((p) => p.pinned)
-  const unpinnedProjects = projects.filter((p) => !p.pinned)
+  // Inbox project (is_default: true) always appears first; other projects: pinned then unpinned.
+  // is_default is added by Wave 1a backend; use passthrough access for forward-compatibility.
+  const inboxProject = projects.find((p) => (p as unknown as { is_default?: boolean }).is_default)
+  const nonInboxProjects = projects.filter((p) => !(p as unknown as { is_default?: boolean }).is_default)
+  const pinnedProjects = nonInboxProjects.filter((p) => p.pinned)
+  const unpinnedProjects = nonInboxProjects.filter((p) => !p.pinned)
   const hasMore = unpinnedProjects.length > PROJECT_COLLAPSE_THRESHOLD
   const visibleUnpinned = projectsExpanded
     ? unpinnedProjects
     : unpinnedProjects.slice(0, PROJECT_COLLAPSE_THRESHOLD)
-  const visibleProjects = [...pinnedProjects, ...visibleUnpinned]
+  // Inbox always first, then pinned, then visible unpinned
+  const visibleProjects = [
+    ...(inboxProject ? [inboxProject] : []),
+    ...pinnedProjects,
+    ...visibleUnpinned,
+  ]
 
   // US-5: Cmd+B / Ctrl+B keyboard shortcut + Escape to close
   const handleKeydown = useCallback(
@@ -167,7 +172,7 @@ export function Sidebar() {
       <div className="flex-1 overflow-y-auto py-3">
         {NAV_ITEMS.map(({ to, label, Icon }) => {
           const isActive = location.pathname === to
-          const badge = to === '/tasks' && pendingCount > 0 ? pendingCount : null
+          const badge = null
           return (
             <Link
               key={to}
@@ -306,13 +311,14 @@ export function Sidebar() {
             .filter((p) => !showSearch || p.name.toLowerCase().includes(searchQuery.toLowerCase()))
             .map((project) => {
             const isActive = activeProjectId === project.id
+            const isInbox = (project as unknown as { is_default?: boolean }).is_default === true
             return (
               <button
                 key={project.id}
                 type="button"
                 onClick={() => {
-                  setActiveProjectId(isActive ? null : project.id)
-                  navigate({ to: '/tasks' })
+                  setActiveProjectId(project.id)
+                  navigate({ to: '/projects/$projectId', params: { projectId: project.id } })
                   if (!effectivelyPinned) close()
                 }}
                 className={cn(
@@ -322,12 +328,14 @@ export function Sidebar() {
                     : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
                 )}
               >
-                {/* Active indicator: gold pulsing dot */}
+                {/* Active indicator: gold pulsing dot; Inbox uses Tray icon */}
                 {isActive ? (
                   <span
                     className="w-2 h-2 rounded-full bg-[var(--color-accent)] animate-pulse flex-shrink-0"
                     aria-hidden="true"
                   />
+                ) : isInbox ? (
+                  <Tray size={14} className="flex-shrink-0 text-[var(--color-accent)]" />
                 ) : (
                   <Folder size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
                 )}
@@ -384,7 +392,8 @@ export function Sidebar() {
                 key={project.id}
                 type="button"
                 onClick={() => {
-                  navigate({ to: '/tasks' })
+                  setActiveProjectId(project.id)
+                  navigate({ to: '/projects/$projectId', params: { projectId: project.id } })
                   if (!effectivelyPinned) close()
                 }}
                 className="flex items-center gap-2 w-full px-4 py-2 mx-0 text-sm transition-colors text-left opacity-70 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
