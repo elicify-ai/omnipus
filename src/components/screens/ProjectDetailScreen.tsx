@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { List, SquaresFour, Lightning, Plus } from '@phosphor-icons/react'
 import { ProjectHeader } from '@/components/projects/ProjectHeader'
@@ -29,6 +30,7 @@ interface ProjectDetailScreenProps {
 }
 
 export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
+  const navigate = useNavigate()
   const { activeMilestoneId, setActiveMilestoneId } = useProjectsStore()
   const [viewMode, setViewMode] = useState<ViewMode>('board')
   const [selectedTask, setSelectedTask] = useState<BoardTask | null>(null)
@@ -41,6 +43,18 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
     queryFn: () => fetchProjects({ status: 'active' }),
     staleTime: 30_000,
   })
+
+  // Redirect /projects/inbox to the real default project ID.
+  // "inbox" is a human-readable alias; the actual project has a real UUID.
+  useEffect(() => {
+    if (projectId !== 'inbox') return
+    if (projects.length === 0) return
+    const defaultProject = projects.find((p) => p.is_default)
+    if (defaultProject) {
+      void navigate({ to: '/projects/$projectId', params: { projectId: defaultProject.id }, replace: true })
+    }
+    // No default project — fall through so the "not found" state renders below.
+  }, [projectId, projects, navigate])
 
   // Also try archived projects for direct URL access
   const { data: archivedProjects = [] } = useQuery({
