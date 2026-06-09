@@ -23,7 +23,7 @@ function TasksRedirect() {
       return
     }
     if (!isLoading && projects) {
-      const inbox = projects.find((p) => (p as unknown as { is_default?: boolean }).is_default)
+      const inbox = projects.find((p) => p.is_default)
       if (inbox) {
         void navigate({ to: '/projects/$projectId', params: { projectId: inbox.id }, replace: true })
       } else if (projects.length > 0) {

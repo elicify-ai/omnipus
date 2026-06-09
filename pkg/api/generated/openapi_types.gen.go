@@ -4744,6 +4744,9 @@ type Project struct {
 	// Id UUID project identifier
 	Id string `json:"id"`
 
+	// IsDefault True only for the auto-created Inbox project. The Inbox project cannot be deleted and always appears first in the sidebar.
+	IsDefault *bool `json:"is_default,omitempty"`
+
 	// Name Human-readable project name. Not unique.
 	Name string `json:"name"`
 

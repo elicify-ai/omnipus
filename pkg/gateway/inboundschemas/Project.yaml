@@ -64,6 +64,12 @@ properties:
       Number of GTD board tasks with this project_id. Computed at read time
       from ~/.omnipus/tasks/. Never stored in the project JSON file.
     example: 3
+  is_default:
+    type: boolean
+    description: >
+      True only for the auto-created Inbox project. The Inbox project cannot
+      be deleted and always appears first in the sidebar.
+    example: false
   created_at:
     type: string
     format: date-time

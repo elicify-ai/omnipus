@@ -1563,6 +1563,7 @@ export const Project = z
     core_team: z.array(z.string()).max(20).optional(),
     repository: z.string().optional(),
     task_count: z.number().int(),
+    is_default: z.boolean().optional(),
     created_at: z.string().datetime({ offset: true }),
     updated_at: z.string().datetime({ offset: true }),
   })

@@ -190,17 +190,9 @@ func writeProjectFile(home string, p storedProject) error {
 	})
 }
 
-// projectWireResponse extends gen.Project with the is_default field (FR-L2-027).
-// The generated gen.Project type does not include is_default; this shim adds it.
-// not-wire-format: local response shim, not a hand-written wire type.
-type projectWireResponse struct { // not-wire-format
-	gen.Project
-	IsDefault bool `json:"is_default"`
-}
-
-// projectToWire converts a storedProject to the projectWireResponse type.
+// projectToWire converts a storedProject to the generated gen.Project wire type.
 // taskCount is passed in (computed by the caller).
-func projectToWire(p storedProject, taskCount int) projectWireResponse {
+func projectToWire(p storedProject, taskCount int) gen.Project {
 	createdAt, err := time.Parse(time.RFC3339, p.CreatedAt)
 	if err != nil {
 		slog.Warn("rest: project: invalid created_at timestamp", "id", p.ID, "raw", p.CreatedAt)
@@ -222,6 +214,10 @@ func projectToWire(p storedProject, taskCount int) projectWireResponse {
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
 	}
+	if p.IsDefault {
+		t := true
+		w.IsDefault = &t
+	}
 	if p.Description != "" {
 		w.Description = &p.Description
 	}
@@ -233,7 +229,7 @@ func projectToWire(p storedProject, taskCount int) projectWireResponse {
 		copy(team, p.CoreTeam)
 		w.CoreTeam = &team
 	}
-	return projectWireResponse{Project: w, IsDefault: p.IsDefault}
+	return w
 }
 
 // deleteTasksForProject removes all GTD task files whose project_id matches projectID.
@@ -386,7 +382,7 @@ func (a *restAPI) handleProjectList(w http.ResponseWriter, r *http.Request) {
 		taskCounts = make(map[string]int)
 	}
 
-	var result []projectWireResponse
+	var result []gen.Project
 	for _, p := range projects {
 		if statusFilter != "all" && p.Status != statusFilter {
 			continue
@@ -394,14 +390,15 @@ func (a *restAPI) handleProjectList(w http.ResponseWriter, r *http.Request) {
 		result = append(result, projectToWire(p, taskCounts[p.ID]))
 	}
 	if result == nil {
-		result = []projectWireResponse{}
+		result = []gen.Project{}
 	}
 
 	// Sort: Inbox (is_default) always first, then pinned items (ascending pin_order),
 	// then unpinned newest-first.
+	isDefault := func(p gen.Project) bool { return p.IsDefault != nil && *p.IsDefault }
 	sort.Slice(result, func(i, j int) bool {
-		if result[i].IsDefault != result[j].IsDefault {
-			return result[i].IsDefault
+		if isDefault(result[i]) != isDefault(result[j]) {
+			return isDefault(result[i])
 		}
 		if result[i].Pinned != result[j].Pinned {
 			return result[i].Pinned

@@ -93,9 +93,8 @@ export function Sidebar() {
   })
 
   // Inbox project (is_default: true) always appears first; other projects: pinned then unpinned.
-  // is_default is added by Wave 1a backend; use passthrough access for forward-compatibility.
-  const inboxProject = projects.find((p) => (p as unknown as { is_default?: boolean }).is_default)
-  const nonInboxProjects = projects.filter((p) => !(p as unknown as { is_default?: boolean }).is_default)
+  const inboxProject = projects.find((p) => p.is_default)
+  const nonInboxProjects = projects.filter((p) => !p.is_default)
   const pinnedProjects = nonInboxProjects.filter((p) => p.pinned)
   const unpinnedProjects = nonInboxProjects.filter((p) => !p.pinned)
   const hasMore = unpinnedProjects.length > PROJECT_COLLAPSE_THRESHOLD
@@ -311,7 +310,7 @@ export function Sidebar() {
             .filter((p) => !showSearch || p.name.toLowerCase().includes(searchQuery.toLowerCase()))
             .map((project) => {
             const isActive = activeProjectId === project.id
-            const isInbox = (project as unknown as { is_default?: boolean }).is_default === true
+            const isInbox = project.is_default === true
             return (
               <button
                 key={project.id}
