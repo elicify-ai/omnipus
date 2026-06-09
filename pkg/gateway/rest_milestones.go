@@ -417,7 +417,7 @@ func (a *restAPI) handleMilestoneGet(
 // milestoneUpdateRequest is a local struct for milestone PUT that supports
 // distinguishing explicit null (clear) from absent (no-op) for due_date.
 // not-wire-format: local decode struct for PUT body; not emitted over the wire.
-type milestoneUpdateRequest struct { // not-wire-format: PUT decode target only; never serialised to any HTTP response
+type milestoneUpdateRequest struct { // not-wire-format: PUT decode target only; never serialized to any HTTP response
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
 	// DueDate is not decoded here; the PUT handler reads it from the raw body map
