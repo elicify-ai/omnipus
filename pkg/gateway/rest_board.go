@@ -7,6 +7,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -773,10 +774,11 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 
-	// GetSessionStore may be nil in test scaffolds or on init failure; fall back to legacy per-agent store.
-	store := a.agentLoop.GetSessionStore()
+	// Use GetAgentStore first — must match processTaskDirect's TranscriptStore.
+	// Fall back to the shared session store only if the per-agent store is nil.
+	store := a.agentLoop.GetAgentStore(agentID)
 	if store == nil {
-		store = a.agentLoop.GetAgentStore(agentID)
+		store = a.agentLoop.GetSessionStore()
 	}
 	if store == nil {
 		jsonErr(w, http.StatusInternalServerError, "session store unavailable")
@@ -788,6 +790,31 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		slog.Error("rest: board task: start session create failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "failed to create session")
 		return
+	}
+
+	// Link session metadata back to this task.
+	title := existing.Name
+	tid := id
+	if setErr := store.SetMeta(meta.ID, session.MetaPatch{Title: &title, TaskID: &tid}); setErr != nil {
+		slog.Warn("rest: board task: start set meta failed", "id", id, "session_id", meta.ID, "error", setErr)
+	}
+
+	// Write the task prompt as the user-turn transcript entry so the session
+	// is not blank when the user navigates to it.
+	prompt := existing.Prompt
+	if prompt == "" {
+		prompt = existing.Description
+	}
+	if prompt != "" {
+		if appendErr := store.AppendTranscript(meta.ID, session.TranscriptEntry{
+			ID:        id + "-prompt",
+			Role:      "user",
+			Content:   prompt,
+			AgentID:   agentID,
+			Timestamp: time.Now().UTC(),
+		}); appendErr != nil {
+			slog.Warn("rest: board task: start transcript write failed", "id", id, "session_id", meta.ID, "error", appendErr)
+		}
 	}
 
 	if existing.SessionID != "" {
@@ -803,15 +830,7 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 	existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
 	if err := a.writeBoardTask(existing); err != nil {
-		slog.Error(
-			"rest: board task: start write failed",
-			"id",
-			id,
-			"session_id",
-			meta.ID,
-			"error",
-			err,
-		)
+		slog.Error("rest: board task: start write failed", "id", id, "session_id", meta.ID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "failed to update task")
 		return
 	}
@@ -824,16 +843,16 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 			SessionID: meta.ID,
 			Details:   map[string]any{"id": id},
 		}); err != nil {
-			slog.Error(
-				"rest: board task: audit log failed",
-				"event",
-				"board_task.start",
-				"error",
-				err,
-			)
+			slog.Error("rest: board task: audit log failed", "event", "board_task.start", "error", err)
 		}
 	}
-	jsonOK(w, toWireBoardTask(existing))
+
+	// Dispatch agent execution asynchronously — returns immediately (202 Accepted).
+	if prompt != "" {
+		a.agentLoop.ExecuteBoardTask(context.Background(), agentID, id, meta.ID, prompt)
+	}
+
+	jsonAccepted(w, toWireBoardTask(existing))
 }
 
 // HandleBoardTasks dispatches requests for /api/v1/board/tasks and /api/v1/board/tasks/{id}.

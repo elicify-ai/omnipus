@@ -2712,6 +2712,19 @@ func (al *AgentLoop) processTaskDirect(
 	})
 }
 
+// ExecuteBoardTask dispatches a GTD board task to the agent loop in a background
+// goroutine. The session must already exist in the per-agent store (via GetAgentStore).
+func (al *AgentLoop) ExecuteBoardTask(ctx context.Context, agentID, taskID, sessionID, prompt string) {
+	go func() {
+		taskCtx := context.Background() // detached — outlives the HTTP request
+		sessionKey := fmt.Sprintf("agent:%s:board:%s", agentID, taskID)
+		if _, err := al.processTaskDirect(taskCtx, agentID, prompt, sessionKey, sessionID); err != nil {
+			logger.ErrorCF("agent", "ExecuteBoardTask: execution failed",
+				map[string]any{"task_id": taskID, "agent_id": agentID, "error": err.Error()})
+		}
+	}()
+}
+
 // SetMediaStore injects a MediaStore for media lifecycle management.
 func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 	al.mediaStoreMu.Lock()
