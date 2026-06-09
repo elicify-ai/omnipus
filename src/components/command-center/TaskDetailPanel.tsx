@@ -131,7 +131,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
     staleTime: 30_000,
   })
 
-  // Milestones for the currently-selected project
+  // Milestones for the task's assigned project
   const { data: milestones = [] } = useQuery({
     queryKey: milestonesQueryKeys.list(selectedProjectId),
     queryFn: () => fetchMilestones(selectedProjectId),
@@ -393,7 +393,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
 }
 
 // ── Workflow Task Detail Panel ─────────────────────────────────────────────────
-// Preserves original behavior for commandCenterScreen usage
+// Preserves original behavior for CommandCenterScreen usage
 
 function WorkflowTaskDetailPanel({
   task,

@@ -162,9 +162,9 @@ export function resetConfigCoercionCount(): void {
   _configCoercionCount = 0
 }
 
-// Expose counters on window.__omnipus_test_hooks in DEV/test builds
-// so Playwright tests can assert on validation health without reaching into module
-// internals.
+// Expose counters on window.__omnipus_test_hooks in DEV/test builds AND when
+// navigator.webdriver is true (Playwright driving a production build) so E2E
+// tests can assert on validation health without reaching into module internals.
 if ((import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver)) && typeof window !== 'undefined') {
   const w = window as unknown as { __omnipus_test_hooks?: Record<string, unknown> }
   w.__omnipus_test_hooks ??= {}
