@@ -122,7 +122,22 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
     )
   }
 
-  if (!project && !archivedLoading) {
+  if (!project) {
+    if (archivedLoading) {
+      return (
+        <div className="flex flex-col h-full">
+          <div className="h-16 bg-[var(--color-surface-1)] border-b border-[var(--color-border)] animate-pulse" />
+          <div className="flex gap-3 p-4">
+            {[1, 2, 3, 4, 5, 6].map((i) => (
+              <div
+                key={i}
+                className="flex-1 min-w-[180px] h-48 rounded-xl border border-[var(--color-border)] animate-pulse bg-[var(--color-surface-1)]"
+              />
+            ))}
+          </div>
+        </div>
+      )
+    }
     return (
       <div className="flex items-center justify-center h-full p-8 text-[var(--color-muted)] text-sm">
         Project not found.

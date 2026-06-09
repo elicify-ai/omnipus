@@ -114,7 +114,6 @@ import {
   TokenUsageSummary as TokenUsageSummarySchema,
   // Milestones (contract-first #8):
   Milestone as MilestoneSchema,
-  MilestoneListResponse as MilestoneListResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────

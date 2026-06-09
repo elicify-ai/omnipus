@@ -23,7 +23,6 @@
  * Traces to: ProjectDetailScreen.tsx lines 49–57 — inbox redirect useEffect.
  */
 
-import React from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -145,8 +144,10 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     pin_order: 0,
     task_count: 0,
     is_default: false,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
     ...overrides,
-  }
+  } as Project
 }
 
 // ── beforeEach: reset mocks ───────────────────────────────────────────────────
