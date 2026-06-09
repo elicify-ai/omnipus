@@ -246,10 +246,11 @@ func (a *restAPI) withOptionalAuth(handler http.HandlerFunc) http.HandlerFunc {
 		prefix := "Bearer "
 		if strings.HasPrefix(authHeader, prefix) {
 			rawToken := strings.TrimPrefix(authHeader, prefix)
-			// Check per-user list (token hash via bcrypt)
+			// Check per-user list (bearer-token SET via bcrypt — SEC-1).
 			if len(cfg.Gateway.Users) > 0 {
-				for _, user := range cfg.Gateway.Users {
-					if user.TokenHash.Verify(rawToken) == nil {
+				for i := range cfg.Gateway.Users {
+					user := cfg.Gateway.Users[i]
+					if user.VerifyToken(rawToken) == nil {
 						ctx := context.WithValue(r.Context(), RoleContextKey{}, user.Role)
 						ctx = context.WithValue(ctx, UserContextKey{}, &user)
 						a.setCORSHeaders(w, r)
@@ -317,7 +318,21 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pre-compute the bearer-token bcrypt hash and its embedded ID outside the
+	// config lock (bcrypt is intentionally slow; must not hold configMu).
+	// SEC-1: bcrypt only the secret body (config.TokenSecret) so the input stays
+	// under bcrypt's 72-byte ceiling — the ID prefix is non-secret routing data.
+	tokenHash, err := bcrypt.GenerateFromPassword([]byte(config.TokenSecret(token)), bcrypt.DefaultCost)
+	if err != nil {
+		slog.Error("auth: hash token failed", "error", err)
+		jsonErr(w, http.StatusInternalServerError, "login failed")
+		return
+	}
+	tokenID := config.TokenIDFromRaw(token)
+	createdAt := time.Now().UTC().Format(time.RFC3339)
+
 	var foundRole string
+	var evictedTokens int
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		gw, ok := m["gateway"].(map[string]any)
 		if !ok {
@@ -346,12 +361,12 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 			if bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(body.Password)) != nil {
 				return ErrInvalidCredentials
 			}
-			// Update both token hashes atomically via safeUpdateConfigJSON.
-			tokenHash, err := bcrypt.GenerateFromPassword([]byte(token), bcrypt.DefaultCost)
-			if err != nil {
-				return fmt.Errorf("token hash failed: %w", err)
-			}
-			userMap["token_hash"] = string(tokenHash)
+			// SEC-1 / UAT #399: APPEND to the bearer-token set — never overwrite.
+			// Existing tokens for other tabs/devices/clients stay valid; the cap
+			// evicts only the oldest entries beyond config.MaxUserTokens.
+			evictedTokens = appendUserToken(userMap, tokenID, string(tokenHash), createdAt)
+			// Session-cookie token remains single-slot (one browser session
+			// cookie per login is the existing contract); overwrite as before.
 			userMap["session_token_hash"] = string(sessionHash)
 			foundRole, _ = userMap["role"].(string)
 			return nil
@@ -372,6 +387,11 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		slog.Error("auth: login succeeded but user role is missing", "username", body.Username)
 		jsonErr(w, http.StatusInternalServerError, "login failed: user role corrupted")
 		return
+	}
+
+	if evictedTokens > 0 {
+		slog.Info("auth: evicted oldest bearer tokens over cap",
+			"username", body.Username, "evicted", evictedTokens, "cap", config.MaxUserTokens)
 	}
 
 	// Reload in-memory config so withAuth middleware picks up the new token hash.
@@ -463,7 +483,9 @@ func (a *restAPI) HandleRegisterAdmin(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "could not register admin")
 		return
 	}
-	tokenHash, err := bcrypt.GenerateFromPassword([]byte(token), bcrypt.DefaultCost)
+	// SEC-1: bcrypt only the secret body so the 81-byte ID-tagged token stays
+	// under bcrypt's 72-byte input ceiling.
+	tokenHash, err := bcrypt.GenerateFromPassword([]byte(config.TokenSecret(token)), bcrypt.DefaultCost)
 	if err != nil {
 		slog.Error("auth: hash token failed", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not register admin")
@@ -508,10 +530,16 @@ func (a *restAPI) HandleRegisterAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Append the new admin entry (all hashes already computed above).
+		// SEC-1: store the bearer token in the token SET, not the legacy
+		// single token_hash, so subsequent logins append rather than evict.
 		newUser := map[string]any{
-			"username":           body.Username,
-			"password_hash":      string(passwordHash),
-			"token_hash":         string(tokenHash),
+			"username":      body.Username,
+			"password_hash": string(passwordHash),
+			"tokens": []any{map[string]any{
+				"id":         config.TokenIDFromRaw(token),
+				"hash":       string(tokenHash),
+				"created_at": time.Now().UTC().Format(time.RFC3339),
+			}},
 			"session_token_hash": string(sessionHash),
 			"role":               string(config.UserRoleAdmin),
 		}
@@ -567,6 +595,15 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
+	// SEC-1 / UAT #399: revoke ONLY the caller's presented bearer token, not
+	// every token the user holds — concurrent sessions on other tabs/devices
+	// must remain valid. Recover the presented token from the Authorization
+	// header to locate its entry in the token set.
+	var presentedToken string
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		presentedToken = strings.TrimPrefix(auth, "Bearer ")
+	}
+	presentedID := config.TokenIDFromRaw(presentedToken)
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		gw, ok := m["gateway"].(map[string]any)
 		if !ok {
@@ -581,11 +618,14 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				continue
 			}
-			if um["username"] == user.Username {
-				um["token_hash"] = ""
-				um["session_token_hash"] = ""
-				return nil
+			if um["username"] != user.Username {
+				continue
 			}
+			revokeUserToken(um, presentedToken, presentedID)
+			// Always clear the single-slot session-cookie hash — logout ends
+			// this browser session regardless of the bearer-token path.
+			um["session_token_hash"] = ""
+			return nil
 		}
 		return fmt.Errorf("user not found in config")
 	}); err != nil {
@@ -684,12 +724,113 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 }
 
 // generateUserToken creates a random bearer token for authentication.
+//
+// SEC-1 / UAT #399: the token embeds a short non-secret ID prefix
+// ("omnipus_<id>_<body>") so verification can index directly to the matching
+// hash in the user's token SET instead of bcrypt-looping every entry. Use
+// config.TokenIDFromRaw to recover the embedded ID and config.TokenSecret to
+// recover the bcrypt-hashed body when storing the token's hash in a token-set
+// entry. Token entropy is 256-bit (32 bytes) in the secret body, as before —
+// the 8-hex-char (32-bit) ID is non-secret routing metadata, not part of the
+// authentication secret.
+//
+// The signature is unchanged from the legacy single-token model so callers that
+// only need the raw token (e.g. onboarding's legacy token_hash path) keep
+// compiling; the ID is derived on demand via config.TokenIDFromRaw.
 func generateUserToken(_ string) (string, error) {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
+	idBytes := make([]byte, 4) // 32-bit non-secret routing prefix
+	if _, err := rand.Read(idBytes); err != nil {
 		return "", fmt.Errorf("rand read failed: %w", err)
 	}
-	return "omnipus_" + hex.EncodeToString(bytes), nil
+	body := make([]byte, 32) // 256-bit secret body
+	if _, err := rand.Read(body); err != nil {
+		return "", fmt.Errorf("rand read failed: %w", err)
+	}
+	return "omnipus_" + hex.EncodeToString(idBytes) + "_" + hex.EncodeToString(body), nil
+}
+
+// appendUserToken adds a new token entry to a user's JSON token set (the
+// "tokens" array on the userMap), evicting the oldest entries beyond
+// config.MaxUserTokens. It returns the number of evicted entries so the caller
+// can log the eviction. Login appends, never evicts the caller's own token
+// unless the cap forces it.
+func appendUserToken(userMap map[string]any, id, hash, createdAt string) (evicted int) {
+	var tokens []any
+	if raw, ok := userMap["tokens"].([]any); ok {
+		tokens = raw
+	}
+	tokens = append(tokens, map[string]any{
+		"id":         id,
+		"hash":       hash,
+		"created_at": createdAt,
+	})
+	// Cap: keep the newest config.MaxUserTokens entries (slice is append-order,
+	// so the oldest are at the front).
+	if len(tokens) > config.MaxUserTokens {
+		evicted = len(tokens) - config.MaxUserTokens
+		tokens = tokens[evicted:]
+	}
+	userMap["tokens"] = tokens
+	return evicted
+}
+
+// revokeUserToken removes exactly ONE token entry — the one matching the
+// presented raw token — from a user's JSON token set, leaving every other
+// concurrent session intact (SEC-1 / UAT #399).
+//
+// Matching strategy:
+//   - When the presented token carries an embedded ID, remove the entry whose
+//     "id" equals it (and whose hash verifies, defending against a forged ID
+//     prefix that does not actually authenticate).
+//   - Otherwise (legacy token with no ID), bcrypt-scan the set and remove the
+//     first entry that verifies, and clear the legacy single token_hash if it
+//     verifies.
+//
+// A no-op (no matching live token) is acceptable — the cookies are still
+// cleared by the caller, so the browser session ends regardless.
+func revokeUserToken(userMap map[string]any, presentedToken, presentedID string) {
+	// Legacy single token_hash was computed over the FULL raw token; clear it
+	// if the presented token verifies.
+	if legacy, ok := userMap["token_hash"].(string); ok && legacy != "" {
+		if config.BcryptHash(legacy).Verify(presentedToken) == nil {
+			userMap["token_hash"] = ""
+		}
+	}
+
+	raw, ok := userMap["tokens"].([]any)
+	if !ok || len(raw) == 0 {
+		return
+	}
+	// Token-set entry hashes are computed over the secret body only (SEC-1).
+	secret := config.TokenSecret(presentedToken)
+	kept := make([]any, 0, len(raw))
+	removed := false
+	for _, e := range raw {
+		entry, ok := e.(map[string]any)
+		if !ok {
+			continue // drop malformed entries
+		}
+		if !removed {
+			entryID, _ := entry["id"].(string)
+			entryHash, _ := entry["hash"].(string)
+			match := false
+			if presentedID != "" && entryID == presentedID {
+				// ID matches — confirm with a bcrypt verify so a spoofed ID
+				// prefix on a non-matching body cannot revoke someone's token.
+				match = config.BcryptHash(entryHash).Verify(secret) == nil
+			} else if presentedID == "" {
+				// Legacy token (no ID): match by bcrypt verify over the body
+				// (which for a legacy token equals the full token).
+				match = config.BcryptHash(entryHash).Verify(secret) == nil
+			}
+			if match {
+				removed = true
+				continue // drop this entry
+			}
+		}
+		kept = append(kept, entry)
+	}
+	userMap["tokens"] = kept
 }
 
 // awaitReload triggers a config reload and waits briefly for it to complete.

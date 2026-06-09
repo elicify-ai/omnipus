@@ -446,11 +446,17 @@ func TestHandleValidateToken_ValidToken(t *testing.T) {
 	users := gwMap["users"].([]any)
 	require.Len(t, users, 1)
 	userMap := users[0].(map[string]any)
-	tokenHash, _ := userMap["token_hash"].(string)
-	require.NotEmpty(t, tokenHash, "token_hash should be set after login")
+	// SEC-1: login writes the token into the bearer-token SET; the entry hash
+	// is bcrypt of the secret BODY (config.TokenSecret), not the full token.
+	tokens, ok := userMap["tokens"].([]any)
+	require.True(t, ok, "tokens set should be present after login")
+	require.Len(t, tokens, 1)
+	entry := tokens[0].(map[string]any)
+	tokenHash, _ := entry["hash"].(string)
+	require.NotEmpty(t, tokenHash, "token entry hash should be set after login")
 
-	// Verify the token matches the hash (sanity check).
-	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(tokenHash), []byte(token)))
+	// Verify the token matches the stored hash (sanity check).
+	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(tokenHash), []byte(config.TokenSecret(token))))
 
 	// Step 2: Validate the token by injecting user context (as withAuth would
 	// after a successful config reload).
@@ -871,6 +877,68 @@ func TestHandleLogout_TokenNoLongerValid(t *testing.T) {
 		"validate must return 401 when no user is in context (post-logout state)")
 }
 
+// TestHandleLogout_RevokesOnlyPresentedToken proves the SEC-1 / UAT #399 fix:
+// logout removes ONLY the caller's presented bearer token from the set; tokens
+// for other concurrent sessions stay valid.
+//
+// BDD: Given a user who logged in twice (two live tokens in the set),
+// When that user POSTs /auth/logout presenting token-1,
+// Then token-1 is removed from the on-disk set,
+// And token-2 still verifies.
+func TestHandleLogout_RevokesOnlyPresentedToken(t *testing.T) {
+	api, tmpDir := newTestRestAPIWithUser(t, "multiuser", "multi-pass-123")
+
+	login := func() string {
+		t.Helper()
+		body := `{"username":"multiuser","password":"multi-pass-123"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		api.HandleLogin(w, req)
+		require.Equal(t, http.StatusOK, w.Code, "login must succeed: %s", w.Body.String())
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		return resp["token"].(string)
+	}
+
+	tok1 := login()
+	tok2 := login()
+
+	// Logout presenting tok1.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+tok1)
+	req = injectUser(req, "multiuser", config.UserRoleAdmin)
+	w := httptest.NewRecorder()
+	api.HandleLogout(w, req)
+	require.Equal(t, http.StatusNoContent, w.Code, "logout must return 204")
+
+	// Read the on-disk token set.
+	raw, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
+	require.NoError(t, err)
+	var diskCfg map[string]any
+	require.NoError(t, json.Unmarshal(raw, &diskCfg))
+	gw := diskCfg["gateway"].(map[string]any)
+	users := gw["users"].([]any)
+	require.Len(t, users, 1)
+	userMap := users[0].(map[string]any)
+	tokens, ok := userMap["tokens"].([]any)
+	require.True(t, ok, "tokens set must still exist after single-token logout")
+	require.Len(t, tokens, 1, "exactly ONE token must remain after logging out one of two sessions")
+
+	verifyAgainstSet := func(plain string) bool {
+		for _, e := range tokens {
+			entry := e.(map[string]any)
+			h, _ := entry["hash"].(string)
+			if bcrypt.CompareHashAndPassword([]byte(h), []byte(config.TokenSecret(plain))) == nil {
+				return true
+			}
+		}
+		return false
+	}
+	assert.False(t, verifyAgainstSet(tok1), "the logged-out token (tok1) must be revoked")
+	assert.True(t, verifyAgainstSet(tok2), "the other session's token (tok2) must remain valid")
+}
+
 // TestHandleLogout_Unauthenticated verifies that POST /api/v1/auth/logout without
 // an authenticated user in context returns 401 Unauthorized.
 // BDD: Given no user is in the request context,
@@ -1145,12 +1213,13 @@ func TestHandleChangePassword_Unauthenticated(t *testing.T) {
 // --- Token entropy and hash-storage regression guards ---
 
 // TestGenerateUserToken_EntropyAndFormat verifies the canonical bearer token
-// format (omnipus_<64 hex chars>) and entropy properties.
+// format (omnipus_<8 hex id>_<64 hex body>) and entropy properties (SEC-1).
 //
-// Three properties are asserted:
-//  1. Format: every token matches ^omnipus_[0-9a-f]{64}$.
-//  2. Byte length: the hex portion decodes to exactly 32 bytes.
-//  3. Uniqueness: 100 invocations produce 100 distinct tokens (no collision
+// Four properties are asserted:
+//  1. Format: every token matches ^omnipus_[0-9a-f]{8}_[0-9a-f]{64}$.
+//  2. ID: the embedded non-secret ID prefix is recoverable (8 hex chars).
+//  3. Byte length: the secret body decodes to exactly 32 bytes (256-bit).
+//  4. Uniqueness: 100 invocations produce 100 distinct tokens (no collision
 //     from a broken RNG, hardcoded seed, or constant return value).
 func TestGenerateUserToken_EntropyAndFormat(t *testing.T) {
 	const invocations = 100
@@ -1160,14 +1229,22 @@ func TestGenerateUserToken_EntropyAndFormat(t *testing.T) {
 		tok, err := generateUserToken("")
 		require.NoError(t, err, "generateUserToken must not error (invocation %d)", i)
 
-		assert.Regexp(t, `^omnipus_[0-9a-f]{64}$`, tok,
-			"token must match omnipus_<64 hex> format (invocation %d)", i)
+		// SEC-1: token now carries a non-secret ID prefix:
+		// omnipus_<8 hex id>_<64 hex body>.
+		assert.Regexp(t, `^omnipus_[0-9a-f]{8}_[0-9a-f]{64}$`, tok,
+			"token must match omnipus_<id>_<body> format (invocation %d)", i)
 
-		hexPart := strings.TrimPrefix(tok, "omnipus_")
-		decoded, decErr := hex.DecodeString(hexPart)
-		require.NoError(t, decErr, "hex portion must be valid hex (invocation %d)", i)
+		// The embedded ID must be recoverable and 8 hex chars (32-bit).
+		id := config.TokenIDFromRaw(tok)
+		assert.Regexp(t, `^[0-9a-f]{8}$`, id,
+			"config.TokenIDFromRaw must recover the 8-hex-char ID (invocation %d)", i)
+
+		// The secret body must decode to exactly 32 bytes (256-bit entropy).
+		bodyHex := strings.TrimPrefix(tok, "omnipus_"+id+"_")
+		decoded, decErr := hex.DecodeString(bodyHex)
+		require.NoError(t, decErr, "body portion must be valid hex (invocation %d)", i)
 		assert.Len(t, decoded, 32,
-			"hex portion must decode to exactly 32 bytes (invocation %d)", i)
+			"body portion must decode to exactly 32 bytes (invocation %d)", i)
 
 		seen[tok] = struct{}{}
 	}
@@ -1210,29 +1287,37 @@ func TestHandleLogin_StoresBcryptedTokenHash(t *testing.T) {
 	require.Len(t, usersRaw, 1)
 	userMap := usersRaw[0].(map[string]any)
 
-	tokenHash, _ := userMap["token_hash"].(string)
-	require.NotEmpty(t, tokenHash, "token_hash must be written to disk after login")
+	// SEC-1: login now writes the token into the bearer-token SET ("tokens"),
+	// not the legacy single token_hash field.
+	tokensRaw, ok := userMap["tokens"].([]any)
+	require.True(t, ok, "tokens set must be written to disk after login")
+	require.Len(t, tokensRaw, 1, "first login must create exactly one token entry")
+	entry := tokensRaw[0].(map[string]any)
+	tokenHash, _ := entry["hash"].(string)
+	require.NotEmpty(t, tokenHash, "token entry hash must be written to disk after login")
 
 	require.NoError(t,
-		bcrypt.CompareHashAndPassword([]byte(tokenHash), []byte(plaintextToken)),
-		"token_hash on disk must be bcrypt of the plaintext token returned to the caller")
+		bcrypt.CompareHashAndPassword([]byte(tokenHash), []byte(config.TokenSecret(plaintextToken))),
+		"stored token hash must be bcrypt of the token's secret body (SEC-1: ID prefix excluded)")
 
 	assert.False(t, strings.Contains(string(raw), plaintextToken),
 		"plaintext token must NOT appear anywhere in config.json — hash-only storage required")
 }
 
-// TestHandleLogin_OverwritesTokenHash_AfterRepeatedLogin verifies that each
-// successful login rotates the token and its hash: no two coexisting token
-// lifecycles.
+// TestHandleLogin_AppendsTokenSet_AfterRepeatedLogin verifies the SEC-1 /
+// UAT #399 fix: repeated logins APPEND to the bearer-token set rather than
+// overwriting a single token_hash, so a second login from another tab/device
+// does NOT invalidate the first client's token.
 //
 // BDD: Given a user "rotateuser",
 // When POST /api/v1/auth/login is called twice,
-// Then the token returned by login-2 differs from the token returned by login-1,
-// And the token_hash on disk after login-2 differs from the token_hash after login-1.
-func TestHandleLogin_OverwritesTokenHash_AfterRepeatedLogin(t *testing.T) {
+// Then login-2 returns a distinct token,
+// And the disk token set holds TWO entries,
+// And BOTH issued tokens still verify against the stored set.
+func TestHandleLogin_AppendsTokenSet_AfterRepeatedLogin(t *testing.T) {
 	api, tmpDir := newTestRestAPIWithUser(t, "rotateuser", "rotate-pass-123")
 
-	doLogin := func() (plaintextToken, diskHash string) {
+	doLogin := func() (plaintextToken string) {
 		t.Helper()
 		body := `{"username":"rotateuser","password":"rotate-pass-123"}`
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(body))
@@ -1245,28 +1330,43 @@ func TestHandleLogin_OverwritesTokenHash_AfterRepeatedLogin(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		tok, _ := resp["token"].(string)
 		require.NotEmpty(t, tok, "login response must include token")
-
-		raw, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
-		require.NoError(t, err)
-		var diskCfg map[string]any
-		require.NoError(t, json.Unmarshal(raw, &diskCfg))
-		gw := diskCfg["gateway"].(map[string]any)
-		usersRaw := gw["users"].([]any)
-		require.Len(t, usersRaw, 1)
-		userMap := usersRaw[0].(map[string]any)
-		hash, _ := userMap["token_hash"].(string)
-		require.NotEmpty(t, hash, "token_hash must be non-empty after login")
-
-		return tok, hash
+		return tok
 	}
 
-	tok1, hash1 := doLogin()
-	tok2, hash2 := doLogin()
+	tok1 := doLogin()
+	tok2 := doLogin()
 
 	assert.NotEqual(t, tok1, tok2,
 		"each login must issue a cryptographically distinct plaintext token")
-	assert.NotEqual(t, hash1, hash2,
-		"each login must overwrite token_hash with a new bcrypt hash")
+
+	// Read the on-disk token set.
+	raw, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
+	require.NoError(t, err)
+	var diskCfg map[string]any
+	require.NoError(t, json.Unmarshal(raw, &diskCfg))
+	gw := diskCfg["gateway"].(map[string]any)
+	usersRaw := gw["users"].([]any)
+	require.Len(t, usersRaw, 1)
+	userMap := usersRaw[0].(map[string]any)
+	tokens, ok := userMap["tokens"].([]any)
+	require.True(t, ok, "tokens set must exist on disk")
+	require.Len(t, tokens, 2, "second login must APPEND, leaving two live tokens (not overwrite)")
+
+	// BOTH tokens must still verify against the stored set — the core SEC-1
+	// guarantee that the first client is not logged out by the second login.
+	verify := func(plain string) bool {
+		for _, e := range tokens {
+			entry := e.(map[string]any)
+			h, _ := entry["hash"].(string)
+			// SEC-1: entry hashes are over the secret body, not the full token.
+			if bcrypt.CompareHashAndPassword([]byte(h), []byte(config.TokenSecret(plain))) == nil {
+				return true
+			}
+		}
+		return false
+	}
+	assert.True(t, verify(tok1), "first login's token must remain valid after the second login")
+	assert.True(t, verify(tok2), "second login's token must be valid")
 }
 
 // --- apiRateLimiter tests ---

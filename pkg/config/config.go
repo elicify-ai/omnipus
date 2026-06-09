@@ -1152,14 +1152,125 @@ func (r *UserRole) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// TokenEntry is a single bearer-token credential in a user's token set.
+//
+// SEC-1 / UAT #399: a user may hold several concurrent bearer tokens (one per
+// tab / device / client). Each entry carries a short non-secret ID prefix that
+// is also embedded in the issued raw token (omnipus_<id>_<hex>), so token
+// verification can index directly to the matching hash instead of bcrypt-looping
+// every entry. The ID is NOT a secret — it only selects which bcrypt hash to
+// verify the (secret) token body against.
+type TokenEntry struct {
+	ID        string     `json:"id"`                   // short non-secret prefix, also embedded in the raw token
+	Hash      BcryptHash `json:"hash"`                 // bcrypt hash of the full raw bearer token
+	CreatedAt string     `json:"created_at,omitempty"` // RFC3339 issue time (for oldest-first eviction)
+}
+
 // UserConfig holds per-user authentication and authorization settings.
 type UserConfig struct {
-	Username         string     `json:"username,omitempty"`
-	PasswordHash     string     `json:"password_hash,omitempty"`      // bcrypt hash
-	TokenHash        BcryptHash `json:"token_hash,omitempty"`         // bcrypt hash of bearer token
-	SessionTokenHash BcryptHash `json:"session_token_hash,omitempty"` // bcrypt hash of session cookie token
-	Role             UserRole   `json:"role"`
-	Name             string     `json:"name,omitempty"`
+	Username     string `json:"username,omitempty"`
+	PasswordHash string `json:"password_hash,omitempty"` // bcrypt hash
+	// TokenHash is the LEGACY single bearer-token hash. New code writes the
+	// Tokens set instead; this field is retained so pre-existing config.json
+	// records (and the migrate-on-read path) still authenticate. Treated as a
+	// one-element set during verification.
+	TokenHash BcryptHash `json:"token_hash,omitempty"`
+	// Tokens is the active bearer-token SET (SEC-1). Login appends; logout
+	// removes a single entry; password reset clears all.
+	Tokens           []TokenEntry `json:"tokens,omitempty"`
+	SessionTokenHash BcryptHash   `json:"session_token_hash,omitempty"` // bcrypt hash of session cookie token
+	Role             UserRole     `json:"role"`
+	Name             string       `json:"name,omitempty"`
+}
+
+// MaxUserTokens caps the number of concurrent bearer tokens kept per user.
+// On login the newest token is appended; when the set exceeds this cap the
+// oldest entries are evicted (logged by the caller). Prevents an unbounded
+// token set from a long-lived account that logs in from many clients.
+const MaxUserTokens = 10
+
+// TokenIDFromRaw extracts the embedded non-secret ID prefix from a raw bearer
+// token of the form "omnipus_<id>_<body>". Returns "" when the token is not in
+// the ID-tagged form (e.g. a legacy "omnipus_<hex>" token or an env token),
+// signaling callers to fall back to scanning the whole set.
+func TokenIDFromRaw(raw string) string {
+	const prefix = "omnipus_"
+	if !strings.HasPrefix(raw, prefix) {
+		return ""
+	}
+	rest := raw[len(prefix):]
+	idx := strings.IndexByte(rest, '_')
+	if idx <= 0 {
+		// No second underscore → legacy "omnipus_<hex>" form with no ID.
+		return ""
+	}
+	return rest[:idx]
+}
+
+// TokenSecret returns the substring of a raw bearer token that is bcrypt-hashed
+// to produce a token-set entry's Hash.
+//
+// SEC-1 / bcrypt 72-byte limit: an ID-tagged token "omnipus_<id>_<body>" is
+// 81 bytes — past bcrypt's 72-byte input ceiling, beyond which bytes are
+// silently ignored. Because the ID prefix is NON-SECRET routing metadata, we
+// bcrypt only the secret <body> (the 256-bit entropy). Generation and
+// verification MUST agree on this, so both go through TokenSecret. A legacy
+// token with no ID is returned whole (its stored hash was computed over the
+// full "omnipus_<hex>" string, which is exactly 72 bytes).
+func TokenSecret(raw string) string {
+	if id := TokenIDFromRaw(raw); id != "" {
+		// Strip "omnipus_<id>_" leaving the secret body.
+		return raw[len("omnipus_")+len(id)+1:]
+	}
+	return raw
+}
+
+// VerifyToken reports whether raw matches any active bearer token for this user.
+//
+// SEC-1: it first parses the embedded ID prefix and, when present, verifies
+// against ONLY the matching entry's hash (constant-time bcrypt compare over the
+// secret body). When the ID is absent (legacy token) it scans every token entry
+// and the legacy single TokenHash. Returns nil on a match, ErrNoHashSet when the
+// user holds no tokens at all, or the bcrypt mismatch error otherwise.
+func (u *UserConfig) VerifyToken(raw string) error {
+	if raw == "" {
+		return ErrNoHashSet
+	}
+	if len(u.Tokens) == 0 && u.TokenHash.IsZero() {
+		return ErrNoHashSet
+	}
+
+	secret := TokenSecret(raw)
+
+	// Fast path: direct index by embedded ID prefix.
+	if id := TokenIDFromRaw(raw); id != "" {
+		for i := range u.Tokens {
+			if u.Tokens[i].ID == id {
+				return u.Tokens[i].Hash.Verify(secret)
+			}
+		}
+		// ID present but no matching entry — fall through to a full scan so a
+		// race (entry just appended/evicted) or a colliding legacy token still
+		// gets a fair chance, then report mismatch.
+	}
+
+	// Scan the full token set (legacy token, or ID lookup miss).
+	for i := range u.Tokens {
+		if u.Tokens[i].Hash.Verify(secret) == nil {
+			return nil
+		}
+	}
+	// Legacy single-token field — its hash was computed over the FULL raw token.
+	if !u.TokenHash.IsZero() && u.TokenHash.Verify(raw) == nil {
+		return nil
+	}
+	return bcrypt.ErrMismatchedHashAndPassword
+}
+
+// HasActiveToken reports whether the user holds at least one live bearer token
+// (either in the new Tokens set or the legacy TokenHash field).
+func (u *UserConfig) HasActiveToken() bool {
+	return len(u.Tokens) > 0 || !u.TokenHash.IsZero()
 }
 
 type GatewayConfig struct {

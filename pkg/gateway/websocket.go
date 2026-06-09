@@ -509,10 +509,11 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn) bool {
 	cfg := h.agentLoop.GetConfig()
 	rawToken := authFrame.Token
 
-	// 1. Check per-user list (RBAC — bcrypt token hash lookup).
+	// 1. Check per-user list (RBAC — bearer-token SET lookup, SEC-1).
 	if len(cfg.Gateway.Users) > 0 {
-		for _, user := range cfg.Gateway.Users {
-			if user.TokenHash.Verify(rawToken) == nil {
+		for i := range cfg.Gateway.Users {
+			user := cfg.Gateway.Users[i]
+			if user.VerifyToken(rawToken) == nil {
 				wc.role = user.Role
 				wc.userID = user.Username // FR-073: needed for session_state user scoping
 				conn.SetReadDeadline(time.Now().Add(60 * time.Second))
