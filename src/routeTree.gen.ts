@@ -22,6 +22,7 @@ import { Route as AppMonitorRouteImport } from './routes/_app/monitor'
 import { Route as AppCommandCenterRouteImport } from './routes/_app/command-center'
 import { Route as AppChannelsRouteImport } from './routes/_app/channels'
 import { Route as AppAgentsRouteImport } from './routes/_app/agents'
+import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects.index'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents.index'
 import { Route as AppSessionsSessionIdRouteImport } from './routes/_app/sessions.$sessionId'
 import { Route as AppProjectsProjectIdRouteImport } from './routes/_app/projects.$projectId'
@@ -91,6 +92,11 @@ const AppAgentsRoute = AppAgentsRouteImport.update({
   path: '/agents',
   getParentRoute: () => AppRoute,
 } as any)
+const AppProjectsIndexRoute = AppProjectsIndexRouteImport.update({
+  id: '/projects/',
+  path: '/projects/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -129,6 +135,7 @@ export interface FileRoutesByFullPath {
   '/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/agents/': typeof AppAgentsIndexRoute
+  '/projects/': typeof AppProjectsIndexRoute
 }
 export interface FileRoutesByTo {
   '/landing': typeof LandingRoute
@@ -146,6 +153,7 @@ export interface FileRoutesByTo {
   '/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/agents': typeof AppAgentsIndexRoute
+  '/projects': typeof AppProjectsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -166,6 +174,7 @@ export interface FileRoutesById {
   '/_app/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/_app/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/_app/agents/': typeof AppAgentsIndexRoute
+  '/_app/projects/': typeof AppProjectsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -186,6 +195,7 @@ export interface FileRouteTypes {
     | '/projects/$projectId'
     | '/sessions/$sessionId'
     | '/agents/'
+    | '/projects/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/landing'
@@ -203,6 +213,7 @@ export interface FileRouteTypes {
     | '/projects/$projectId'
     | '/sessions/$sessionId'
     | '/agents'
+    | '/projects'
   id:
     | '__root__'
     | '/_app'
@@ -222,6 +233,7 @@ export interface FileRouteTypes {
     | '/_app/projects/$projectId'
     | '/_app/sessions/$sessionId'
     | '/_app/agents/'
+    | '/_app/projects/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -324,6 +336,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAgentsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/projects/': {
+      id: '/_app/projects/'
+      path: '/projects'
+      fullPath: '/projects/'
+      preLoaderRoute: typeof AppProjectsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/agents/': {
       id: '/_app/agents/'
       path: '/'
@@ -381,6 +400,7 @@ interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppProjectsProjectIdRoute: typeof AppProjectsProjectIdRoute
   AppSessionsSessionIdRoute: typeof AppSessionsSessionIdRoute
+  AppProjectsIndexRoute: typeof AppProjectsIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -395,6 +415,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppProjectsProjectIdRoute: AppProjectsProjectIdRoute,
   AppSessionsSessionIdRoute: AppSessionsSessionIdRoute,
+  AppProjectsIndexRoute: AppProjectsIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

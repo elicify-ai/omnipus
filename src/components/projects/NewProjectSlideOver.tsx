@@ -64,7 +64,7 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
       onOpenChange(false)
     },
     onError: (err) => {
-      const msg = isApiError(err) ? err.message : 'Unexpected error'
+      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Unexpected error'
       addToast({ message: `Failed to create project: ${msg}`, variant: 'error' })
     },
   })

@@ -19,7 +19,6 @@ import {
   projectsQueryKeys,
   milestonesQueryKeys,
 } from '@/lib/api'
-import type { BoardTask } from '@/lib/api'
 import { useProjectsStore } from '@/store/projectsStore'
 import { cn } from '@/lib/utils'
 
@@ -33,7 +32,9 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
   const navigate = useNavigate()
   const { activeMilestoneId, setActiveMilestoneId } = useProjectsStore()
   const [viewMode, setViewMode] = useState<ViewMode>('board')
-  const [selectedTask, setSelectedTask] = useState<BoardTask | null>(null)
+  // F2 fix: store task id only; derive the displayed task from live query data
+  // so the detail panel reflects post-mutation state immediately.
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [createTaskOpen, setCreateTaskOpen] = useState(false)
   const [createMilestoneOpen, setCreateMilestoneOpen] = useState(false)
 
@@ -99,6 +100,11 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
     queryFn: fetchAgents,
     staleTime: 60_000,
   })
+
+  // F2 fix: derive the selected task from the live query array so the detail
+  // panel always reflects post-mutation state (Start/Update/Retry refetches the
+  // board-tasks query; the panel reads from the fresh array, not the snapshot).
+  const selectedTask = selectedTaskId != null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null
 
   // 'inbox' is a redirect alias — suppress render while the useEffect navigates to the real project ID.
   // Without this, archivedLoading can flip to false before navigate() completes, causing a crash
@@ -236,28 +242,28 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
           tasks={tasks}
           milestones={milestones}
           activeMilestoneId={activeMilestoneId}
-          onTaskClick={(task) => setSelectedTask(task)}
+          onTaskClick={(task) => setSelectedTaskId(task.id)}
           onNewTask={() => setCreateTaskOpen(true)}
         />
       ) : viewMode === 'execution' ? (
         <ExecutionView
           tasks={tasks}
           milestones={milestones}
-          onTaskClick={(task) => setSelectedTask(task)}
+          onTaskClick={(task) => setSelectedTaskId(task.id)}
         />
       ) : (
         <ListView
           tasks={tasks}
           milestones={milestones}
           agents={agents}
-          onTaskClick={(task) => setSelectedTask(task)}
+          onTaskClick={(task) => setSelectedTaskId(task.id)}
         />
       )}
 
       {/* Task detail slide-over */}
       <TaskDetailSlideOver
         task={selectedTask}
-        onClose={() => setSelectedTask(null)}
+        onClose={() => setSelectedTaskId(null)}
       />
 
       {/* Create task slide-over */}

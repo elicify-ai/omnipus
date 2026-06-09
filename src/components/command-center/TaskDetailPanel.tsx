@@ -159,6 +159,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
       if (data.session_id) {
         void navigate({ to: '/sessions/$sessionId', params: { sessionId: data.session_id } })
       } else {
@@ -176,6 +177,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
       addToast({ message: 'Task retried — moved to Next.', variant: 'success' })
     },
     onError: (err: unknown) =>

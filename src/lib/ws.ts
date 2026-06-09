@@ -764,6 +764,26 @@ export class WsConnection {
       // diagnostic toast as well; for clean-but-unintentional 1000/1001 the
       // banner alone is sufficient.
       if (!this.intentionalClose) {
+        // Close code 1008 = policy violation / auth failure. The server rejected
+        // the token. Reconnecting with the same dead token will loop forever —
+        // route through the same logout+redirect path as the QueryClient 401 handler.
+        if (event.code === 1008) {
+          sessionStorage.removeItem('omnipus_auth_token')
+          localStorage.removeItem('omnipus_auth_token')
+          localStorage.removeItem('omnipus_auth_role')
+          localStorage.removeItem('omnipus_auth_username')
+          void import('@/store/auth')
+            .then(({ useAuthStore }) => {
+              useAuthStore.getState().clearAuth()
+            })
+            .catch(() => {
+              // Store not yet loaded — token removal above is sufficient.
+            })
+          if (typeof window !== 'undefined') {
+            window.location.hash = '/login'
+          }
+          return
+        }
         if (event.code !== 1000 && event.code !== 1001) {
           const codeLabel = event.code ? ` code ${event.code}` : ''
           const reasonLabel = event.reason ? `: ${event.reason}` : ''

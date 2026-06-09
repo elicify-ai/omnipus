@@ -95,7 +95,14 @@ function BoardColumn({ config, tasks, milestones, onTaskClick, onNewTask }: Boar
       {/* Task cards */}
       <div className="flex flex-col gap-2 p-2 flex-1 overflow-y-auto">
         {tasks.length === 0 ? (
-          <p className="text-xs text-[var(--color-muted)] text-center py-4">No tasks</p>
+          <button
+            type="button"
+            onClick={onNewTask}
+            className="mx-auto mt-3 flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+          >
+            <Plus size={11} />
+            Add your first task
+          </button>
         ) : (
           tasks.map((task) => (
             <TaskCard

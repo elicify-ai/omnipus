@@ -19,6 +19,7 @@ import {
   MagnifyingGlass,
   WarningCircle,
   ArrowClockwise,
+  ClipboardText,
 } from '@phosphor-icons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
@@ -31,6 +32,7 @@ import avatarUrl from '@/assets/logo/omnipus-avatar.svg?url'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Chat', Icon: ChatCircle },
+  { to: '/tasks', label: 'Tasks', Icon: ClipboardText },
   { to: '/monitor', label: 'Monitor', Icon: ChartBar },
   { to: '/agents', label: 'Agents', Icon: Robot },
   { to: '/channels', label: 'Channels', Icon: PlugsConnected },

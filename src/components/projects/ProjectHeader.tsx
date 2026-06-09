@@ -117,17 +117,33 @@ export function ProjectHeader({ project }: ProjectHeaderProps) {
             {project.description}
           </p>
         )}
-        {project.repository && (
-          <a
-            href={project.repository}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:underline flex-shrink-0"
-          >
-            <Link size={12} />
-            Repository
-          </a>
-        )}
+        {project.repository && (() => {
+          // SEC-5: Only render an anchor when the URL has a safe http/https protocol.
+          // javascript: and data: URIs would execute arbitrary code as the user.
+          let isSafeUrl = false
+          try {
+            const proto = new URL(project.repository).protocol
+            isSafeUrl = proto === 'http:' || proto === 'https:'
+          } catch {
+            // Unparseable URL — fall through to plain text.
+          }
+          return isSafeUrl ? (
+            <a
+              href={project.repository}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:underline flex-shrink-0"
+            >
+              <Link size={12} />
+              Repository
+            </a>
+          ) : (
+            <span className="flex items-center gap-1 text-xs text-[var(--color-muted)] flex-shrink-0">
+              <Link size={12} />
+              {project.repository}
+            </span>
+          )
+        })()}
         <span className={cn(
           'text-xs text-[var(--color-muted)] flex-shrink-0',
           project.task_count === 0 && 'hidden',
