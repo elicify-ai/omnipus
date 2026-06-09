@@ -23,6 +23,7 @@ import (
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/dapicom-ai/omnipus/pkg/session"
 )
 
 // boardTask mirrors the on-disk format of ~/.omnipus/tasks/{id}.json for GTD tasks.
@@ -682,6 +683,82 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleBoardTaskStart handles POST /api/v1/board/tasks/{id}/start.
+// It creates a new chat session linked to the task, sets status to active, and persists.
+func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid task ID")
+		return
+	}
+
+	existing, err := a.readBoardTask(id)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			jsonErr(w, http.StatusNotFound, "board task not found")
+			return
+		}
+		slog.Error("rest: board task: start read failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read board task")
+		return
+	}
+
+	if existing.Status == "active" || existing.Status == "done" {
+		jsonErr(w, http.StatusConflict, "task already started")
+		return
+	}
+
+	// Resolve the agent to use: prefer the task's own agent_id, fall back to the
+	// first enabled agent in config.
+	agentID := existing.AgentID
+	if agentID == "" {
+		cfg := a.agentLoop.GetConfig()
+		for _, ag := range cfg.Agents.List {
+			if ag.IsActive() {
+				agentID = ag.ID
+				break
+			}
+		}
+	}
+	if agentID == "" {
+		jsonErr(w, http.StatusBadRequest, "no agent configured")
+		return
+	}
+
+	// Use the shared session store; fall back to the per-agent store.
+	store := a.agentLoop.GetSessionStore()
+	if store == nil {
+		store = a.agentLoop.GetAgentStore(agentID)
+	}
+	if store == nil {
+		jsonErr(w, http.StatusInternalServerError, "session store unavailable")
+		return
+	}
+
+	meta, err := store.NewSession(session.SessionTypeTask, "board", agentID)
+	if err != nil {
+		slog.Error("rest: board task: start session create failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
+
+	existing.SessionID = meta.ID
+	existing.Status = "active"
+	existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+
+	if err := a.writeBoardTask(existing); err != nil {
+		slog.Error("rest: board task: start write failed", "id", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "failed to update task")
+		return
+	}
+
+	if a.auditor != nil {
+		_ = a.auditor.Log(
+			&audit.Entry{Event: "board_task.start", Decision: "allowed", Details: map[string]any{"id": id, "session_id": meta.ID}},
+		)
+	}
+	jsonOK(w, toWireBoardTask(existing))
+}
+
 // HandleBoardTasks dispatches requests for /api/v1/board/tasks and /api/v1/board/tasks/{id}.
 func (a *restAPI) HandleBoardTasks(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
@@ -689,7 +766,20 @@ func (a *restAPI) HandleBoardTasks(w http.ResponseWriter, r *http.Request) {
 
 	if len(rest) > 1 {
 		id := strings.TrimPrefix(rest, "/")
-		// Reject sub-paths (e.g. /api/v1/board/tasks/foo/bar).
+
+		// POST /api/v1/board/tasks/{id}/start — must be checked before the sub-path
+		// rejection below because the id segment contains a "/".
+		if strings.HasSuffix(id, "/start") {
+			taskID := strings.TrimSuffix(id, "/start")
+			if r.Method != http.MethodPost {
+				jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+				return
+			}
+			a.handleBoardTaskStart(w, r, taskID)
+			return
+		}
+
+		// Reject other sub-paths (e.g. /api/v1/board/tasks/foo/bar).
 		if strings.Contains(id, "/") {
 			http.NotFound(w, r)
 			return
