@@ -5619,6 +5619,11 @@ export interface components {
              * @example 2026-06-08T15:00:00Z
              */
             updated_at: string;
+            /**
+             * @description Username of the user who owns this resource. Set server-side at creation; read-only.
+             * @example alice
+             */
+            owner?: string;
         };
         /** @description Request body for POST /projects */
         ProjectCreateRequest: {
@@ -5695,6 +5700,11 @@ export interface components {
              * @example 2026-06-08T15:00:00Z
              */
             updated_at: string;
+            /**
+             * @description Username of the user who owns this resource. Set server-side at creation; read-only.
+             * @example alice
+             */
+            owner?: string;
         };
         /** @description Paginated list response for GET /board/tasks */
         BoardTaskListResponse: {
@@ -5776,6 +5786,11 @@ export interface components {
              * @example 2026-06-08T15:00:00Z
              */
             updated_at: string;
+            /**
+             * @description Username of the user who owns this resource. Set server-side at creation; read-only.
+             * @example alice
+             */
+            owner?: string;
         };
         MilestoneCreateRequest: {
             /** @description Milestone name. Required. */

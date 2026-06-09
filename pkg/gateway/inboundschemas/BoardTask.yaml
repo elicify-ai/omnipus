@@ -61,3 +61,7 @@ properties:
     type: string
     format: date-time
     example: "2026-06-08T15:00:00Z"
+  owner:
+    type: string
+    description: "Username of the user who owns this resource. Set server-side at creation; read-only."
+    example: "alice"

@@ -3794,6 +3794,9 @@ type BoardTask struct {
 	// Name Task name.
 	Name string `json:"name"`
 
+	// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
+	Owner *string `json:"owner,omitempty"`
+
 	// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified.
 	Priority *int `json:"priority,omitempty"`
 
@@ -3852,6 +3855,9 @@ type BoardTaskListResponse struct {
 
 		// Name Task name.
 		Name string `json:"name"`
+
+		// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
+		Owner *string `json:"owner,omitempty"`
 
 		// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified.
 		Priority *int `json:"priority,omitempty"`
@@ -4500,6 +4506,9 @@ type Milestone struct {
 	// Name Human-readable milestone name.
 	Name string `json:"name"`
 
+	// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
+	Owner *string `json:"owner,omitempty"`
+
 	// ProjectId Project this milestone belongs to.
 	ProjectId string `json:"project_id"`
 
@@ -4536,6 +4545,9 @@ type MilestoneListResponse struct {
 
 		// Name Human-readable milestone name.
 		Name string `json:"name"`
+
+		// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
+		Owner *string `json:"owner,omitempty"`
 
 		// ProjectId Project this milestone belongs to.
 		ProjectId string `json:"project_id"`
@@ -4749,6 +4761,9 @@ type Project struct {
 
 	// Name Human-readable project name. Not unique.
 	Name string `json:"name"`
+
+	// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
+	Owner *string `json:"owner,omitempty"`
 
 	// PinOrder Ascending sort position among pinned projects. 0 for unpinned projects. Last-writer-wins; tiebreak by created_at ascending.
 	PinOrder int `json:"pin_order"`

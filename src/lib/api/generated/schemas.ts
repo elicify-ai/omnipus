@@ -411,6 +411,7 @@ type BoardTask = {
   result?: string | undefined;
   created_at: string;
   updated_at: string;
+  owner?: string | undefined;
 };
 type GTDBoardTaskStatus =
   | "inbox"
@@ -457,6 +458,7 @@ type Milestone = {
   due_date?: (string | null) | undefined;
   created_at: string;
   updated_at: string;
+  owner?: string | undefined;
 };
 type TokenUsageSummary = {
   agents: Array<AgentTokenEntry>;
@@ -1566,6 +1568,7 @@ export const Project = z
     is_default: z.boolean().optional(),
     created_at: z.string().datetime({ offset: true }),
     updated_at: z.string().datetime({ offset: true }),
+    owner: z.string().optional(),
   })
   .passthrough();
 export const ProjectCreateRequest = z
@@ -1603,6 +1606,7 @@ export const Milestone: z.ZodType<Milestone> = z
     due_date: z.string().nullish(),
     created_at: z.string().datetime({ offset: true }),
     updated_at: z.string().datetime({ offset: true }),
+    owner: z.string().optional(),
   })
   .passthrough();
 export const MilestoneListResponse: z.ZodType<MilestoneListResponse> = z
@@ -1646,6 +1650,7 @@ export const BoardTask: z.ZodType<BoardTask> = z
     result: z.string().max(50000).optional(),
     created_at: z.string().datetime({ offset: true }),
     updated_at: z.string().datetime({ offset: true }),
+    owner: z.string().optional(),
   })
   .passthrough();
 export const BoardTaskListResponse: z.ZodType<BoardTaskListResponse> = z
