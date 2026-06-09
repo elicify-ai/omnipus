@@ -2478,6 +2478,37 @@ Includes session_start events from all agent stores and task lifecycle events.
     ],
   },
   {
+    method: "post",
+    path: "/board/tasks/:id/start",
+    alias: "startBoardTask",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: BoardTask,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "get",
     path: "/channels",
     alias: "listChannels",

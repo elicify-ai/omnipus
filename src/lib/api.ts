@@ -2153,6 +2153,14 @@ export function deleteBoardTask(id: string): Promise<void> {
   return request<void>(`/board/tasks/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
+export function startBoardTask(id: string): Promise<BoardTask> {
+  return request<BoardTask>(
+    `/board/tasks/${encodeURIComponent(id)}/start`,
+    { method: 'POST' },
+    BoardTaskSchema as ZodType<BoardTask>,
+  )
+}
+
 // ── Milestones ────────────────────────────────────────────────────────────────
 //
 // Milestones are scoped to a project. All types are re-exported from generated

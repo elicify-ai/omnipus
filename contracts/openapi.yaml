@@ -4561,6 +4561,34 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
 
+  /board/tasks/{id}/start:
+    post:
+      operationId: startBoardTask
+      summary: Start a board task — create session, link it, set status active
+      tags:
+        - Board Tasks
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task started; session_id and status=active set.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoardTask'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
+
   /stats/tokens:
     get:
       operationId: getTokenStats
