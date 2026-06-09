@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { Plus } from '@phosphor-icons/react'
 import { SchedulesList } from '@/components/command-center/SchedulesList'
 import { ScheduleFormSheet } from '@/components/command-center/ScheduleFormSheet'
-import { fetchTokenStats, tokenStatsQueryKeys } from '@/lib/api'
+import { fetchTokenStats, tokenStatsQueryKeys, fetchAuditLog } from '@/lib/api'
+import type { AuditEntry } from '@/lib/api'
 
 // ── Token Usage table ─────────────────────────────────────────────────────────
 
@@ -86,6 +87,57 @@ function TokenUsageSection() {
   )
 }
 
+// ── AuditLogSection ───────────────────────────────────────────────────────────
+
+function AuditLogSection() {
+  const { data: auditEntries = [], isLoading: auditLoading, isError: auditError } = useQuery<AuditEntry[]>({
+    queryKey: ['audit-log'],
+    queryFn: fetchAuditLog,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  })
+
+  if (auditLoading) {
+    return (
+      <p className="px-4 py-3 text-xs text-[var(--color-muted)]">Loading audit log…</p>
+    )
+  }
+
+  if (auditError) {
+    return (
+      <p className="px-4 py-3 text-xs text-[var(--color-muted)]">Audit log unavailable.</p>
+    )
+  }
+
+  if (auditEntries.length === 0) {
+    return (
+      <p className="px-4 py-3 text-xs text-[var(--color-muted)]">No audit events recorded yet.</p>
+    )
+  }
+
+  return (
+    <div className="divide-y divide-[var(--color-border)]">
+      {auditEntries.map((entry, i) => (
+        <div key={i} className="px-4 py-2 flex items-start gap-3 text-xs">
+          <span className="text-[var(--color-muted)] shrink-0 font-mono">
+            {new Date(entry.timestamp).toLocaleString()}
+          </span>
+          <span className="text-[var(--color-secondary)] flex-1 break-all">
+            {entry.event}
+            {entry.tool && <span className="text-[var(--color-muted)]"> — {entry.tool}</span>}
+            {entry.command && <span className="text-[var(--color-muted)]"> — {entry.command}</span>}
+          </span>
+          {entry.decision && (
+            <span className={entry.decision === 'allow' ? 'text-green-400 shrink-0' : 'text-red-400 shrink-0'}>
+              {entry.decision}
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ── MonitorScreen ─────────────────────────────────────────────────────────────
 
 export function MonitorScreen() {
@@ -149,9 +201,7 @@ export function MonitorScreen() {
             Audit Log
           </h3>
         </div>
-        <p className="px-4 py-3 text-sm text-[var(--color-muted)]">
-          Audit log requires admin access.
-        </p>
+        <AuditLogSection />
       </section>
 
       {/* New schedule slide-over */}
