@@ -112,8 +112,6 @@ import {
   BoardTask as BoardTaskSchema,
   BoardTaskListResponse as BoardTaskListResponseSchema,
   TokenUsageSummary as TokenUsageSummarySchema,
-  BoardTaskCreateRequest as CreateBoardTaskBodySchema,
-  BoardTaskUpdateRequest as UpdateBoardTaskBodySchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
