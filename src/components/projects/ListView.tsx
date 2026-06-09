@@ -48,8 +48,8 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
   const filtered = tasks
     .filter((t) => filterStatus === '__all__' || t.status === filterStatus)
     .filter((t) => filterPriority === '__all__' || String(t.priority ?? 3) === filterPriority)
-    .filter((t) => filterMilestone === '__all__' || (t.milestone_id ?? '') === filterMilestone)
-    .filter((t) => filterAgent === '__all__' || (t.agent_id ?? '') === filterAgent)
+    .filter((t) => filterMilestone === '__all__' || (filterMilestone === '__unscheduled__' ? !t.milestone_id : t.milestone_id === filterMilestone))
+    .filter((t) => filterAgent === '__all__' || (filterAgent === '__unassigned__' ? !t.agent_id : t.agent_id === filterAgent))
     .sort((a, b) => {
       const diff = new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
       return sortDir === 'desc' ? diff : -diff
@@ -92,7 +92,7 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
             onValueChange={setFilterMilestone}
             options={[
               { value: '__all__', label: 'All milestones' },
-              { value: '', label: 'Unscheduled' },
+              { value: '__unscheduled__', label: 'Unscheduled' },
               ...milestones.map((m) => ({ value: m.id, label: m.name })),
             ]}
           />
@@ -104,7 +104,7 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
             onValueChange={setFilterAgent}
             options={[
               { value: '__all__', label: 'All agents' },
-              { value: '', label: 'Unassigned' },
+              { value: '__unassigned__', label: 'Unassigned' },
               ...agents.map((a) => ({ value: a.id, label: a.name })),
             ]}
           />
@@ -156,6 +156,7 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
                   key={task.id}
                   task={task}
                   milestones={milestones}
+                  agents={agents}
                   onClick={() => onTaskClick(task)}
                 />
               ))
@@ -170,15 +171,18 @@ export function ListView({ tasks, milestones, agents, onTaskClick }: ListViewPro
 function TaskRow({
   task,
   milestones,
+  agents,
   onClick,
 }: {
   task: BoardTask
   milestones: MilestoneWithProgress[]
+  agents: { id: string; name: string }[]
   onClick: () => void
 }) {
   const priority = task.priority ?? 3
   const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
   const milestone = task.milestone_id ? milestones.find((m) => m.id === task.milestone_id) : null
+  const agentName = task.agent_id ? (agents.find((a) => a.id === task.agent_id)?.name ?? task.agent_id) : null
 
   return (
     <tr
@@ -216,9 +220,9 @@ function TaskRow({
         )}
       </td>
       <td className="px-2 py-2.5">
-        {task.agent_id ? (
+        {agentName ? (
           <span className="text-xs text-[var(--color-secondary)] truncate max-w-[5rem] block">
-            {task.agent_id}
+            {agentName}
           </span>
         ) : (
           <span className="text-xs text-[var(--color-muted)]">—</span>

@@ -5,8 +5,10 @@ import {
   fetchAgents,
   fetchSubtasks,
   fetchMilestones,
+  fetchProjects,
   updateTask,
   updateBoardTask,
+  createSession,
   startTask,
   isApiError,
   boardTasksQueryKeys,
@@ -124,6 +126,12 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
 
+  const { data: projects = [] } = useQuery({
+    queryKey: projectsQueryKeys.list(),
+    queryFn: () => fetchProjects(),
+    staleTime: 30_000,
+  })
+
   // Milestones for the currently-selected project
   const { data: milestones = [] } = useQuery({
     queryKey: milestonesQueryKeys.list(selectedProjectId),
@@ -146,13 +154,23 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
   })
 
   const { mutate: doStart, isPending: isStarting } = useMutation({
-    mutationFn: () => {
-      if (!task) return Promise.reject(new Error('No task selected'))
-      return updateBoardTask(task.id, { status: 'next' })
+    mutationFn: async () => {
+      if (!task) throw new Error('No task selected')
+      const agentId = task.agent_id
+        || agents.find((a) => a.default)?.id
+        || agents[0]?.id
+      if (!agentId) throw new Error('No agent available — configure an agent first')
+      const session = await createSession(agentId)
+      // Move to 'next'; 'active' and session_id are agent-context-only (FR-L2-006)
+      if (task.status === 'inbox' || task.status === 'waiting') {
+        await updateBoardTask(task.id, { status: 'next' })
+      }
+      return session
     },
-    onSuccess: () => {
+    onSuccess: (session) => {
       queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
-      addToast({ message: 'Task moved to Next.', variant: 'success' })
+      void navigate({ to: '/sessions/$sessionId', params: { sessionId: session.id } })
+      onClose()
     },
     onError: (err: unknown) =>
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to start task', variant: 'error' }),
@@ -279,7 +297,11 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
 
       {/* Project */}
       <Field label="Project">
-        <p className="text-xs text-[var(--color-muted)]">{task.project_id ?? '—'}</p>
+        <p className="text-xs text-[var(--color-muted)]">
+          {task.project_id
+            ? (projects.find((p) => p.id === task.project_id)?.name ?? task.project_id)
+            : '—'}
+        </p>
       </Field>
 
       {/* Milestone — filtered to selected project */}
@@ -320,7 +342,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
           disabled={isStarting}
         >
           <Play size={13} weight="fill" />
-          {isStarting ? 'Moving…' : 'Start Task'}
+          {isStarting ? 'Starting…' : 'Start Task'}
         </Button>
       )}
 

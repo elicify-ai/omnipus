@@ -26,14 +26,14 @@ import (
 // The handler returns milestoneWithProgress which is a local struct (not the
 // generated gen.Milestone which lacks a progress field).
 type milestoneResponse struct { // not-wire-format: test-local decode struct matching milestoneWithProgress JSON
-	ID          string   `json:"id"`
-	ProjectID   string   `json:"project_id"`
-	Name        string   `json:"name"`
-	Description *string  `json:"description,omitempty"`
-	DueDate     *string  `json:"due_date,omitempty"`
+	ID          string    `json:"id"`
+	ProjectID   string    `json:"project_id"`
+	Name        string    `json:"name"`
+	Description *string   `json:"description,omitempty"`
+	DueDate     *string   `json:"due_date,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
-	Progress    float64  `json:"progress"`
+	Progress    float64   `json:"progress"`
 }
 
 // milestoneListResponse matches the JSON shape from GET /projects/{id}/milestones.
@@ -492,12 +492,13 @@ func TestHandleMilestones_Update(t *testing.T) {
 //
 // BUG DETECTED: This test is expected to FAIL.
 // Production bug in rest_milestones.go:
-//   milestoneUpdateRequest.DueDate is `*json.RawMessage` with `json:"due_date,omitempty"`.
-//   The `omitempty` tag causes JSON null to be treated as absent (pointer stays nil),
-//   so the null-clearing branch (raw == "null") is never reached. The due_date is NOT
-//   cleared when PUT {"due_date":null} is sent.
-//   Fix needed: remove `omitempty` from the DueDate tag in milestoneUpdateRequest.
-//   Filed as production defect — backend-lead must fix this in rest_milestones.go.
+//
+//	milestoneUpdateRequest.DueDate is `*json.RawMessage` with `json:"due_date,omitempty"`.
+//	The `omitempty` tag causes JSON null to be treated as absent (pointer stays nil),
+//	so the null-clearing branch (raw == "null") is never reached. The due_date is NOT
+//	cleared when PUT {"due_date":null} is sent.
+//	Fix needed: remove `omitempty` from the DueDate tag in milestoneUpdateRequest.
+//	Filed as production defect — backend-lead must fix this in rest_milestones.go.
 func TestHandleMilestones_Update_ClearDueDate(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — MilestoneUpdateRequest due_date nullable
 	// BLOCKED: production bug — omitempty on *json.RawMessage eats JSON null values.
