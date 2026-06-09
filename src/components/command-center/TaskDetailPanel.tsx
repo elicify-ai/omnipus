@@ -11,7 +11,6 @@ import {
   startBoardTask,
   startTask,
   isApiError,
-  boardTasksQueryKeys,
   milestonesQueryKeys,
   projectsQueryKeys,
 } from '@/lib/api'
@@ -146,8 +145,8 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
       return updateBoardTask(task.id, data)
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
-      queryClient.invalidateQueries({ queryKey: projectsQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
     },
     onError: (err: unknown) =>
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update task', variant: 'error' }),
@@ -159,7 +158,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
       return startBoardTask(task.id)
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
       addToast({ message: 'Task started.', variant: 'success' })
     },
     onError: (err: unknown) =>
@@ -172,7 +171,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
       return updateBoardTask(task.id, { status: 'next' })
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
       addToast({ message: 'Task retried — moved to Next.', variant: 'success' })
     },
     onError: (err: unknown) =>

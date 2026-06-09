@@ -5,6 +5,7 @@ import { SchedulesList } from '@/components/command-center/SchedulesList'
 import { ScheduleFormSheet } from '@/components/command-center/ScheduleFormSheet'
 import { fetchTokenStats, tokenStatsQueryKeys, fetchAuditLog, auditLogQueryKeys } from '@/lib/api'
 import type { AuditEntry } from '@/lib/api'
+import { useAuthStore } from '@/store/auth'
 
 // ── Token Usage table ─────────────────────────────────────────────────────────
 
@@ -90,12 +91,19 @@ function TokenUsageSection() {
 // ── AuditLogSection ───────────────────────────────────────────────────────────
 
 function AuditLogSection() {
+  const role = useAuthStore((s) => s.role)
+
   const { data: auditEntries = [], isLoading, isError } = useQuery<AuditEntry[]>({
     queryKey: auditLogQueryKeys.list(),
     queryFn: fetchAuditLog,
     staleTime: 30_000,
     refetchInterval: 60_000,
+    enabled: role === 'admin',
   })
+
+  if (role !== 'admin') {
+    return <p className="px-4 py-3 text-xs text-[var(--color-muted)]">Audit log requires admin access.</p>
+  }
 
   if (isLoading) {
     return (
@@ -111,14 +119,14 @@ function AuditLogSection() {
 
   if (auditEntries.length === 0) {
     return (
-      <p className="px-4 py-3 text-xs text-[var(--color-muted)]">No audit events recorded yet.</p>
+      <p className="px-4 py-3 text-xs text-[var(--color-muted)]">No audit entries.</p>
     )
   }
 
   return (
     <div className="divide-y divide-[var(--color-border)]">
-      {auditEntries.map((entry) => (
-        <div key={`${entry.timestamp}-${entry.event}`} className="px-4 py-2 flex items-start gap-3 text-xs">
+      {auditEntries.map((entry, idx) => (
+        <div key={`${idx}-${entry.timestamp}-${entry.event}`} className="px-4 py-2 flex items-start gap-3 text-xs">
           <span className="text-[var(--color-muted)] shrink-0 font-mono">
             {new Date(entry.timestamp).toLocaleString()}
           </span>
