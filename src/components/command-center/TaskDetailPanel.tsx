@@ -8,7 +8,7 @@ import {
   fetchProjects,
   updateTask,
   updateBoardTask,
-  createSession,
+  startBoardTask,
   startTask,
   isApiError,
   boardTasksQueryKeys,
@@ -112,7 +112,6 @@ export function TaskDetailPanel(props: TaskDetailPanelProps) {
 function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose: () => void }) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
-  const navigate = useNavigate()
 
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
@@ -154,23 +153,13 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
   })
 
   const { mutate: doStart, isPending: isStarting } = useMutation({
-    mutationFn: async () => {
-      if (!task) throw new Error('No task selected')
-      const agentId = task.agent_id
-        || agents.find((a) => a.default)?.id
-        || agents[0]?.id
-      if (!agentId) throw new Error('No agent available — configure an agent first')
-      const session = await createSession(agentId)
-      // Move to 'next'; 'active' and session_id are agent-context-only (FR-L2-006)
-      if (task.status === 'inbox' || task.status === 'waiting') {
-        await updateBoardTask(task.id, { status: 'next' })
-      }
-      return session
+    mutationFn: () => {
+      if (!task) return Promise.reject(new Error('No task selected'))
+      return startBoardTask(task.id)
     },
-    onSuccess: (session) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
-      void navigate({ to: '/sessions/$sessionId', params: { sessionId: session.id } })
-      onClose()
+      // Stay on board — "Open in Chat" button appears when task.session_id is set
     },
     onError: (err: unknown) =>
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to start task', variant: 'error' }),
