@@ -597,8 +597,8 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		}
 		existing.Status = newStatus
 	}
-	// session_id may only be set via an agent-context request (AW-3: excluded from
-	// BoardTaskUpdateRequest schema, but present in UpdateBoardTaskJSONBody for agent path).
+	// session_id is present in BoardTaskUpdateRequest but only applied when the
+	// agent-context header is set (AW-3: prevents UI from overwriting session linkage).
 	if req.SessionId != nil && isAgentContext {
 		existing.SessionID = *req.SessionId
 	}
