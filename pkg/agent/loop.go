@@ -2714,13 +2714,21 @@ func (al *AgentLoop) processTaskDirect(
 
 // ExecuteBoardTask dispatches a GTD board task to the agent loop in a background
 // goroutine. The session must already exist in the per-agent store (via GetAgentStore).
-func (al *AgentLoop) ExecuteBoardTask(ctx context.Context, agentID, taskID, sessionID, prompt string) {
+// onComplete is called with the execution error (nil on success) once the agent finishes;
+// the caller is responsible for persisting the terminal task status.
+func (al *AgentLoop) ExecuteBoardTask(agentID, taskID, sessionID, prompt string, onComplete func(error)) {
 	go func() {
 		taskCtx := context.Background() // detached — outlives the HTTP request
 		sessionKey := fmt.Sprintf("agent:%s:board:%s", agentID, taskID)
-		if _, err := al.processTaskDirect(taskCtx, agentID, prompt, sessionKey, sessionID); err != nil {
+		logger.InfoCF("agent", "ExecuteBoardTask: dispatching",
+			map[string]any{"task_id": taskID, "agent_id": agentID, "session_id": sessionID, "session_key": sessionKey})
+		_, err := al.processTaskDirect(taskCtx, agentID, prompt, sessionKey, sessionID)
+		if err != nil {
 			logger.ErrorCF("agent", "ExecuteBoardTask: execution failed",
-				map[string]any{"task_id": taskID, "agent_id": agentID, "error": err.Error()})
+				map[string]any{"task_id": taskID, "agent_id": agentID, "session_id": sessionID, "error": err.Error()})
+		}
+		if onComplete != nil {
+			onComplete(err)
 		}
 	}()
 }

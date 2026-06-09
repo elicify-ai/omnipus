@@ -7,7 +7,6 @@
 package gateway
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -598,12 +597,17 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		}
 		existing.Status = newStatus
 	}
-	// session_id: clearing (empty string) is allowed from any caller so users can
-	// retry failed tasks. Setting a non-empty session_id requires agent-context
-	// (AW-3: prevents UI from overwriting an active session link).
+	// session_id: setting a non-empty value requires agent-context (AW-3).
+	// Clearing (empty string) is allowed without agent-context only when the task
+	// is not currently active — clearing on an active task would break the
+	// task→session link while the goroutine is still running.
 	if req.SessionId != nil {
 		if *req.SessionId != "" && !isAgentContext {
 			jsonErr(w, http.StatusForbidden, "setting session_id requires agent context")
+			return
+		}
+		if *req.SessionId == "" && existing.Status == "active" && !isAgentContext {
+			jsonErr(w, http.StatusForbidden, "clearing session_id on an active task requires agent context")
 			return
 		}
 		existing.SessionID = *req.SessionId
@@ -779,6 +783,17 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 
+	// Reject early if there's nothing to execute — a task with neither prompt nor
+	// description would be dispatched silently and stuck in "active" forever.
+	prompt := existing.Prompt
+	if prompt == "" {
+		prompt = existing.Description
+	}
+	if prompt == "" {
+		jsonErr(w, http.StatusUnprocessableEntity, "task has no prompt or description")
+		return
+	}
+
 	// Use GetAgentStore first — must match processTaskDirect's TranscriptStore.
 	// Fall back to the shared session store only if the per-agent store is nil.
 	store := a.agentLoop.GetAgentStore(agentID)
@@ -806,20 +821,14 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 
 	// Write the task prompt as the user-turn transcript entry so the session
 	// is not blank when the user navigates to it.
-	prompt := existing.Prompt
-	if prompt == "" {
-		prompt = existing.Description
-	}
-	if prompt != "" {
-		if appendErr := store.AppendTranscript(meta.ID, session.TranscriptEntry{
-			ID:        id + "-prompt",
-			Role:      "user",
-			Content:   prompt,
-			AgentID:   agentID,
-			Timestamp: time.Now().UTC(),
-		}); appendErr != nil {
-			slog.Warn("rest: board task: start transcript write failed", "id", id, "session_id", meta.ID, "error", appendErr)
-		}
+	if appendErr := store.AppendTranscript(meta.ID, session.TranscriptEntry{
+		ID:        id + "-prompt",
+		Role:      "user",
+		Content:   prompt,
+		AgentID:   agentID,
+		Timestamp: time.Now().UTC(),
+	}); appendErr != nil {
+		slog.Warn("rest: board task: start transcript write failed", "id", id, "session_id", meta.ID, "error", appendErr)
 	}
 
 	if existing.SessionID != "" {
@@ -852,10 +861,31 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		}
 	}
 
-	// Dispatch agent execution asynchronously — returns immediately (202 Accepted).
-	if prompt != "" {
-		a.agentLoop.ExecuteBoardTask(context.Background(), agentID, id, meta.ID, prompt)
-	}
+	// Dispatch agent execution asynchronously. On completion, update the task to
+	// done/failed — but only if the task is still active (guard against user retry
+	// resetting the status before the goroutine finishes).
+	taskID := id
+	a.agentLoop.ExecuteBoardTask(agentID, taskID, meta.ID, prompt, func(execErr error) {
+		t, readErr := a.readBoardTask(taskID)
+		if readErr != nil {
+			slog.Error("rest: board task: completion read failed", "id", taskID, "error", readErr)
+			return
+		}
+		if t.Status != "active" {
+			// Task was modified externally (e.g. user retried) — don't overwrite.
+			return
+		}
+		if execErr != nil {
+			t.Status = "failed"
+			t.Result = execErr.Error()
+		} else {
+			t.Status = "done"
+		}
+		t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		if writeErr := a.writeBoardTask(t); writeErr != nil {
+			slog.Error("rest: board task: completion update failed", "id", taskID, "error", writeErr)
+		}
+	})
 
 	jsonAccepted(w, toWireBoardTask(existing))
 }

@@ -6,6 +6,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -45,6 +46,27 @@ func createBoardTaskViaAPI(t *testing.T, api *restAPI, name, status string) gen.
 		"create board task must return 201; body=%s",
 		w.Body.String(),
 	)
+	var task gen.BoardTask
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &task))
+	require.NotEmpty(t, task.Id)
+	return task
+}
+
+// createBoardTaskWithPromptViaAPI creates a task with a name, status, and a non-empty prompt.
+// Use this helper for /start tests that require a prompt to dispatch the agent.
+func createBoardTaskWithPromptViaAPI(t *testing.T, api *restAPI, name, status, prompt string) gen.BoardTask {
+	t.Helper()
+	var statusField string
+	if status != "" {
+		statusField = fmt.Sprintf(`,"status":%q`, status)
+	}
+	body := fmt.Sprintf(`{"name":%q%s,"prompt":%q}`, name, statusField, prompt)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(w, r)
+	require.Equal(t, http.StatusCreated, w.Code, "create board task must return 201; body=%s", w.Body.String())
 	var task gen.BoardTask
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &task))
 	require.NotEmpty(t, task.Id)
@@ -1101,7 +1123,7 @@ func postBoardTaskStart(t *testing.T, api *restAPI, taskID string) *httptest.Res
 func TestHandleBoardTasks_Start(t *testing.T) {
 	t.Run("happy path 202", func(t *testing.T) {
 		api := newTestRestAPIWithAgent(t)
-		task := createBoardTaskViaAPI(t, api, "StartHappyTask", "inbox")
+		task := createBoardTaskWithPromptViaAPI(t, api, "StartHappyTask", "inbox", "Run startup checks")
 
 		w := postBoardTaskStart(t, api, task.Id)
 		require.Equal(
@@ -1147,7 +1169,7 @@ func TestHandleBoardTasks_Start(t *testing.T) {
 
 	t.Run("409 already active", func(t *testing.T) {
 		api := newTestRestAPIWithAgent(t)
-		task := createBoardTaskViaAPI(t, api, "DoubleStartTask", "inbox")
+		task := createBoardTaskWithPromptViaAPI(t, api, "DoubleStartTask", "inbox", "Run the test suite")
 
 		// First start → 202.
 		w1 := postBoardTaskStart(t, api, task.Id)
@@ -1232,8 +1254,8 @@ func TestHandleBoardTasks_Start(t *testing.T) {
 
 	t.Run("session uniqueness", func(t *testing.T) {
 		api := newTestRestAPIWithAgent(t)
-		task1 := createBoardTaskViaAPI(t, api, "UniqueSession1", "inbox")
-		task2 := createBoardTaskViaAPI(t, api, "UniqueSession2", "inbox")
+		task1 := createBoardTaskWithPromptViaAPI(t, api, "UniqueSession1", "inbox", "Run task one")
+		task2 := createBoardTaskWithPromptViaAPI(t, api, "UniqueSession2", "inbox", "Run task two")
 
 		w1 := postBoardTaskStart(t, api, task1.Id)
 		require.Equal(
@@ -1322,6 +1344,57 @@ func TestHandleBoardTasks_Start(t *testing.T) {
 		require.NotEmpty(t, entries, "expected user-turn transcript entry after /start with non-empty prompt")
 		assert.Equal(t, "user", entries[0].Role, "first transcript entry must have role=user")
 		assert.NotEmpty(t, entries[0].Content, "user transcript entry must have non-empty content")
+	})
+
+	// Scenario 8 — 422 when task has no prompt or description: dispatching a task
+	// with nothing to execute would leave it stuck in "active" forever.
+	t.Run("422 no prompt or description", func(t *testing.T) {
+		api := newTestRestAPIWithAgent(t)
+
+		// Create a task with only a name — no prompt, no description.
+		wCreate := httptest.NewRecorder()
+		rCreate := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks",
+			strings.NewReader(`{"name":"NopromptTask","status":"inbox"}`))
+		rCreate.Header.Set("Content-Type", "application/json")
+		rCreate.URL.Path = "/api/v1/board/tasks"
+		api.HandleBoardTasks(wCreate, rCreate)
+		require.Equal(t, http.StatusCreated, wCreate.Code, "create must return 201; body=%s", wCreate.Body.String())
+		var task gen.BoardTask
+		require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &task))
+
+		wStart := postBoardTaskStart(t, api, task.Id)
+		assert.Equal(t, http.StatusUnprocessableEntity, wStart.Code,
+			"POST /start on task with no prompt must return 422; body=%s", wStart.Body.String())
+	})
+
+	// Scenario 9 — 403 clearing session_id on an active task without agent context:
+	// prevents UI from orphaning a live agent session.
+	t.Run("403 clear session_id on active task", func(t *testing.T) {
+		api := newTestRestAPIWithAgent(t)
+
+		// Create a task with a prompt so /start succeeds.
+		wCreate := httptest.NewRecorder()
+		rCreate := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks",
+			strings.NewReader(`{"name":"ActiveSessionTask","prompt":"Do something"}`))
+		rCreate.Header.Set("Content-Type", "application/json")
+		rCreate.URL.Path = "/api/v1/board/tasks"
+		api.HandleBoardTasks(wCreate, rCreate)
+		require.Equal(t, http.StatusCreated, wCreate.Code)
+		var task gen.BoardTask
+		require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &task))
+
+		wStart := postBoardTaskStart(t, api, task.Id)
+		require.Equal(t, http.StatusAccepted, wStart.Code, "start must return 202; body=%s", wStart.Body.String())
+
+		// Attempt to clear session_id without agent-context header while task is active.
+		body, _ := json.Marshal(map[string]any{"session_id": ""})
+		wPut := httptest.NewRecorder()
+		rPut := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id, bytes.NewReader(body))
+		rPut.Header.Set("Content-Type", "application/json")
+		rPut.URL.Path = "/api/v1/board/tasks/" + task.Id
+		api.HandleBoardTasks(wPut, rPut)
+		assert.Equal(t, http.StatusForbidden, wPut.Code,
+			"clearing session_id on active task must return 403; body=%s", wPut.Body.String())
 	})
 }
 
