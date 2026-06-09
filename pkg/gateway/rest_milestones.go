@@ -41,7 +41,7 @@ type milestone struct { // not-wire-format: on-disk JSON cache; mapped to genera
 // milestoneWithProgress is a milestone plus computed task progress.
 // not-wire-format: local response shim that includes the computed progress field
 // (not stored on disk, computed at read time per FR-L2-010).
-type milestoneWithProgress struct { // not-wire-format: response shim with computed progress; maps to generated Milestone before wire
+type milestoneWithProgress struct { // not-wire-format: serialized directly to HTTP response; extends on-disk type with computed progress field
 	ID          string    `json:"id"`
 	ProjectID   string    `json:"project_id"`
 	Name        string    `json:"name"`
