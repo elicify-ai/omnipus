@@ -12,8 +12,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 )
 
@@ -30,6 +32,7 @@ var omnipusDirs = []dirEntry{
 	{"projects", 0o700},
 	{"sessions", 0o700},
 	{"tasks", 0o700},
+	{"workflow-tasks", 0o700},
 	{"pins", 0o700},
 	{"channels", 0o700},
 	{"skills", 0o700},
@@ -139,8 +142,108 @@ func Init(home string) error {
 		}
 	}
 
+	// One-time boot migration: move workflow task files out of tasks/ into workflow-tasks/.
+	migrateWorkflowTasks(home)
+
 	slog.Debug("datamodel: home directory initialized", "home", home)
 	return nil
+}
+
+// migrateWorkflowTasks is a one-time, idempotent boot migration that scans
+// ~/.omnipus/tasks/*.json and moves any workflow task files to
+// ~/.omnipus/workflow-tasks/. A workflow task is one that has a non-empty
+// "title" field OR has a workflow status (queued/assigned/running/completed).
+//
+// Classification rules:
+//   - workflow: title non-empty OR status ∈ {queued, assigned, running, completed}
+//   - GTD: name non-empty OR status ∈ GTD set → leave in place
+//   - ambiguous (neither): leave in tasks/, log WARN
+//
+// Files that have already been moved (target already exists) are skipped.
+// This function never deletes files — only os.Rename (atomic on same filesystem).
+// Non-fatal: any per-file error is logged at Warn; the overall migration continues.
+func migrateWorkflowTasks(home string) {
+	srcDir := filepath.Join(home, "tasks")
+	dstDir := filepath.Join(home, "workflow-tasks")
+
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return // nothing to migrate
+		}
+		slog.Warn("datamodel: migrate workflow-tasks: cannot read tasks dir", "error", err)
+		return
+	}
+
+	movedCount := 0
+	skippedGTD := 0
+	skippedAmbiguous := 0
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		srcPath := filepath.Join(srcDir, e.Name())
+		dstPath := filepath.Join(dstDir, e.Name())
+
+		// If the file already exists at the destination, skip (already migrated).
+		if _, statErr := os.Stat(dstPath); statErr == nil {
+			continue
+		}
+
+		data, readErr := os.ReadFile(srcPath)
+		if readErr != nil {
+			slog.Warn("datamodel: migrate workflow-tasks: cannot read file", "file", e.Name(), "error", readErr)
+			continue
+		}
+
+		// Parse just the discriminating fields.
+		var raw struct {
+			Name   string `json:"name"`
+			Title  string `json:"title"`
+			Status string `json:"status"`
+		}
+		if jsonErr := json.Unmarshal(data, &raw); jsonErr != nil {
+			slog.Warn("datamodel: migrate workflow-tasks: cannot parse file", "file", e.Name(), "error", jsonErr)
+			skippedAmbiguous++
+			continue
+		}
+
+		isWorkflow := raw.Title != "" || boardtask.WorkflowStatuses[raw.Status]
+		isGTD := raw.Name != "" || boardtask.IsGTDStatus(raw.Status)
+
+		switch {
+		case isWorkflow && !isGTD:
+			// Clearly a workflow task — move to workflow-tasks/.
+			if renameErr := os.Rename(srcPath, dstPath); renameErr != nil {
+				// os.Rename may fail across filesystems; fall back to copy+delete.
+				if copyErr := fileutil.WriteFileAtomic(dstPath, data, 0o600); copyErr != nil {
+					slog.Warn("datamodel: migrate workflow-tasks: copy failed", "file", e.Name(), "error", copyErr)
+					continue
+				}
+				if rmErr := os.Remove(srcPath); rmErr != nil {
+					slog.Warn("datamodel: migrate workflow-tasks: remove src after copy failed", "file", e.Name(), "error", rmErr)
+					// Keep the copy at dst; the original stays — we treat it as migrated.
+				}
+			}
+			movedCount++
+		case isGTD:
+			// Clearly (or conservatively) a GTD task — leave in place.
+			skippedGTD++
+		default:
+			// Ambiguous: neither name/title nor a known status — leave in place, warn.
+			slog.Warn("datamodel: migrate workflow-tasks: ambiguous file left in tasks/", "file", e.Name())
+			skippedAmbiguous++
+		}
+	}
+
+	if movedCount > 0 || skippedAmbiguous > 0 {
+		slog.Info("datamodel: migrate workflow-tasks complete",
+			"moved", movedCount,
+			"left_gtd", skippedGTD,
+			"left_ambiguous", skippedAmbiguous,
+		)
+	}
 }
 
 // InitAgentWorkspace creates the workspace directory tree for an agent.

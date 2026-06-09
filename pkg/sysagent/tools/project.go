@@ -83,7 +83,7 @@ func sanitizeCoreTeam(raw []any) ([]string, error) {
 // workflow tasks (queued/assigned/running/completed/failed) are excluded.
 // Single-pass: called per-project only (list endpoint does its own single-pass; see computeTaskCounts).
 func computeTaskCount(home, projectID string) int {
-	tasks, err := listEntities[task](tasksDir(home))
+	tasks, err := listEntities[gtdTask](tasksDir(home))
 	if err != nil {
 		return 0
 	}
@@ -105,7 +105,7 @@ func computeTaskCount(home, projectID string) int {
 // Use this for list responses to avoid O(N×M) disk reads.
 func computeTaskCounts(home string) map[string]int {
 	counts := make(map[string]int)
-	tasks, err := listEntities[task](tasksDir(home))
+	tasks, err := listEntities[gtdTask](tasksDir(home))
 	if err != nil {
 		return counts
 	}
@@ -357,7 +357,7 @@ func (t *ProjectDeleteTool) Execute(_ context.Context, args map[string]any) *too
 	}
 
 	// Step 1: cascade-delete tasks
-	tasks, err := listEntities[task](tasksDir(t.deps.Home))
+	tasks, err := listEntities[gtdTask](tasksDir(t.deps.Home))
 	if err != nil {
 		slog.Error("sysagent: project cascade delete: failed to list tasks", "project_id", id, "error", err)
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", "could not list tasks for cascade delete: "+err.Error(), ""))

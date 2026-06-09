@@ -155,8 +155,9 @@ func scanGTDTasks(home string, fn func(id string, t boardTask)) error {
 
 // computeProjectTaskCounts returns a map[projectID]count by doing a single pass
 // over all task files in ~/.omnipus/tasks/. Used by list (O(N) for all projects).
-// Only GTD tasks (status ∈ {inbox,next,active,waiting,done,failed}) are counted; workflow
-// tasks from pkg/taskstore share the same directory and are excluded.
+// Only GTD tasks (status ∈ {inbox,next,active,waiting,done,failed}) are counted.
+// Workflow tasks live in ~/.omnipus/workflow-tasks/ (separate directory) and are
+// not present here after the boot migration in datamodel.Init.
 func computeProjectTaskCounts(home string) (map[string]int, error) {
 	counts := make(map[string]int)
 	if err := scanGTDTasks(home, func(_ string, t boardTask) {

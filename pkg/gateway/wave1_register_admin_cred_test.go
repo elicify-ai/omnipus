@@ -65,7 +65,7 @@ func newTestAPIWithHome(t *testing.T) (*restAPI, string) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 	return api, tmpDir
 }
@@ -105,7 +105,7 @@ func newTestAPIWithMasterKey(t *testing.T) (*restAPI, string, string) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 	return api, tmpDir, hexKey
 }
@@ -416,7 +416,7 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	w := httptest.NewRecorder()
@@ -724,7 +724,7 @@ func TestProviderGET_ResolvesAPIKeyRefFromCredStore(t *testing.T) {
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
-		taskStore:     taskstore.New(tmpDir + "/tasks"),
+		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
 	}
 
 	// Step 4: GET /api/v1/providers — must include openai as connected.

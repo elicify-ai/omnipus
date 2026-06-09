@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,7 +20,8 @@ import (
 // ErrNotFound is returned when a task ID does not exist on disk.
 var ErrNotFound = errors.New("task not found")
 
-// TaskEntity is the persistent shape for one task stored at ~/.omnipus/tasks/<id>.json.
+// TaskEntity is the persistent shape for one workflow task stored at
+// ~/.omnipus/workflow-tasks/<id>.json.
 type TaskEntity struct {
 	ID            string     `json:"id"`
 	Title         string     `json:"title"`
@@ -42,28 +42,26 @@ type TaskEntity struct {
 	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 }
 
-// legacyRaw is used only to detect and migrate old GTD-format task files.
-type legacyRaw struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	Status      string    `json:"status"`
-	AgentID     string    `json:"agent_id,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-
-	// New fields — may be zero in old files.
+// workflowRaw is a superset of TaskEntity used to parse files from the
+// workflow-tasks directory.  Extra fields (e.g. "name" from a mistakenly
+// placed GTD file) are silently ignored via omitempty — the load function
+// validates that the result is actually a workflow task before returning it.
+type workflowRaw struct {
+	ID            string     `json:"id"`
 	Title         string     `json:"title,omitempty"`
 	Prompt        string     `json:"prompt,omitempty"`
+	AgentID       string     `json:"agent_id,omitempty"`
 	CreatedBy     string     `json:"created_by,omitempty"`
 	ParentTaskID  string     `json:"parent_task_id,omitempty"`
 	Priority      int        `json:"priority,omitempty"`
+	Status        string     `json:"status"`
 	Result        string     `json:"result,omitempty"`
 	Artifacts     []string   `json:"artifacts,omitempty"`
 	SessionID     string     `json:"session_id,omitempty"`
 	TriggerType   string     `json:"trigger_type,omitempty"`
 	SourceChannel string     `json:"source_channel,omitempty"`
 	SourceChatID  string     `json:"source_chat_id,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
 	StartedAt     *time.Time `json:"started_at,omitempty"`
 	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 }
@@ -97,7 +95,9 @@ type TaskStore struct {
 	mu  sync.Mutex
 }
 
-// New creates a TaskStore rooted at dir (e.g. ~/.omnipus/tasks).
+// New creates a TaskStore rooted at dir.
+// The canonical workflow-task directory is ~/.omnipus/workflow-tasks/;
+// callers should pass that path rather than the GTD tasks/ directory.
 func New(dir string) *TaskStore {
 	return &TaskStore{dir: dir}
 }
@@ -118,7 +118,10 @@ func (s *TaskStore) path(id string) string {
 	return filepath.Join(s.dir, id+".json")
 }
 
-// load reads and (if needed) lazily migrates a task file.
+// load reads a workflow task file.  It never rewrites the file on read.
+// Files that do not parse as a valid TaskEntity (e.g. a GTD task accidentally
+// placed in the workflow-tasks directory) are skipped by returning ErrNotFound
+// so callers can log a warning and move on without corrupting GTD data.
 func (s *TaskStore) load(id string) (*TaskEntity, error) {
 	data, err := os.ReadFile(s.path(id))
 	if err != nil {
@@ -128,82 +131,53 @@ func (s *TaskStore) load(id string) (*TaskEntity, error) {
 		return nil, fmt.Errorf("taskstore: read %q: %w", id, err)
 	}
 
-	var raw legacyRaw
+	var raw workflowRaw
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("taskstore: parse %q: %w", id, err)
 	}
 
-	// If the file already uses the new format (has Title), return as-is.
-	if raw.Title != "" || raw.Name == "" {
-		t := &TaskEntity{
-			ID:            raw.ID,
-			Title:         raw.Title,
-			Prompt:        raw.Prompt,
-			AgentID:       raw.AgentID,
-			CreatedBy:     raw.CreatedBy,
-			ParentTaskID:  raw.ParentTaskID,
-			Priority:      raw.Priority,
-			Status:        raw.Status,
-			Result:        raw.Result,
-			Artifacts:     raw.Artifacts,
-			SessionID:     raw.SessionID,
-			TriggerType:   raw.TriggerType,
-			SourceChannel: raw.SourceChannel,
-			SourceChatID:  raw.SourceChatID,
-			CreatedAt:     raw.CreatedAt,
-			StartedAt:     raw.StartedAt,
-			CompletedAt:   raw.CompletedAt,
-		}
-		if t.Priority == 0 {
-			t.Priority = 3
-		}
-		if t.TriggerType == "" {
-			t.TriggerType = "manual"
-		}
-		if t.CreatedBy == "" {
-			t.CreatedBy = "user"
-		}
-		return t, nil
+	// A valid workflow file must have a non-empty Title and a workflow status.
+	// Files that look like GTD tasks (have no Title, or have a GTD status) are
+	// not owned by this store — skip them rather than mutating them.
+	if raw.Title == "" {
+		return nil, fmt.Errorf("taskstore: %w: file %q has no title field (not a workflow task)", ErrNotFound, id)
+	}
+	if !validStatuses[raw.Status] {
+		return nil, fmt.Errorf("taskstore: %w: file %q has non-workflow status %q", ErrNotFound, id, raw.Status)
 	}
 
-	// Lazy migration from GTD format.
 	t := &TaskEntity{
-		ID:          raw.ID,
-		Title:       raw.Name,
-		Prompt:      raw.Description,
-		AgentID:     raw.AgentID,
-		CreatedBy:   "user",
-		Priority:    3,
-		TriggerType: "manual",
-		CreatedAt:   raw.CreatedAt,
-		// Preserve new-format fields that may be present even in legacy files.
+		ID:            raw.ID,
+		Title:         raw.Title,
+		Prompt:        raw.Prompt,
+		AgentID:       raw.AgentID,
+		CreatedBy:     raw.CreatedBy,
+		ParentTaskID:  raw.ParentTaskID,
+		Priority:      raw.Priority,
+		Status:        raw.Status,
 		Result:        raw.Result,
 		Artifacts:     raw.Artifacts,
 		SessionID:     raw.SessionID,
+		TriggerType:   raw.TriggerType,
 		SourceChannel: raw.SourceChannel,
 		SourceChatID:  raw.SourceChatID,
+		CreatedAt:     raw.CreatedAt,
 		StartedAt:     raw.StartedAt,
 		CompletedAt:   raw.CompletedAt,
 	}
-	// Migrate GTD statuses to execution statuses.
-	switch raw.Status {
-	case "inbox", "next", "waiting":
-		t.Status = "queued"
-	case "active":
-		t.Status = "running"
-	case "done":
-		t.Status = "completed"
-	default:
-		t.Status = "queued"
+	if t.Priority == 0 {
+		t.Priority = 3
 	}
-	// Persist the migrated entity (best-effort; non-fatal if the write fails).
-	if werr := s.write(t); werr != nil {
-		slog.Warn("taskstore: lazy migration write failed", "id", t.ID, "error", werr)
+	if t.TriggerType == "" {
+		t.TriggerType = "manual"
+	}
+	if t.CreatedBy == "" {
+		t.CreatedBy = "user"
 	}
 	return t, nil
 }
 
-// write persists a TaskEntity atomically.
+// write persists a TaskEntity atomically with an advisory flock.
 func (s *TaskStore) write(t *TaskEntity) error {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return fmt.Errorf("taskstore: create dir: %w", err)
@@ -212,7 +186,10 @@ func (s *TaskStore) write(t *TaskEntity) error {
 	if err != nil {
 		return fmt.Errorf("taskstore: marshal %q: %w", t.ID, err)
 	}
-	return fileutil.WriteFileAtomic(s.path(t.ID), data, 0o600)
+	p := s.path(t.ID)
+	return fileutil.WithFlock(p, func() error {
+		return fileutil.WriteFileAtomic(p, data, 0o600)
+	})
 }
 
 // List returns all tasks matching filter, sorted by priority ASC then created_at ASC.

@@ -137,7 +137,7 @@ func TestRefreshConfigAfterSave_PreservesRedaction(t *testing.T) {
 		homePath:      tmpDir,
 		allowedOrigin: "http://localhost:3000",
 		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     taskstore.New(filepath.Join(tmpDir, "tasks")),
+		taskStore:     taskstore.New(filepath.Join(tmpDir, "workflow-tasks")),
 		credStore:     credStore,
 	}
 

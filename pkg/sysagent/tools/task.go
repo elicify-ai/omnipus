@@ -8,30 +8,25 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
-type task struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Status      string `json:"status"`
-	ProjectID   string `json:"project_id,omitempty"`
-	AgentID     string `json:"agent_id,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
-}
+// gtdTask is the canonical on-disk GTD task type used by the sysagent tools.
+// Using boardtask.Task ensures field-preserving read-modify-write: all fields
+// survive a round-trip through readEntity/writeEntity, including prompt,
+// priority, milestone_id, session_id, result, and owner.
+type gtdTask = boardtask.Task
 
 func tasksDir(home string) string { return filepath.Join(home, "tasks") }
 
 // gtdStatusSet is the set of valid GTD task statuses.
 // Used to exclude workflow/taskstore tasks from agent-visible task lists.
-var gtdStatusSet = map[string]bool{
-	"inbox": true, "next": true, "active": true, "waiting": true, "done": true, "failed": true,
-}
+var gtdStatusSet = boardtask.GTDStatuses
 
 // ---- system.task.create ----
 
@@ -68,12 +63,13 @@ func (t *TaskCreateTool) Execute(_ context.Context, args map[string]any) *tools.
 		status = v
 	}
 	id := ulid.Make().String()
-	tk := task{
+	now := time.Now().UTC().Format(time.RFC3339)
+	tk := gtdTask{
 		ID:        id,
 		Name:      name,
 		Status:    status,
-		CreatedAt: nowISO(),
-		UpdatedAt: nowISO(),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	if v, ok := args["description"].(string); ok {
 		tk.Description = v
@@ -130,7 +126,10 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
-	var tk task
+	// Field-preserving read: load the FULL on-disk struct so no fields are lost.
+	// The old code used the minimal 8-field `task` struct, which dropped prompt,
+	// priority, milestone_id, session_id, result, and owner on every write.
+	var tk gtdTask
 	if err := readEntity(tasksDir(t.deps.Home), id, &tk); err != nil {
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
 			"Use system.task.list to see available tasks"))
@@ -152,7 +151,10 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 		tk.Status = v
 		updated = append(updated, "status")
 	}
-	if v, ok := args["agent_id"].(string); ok {
+	// Only overwrite agent_id when the caller explicitly provides a non-empty value.
+	// An empty string in args["agent_id"] is ignored to avoid clobbering the existing
+	// assignment (mirrors how "name" is guarded above).
+	if v, ok := args["agent_id"].(string); ok && v != "" {
 		tk.AgentID = v
 		updated = append(updated, "agent_id")
 	}
@@ -168,7 +170,7 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 		tk.ProjectID = v
 		updated = append(updated, "project_id")
 	}
-	tk.UpdatedAt = nowISO()
+	tk.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := writeEntity(tasksDir(t.deps.Home), id, tk); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
@@ -207,7 +209,7 @@ func (t *TaskDeleteTool) Execute(_ context.Context, args map[string]any) *tools.
 		return tools.ErrorResult(errorJSON("CONFIRMATION_REQUIRED",
 			"confirm must be true to delete a task", ""))
 	}
-	var tk task
+	var tk gtdTask
 	if err := readEntity(tasksDir(t.deps.Home), id, &tk); err != nil {
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
 			"Use system.task.list to see available tasks"))
@@ -246,7 +248,7 @@ func (t *TaskListTool) Parameters() map[string]any {
 }
 
 func (t *TaskListTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	all, err := listEntities[task](tasksDir(t.deps.Home))
+	all, err := listEntities[gtdTask](tasksDir(t.deps.Home))
 	if err != nil {
 		return tools.ErrorResult(errorJSON("LIST_FAILED", err.Error(), ""))
 	}
@@ -254,7 +256,7 @@ func (t *TaskListTool) Execute(_ context.Context, args map[string]any) *tools.To
 	agentFilter, _ := args["agent_id"].(string)
 	statusFilter, _ := args["status"].(string)
 
-	var filtered []task
+	var filtered []gtdTask
 	for _, tk := range all {
 		if !gtdStatusSet[tk.Status] {
 			continue

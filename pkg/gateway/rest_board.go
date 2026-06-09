@@ -22,41 +22,23 @@ import (
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/session"
 )
 
-// boardTask mirrors the on-disk format of ~/.omnipus/tasks/{id}.json for GTD tasks.
-type boardTask struct { // not-wire-format: internal disk-cache struct, never emitted directly over the wire
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Prompt      string `json:"prompt,omitempty"`       // Agent execution instruction (multiline markdown); max 10000 chars
-	Priority    int    `json:"priority,omitempty"`     // 1 (critical) – 5 (low); 0 = unset (treated as 3 on read)
-	MilestoneID string `json:"milestone_id,omitempty"` // optional FK to milestone in same project
-	SessionID   string `json:"session_id,omitempty"`   // set by system when agent starts; links to chat session
-	Result      string `json:"result,omitempty"`       // execution output; set on done/failed
-	Status      string `json:"status"`
-	ProjectID   string `json:"project_id,omitempty"`
-	AgentID     string `json:"agent_id,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
-}
+// boardTask is the canonical on-disk GTD task type, re-exported from pkg/boardtask
+// so gateway code can use the short name without fully qualifying every reference.
+// not-wire-format: mapped to gen.BoardTask at the REST layer.
+type boardTask = boardtask.Task
 
 // gtdStatuses is the set of valid GTD task status values.
 // Workflow tasks (pkg/taskstore) use queued/assigned/running/completed/failed — never these.
-var gtdStatuses = map[string]bool{
-	"inbox":   true,
-	"next":    true,
-	"active":  true,
-	"waiting": true,
-	"done":    true,
-	"failed":  true,
-}
+var gtdStatuses = boardtask.GTDStatuses
 
 // isGTDTask returns true when status is a known GTD status value.
 func isGTDTask(status string) bool {
-	return gtdStatuses[status]
+	return boardtask.IsGTDStatus(status)
 }
 
 // boardTasksDir returns the absolute path of ~/.omnipus/tasks/.
@@ -201,6 +183,12 @@ func toWireBoardTask(t boardTask) gen.BoardTask {
 		updatedAt = time.Now().UTC()
 	}
 
+	var owner *string
+	if t.Owner != "" {
+		o := t.Owner
+		owner = &o
+	}
+
 	return gen.BoardTask{
 		Id:          t.ID,
 		Name:        t.Name,
@@ -213,6 +201,7 @@ func toWireBoardTask(t boardTask) gen.BoardTask {
 		Status:      gen.BoardTaskStatus(t.Status),
 		ProjectId:   projectID,
 		AgentId:     agentID,
+		Owner:       owner,
 		CreatedAt:   createdAt,
 		UpdatedAt:   updatedAt,
 	}

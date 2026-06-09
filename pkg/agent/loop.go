@@ -416,9 +416,9 @@ func NewAgentLoop(
 	al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(al.hooks, cfg)
 
-	// Initialize task store (sibling of workspace: ~/.omnipus/tasks).
+	// Initialize task store at ~/.omnipus/workflow-tasks/ (separate from GTD tasks/).
 	homePath := filepath.Dir(cfg.WorkspacePath())
-	al.taskStore = taskstore.New(filepath.Join(homePath, "tasks"))
+	al.taskStore = taskstore.New(filepath.Join(homePath, "workflow-tasks"))
 	al.taskExecutor = newTaskExecutor(al, al.taskStore)
 
 	// Register project session linker: auto-links sessions to projects on task create/update.
