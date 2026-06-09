@@ -1396,6 +1396,39 @@ func TestHandleBoardTasks_Start(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, wPut.Code,
 			"clearing session_id on active task must return 403; body=%s", wPut.Body.String())
 	})
+
+	// Scenario 10 — session_id clear on a non-active task (e.g. failed) is allowed
+	// without agent context: this is the doRetry path the UI exercises.
+	t.Run("clear session_id on failed task succeeds without agent context", func(t *testing.T) {
+		api := newTestRestAPIWithAgent(t)
+		task := createBoardTaskWithPromptViaAPI(t, api, "FailedRetryTask", "inbox", "Do work")
+
+		// Set status to failed (simulate completed failure) via agent-context PUT.
+		statusFailed := "failed"
+		sessionVal := "some-session-id"
+		failBody, _ := json.Marshal(map[string]any{"status": statusFailed, "session_id": sessionVal})
+		wFail := httptest.NewRecorder()
+		rFail := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id, bytes.NewReader(failBody))
+		rFail.Header.Set("Content-Type", "application/json")
+		rFail.Header.Set("X-Omnipus-Agent-Context", "true")
+		rFail.URL.Path = "/api/v1/board/tasks/" + task.Id
+		api.HandleBoardTasks(wFail, rFail)
+		require.Equal(t, http.StatusOK, wFail.Code, "set failed status must succeed; body=%s", wFail.Body.String())
+
+		// Now clear session_id without agent-context — must be allowed (doRetry path).
+		clearBody, _ := json.Marshal(map[string]any{"session_id": "", "status": "next"})
+		wClear := httptest.NewRecorder()
+		rClear := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id, bytes.NewReader(clearBody))
+		rClear.Header.Set("Content-Type", "application/json")
+		rClear.URL.Path = "/api/v1/board/tasks/" + task.Id
+		api.HandleBoardTasks(wClear, rClear)
+		assert.Equal(t, http.StatusOK, wClear.Code,
+			"clearing session_id on failed task must return 200; body=%s", wClear.Body.String())
+		var updated gen.BoardTask
+		require.NoError(t, json.Unmarshal(wClear.Body.Bytes(), &updated))
+		assert.Equal(t, gen.BoardTaskStatus("next"), updated.Status)
+		assert.Nil(t, updated.SessionId, "session_id must be cleared")
+	})
 }
 
 // TestEnsureInboxProject verifies the ensureInboxProject function is idempotent and
