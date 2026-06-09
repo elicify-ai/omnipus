@@ -385,6 +385,38 @@ describe('fetchBoardTasks', () => {
     expect(url).not.toContain('project_id=')
     expect(result).toEqual([])
   })
+
+  it('fetchBoardTasks includes project_id in query string when provided', async () => {
+    // BDD: Given fetchBoardTasks({ project_id: 'proj-abc' }) is called,
+    // When the API request is made,
+    // Then the URL contains 'project_id=proj-abc',
+    // And the URL does NOT contain 'status='.
+    // Traces to: project-task-management-level1-spec.md — TC-002 fetchBoardTasks project_id filter
+    const payload = {
+      items: [
+        { id: 't-proj-1', name: 'Project task', status: 'inbox', created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
+      ],
+      total: 1,
+    }
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse(payload))
+
+    const { fetchBoardTasks } = await import('./api')
+    const result = await fetchBoardTasks({ project_id: 'proj-abc' })
+
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
+
+    // Must include the project_id filter.
+    expect(url).toContain('project_id=proj-abc')
+
+    // Must NOT include a status filter (none was requested).
+    expect(url).not.toContain('status=')
+
+    // Result is the items array from the response.
+    expect(result).toHaveLength(1)
+    expect(result[0].id).toBe('t-proj-1')
+    expect(result[0].name).toBe('Project task')
+  })
 })
 
 // ── createBoardTask ───────────────────────────────────────────────────────────
