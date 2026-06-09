@@ -221,6 +221,64 @@ func TestHandleTokenStats_MultiAgent(t *testing.T) {
 	assert.Equal(t, 80, beta.TokensOut, "agent-beta tokens_out must be 80")
 }
 
+// TestHandleTokenStats_ExcludesOutOfPeriodSessions verifies that sessions outside the
+// current month are excluded from the token stats response.
+// BDD: Given a session from the current month (agent-1, tokens_in=100, tokens_out=50)
+// and a session from the prior month (agent-2, tokens_in=999, tokens_out=999),
+// When GET /api/v1/stats/tokens?period=month is called,
+// Then 200 with agents array of length 1 (only agent-1), tokens_in=100, tokens_out=50.
+// Traces to: project-task-management-level1-spec.md — TST-003 (period filter exclusion)
+func TestHandleTokenStats_ExcludesOutOfPeriodSessions(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// Step 1: Write a session meta file with updated_at in the current month (in-period).
+	inPeriod := time.Now().UTC()
+	writeTestSessionMeta(t, api.homePath, "sess-inperiod-001", "agent-1", 100, 50, inPeriod)
+
+	// Step 2: Write another session meta file with updated_at in the prior month (out-of-period).
+	outOfPeriod := time.Now().AddDate(0, -1, 0).UTC()
+	writeTestSessionMeta(t, api.homePath, "sess-outofperiod-002", "agent-2", 999, 999, outOfPeriod)
+
+	// Step 3: Call GET /api/v1/stats/tokens?period=month.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/stats/tokens?period=month", nil)
+	r.URL.RawQuery = "period=month"
+	api.HandleTokenStats(w, r)
+
+	// Step 4: Assert response status 200.
+	require.Equal(t, http.StatusOK, w.Code,
+		"GET /stats/tokens?period=month must return 200; body=%s", w.Body.String())
+
+	var resp struct {
+		Agents []struct {
+			AgentID   string `json:"agent_id"`
+			TokensIn  int    `json:"tokens_in"`
+			TokensOut int    `json:"tokens_out"`
+		} `json:"agents"`
+		TotalTokensIn  int `json:"total_tokens_in"`
+		TotalTokensOut int `json:"total_tokens_out"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	// Step 5: Assert the agents array has exactly 1 entry (for agent-1, not agent-2).
+	require.Len(t, resp.Agents, 1,
+		"agents must contain exactly 1 entry (out-of-period session must be excluded); body=%s", w.Body.String())
+	assert.Equal(t, "agent-1", resp.Agents[0].AgentID,
+		"only the in-period session's agent must appear; body=%s", w.Body.String())
+
+	// Step 6: Assert tokens_in=100, tokens_out=50 (only in-period values).
+	assert.Equal(t, 100, resp.Agents[0].TokensIn,
+		"tokens_in must be 100 (only in-period session counted); body=%s", w.Body.String())
+	assert.Equal(t, 50, resp.Agents[0].TokensOut,
+		"tokens_out must be 50 (only in-period session counted); body=%s", w.Body.String())
+
+	// Differentiation test: assert agent-2 is NOT present (not just empty array).
+	for _, a := range resp.Agents {
+		assert.NotEqual(t, "agent-2", a.AgentID,
+			"agent-2 (out-of-period) must not appear in stats response")
+	}
+}
+
 // TestHandleTokenStats_StatusValidation verifies period parameter validation:
 // no period defaults to month (200), and period=week returns 400.
 // BDD: Given GET /api/v1/stats/tokens with no period,

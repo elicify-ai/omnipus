@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -504,4 +505,76 @@ func TestHandleProjects_CascadeDelete_TasksAndLinksGone(t *testing.T) {
 	api.HandleProjects(wGet, rGet)
 	assert.Equal(t, http.StatusNotFound, wGet.Code,
 		"GET /projects/{id} after delete must return 404; body=%s", wGet.Body.String())
+}
+
+// TestHandleProjects_ConcurrentDelete verifies that two simultaneous DELETE requests
+// for the same project do not produce a 500 — each returns either 204 or 404.
+// BDD: Given an existing project P and a board task T linked to P,
+// When two goroutines simultaneously DELETE /api/v1/projects/{P},
+// Then both respond with 204 or 404 (never 500) and the project file is absent afterward.
+// Traces to: project-task-management-level1-spec.md — TST-001 (concurrent delete safety)
+func TestHandleProjects_ConcurrentDelete(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// Step 1: Create a project via POST /api/v1/projects.
+	projID := createProjectViaAPI(t, api, "ConcurrentDeleteProject", "concurrent delete test")
+
+	// Step 2: Create a board task linked to the project via POST /api/v1/board/tasks.
+	taskBody := fmt.Sprintf(`{"name":"ConcurrentTask","project_id":%q}`, projID)
+	wTask := httptest.NewRecorder()
+	rTask := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(taskBody))
+	rTask.Header.Set("Content-Type", "application/json")
+	rTask.URL.Path = "/api/v1/board/tasks"
+	api.HandleBoardTasks(wTask, rTask)
+	require.Equal(t, http.StatusCreated, wTask.Code,
+		"create board task must return 201; body=%s", wTask.Body.String())
+
+	// Step 3: Launch 2 goroutines that simultaneously DELETE the project.
+	type result struct {
+		code int
+		body string
+	}
+	results := make([]result, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	for i := 0; i < 2; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodDelete, "/api/v1/projects/"+projID, nil)
+			r.URL.Path = "/api/v1/projects/" + projID
+			api.HandleProjects(w, r)
+			results[i] = result{code: w.Code, body: w.Body.String()}
+		}()
+	}
+
+	// Step 4: Wait for both goroutines to finish.
+	wg.Wait()
+
+	// Step 5: Assert both responses had status 204 or 404 (never 500).
+	for i, res := range results {
+		assert.True(t,
+			res.code == http.StatusNoContent || res.code == http.StatusNotFound,
+			"goroutine %d: concurrent DELETE must return 204 or 404, got %d; body=%s",
+			i, res.code, res.body,
+		)
+		assert.NotEqual(t, http.StatusInternalServerError, res.code,
+			"goroutine %d: concurrent DELETE must never return 500; body=%s", i, res.body)
+	}
+
+	// Step 6: Assert the project file is gone after both deletes.
+	projectPath := filepath.Join(api.homePath, "projects", projID+".json")
+	_, statErr := os.Stat(projectPath)
+	assert.True(t, os.IsNotExist(statErr),
+		"project file must not exist after concurrent deletes; path=%s, err=%v", projectPath, statErr)
+
+	// Verify the project is truly gone by trying to GET it.
+	wGet := httptest.NewRecorder()
+	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+projID, nil)
+	rGet.URL.Path = "/api/v1/projects/" + projID
+	api.HandleProjects(wGet, rGet)
+	assert.Equal(t, http.StatusNotFound, wGet.Code,
+		"GET /projects/{id} after concurrent delete must return 404; body=%s", wGet.Body.String())
 }
