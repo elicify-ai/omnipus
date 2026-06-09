@@ -157,9 +157,13 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
       if (!task) return Promise.reject(new Error('No task selected'))
       return startBoardTask(task.id)
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
-      addToast({ message: 'Task started.', variant: 'success' })
+      if (data.session_id) {
+        void navigate({ to: '/sessions/$sessionId', params: { sessionId: data.session_id } })
+      } else {
+        addToast({ message: 'Task started.', variant: 'success' })
+      }
     },
     onError: (err: unknown) =>
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to start task', variant: 'error' }),
@@ -168,7 +172,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
   const { mutate: doRetry, isPending: isRetrying } = useMutation({
     mutationFn: () => {
       if (!task) return Promise.reject(new Error('No task selected'))
-      return updateBoardTask(task.id, { status: 'next' })
+      return updateBoardTask(task.id, { status: 'next', session_id: '' })
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
