@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { List, SquaresFour, Plus } from '@phosphor-icons/react'
+import { List, SquaresFour, Lightning, Plus } from '@phosphor-icons/react'
 import { ProjectHeader } from '@/components/projects/ProjectHeader'
 import { MilestoneFilterPills, MILESTONE_FILTER_UNSCHEDULED } from '@/components/projects/MilestoneFilterPills'
 import { BoardView } from '@/components/projects/BoardView'
 import { ListView } from '@/components/projects/ListView'
+import { ExecutionView } from '@/components/projects/ExecutionView'
 import { TaskDetailSlideOver } from '@/components/projects/TaskDetailSlideOver'
 import { CreateTaskSlideOver } from '@/components/projects/CreateTaskSlideOver'
 import { CreateMilestoneSlideOver } from '@/components/projects/CreateMilestoneSlideOver'
@@ -21,7 +22,7 @@ import type { BoardTask } from '@/lib/api'
 import { useProjectsStore } from '@/store/projectsStore'
 import { cn } from '@/lib/utils'
 
-type ViewMode = 'board' | 'list'
+type ViewMode = 'board' | 'list' | 'execution'
 
 interface ProjectDetailScreenProps {
   projectId: string
@@ -135,6 +136,14 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
             <List size={14} />
             <span>List</span>
           </ViewToggleButton>
+          <ViewToggleButton
+            active={viewMode === 'execution'}
+            onClick={() => setViewMode('execution')}
+            aria-label="Execution view"
+          >
+            <Lightning size={14} />
+            <span>Execution</span>
+          </ViewToggleButton>
         </div>
 
         <div className="flex-1" />
@@ -190,6 +199,12 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
           activeMilestoneId={activeMilestoneId}
           onTaskClick={(task) => setSelectedTask(task)}
           onNewTask={() => setCreateTaskOpen(true)}
+        />
+      ) : viewMode === 'execution' ? (
+        <ExecutionView
+          tasks={tasks}
+          milestones={milestones}
+          onTaskClick={(task) => setSelectedTask(task)}
         />
       ) : (
         <ListView
