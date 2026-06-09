@@ -30,6 +30,11 @@ type boardTask struct { // not-wire-format: internal disk-cache struct, never em
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
+	Prompt      string `json:"prompt,omitempty"`       // Agent execution instruction (multiline markdown); max 10000 chars
+	Priority    int    `json:"priority,omitempty"`     // 1 (critical) – 5 (low); 0 = unset (treated as 3 on read)
+	MilestoneID string `json:"milestone_id,omitempty"` // optional FK to milestone in same project
+	SessionID   string `json:"session_id,omitempty"`   // set by system when agent starts; links to chat session
+	Result      string `json:"result,omitempty"`       // execution output; set on done/failed
 	Status      string `json:"status"`
 	ProjectID   string `json:"project_id,omitempty"`
 	AgentID     string `json:"agent_id,omitempty"`
@@ -45,6 +50,7 @@ var gtdStatuses = map[string]bool{
 	"active":  true,
 	"waiting": true,
 	"done":    true,
+	"failed":  true,
 }
 
 // isGTDTask returns true when status is a known GTD status value.
@@ -139,6 +145,7 @@ func (a *restAPI) listBoardTasks() ([]boardTask, error) {
 }
 
 // toWireBoardTask converts the internal boardTask to the generated wire type.
+// priority defaults to 3 (FR-L2-007) when the on-disk value is 0 (absent in legacy files).
 func toWireBoardTask(t boardTask) gen.BoardTask {
 	var desc *string
 	if t.Description != "" {
@@ -154,6 +161,32 @@ func toWireBoardTask(t boardTask) gen.BoardTask {
 	if t.AgentID != "" {
 		ag := t.AgentID
 		agentID = &ag
+	}
+	var prompt *string
+	if t.Prompt != "" {
+		pr := t.Prompt
+		prompt = &pr
+	}
+	// priority defaults to 3 when absent in legacy files (value 0 on disk).
+	priority := t.Priority
+	if priority == 0 {
+		priority = 3
+	}
+	prio := priority
+	var milestoneID *string
+	if t.MilestoneID != "" {
+		m := t.MilestoneID
+		milestoneID = &m
+	}
+	var sessionID *string
+	if t.SessionID != "" {
+		s := t.SessionID
+		sessionID = &s
+	}
+	var result *string
+	if t.Result != "" {
+		r := t.Result
+		result = &r
 	}
 
 	createdAt, err := time.Parse(time.RFC3339, t.CreatedAt)
@@ -171,6 +204,11 @@ func toWireBoardTask(t boardTask) gen.BoardTask {
 		Id:          t.ID,
 		Name:        t.Name,
 		Description: desc,
+		Prompt:      prompt,
+		Priority:    &prio,
+		MilestoneId: milestoneID,
+		SessionId:   sessionID,
+		Result:      result,
 		Status:      gen.BoardTaskStatus(t.Status),
 		ProjectId:   projectID,
 		AgentId:     agentID,
@@ -183,6 +221,8 @@ func toWireBoardTask(t boardTask) gen.BoardTask {
 func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 	projectFilter := r.URL.Query().Get("project_id")
 	statusFilter := r.URL.Query().Get("status")
+	agentFilter := r.URL.Query().Get("agent_id")
+	milestoneFilter := r.URL.Query().Get("milestone_id")
 
 	// Parse limit (default 200, max 1000 per spec).
 	limit := 200
@@ -214,13 +254,19 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply project_id and status filters.
+	// Apply project_id, status, agent_id, milestone_id filters.
 	filtered := make([]boardTask, 0, len(all))
 	for _, t := range all {
 		if projectFilter != "" && t.ProjectID != projectFilter {
 			continue
 		}
 		if statusFilter != "" && t.Status != statusFilter {
+			continue
+		}
+		if agentFilter != "" && t.AgentID != agentFilter {
+			continue
+		}
+		if milestoneFilter != "" && t.MilestoneID != milestoneFilter {
 			continue
 		}
 		filtered = append(filtered, t)
@@ -254,8 +300,13 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		CreatedAt   time.Time                            `json:"created_at"`
 		Description *string                              `json:"description,omitempty"`
 		Id          string                               `json:"id"`
+		MilestoneId *string                              `json:"milestone_id,omitempty"`
 		Name        string                               `json:"name"`
+		Priority    *int                                 `json:"priority,omitempty"`
 		ProjectId   *string                              `json:"project_id,omitempty"`
+		Prompt      *string                              `json:"prompt,omitempty"`
+		Result      *string                              `json:"result,omitempty"`
+		SessionId   *string                              `json:"session_id,omitempty"`
 		Status      gen.BoardTaskListResponseItemsStatus `json:"status"`
 		UpdatedAt   time.Time                            `json:"updated_at"`
 	}
@@ -272,8 +323,13 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:   wt.CreatedAt,
 			Description: wt.Description,
 			Id:          wt.Id,
+			MilestoneId: wt.MilestoneId,
 			Name:        wt.Name,
+			Priority:    wt.Priority,
 			ProjectId:   wt.ProjectId,
+			Prompt:      wt.Prompt,
+			Result:      wt.Result,
+			SessionId:   wt.SessionId,
 			// t.Status is a validated GTD status string (readBoardTask/listBoardTasks
 			// reject non-GTD values); convert via the source string rather than an
 			// enum-to-enum cast.
@@ -327,7 +383,7 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 		status = string(*req.Status)
 	}
 	if !isGTDTask(status) {
-		jsonErr(w, http.StatusBadRequest, "status must be one of: inbox, next, active, waiting, done")
+		jsonErr(w, http.StatusBadRequest, "status must be one of: inbox, next, active, waiting, done, failed")
 		return
 	}
 
@@ -378,11 +434,45 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	prompt := ""
+	if req.Prompt != nil {
+		prompt = *req.Prompt
+		if len(prompt) > 10000 {
+			jsonErr(w, http.StatusBadRequest, "prompt must be 10000 characters or fewer")
+			return
+		}
+	}
+
+	// priority: default 3; validate 1–5 if supplied.
+	priority := 3
+	if req.Priority != nil {
+		priority = *req.Priority
+		if priority < 1 || priority > 5 {
+			jsonErr(w, http.StatusBadRequest, "priority must be between 1 and 5")
+			return
+		}
+	}
+
+	milestoneID := ""
+	if req.MilestoneId != nil {
+		milestoneID = *req.MilestoneId
+		if milestoneID != "" {
+			// Validate milestone FK: must exist and belong to the same project.
+			if err := validateMilestoneFK(a.homePath, milestoneID, projectID); err != nil {
+				jsonErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	t := boardTask{
 		ID:          ulid.Make().String(),
 		Name:        req.Name,
 		Description: description,
+		Prompt:      prompt,
+		Priority:    priority,
+		MilestoneID: milestoneID,
 		Status:      status,
 		ProjectID:   projectID,
 		AgentID:     agentID,
@@ -429,6 +519,9 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
+	// Check agent-context header — required for setting status=active or session_id.
+	isAgentContext := r.Header.Get("X-Omnipus-Agent-Context") == "true"
+
 	// Apply partial update (only provided non-nil fields).
 	if req.Name != nil {
 		if *req.Name == "" {
@@ -448,13 +541,44 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		}
 		existing.Description = *req.Description
 	}
+	if req.Prompt != nil {
+		if len(*req.Prompt) > 10000 {
+			jsonErr(w, http.StatusBadRequest, "prompt must be 10000 characters or fewer")
+			return
+		}
+		existing.Prompt = *req.Prompt
+	}
+	if req.Priority != nil {
+		if *req.Priority < 1 || *req.Priority > 5 {
+			jsonErr(w, http.StatusBadRequest, "priority must be between 1 and 5")
+			return
+		}
+		existing.Priority = *req.Priority
+	}
+	if req.Result != nil {
+		if len(*req.Result) > 50000 {
+			jsonErr(w, http.StatusBadRequest, "result must be 50000 characters or fewer")
+			return
+		}
+		existing.Result = *req.Result
+	}
 	if req.Status != nil {
 		newStatus := string(*req.Status)
 		if !isGTDTask(newStatus) {
-			jsonErr(w, http.StatusBadRequest, "status must be one of: inbox, next, active, waiting, done")
+			jsonErr(w, http.StatusBadRequest, "status must be one of: inbox, next, active, waiting, done, failed")
+			return
+		}
+		// active status can only be set by an agent (FR-L2-006).
+		if newStatus == "active" && !isAgentContext {
+			jsonErr(w, http.StatusBadRequest, "status 'active' can only be set by an agent")
 			return
 		}
 		existing.Status = newStatus
+	}
+	// session_id may only be set via an agent-context request (AW-3: excluded from
+	// BoardTaskUpdateRequest schema, but present in UpdateBoardTaskJSONBody for agent path).
+	if req.SessionId != nil && isAgentContext {
+		existing.SessionID = *req.SessionId
 	}
 	if req.ProjectId != nil {
 		if len(*req.ProjectId) > 50 {
@@ -476,6 +600,18 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 			}
 		}
 		existing.ProjectID = *req.ProjectId
+	}
+	if req.MilestoneId != nil {
+		milestoneID := *req.MilestoneId
+		if milestoneID != "" {
+			// Use the (possibly updated) project_id for FK validation.
+			effectiveProjectID := existing.ProjectID
+			if err := validateMilestoneFK(a.homePath, milestoneID, effectiveProjectID); err != nil {
+				jsonErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		existing.MilestoneID = milestoneID
 	}
 	if req.AgentId != nil {
 		agentID := *req.AgentId
@@ -579,4 +715,18 @@ func (a *restAPI) HandleBoardTasks(w http.ResponseWriter, r *http.Request) {
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// validateMilestoneFK validates that a milestone exists and belongs to the given project.
+// Returns a user-facing error string on failure (caller writes 400), nil on success.
+// If projectID is empty, only existence is checked (milestone_id on a task with no project).
+func validateMilestoneFK(homePath, milestoneID, projectID string) error {
+	m, err := readMilestoneFile(homePath, milestoneID)
+	if err != nil {
+		return errors.New("milestone not found")
+	}
+	if projectID != "" && m.ProjectID != projectID {
+		return errors.New("milestone does not belong to this project")
+	}
+	return nil
 }

@@ -533,6 +533,7 @@ func (e AuditEntryDecision) Valid() bool {
 const (
 	BoardTaskStatusActive  BoardTaskStatus = "active"
 	BoardTaskStatusDone    BoardTaskStatus = "done"
+	BoardTaskStatusFailed  BoardTaskStatus = "failed"
 	BoardTaskStatusInbox   BoardTaskStatus = "inbox"
 	BoardTaskStatusNext    BoardTaskStatus = "next"
 	BoardTaskStatusWaiting BoardTaskStatus = "waiting"
@@ -544,6 +545,8 @@ func (e BoardTaskStatus) Valid() bool {
 	case BoardTaskStatusActive:
 		return true
 	case BoardTaskStatusDone:
+		return true
+	case BoardTaskStatusFailed:
 		return true
 	case BoardTaskStatusInbox:
 		return true
@@ -560,6 +563,7 @@ func (e BoardTaskStatus) Valid() bool {
 const (
 	BoardTaskCreateRequestStatusActive  BoardTaskCreateRequestStatus = "active"
 	BoardTaskCreateRequestStatusDone    BoardTaskCreateRequestStatus = "done"
+	BoardTaskCreateRequestStatusFailed  BoardTaskCreateRequestStatus = "failed"
 	BoardTaskCreateRequestStatusInbox   BoardTaskCreateRequestStatus = "inbox"
 	BoardTaskCreateRequestStatusNext    BoardTaskCreateRequestStatus = "next"
 	BoardTaskCreateRequestStatusWaiting BoardTaskCreateRequestStatus = "waiting"
@@ -571,6 +575,8 @@ func (e BoardTaskCreateRequestStatus) Valid() bool {
 	case BoardTaskCreateRequestStatusActive:
 		return true
 	case BoardTaskCreateRequestStatusDone:
+		return true
+	case BoardTaskCreateRequestStatusFailed:
 		return true
 	case BoardTaskCreateRequestStatusInbox:
 		return true
@@ -587,6 +593,7 @@ func (e BoardTaskCreateRequestStatus) Valid() bool {
 const (
 	BoardTaskListResponseItemsStatusActive  BoardTaskListResponseItemsStatus = "active"
 	BoardTaskListResponseItemsStatusDone    BoardTaskListResponseItemsStatus = "done"
+	BoardTaskListResponseItemsStatusFailed  BoardTaskListResponseItemsStatus = "failed"
 	BoardTaskListResponseItemsStatusInbox   BoardTaskListResponseItemsStatus = "inbox"
 	BoardTaskListResponseItemsStatusNext    BoardTaskListResponseItemsStatus = "next"
 	BoardTaskListResponseItemsStatusWaiting BoardTaskListResponseItemsStatus = "waiting"
@@ -598,6 +605,8 @@ func (e BoardTaskListResponseItemsStatus) Valid() bool {
 	case BoardTaskListResponseItemsStatusActive:
 		return true
 	case BoardTaskListResponseItemsStatusDone:
+		return true
+	case BoardTaskListResponseItemsStatusFailed:
 		return true
 	case BoardTaskListResponseItemsStatusInbox:
 		return true
@@ -614,6 +623,7 @@ func (e BoardTaskListResponseItemsStatus) Valid() bool {
 const (
 	BoardTaskUpdateRequestStatusActive  BoardTaskUpdateRequestStatus = "active"
 	BoardTaskUpdateRequestStatusDone    BoardTaskUpdateRequestStatus = "done"
+	BoardTaskUpdateRequestStatusFailed  BoardTaskUpdateRequestStatus = "failed"
 	BoardTaskUpdateRequestStatusInbox   BoardTaskUpdateRequestStatus = "inbox"
 	BoardTaskUpdateRequestStatusNext    BoardTaskUpdateRequestStatus = "next"
 	BoardTaskUpdateRequestStatusWaiting BoardTaskUpdateRequestStatus = "waiting"
@@ -625,6 +635,8 @@ func (e BoardTaskUpdateRequestStatus) Valid() bool {
 	case BoardTaskUpdateRequestStatusActive:
 		return true
 	case BoardTaskUpdateRequestStatusDone:
+		return true
+	case BoardTaskUpdateRequestStatusFailed:
 		return true
 	case BoardTaskUpdateRequestStatusInbox:
 		return true
@@ -914,6 +926,7 @@ func (e DoctorResultIssuesSeverity) Valid() bool {
 const (
 	GTDBoardTaskStatusActive  GTDBoardTaskStatus = "active"
 	GTDBoardTaskStatusDone    GTDBoardTaskStatus = "done"
+	GTDBoardTaskStatusFailed  GTDBoardTaskStatus = "failed"
 	GTDBoardTaskStatusInbox   GTDBoardTaskStatus = "inbox"
 	GTDBoardTaskStatusNext    GTDBoardTaskStatus = "next"
 	GTDBoardTaskStatusWaiting GTDBoardTaskStatus = "waiting"
@@ -925,6 +938,8 @@ func (e GTDBoardTaskStatus) Valid() bool {
 	case GTDBoardTaskStatusActive:
 		return true
 	case GTDBoardTaskStatusDone:
+		return true
+	case GTDBoardTaskStatusFailed:
 		return true
 	case GTDBoardTaskStatusInbox:
 		return true
@@ -2711,6 +2726,7 @@ func (e ValidateTokenResponseRole) Valid() bool {
 const (
 	ListBoardTasksParamsStatusActive  ListBoardTasksParamsStatus = "active"
 	ListBoardTasksParamsStatusDone    ListBoardTasksParamsStatus = "done"
+	ListBoardTasksParamsStatusFailed  ListBoardTasksParamsStatus = "failed"
 	ListBoardTasksParamsStatusInbox   ListBoardTasksParamsStatus = "inbox"
 	ListBoardTasksParamsStatusNext    ListBoardTasksParamsStatus = "next"
 	ListBoardTasksParamsStatusWaiting ListBoardTasksParamsStatus = "waiting"
@@ -2722,6 +2738,8 @@ func (e ListBoardTasksParamsStatus) Valid() bool {
 	case ListBoardTasksParamsStatusActive:
 		return true
 	case ListBoardTasksParamsStatusDone:
+		return true
+	case ListBoardTasksParamsStatusFailed:
 		return true
 	case ListBoardTasksParamsStatusInbox:
 		return true
@@ -2738,6 +2756,7 @@ func (e ListBoardTasksParamsStatus) Valid() bool {
 const (
 	CreateBoardTaskJSONBodyStatusActive  CreateBoardTaskJSONBodyStatus = "active"
 	CreateBoardTaskJSONBodyStatusDone    CreateBoardTaskJSONBodyStatus = "done"
+	CreateBoardTaskJSONBodyStatusFailed  CreateBoardTaskJSONBodyStatus = "failed"
 	CreateBoardTaskJSONBodyStatusInbox   CreateBoardTaskJSONBodyStatus = "inbox"
 	CreateBoardTaskJSONBodyStatusNext    CreateBoardTaskJSONBodyStatus = "next"
 	CreateBoardTaskJSONBodyStatusWaiting CreateBoardTaskJSONBodyStatus = "waiting"
@@ -2749,6 +2768,8 @@ func (e CreateBoardTaskJSONBodyStatus) Valid() bool {
 	case CreateBoardTaskJSONBodyStatusActive:
 		return true
 	case CreateBoardTaskJSONBodyStatusDone:
+		return true
+	case CreateBoardTaskJSONBodyStatusFailed:
 		return true
 	case CreateBoardTaskJSONBodyStatusInbox:
 		return true
@@ -2765,6 +2786,7 @@ func (e CreateBoardTaskJSONBodyStatus) Valid() bool {
 const (
 	UpdateBoardTaskJSONBodyStatusActive  UpdateBoardTaskJSONBodyStatus = "active"
 	UpdateBoardTaskJSONBodyStatusDone    UpdateBoardTaskJSONBodyStatus = "done"
+	UpdateBoardTaskJSONBodyStatusFailed  UpdateBoardTaskJSONBodyStatus = "failed"
 	UpdateBoardTaskJSONBodyStatusInbox   UpdateBoardTaskJSONBodyStatus = "inbox"
 	UpdateBoardTaskJSONBodyStatusNext    UpdateBoardTaskJSONBodyStatus = "next"
 	UpdateBoardTaskJSONBodyStatusWaiting UpdateBoardTaskJSONBodyStatus = "waiting"
@@ -2776,6 +2798,8 @@ func (e UpdateBoardTaskJSONBodyStatus) Valid() bool {
 	case UpdateBoardTaskJSONBodyStatusActive:
 		return true
 	case UpdateBoardTaskJSONBodyStatusDone:
+		return true
+	case UpdateBoardTaskJSONBodyStatusFailed:
 		return true
 	case UpdateBoardTaskJSONBodyStatusInbox:
 		return true
@@ -3764,11 +3788,26 @@ type BoardTask struct {
 	// Id UUID task identifier
 	Id string `json:"id"`
 
+	// MilestoneId Optional milestone this task belongs to.
+	MilestoneId *string `json:"milestone_id,omitempty"`
+
 	// Name Task name.
 	Name string `json:"name"`
 
+	// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified.
+	Priority *int `json:"priority,omitempty"`
+
 	// ProjectId Optional project this task belongs to. Must be an existing project ID. If absent, task is unassigned.
 	ProjectId *string `json:"project_id,omitempty"`
+
+	// Prompt Optional agent prompt attached to the task.
+	Prompt *string `json:"prompt,omitempty"`
+
+	// Result Optional task result or output.
+	Result *string `json:"result,omitempty"`
+
+	// SessionId Optional session linked to this task.
+	SessionId *string `json:"session_id,omitempty"`
 
 	// Status GTD board task status.
 	Status    BoardTaskStatus `json:"status"`
@@ -3782,8 +3821,11 @@ type BoardTaskStatus string
 type BoardTaskCreateRequest struct {
 	AgentId     *string `json:"agent_id,omitempty"`
 	Description *string `json:"description,omitempty"`
+	MilestoneId *string `json:"milestone_id,omitempty"`
 	Name        string  `json:"name"`
+	Priority    *int    `json:"priority,omitempty"`
 	ProjectId   *string `json:"project_id,omitempty"`
+	Prompt      *string `json:"prompt,omitempty"`
 
 	// Status GTD board task status.
 	Status *BoardTaskCreateRequestStatus `json:"status,omitempty"`
@@ -3805,11 +3847,26 @@ type BoardTaskListResponse struct {
 		// Id UUID task identifier
 		Id string `json:"id"`
 
+		// MilestoneId Optional milestone this task belongs to.
+		MilestoneId *string `json:"milestone_id,omitempty"`
+
 		// Name Task name.
 		Name string `json:"name"`
 
+		// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified.
+		Priority *int `json:"priority,omitempty"`
+
 		// ProjectId Optional project this task belongs to. Must be an existing project ID. If absent, task is unassigned.
 		ProjectId *string `json:"project_id,omitempty"`
+
+		// Prompt Optional agent prompt attached to the task.
+		Prompt *string `json:"prompt,omitempty"`
+
+		// Result Optional task result or output.
+		Result *string `json:"result,omitempty"`
+
+		// SessionId Optional session linked to this task.
+		SessionId *string `json:"session_id,omitempty"`
 
 		// Status GTD board task status.
 		Status    BoardTaskListResponseItemsStatus `json:"status"`
@@ -3827,8 +3884,13 @@ type BoardTaskListResponseItemsStatus string
 type BoardTaskUpdateRequest struct {
 	AgentId     *string `json:"agent_id,omitempty"`
 	Description *string `json:"description,omitempty"`
+	MilestoneId *string `json:"milestone_id,omitempty"`
 	Name        *string `json:"name,omitempty"`
+	Priority    *int    `json:"priority,omitempty"`
 	ProjectId   *string `json:"project_id,omitempty"`
+	Prompt      *string `json:"prompt,omitempty"`
+	Result      *string `json:"result,omitempty"`
+	SessionId   *string `json:"session_id,omitempty"`
 
 	// Status GTD board task status.
 	Status *BoardTaskUpdateRequestStatus `json:"status,omitempty"`
@@ -4420,6 +4482,83 @@ type MessageToolCallsStatus string
 
 // MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
 type MessageType string
+
+// Milestone defines model for Milestone.
+type Milestone struct {
+	// CreatedAt RFC3339 UTC creation timestamp.
+	CreatedAt time.Time `json:"created_at"`
+
+	// Description Optional free-text description.
+	Description *string `json:"description,omitempty"`
+
+	// DueDate Optional due date (ISO 8601 date string or null).
+	DueDate *string `json:"due_date,omitempty"`
+
+	// Id UUID milestone identifier
+	Id string `json:"id"`
+
+	// Name Human-readable milestone name.
+	Name string `json:"name"`
+
+	// ProjectId Project this milestone belongs to.
+	ProjectId string `json:"project_id"`
+
+	// UpdatedAt RFC3339 UTC last-update timestamp.
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// MilestoneCreateRequest defines model for MilestoneCreateRequest.
+type MilestoneCreateRequest struct {
+	// Description Optional free-text description.
+	Description *string `json:"description,omitempty"`
+
+	// DueDate Optional due date (ISO 8601 date string or null).
+	DueDate *string `json:"due_date,omitempty"`
+
+	// Name Milestone name. Required.
+	Name string `json:"name"`
+}
+
+// MilestoneListResponse defines model for MilestoneListResponse.
+type MilestoneListResponse struct {
+	Milestones []struct {
+		// CreatedAt RFC3339 UTC creation timestamp.
+		CreatedAt time.Time `json:"created_at"`
+
+		// Description Optional free-text description.
+		Description *string `json:"description,omitempty"`
+
+		// DueDate Optional due date (ISO 8601 date string or null).
+		DueDate *string `json:"due_date,omitempty"`
+
+		// Id UUID milestone identifier
+		Id string `json:"id"`
+
+		// Name Human-readable milestone name.
+		Name string `json:"name"`
+
+		// ProjectId Project this milestone belongs to.
+		ProjectId string `json:"project_id"`
+
+		// UpdatedAt RFC3339 UTC last-update timestamp.
+		UpdatedAt time.Time `json:"updated_at"`
+	} `json:"milestones"`
+
+	// Total Total number of milestones for this project.
+	Total int `json:"total"`
+}
+
+// MilestoneUpdateRequest defines model for MilestoneUpdateRequest.
+type MilestoneUpdateRequest struct {
+	// Description Optional free-text description.
+	Description *string `json:"description,omitempty"`
+
+	// DueDate Optional due date (ISO 8601 date string or null).
+	DueDate *string `json:"due_date,omitempty"`
+
+	// Name Milestone name.
+	Name *string `json:"name,omitempty"`
+}
 
 // Notification A user-facing notification (#264) surfaced in the header notification center. Currently raised on scheduled-run failures, but the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
 type Notification struct {
@@ -6249,6 +6388,12 @@ type ListBoardTasksParams struct {
 	// Status Filter by GTD status.
 	Status *ListBoardTasksParamsStatus `form:"status,omitempty" json:"status,omitempty"`
 
+	// AgentId Filter by agent ID.
+	AgentId *string `form:"agent_id,omitempty" json:"agent_id,omitempty"`
+
+	// MilestoneId Filter by milestone ID.
+	MilestoneId *string `form:"milestone_id,omitempty" json:"milestone_id,omitempty"`
+
 	// Limit Maximum items to return.
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 
@@ -6263,8 +6408,11 @@ type ListBoardTasksParamsStatus string
 type CreateBoardTaskJSONBody struct {
 	AgentId     *string `json:"agent_id,omitempty"`
 	Description *string `json:"description,omitempty"`
+	MilestoneId *string `json:"milestone_id,omitempty"`
 	Name        string  `json:"name"`
+	Priority    *int    `json:"priority,omitempty"`
 	ProjectId   *string `json:"project_id,omitempty"`
+	Prompt      *string `json:"prompt,omitempty"`
 
 	// Status GTD board task status.
 	Status *CreateBoardTaskJSONBodyStatus `json:"status,omitempty"`
@@ -6277,8 +6425,13 @@ type CreateBoardTaskJSONBodyStatus string
 type UpdateBoardTaskJSONBody struct {
 	AgentId     *string `json:"agent_id,omitempty"`
 	Description *string `json:"description,omitempty"`
+	MilestoneId *string `json:"milestone_id,omitempty"`
 	Name        *string `json:"name,omitempty"`
+	Priority    *int    `json:"priority,omitempty"`
 	ProjectId   *string `json:"project_id,omitempty"`
+	Prompt      *string `json:"prompt,omitempty"`
+	Result      *string `json:"result,omitempty"`
+	SessionId   *string `json:"session_id,omitempty"`
 
 	// Status GTD board task status.
 	Status *UpdateBoardTaskJSONBodyStatus `json:"status,omitempty"`
@@ -6427,6 +6580,12 @@ type CreateProjectJSONRequestBody = ProjectCreateRequest
 
 // UpdateProjectJSONRequestBody defines body for UpdateProject for application/json ContentType.
 type UpdateProjectJSONRequestBody = ProjectUpdateRequest
+
+// CreateProjectMilestoneJSONRequestBody defines body for CreateProjectMilestone for application/json ContentType.
+type CreateProjectMilestoneJSONRequestBody = MilestoneCreateRequest
+
+// UpdateProjectMilestoneJSONRequestBody defines body for UpdateProjectMilestone for application/json ContentType.
+type UpdateProjectMilestoneJSONRequestBody = MilestoneUpdateRequest
 
 // UpdateProviderJSONRequestBody defines body for UpdateProvider for application/json ContentType.
 type UpdateProviderJSONRequestBody = ProviderUpdateRequest

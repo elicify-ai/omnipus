@@ -1,0 +1,41 @@
+type: object
+required:
+  - id
+  - project_id
+  - name
+  - created_at
+  - updated_at
+properties:
+  id:
+    type: string
+    description: UUID milestone identifier
+    example: "c3d4e5f6-a7b8-9012-cdef-123456789012"
+  project_id:
+    type: string
+    description: Project this milestone belongs to.
+    example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  name:
+    type: string
+    minLength: 1
+    maxLength: 200
+    description: Human-readable milestone name.
+    example: "v1.0 Launch"
+  description:
+    type: string
+    maxLength: 2000
+    description: Optional free-text description.
+  due_date:
+    type: string
+    nullable: true
+    description: Optional due date (ISO 8601 date string or null).
+    example: "2026-12-31"
+  created_at:
+    type: string
+    format: date-time
+    description: RFC3339 UTC creation timestamp.
+    example: "2026-06-08T14:22:00Z"
+  updated_at:
+    type: string
+    format: date-time
+    description: RFC3339 UTC last-update timestamp.
+    example: "2026-06-08T15:00:00Z"

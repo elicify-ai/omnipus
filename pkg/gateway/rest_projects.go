@@ -40,6 +40,7 @@ type storedProject struct { // not-wire-format: internal disk-cache struct, mapp
 	PinOrder    int      `json:"pin_order"`
 	CoreTeam    []string `json:"core_team,omitempty"`
 	Repository  string   `json:"repository,omitempty"`
+	IsDefault   bool     `json:"is_default,omitempty"` // true only for the auto-created Inbox project (FR-INX-4)
 	CreatedAt   string   `json:"created_at"`
 	UpdatedAt   string   `json:"updated_at"`
 }
@@ -189,9 +190,17 @@ func writeProjectFile(home string, p storedProject) error {
 	})
 }
 
-// projectToWire converts a storedProject to the gen.Project wire type.
+// projectWireResponse extends gen.Project with the is_default field (FR-L2-027).
+// The generated gen.Project type does not include is_default; this shim adds it.
+// not-wire-format: local response shim, not a hand-written wire type.
+type projectWireResponse struct { // not-wire-format
+	gen.Project
+	IsDefault bool `json:"is_default"`
+}
+
+// projectToWire converts a storedProject to the projectWireResponse type.
 // taskCount is passed in (computed by the caller).
-func projectToWire(p storedProject, taskCount int) gen.Project {
+func projectToWire(p storedProject, taskCount int) projectWireResponse {
 	createdAt, err := time.Parse(time.RFC3339, p.CreatedAt)
 	if err != nil {
 		slog.Warn("rest: project: invalid created_at timestamp", "id", p.ID, "raw", p.CreatedAt)
@@ -224,7 +233,7 @@ func projectToWire(p storedProject, taskCount int) gen.Project {
 		copy(team, p.CoreTeam)
 		w.CoreTeam = &team
 	}
-	return w
+	return projectWireResponse{Project: w, IsDefault: p.IsDefault}
 }
 
 // deleteTasksForProject removes all GTD task files whose project_id matches projectID.
@@ -264,10 +273,49 @@ func (a *restAPI) loadProject(w http.ResponseWriter, id string) (storedProject, 
 	return p, true
 }
 
+// ensureInboxProject checks if the default Inbox project exists; if not, creates it.
+// Idempotent: if a project with is_default=true already exists, this is a no-op.
+// On failure, logs an error but returns nil (non-fatal per spec — gateway continues).
+// (FR-L2-001, FR-INX-1)
+func ensureInboxProject(home string) error {
+	projects, err := listProjectFiles(home)
+	if err != nil {
+		return fmt.Errorf("ensureInboxProject: list projects: %w", err)
+	}
+	for _, p := range projects {
+		if p.IsDefault {
+			return nil // already exists
+		}
+	}
+	// No default project found — create the Inbox.
+	now := time.Now().UTC().Format(time.RFC3339)
+	inbox := storedProject{
+		ID:        ulid.Make().String(),
+		Name:      "Inbox",
+		Status:    string(gen.ProjectStatusActive),
+		Pinned:    false,
+		PinOrder:  0,
+		IsDefault: true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := writeProjectFile(home, inbox); err != nil {
+		return fmt.Errorf("ensureInboxProject: write: %w", err)
+	}
+	slog.Info("rest: inbox project auto-created", "id", inbox.ID)
+	return nil
+}
+
 // HandleProjects dispatches all /api/v1/projects* requests.
 func (a *restAPI) HandleProjects(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	rest := strings.TrimPrefix(path, "/api/v1/projects")
+
+	// /api/v1/projects/{id}/milestones[/{milestoneId}] — delegate to HandleMilestones.
+	if strings.Contains(rest, "/milestones") {
+		a.HandleMilestones(w, r)
+		return
+	}
 
 	// /api/v1/projects/{id}/sessions
 	if strings.HasSuffix(rest, "/sessions") {
@@ -338,7 +386,7 @@ func (a *restAPI) handleProjectList(w http.ResponseWriter, r *http.Request) {
 		taskCounts = make(map[string]int)
 	}
 
-	var result []gen.Project
+	var result []projectWireResponse
 	for _, p := range projects {
 		if statusFilter != "all" && p.Status != statusFilter {
 			continue
@@ -346,11 +394,15 @@ func (a *restAPI) handleProjectList(w http.ResponseWriter, r *http.Request) {
 		result = append(result, projectToWire(p, taskCounts[p.ID]))
 	}
 	if result == nil {
-		result = []gen.Project{}
+		result = []projectWireResponse{}
 	}
 
-	// Sort: pinned items first (ascending pin_order), then unpinned newest-first.
+	// Sort: Inbox (is_default) always first, then pinned items (ascending pin_order),
+	// then unpinned newest-first.
 	sort.Slice(result, func(i, j int) bool {
+		if result[i].IsDefault != result[j].IsDefault {
+			return result[i].IsDefault
+		}
 		if result[i].Pinned != result[j].Pinned {
 			return result[i].Pinned
 		}
@@ -549,13 +601,22 @@ func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id
 	}
 
 	// Verify the project exists before cascading.
-	if _, ok := a.loadProject(w, id); !ok {
+	p, ok := a.loadProject(w, id)
+	if !ok {
 		return
 	}
 
-	// Cascade: tasks → link entries → project file.
-	// Abort only if task scanning fails (cannot enumerate tasks directory) — individual
-	// task-file deletions are best-effort per FR-007 and do not abort the cascade.
+	// Inbox (is_default) cannot be deleted (FR-L2-002 / FR-INX-2).
+	if p.IsDefault {
+		jsonErr(w, http.StatusConflict, "cannot delete the default Inbox project")
+		return
+	}
+
+	// Cascade: (1) milestones for project → (2) clear milestone_id on those tasks →
+	// (3) delete tasks → (4) session links → (5) project file.
+	// Per FR-L2-028 and FR-007: individual file errors are best-effort (logged, not fatal).
+	deleteMilestonesForProject(a.homePath, id)
+
 	if err := deleteTasksForProject(a.homePath, id); err != nil {
 		slog.Error("rest: delete project: cascade tasks", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "failed to scan tasks for cascade delete")
@@ -574,6 +635,30 @@ func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id
 		_ = a.auditor.Log(&audit.Entry{Event: "project.delete", Decision: "allowed", Details: map[string]any{"id": id}})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteMilestonesForProject removes all milestone files for the given project and
+// clears milestone_id on tasks that referenced them (FR-L2-028).
+// Best-effort: individual file errors are logged and skipped.
+func deleteMilestonesForProject(home, projectID string) {
+	all, err := listMilestoneFiles(home)
+	if err != nil {
+		slog.Warn("rest: project cascade: could not list milestones for project",
+			"project_id", projectID, "error", err)
+		return
+	}
+	for _, m := range all {
+		if m.ProjectID != projectID {
+			continue
+		}
+		// Clear milestone_id on tasks referencing this milestone before deleting.
+		clearMilestoneOnTasks(home, m.ID)
+		path := filepath.Join(home, "milestones", m.ID+".json")
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("rest: project cascade: failed to delete milestone",
+				"milestone_id", m.ID, "project_id", projectID, "error", err)
+		}
+	}
 }
 
 func (a *restAPI) handleProjectSessions(w http.ResponseWriter, r *http.Request, id string) {

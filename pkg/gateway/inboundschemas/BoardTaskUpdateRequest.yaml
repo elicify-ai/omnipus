@@ -13,3 +13,17 @@ properties:
     type: string
   agent_id:
     type: string
+  prompt:
+    type: string
+    maxLength: 10000
+  priority:
+    type: integer
+    minimum: 1
+    maximum: 5
+  milestone_id:
+    type: string
+  session_id:
+    type: string
+  result:
+    type: string
+    maxLength: 50000

@@ -109,27 +109,39 @@ func TestHandleBoardTasks_CreateAndGet(t *testing.T) {
 
 // TestHandleBoardTasks_Update verifies PUT /api/v1/board/tasks/{id} updates the task.
 // BDD: Given an existing board task,
-// When PUT /api/v1/board/tasks/{id} with {"status":"active"},
+// When PUT /api/v1/board/tasks/{id} with {"status":"active"} and agent-context header,
 // Then 200 with status=active.
+// When PUT /api/v1/board/tasks/{id} with {"status":"active"} WITHOUT agent-context header,
+// Then 400 (FR-L2-006: active can only be set by an agent).
 // When PUT to nonexistent ID,
 // Then 404.
-// Traces to: FR-002
+// Traces to: FR-002, FR-L2-006
 func TestHandleBoardTasks_Update(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	task := createBoardTaskViaAPI(t, api, "UpdatableTask", "inbox")
 
-	// PUT {"status":"active"} → 200.
+	// PUT {"status":"active"} with agent-context header → 200.
 	wUp := httptest.NewRecorder()
 	rUp := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
 		strings.NewReader(`{"status":"active"}`))
 	rUp.Header.Set("Content-Type", "application/json")
+	rUp.Header.Set("X-Omnipus-Agent-Context", "true")
 	rUp.URL.Path = "/api/v1/board/tasks/" + task.Id
 	api.HandleBoardTasks(wUp, rUp)
 
-	require.Equal(t, http.StatusOK, wUp.Code, "PUT /board/tasks/{id} must return 200; body=%s", wUp.Body.String())
+	require.Equal(t, http.StatusOK, wUp.Code, "PUT /board/tasks/{id} with agent-context must return 200; body=%s", wUp.Body.String())
 	var updated gen.BoardTask
 	require.NoError(t, json.Unmarshal(wUp.Body.Bytes(), &updated))
 	assert.Equal(t, gen.BoardTaskStatus("active"), updated.Status, "status must be updated to active")
+
+	// PUT {"status":"active"} WITHOUT agent-context → 400 (FR-L2-006).
+	wNoCtx := httptest.NewRecorder()
+	rNoCtx := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
+		strings.NewReader(`{"status":"active"}`))
+	rNoCtx.Header.Set("Content-Type", "application/json")
+	rNoCtx.URL.Path = "/api/v1/board/tasks/" + task.Id
+	api.HandleBoardTasks(wNoCtx, rNoCtx)
+	require.Equal(t, http.StatusBadRequest, wNoCtx.Code, "PUT active without agent-context must return 400; body=%s", wNoCtx.Body.String())
 
 	// Differentiation test: a second PUT with a different status returns a different result.
 	wUp2 := httptest.NewRecorder()
@@ -147,7 +159,7 @@ func TestHandleBoardTasks_Update(t *testing.T) {
 	// PUT nonexistent → 404.
 	wNot := httptest.NewRecorder()
 	rNot := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/01JXNOTEXISTENT00000000000",
-		strings.NewReader(`{"status":"active"}`))
+		strings.NewReader(`{"status":"next"}`))
 	rNot.Header.Set("Content-Type", "application/json")
 	rNot.URL.Path = "/api/v1/board/tasks/01JXNOTEXISTENT00000000000"
 	api.HandleBoardTasks(wNot, rNot)

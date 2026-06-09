@@ -30,7 +30,7 @@ func tasksDir(home string) string { return filepath.Join(home, "tasks") }
 // gtdStatusSet is the set of valid GTD task statuses.
 // Used to exclude workflow/taskstore tasks from agent-visible task lists.
 var gtdStatusSet = map[string]bool{
-	"inbox": true, "next": true, "active": true, "waiting": true, "done": true,
+	"inbox": true, "next": true, "active": true, "waiting": true, "done": true, "failed": true,
 }
 
 // ---- system.task.create ----

@@ -53,6 +53,8 @@ tags:
   description: Project management — create, list, update, delete, and session linking.
 - name: Board Tasks
   description: GTD board tasks — distinct from workflow tasks at /tasks.
+- name: Milestones
+  description: Project milestones — group tasks under named milestones with optional due dates.
 - name: Stats
   description: Usage statistics and aggregations.
 components:
@@ -394,6 +396,14 @@ components:
       $ref: ./components/schemas/BoardTaskUpdateRequest.yaml
     ProjectSessionLink:
       $ref: ./components/schemas/ProjectSessionLink.yaml
+    Milestone:
+      $ref: ./components/schemas/Milestone.yaml
+    MilestoneCreateRequest:
+      $ref: ./components/schemas/MilestoneCreateRequest.yaml
+    MilestoneUpdateRequest:
+      $ref: ./components/schemas/MilestoneUpdateRequest.yaml
+    MilestoneListResponse:
+      $ref: ./components/schemas/MilestoneListResponse.yaml
     AgentTokenEntry:
       $ref: ./components/schemas/AgentTokenEntry.yaml
     TokenUsageSummary:
@@ -4221,6 +4231,165 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
 
+  /projects/{id}/milestones:
+    get:
+      operationId: listProjectMilestones
+      summary: List milestones for a project
+      tags:
+      - Milestones
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Project ID.
+      responses:
+        '200':
+          description: Milestone list with total count
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MilestoneListResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    post:
+      operationId: createProjectMilestone
+      summary: Create a milestone for a project
+      tags:
+      - Milestones
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Project ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MilestoneCreateRequest'
+      responses:
+        '201':
+          description: Created milestone
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Milestone'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /projects/{id}/milestones/{milestoneId}:
+    get:
+      operationId: getProjectMilestone
+      summary: Get a milestone by ID
+      tags:
+      - Milestones
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Project ID.
+      - name: milestoneId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Milestone ID.
+      responses:
+        '200':
+          description: Milestone
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Milestone'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    put:
+      operationId: updateProjectMilestone
+      summary: Update a milestone (partial update)
+      tags:
+      - Milestones
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Project ID.
+      - name: milestoneId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Milestone ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MilestoneUpdateRequest'
+      responses:
+        '200':
+          description: Updated milestone
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Milestone'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+    delete:
+      operationId: deleteProjectMilestone
+      summary: Delete a milestone
+      tags:
+      - Milestones
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Project ID.
+      - name: milestoneId
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Milestone ID.
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
   /board/tasks:
     get:
       operationId: listBoardTasks
@@ -4245,8 +4414,20 @@ paths:
         required: false
         schema:
           type: string
-          enum: [inbox, next, active, waiting, done]
+          enum: [inbox, next, active, waiting, done, failed]
         description: Filter by GTD status.
+      - name: agent_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Filter by agent ID.
+      - name: milestone_id
+        in: query
+        required: false
+        schema:
+          type: string
+        description: Filter by milestone ID.
       - name: limit
         in: query
         required: false

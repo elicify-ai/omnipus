@@ -34,6 +34,25 @@ properties:
     type: string
     description: Optional agent responsible for this task.
     example: "mia"
+  prompt:
+    type: string
+    maxLength: 10000
+    description: Optional agent prompt attached to the task.
+  priority:
+    type: integer
+    minimum: 1
+    maximum: 5
+    description: Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified.
+  milestone_id:
+    type: string
+    description: Optional milestone this task belongs to.
+  session_id:
+    type: string
+    description: Optional session linked to this task.
+  result:
+    type: string
+    maxLength: 50000
+    description: Optional task result or output.
   created_at:
     type: string
     format: date-time

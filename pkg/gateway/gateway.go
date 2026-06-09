@@ -1352,6 +1352,12 @@ func setupAndStartServices(
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/skills/", api.withAuth(api.HandleSkills))
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/doctor", api.withAuth(api.HandleDoctor))
 
+	// Ensure the default Inbox project exists (FR-L2-001). Best-effort: a failure
+	// is logged but does not abort gateway startup.
+	if err := ensureInboxProject(homePath); err != nil {
+		slog.Error("gateway: inbox project auto-creation failed", "error", err)
+	}
+
 	// Register additional endpoints for frontend features.
 	// These return proper JSON responses instead of letting the SPA catch-all
 	// serve HTML (which causes "Unexpected token '<'" JSON parse errors).
