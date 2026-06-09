@@ -681,7 +681,14 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		agentID = *req.AgentId
 	}
 	if agentID == "" {
-		agentID = "main"
+		if reg := a.agentLoop.GetRegistry(); reg != nil {
+			if def := reg.GetDefaultAgent(); def != nil {
+				agentID = def.ID
+			}
+		}
+		if agentID == "" {
+			agentID = "main" // legacy fallback for configs without a marked default
+		}
 	}
 	if err := validateEntityID(agentID); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid agent_id")
