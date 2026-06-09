@@ -35,7 +35,7 @@ export function BoardView({ tasks, milestones, activeMilestoneId, onTaskClick, o
   const filteredTasks = filterByMilestone(tasks, activeMilestoneId)
 
   return (
-    <div className="flex gap-3 p-4 overflow-x-auto min-h-0 flex-1">
+    <div className="flex gap-2 p-4 overflow-x-auto min-h-0 flex-1">
       {COLUMNS.map((col) => (
         <BoardColumn
           key={col.status}
@@ -69,7 +69,7 @@ interface BoardColumnProps {
 function BoardColumn({ config, tasks, milestones, onTaskClick, onNewTask }: BoardColumnProps) {
   return (
     <div
-      className="flex flex-col min-w-[220px] flex-1 bg-[var(--color-surface-1)] rounded-xl border border-[var(--color-border)] max-h-full"
+      className="flex flex-col min-w-[180px] flex-1 bg-[var(--color-surface-1)] rounded-xl border border-[var(--color-border)] max-h-full"
       aria-label={`${config.label} column`}
     >
       {/* Column header */}
