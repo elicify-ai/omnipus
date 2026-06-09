@@ -33,6 +33,7 @@ import {
   fetchProjects,
   projectsQueryKeys,
   isApiError,
+  ApiSchemaError,
 } from '@/lib/api'
 import type { BoardTask } from '@/lib/api'
 import { useProjectsStore } from '@/store/projectsStore'
@@ -98,15 +99,17 @@ function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
         project_id: form.project_id === '__none__' ? undefined : form.project_id || undefined,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: projectsQueryKeys.list() })
       addToast({ message: 'Task created', variant: 'success' })
       setForm({ name: '', description: '', status: 'inbox', project_id: activeProjectId ?? '__none__' })
       setNameError('')
       onOpenChange(false)
     },
     onError: (err) => {
-      const msg = isApiError(err) ? err.message : 'Unexpected error'
+      const msg = isApiError(err) ? err.message
+        : err instanceof ApiSchemaError ? `Schema error: ${err.zodIssues[0]?.message ?? 'unknown'}`
+        : 'Unexpected error'
       addToast({ message: `Failed to create task: ${msg}`, variant: 'error' })
     },
   })
@@ -421,12 +424,14 @@ export function TasksScreen() {
     mutationFn: (id: string) => deleteBoardTask(id),
     onMutate: (id) => setDeletingIds((prev) => new Set([...prev, id])),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: projectsQueryKeys.list() })
       addToast({ message: 'Task deleted', variant: 'success' })
     },
     onError: (err) => {
-      const msg = isApiError(err) ? err.message : 'Unexpected error'
+      const msg = isApiError(err) ? err.message
+        : err instanceof ApiSchemaError ? `Schema error: ${err.zodIssues[0]?.message ?? 'unknown'}`
+        : 'Unexpected error'
       addToast({ message: `Failed to delete task: ${msg}`, variant: 'error' })
     },
     onSettled: (_data, _err, id) => setDeletingIds((prev) => { const n = new Set(prev); n.delete(id); return n }),
@@ -436,13 +441,28 @@ export function TasksScreen() {
   const updateMutation = useMutation({
     mutationFn: ({ id, status }: { id: string; status: BoardStatus }) =>
       updateBoardTask(id, { status }),
-    onMutate: ({ id }) => setUpdatingIds((prev) => new Set([...prev, id])),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+    onMutate: async ({ id, status }) => {
+      await queryClient.cancelQueries({ queryKey: ['board-tasks'] })
+      const previousTasks = queryClient.getQueriesData<BoardTask[]>({ queryKey: ['board-tasks'] })
+      queryClient.setQueriesData<BoardTask[]>(
+        { queryKey: ['board-tasks'] },
+        (old) => old?.map((t) => (t.id === id ? { ...t, status } : t)) ?? old,
+      )
+      setUpdatingIds((prev) => new Set([...prev, id]))
+      return { previousTasks }
     },
-    onError: (err) => {
-      const msg = isApiError(err) ? err.message : 'Unexpected error'
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: projectsQueryKeys.list() })
+      addToast({ message: 'Task updated', variant: 'success' })
+    },
+    onError: (err, _vars, context) => {
+      if (context?.previousTasks) {
+        context.previousTasks.forEach(([queryKey, data]) => queryClient.setQueryData(queryKey, data))
+      }
+      const msg = isApiError(err) ? err.message
+        : err instanceof ApiSchemaError ? `Schema error: ${err.zodIssues[0]?.message ?? 'unknown'}`
+        : 'Unexpected error'
       addToast({ message: `Failed to update task: ${msg}`, variant: 'error' })
     },
     onSettled: (_data, _err, variables) => {
@@ -491,13 +511,6 @@ export function TasksScreen() {
         </button>
       </div>
 
-      {/* Error banner */}
-      {tasksError && (
-        <div className="px-4 py-2 text-xs text-[var(--color-error)] border-b border-[var(--color-border)]">
-          Failed to load tasks. Check your connection and try again.
-        </div>
-      )}
-
       {/* Kanban board */}
       {isLoading ? (
         <div className="flex gap-3 p-4 overflow-x-auto">
@@ -514,6 +527,10 @@ export function TasksScreen() {
               </div>
             </div>
           ))}
+        </div>
+      ) : tasksError && tasks.length === 0 ? (
+        <div className="flex flex-1 items-center justify-center p-8 text-[var(--color-muted)] text-sm">
+          Failed to load tasks. Check your connection and try again.
         </div>
       ) : (
         <div className="flex gap-3 p-4 overflow-x-auto min-h-[calc(100vh-9rem)]">

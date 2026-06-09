@@ -265,7 +265,7 @@ export function Sidebar() {
               <span className="text-xs text-[var(--color-error)] flex-1">Could not load projects</span>
               <button
                 type="button"
-                onClick={() => queryClient.refetchQueries({ queryKey: ['projects'] })}
+                onClick={() => queryClient.invalidateQueries({ queryKey: projectsQueryKeys.list() })}
                 aria-label="Retry loading projects"
                 className="rounded p-0.5 text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
               >
@@ -379,31 +379,17 @@ export function Sidebar() {
           )}
 
           {archiveOpen && archivedProjects.map((project) => {
-            const isActive = activeProjectId === project.id
             return (
               <button
                 key={project.id}
                 type="button"
                 onClick={() => {
-                  setActiveProjectId(isActive ? null : project.id)
                   navigate({ to: '/tasks' })
                   if (!effectivelyPinned) close()
                 }}
-                className={cn(
-                  'flex items-center gap-2 w-full px-4 py-2 mx-0 text-sm transition-colors text-left opacity-70',
-                  isActive
-                    ? 'text-[var(--color-accent)] font-medium'
-                    : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
-                )}
+                className="flex items-center gap-2 w-full px-4 py-2 mx-0 text-sm transition-colors text-left opacity-70 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
               >
-                {isActive ? (
-                  <span
-                    className="w-2 h-2 rounded-full bg-[var(--color-accent)] animate-pulse flex-shrink-0"
-                    aria-hidden="true"
-                  />
-                ) : (
-                  <Folder size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
-                )}
+                <Folder size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
                 <span className="flex-1 truncate">{project.name}</span>
                 {project.task_count > 0 && (
                   <span className="text-[10px] text-[var(--color-muted)] flex-shrink-0">

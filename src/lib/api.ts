@@ -284,6 +284,9 @@ import type {
   ScheduleRunResult,
   // #264 Notifications (contract-first #8):
   NotificationList,
+  // Level-1 board task request types:
+  BoardTaskCreateRequest,
+  BoardTaskUpdateRequest,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -374,6 +377,8 @@ export type {
   BoardTaskListResponse,
   ProjectSessionLink,
   TokenUsageSummary,
+  BoardTaskCreateRequest,
+  BoardTaskUpdateRequest,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -2116,7 +2121,7 @@ export function fetchBoardTasks(params?: { project_id?: string; status?: string 
   ).then((res) => res.items)
 }
 
-export function createBoardTask(body: z.infer<typeof CreateBoardTaskBodySchema>): Promise<BoardTask> {
+export function createBoardTask(body: BoardTaskCreateRequest): Promise<BoardTask> {
   return request<BoardTask>(
     '/board/tasks',
     { method: 'POST', body: JSON.stringify(body) },
@@ -2124,7 +2129,7 @@ export function createBoardTask(body: z.infer<typeof CreateBoardTaskBodySchema>)
   )
 }
 
-export function updateBoardTask(id: string, body: z.infer<typeof UpdateBoardTaskBodySchema>): Promise<BoardTask> {
+export function updateBoardTask(id: string, body: BoardTaskUpdateRequest): Promise<BoardTask> {
   return request<BoardTask>(
     `/board/tasks/${encodeURIComponent(id)}`,
     { method: 'PUT', body: JSON.stringify(body) },
