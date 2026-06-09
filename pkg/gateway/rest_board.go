@@ -597,9 +597,14 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		}
 		existing.Status = newStatus
 	}
-	// session_id is present in BoardTaskUpdateRequest but only applied when the
-	// agent-context header is set (AW-3: prevents UI from overwriting session linkage).
-	if req.SessionId != nil && isAgentContext {
+	// session_id: clearing (empty string) is allowed from any caller so users can
+	// retry failed tasks. Setting a non-empty session_id requires agent-context
+	// (AW-3: prevents UI from overwriting an active session link).
+	if req.SessionId != nil {
+		if *req.SessionId != "" && !isAgentContext {
+			jsonErr(w, http.StatusForbidden, "setting session_id requires agent context")
+			return
+		}
 		existing.SessionID = *req.SessionId
 	}
 	if req.ProjectId != nil {

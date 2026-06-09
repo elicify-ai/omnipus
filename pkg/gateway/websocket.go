@@ -846,7 +846,14 @@ func (h *WSHandler) handleChatMessage(
 ) {
 	targetAgentID := agentID
 	if targetAgentID == "" {
-		targetAgentID = "main"
+		if reg := h.agentLoop.GetRegistry(); reg != nil {
+			if def := reg.GetDefaultAgent(); def != nil {
+				targetAgentID = def.ID
+			}
+		}
+		if targetAgentID == "" {
+			targetAgentID = "main" // legacy fallback
+		}
 	}
 
 	sessionID := frameSessionID
