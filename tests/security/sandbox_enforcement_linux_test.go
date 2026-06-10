@@ -251,17 +251,32 @@ func runWriteEtcPasswdChild(_ string) {
 }
 
 func runReadProcExeChild() {
-	// /proc/self/exe readlink points at the test binary, which is OUTSIDE
-	// the workspace. Reading through it requires traversing the parent path;
-	// Landlock should block.
-	target, err := os.Readlink("/proc/self/exe")
-	if err != nil {
-		// Readlink itself may be allowed; the enforcement is on opening the target.
-		fmt.Fprintf(os.Stderr, "child: readlink succeeded, target=%q\n", target)
+	// Security intent: prove Landlock blocks opening an out-of-workspace file.
+	//
+	// Historically this case opened the readlink target of /proc/self/exe (the
+	// test binary). That path is NON-DETERMINISTIC: `go test ./...` drops the
+	// per-package test binary in a go-managed temp dir whose location varies per
+	// runner/TMPDIR. On some runners that path lands UNDER an allowed prefix
+	// (e.g. /usr, or a TMPDIR resolving there), so os.Open SUCCEEDS and the case
+	// false-fails ("NOT ENFORCED") even though Landlock is working correctly.
+	//
+	// Fix: the pass/fail decision now hinges on opening a FIXED path that is
+	// guaranteed outside every allowed prefix (workspace, /lib, /lib64, /usr)
+	// and outside /tmp: /etc/hostname. The /etc tree is already proven
+	// out-of-workspace by the read_etc_shadow case. This keeps the security
+	// intent identical ("Landlock blocks reading an out-of-workspace file")
+	// while removing the dependency on where the toolchain dropped the binary.
+	//
+	// The /proc/self/exe readlink is retained for logging only — it documents
+	// the binary location in CI output but does NOT influence the verdict.
+	if target, err := os.Readlink("/proc/self/exe"); err == nil {
+		fmt.Fprintf(os.Stderr, "child: /proc/self/exe target=%q (informational only)\n", target)
 	}
-	// Attempt to open the target (which is outside workspace → should fail).
-	_, openErr := os.Open(target)
-	exitEnforcedIf("open /proc/self/exe target "+target, openErr)
+
+	// Verdict hinges on this fixed, known-outside-workspace target.
+	const outsidePath = "/etc/hostname"
+	_, openErr := os.Open(outsidePath)
+	exitEnforcedIf("open out-of-workspace "+outsidePath, openErr)
 }
 
 func runPtraceChild() {
