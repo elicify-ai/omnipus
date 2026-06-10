@@ -101,10 +101,12 @@ function RestartBannerInner() {
           <button
             type="button"
             onClick={handleManualRefetch}
-            className="text-amber-300/60 hover:text-amber-300 transition-colors"
+            className="flex items-center gap-1 text-xs text-amber-300/60 hover:text-amber-300 transition-colors"
             aria-label="Refresh pending restart status"
+            title="Refresh status"
           >
-            <ArrowsClockwise size={14} />
+            <ArrowsClockwise size={13} />
+            <span>Refresh status</span>
           </button>
         </div>
       </div>

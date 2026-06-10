@@ -123,14 +123,15 @@ describe('GenericToolCall — marshal-error result sentinel', () => {
 // ── Baseline: non-sentinel result still renders normally ────────────────────
 
 describe('GenericToolCall — baseline rendering', () => {
-  it('renders header with tool name', () => {
+  it('renders header with humanized tool name', () => {
     render(
       <GenericToolCall
         toolName="web_search"
         status={RUNNING_STATUS}
       />
     )
-    expect(screen.getByText('web_search')).toBeInTheDocument()
+    // Collapsed chip shows the humanized label, not the raw id.
+    expect(screen.getByText('Search the web')).toBeInTheDocument()
   })
 
   it('expanded pane shows plain result when result is a plain object', () => {

@@ -9,6 +9,8 @@ import { useConnectionStore } from "@/store/connection";
 import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
 import { useSessionStore, resetChatBucketForReplay } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
+import { queryClient } from "@/lib/queryClient";
+import type { Session, SessionDetail } from "@/lib/api";
 import { TerminalOutputUI } from "./tools/TerminalOutput";
 import { FileReadPreviewUI, FileReadAliasDotUI } from "./tools/FileReadPreview";
 import { FileWriteConfirmUI, FileWriteAliasDotUI, EditFileConfirmUI, AppendFileConfirmUI } from "./tools/FileWriteConfirm";
@@ -57,6 +59,40 @@ function MemoryObserverLifecycle() {
   return null
 }
 
+// Resolves the last-active agent id for a session when re-seeding the
+// header/composer on WS (re)connect. Always prefers active_agent_id
+// (post-handover) over the creating agent_id, and never downgrades a known
+// live value to the creating agent.
+//
+// Resolution order:
+//   1. The LIVE store value when the session matches — it already reflects any
+//      live handover (set by the agent_switched frame). Preferring it first
+//      means a transient reconnect during a live handover can never be clobbered
+//      by a stale session-detail cache.
+//   2. The cached ['session-detail', id] — set fresh by the route loader on a
+//      full reload (the case this fix targets); active_agent_id ?? agent_id.
+//   3. The cached ['sessions'] list entry; active_agent_id ?? agent_id.
+//   4. null — leave the live store untouched.
+export function resolveLastActiveAgentId(sessionId: string): string | null {
+  const session = useSessionStore.getState();
+  if (session.activeSessionId === sessionId && session.activeAgentId) {
+    return session.activeAgentId;
+  }
+
+  const detail = queryClient.getQueryData<SessionDetail>(['session-detail', sessionId]);
+  if (detail?.session) {
+    return detail.session.active_agent_id ?? detail.session.agent_id ?? null;
+  }
+
+  const list = queryClient.getQueryData<Session[]>(['sessions']);
+  const fromList = list?.find((s) => s.id === sessionId);
+  if (fromList) {
+    return fromList.active_agent_id ?? fromList.agent_id ?? null;
+  }
+
+  return null;
+}
+
 // Manages WebSocket connection lifecycle — renders nothing, only side effects.
 function WsLifecycle() {
   const handleFrame = useChatStore((s) => s.handleFrame);
@@ -81,6 +117,22 @@ function WsLifecycle() {
         // transcript context.
         const activeSessionId = useSessionStore.getState().activeSessionId;
         if (activeSessionId) {
+          // Re-seed the header/composer agent from the authoritative
+          // last-active agent BEFORE replay starts. After a handover (e.g.
+          // Mia → Jim) a full reload must keep the header on Jim
+          // (active_agent_id), not revert to the session's creating agent
+          // (agent_id). The route loader sets this on cold load, but on the
+          // WS-(re)connect attach path we re-assert it from the cached session
+          // detail so this path can never regress to the creating agent.
+          //
+          // Resolution order, all preferring active_agent_id over agent_id:
+          //   1. cached ['session-detail', id] (freshest — set by the route loader)
+          //   2. cached ['sessions'] list entry
+          //   3. the live store value (never downgrade to the creating agent)
+          const seedAgentId = resolveLastActiveAgentId(activeSessionId);
+          if (seedAgentId) {
+            useSessionStore.getState().setActiveSession(activeSessionId, seedAgentId);
+          }
           // The gateway will replay the entire transcript. Mark the session
           // as replaying symmetrically here (same as in attachToSession).
           useChatStore.setState({ isReplaying: true });

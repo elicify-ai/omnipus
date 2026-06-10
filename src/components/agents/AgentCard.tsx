@@ -73,8 +73,11 @@ export function AgentCard({ agent, onSetDefault }: AgentCardProps) {
                 <Badge variant={typeBadgeVariant[agent.type]}>{agent.type}</Badge>
               )}
               {agent.model && (
-                <span className="text-[10px] font-mono text-[var(--color-muted)] truncate max-w-[120px]">
-                  {agent.model}
+                <span
+                  className="text-[10px] font-mono text-[var(--color-muted)] truncate max-w-[140px]"
+                  title={agent.model}
+                >
+                  {agent.model.includes('/') ? agent.model.split('/').slice(1).join('/') : agent.model}
                 </span>
               )}
             </div>

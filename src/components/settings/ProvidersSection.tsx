@@ -118,20 +118,18 @@ export function ProvidersSection() {
 
                   <div className="flex items-center gap-2 shrink-0">
                     {connected && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
+                      <button
+                        type="button"
                         onClick={() => handleTest(provider.id)}
                         disabled={testing[provider.id]}
-                        className="h-7 px-2 text-xs"
+                        className="text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
                       >
                         {testing[provider.id] ? (
-                          <ArrowCounterClockwise size={12} className="animate-spin" />
+                          <ArrowCounterClockwise size={12} className="animate-spin inline" />
                         ) : 'Test'}
-                      </Button>
+                      </button>
                     )}
                     <Button
-                      variant="outline"
                       size="sm"
                       onClick={() =>
                         setExpandedProvider(isExpanded ? null : provider.id)

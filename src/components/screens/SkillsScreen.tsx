@@ -117,18 +117,30 @@ export function SkillsScreen() {
 
         {/* Installed Skills */}
         <TabsContent value="skills">
-          <div className="flex justify-end mb-3">
-            <Button size="sm" className="gap-1.5" onClick={() => setSkillBrowserOpen(true)}>
-              <MagnifyingGlass size={13} /> Browse Skills
-            </Button>
-          </div>
           {skillsError ? (
             <ErrorState message="Could not load skills." />
           ) : skillsLoading ? (
             <SkeletonList />
           ) : skills.length === 0 ? (
-            <EmptyState icon={<PuzzlePiece size={40} weight="thin" />} message="No skills installed." />
+            <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
+              <div className="text-[var(--color-border)]">
+                <PuzzlePiece size={40} weight="thin" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm text-[var(--color-muted)]">No skills installed.</p>
+                <p className="text-xs text-[var(--color-muted)]/70">Browse the skill registry to add capabilities to your agents.</p>
+              </div>
+              <Button size="sm" className="gap-1.5 mt-1" onClick={() => setSkillBrowserOpen(true)}>
+                <MagnifyingGlass size={13} /> Browse Skills
+              </Button>
+            </div>
           ) : (
+            <>
+              <div className="flex justify-end mb-3">
+                <Button size="sm" className="gap-1.5" onClick={() => setSkillBrowserOpen(true)}>
+                  <MagnifyingGlass size={13} /> Browse Skills
+                </Button>
+              </div>
             <div className="space-y-2">
               {skills.map((skill) => (
                 <div
@@ -168,6 +180,7 @@ export function SkillsScreen() {
                 </div>
               ))}
             </div>
+            </>
           )}
         </TabsContent>
 

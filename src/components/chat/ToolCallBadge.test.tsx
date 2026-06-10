@@ -30,7 +30,8 @@ describe('ToolCallBadge — running state (test #6)', () => {
   it('shows tool name and spinning icon while running', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Running tool call shows spinner
     render(<ToolCallBadge toolCall={makeToolCall({ tool: 'web_search', status: 'running' })} />)
-    expect(screen.getByText(/web_search/i)).toBeInTheDocument()
+    // Collapsed chip shows the humanized label, not the raw id.
+    expect(screen.getByText('Search the web')).toBeInTheDocument()
     // Spinning icon from animate-spin class
     const spinner = document.querySelector('.animate-spin')
     expect(spinner).toBeTruthy()
@@ -131,25 +132,33 @@ describe('ToolCallBadge — collapse/expand toggle (test #7)', () => {
 
 describe('ToolCallBadge — tool icon registry (test #8)', () => {
   it.each([
-    ['exec', 'terminal-icon'],
-    ['web_search', 'globe-icon'],
-    ['file.read', 'file-icon'],
-    ['browser.navigate', 'globe-icon'],
-  ])('renders without crashing for built-in tool: %s', (toolName) => {
+    // [rawTool, humanizedCollapsedLabel]
+    ['exec', 'Run command'],
+    ['web_search', 'Search the web'],
+    ['file.read', 'Read'],
+    ['browser.navigate', 'Navigate browser'],
+  ])('renders humanized label for built-in tool: %s → %s', (toolName, label) => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario Outline: Built-in tool uses custom component
     const { container } = render(
       <ToolCallBadge toolCall={makeToolCall({ tool: toolName, status: 'success', duration_ms: 100 })} />
     )
     expect(container.firstChild).toBeTruthy()
-    expect(screen.getByText(toolName)).toBeInTheDocument()
+    // Collapsed chip shows the humanized label; raw id is NOT shown collapsed.
+    expect(screen.getByText(label)).toBeInTheDocument()
   })
 
-  it('renders generic wrench icon for unknown MCP tool', () => {
+  it('renders generic label for unknown MCP tool and exposes the raw id when expanded', () => {
     // Traces to: wave5a-wire-ui-spec.md — Scenario: Unknown tool uses generic component
     render(
       <ToolCallBadge toolCall={makeToolCall({ tool: 'custom_mcp_tool', status: 'success', duration_ms: 80 })} />
     )
-    expect(screen.getByText(/custom_mcp_tool/i)).toBeInTheDocument()
+    // Collapsed: humanized label.
+    expect(screen.getByText('Custom mcp tool')).toBeInTheDocument()
+    expect(screen.queryByText('custom_mcp_tool')).toBeNull()
+    // Expand: raw tool id is visible to power users.
+    const btn = document.querySelector('button[aria-expanded]') as HTMLButtonElement
+    fireEvent.click(btn)
+    expect(screen.getByText('custom_mcp_tool')).toBeInTheDocument()
   })
 })
 
