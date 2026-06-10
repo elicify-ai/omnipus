@@ -394,12 +394,12 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 			"username", body.Username, "evicted", evictedTokens, "cap", config.MaxUserTokens)
 	}
 
-	// Reload in-memory config so withAuth middleware picks up the new token hash.
-	// Reload failure is non-fatal for login — the token is on disk and will be
-	// picked up on the next config poll.
-	if err := a.awaitReload(); err != nil {
-		slog.Warn("auth: hot-reload after login failed; token active after next restart", "error", err)
-	}
+	// The new token is already live in memory: safeUpdateConfigJSON above ran
+	// refreshConfigAndRewireServices → SwapConfig, so withAuth reads the updated
+	// Gateway.Users immediately. We deliberately do NOT call awaitReload here: a
+	// full service reload for a token append needlessly restarts channels/cron
+	// and can cancel an in-flight scheduled run (#412 — every login churned a
+	// reload that cancelled Run-now turns).
 
 	// Reset rate limit counter on successful login.
 	globalLoginLimiter.recordSuccess(ip, body.Username)
@@ -633,9 +633,8 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "logout failed")
 		return
 	}
-	if err := a.awaitReload(); err != nil {
-		slog.Warn("auth: hot-reload after logout failed", "error", err)
-	}
+	// Token revocation is already live via safeUpdateConfigJSON → SwapConfig
+	// above; no full service reload needed (avoids channel/cron churn — #412).
 	// Revoke both browser-side cookies (session + CSRF). Defense-in-depth:
 	// the server-side hashes were already cleared above.
 	middleware.ClearSessionCookie(w, r)

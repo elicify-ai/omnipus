@@ -2173,9 +2173,8 @@ func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) erro
 	// Register the content hash of what we just wrote so the config file
 	// watcher knows this is an app-initiated write and does not trigger a
 	// full service reload (channels disconnect/reconnect, cron lanes cancelled).
-	// fileutil.WriteFileAtomic does a temp-file+rename, so the final on-disk
-	// content matches `out` exactly. We register before the in-memory refresh
-	// so that even a fast poller tick sees the hash already registered.
+	// We register `out` first so even a fast poller tick before the refresh sees
+	// a known hash.
 	if a.selfWriteReg != nil {
 		a.selfWriteReg.register(sha256.Sum256(out))
 	}
@@ -2184,6 +2183,16 @@ func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) erro
 	// serving stale in-memory state (prevents A1 regression on REST-initiated writes).
 	if refreshErr := a.refreshConfigAndRewireServices(a.configPath()); refreshErr != nil {
 		return fmt.Errorf("config written but in-memory refresh failed: %w", refreshErr)
+	}
+	// refreshConfigAndRewireServices loads the config, and config.LoadConfig may
+	// normalize + re-save the file (config.go SaveConfig-on-load), producing
+	// different bytes than `out`. Register the FINAL on-disk content hash too, so
+	// the poller recognizes the post-refresh file as an app write and suppresses
+	// the reload. Best-effort: a read failure just means the poller may reload once.
+	if a.selfWriteReg != nil {
+		if finalBytes, readErr := os.ReadFile(a.configPath()); readErr == nil {
+			a.selfWriteReg.register(sha256.Sum256(finalBytes))
+		}
 	}
 	// FR-061 single chokepoint: every config mutation invalidates all cached
 	// system-prompt preambles so the next agent turn rebuilds from the updated
