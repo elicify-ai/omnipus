@@ -8,6 +8,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,6 +75,43 @@ const (
 	logFile   = "gateway.log"
 )
 
+// configSelfWriteRegistry tracks sha256 hashes of config.json contents that
+// were written by the app itself (via safeUpdateConfigJSON). The config file
+// watcher consults this to distinguish internal writes from genuine external
+// operator edits, suppressing spurious full-service reloads on every login,
+// settings change, or channel config write.
+//
+// Concurrency: all methods are safe for concurrent use. The mu protects the
+// hashes map. The poller goroutine and HTTP handler goroutines access this
+// concurrently.
+type configSelfWriteRegistry struct {
+	mu     sync.Mutex
+	hashes map[[32]byte]struct{}
+}
+
+// register records a sha256 hash as an app-initiated write. Called by
+// safeUpdateConfigJSON immediately after a successful atomic write.
+func (r *configSelfWriteRegistry) register(h [32]byte) {
+	r.mu.Lock()
+	r.hashes[h] = struct{}{}
+	r.mu.Unlock()
+}
+
+// consume checks whether h is a known app-initiated write. If it is, the
+// entry is removed and true is returned. The entire set is also cleared of
+// any older accumulated hashes (the file can only have one current content,
+// so any hash that is not the current one is stale). Returns false for
+// hashes that were not registered (external edits).
+func (r *configSelfWriteRegistry) consume(h [32]byte) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, known := r.hashes[h]
+	// Always clear all accumulated hashes on any check: older hashes from
+	// previous writes can never match the current file content again.
+	r.hashes = make(map[[32]byte]struct{})
+	return known
+}
+
 type services struct {
 	CronService      *cron.CronService
 	HeartbeatService *heartbeat.HeartbeatService
@@ -130,6 +168,12 @@ type services struct {
 	// reach the already-constructed restAPI; storing the ref here avoids
 	// a larger refactor of setupAndStartServices).
 	restAPIRef *restAPI
+
+	// selfWriteReg is the shared registry of config.json content hashes that
+	// were written by the app itself. Created in setupAndStartServices when the
+	// restAPI is constructed; passed to setupConfigWatcherPolling so the poller
+	// can suppress reload on app-initiated writes.
+	selfWriteReg *configSelfWriteRegistry
 }
 
 type startupBlockedProvider struct {
@@ -821,7 +865,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	var configReloadChan <-chan *config.Config
 	stopWatch := func() {}
 	if cfg.Gateway.HotReload {
-		configReloadChan, stopWatch = setupConfigWatcherPolling(configPath, debug, credStore)
+		configReloadChan, stopWatch = setupConfigWatcherPolling(configPath, debug, credStore, runningServices.selfWriteReg)
 		logger.Info("Config hot reload enabled")
 	}
 	defer stopWatch()
@@ -1315,6 +1359,14 @@ func setupAndStartServices(
 	// Wire god-mode opt-in into the agent loop for runtime coercion.
 	agentLoop.SetAllowGodMode(allowGodMode)
 
+	// selfWriteReg is shared between safeUpdateConfigJSON (registers hashes of
+	// app-initiated writes) and setupConfigWatcherPolling (suppresses reload for
+	// those writes). Created here so both can reference the same instance.
+	selfWriteReg := &configSelfWriteRegistry{
+		hashes: make(map[[32]byte]struct{}),
+	}
+	runningServices.selfWriteReg = selfWriteReg
+
 	api := &restAPI{
 		agentLoop:       agentLoop,
 		allowedOrigin:   allowedOrigin,
@@ -1336,6 +1388,7 @@ func setupAndStartServices(
 		cronService:     runningServices.CronService,     // #264: schedules CRUD
 		notifStore:      runningServices.notifStore,      // #264: notification center
 		auditor:         agentLoop.AuditLogger(),         // shared audit logger for REST mutations
+		selfWriteReg:    selfWriteReg,                    // suppress watcher reload on app-initiated writes
 	}
 	// Stash the api ref so RunContextWithOptions can update builtinRegistry
 	// after the M16 live-deps re-population (the ~line 715 reassignment creates a fresh
@@ -1748,10 +1801,21 @@ func restartServices(
 	return nil
 }
 
+// setupConfigWatcherPolling starts a background goroutine that polls
+// configPath every 2 s for mtime/size changes and emits the new *config.Config
+// on the returned channel.
+//
+// selfWriteReg (may be nil) is consulted to suppress reloads for writes that
+// the app itself made via safeUpdateConfigJSON. When the detected change is
+// identified as an app-initiated write its hash is consumed from the registry
+// and the reload is skipped, preventing spurious full-service restarts on every
+// login, settings change, or channel-config write. Only genuine external edits
+// (hashes not present in the registry) proceed to executeReload.
 func setupConfigWatcherPolling(
 	configPath string,
 	debug bool,
 	credStore *credentials.Store,
+	selfWriteReg *configSelfWriteRegistry,
 ) (chan *config.Config, func()) {
 	configChan := make(chan *config.Config, 1)
 	stop := make(chan struct{})
@@ -1778,10 +1842,29 @@ func setupConfigWatcherPolling(
 						logger.Debugf("🔍 Config file change detected")
 					}
 
+					// 500 ms debounce: let concurrent rapid writes settle so
+					// we read the final state rather than a transient version.
 					time.Sleep(500 * time.Millisecond)
 
-					lastModTime = currentModTime
-					lastSize = currentSize
+					// Re-stat after the debounce; the file may have changed again.
+					lastModTime = getFileModTime(configPath)
+					lastSize = getFileSize(configPath)
+
+					// Read current file content to compute identity hash.
+					fileBytes, readErr := os.ReadFile(configPath)
+					if readErr != nil {
+						logger.Errorf("⚠ Could not read config for change check: %v", readErr)
+						continue
+					}
+					currentHash := sha256.Sum256(fileBytes)
+
+					// Suppress reload when the change was made by the app itself.
+					if selfWriteReg != nil && selfWriteReg.consume(currentHash) {
+						if debug {
+							logger.Debugf("Config file change is app-initiated — skipping reload")
+						}
+						continue
+					}
 
 					newCfg, err := config.LoadConfigWithStore(configPath, credStore)
 					if err != nil {
@@ -1796,7 +1879,7 @@ func setupConfigWatcherPolling(
 						continue
 					}
 
-					logger.Info("✓ Config file validated and loaded")
+					logger.Info("✓ Config file validated and loaded (external edit)")
 
 					select {
 					case configChan <- newCfg:

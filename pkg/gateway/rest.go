@@ -9,6 +9,7 @@ package gateway
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -152,6 +153,13 @@ type restAPI struct {
 	// usage is O(1) regardless of task count, matching the pattern in
 	// pkg/memory/jsonl.go::JSONLStore.
 	taskStripedMu [64]sync.Mutex
+
+	// selfWriteReg is the registry of config.json content hashes written by
+	// the app itself. safeUpdateConfigJSON registers each write here so the
+	// config file watcher can suppress spurious full-service reloads on
+	// app-initiated changes (logins, settings writes, channel config, etc.).
+	// Nil in test setups that do not wire the config watcher.
+	selfWriteReg *configSelfWriteRegistry
 }
 
 // --- CORS / JSON helpers ---
@@ -2161,6 +2169,15 @@ func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) erro
 	}
 	if writeErr := fileutil.WriteFileAtomic(a.configPath(), out, 0o600); writeErr != nil {
 		return writeErr
+	}
+	// Register the content hash of what we just wrote so the config file
+	// watcher knows this is an app-initiated write and does not trigger a
+	// full service reload (channels disconnect/reconnect, cron lanes cancelled).
+	// fileutil.WriteFileAtomic does a temp-file+rename, so the final on-disk
+	// content matches `out` exactly. We register before the in-memory refresh
+	// so that even a fast poller tick sees the hash already registered.
+	if a.selfWriteReg != nil {
+		a.selfWriteReg.register(sha256.Sum256(out))
 	}
 	// Refresh the in-memory config AND rewire sensitive-data scrubbing.
 	// Propagate the error so callers fail the HTTP request rather than silently
