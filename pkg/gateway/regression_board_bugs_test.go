@@ -37,6 +37,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
@@ -161,17 +162,17 @@ func TestRegression_CompletionCallback_SetsResult(t *testing.T) {
 	// wires into ExecuteBoardTask. We replicate it here so no real agent is needed.
 	const agentResult = "Tests passed: 42 passed, 0 failed."
 	func() {
-		mu := api.boardTaskLock(task.Id)
+		mu := api.taskLock.Get(task.Id)
 		mu.Lock()
 		defer mu.Unlock()
 
 		t2, readErr := api.readBoardTask(task.Id)
 		require.NoError(t, readErr)
-		require.Equal(t, "active", t2.Status,
+		require.Equal(t, boardtask.StatusActive, t2.Status,
 			"task must be active before running completion logic")
 
 		// Success branch: status=done, result=agent output.
-		t2.Status = "done"
+		t2.Status = boardtask.StatusDone
 		t2.Result = agentResult
 		t2.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		writeErr := api.writeBoardTask(t2)
@@ -204,14 +205,14 @@ func TestRegression_CompletionCallback_SetsResult(t *testing.T) {
 
 	const failMsg = "execution failed: timeout"
 	func() {
-		mu := api.boardTaskLock(task.Id)
+		mu := api.taskLock.Get(task.Id)
 		mu.Lock()
 		defer mu.Unlock()
 
 		t3, readErr := api.readBoardTask(task.Id)
 		require.NoError(t, readErr)
 		// Failure branch.
-		t3.Status = "failed"
+		t3.Status = boardtask.StatusFailed
 		t3.Result = failMsg
 		t3.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		writeErr := api.writeBoardTask(t3)
@@ -406,6 +407,7 @@ func TestRegression_RestartPersistence(t *testing.T) {
 			onboardingMgr: onboarding.NewManager(home),
 			homePath:      home,
 			taskStore:     taskstore.New(home + "/workflow-tasks"),
+			taskLock:      boardtask.TaskFileLock,
 		}
 	}
 

@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"log/slog"
 	"net/http"
 	"os"
@@ -18,7 +17,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -40,18 +38,18 @@ type boardTask = boardtask.Task
 // Workflow tasks (pkg/taskstore) use queued/assigned/running/completed/failed — never these.
 var gtdStatuses = boardtask.GTDStatuses
 
-// isGTDTask returns true when status is a known GTD status value.
-func isGTDTask(status string) bool {
-	return boardtask.IsGTDStatus(status)
+// boardTaskLock returns the per-task striped lock. It falls back to the package-level
+// singleton when the field is nil (test setups that do not wire taskLock explicitly).
+func (a *restAPI) boardTaskLock() *boardtask.StripedLock {
+	if a.taskLock != nil {
+		return a.taskLock
+	}
+	return boardtask.TaskFileLock
 }
 
-// boardTaskLock returns the striped mutex for the given task ID.
-// The pool is a fixed 64 shards (O(1) memory), keyed by FNV hash of the task ID,
-// matching the pattern in pkg/memory/jsonl.go::JSONLStore.
-func (a *restAPI) boardTaskLock(taskID string) *sync.Mutex {
-	h := fnv.New32a()
-	h.Write([]byte(taskID))
-	return &a.taskStripedMu[h.Sum32()%64]
+// isGTDTask returns true when status is a known GTD status value.
+func isGTDTask(status boardtask.Status) bool {
+	return boardtask.IsGTDStatus(string(status))
 }
 
 // validateBoardTaskAgentID checks that the given agent ID exists in the registry
@@ -83,8 +81,8 @@ func (a *restAPI) validateBoardTaskAgentID(agentID string) error {
 // single rule (every source mapped to the same five non-active targets).
 //
 // Invariant: a PUT may never set status=active; /start is the only path.
-func validateStatusTransition(_, newStatus string) error {
-	if newStatus == "active" {
+func validateStatusTransition(_, newStatus boardtask.Status) error {
+	if newStatus == boardtask.StatusActive {
 		return fmt.Errorf("status 'active' can only be set via POST /start, not via PUT")
 	}
 	return nil
@@ -305,7 +303,7 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		if projectFilter != "" && t.ProjectID != projectFilter {
 			continue
 		}
-		if statusFilter != "" && t.Status != statusFilter {
+		if statusFilter != "" && string(t.Status) != statusFilter {
 			continue
 		}
 		if agentFilter != "" && t.AgentID != agentFilter {
@@ -336,35 +334,13 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build the response. BoardTaskListResponse.Items is an inline anonymous struct
-	// in the generated code, so we use a local shape that is JSON-identical.
-	// gen.BoardTaskListResponse.Items is an inline anonymous struct in the generated code;
-	// use a local shim until oapi-codegen emits a named type for the item shape.
-	type listItem struct { // not-wire-format: local shim for anonymous generated struct item, not a hand-written wire type
-		AgentId     *string                              `json:"agent_id,omitempty"`
-		CreatedAt   time.Time                            `json:"created_at"`
-		Description *string                              `json:"description,omitempty"`
-		Id          string                               `json:"id"`
-		MilestoneId *string                              `json:"milestone_id,omitempty"`
-		Name        string                               `json:"name"`
-		Owner       *string                              `json:"owner,omitempty"`
-		Priority    *int                                 `json:"priority,omitempty"`
-		ProjectId   *string                              `json:"project_id,omitempty"`
-		Prompt      *string                              `json:"prompt,omitempty"`
-		Result      *string                              `json:"result,omitempty"`
-		SessionId   *string                              `json:"session_id,omitempty"`
-		Status      gen.BoardTaskListItemStatus `json:"status"`
-		UpdatedAt   time.Time                            `json:"updated_at"`
-	}
-	type boardTaskListShim struct { // not-wire-format: wrapper for anonymous generated struct, mirrors BoardTaskListResponse exactly
-		Items []listItem `json:"items"`
-		Total int        `json:"total"`
-	}
-
-	items := make([]listItem, 0, len(filtered))
+	// Build the response using the generated gen.BoardTaskListItem type directly.
+	// BoardTaskListResponse.Items is now []gen.BoardTaskListItem (commit 1 promoted
+	// BoardTaskListItem from an allOf wrapper to a plain named object).
+	items := make([]gen.BoardTaskListItem, 0, len(filtered))
 	for _, t := range filtered {
 		wt := toWireBoardTask(t)
-		items = append(items, listItem{
+		items = append(items, gen.BoardTaskListItem{
 			AgentId:     wt.AgentId,
 			CreatedAt:   wt.CreatedAt,
 			Description: wt.Description,
@@ -377,15 +353,14 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 			Prompt:      wt.Prompt,
 			Result:      wt.Result,
 			SessionId:   wt.SessionId,
-			// t.Status is a validated GTD status string (readBoardTask/listBoardTasks
-			// reject non-GTD values); convert via the source string rather than an
-			// enum-to-enum cast.
+			// t.Status is a validated GTD status; convert boardtask.Status → gen.BoardTaskListItemStatus
+			// (both are named string types — no runtime cost).
 			Status:    gen.BoardTaskListItemStatus(t.Status),
 			UpdatedAt: wt.UpdatedAt,
 		})
 	}
 
-	jsonOK(w, boardTaskListShim{Items: items, Total: total})
+	jsonOK(w, gen.BoardTaskListResponse{Items: items, Total: total})
 }
 
 // handleBoardTaskGet handles GET /api/v1/board/tasks/{id}.
@@ -429,9 +404,9 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Determine status; default to inbox.
-	status := "inbox"
+	status := boardtask.StatusInbox
 	if req.Status != nil && string(*req.Status) != "" {
-		status = string(*req.Status)
+		status = boardtask.Status(string(*req.Status))
 	}
 	if !isGTDTask(status) {
 		jsonErr(
@@ -595,7 +570,7 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 
 	// Hold the per-task striped lock for the entire read→mutate→write so that
 	// two concurrent PUTs on the same task do not race.
-	mu := a.boardTaskLock(id)
+	mu := a.boardTaskLock().Get(id)
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -663,7 +638,7 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		existing.Result = *req.Result
 	}
 	if req.Status != nil {
-		newStatus := string(*req.Status)
+		newStatus := boardtask.Status(string(*req.Status))
 		if !isGTDTask(newStatus) {
 			jsonErr(
 				w,
@@ -682,8 +657,8 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		// #405: when transitioning from a terminal/active state to a re-queue state
 		// (next/inbox), auto-clear session_id UNLESS the request explicitly sets it.
 		// This is the defensive backend half; the SPA already sends session_id:"" on retry.
-		terminalOrActive := oldStatus == "done" || oldStatus == "failed" || oldStatus == "active"
-		requeue := newStatus == "next" || newStatus == "inbox"
+		terminalOrActive := oldStatus == boardtask.StatusDone || oldStatus == boardtask.StatusFailed || oldStatus == boardtask.StatusActive
+		requeue := newStatus == boardtask.StatusNext || newStatus == boardtask.StatusInbox
 		if terminalOrActive && requeue && !reqExplicitSessionID {
 			existing.SessionID = ""
 		}
@@ -698,7 +673,7 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 			return
 		}
 		// Clear to "" is allowed unless the task is currently active.
-		if existing.Status == "active" {
+		if existing.Status == boardtask.StatusActive {
 			jsonErr(w, http.StatusForbidden, "clearing session_id on an active task is not allowed")
 			return
 		}
@@ -843,41 +818,50 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleBoardTaskStart handles POST /api/v1/board/tasks/{id}/start.
-func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, id string) {
-	if err := validateEntityID(id); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid task ID")
-		return
-	}
+// startDispatchParams holds the parameters extracted by startBoardTaskLocked
+// that are needed to dispatch agent execution after the lock is released.
+type startDispatchParams struct {
+	agentID   string
+	sessionID string
+	prompt    string
+	projectID string
+	task      boardTask // final task state written to disk (status=active)
+}
 
-	// Hold the per-task striped lock for the entire read→check→write so that two
-	// concurrent /start calls cannot both reach "active" (B8: atomic check-and-set).
-	mu := a.boardTaskLock(id)
+// startBoardTaskLocked performs the locked read→validate→mutate→write phase of
+// POST /start. It acquires the per-task striped lock, does all validation and
+// disk work inside, and releases the lock via defer before returning.
+//
+// Invariant: the lock is always released before this function returns, so the
+// caller dispatches the agent goroutine with the lock already unlocked.
+// This preserves the original semantic: lock is held only for the synchronous
+// RMW, not for the (potentially long) agent execution.
+//
+// On success it returns (params, 0, ""). On error it returns (zero, httpStatus, errMsg).
+func (a *restAPI) startBoardTaskLocked(
+	id string,
+	callerCanAccess func(owner string) bool,
+) (startDispatchParams, int, string) {
+	mu := a.boardTaskLock().Get(id)
 	mu.Lock()
+	defer mu.Unlock()
 
 	existing, err := a.readBoardTask(id)
 	if err != nil {
-		mu.Unlock()
 		if errors.Is(err, os.ErrNotExist) {
-			jsonErr(w, http.StatusNotFound, "board task not found")
-			return
+			return startDispatchParams{}, http.StatusNotFound, "board task not found"
 		}
 		slog.Error("rest: board task: start read failed", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not read board task")
-		return
+		return startDispatchParams{}, http.StatusInternalServerError, "could not read board task"
 	}
 
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	if !a.callerIdentity(r).canAccess(existing.Owner) {
-		mu.Unlock()
-		jsonErr(w, http.StatusNotFound, "board task not found")
-		return
+	if !callerCanAccess(existing.Owner) {
+		return startDispatchParams{}, http.StatusNotFound, "board task not found"
 	}
 
-	if existing.Status == "active" || existing.Status == "done" || existing.Status == "failed" {
-		mu.Unlock()
-		jsonErr(w, http.StatusConflict, "task already started or completed")
-		return
+	if existing.Status == boardtask.StatusActive || existing.Status == boardtask.StatusDone || existing.Status == boardtask.StatusFailed {
+		return startDispatchParams{}, http.StatusConflict, "task already started or completed"
 	}
 
 	agentID := existing.AgentID
@@ -892,17 +876,13 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		}
 	}
 	if agentID == "" {
-		mu.Unlock()
-		jsonErr(w, http.StatusInternalServerError, "no agent configured")
-		return
+		return startDispatchParams{}, http.StatusInternalServerError, "no agent configured"
 	}
 
 	// A2: validate that the resolved agent actually exists in the registry
 	// (when the registry is non-empty — empty means fresh install or test fixture).
 	if err := a.validateBoardTaskAgentID(agentID); err != nil {
-		mu.Unlock()
-		jsonErr(w, http.StatusBadRequest, err.Error())
-		return
+		return startDispatchParams{}, http.StatusBadRequest, err.Error()
 	}
 
 	// Reject early if there's nothing to execute — a task with neither prompt nor
@@ -912,9 +892,7 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		prompt = existing.Description
 	}
 	if prompt == "" {
-		mu.Unlock()
-		jsonErr(w, http.StatusUnprocessableEntity, "task has no prompt or description")
-		return
+		return startDispatchParams{}, http.StatusUnprocessableEntity, "task has no prompt or description"
 	}
 
 	// Use GetAgentStore first — must match processTaskDirect's TranscriptStore.
@@ -924,17 +902,13 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		store = a.agentLoop.GetSessionStore()
 	}
 	if store == nil {
-		mu.Unlock()
-		jsonErr(w, http.StatusInternalServerError, "session store unavailable")
-		return
+		return startDispatchParams{}, http.StatusInternalServerError, "session store unavailable"
 	}
 
 	meta, err := store.NewSession(session.SessionTypeTask, "board", agentID)
 	if err != nil {
-		mu.Unlock()
 		slog.Error("rest: board task: start session create failed", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "failed to create session")
-		return
+		return startDispatchParams{}, http.StatusInternalServerError, "failed to create session"
 	}
 
 	// H2: Link session metadata back to this task — treat failure as fatal.
@@ -948,15 +922,13 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 	// running inside this turn inherit the correct owner (SEC-2/#406, Rule-2).
 	taskOwner := existing.Owner
 	if setErr := store.SetMeta(meta.ID, session.MetaPatch{Title: &title, TaskID: &tid, Owner: &taskOwner}); setErr != nil {
-		mu.Unlock()
 		slog.Error("rest: board task: start set meta failed — aborting dispatch",
 			"id", id, "session_id", meta.ID, "error", setErr)
 		if delErr := store.DeleteSession(meta.ID); delErr != nil {
 			slog.Warn("rest: board task: start orphan session cleanup failed",
 				"id", id, "session_id", meta.ID, "error", delErr)
 		}
-		jsonErr(w, http.StatusInternalServerError, "failed to link session metadata")
-		return
+		return startDispatchParams{}, http.StatusInternalServerError, "failed to link session metadata"
 	}
 
 	// H2: Write the task prompt as the user-turn transcript entry — fatal on failure.
@@ -967,15 +939,13 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		AgentID:   agentID,
 		Timestamp: time.Now().UTC(),
 	}); appendErr != nil {
-		mu.Unlock()
 		slog.Error("rest: board task: start transcript write failed — aborting dispatch",
 			"id", id, "session_id", meta.ID, "error", appendErr)
 		if delErr := store.DeleteSession(meta.ID); delErr != nil {
 			slog.Warn("rest: board task: start orphan session cleanup failed",
 				"id", id, "session_id", meta.ID, "error", delErr)
 		}
-		jsonErr(w, http.StatusInternalServerError, "failed to write session transcript")
-		return
+		return startDispatchParams{}, http.StatusInternalServerError, "failed to write session transcript"
 	}
 
 	if existing.SessionID != "" {
@@ -987,28 +957,49 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		)
 	}
 	existing.SessionID = meta.ID
-	existing.Status = "active"
+	existing.Status = boardtask.StatusActive
 	// #403: persist the resolved agentID so GET /tasks/{id} reflects which agent ran it.
 	existing.AgentID = agentID
 	existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
 	if err := a.writeBoardTask(existing); err != nil {
-		mu.Unlock()
 		slog.Error("rest: board task: start write failed", "id", id, "session_id", meta.ID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "failed to update task")
+		return startDispatchParams{}, http.StatusInternalServerError, "failed to update task"
+	}
+
+	return startDispatchParams{
+		agentID:   agentID,
+		sessionID: meta.ID,
+		prompt:    prompt,
+		projectID: existing.ProjectID,
+		task:      existing,
+	}, 0, ""
+}
+
+// handleBoardTaskStart handles POST /api/v1/board/tasks/{id}/start.
+func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, id string) {
+	if err := validateEntityID(id); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid task ID")
 		return
 	}
 
-	// Release the lock BEFORE dispatching the goroutine — we hold the lock only
-	// for the synchronous read→mutate→write, not for the entire agent execution.
-	mu.Unlock()
+	// startBoardTaskLocked acquires and releases the per-task striped lock inside,
+	// using defer mu.Unlock() so every error path is covered without explicit unlocks.
+	// The lock is released before this function returns, so dispatch is always
+	// outside the critical section (lock held only for synchronous RMW, not execution).
+	c := a.callerIdentity(r)
+	params, httpStatus, errMsg := a.startBoardTaskLocked(id, c.canAccess)
+	if httpStatus != 0 {
+		jsonErr(w, httpStatus, errMsg)
+		return
+	}
 
 	// A1: record the project↔session link so GET /projects/{id}/sessions works for board tasks.
-	if existing.ProjectID != "" {
-		if linkErr := systools.AppendLinkExported(a.homePath, existing.ProjectID, meta.ID); linkErr != nil {
+	if params.projectID != "" {
+		if linkErr := systools.AppendLinkExported(a.homePath, params.projectID, params.sessionID); linkErr != nil {
 			// Non-fatal: log but continue; the task is already dispatched.
 			slog.Warn("rest: board task: start project session link failed",
-				"id", id, "project_id", existing.ProjectID, "session_id", meta.ID, "error", linkErr)
+				"id", id, "project_id", params.projectID, "session_id", params.sessionID, "error", linkErr)
 		}
 	}
 
@@ -1016,8 +1007,8 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		if err := a.auditor.Log(&audit.Entry{
 			Event:     "board_task.start",
 			Decision:  audit.DecisionAllow,
-			AgentID:   agentID,
-			SessionID: meta.ID,
+			AgentID:   params.agentID,
+			SessionID: params.sessionID,
 			Details:   map[string]any{"id": id},
 		}); err != nil {
 			slog.Error("rest: board task: audit log failed", "event", "board_task.start", "error", err)
@@ -1028,9 +1019,12 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 	// done/failed — but only if the task is still active (guard against user retry
 	// resetting the status before the goroutine finishes).
 	taskID := id
-	a.agentLoop.ExecuteBoardTask(agentID, taskID, meta.ID, prompt, func(result string, execErr error) {
+	agentID := params.agentID
+	sessionID := params.sessionID
+	prompt := params.prompt
+	a.agentLoop.ExecuteBoardTask(agentID, taskID, sessionID, prompt, func(result string, execErr error) {
 		// Hold the task lock for the completion RMW as well (B8).
-		cMu := a.boardTaskLock(taskID)
+		cMu := a.boardTaskLock().Get(taskID)
 		cMu.Lock()
 		defer cMu.Unlock()
 
@@ -1039,15 +1033,15 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 			slog.Error("rest: board task: completion read failed", "id", taskID, "error", readErr)
 			return
 		}
-		if t.Status != "active" {
+		if t.Status != boardtask.StatusActive {
 			// Task was modified externally (e.g. user retried) — don't overwrite.
 			return
 		}
 		if execErr != nil {
-			t.Status = "failed"
+			t.Status = boardtask.StatusFailed
 			t.Result = execErr.Error()
 		} else {
-			t.Status = "done"
+			t.Status = boardtask.StatusDone
 			// #404: capture the agent's output string (truncated to 50000 chars).
 			if len(result) > 50000 {
 				result = result[:50000]
@@ -1060,7 +1054,7 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		}
 	})
 
-	jsonAccepted(w, toWireBoardTask(existing))
+	jsonAccepted(w, toWireBoardTask(params.task))
 }
 
 // HandleBoardTasks dispatches requests for /api/v1/board/tasks and /api/v1/board/tasks/{id}.

@@ -43,6 +43,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
@@ -124,6 +125,7 @@ func newTestRestAPIWithProvider(t *testing.T, provider providers.LLMProvider) *r
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
 		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskLock:      boardtask.TaskFileLock,
 	}
 	// H1: drain goroutines before TempDir cleanup.
 	t.Cleanup(func() { api.agentLoop.WaitForActiveRequests() })
@@ -210,7 +212,11 @@ func TestBoardTaskStart_ConcurrentRace(t *testing.T) {
 	assert.Equal(t, winnerSessionID, diskTask.SessionID,
 		"on-disk session_id must equal the winner's session_id")
 
-	validStatuses := map[string]bool{"active": true, "done": true, "failed": true}
+	validStatuses := map[boardtask.Status]bool{
+		boardtask.StatusActive: true,
+		boardtask.StatusDone:   true,
+		boardtask.StatusFailed: true,
+	}
 	assert.True(t, validStatuses[diskTask.Status],
 		"on-disk status must be active/done/failed after /start, got %q", diskTask.Status)
 }
@@ -254,16 +260,16 @@ func TestBoardTaskStart_CompletionVsRequeueRace(t *testing.T) {
 	// Here we reproduce the exact same logic.
 	callbackWroteResult := false
 	func() {
-		mu := api.boardTaskLock(taskID)
+		mu := api.taskLock.Get(taskID)
 		mu.Lock()
 		defer mu.Unlock()
 		diskTask, readErr := api.readBoardTask(taskID)
 		require.NoError(t, readErr)
-		if diskTask.Status != "active" {
+		if diskTask.Status != boardtask.StatusActive {
 			return // guard fires — skip write (this is the production path)
 		}
 		// Reaching here means the guard failed (production bug).
-		diskTask.Status = "done"
+		diskTask.Status = boardtask.StatusDone
 		diskTask.Result = "callback overwrote task — guard failed"
 		diskTask.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		callbackWroteResult = true
@@ -276,7 +282,7 @@ func TestBoardTaskStart_CompletionVsRequeueRace(t *testing.T) {
 	// Verify task still reads as "next" on disk.
 	final, readErr := api.readBoardTask(taskID)
 	require.NoError(t, readErr)
-	assert.Equal(t, "next", final.Status,
+	assert.Equal(t, boardtask.StatusNext, final.Status,
 		"task must remain 'next' — the B8 guard must have prevented any write")
 	assert.Empty(t, final.Result,
 		"result must be empty because the callback guard fired before writing")
@@ -291,15 +297,15 @@ func TestBoardTaskStart_CompletionVsRequeueRace(t *testing.T) {
 
 	activeCallbackWrote := false
 	func() {
-		mu := api.boardTaskLock(activeTaskID)
+		mu := api.taskLock.Get(activeTaskID)
 		mu.Lock()
 		defer mu.Unlock()
 		diskTask, readErr := api.readBoardTask(activeTaskID)
 		require.NoError(t, readErr)
-		if diskTask.Status != "active" {
+		if diskTask.Status != boardtask.StatusActive {
 			return
 		}
-		diskTask.Status = "done"
+		diskTask.Status = boardtask.StatusDone
 		diskTask.Result = "callback wrote result correctly"
 		diskTask.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		activeCallbackWrote = true
@@ -515,20 +521,20 @@ func TestBoardTaskPost_RejectsUnknownAgentID(t *testing.T) {
 func TestValidateStatusTransition_RejectsActive(t *testing.T) {
 	tests := []struct {
 		name        string
-		newStatus   string
+		newStatus   boardtask.Status
 		expectError bool
 	}{
-		{"active is rejected", "active", true},
-		{"inbox is allowed", "inbox", false},
-		{"next is allowed", "next", false},
-		{"waiting is allowed", "waiting", false},
-		{"done is allowed", "done", false},
-		{"failed is allowed", "failed", false},
+		{"active is rejected", boardtask.StatusActive, true},
+		{"inbox is allowed", boardtask.StatusInbox, false},
+		{"next is allowed", boardtask.StatusNext, false},
+		{"waiting is allowed", boardtask.StatusWaiting, false},
+		{"done is allowed", boardtask.StatusDone, false},
+		{"failed is allowed", boardtask.StatusFailed, false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateStatusTransition("inbox", tc.newStatus)
+			err := validateStatusTransition(boardtask.StatusInbox, tc.newStatus)
 			if tc.expectError {
 				assert.Error(t, err,
 					"validateStatusTransition(inbox→%q) must return an error", tc.newStatus)
@@ -542,8 +548,8 @@ func TestValidateStatusTransition_RejectsActive(t *testing.T) {
 	}
 
 	// Differentiation: active errors, next does not.
-	errActive := validateStatusTransition("inbox", "active")
-	errNext := validateStatusTransition("inbox", "next")
+	errActive := validateStatusTransition(boardtask.StatusInbox, boardtask.StatusActive)
+	errNext := validateStatusTransition(boardtask.StatusInbox, boardtask.StatusNext)
 	assert.Error(t, errActive, "active must produce an error (different from next)")
 	assert.NoError(t, errNext, "next must not produce an error (different from active)")
 }

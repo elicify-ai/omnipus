@@ -15,6 +15,8 @@ package gateway
 import (
 	"log/slog"
 	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 )
 
 // reconcileStuckBoardTasks is called once at gateway startup to recover board tasks
@@ -41,10 +43,10 @@ func (a *restAPI) reconcileStuckBoardTasks() {
 	reset := 0
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, t := range tasks {
-		if t.Status != "active" {
+		if t.Status != boardtask.StatusActive {
 			continue
 		}
-		t.Status = "failed"
+		t.Status = boardtask.StatusFailed
 		t.Result = "interrupted: gateway restarted while task was running"
 		t.UpdatedAt = now
 		if writeErr := a.writeBoardTask(t); writeErr != nil {

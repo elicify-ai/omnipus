@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,6 +36,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/agent"
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/channels"
 	whatsappnative "github.com/dapicom-ai/omnipus/pkg/channels/whatsapp_native"
 	"github.com/dapicom-ai/omnipus/pkg/config"
@@ -134,8 +136,10 @@ type restAPI struct {
 
 	// cronService backs the /api/v1/schedules CRUD + run-now + pause endpoints
 	// (#264). Schedules are a contract-first projection over cron.CronJob.
-	// Nil in test setups that do not exercise schedules.
-	cronService *cron.CronService
+	// Stored as an atomic pointer so restartServices can update it from a reload
+	// goroutine without racing against concurrent HTTP schedule handler reads.
+	// Nil/zero in test setups that do not exercise schedules.
+	cronService atomic.Pointer[cron.CronService]
 
 	// notifStore backs /api/v1/notifications (#264). Per-user, file-based.
 	// Nil in test setups that do not exercise notifications.
@@ -146,13 +150,13 @@ type restAPI struct {
 	// may be nil when audit logging is disabled (best-effort — nil-safe callers).
 	auditor *audit.Logger
 
-	// taskStripedMu is a 64-shard mutex pool keyed by FNV hash of the task ID.
-	// Held for the full read→mutate→write cycle of a board task to make RMW
-	// atomic (prevents a race between two concurrent /start calls or between
-	// /start and the completion callback). The pool is fixed-size so memory
-	// usage is O(1) regardless of task count, matching the pattern in
-	// pkg/memory/jsonl.go::JSONLStore.
-	taskStripedMu [64]sync.Mutex
+	// taskLock is the process-wide per-task-ID striped mutex shared by the REST
+	// board task handlers and the sysagent system.task.* tools. Both paths
+	// use boardtask.TaskFileLock (the package-level singleton), which is the
+	// same pointer stored here. Holding the lock for the full read→mutate→write
+	// cycle prevents a race between two concurrent /start calls, between a PUT
+	// and the completion callback, or between a PUT and a sysagent task.update.
+	taskLock *boardtask.StripedLock
 
 	// selfWriteReg is the registry of config.json content hashes written by
 	// the app itself. safeUpdateConfigJSON registers each write here so the

@@ -71,7 +71,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 		MilestoneID: wantMilestoneID,
 		SessionID:   wantSessionID,
 		Result:      wantResult,
-		Status:      "inbox",
+		Status:      boardtask.StatusInbox,
 		ProjectID:   "",
 		AgentID:     wantAgentID,
 		Owner:       wantOwner,
@@ -140,7 +140,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 
 	assert.Equal(t, "Updated Name", got2.Name,
 		"name must still be 'Updated Name' after status-only update (not reverted)")
-	assert.Equal(t, "next", got2.Status,
+	assert.Equal(t, boardtask.StatusNext, got2.Status,
 		"status must be updated to 'next' by second update")
 	assert.Equal(t, wantPrompt, got2.Prompt,
 		"prompt must still be intact after second update")
@@ -210,7 +210,7 @@ func TestRegression_SysagentTaskCreate_FieldsRoundTrip(t *testing.T) {
 	var disk1 boardtask.Task
 	require.NoError(t, json.Unmarshal(rawBytes1, &disk1))
 	assert.Equal(t, "Alpha", disk1.Name, "task1 name must be Alpha on disk")
-	assert.Equal(t, "inbox", disk1.Status, "task1 status must be inbox on disk")
+	assert.Equal(t, boardtask.StatusInbox, disk1.Status, "task1 status must be inbox on disk")
 	assert.Equal(t, "agent-1", disk1.AgentID, "task1 agent_id must be agent-1 on disk")
 	assert.NotEmpty(t, disk1.ID, "task1 ID must be non-empty on disk")
 	assert.NotEmpty(t, disk1.CreatedAt, "task1 created_at must be non-empty on disk")
@@ -220,7 +220,7 @@ func TestRegression_SysagentTaskCreate_FieldsRoundTrip(t *testing.T) {
 	var disk2 boardtask.Task
 	require.NoError(t, json.Unmarshal(rawBytes2, &disk2))
 	assert.Equal(t, "Beta", disk2.Name, "task2 name must be Beta on disk")
-	assert.Equal(t, "next", disk2.Status, "task2 status must be next on disk")
+	assert.Equal(t, boardtask.StatusNext, disk2.Status, "task2 status must be next on disk")
 	assert.Equal(t, "agent-2", disk2.AgentID, "task2 agent_id must be agent-2 on disk")
 
 	// The two tasks must be entirely different.

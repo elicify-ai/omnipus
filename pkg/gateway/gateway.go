@@ -29,6 +29,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/channels"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/dingtalk"
@@ -1385,11 +1386,12 @@ func setupAndStartServices(
 		builtinRegistry: builtinReg,                      // M16: central builtin registry (FR-001)
 		mcpRegistry:     mcpReg,                          // M16: central MCP registry (FR-001)
 		allowGodMode:    allowGodMode,                    // god-mode latch (2)
-		cronService:     runningServices.CronService,     // #264: schedules CRUD
 		notifStore:      runningServices.notifStore,      // #264: notification center
 		auditor:         agentLoop.AuditLogger(),         // shared audit logger for REST mutations
 		selfWriteReg:    selfWriteReg,                    // suppress watcher reload on app-initiated writes
+		taskLock:        boardtask.TaskFileLock,          // shared striped lock for board task RMW
 	}
+	api.cronService.Store(runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
 	// Stash the api ref so RunContextWithOptions can update builtinRegistry
 	// after the M16 live-deps re-population (the ~line 715 reassignment creates a fresh
 	// *BuiltinRegistry that would otherwise not reach the already-constructed api).
@@ -1694,7 +1696,7 @@ func restartServices(
 	// cancelled by the previous Stop(), causing "turn not started: context
 	// canceled" on every RunNow call (#412).
 	if runningServices.restAPIRef != nil {
-		runningServices.restAPIRef.cronService = runningServices.CronService
+		runningServices.restAPIRef.cronService.Store(runningServices.CronService)
 	}
 	fmt.Println("  ✓ Cron service restarted")
 

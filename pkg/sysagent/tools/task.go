@@ -58,9 +58,9 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
-	status := "inbox"
+	status := boardtask.StatusInbox
 	if v, ok := args["status"].(string); ok && gtdStatusSet[v] {
-		status = v
+		status = boardtask.Status(v)
 	}
 	id := ulid.Make().String()
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -108,7 +108,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
 	return tools.NewToolResult(successJSON(map[string]any{
-		"id": id, "name": name, "status": status,
+		"id": id, "name": name, "status": string(status),
 		"project_id": tk.ProjectID, "agent_id": tk.AgentID,
 	}))
 }
@@ -144,6 +144,15 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
+
+	// Acquire the process-wide per-task striped lock before the read→mutate→write
+	// so that a concurrent gateway PUT on the same task cannot interleave and lose
+	// updates (#407). The gateway's handleBoardTaskPut and handleBoardTaskStart use
+	// the same boardtask.TaskFileLock singleton keyed by task ID.
+	mu := boardtask.TaskFileLock.Get(id)
+	mu.Lock()
+	defer mu.Unlock()
+
 	// Field-preserving read: load the FULL on-disk struct so no fields are lost.
 	// The old code used the minimal 8-field `task` struct, which dropped prompt,
 	// priority, milestone_id, session_id, result, and owner on every write.
@@ -152,7 +161,7 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
 			"Use system.task.list to see available tasks"))
 	}
-	if !gtdStatusSet[tk.Status] {
+	if !gtdStatusSet[string(tk.Status)] {
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No GTD task %q", id),
 			"Use system.task.list to see available tasks"))
 	}
@@ -168,11 +177,11 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 	if v, ok := args["status"].(string); ok && gtdStatusSet[v] {
 		// A4: apply the same transition guard as the REST PUT handler.
 		// Only /start may reach "active"; the tool path cannot bypass this.
-		if v == "active" {
+		if v == string(boardtask.StatusActive) {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
 				"status 'active' can only be set via /start, not by the task.update tool", "status"))
 		}
-		tk.Status = v
+		tk.Status = boardtask.Status(v)
 		updated = append(updated, "status")
 	}
 	// Only overwrite agent_id when the caller explicitly provides a non-empty value.
@@ -238,7 +247,7 @@ func (t *TaskDeleteTool) Execute(_ context.Context, args map[string]any) *tools.
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
 			"Use system.task.list to see available tasks"))
 	}
-	if !gtdStatusSet[tk.Status] {
+	if !gtdStatusSet[string(tk.Status)] {
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No GTD task %q", id),
 			"Use system.task.list to see available tasks"))
 	}
@@ -282,7 +291,7 @@ func (t *TaskListTool) Execute(_ context.Context, args map[string]any) *tools.To
 
 	var filtered []gtdTask
 	for _, tk := range all {
-		if !gtdStatusSet[tk.Status] {
+		if !gtdStatusSet[string(tk.Status)] {
 			continue
 		}
 		if projectFilter != "" && tk.ProjectID != projectFilter {
@@ -291,7 +300,7 @@ func (t *TaskListTool) Execute(_ context.Context, args map[string]any) *tools.To
 		if agentFilter != "" && tk.AgentID != agentFilter {
 			continue
 		}
-		if statusFilter != "" && tk.Status != statusFilter {
+		if statusFilter != "" && string(tk.Status) != statusFilter {
 			continue
 		}
 		filtered = append(filtered, tk)

@@ -34,7 +34,7 @@ func seedGTDTask(t *testing.T, home, id, name, status string) {
 	tk := boardtask.Task{
 		ID:        id,
 		Name:      name,
-		Status:    status,
+		Status:    boardtask.Status(status),
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -79,7 +79,7 @@ func TestSysagentTaskUpdate_A4_StatusActiveRejected(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(home, "tasks", taskID+".json"))
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(data, &onDisk))
-	assert.Equal(t, "inbox", onDisk.Status,
+	assert.Equal(t, boardtask.StatusInbox, onDisk.Status,
 		"on-disk status must still be 'inbox' — the A4 guard must not write the file")
 }
 
@@ -115,7 +115,7 @@ func TestSysagentTaskUpdate_A4_StatusNextAllowed(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(home, "tasks", taskID+".json"))
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(data, &onDisk))
-	assert.Equal(t, "next", onDisk.Status,
+	assert.Equal(t, boardtask.StatusNext, onDisk.Status,
 		"on-disk status must be 'next' after a successful update")
 }
 

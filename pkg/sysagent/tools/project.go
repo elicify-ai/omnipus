@@ -92,7 +92,7 @@ func computeTaskCount(home, projectID string) int {
 	}
 	n := 0
 	for i := range tasks {
-		if !gtdStatusSet[tasks[i].Status] {
+		if !gtdStatusSet[string(tasks[i].Status)] {
 			continue
 		}
 		if tasks[i].ProjectID == projectID {
@@ -113,7 +113,7 @@ func computeTaskCounts(home string) map[string]int {
 		return counts
 	}
 	for i := range tasks {
-		if !gtdStatusSet[tasks[i].Status] {
+		if !gtdStatusSet[string(tasks[i].Status)] {
 			continue
 		}
 		if tasks[i].ProjectID != "" {
@@ -377,7 +377,7 @@ func (t *ProjectDeleteTool) Execute(_ context.Context, args map[string]any) *too
 	}
 	tasksDeleted := 0
 	for _, tk := range tasks {
-		if !gtdStatusSet[tk.Status] {
+		if !gtdStatusSet[string(tk.Status)] {
 			continue
 		}
 		if tk.ProjectID == id {

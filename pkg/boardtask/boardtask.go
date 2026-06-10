@@ -18,6 +18,22 @@
 // status alone, so a workflow task with status "failed" is never misclassified as GTD.
 package boardtask
 
+// Status is the typed GTD task status. The wire JSON representation is a plain
+// string (unchanged); using a named type catches accidental mixing with workflow
+// status strings at compile time.
+type Status string
+
+// GTD board task status constants. These are the only valid values for Task.Status.
+// Workflow tasks (pkg/taskstore) use a separate vocabulary; see IsWorkflowStatus.
+const (
+	StatusInbox   Status = "inbox"
+	StatusNext    Status = "next"
+	StatusActive  Status = "active"
+	StatusWaiting Status = "waiting"
+	StatusDone    Status = "done"
+	StatusFailed  Status = "failed"
+)
+
 // Task is the canonical on-disk format for a GTD board task stored at
 // ~/.omnipus/tasks/<id>.json.
 //
@@ -36,7 +52,7 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	SessionID string `json:"session_id,omitempty"`
 	// Result is the execution output; set on done/failed.
 	Result    string `json:"result,omitempty"`
-	Status    string `json:"status"`
+	Status    Status `json:"status"`
 	ProjectID string `json:"project_id,omitempty"`
 	AgentID   string `json:"agent_id,omitempty"`
 	// Owner is the username of the user who owns this task. Set at creation; read-only.
@@ -55,12 +71,12 @@ type Task struct { //nolint:revive // exported name matches package purpose
 // requires the full set (e.g. range iteration or initialisation of a local alias).
 // Do not mutate this map — mutations will corrupt GTD status validation globally.
 var GTDStatuses = map[string]bool{ //nolint:gochecknoglobals
-	"inbox":   true,
-	"next":    true,
-	"active":  true,
-	"waiting": true,
-	"done":    true,
-	"failed":  true,
+	string(StatusInbox):   true,
+	string(StatusNext):    true,
+	string(StatusActive):  true,
+	string(StatusWaiting): true,
+	string(StatusDone):    true,
+	string(StatusFailed):  true,
 }
 
 // IsGTDStatus returns true when status is a known GTD status value.

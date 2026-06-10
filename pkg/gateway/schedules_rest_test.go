@@ -41,7 +41,8 @@ func newSchedulesTestAPI(t *testing.T) (*restAPI, *cron.CronService) {
 	t.Cleanup(cs.Stop)
 
 	notifs := notifications.NewStore(t.TempDir())
-	api := &restAPI{agentLoop: loop, cronService: cs, notifStore: notifs}
+	api := &restAPI{agentLoop: loop, notifStore: notifs}
+	api.cronService.Store(cs)
 	return api, cs
 }
 

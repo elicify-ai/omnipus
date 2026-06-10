@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
@@ -1124,6 +1125,7 @@ func newTestRestAPIWithAgent(t *testing.T) *restAPI {
 		onboardingMgr: onboarding.NewManager(tmpDir),
 		homePath:      tmpDir,
 		taskStore:     taskstore.New(tmpDir + "/workflow-tasks"),
+		taskLock:      boardtask.TaskFileLock,
 	}
 }
 

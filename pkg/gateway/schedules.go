@@ -808,9 +808,15 @@ func toSchedule(job cron.CronJob) gen.Schedule {
 	return s
 }
 
+// cronSvc safely loads the current cron service pointer.
+// Returns nil when the schedules service has not been configured.
+func (a *restAPI) cronSvc() *cron.CronService {
+	return a.cronService.Load()
+}
+
 // HandleSchedules dispatches /api/v1/schedules and /api/v1/schedules/{id}[/run|/pause].
 func (a *restAPI) HandleSchedules(w http.ResponseWriter, r *http.Request) {
-	if a.cronService == nil {
+	if a.cronSvc() == nil {
 		jsonErr(w, http.StatusServiceUnavailable, "schedules service unavailable")
 		return
 	}
@@ -864,7 +870,7 @@ func (a *restAPI) HandleSchedules(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *restAPI) handleListSchedules(w http.ResponseWriter, user *config.UserConfig) {
-	jobs := a.cronService.ListJobs(true)
+	jobs := a.cronSvc().ListJobs(true)
 	// Build a slice of the generated Schedule type, then round-trip the whole
 	// list into gen.ScheduleList. The ScheduleList element is structurally
 	// identical to gen.Schedule, so the JSON marshal/unmarshal maps cleanly
@@ -893,7 +899,7 @@ func (a *restAPI) handleListSchedules(w http.ResponseWriter, user *config.UserCo
 }
 
 func (a *restAPI) handleGetSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
-	job, ok := a.cronService.GetJob(id)
+	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -950,7 +956,7 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 	// atomic write via AddJobFull. The previous AddJob+UpdateJob pair briefly
 	// persisted an owner-less job that could fire and die between the two writes.
 	deliver := derefBool(req.Deliver, false)
-	job, err := a.cronService.AddJobFull(cron.JobSpec{
+	job, err := a.cronSvc().AddJobFull(cron.JobSpec{
 		Name:           req.Name,
 		Schedule:       schedule,
 		Message:        req.Message,
@@ -971,7 +977,7 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 }
 
 func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, user *config.UserConfig, id string) {
-	job, ok := a.cronService.GetJob(id)
+	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -1043,7 +1049,7 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 		job.Schedule = schedule
 	}
 
-	if err := a.cronService.UpdateJob(&job); err != nil {
+	if err := a.cronSvc().UpdateJob(&job); err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to update schedule")
 		return
 	}
@@ -1051,7 +1057,7 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 }
 
 func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
-	job, ok := a.cronService.GetJob(id)
+	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -1060,7 +1066,7 @@ func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, user *config.UserC
 		jsonErr(w, code, msg)
 		return
 	}
-	if !a.cronService.RemoveJob(id) {
+	if !a.cronSvc().RemoveJob(id) {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
 	}
@@ -1068,7 +1074,7 @@ func (a *restAPI) handleDeleteSchedule(w http.ResponseWriter, user *config.UserC
 }
 
 func (a *restAPI) handleRunSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
-	job, ok := a.cronService.GetJob(id)
+	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -1077,7 +1083,7 @@ func (a *restAPI) handleRunSchedule(w http.ResponseWriter, user *config.UserConf
 		jsonErr(w, code, msg)
 		return
 	}
-	status, sessionID, runErr := a.cronService.RunNow(id)
+	status, sessionID, runErr := a.cronSvc().RunNow(id)
 	if status == "" && runErr != nil {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -1097,7 +1103,7 @@ func (a *restAPI) handleRunSchedule(w http.ResponseWriter, user *config.UserConf
 }
 
 func (a *restAPI) handlePauseSchedule(w http.ResponseWriter, user *config.UserConfig, id string) {
-	job, ok := a.cronService.GetJob(id)
+	job, ok := a.cronSvc().GetJob(id)
 	if !ok {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
@@ -1106,7 +1112,7 @@ func (a *restAPI) handlePauseSchedule(w http.ResponseWriter, user *config.UserCo
 		jsonErr(w, code, msg)
 		return
 	}
-	updated := a.cronService.EnableJob(id, !job.Enabled)
+	updated := a.cronSvc().EnableJob(id, !job.Enabled)
 	if updated == nil {
 		jsonErr(w, http.StatusNotFound, "schedule not found")
 		return
