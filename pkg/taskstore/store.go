@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -139,10 +140,16 @@ func (s *TaskStore) load(id string) (*TaskEntity, error) {
 	// A valid workflow file must have a non-empty Title and a workflow status.
 	// Files that look like GTD tasks (have no Title, or have a GTD status) are
 	// not owned by this store — skip them rather than mutating them.
+	// WARN when a present file is structurally rejected so corruption is visible
+	// in operator logs (a silent 404 would hide a corrupt or misplaced file).
 	if raw.Title == "" {
+		slog.Warn("taskstore: rejecting file — no title field (possible GTD task or corrupt file)",
+			"id", id, "path", s.path(id))
 		return nil, fmt.Errorf("taskstore: %w: file %q has no title field (not a workflow task)", ErrNotFound, id)
 	}
 	if !validStatuses[raw.Status] {
+		slog.Warn("taskstore: rejecting file — unrecognized workflow status (possible GTD task or corrupt file)",
+			"id", id, "status", raw.Status, "path", s.path(id))
 		return nil, fmt.Errorf("taskstore: %w: file %q has non-workflow status %q", ErrNotFound, id, raw.Status)
 	}
 

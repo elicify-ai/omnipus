@@ -1361,6 +1361,10 @@ func setupAndStartServices(
 		slog.Error("gateway: inbox project auto-creation failed", "error", inboxErr)
 	}
 
+	// Recover board tasks left "active" by a crashed/abandoned previous process,
+	// before the heartbeat starts and before any handler can race a /start.
+	api.reconcileStuckBoardTasks()
+
 	// Register additional endpoints for frontend features.
 	// These return proper JSON responses instead of letting the SPA catch-all
 	// serve HTML (which causes "Unexpected token '<'" JSON parse errors).

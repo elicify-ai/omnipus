@@ -152,12 +152,15 @@ func Init(home string) error {
 // migrateWorkflowTasks is a one-time, idempotent boot migration that scans
 // ~/.omnipus/tasks/*.json and moves any workflow task files to
 // ~/.omnipus/workflow-tasks/. A workflow task is one that has a non-empty
-// "title" field OR has a workflow status (queued/assigned/running/completed).
+// "title" field OR has a workflow status (queued/assigned/running/completed/failed).
 //
-// Classification rules:
-//   - workflow: title non-empty OR status ∈ {queued, assigned, running, completed}
-//   - GTD: name non-empty OR status ∈ GTD set → leave in place
-//   - ambiguous (neither): leave in tasks/, log WARN
+// Classification rules (in priority order):
+//  1. title non-empty → workflow task, regardless of status (title is the decisive
+//     signal; this correctly handles workflow tasks with status "failed", which also
+//     appears in the GTD vocabulary).
+//  2. name non-empty OR status ∈ GTD set → GTD task, leave in tasks/.
+//  3. status ∈ workflow set (title is empty) → workflow task.
+//  4. neither → ambiguous, leave in tasks/, log WARN.
 //
 // Files that have already been moved (target already exists) are skipped.
 // This function never deletes files — only os.Rename (atomic on same filesystem).
@@ -209,12 +212,17 @@ func migrateWorkflowTasks(home string) {
 			continue
 		}
 
-		isWorkflow := raw.Title != "" || boardtask.WorkflowStatuses[raw.Status]
+		// Classification: title non-empty is the decisive workflow signal and takes
+		// priority over status — this correctly handles workflow tasks with status
+		// "failed", which also appears in the GTD vocabulary.
+		isWorkflow := raw.Title != "" || boardtask.IsWorkflowStatus(raw.Status)
 		isGTD := raw.Name != "" || boardtask.IsGTDStatus(raw.Status)
 
 		switch {
-		case isWorkflow && !isGTD:
-			// Clearly a workflow task — move to workflow-tasks/.
+		case raw.Title != "", isWorkflow && !isGTD:
+			// Non-empty title is decisive: workflow task regardless of status.
+			// Fallthrough: status-only workflow classification when title is empty
+			// and status is workflow-exclusive (no GTD overlap).
 			if renameErr := os.Rename(srcPath, dstPath); renameErr != nil {
 				// os.Rename may fail across filesystems; fall back to copy+delete.
 				if copyErr := fileutil.WriteFileAtomic(dstPath, data, 0o600); copyErr != nil {
@@ -222,8 +230,16 @@ func migrateWorkflowTasks(home string) {
 					continue
 				}
 				if rmErr := os.Remove(srcPath); rmErr != nil {
-					slog.Warn("datamodel: migrate workflow-tasks: remove src after copy failed", "file", e.Name(), "error", rmErr)
-					// Keep the copy at dst; the original stays — we treat it as migrated.
+					// The copy at dst succeeded but we could not remove the source.
+					// The file now exists in BOTH directories — log clearly so an
+					// operator can manually resolve the orphan. Do NOT count this as
+					// moved (the count would misrepresent reality).
+					slog.Warn(
+						"datamodel: migrate workflow-tasks: remove src after copy failed — orphan in both dirs",
+						"src", srcPath, "dst", dstPath, "error", rmErr,
+					)
+					skippedAmbiguous++
+					continue
 				}
 			}
 			movedCount++

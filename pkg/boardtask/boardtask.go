@@ -12,6 +12,10 @@
 // GTD board tasks are distinct from workflow tasks (pkg/taskstore / ~/.omnipus/workflow-tasks/).
 // GTD statuses are: inbox, next, active, waiting, done, failed.
 // Workflow statuses are: queued, assigned, running, completed, failed.
+//
+// Note: "failed" appears in both status vocabularies. During boot migration the
+// disambiguator uses the title field (non-empty title → workflow task) rather than
+// status alone, so a workflow task with status "failed" is never misclassified as GTD.
 package boardtask
 
 // Task is the canonical on-disk format for a GTD board task stored at
@@ -45,7 +49,12 @@ type Task struct { //nolint:revive // exported name matches package purpose
 
 // GTDStatuses is the set of valid GTD task status values.
 // Workflow tasks (pkg/taskstore) use queued/assigned/running/completed/failed — never these.
-var GTDStatuses = map[string]bool{
+//
+// Treat this map as read-only. External callers must use IsGTDStatus for membership
+// tests; the exported map is retained only for backward compatibility with code that
+// requires the full set (e.g. range iteration or initialisation of a local alias).
+// Do not mutate this map — mutations will corrupt GTD status validation globally.
+var GTDStatuses = map[string]bool{ //nolint:gochecknoglobals
 	"inbox":   true,
 	"next":    true,
 	"active":  true,
@@ -59,11 +68,23 @@ func IsGTDStatus(status string) bool {
 	return GTDStatuses[status]
 }
 
-// WorkflowStatuses is the set of valid workflow (taskstore) status values.
-// Used by the boot migration to classify ambiguous files.
-var WorkflowStatuses = map[string]bool{
+// workflowStatuses is the unexported canonical set of valid workflow (taskstore) status values.
+// "failed" is intentionally included: it is a terminal workflow status (see pkg/taskstore
+// validStatuses). Disambiguation between GTD and workflow files with status "failed" is
+// resolved by the title field: a non-empty title wins as workflow regardless of status.
+//
+// Unexported to prevent external mutation; use IsWorkflowStatus for membership tests.
+var workflowStatuses = map[string]bool{
 	"queued":    true,
 	"assigned":  true,
 	"running":   true,
 	"completed": true,
+	"failed":    true,
+}
+
+// IsWorkflowStatus returns true when status is a known workflow (taskstore) status value.
+// Note: "failed" is a valid workflow status; use the title field to disambiguate when
+// a file could belong to either vocabulary.
+func IsWorkflowStatus(status string) bool {
+	return workflowStatuses[status]
 }

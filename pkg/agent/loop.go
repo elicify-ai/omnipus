@@ -2716,13 +2716,19 @@ func (al *AgentLoop) processTaskDirect(
 // goroutine. The session must already exist in the per-agent store (via GetAgentStore).
 // onComplete is called with the result string and execution error once the agent
 // finishes; the caller is responsible for persisting the terminal task status.
-// The goroutine is tracked in activeRequests so WaitForActiveRequests/Close drains it
-// before the process exits.
+//
+// Shutdown behavior:
+//   - Graceful shutdown (Stop + WaitForActiveRequests): the goroutine is tracked in
+//     activeRequests, so WaitForActiveRequests/Close drain it before the process exits
+//     and onComplete is called with the cancellation error, transitioning the task to
+//     "failed" normally.
+//   - Crash / SIGKILL / OOM: the goroutine is abandoned and onComplete never runs,
+//     leaving the task persisted with status "active". On next boot,
+//     gateway.reconcileStuckBoardTasks scans for any task with status=="active" and
+//     resets it to "failed" with a note that the gateway restarted while it was running.
 func (al *AgentLoop) ExecuteBoardTask(agentID, taskID, sessionID, prompt string, onComplete func(string, error)) {
 	// Board-task goroutines run on context.Background() — they are detached from the
-	// HTTP request lifecycle and outlive the Run loop. Stop() cancels in-flight LLM
-	// calls via the provider's own context propagation; the goroutine then records the
-	// error via onComplete so the task transitions to "failed" on shutdown.
+	// HTTP request lifecycle and outlive the Run loop.
 	taskCtx := context.Background()
 
 	al.activeRequests.Add(1)
