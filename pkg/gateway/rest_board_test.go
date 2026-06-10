@@ -1114,6 +1114,10 @@ func newTestRestAPIWithAgent(t *testing.T) *restAPI {
 
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	// H1: drain any in-flight board-task goroutines before TempDir teardown fires.
+	// LIFO cleanup ordering: WaitForActiveRequests runs before al.Close (registered
+	// after mustAgentLoop's al.Close cleanup) and before t.TempDir cleanup.
+	t.Cleanup(func() { al.WaitForActiveRequests() })
 	return &restAPI{
 		agentLoop:     al,
 		allowedOrigin: "http://localhost:3000",
