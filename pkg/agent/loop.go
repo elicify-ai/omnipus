@@ -5370,6 +5370,15 @@ turnLoop:
 				}
 			}
 
+			// Capture the active agent id BEFORE the tool executes. A handoff tool
+			// switches the session's active agent mid-execution (via onHandoffFrontend
+			// → sessionActiveAgent.Store), so resolving AFTER execution would attribute
+			// the connecting tool_call to the TARGET agent. The handoff narration and
+			// the handoff tool_call belong to the SOURCE agent (the one that decided to
+			// connect the user). Resolve here, before the switch, and use this for the
+			// tool_call transcript entry and the ToolExecEnd event below. The target
+			// agent's subsequent turns resolve to the target as normal.
+			preExecAgentID := ts.resolveActiveAgentID()
 			toolStart := time.Now()
 			// Inject the current tool call's ID into the context so that tools like
 			// spawn can read it as their parentSpawnCallID when they in turn call
@@ -5570,7 +5579,11 @@ turnLoop:
 					Async:             toolResult.Async,
 					Result:            contentForLLM,
 					ParentSpawnCallID: session.ToolCallID(ts.parentSpawnCallID),
-					AgentID:           ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
+					// Attribute to the agent active BEFORE this tool ran. For a handoff
+					// tool this is the SOURCE agent — the tool_call that performs the
+					// handoff belongs to the agent that initiated it, not the target it
+					// switched to mid-execution.
+					AgentID: preExecAgentID,
 				},
 			)
 			tcStatus := "success"
@@ -5609,7 +5622,7 @@ turnLoop:
 				}
 				tcRecord.Result = map[string]any{"media": descs}
 			}
-			ts.appendToolCallTranscript(tcRecord)
+			ts.appendToolCallTranscript(tcRecord, preExecAgentID)
 			messages = append(messages, toolResultMsg)
 			if !ts.opts.NoHistory {
 				ts.agent.Sessions.AddFullMessage(ts.sessionKey, toolResultMsg)

@@ -393,7 +393,7 @@ func ensureInboxProject(home string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	inbox := storedProject{
 		ID:        ulid.Make().String(),
-		Name:      "Inbox",
+		Name:      "Main",
 		Status:    string(gen.ProjectStatusActive),
 		Pinned:    false,
 		PinOrder:  0,

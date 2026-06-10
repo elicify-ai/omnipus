@@ -1493,7 +1493,7 @@ func TestHandleBoardTasks_Start(t *testing.T) {
 //
 //	Given a fresh home directory,
 //	When ensureInboxProject is called,
-//	Then GET /api/v1/projects?status=active returns exactly one project with is_default=true and name="Inbox".
+//	Then GET /api/v1/projects?status=active returns exactly one project with is_default=true and name="Main".
 //	When ensureInboxProject is called again,
 //	Then GET /api/v1/projects?status=active still returns exactly one default project (idempotent).
 //
@@ -1508,7 +1508,7 @@ func TestEnsureInboxProject(t *testing.T) {
 		"first ensureInboxProject call must not return an error",
 	)
 
-	// GET /api/v1/projects → must contain exactly one default project named "Inbox".
+	// GET /api/v1/projects → must contain exactly one default project named "Main".
 	wList := httptest.NewRecorder()
 	rList := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
 	rList.URL.Path = "/api/v1/projects"
@@ -1522,8 +1522,8 @@ func TestEnsureInboxProject(t *testing.T) {
 	for _, p := range projects {
 		if p.IsDefault != nil && *p.IsDefault {
 			defaultCount++
-			assert.Equal(t, "Inbox", p.Name, "default project must be named Inbox")
-			assert.Equal(t, gen.ProjectStatusActive, p.Status, "Inbox must have status=active")
+			assert.Equal(t, "Main", p.Name, "default project display name must be 'Main' (renamed from 'Inbox')")
+			assert.Equal(t, gen.ProjectStatusActive, p.Status, "default project must have status=active")
 		}
 	}
 	assert.Equal(t, 1, defaultCount, "exactly one default project must exist after first call")

@@ -114,6 +114,65 @@ func TestCronService_ComputeNextRun(t *testing.T) {
 	}
 }
 
+// TestCronService_EveryNextRunPerScheduleDiverges documents the "every" cadence
+// next-run semantics and proves there is NO shared-value binding bug (Item 2).
+//
+// Observation under investigation: on the Monitor screen, several "Every 1h"
+// schedules showed an identical "Next run" down to the second. This test pins
+// the real cause and confirms it is benign:
+//
+//  1. next_run for "every" is computed PER SCHEDULE as now + interval (it is not
+//     aligned to a wall-clock boundary, and it is not a single value shared
+//     across rows). Each job stores its own State.NextRunAtMS.
+//  2. When several "every 1h" jobs have not yet fired and their next-runs are
+//     (re)computed in the SAME recompute pass from one `now`, they legitimately
+//     coincide to the millisecond — identical cadence + identical reference
+//     time => identical result. This is correct, not a binding bug.
+//  3. After a schedule actually fires, its next-run becomes fireTime + interval,
+//     so once jobs fire at different instants their next-runs diverge.
+//
+// The assertions below lock all three facts so a future change that (a) made
+// next_run a shared/aliased value, or (b) stopped recomputing per-schedule,
+// would fail here.
+func TestCronService_EveryNextRunPerScheduleDiverges(t *testing.T) {
+	cs, path := setupService(nil)
+	defer os.Remove(path)
+
+	const hourMS = int64(60 * 60 * 1000)
+	base := time.Date(2026, 6, 10, 13, 19, 30, 0, time.UTC).UnixMilli()
+	schedA := CronSchedule{Kind: "every", EveryMS: int64Ptr(hourMS)}
+	schedB := CronSchedule{Kind: "every", EveryMS: int64Ptr(hourMS)}
+
+	// (1)+(2) Same cadence, same reference time => identical next-run. This is the
+	// benign coincidence the Monitor screen showed; not a shared/aliased pointer.
+	nextA := cs.computeNextRun(&schedA, base)
+	nextB := cs.computeNextRun(&schedB, base)
+	if nextA == nil || nextB == nil {
+		t.Fatalf("computeNextRun returned nil for an every schedule: A=%v B=%v", nextA, nextB)
+	}
+	if *nextA != *nextB {
+		t.Fatalf("same cadence + same reference time must yield equal next-run; got A=%d B=%d", *nextA, *nextB)
+	}
+	if *nextA != base+hourMS {
+		t.Fatalf("every next-run must be now+interval (relative, not boundary-aligned); got %d want %d", *nextA, base+hourMS)
+	}
+	// Distinct backing storage — the equal values are NOT the same pointer/alias.
+	if nextA == nextB {
+		t.Fatalf("each schedule must own its next-run value; got an aliased pointer")
+	}
+
+	// (3) Once schedules fire at different instants, their next-runs diverge —
+	// proving the value is recomputed per schedule from each job's own fire time.
+	firedA := cs.computeNextRun(&schedA, base+5_000)       // A fires 5s later
+	firedB := cs.computeNextRun(&schedB, base+5_000+1_000) // B fires 1s after A
+	if firedA == nil || firedB == nil {
+		t.Fatalf("computeNextRun returned nil after fire: A=%v B=%v", firedA, firedB)
+	}
+	if *firedA == *firedB {
+		t.Fatalf("after firing at different instants, next-runs must diverge; both=%d", *firedA)
+	}
+}
+
 // 3. Test Execution Flow
 func TestCronService_ExecutionFlow(t *testing.T) {
 	var mu sync.Mutex

@@ -593,11 +593,19 @@ func TestHandleProjects_ConcurrentDelete(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestHandleProjects_InboxAutoCreated verifies that GET /api/v1/projects on a fresh home dir
-// returns a project with is_default=true and name="Inbox".
+// returns a project with is_default=true and display name="Main".
+//
+// Item 1: the default project's DISPLAY name was renamed "Inbox" -> "Main" to
+// avoid colliding with the "Inbox" board column/status. The rename touches the
+// human display name ONLY — the default project is identified by the stable
+// IsDefault flag (used by ensureInboxProject, the sidebar-first sort, and the
+// not-deletable guard), never by the literal display string. This test pins the
+// new display name AND that the default-project identity (is_default=true) is
+// preserved so inbox routing is unaffected.
 // BDD: Given a fresh home directory with no projects,
 // When GET /api/v1/projects is called,
-// Then 200 with an array containing a project where is_default=true and name="Inbox".
-// Traces to: project-task-milestone-spec.md — FR-L2-001 (Inbox auto-creation), FR-INX-1
+// Then 200 with an array containing a project where is_default=true and name="Main".
+// Traces to: project-task-milestone-spec.md — FR-L2-001 (default-project auto-creation), FR-INX-1
 func TestHandleProjects_InboxAutoCreated(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — FR-L2-001 / FR-INX-1: Inbox auto-created on first use
 	api := newTestRestAPIWithHome(t)
@@ -621,16 +629,17 @@ func TestHandleProjects_InboxAutoCreated(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &projects))
 	require.NotEmpty(t, projects, "GET /projects must return at least the Inbox project")
 
-	// Content test: find the default (Inbox) project.
+	// Content test: find the default project. Identity is the is_default flag
+	// (stable routing key); the display name is "Main" after the Item 1 rename.
 	foundInbox := false
 	for _, p := range projects {
 		if p.IsDefault != nil && *p.IsDefault {
 			foundInbox = true
-			assert.Equal(t, "Inbox", p.Name, "the default project must have name 'Inbox'")
-			assert.Equal(t, gen.ProjectStatusActive, p.Status, "Inbox project must be active")
+			assert.Equal(t, "Main", p.Name, "the default project's display name must be 'Main' (renamed from 'Inbox')")
+			assert.Equal(t, gen.ProjectStatusActive, p.Status, "default project must be active")
 		}
 	}
-	assert.True(t, foundInbox, "GET /projects must contain a project with is_default=true (Inbox)")
+	assert.True(t, foundInbox, "GET /projects must contain a project with is_default=true (the default/Main project)")
 }
 
 // TestHandleProjects_InboxNotDeletable verifies that DELETE /api/v1/projects/<inbox-id> returns 409.

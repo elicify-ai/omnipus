@@ -188,7 +188,7 @@ func TestTurnState_Abandoned_SuppressesAppendToolCallTranscript(t *testing.T) {
 	ts.appendToolCallTranscript(session.ToolCall{
 		ID:   "tc-001",
 		Tool: "some.tool",
-	})
+	}, "")
 
 	// Counter must have incremented.
 	assert.Equal(t, before+1, AbandonedWritesSuppressed(), "suppressed counter must increment")
@@ -243,4 +243,60 @@ func TestTurnState_Abandoned_SuppressesFinalizeStreamer(t *testing.T) {
 
 	assert.Equal(t, before+1, AbandonedWritesSuppressed(), "suppressed counter must increment")
 	assert.Equal(t, 0, ms.finalizeCalled, "Finalize must NOT be called when abandoned")
+}
+
+// TestAppendToolCallTranscript_HandoffAttributedToSource verifies Item 3: the
+// handoff tool_call entry is attributed to the SOURCE agent (the one that
+// initiated the handoff), not the target the session switched to mid-execution.
+//
+// The handoff tool's Execute switches sessionActiveAgent to the target, so by
+// the time the tool_call entry is written, resolveActiveAgentID() would return
+// the target. The loop captures the active agent id BEFORE the tool runs
+// (preExecAgentID = source) and passes it explicitly. This test simulates that:
+// the resolver returns the TARGET (post-switch), yet the explicit source id wins.
+//
+// BDD: Given a turn whose active-agent resolver reflects a completed handoff
+//
+//	(resolver -> target "ray"),
+//
+// When appendToolCallTranscript is called with the pre-exec source id "mia",
+// Then the persisted tool_call entry carries agent_id "mia" (source).
+// And: when called WITHOUT an explicit id, it falls back to the resolver (target).
+func TestAppendToolCallTranscript_HandoffAttributedToSource(t *testing.T) {
+	store, err := session.NewUnifiedStore(t.TempDir())
+	require.NoError(t, err)
+	sessionID, err := session.NewSessionID()
+	require.NoError(t, err)
+
+	ts := &turnState{
+		agentID:             "mia",
+		transcriptStore:     store,
+		transcriptSessionID: sessionID,
+		// Resolver reflects the POST-handoff active agent (target). Without the
+		// explicit source id, this is what an entry would be attributed to.
+		activeAgentResolver: func() string { return "ray" },
+	}
+
+	// Handoff tool_call: attribute to the SOURCE captured before execution.
+	ts.appendToolCallTranscript(session.ToolCall{ID: "handoff-1", Tool: "handoff", Status: "success"}, "mia")
+	// A normal subsequent tool_call with no explicit id falls back to the resolver
+	// (the target, now the active agent) — proving the target keeps its own id.
+	ts.appendToolCallTranscript(session.ToolCall{ID: "after-1", Tool: "some.tool", Status: "success"}, "")
+
+	entries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+
+	got := map[string]string{}
+	for _, e := range entries {
+		if e.Type != session.EntryTypeToolCall {
+			continue
+		}
+		for _, c := range e.ToolCalls {
+			got[string(c.ID)] = e.AgentID
+		}
+	}
+	assert.Equal(t, "mia", got["handoff-1"],
+		"handoff tool_call must be attributed to the SOURCE agent (mia), not the target")
+	assert.Equal(t, "ray", got["after-1"],
+		"a non-handoff tool_call with no explicit id must fall back to the runtime-current (target) agent")
 }
