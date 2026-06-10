@@ -72,3 +72,25 @@ export const agentCards = (page: Page) =>
  */
 export const newChatButton = (page: Page) =>
   page.getByRole('banner').getByRole('button', { name: 'New Chat' });
+
+/**
+ * Switch the active chat agent via the header agent picker.
+ *
+ * Spawn-dependent E2E specs must run against a general-purpose task agent
+ * (default: Jim) rather than the default agent Mia: Mia's "guide" persona makes
+ * the model REFUSE to emit `spawn` ("My role is to explain… not to spawn
+ * subagents"), so spawn-expecting assertions never see a SubagentBlock.
+ *
+ * Reuses the established picker pattern from chat.spec.ts (open menu →
+ * click menuitem → assert the picker label updated).
+ */
+export const selectAgent = async (page: Page, name: string | RegExp = /Jim/i) => {
+  const picker = agentPicker(page);
+  await picker.waitFor({ state: 'visible', timeout: 15_000 });
+  await picker.click();
+  await page.getByRole('menuitem', { name }).click();
+  // Assert the picker label updated so we know the switch took effect.
+  const label = typeof name === 'string' ? new RegExp(name, 'i') : name;
+  await page.getByRole('banner').locator('button').filter({ hasText: label }).first()
+    .waitFor({ state: 'visible', timeout: 5_000 });
+};

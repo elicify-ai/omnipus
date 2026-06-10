@@ -109,11 +109,33 @@ test('(d) all tabs reachable via keyboard navigation (ArrowKeys)', async ({ page
 
   // Verify wrap-around: one more ArrowRight from the last tab cycles back to
   // the first. This proves the entire tablist is keyboard-reachable in a loop.
-  await page.keyboard.press('ArrowRight');
-  const afterWrapActive = tabList.locator('[role="tab"][data-state="active"]').first();
-  const afterWrapAriaControls = await afterWrapActive.getAttribute('aria-controls');
+  //
+  // Radix automatic-activation timing: the loop above lands focus+active on the
+  // LAST tab, but Radix activates focus on a microtask and re-renders the panel
+  // asynchronously. Before pressing the wrap ArrowRight, re-assert focus is
+  // settled on the last (active) tab, otherwise the keypress can race a not-yet-
+  // committed focus and land on the wrong tab. Then poll the post-wrap
+  // aria-controls to absorb the panel re-render settle.
+  const lastActive = tabList.locator('[role="tab"][data-state="active"]').first();
+  await expect(lastActive).toBeFocused({ timeout: 5_000 });
+
   const initialAriaControls = await initialActive.getAttribute('aria-controls');
-  expect(afterWrapAriaControls).toBe(initialAriaControls);
+
+  await page.keyboard.press('ArrowRight');
+
+  // Poll for the wrap to complete: the now-active tab's aria-controls must equal
+  // the first tab's. Polling absorbs Radix's asynchronous activation + panel
+  // re-render without weakening the assertion (we still require wrap-to-first).
+  await expect
+    .poll(
+      async () =>
+        tabList
+          .locator('[role="tab"][data-state="active"]')
+          .first()
+          .getAttribute('aria-controls'),
+      { timeout: 5_000 },
+    )
+    .toBe(initialAriaControls);
 });
 
 test('(e) tool-policy "Always Allow" toggle persists across page reload', async ({ page }) => {

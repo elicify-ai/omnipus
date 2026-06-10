@@ -89,9 +89,9 @@ test('(b) approval-queue: policy=ask tool call triggers approval modal and Appro
 
   // Wait for the approval modal (data-testid="approval-modal" from ExecApprovalBlock).
   // 120s timeout: under real-LLM determinism and prolonged suite load
-  // (~10 min wall-clock by the time this test runs), z-ai/glm-5v-turbo enters
-  // extended thinking mode and can take 60-90s before calling exec.
-  // test.slow() gives 270s total; 120s here leaves ample time for approval.
+  // (~10 min wall-clock by the time this test runs), google/gemini-2.5-flash
+  // can take 60-90s before calling exec. test.slow() gives 270s total; 120s
+  // here leaves ample time for approval.
   const approvalModal = page.getByTestId('approval-modal');
   await expect(approvalModal).toBeVisible({ timeout: 120_000 });
 
