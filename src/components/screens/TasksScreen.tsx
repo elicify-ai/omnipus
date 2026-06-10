@@ -53,6 +53,14 @@ const COLUMNS: { status: BoardStatus; label: string }[] = [
   { status: 'done',    label: 'Done' },
 ]
 
+// Status options for the inline status-change <Select> on a task card.
+// Excludes 'active' — active is set only via /start (a dedicated API action),
+// not via a direct PUT-status update. Offering it would return a 403 from the
+// backend. The narrowed BoardUpdateStatus type enforces this at compile time.
+const CHANGE_STATUS_OPTIONS: { status: BoardUpdateStatus; label: string }[] = COLUMNS.filter(
+  (col): col is { status: BoardUpdateStatus; label: string } => col.status !== 'active',
+)
+
 // ── Create Task slide-over ────────────────────────────────────────────────────
 
 interface CreateTaskSlideOverProps {
@@ -262,7 +270,9 @@ function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
 interface TaskCardProps {
   task: BoardTask
   onDelete: (id: string) => void
-  onStatusChange: (id: string, status: BoardStatus) => void
+  // BoardUpdateStatus excludes 'active' — the change dropdown only offers
+  // statuses that the PUT endpoint accepts (active is /start-only).
+  onStatusChange: (id: string, status: BoardUpdateStatus) => void
   isDeleting: boolean
   isUpdating: boolean
 }
@@ -305,19 +315,19 @@ function TaskCard({ task, onDelete, onStatusChange, isDeleting, isUpdating }: Ta
               {task.description}
             </p>
           )}
-          {/* Inline status change (US-7) */}
+          {/* Inline status change (US-7) — active excluded (set via /start only) */}
           <div className="flex items-center gap-2">
             <span className="text-xs text-[var(--color-muted)]">Status</span>
             <Select
               value={task.status}
-              onValueChange={(v) => onStatusChange(task.id, v as BoardStatus)}
+              onValueChange={(v) => onStatusChange(task.id, v as BoardUpdateStatus)}
               disabled={isUpdating}
             >
               <SelectTrigger className="h-7 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] flex-1">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {COLUMNS.map((col) => (
+                {CHANGE_STATUS_OPTIONS.map((col) => (
                   <SelectItem key={col.status} value={col.status} className="text-xs">
                     {col.label}
                   </SelectItem>
@@ -347,7 +357,7 @@ interface ColumnProps {
   label: string
   tasks: BoardTask[]
   onDelete: (id: string) => void
-  onStatusChange: (id: string, status: BoardStatus) => void
+  onStatusChange: (id: string, status: BoardUpdateStatus) => void
   deletingIds: Set<string>
   updatingIds: Set<string>
 }
@@ -541,7 +551,7 @@ export function TasksScreen() {
               label={col.label}
               tasks={tasks.filter((t) => t.status === col.status)}
               onDelete={(id) => deleteMutation.mutate(id)}
-              onStatusChange={(id, status) => updateMutation.mutate({ id, status: status as BoardUpdateStatus })}
+              onStatusChange={(id, status) => updateMutation.mutate({ id, status })}
               deletingIds={deletingIds}
               updatingIds={updatingIds}
             />

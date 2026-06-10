@@ -26,17 +26,19 @@ export const queryClient = new QueryClient({
       // would produce a toast storm (4 toasts per failure with default retry:3).
       // Never retry 401/403 — these are auth errors that will keep failing with
       // the same token and would flood the console before the redirect fires.
+      // Never retry 404 — a missing resource will not appear on retry (e.g. a
+      // just-deleted schedule whose refetch fires after the delete onSuccess).
       retry: (failureCount, err) =>
         !(err instanceof ApiSchemaError) &&
-        !(err instanceof ApiError && (err.status === 401 || err.status === 403)) &&
+        !(err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404)) &&
         failureCount < 3,
       retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 30_000),
     },
     mutations: {
-      // Same guard for mutations: schema mismatches and auth errors are not transient.
+      // Same guard for mutations: schema mismatches, auth errors, and 404s are not transient.
       retry: (failureCount, err) =>
         !(err instanceof ApiSchemaError) &&
-        !(err instanceof ApiError && (err.status === 401 || err.status === 403)) &&
+        !(err instanceof ApiError && (err.status === 401 || err.status === 403 || err.status === 404)) &&
         failureCount < 3,
     },
   },

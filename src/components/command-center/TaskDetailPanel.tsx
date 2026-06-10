@@ -15,6 +15,7 @@ import {
   projectsQueryKeys,
 } from '@/lib/api'
 import type { Task, BoardTask, BoardTaskUpdateRequest } from '@/lib/api'
+import type { BoardTaskUpdateStatus } from '@/lib/api/generated/openapi-types'
 import {
   Sheet,
   SheetContent,
@@ -49,12 +50,14 @@ const WORKFLOW_STATUS_OPTIONS: { value: Task['status']; label: string; color: st
   { value: 'failed',    label: 'Failed',    color: 'text-red-400' },
 ]
 
-// GTD board task statuses (taskMode === 'gtd')
-type GTDStatus = BoardTask['status']
-const GTD_STATUS_OPTIONS: { value: GTDStatus; label: string; color: string }[] = [
+// GTD board task statuses for the status-change dropdown (taskMode === 'gtd').
+// 'active' is intentionally excluded — it is set only via /start (a dedicated API
+// action). Offering it in the change dropdown would return a 403. The task's
+// current status badge still shows 'active' when the task IS active (read-only).
+type GTDChangeStatus = BoardTaskUpdateStatus
+const GTD_STATUS_OPTIONS: { value: GTDChangeStatus; label: string; color: string }[] = [
   { value: 'inbox',   label: 'Inbox',   color: 'text-[var(--color-muted)]' },
   { value: 'next',    label: 'Next',    color: 'text-blue-400' },
-  { value: 'active',  label: 'Active',  color: 'text-yellow-400' },
   { value: 'waiting', label: 'Waiting', color: 'text-purple-400' },
   { value: 'done',    label: 'Done',    color: 'text-green-400' },
   { value: 'failed',  label: 'Failed',  color: 'text-red-400' },
@@ -276,11 +279,11 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
         />
       </Field>
 
-      {/* Status — all 6 values (FR-L2-023) */}
+      {/* Status change — active excluded (set via /start only); badge above shows read-only current status */}
       <Field label="Status">
         <SmartSelect
           value={task.status}
-          onValueChange={(val) => doUpdate({ status: val as BoardTaskUpdateRequest['status'] })}
+          onValueChange={(val) => doUpdate({ status: val as GTDChangeStatus })}
           triggerClassName="h-8 text-xs"
           items={GTD_STATUS_OPTIONS.map((o) => ({
             value: o.value,

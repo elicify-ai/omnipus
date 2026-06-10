@@ -214,6 +214,12 @@ function buildTrigger(form: FormState): ScheduleTrigger {
  * Build a human-readable description of the trigger derived from form state,
  * used by NextRunPreview. Returns null when inputs are incomplete/invalid.
  */
+/** Pluralize a unit label based on count. "1 hour", "2 hours", etc. */
+function pluralizeUnit(n: number, unit: EveryUnit): string {
+  const singular: Record<EveryUnit, string> = { minutes: 'minute', hours: 'hour', days: 'day' }
+  return n === 1 ? singular[unit] : unit
+}
+
 function formTriggerDescription(form: FormState): string | null {
   switch (form.friendlyMode) {
     case 'once':
@@ -223,7 +229,7 @@ function formTriggerDescription(form: FormState): string | null {
       if (form.repeatShape === 'interval') {
         const n = parseInt(form.everyValue, 10)
         if (isNaN(n) || n < 1) return null
-        return `Every ${n} ${form.everyUnit}`
+        return `Every ${n} ${pluralizeUnit(n, form.everyUnit)}`
       }
       const cron = buildRepeatCron(form.repeatShape, form.repeatTime, form.weekday, form.monthDay)
       if (!cron) return null
