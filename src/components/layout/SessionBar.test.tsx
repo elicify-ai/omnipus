@@ -93,19 +93,38 @@ describe('SessionBar — rendering (test #11)', () => {
   })
 
   it('navigates to "/" when New Chat is clicked (fix #417)', async () => {
-    // Regression test: "New Chat" from a session route must navigate to '/'
-    // so RootChatScreen mounts and its useEffect wires the first-send
-    // navigation to /sessions/<newId>. Previously startNewSession() was
-    // called directly without navigating, leaving the URL at the old session.
-    renderBar()
-    // Wait for the button to appear (agents query must resolve first).
-    const [newChatBtn] = await vi.waitFor(() => {
-      const btns = screen.getAllByRole('button', { name: /new chat/i })
-      if (btns.length === 0) throw new Error('not rendered')
-      return btns
-    })
-    fireEvent.click(newChatBtn)
-    expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
+    // #417 is fixed structurally in RootChatScreen (the "/" route), NOT here:
+    // New Chat simply navigates to "/", exactly like the sidebar "Chat" link,
+    // and RootChatScreen owns the new-session lifecycle (clear on mount + a
+    // stale-safe forward-navigation guard). See -index.test.tsx for the
+    // no-bounce regression coverage. This test pins SessionBar's only
+    // responsibility: route to "/".
+    //
+    // SessionBar must NOT pre-clear the store itself — doing so would resurrect
+    // the dual-source reconciliation the structural fix removed — so we also
+    // assert it does not call startNewSession.
+    const startNewSessionSpy = vi.spyOn(useSessionStore.getState(), 'startNewSession')
+
+    try {
+      renderBar()
+      const [newChatBtn] = await vi.waitFor(() => {
+        const btns = screen.getAllByRole('button', { name: /new chat/i })
+        if (btns.length === 0) throw new Error('not rendered')
+        return btns
+      })
+
+      // Precondition: a session is active before the click.
+      expect(useSessionStore.getState().activeSessionId).toBe('sess_1')
+
+      fireEvent.click(newChatBtn)
+
+      // New Chat routes to "/" — RootChatScreen takes it from there.
+      expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
+      // It does NOT clear the store itself (the route owns that now).
+      expect(startNewSessionSpy).not.toHaveBeenCalled()
+    } finally {
+      startNewSessionSpy.mockRestore()
+    }
   })
 })
 

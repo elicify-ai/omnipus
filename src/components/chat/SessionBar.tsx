@@ -26,19 +26,16 @@ function formatTokens(tokens: number): string {
 }
 
 export function SessionBar() {
-  const { activeAgentId, activeSessionId, setActiveSession, startNewSession } = useSessionStore()
+  const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
   const { sessionTokens, sessionCost, isStreaming } = useChatStore()
   const navigate = useNavigate()
 
-  // Fix for #417: start a fresh session (clears activeSessionId to null, keeps the
-  // current agent) BEFORE navigating to '/'. This matters because RootChatScreen's
-  // navigation effect fires on mount and, if activeSessionId is still the OLD session,
-  // immediately navigates back to /sessions/<old-id> — bouncing the URL and leaving
-  // the new conversation under a stale URL. Clearing first means RootChatScreen mounts
-  // with activeSessionId=null (no bounce); the URL then updates to /sessions/<newId>
-  // once session_started arrives after the first sent message.
+  // New Chat just navigates to "/". RootChatScreen owns the new-session
+  // lifecycle: it clears the active session on mount and only advances the URL
+  // when a session is genuinely minted there, so a stale activeSessionId can no
+  // longer bounce the URL back to the old conversation (#417). This is identical
+  // to clicking the sidebar "Chat" link — the route is the single source of truth.
   const handleNewChat = () => {
-    startNewSession()
     void navigate({ to: '/' })
   }
 
