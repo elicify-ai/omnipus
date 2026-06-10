@@ -1361,8 +1361,9 @@ func setupAndStartServices(
 		slog.Error("gateway: inbox project auto-creation failed", "error", inboxErr)
 	}
 
-	// Recover board tasks left "active" by a crashed/abandoned previous process,
-	// before the heartbeat starts and before any handler can race a /start.
+	// Recover board tasks left "active" by a crashed/abandoned previous process.
+	// Runs before the HTTP listener accepts connections (StartAll, below), so no
+	// /start handler can race reconciliation.
 	api.reconcileStuckBoardTasks()
 
 	// Register additional endpoints for frontend features.
