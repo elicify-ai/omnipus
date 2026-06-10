@@ -2397,6 +2397,19 @@ func (s *wsStreamer) SuppressTranscriptWrite() {
 	s.statsMu.Unlock()
 }
 
+// StreamedContentLen reports how many bytes of streamed content this streamer
+// has already emitted to the client for the current attempt. The agent loop's
+// inline-retry guard uses this to avoid re-streaming a full response onto a
+// partially-streamed bubble after a mid-stream transport drop (which would
+// visibly duplicate text in the SPA, since the dropped attempt sent no `done`
+// frame). Guarded by statsMu — the same mutex Update holds when it appends to
+// accumulated — so the read is race-free across goroutines.
+func (s *wsStreamer) StreamedContentLen() int {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	return s.accumulated.Len()
+}
+
 // SetTurnStats is called by the agent loop's finalizeStreamer just before
 // Finalize. Implements the streamerStatsSetter interface from pkg/agent.
 func (s *wsStreamer) SetTurnStats(tokens int64, costUSD float64, duration time.Duration) {
@@ -2438,7 +2451,13 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 		slog.Warn("ws: token backpressure", "session_id", s.sessionID, "chat_id", s.chatID, "agent_id", s.agentID)
 		return fmt.Errorf("ws: token channel full, token dropped")
 	}
+	// Guarded by statsMu so StreamedContentLen() (read by the agent loop's
+	// inline-retry guard, possibly from a different goroutine) observes a
+	// consistent length. Finalize reads accumulated only after streaming has
+	// completed, so it remains lock-free there.
+	s.statsMu.Lock()
 	s.accumulated.WriteString(content)
+	s.statsMu.Unlock()
 	// Cross-browser session attach (#133): also forward the token to every
 	// other connection bound to the same session. The originating chat
 	// already received the frame above; secondary tabs see the live stream

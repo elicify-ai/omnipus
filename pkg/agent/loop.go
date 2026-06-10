@@ -4492,6 +4492,34 @@ turnLoop:
 			}
 
 			if isTimeoutError && retry < maxRetries {
+				// FIX 2: re-check hard-abort FIRST. A user cancel mid-stream can
+				// surface as a transport-drop string (classified FailoverTimeout)
+				// rather than context.Canceled. Without this guard the branch would
+				// emit a spurious "Retrying…" message + stray LLMRetry/TurnTimeout
+				// events before the cancelled turnCtx collapses the backoff. Breaking
+				// here lets the cancelled turn finalize quietly.
+				if ts.hardAbortRequested() {
+					break
+				}
+				// FIX 1: only inline-retry a transport-drop when NO partial content
+				// was already streamed to the client for this attempt. If tokens were
+				// already streamed, the dropped attempt sent no `done` frame, so the
+				// SPA's bubble stays in "streaming" state; re-streaming the full
+				// response on retry would concatenate attempt-2 onto attempt-1 and
+				// visibly duplicate text. In that case break instead — the turn
+				// surfaces the error normally and the SPA finalizes the bubble as
+				// interrupted. When there is no active streamer (non-streaming /
+				// Chat path) or it streamed nothing yet (drop before the first
+				// token — the common, safe case), retry as before.
+				if sc, ok := ts.lastStreamer.(interface{ StreamedContentLen() int }); ok && sc.StreamedContentLen() > 0 {
+					logger.WarnCF("agent", "Transport drop after partial stream; not inline-retrying to avoid duplicated text", map[string]any{
+						"agent_id":  ts.agent.ID,
+						"iteration": iteration,
+						"streamed":  sc.StreamedContentLen(),
+						"error":     err.Error(),
+					})
+					break
+				}
 				// I1: emit EventKindTurnTimeout when a timeout error is detected.
 				al.emitEvent(
 					EventKindTurnTimeout,
