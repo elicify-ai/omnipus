@@ -186,84 +186,53 @@ func TestRegression_MigrateWorkflowTasks_Idempotent(t *testing.T) {
 		"workflow-tasks/ file must still be unchanged after third Init")
 }
 
-// TestRegression_MigrateWorkflowTasks_WorkflowStatusOnly verifies that a file
-// with ONLY a workflow status (no "title") is still classified as workflow.
-//
-// BDD:
-// Given tasks/ contains a file with status:"running" and no title/name fields,
-// When Init() runs,
-// Then the file is moved to workflow-tasks/ (WorkflowStatuses match).
+// assertStatusOnlyMigration seeds tasks/ with a single file carrying only the
+// given status (no title/name) and asserts whether Init() relocates it to
+// workflow-tasks/ (wantWorkflow=true) or leaves it in tasks/ (wantWorkflow=false).
 //
 // Traces to: feat/level1-project-task-mgmt — #402/#397 status-only classification
-func TestRegression_MigrateWorkflowTasks_WorkflowStatusOnly(t *testing.T) {
-	// Traces to: #402/#397 — workflow status alone is sufficient to trigger migration
+func assertStatusOnlyMigration(t *testing.T, id, status string, wantWorkflow bool) {
+	t.Helper()
 	home := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(home, "tasks"), 0o700))
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	// Only "running" status — no title, no name.
 	taskBytes, err := json.Marshal(map[string]any{
-		"id":         "01JXMIGRATE_STATONLY01",
-		"status":     "running",
+		"id":         id,
+		"status":     status, // status only — no title, no name
 		"created_at": now,
 		"updated_at": now,
 	})
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
-		filepath.Join(home, "tasks", "01JXMIGRATE_STATONLY01.json"),
-		taskBytes, 0o600,
-	))
+	require.NoError(t, os.WriteFile(filepath.Join(home, "tasks", id+".json"), taskBytes, 0o600))
 
 	require.NoError(t, Init(home))
 
-	_, err = os.Stat(filepath.Join(home, "workflow-tasks", "01JXMIGRATE_STATONLY01.json"))
-	assert.NoError(t, err,
-		"file with only a workflow status ('running') must be moved to workflow-tasks/")
-
-	_, err = os.Stat(filepath.Join(home, "tasks", "01JXMIGRATE_STATONLY01.json"))
-	assert.True(t, os.IsNotExist(err),
-		"file with only a workflow status must be removed from tasks/")
+	inWorkflow := filepath.Join(home, "workflow-tasks", id+".json")
+	inTasks := filepath.Join(home, "tasks", id+".json")
+	if wantWorkflow {
+		_, err = os.Stat(inWorkflow)
+		assert.NoError(t, err, "status %q must be moved to workflow-tasks/", status)
+		_, err = os.Stat(inTasks)
+		assert.True(t, os.IsNotExist(err), "status %q must be removed from tasks/", status)
+	} else {
+		_, err = os.Stat(inTasks)
+		assert.NoError(t, err, "status %q must remain in tasks/", status)
+		_, err = os.Stat(inWorkflow)
+		assert.True(t, os.IsNotExist(err), "status %q must NOT be copied to workflow-tasks/", status)
+	}
 }
 
-// TestRegression_MigrateWorkflowTasks_GTDStatusOnly verifies that a file with
-// ONLY a GTD status (no "name") is left in tasks/ (GTD classification wins).
-//
-// BDD:
-// Given tasks/ contains a file with status:"next" and no name/title fields,
-// When Init() runs,
-// Then the file remains in tasks/ (GTD status — leave in place).
-//
-// Traces to: feat/level1-project-task-mgmt — #402/#397 GTD status classification
+// TestRegression_MigrateWorkflowTasks_WorkflowStatusOnly: a file with ONLY a
+// workflow status (no "title") is still classified as workflow and moved.
+func TestRegression_MigrateWorkflowTasks_WorkflowStatusOnly(t *testing.T) {
+	assertStatusOnlyMigration(t, "01JXMIGRATE_STATONLY01", "running", true)
+}
+
+// TestRegression_MigrateWorkflowTasks_GTDStatusOnly: a file with ONLY a GTD
+// status (no "name") is left in tasks/ (GTD classification wins).
 func TestRegression_MigrateWorkflowTasks_GTDStatusOnly(t *testing.T) {
-	// Traces to: #402/#397 — GTD status alone leaves the file in tasks/
-	home := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(home, "tasks"), 0o700))
-
-	now := time.Now().UTC().Format(time.RFC3339)
-	// Only "next" status — no title, no name.
-	taskBytes, err := json.Marshal(map[string]any{
-		"id":         "01JXMIGRATE_GTDSTAT01",
-		"status":     "next",
-		"created_at": now,
-		"updated_at": now,
-	})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
-		filepath.Join(home, "tasks", "01JXMIGRATE_GTDSTAT01.json"),
-		taskBytes, 0o600,
-	))
-
-	require.NoError(t, Init(home))
-
-	// Must stay in tasks/.
-	_, err = os.Stat(filepath.Join(home, "tasks", "01JXMIGRATE_GTDSTAT01.json"))
-	assert.NoError(t, err,
-		"file with only a GTD status ('next') must remain in tasks/")
-
-	// Must NOT be in workflow-tasks/.
-	_, err = os.Stat(filepath.Join(home, "workflow-tasks", "01JXMIGRATE_GTDSTAT01.json"))
-	assert.True(t, os.IsNotExist(err),
-		"file with only a GTD status must NOT be copied to workflow-tasks/")
+	assertStatusOnlyMigration(t, "01JXMIGRATE_GTDSTAT01", "next", false)
 }
 
 // TestRegression_MigrateWorkflowTasks_DifferentiationTwoFiles verifies that
