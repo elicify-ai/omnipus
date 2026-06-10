@@ -2375,6 +2375,26 @@ type wsStreamer struct {
 	statsTokens   int64
 	statsCostUSD  float64
 	statsDuration time.Duration
+
+	// transcriptPersisted records that the agent loop already wrote this
+	// streamer's narration to the transcript via
+	// appendIntermediateAssistantTranscript (#416). When set, Finalize must NOT
+	// append the accumulated content again — it would create a duplicate
+	// assistant entry on replay when the turn exits via max_tool_iterations
+	// exhaustion (the last executed round is a tool-call round whose streamer is
+	// the lastStreamer that gets finalized). Guarded by statsMu, which Finalize
+	// already holds while reading stats.
+	transcriptPersisted bool
+}
+
+// SuppressTranscriptWrite marks this streamer so its Finalize skips the
+// transcript-append block. The agent loop calls this (via the inline
+// SuppressTranscriptWrite interface) after it has already persisted the round's
+// narration through appendIntermediateAssistantTranscript (#416 gate fix).
+func (s *wsStreamer) SuppressTranscriptWrite() {
+	s.statsMu.Lock()
+	s.transcriptPersisted = true
+	s.statsMu.Unlock()
 }
 
 // SetTurnStats is called by the agent loop's finalizeStreamer just before
@@ -2474,6 +2494,7 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	tokensF := float64(s.statsTokens)
 	costF := s.statsCostUSD
 	durF := float64(s.statsDuration.Milliseconds())
+	transcriptAlreadyPersisted := s.transcriptPersisted
 	s.statsMu.Unlock()
 	doneStats.Tokens = &tokensF
 	doneStats.Cost = &costF
@@ -2497,8 +2518,15 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	if s.channel != nil && s.accumulated.Len() > 0 {
 		s.channel.markStreamed(s.chatID)
 	}
-	// Record the full assistant response to the session transcript.
-	if s.agentStore != nil && s.sessionID != "" {
+	// Record the full assistant response to the session transcript — unless the
+	// agent loop already persisted this round's narration via
+	// appendIntermediateAssistantTranscript (#416 gate fix). This happens when
+	// the turn exits via max_tool_iterations exhaustion: the last executed round
+	// is a tool-call round whose streamer (this one) becomes the lastStreamer.
+	// Writing here too would duplicate the assistant bubble on replay. We still
+	// sent the done frame, fan-out, and markStreamed above — only the append is
+	// suppressed.
+	if s.agentStore != nil && s.sessionID != "" && !transcriptAlreadyPersisted {
 		content := s.accumulated.String()
 		// Fallback: when accumulated is empty (every Update() call silently
 		// failed because the client WS was already closed), use the

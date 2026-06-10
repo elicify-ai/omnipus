@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -13,6 +12,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/session"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
+	"github.com/google/uuid"
 )
 
 // abandonedWritesSuppressed is incremented each time a write (transcript
@@ -408,6 +408,24 @@ func (ts *turnState) setLastStreamer(s bus.Streamer) {
 	ts.lastStreamer = s
 }
 
+// markLastStreamerTranscriptPersisted tells the active streamer that the agent
+// loop has already written this round's narration to the transcript (via
+// appendIntermediateAssistantTranscript), so the streamer's own Finalize must
+// not write it again. Only the streamer that ends up finalized (the last one)
+// matters; marking superseded streamers is harmless (they are never finalized).
+//
+// Uses a type-assertion to an inline interface so bus.Streamer needs no new
+// method — non-streaming-transcript impls (telegram, wecom, sse, manager) are
+// untouched; only wsStreamer implements SuppressTranscriptWrite.
+func (ts *turnState) markLastStreamerTranscriptPersisted() {
+	ts.mu.RLock()
+	s := ts.lastStreamer
+	ts.mu.RUnlock()
+	if sup, ok := s.(interface{ SuppressTranscriptWrite() }); ok {
+		sup.SuppressTranscriptWrite()
+	}
+}
+
 // streamerStatsSetter is an optional interface a Streamer may implement to
 // receive turn-end stats (tokens, cost, duration) before Finalize is called.
 // The ws streamer uses this to populate the "done" frame so the chat UI shows
@@ -653,7 +671,7 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string) {
 	}
 	agentID := ts.resolveActiveAgentID()
 	entry := session.TranscriptEntry{
-		ID:        fmt.Sprintf("assistant-%d", time.Now().UnixNano()),
+		ID:        uuid.New().String(),
 		Role:      "assistant",
 		AgentID:   agentID,
 		Content:   content,
@@ -688,7 +706,7 @@ func (ts *turnState) appendAssistantTranscript(content string) {
 	// path (#411). GetTurnStats is safe to call here — the turn is finishing.
 	turnTokens, turnCost := ts.GetTurnStats()
 	entry := session.TranscriptEntry{
-		ID:        fmt.Sprintf("assistant-%d", time.Now().UnixNano()),
+		ID:        uuid.New().String(),
 		Role:      "assistant",
 		AgentID:   agentID,
 		Content:   content,

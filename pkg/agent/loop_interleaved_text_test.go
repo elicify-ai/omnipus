@@ -50,12 +50,21 @@ func TestInterleavedAssistantText_AllSegmentsPersisted(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", home)
 
 	provider := testutil.NewScenario().
-		// Iteration 1: narration text + tool call.
+		// Iteration 1: narration text + tool call. Carries token usage so the
+		// turn accumulates real stats (#411 path).
 		WithTextAndToolCall("Got it, saving fact 1.", "remember", `{"key":"name","value":"Alex"}`).
-		// Iteration 2: narration text + tool call.
-		WithTextAndToolCall("Got it, saving fact 2.", "remember", `{"key":"color","value":"blue"}`).
-		// Iteration 3: final text only (no tool calls) — ends the turn.
-		WithText("All three facts saved!")
+		WithUsage(100, 20).
+		// Iteration 2: a NO-TEXT tool round (empty Content) — must NOT produce an
+		// empty-content assistant entry (covers the content=="" guard in
+		// appendIntermediateAssistantTranscript). Also carries usage.
+		WithToolCall("remember", `{"key":"color","value":"blue"}`).
+		WithUsage(50, 10).
+		// Iteration 3: narration text + tool call again.
+		WithTextAndToolCall("Got it, saving fact 2.", "remember", `{"key":"pet","value":"cat"}`).
+		WithUsage(40, 5).
+		// Iteration 4: final text only (no tool calls) — ends the turn.
+		WithText("All three facts saved!").
+		WithUsage(30, 15)
 
 	cfg := &config.Config{}
 	cfg.Agents.Defaults.Workspace = filepath.Join(home, "workspace")
@@ -116,18 +125,65 @@ func TestInterleavedAssistantText_AllSegmentsPersisted(t *testing.T) {
 
 	// Before the fix: assistantTexts == ["All three facts saved!"]  (len=1)
 	// After the fix:  assistantTexts == [segment1, segment2, "All three facts saved!"]  (len=3)
+	//
+	// Note the NO-TEXT tool round (iteration 2) contributes NO assistant entry —
+	// the content=="" guard in appendIntermediateAssistantTranscript suppresses
+	// it. So we still expect exactly 3 narrated segments.
 	assert.Len(t, assistantTexts, 3,
-		"all 3 assistant text segments must be persisted (bug #416 regression); got: %v",
+		"all 3 narrated assistant text segments must be persisted; the no-text "+
+			"tool round must NOT add an empty-content entry (bug #416 regression); got: %v",
 		assistantTexts)
 
 	if len(assistantTexts) == 3 {
 		assert.Equal(t, "Got it, saving fact 1.", assistantTexts[0],
 			"first segment must be the round-1 narration")
 		assert.Equal(t, "Got it, saving fact 2.", assistantTexts[1],
-			"second segment must be the round-2 narration")
+			"second segment must be the round-3 narration")
 		assert.Equal(t, "All three facts saved!", assistantTexts[2],
 			"third segment must be the final answer")
 	}
+
+	// -----------------------------------------------------------------------
+	// Assert: no empty-content assistant entry was written for the no-text
+	// tool round. Belt-and-suspenders against a regression where an empty
+	// narration leaks an assistant bubble.
+	// -----------------------------------------------------------------------
+	for _, e := range entries {
+		if e.Role == "assistant" {
+			assert.NotEmpty(t, e.Content,
+				"no empty-content assistant entry may be written (no-text tool round must be silent)")
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// Assert: token/cost attribution (#411 — no double-counting).
+	// The two INTERMEDIATE narrated entries must carry Tokens==0 && Cost==0;
+	// the FINAL assistant entry carries the whole turn total (sum of every
+	// round's usage). Total tokens = (100+20)+(50+10)+(40+5)+(30+15) = 270.
+	// -----------------------------------------------------------------------
+	const wantTurnTokens = 270
+	var assistantEntries []session.TranscriptEntry
+	for _, e := range entries {
+		if e.Role == "assistant" && e.Content != "" {
+			assistantEntries = append(assistantEntries, e)
+		}
+	}
+	require.Len(t, assistantEntries, 3, "expected exactly 3 narrated assistant entries")
+
+	// Intermediate entries (all but the last) carry no usage.
+	for i := 0; i < len(assistantEntries)-1; i++ {
+		assert.Equal(t, 0, assistantEntries[i].Tokens,
+			"intermediate assistant entry %d must have 0 tokens (no double-counting, #411)", i)
+		assert.Zero(t, assistantEntries[i].Cost,
+			"intermediate assistant entry %d must have 0 cost (no double-counting, #411)", i)
+	}
+
+	// Final entry carries the full turn total.
+	final := assistantEntries[len(assistantEntries)-1]
+	assert.Equal(t, wantTurnTokens, final.Tokens,
+		"final assistant entry must carry the full turn token total (#411)")
+	assert.Positive(t, final.Cost,
+		"final assistant entry must carry a non-zero turn cost (#411)")
 
 	// -----------------------------------------------------------------------
 	// Assert: ordering — each text segment must appear BEFORE the tool_call
@@ -165,13 +221,17 @@ func TestInterleavedAssistantText_AllSegmentsPersisted(t *testing.T) {
 		}
 	}
 
-	// We expect the pattern: assistant, tool, assistant, tool, assistant
-	// (the user entry is kindOther and excluded above).
+	// Expected pattern (user entry is kindOther, excluded above):
+	//   assistant(text1) → tool(r1) → tool(r2, no-text round) → assistant(text2)
+	//   → tool(r3) → assistant(final)
+	// The no-text round 2 contributes only a tool entry, no assistant entry.
 	expectedPattern := []entryKind{
 		kindAssistant, kindToolCall,
+		kindToolCall,
 		kindAssistant, kindToolCall,
 		kindAssistant,
 	}
 	assert.Equal(t, expectedPattern, sequence,
-		"transcript entries must alternate text→tool→text→tool→text in order (bug #416)")
+		"transcript entries must reflect the interleaved order, with the no-text "+
+			"round emitting only a tool entry (bug #416)")
 }

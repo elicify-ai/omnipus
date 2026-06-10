@@ -4985,6 +4985,15 @@ turnLoop:
 		// Tokens/cost are 0 here — the turn total is attributed to the final
 		// assistant entry only (wsStreamer.Finalize or appendAssistantTranscript).
 		ts.appendIntermediateAssistantTranscript(response.Content)
+		if response.Content != "" {
+			// The narration is now in the transcript. If this round's streamer
+			// ends up being finalized (the turn exits via max_tool_iterations
+			// exhaustion, where the last executed round is a tool-call round),
+			// suppress its duplicate transcript write (#416 gate fix). The check
+			// mirrors appendIntermediateAssistantTranscript's own content==""
+			// early-return so the mark fires only when a write actually happened.
+			ts.markLastStreamerTranscriptPersisted()
+		}
 
 		ts.setPhase(TurnPhaseTools)
 		for i, tc := range normalizedToolCalls {
