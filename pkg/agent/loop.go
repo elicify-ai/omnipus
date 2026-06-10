@@ -3164,11 +3164,30 @@ func (al *AgentLoop) ProcessScheduled(
 	// (which is what RequestCancel(CancelScope{SessionID}) matches against).
 	transcriptStore := al.ResolveSessionStore(sessionID)
 	if transcriptStore == nil {
-		logger.WarnCF(
-			"agent",
-			"scheduled run: session store not found for session id — tool calls will not be recorded",
-			map[string]any{"session_id": sessionID, "owner": ownerAgentID},
+		// Hard error: without a store the user message cannot be recorded, the
+		// assistant reply will be lost, and message_count stays at 0. Do not
+		// silently degrade — return now so the caller records an explicit failure.
+		return "", fmt.Errorf(
+			"scheduled run: session store not found for session %q (owner %s) — aborting to avoid unrecorded turn",
+			sessionID, ownerAgentID,
 		)
+	}
+
+	// Append the user message to the transcript before running the agent loop,
+	// mirroring the interactive websocket path (pkg/gateway/websocket.go ~l980).
+	// Without this, message_count stays at 0 and "Run now" always shows "error"
+	// because the agent loop's assistant reply has no paired user turn to count.
+	userEntry := session.TranscriptEntry{
+		ID:        fmt.Sprintf("scheduled-%s-%d", sessionID, time.Now().UnixNano()),
+		Role:      "user",
+		AgentID:   ownerAgentID,
+		Content:   content,
+		Timestamp: time.Now().UTC(),
+	}
+	if err := transcriptStore.AppendTranscript(sessionID, userEntry); err != nil {
+		logger.ErrorCF("agent", "scheduled run: failed to record user message to transcript",
+			map[string]any{"session_id": sessionID, "owner": ownerAgentID, "error": err.Error()})
+		return "", fmt.Errorf("scheduled run: transcript write failed for session %q: %w", sessionID, err)
 	}
 
 	return al.runAgentLoop(ctx, agent, processOptions{

@@ -230,6 +230,15 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 	r.cleanupRunProcesses(job, sessionID)
 
 	if runErr != nil {
+		// Always log the raw error before any wrapping so the real cause lands in
+		// gateway.log regardless of what the channel-alert path surfaces.
+		logger.ErrorCF("gateway", "scheduled run failed",
+			map[string]any{
+				"schedule_id": job.ID,
+				"session_id":  sessionID,
+				"owner":       owner,
+				"error":       runErr.Error(),
+			})
 		// Surface the deadline as a context.DeadlineExceeded error so the cron
 		// lane classifies the run record Status as "timeout" (errors.Is). The
 		// underlying agent error is wrapped so it stays inspectable.
