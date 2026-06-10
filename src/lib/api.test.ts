@@ -1111,6 +1111,44 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
     expect(messages[0].tool_calls![0].status).toBe('cancelled')
   })
 
+  it('carries per-message wire agent_id onto SPA message.agentId (handover replay)', async () => {
+    // Regression for the handover reload bug: cold-load (REST) transcripts must
+    // expose each message's authoring agent so the row renders under its true
+    // author. Mia's pre-handover turn stays Mia; Jim's post-handover turn is Jim.
+    const wirePayload = [
+      {
+        id: 'm-mia',
+        agent_id: 'mia',
+        role: 'assistant',
+        content: 'I will hand this to Jim.',
+        timestamp: '2026-05-18T10:00:00Z',
+        status: 'ok',
+      },
+      {
+        id: 'm-jim',
+        agent_id: 'jim',
+        role: 'assistant',
+        content: 'On it.',
+        timestamp: '2026-05-18T10:01:00Z',
+        status: 'ok',
+      },
+    ]
+
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-handover')
+
+    expect(messages).toHaveLength(2)
+    expect(messages[0].agentId).toBe('mia')
+    expect(messages[1].agentId).toBe('jim')
+  })
+
   // Regression guards for the 2026-05-21 production bug: Message.yaml's
   // `type` enum was missing "tool_call" and "turn_canceled". A jim session
   // with 44 tool_call entries failed the SPA's Zod validation with

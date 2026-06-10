@@ -281,4 +281,64 @@ describe('SessionRoute component — task-session attach path (useEffect)', () =
       })
     },
   )
+
+  it(
+    'attaches under the LAST-ACTIVE agent (active_agent_id) after a handover, not the creator',
+    async () => {
+      // BDD: Given a session created by "mia" that handed over to "jim"
+      //   (agent_id='mia', active_agent_id='jim'),
+      // When SessionRoute mounts with WS connected,
+      // Then attachToSession seeds the header/composer agent as 'jim' (active),
+      //   NOT 'mia' (the creator).
+      //
+      // Traces to: sessions.$sessionId.tsx useEffect — headerAgentId resolution.
+      // FAILS on a version that uses session.agent_id (would attach as 'mia').
+      const detail = makeChatSession({ agent_id: 'mia', active_agent_id: 'jim' })
+      _mockUseQueryData = detail
+
+      const mockConn = makeMockConnection()
+      useConnectionStore.setState({ connection: mockConn as never, isConnected: true })
+
+      const attachToSession = vi.spyOn(useSessionStore.getState(), 'attachToSession')
+
+      const Route = SessionRoute
+      if (!Route) throw new Error('SessionRoute not loaded')
+      await act(async () => {
+        render(<Route />)
+      })
+
+      await waitFor(() => {
+        expect(attachToSession).toHaveBeenCalledWith(mockSessionId, 'chat', undefined, 'jim')
+      })
+      // Mutation check: never attach under the creating agent after a handover.
+      expect(attachToSession).not.toHaveBeenCalledWith(mockSessionId, 'chat', undefined, 'mia')
+    },
+  )
+
+  it(
+    'falls back to setActiveSession under the active agent when WS is down after a handover',
+    async () => {
+      // BDD: Given agent_id='mia', active_agent_id='jim' and NO WS connection,
+      // When SessionRoute mounts,
+      // Then setActiveSession seeds the active agent ('jim'), not the creator.
+      //
+      // Traces to: sessions.$sessionId.tsx useEffect — !connection else branch
+      // using headerAgentId.
+      const detail = makeChatSession({ agent_id: 'mia', active_agent_id: 'jim' })
+      _mockUseQueryData = detail
+
+      const setActiveSession = vi.spyOn(useSessionStore.getState(), 'setActiveSession')
+
+      const Route = SessionRoute
+      if (!Route) throw new Error('SessionRoute not loaded')
+      await act(async () => {
+        render(<Route />)
+      })
+
+      await waitFor(() => {
+        expect(setActiveSession).toHaveBeenCalledWith(mockSessionId, 'jim', null)
+      })
+      expect(setActiveSession).not.toHaveBeenCalledWith(mockSessionId, 'mia', null)
+    },
+  )
 })

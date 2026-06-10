@@ -695,6 +695,13 @@ interface MessageBase { // not-wire-format
   timestamp: string
   tokens?: number
   cost?: number
+  /**
+   * Authoring agent id (assistant messages). Carried through from the wire
+   * `agent_id` so cold-load (REST) transcripts render each message under its
+   * true author after a handover — matching the WS-replay path which already
+   * populates ChatMessage.agentId from each frame's agent_id.
+   */
+  agentId?: string
 }
 
 export interface UserMessage extends MessageBase { // not-wire-format: SPA-internal user message. Status 'error' means the WS send failed; Retry button re-sends the content.
@@ -886,6 +893,7 @@ function rawToMessage(raw: RawMessage): Message {
       timestamp: raw.timestamp,
       tokens: raw.tokens,
       cost: raw.cost,
+      agentId: raw.agent_id || undefined,
       status: (baseStatus === 'done' || baseStatus === 'error') ? baseStatus : 'done',
     } satisfies UserMessage
   }
@@ -898,6 +906,7 @@ function rawToMessage(raw: RawMessage): Message {
       timestamp: raw.timestamp,
       tokens: raw.tokens,
       cost: raw.cost,
+      agentId: raw.agent_id || undefined,
       status: 'done',
     } satisfies SystemMessage
   }
@@ -910,6 +919,9 @@ function rawToMessage(raw: RawMessage): Message {
     timestamp: raw.timestamp,
     tokens: raw.tokens,
     cost: raw.cost,
+    // Carry the per-message authoring agent so a reloaded handover transcript
+    // renders each assistant turn under its true author (not the active agent).
+    agentId: raw.agent_id || undefined,
     // Wire status is 'ok'→'done' | 'error' | 'interrupted'. 'streaming' is SPA-only
     // (never on persisted wire messages) so this branch guards for undefined only.
     status: (baseStatus === 'done' || baseStatus === 'error' || baseStatus === 'interrupted') ? baseStatus : 'done',
