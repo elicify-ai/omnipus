@@ -54,6 +54,29 @@ func (s *ScenarioProvider) WithText(content string) *ScenarioProvider {
 	return s
 }
 
+// WithTextAndToolCall appends a response that carries both a narration text
+// segment AND a single tool call. This mirrors the real-model pattern where the
+// LLM writes a sentence ("Okay, I've saved your name.") and then requests a tool
+// in the same response — the scenario used to reproduce bug #416.
+func (s *ScenarioProvider) WithTextAndToolCall(text, name, argsJSON string) *ScenarioProvider {
+	fc := providers.FunctionCall{
+		Name:      name,
+		Arguments: argsJSON,
+	}
+	s.steps = append(s.steps, scenarioStep{
+		resp: &providers.LLMResponse{
+			Content: text,
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:       name + "-0",
+					Function: &fc,
+				},
+			},
+		},
+	})
+	return s
+}
+
 // WithToolCall appends a response that invokes a single tool with the given JSON args.
 func (s *ScenarioProvider) WithToolCall(name, argsJSON string) *ScenarioProvider {
 	fc := providers.FunctionCall{

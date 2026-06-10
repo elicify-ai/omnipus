@@ -631,6 +631,42 @@ func (ts *turnState) resolveActiveAgentID() string {
 	return ts.agentID
 }
 
+// appendIntermediateAssistantTranscript persists an assistant text segment that
+// immediately precedes a round of tool calls within a single turn. It is called
+// once per tool-call iteration when the LLM emits both narration text AND tool
+// calls in the same response — the text must be recorded BEFORE the tool_call
+// entries so the transcript faithfully reflects the interleaved order the user
+// saw live.
+//
+// Tokens and cost are always 0 for intermediate entries to avoid double-counting:
+// the turn total is attributed to the final assistant entry written by either
+// wsStreamer.Finalize (streaming path) or appendAssistantTranscript (non-streaming).
+//
+// Bug #416 fix: without this, only the last text segment reached the transcript.
+func (ts *turnState) appendIntermediateAssistantTranscript(content string) {
+	if ts.abandoned.Load() {
+		abandonedWritesSuppressed.Add(1)
+		return
+	}
+	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || content == "" {
+		return
+	}
+	agentID := ts.resolveActiveAgentID()
+	entry := session.TranscriptEntry{
+		ID:        fmt.Sprintf("assistant-%d", time.Now().UnixNano()),
+		Role:      "assistant",
+		AgentID:   agentID,
+		Content:   content,
+		Timestamp: time.Now().UTC(),
+		// Tokens and Cost are intentionally 0 — the turn total is attributed to
+		// the final assistant entry only. See appendAssistantTranscript.
+	}
+	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
+		logger.WarnCF("agent", "could not record intermediate assistant message to transcript",
+			map[string]any{"session_id": ts.transcriptSessionID, "error": err.Error()})
+	}
+}
+
 // appendAssistantTranscript persists a completed assistant text response to the
 // session transcript. It is called on the non-streaming path (no wsStreamer) so
 // that replay can reconstruct the full conversation even after a WS disconnect.

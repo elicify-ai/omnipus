@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import { Robot, CurrencyDollar, ArrowsClockwise, CaretDown, PencilSimpleLine } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import {
@@ -25,8 +26,18 @@ function formatTokens(tokens: number): string {
 }
 
 export function SessionBar() {
-  const { activeAgentId, activeSessionId, setActiveSession, startNewSession } = useSessionStore()
+  const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
   const { sessionTokens, sessionCost, isStreaming } = useChatStore()
+  const navigate = useNavigate()
+
+  // Navigate to '/' so RootChatScreen mounts, calls startNewSession(), and its
+  // useEffect wires the first-send navigation to /sessions/<newId>.
+  // Fix for #417: calling startNewSession() alone left the URL at
+  // /sessions/<old-id>; the RootChatScreen navigation effect never ran so the
+  // new session id was never reflected in the address bar after the first send.
+  const handleNewChat = () => {
+    void navigate({ to: '/' })
+  }
 
   const { data: agents = [], isError: agentsError } = useQuery({
     queryKey: ['agents'],
@@ -149,7 +160,7 @@ export function SessionBar() {
       {/* New Chat — icon-only on mobile, icon+text on desktop */}
       <button
         type="button"
-        onClick={() => startNewSession(effectiveAgentId ?? undefined, activeAgent?.type ?? null)}
+        onClick={handleNewChat}
         title="New chat"
         className="sm:hidden w-7 h-7 rounded-md flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
       >
@@ -161,7 +172,7 @@ export function SessionBar() {
         variant="ghost"
         size="sm"
         className="hidden sm:flex h-7 px-2 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] gap-1"
-        onClick={() => startNewSession(effectiveAgentId ?? undefined, activeAgent?.type ?? null)}
+        onClick={handleNewChat}
         title="New chat"
       >
         <PencilSimpleLine size={13} />

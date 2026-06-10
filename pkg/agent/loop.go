@@ -4974,6 +4974,18 @@ turnLoop:
 			ts.recordPersistedMessage(assistantMsg)
 		}
 
+		// Bug #416 fix: persist the narration text the LLM emitted alongside
+		// this round's tool calls. Without this, only the FINAL iteration's text
+		// reaches the transcript — intermediate "Okay, I've saved X." sentences
+		// are shown live via wsStreamer.Update but never written to transcript.jsonl.
+		//
+		// We write BEFORE the tool_call entries so the transcript order mirrors
+		// the live stream: [text segment N] → [tool_call round N] → …
+		//
+		// Tokens/cost are 0 here — the turn total is attributed to the final
+		// assistant entry only (wsStreamer.Finalize or appendAssistantTranscript).
+		ts.appendIntermediateAssistantTranscript(response.Content)
+
 		ts.setPhase(TurnPhaseTools)
 		for i, tc := range normalizedToolCalls {
 			if ts.hardAbortRequested() {
