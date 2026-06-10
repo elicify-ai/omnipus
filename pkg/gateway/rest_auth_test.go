@@ -1735,8 +1735,13 @@ func TestHandleChangePassword_InvalidatesExistingToken(t *testing.T) {
 	usersBefore := gwBefore["users"].([]any)
 	require.Len(t, usersBefore, 1)
 	userMapBefore := usersBefore[0].(map[string]any)
-	require.NotEmpty(t, userMapBefore["token_hash"],
-		"token_hash must be written to disk after login (precondition)")
+	// SEC-1 / UAT #399: login appends bearer tokens to the "tokens" SET, not the
+	// legacy single "token_hash" field. The precondition is that the new token is
+	// live on disk, which now means the "tokens" array is non-empty.
+	tokensBefore, ok := userMapBefore["tokens"].([]any)
+	require.True(t, ok, "tokens array must be present in config.json after login")
+	require.NotEmpty(t, tokensBefore,
+		"a bearer token must be written to the tokens set on disk after login (precondition)")
 
 	// Step 2: Change password — must clear token_hash and session_token_hash.
 	cpBody := `{"current_password":"OldTokenPass1","new_password":"NewTokenPass2"}`
@@ -1765,6 +1770,14 @@ func TestHandleChangePassword_InvalidatesExistingToken(t *testing.T) {
 			"old token must be invalidated")
 	assert.Equal(t, "", userMapAfter["session_token_hash"],
 		"session_token_hash must be cleared in config.json after password change")
+	// SEC-1 / UAT #399: the active bearer-token SET must also be emptied, else the
+	// old token still verifies via UserConfig.VerifyToken and the password change
+	// would not invalidate existing sessions.
+	if tokensAfter, ok := userMapAfter["tokens"].([]any); ok {
+		assert.Empty(t, tokensAfter,
+			"tokens set must be cleared in config.json after password change — "+
+				"old bearer tokens must be invalidated")
+	}
 
 	// Step 3b: The old token, routed through withAuth (which calls checkBearerAuth
 	// and bcrypt-compares against token_hash in the in-memory config), must yield

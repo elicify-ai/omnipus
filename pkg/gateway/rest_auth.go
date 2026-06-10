@@ -399,7 +399,7 @@ func (a *restAPI) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	// Gateway.Users immediately. We deliberately do NOT call triggerReloadAndWait here: a
 	// full service reload for a token append needlessly restarts channels/cron
 	// and can cancel an in-flight scheduled run (#412 — every login churned a
-	// reload that cancelled Run-now turns).
+	// reload that canceled Run-now turns).
 
 	// Reset rate limit counter on successful login.
 	globalLoginLimiter.recordSuccess(ip, body.Username)
@@ -701,7 +701,13 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 			}
 			um["password_hash"] = string(newHash)
 			// Invalidate all existing sessions so the user must re-authenticate
-			// with the new password. Clearing both hashes mimics HandleLogout.
+			// with the new password. SEC-1 / UAT #399: login now appends bearer
+			// tokens to the "tokens" set rather than the legacy single
+			// "token_hash" — clearing only the legacy field would leave every
+			// active bearer token in "tokens" live, so the password change would
+			// NOT log old sessions out. Clear the whole token set plus both
+			// legacy single-slot hashes.
+			um["tokens"] = []any{}
 			um["token_hash"] = ""
 			um["session_token_hash"] = ""
 			return nil
