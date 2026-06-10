@@ -570,7 +570,7 @@ describe('updateBoardTask', () => {
       .mockResolvedValueOnce(makeJsonResponse(t2))
 
     const { updateBoardTask } = await import('./api')
-    const r1 = await updateBoardTask('task-x', { status: 'active' })
+    const r1 = await updateBoardTask('task-x', { status: 'next' })
     const r2 = await updateBoardTask('task-y', { status: 'done' })
 
     expect(r1.id).toBe('task-x')

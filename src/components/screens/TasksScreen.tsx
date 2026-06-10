@@ -35,7 +35,7 @@ import {
   isApiError,
   ApiSchemaError,
 } from '@/lib/api'
-import type { BoardTask } from '@/lib/api'
+import type { BoardTask, BoardTaskUpdateRequest } from '@/lib/api'
 import { useProjectsStore } from '@/store/projectsStore'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
@@ -43,6 +43,7 @@ import { cn } from '@/lib/utils'
 // ── Column definitions ────────────────────────────────────────────────────────
 
 type BoardStatus = BoardTask['status']
+type BoardUpdateStatus = NonNullable<BoardTaskUpdateRequest['status']>
 
 const COLUMNS: { status: BoardStatus; label: string }[] = [
   { status: 'inbox',   label: 'Inbox' },
@@ -439,7 +440,7 @@ export function TasksScreen() {
 
   // Update mutation (status change from TaskCard expanded panel)
   const updateMutation = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: BoardStatus }) =>
+    mutationFn: ({ id, status }: { id: string; status: BoardUpdateStatus }) =>
       updateBoardTask(id, { status }),
     onMutate: async ({ id, status }) => {
       await queryClient.cancelQueries({ queryKey: ['board-tasks'] })
@@ -540,7 +541,7 @@ export function TasksScreen() {
               label={col.label}
               tasks={tasks.filter((t) => t.status === col.status)}
               onDelete={(id) => deleteMutation.mutate(id)}
-              onStatusChange={(id, status) => updateMutation.mutate({ id, status })}
+              onStatusChange={(id, status) => updateMutation.mutate({ id, status: status as BoardUpdateStatus })}
               deletingIds={deletingIds}
               updatingIds={updatingIds}
             />

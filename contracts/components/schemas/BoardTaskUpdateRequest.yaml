@@ -8,7 +8,7 @@ properties:
     type: string
     maxLength: 2000
   status:
-    $ref: './GTDBoardTaskStatus.yaml'
+    $ref: './BoardTaskUpdateStatus.yaml'
   project_id:
     type: string
   agent_id:

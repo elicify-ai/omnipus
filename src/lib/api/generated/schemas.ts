@@ -420,8 +420,9 @@ type GTDBoardTaskStatus =
   | "waiting"
   | "done"
   | "failed";
+type BoardTaskListItem = BoardTask;
 type BoardTaskListResponse = {
-  items: Array<BoardTask>;
+  items: Array<BoardTaskListItem>;
   total: number;
 };
 type BoardTaskCreateRequest = {
@@ -437,7 +438,7 @@ type BoardTaskCreateRequest = {
 type BoardTaskUpdateRequest = Partial<{
   name: string;
   description: string;
-  status: GTDBoardTaskStatus;
+  status: BoardTaskUpdateStatus;
   project_id: string;
   agent_id: string;
   prompt: string;
@@ -446,6 +447,7 @@ type BoardTaskUpdateRequest = Partial<{
   session_id: string;
   result: string;
 }>;
+type BoardTaskUpdateStatus = "inbox" | "next" | "waiting" | "done" | "failed";
 type MilestoneListResponse = {
   milestones: Array<Milestone>;
   total: number;
@@ -1653,8 +1655,9 @@ export const BoardTask: z.ZodType<BoardTask> = z
     owner: z.string().optional(),
   })
   .passthrough();
+export const BoardTaskListItem: z.ZodType<BoardTaskListItem> = BoardTask;
 export const BoardTaskListResponse: z.ZodType<BoardTaskListResponse> = z
-  .object({ items: z.array(BoardTask), total: z.number().int() })
+  .object({ items: z.array(BoardTaskListItem), total: z.number().int() })
   .passthrough();
 export const BoardTaskCreateRequest: z.ZodType<BoardTaskCreateRequest> = z
   .object({
@@ -1668,11 +1671,18 @@ export const BoardTaskCreateRequest: z.ZodType<BoardTaskCreateRequest> = z
     milestone_id: z.string().optional(),
   })
   .passthrough();
+export const BoardTaskUpdateStatus = z.enum([
+  "inbox",
+  "next",
+  "waiting",
+  "done",
+  "failed",
+]);
 export const BoardTaskUpdateRequest: z.ZodType<BoardTaskUpdateRequest> = z
   .object({
     name: z.string().min(1).max(200),
     description: z.string().max(2000),
-    status: GTDBoardTaskStatus,
+    status: BoardTaskUpdateStatus,
     project_id: z.string(),
     agent_id: z.string(),
     prompt: z.string().max(10000),

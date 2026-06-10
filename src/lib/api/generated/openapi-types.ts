@@ -5655,6 +5655,11 @@ export interface components {
          * @enum {string}
          */
         GTDBoardTaskStatus: "inbox" | "next" | "active" | "waiting" | "done" | "failed";
+        /**
+         * @description GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
+         * @enum {string}
+         */
+        BoardTaskUpdateStatus: "inbox" | "next" | "waiting" | "done" | "failed";
         /** @description A GTD board task stored in ~/.omnipus/tasks/. Distinct from workflow tasks (pkg/taskstore, /api/v1/tasks) which have different statuses and semantics. */
         BoardTask: {
             /**
@@ -5706,9 +5711,11 @@ export interface components {
              */
             owner?: string;
         };
+        /** @description A single item in the board task list response. Equivalent to BoardTask. */
+        BoardTaskListItem: components["schemas"]["BoardTask"];
         /** @description Paginated list response for GET /board/tasks */
         BoardTaskListResponse: {
-            items: components["schemas"]["BoardTask"][];
+            items: components["schemas"]["BoardTaskListItem"][];
             /**
              * @description Total number of tasks matching the filter (before pagination).
              * @example 42
@@ -5728,7 +5735,7 @@ export interface components {
         BoardTaskUpdateRequest: {
             name?: string;
             description?: string;
-            status?: components["schemas"]["GTDBoardTaskStatus"];
+            status?: components["schemas"]["BoardTaskUpdateStatus"];
             project_id?: string;
             agent_id?: string;
             prompt?: string;
@@ -10329,7 +10336,9 @@ export type Project = components["schemas"]["Project"];
 export type ProjectCreateRequest = components["schemas"]["ProjectCreateRequest"];
 export type ProjectUpdateRequest = components["schemas"]["ProjectUpdateRequest"];
 export type GTDBoardTaskStatus = components["schemas"]["GTDBoardTaskStatus"];
+export type BoardTaskUpdateStatus = components["schemas"]["BoardTaskUpdateStatus"];
 export type BoardTask = components["schemas"]["BoardTask"];
+export type BoardTaskListItem = components["schemas"]["BoardTaskListItem"];
 export type BoardTaskListResponse = components["schemas"]["BoardTaskListResponse"];
 export type BoardTaskCreateRequest = components["schemas"]["BoardTaskCreateRequest"];
 export type BoardTaskUpdateRequest = components["schemas"]["BoardTaskUpdateRequest"];

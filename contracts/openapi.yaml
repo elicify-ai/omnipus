@@ -386,8 +386,12 @@ components:
       $ref: ./components/schemas/ProjectUpdateRequest.yaml
     GTDBoardTaskStatus:
       $ref: ./components/schemas/GTDBoardTaskStatus.yaml
+    BoardTaskUpdateStatus:
+      $ref: ./components/schemas/BoardTaskUpdateStatus.yaml
     BoardTask:
       $ref: ./components/schemas/BoardTask.yaml
+    BoardTaskListItem:
+      $ref: ./components/schemas/BoardTaskListItem.yaml
     BoardTaskListResponse:
       $ref: ./components/schemas/BoardTaskListResponse.yaml
     BoardTaskCreateRequest:

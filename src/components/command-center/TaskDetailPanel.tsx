@@ -14,7 +14,7 @@ import {
   milestonesQueryKeys,
   projectsQueryKeys,
 } from '@/lib/api'
-import type { Task, BoardTask } from '@/lib/api'
+import type { Task, BoardTask, BoardTaskUpdateRequest } from '@/lib/api'
 import {
   Sheet,
   SheetContent,
@@ -140,7 +140,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
   })
 
   const { mutate: doUpdate } = useMutation({
-    mutationFn: (data: Partial<BoardTask>) => {
+    mutationFn: (data: Partial<BoardTaskUpdateRequest>) => {
       if (!task) return Promise.reject(new Error('No task selected'))
       return updateBoardTask(task.id, data)
     },
@@ -280,7 +280,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
       <Field label="Status">
         <SmartSelect
           value={task.status}
-          onValueChange={(val) => doUpdate({ status: val as GTDStatus })}
+          onValueChange={(val) => doUpdate({ status: val as BoardTaskUpdateRequest['status'] })}
           triggerClassName="h-8 text-xs"
           items={GTD_STATUS_OPTIONS.map((o) => ({
             value: o.value,
