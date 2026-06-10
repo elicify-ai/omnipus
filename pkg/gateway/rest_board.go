@@ -527,11 +527,11 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 	if req.MilestoneId != nil {
 		milestoneID = *req.MilestoneId
 		if milestoneID != "" {
-			// Validate milestone FK: must exist and belong to the same project.
-			// The milestone's parent project access was already checked above
-			// (validateMilestoneFK reads the milestone and verifies project_id match;
-			// parent project access was guarded when project_id was validated).
-			if err := validateMilestoneFK(a.homePath, milestoneID, projectID); err != nil {
+			// Validate milestone FK: must exist, be accessible to the caller, and
+			// belong to the same project (when project_id is provided).
+			// Pass the caller so cross-owner milestones are denied without an oracle
+			// (SEC-2: same "milestone not found" 400 as the not-exist case).
+			if err := validateMilestoneFK(a.homePath, milestoneID, projectID, c); err != nil {
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
@@ -735,8 +735,9 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		milestoneID := *req.MilestoneId
 		if milestoneID != "" {
 			// Use the (possibly updated) project_id for FK validation.
+			// Pass the caller for SEC-2 ownership check (anti-enumeration oracle).
 			effectiveProjectID := existing.ProjectID
-			if err := validateMilestoneFK(a.homePath, milestoneID, effectiveProjectID); err != nil {
+			if err := validateMilestoneFK(a.homePath, milestoneID, effectiveProjectID, c); err != nil {
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
@@ -1108,12 +1109,21 @@ func (a *restAPI) HandleBoardTasks(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// validateMilestoneFK validates that a milestone exists and belongs to the given project.
+// validateMilestoneFK validates that a milestone exists, is accessible to the
+// caller, and (when projectID is non-empty) belongs to the given project.
 // Returns a user-facing error string on failure (caller writes 400), nil on success.
-// If projectID is empty, only existence is checked (milestone_id on a task with no project).
-func validateMilestoneFK(homePath, milestoneID, projectID string) error {
+//
+// SEC-2 / anti-enumeration: when the milestone exists but the caller cannot
+// access it (cross-owner), we return the same "milestone not found" error as the
+// not-exist case so that non-admin users cannot enumerate other users' milestones
+// via the 400 vs. success distinction.
+func validateMilestoneFK(homePath, milestoneID, projectID string, c caller) error {
 	m, err := readMilestoneFile(homePath, milestoneID)
 	if err != nil {
+		return errors.New("milestone not found")
+	}
+	// Ownership check: deny access with the same error as not-found (no oracle).
+	if !c.canAccess(m.Owner) {
 		return errors.New("milestone not found")
 	}
 	if projectID != "" && m.ProjectID != projectID {

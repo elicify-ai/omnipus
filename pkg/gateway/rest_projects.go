@@ -120,23 +120,6 @@ func (a *restAPI) callerIdentity(r *http.Request) caller {
 	return c
 }
 
-// callerIdentityFromRequest is a package-level shim retained for backward
-// compatibility with call sites that cannot easily access a *restAPI. New code
-// must use a.callerIdentity(r) directly to get the MultiUser flag set correctly.
-// This shim sets MultiUser=false (single-user / shared mode).
-func callerIdentityFromRequest(r *http.Request) caller {
-	var c caller
-	if u, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && u != nil {
-		c.Username = u.Username
-	}
-	if ro, ok := r.Context().Value(RoleContextKey{}).(config.UserRole); ok && ro != "" {
-		c.Role = ro
-	} else {
-		c.Role = config.UserRoleAdmin
-	}
-	return c
-}
-
 // canAccess is a package-level shim retained for backward compatibility with call
 // sites that have not yet been migrated to caller.canAccess. New code must use
 // caller.canAccess directly.
