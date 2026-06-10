@@ -11,7 +11,7 @@ export const WsFrameType = z.enum(["auth", "message", "cancel", "exec_approval_r
 export const AuthFrame = z
   .object({
     type: z.literal("auth"),
-    token: z.string().min(8).max(72).regex(/^omnipus_[a-f0-9]{64}$/),
+    token: z.string().min(72).max(81).regex(/^omnipus_([a-f0-9]{8}_)?[a-f0-9]{64}$/),
   })
   .strict();
 

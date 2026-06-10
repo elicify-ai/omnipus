@@ -480,8 +480,8 @@ export const LoginRequest = z.object({
 export const BearerToken = z.string();
 export const LoginResponse: z.ZodType<LoginResponse> = z.object({
   token: BearerToken.min(72)
-    .max(72)
-    .regex(/^omnipus_[a-f0-9]{64}$/),
+    .max(81)
+    .regex(/^omnipus_([a-f0-9]{8}_)?[a-f0-9]{64}$/),
   role: z.enum(["admin", "user"]),
   username: z.string(),
   warning: z.string().optional(),
@@ -1235,8 +1235,8 @@ export const ChannelRouting = z
   .partial();
 export const RotateTokenResponse: z.ZodType<RotateTokenResponse> = z.object({
   token: BearerToken.min(72)
-    .max(72)
-    .regex(/^omnipus_[a-f0-9]{64}$/),
+    .max(81)
+    .regex(/^omnipus_([a-f0-9]{8}_)?[a-f0-9]{64}$/),
 });
 export const PendingRestartEntry = z
   .object({
@@ -5684,7 +5684,7 @@ export const WsFrameType = z.enum(["auth", "message", "cancel", "exec_approval_r
 export const AuthFrame = z
   .object({
     type: z.literal("auth"),
-    token: z.string().min(8).max(72).regex(/^omnipus_[a-f0-9]{64}$/),
+    token: z.string().min(72).max(81).regex(/^omnipus_([a-f0-9]{8}_)?[a-f0-9]{64}$/),
   })
   .strict();
 

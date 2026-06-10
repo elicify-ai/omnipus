@@ -5244,8 +5244,8 @@ export interface components {
         };
         /**
          * BearerToken
-         * @description Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
-         * @example omnipus_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+         * @description Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
+         * @example omnipus_0123abcd_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
          */
         BearerToken: string;
         /**

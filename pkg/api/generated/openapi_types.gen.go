@@ -3773,7 +3773,7 @@ type BackupEntry struct {
 	SizeBytes int64 `json:"size_bytes"`
 }
 
-// BearerToken Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
+// BearerToken Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 type BearerToken = string
 
 // BoardTask A GTD board task stored in ~/.omnipus/tasks/. Distinct from workflow tasks (pkg/taskstore, /api/v1/tasks) which have different statuses and semantics.
@@ -4256,7 +4256,7 @@ type LoginResponse struct {
 	// Role RBAC role of the authenticated user.
 	Role LoginResponseRole `json:"role"`
 
-	// Token Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
+	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
 
 	// Username The authenticated user's login name.
@@ -4675,7 +4675,7 @@ type OnboardingCompleteResponse struct {
 	// Role RBAC role of the authenticated user.
 	Role OnboardingCompleteResponseRole `json:"role"`
 
-	// Token Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
+	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
 
 	// Username The authenticated user's login name.
@@ -5037,7 +5037,7 @@ type RetentionUpdateResponse struct {
 
 // RotateTokenResponse Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
 type RotateTokenResponse struct {
-	// Token Canonical opaque bearer token format used by Omnipus. The prefix "omnipus_" (8 characters) followed by 64 lowercase hex characters (32 random bytes), giving a total length of 72 characters. Used in Authorization headers, WS AuthFrame, and rotate-token responses.
+	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
 }
 
