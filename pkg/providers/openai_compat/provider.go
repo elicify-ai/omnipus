@@ -221,6 +221,7 @@ func (p *Provider) ChatStream(
 
 	requestBody := p.buildRequestBody(messages, tools, model, options)
 	requestBody["stream"] = true
+	requestBody["stream_options"] = map[string]any{"include_usage": true}
 
 	jsonData, err := json.Marshal(requestBody)
 	if err != nil {

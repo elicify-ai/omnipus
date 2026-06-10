@@ -2434,6 +2434,8 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 				AgentID:   s.agentID,
 				Content:   content,
 				Timestamp: time.Now().UTC(),
+				Tokens:    int(tokensF),
+				Cost:      costF,
 			}
 			if err := s.agentStore.AppendTranscript(s.sessionID, entry); err != nil {
 				slog.Warn("ws: could not record streamed assistant message", "session_id", s.sessionID, "error", err)
