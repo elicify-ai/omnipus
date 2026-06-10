@@ -185,8 +185,11 @@ test('(b) admin creates second admin — no token or Copy button appears', async
   // ── Then: NO token string "omnipus_" anywhere on the page ─────────────────
   // Token creation is removed from the Create flow entirely — no token is displayed.
   const pageContent = await page.content();
+  // Multi-token format (SEC-1/#399): omnipus_<8hex id>_<64hex secret>; the
+  // legacy single-token form (omnipus_<64hex>) is also matched so a leak of
+  // either format is detected.
   expect(pageContent, 'Page must not contain a bearer token string').not.toMatch(
-    /omnipus_[0-9a-f]{64}/i,
+    /omnipus_([0-9a-f]{8}_)?[0-9a-f]{64}/i,
   );
 
   // ── Then: NO "Copy" button in dialog or toast ─────────────────────────────
@@ -332,8 +335,10 @@ test('(f) backend last-admin guard: DELETE /api/v1/users/{last-admin} returns 40
       ''
     );
   });
+  // Multi-token format (SEC-1/#399): omnipus_<8hex id>_<64hex secret>. The
+  // optional id segment keeps the legacy single-token form valid too.
   expect(token, 'Auth token must match omnipus_ bearer pattern').toMatch(
-    /^omnipus_[0-9a-f]{64}$/,
+    /^omnipus_([0-9a-f]{8}_)?[0-9a-f]{64}$/,
   );
 
   // Get the CSRF cookie value so we can echo it in the header.
