@@ -866,7 +866,12 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	var configReloadChan <-chan *config.Config
 	stopWatch := func() {}
 	if cfg.Gateway.HotReload {
-		configReloadChan, stopWatch = setupConfigWatcherPolling(configPath, debug, credStore, runningServices.selfWriteReg)
+		configReloadChan, stopWatch = setupConfigWatcherPolling(
+			configPath,
+			debug,
+			credStore,
+			runningServices.selfWriteReg,
+		)
 		logger.Info("Config hot reload enabled")
 	}
 	defer stopWatch()
@@ -1727,7 +1732,7 @@ func restartServices(
 	// (setupAndStartServices). On each reload, restartServices replaces
 	// runningServices.CronService with a new instance whose laneCtx is live;
 	// without this update the restAPI holds a stale pointer whose laneCtx was
-	// cancelled by the previous Stop(), causing "turn not started: context
+	// canceled by the previous Stop(), causing "turn not started: context
 	// canceled" on every RunNow call (#412).
 	if runningServices.restAPIRef != nil {
 		runningServices.restAPIRef.cronService.Store(runningServices.CronService)

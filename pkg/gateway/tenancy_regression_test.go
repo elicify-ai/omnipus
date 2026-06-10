@@ -174,8 +174,12 @@ func TestBoardTask_CrossOwnerMilestoneFK_MilestoneNotFound(t *testing.T) {
 	milestoneID := "01JXMILESTONE00000000ALICE"
 	milestonesDir := filepath.Join(api.homePath, "milestones")
 	require.NoError(t, os.MkdirAll(milestonesDir, 0o700))
-	milestoneJSON := fmt.Sprintf(`{"id":%q,"project_id":"","name":"Alice Milestone","owner":"alice","created_at":%q,"updated_at":%q}`,
-		milestoneID, time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
+	milestoneJSON := fmt.Sprintf(
+		`{"id":%q,"project_id":"","name":"Alice Milestone","owner":"alice","created_at":%q,"updated_at":%q}`,
+		milestoneID,
+		time.Now().UTC().Format(time.RFC3339),
+		time.Now().UTC().Format(time.RFC3339),
+	)
 	require.NoError(t, os.WriteFile(filepath.Join(milestonesDir, milestoneID+".json"), []byte(milestoneJSON), 0o600))
 
 	// "bob" attempts to create a task referencing alice's milestone (no project_id).

@@ -59,7 +59,7 @@ func TestWsStreamer_Finalize_SuppressesDuplicateTranscript(t *testing.T) {
 		agentStore: store,
 		agentID:    "main",
 		// channel is nil: markStreamed and fan-out short-circuit, which is fine —
-		// we only assert on the transcript-append behaviour here.
+		// we only assert on the transcript-append behavior here.
 	}
 
 	// Accumulate some narration (as Update would during a tool-call round).

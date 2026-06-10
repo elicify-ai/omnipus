@@ -2,7 +2,7 @@
 
 // Regression tests for the board-task bug epic on feat/level1-project-task-mgmt.
 //
-// Each test is labelled with the bug it guards against so a future regression
+// Each test is labeled with the bug it guards against so a future regression
 // is immediately traceable to the commit that introduced the fix.
 //
 // T1 — taskstore/board-task collision (data-loss landmine #402/#397):

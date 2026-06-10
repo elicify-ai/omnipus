@@ -445,7 +445,7 @@ func isTransientRunError(err error) bool {
 // job.CreatedBy. Only stamps when the session has no owner yet (new or
 // explicitly unowned). Errors are non-fatal and logged as warnings — a missing
 // owner on a scheduled session degrades gracefully to the shared/unowned
-// behaviour rather than aborting the run (SEC-2/#406).
+// behavior rather than aborting the run (SEC-2/#406).
 func (r *scheduledRunner) stampScheduledSessionOwner(store *session.UnifiedStore, sessionID, userOwner string) {
 	if userOwner == "" {
 		return

@@ -657,7 +657,8 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		// #405: when transitioning from a terminal/active state to a re-queue state
 		// (next/inbox), auto-clear session_id UNLESS the request explicitly sets it.
 		// This is the defensive backend half; the SPA already sends session_id:"" on retry.
-		terminalOrActive := oldStatus == boardtask.StatusDone || oldStatus == boardtask.StatusFailed || oldStatus == boardtask.StatusActive
+		terminalOrActive := oldStatus == boardtask.StatusDone || oldStatus == boardtask.StatusFailed ||
+			oldStatus == boardtask.StatusActive
 		requeue := newStatus == boardtask.StatusNext || newStatus == boardtask.StatusInbox
 		if terminalOrActive && requeue && !reqExplicitSessionID {
 			existing.SessionID = ""
@@ -860,7 +861,8 @@ func (a *restAPI) startBoardTaskLocked(
 		return startDispatchParams{}, http.StatusNotFound, "board task not found"
 	}
 
-	if existing.Status == boardtask.StatusActive || existing.Status == boardtask.StatusDone || existing.Status == boardtask.StatusFailed {
+	if existing.Status == boardtask.StatusActive || existing.Status == boardtask.StatusDone ||
+		existing.Status == boardtask.StatusFailed {
 		return startDispatchParams{}, http.StatusConflict, "task already started or completed"
 	}
 
@@ -881,8 +883,8 @@ func (a *restAPI) startBoardTaskLocked(
 
 	// A2: validate that the resolved agent actually exists in the registry
 	// (when the registry is non-empty — empty means fresh install or test fixture).
-	if err := a.validateBoardTaskAgentID(agentID); err != nil {
-		return startDispatchParams{}, http.StatusBadRequest, err.Error()
+	if validateErr := a.validateBoardTaskAgentID(agentID); validateErr != nil {
+		return startDispatchParams{}, http.StatusBadRequest, validateErr.Error()
 	}
 
 	// Reject early if there's nothing to execute — a task with neither prompt nor

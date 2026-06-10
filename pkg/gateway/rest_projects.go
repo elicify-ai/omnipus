@@ -85,7 +85,7 @@ func (c caller) canAccess(resourceOwner string) bool {
 }
 
 // denyIfNoAccess writes a 404 JSON error and returns true when the caller cannot
-// access the given resource owner, centralising the SEC-2 "404-not-403" invariant.
+// access the given resource owner, centralizing the SEC-2 "404-not-403" invariant.
 // Returns false (access granted) without writing anything when access is permitted.
 func (a *restAPI) denyIfNoAccess(w http.ResponseWriter, c caller, owner, notFoundMsg string) bool {
 	if c.canAccess(owner) {
@@ -118,13 +118,6 @@ func (a *restAPI) callerIdentity(r *http.Request) caller {
 		c.MultiUser = len(cfg.Gateway.Users) > 1
 	}
 	return c
-}
-
-// canAccess is a package-level shim retained for backward compatibility with call
-// sites that have not yet been migrated to caller.canAccess. New code must use
-// caller.canAccess directly.
-func canAccess(resourceOwner, callerUsername string, callerRole config.UserRole) bool {
-	return (caller{Username: callerUsername, Role: callerRole}).canAccess(resourceOwner)
 }
 
 // validateRepositoryURL returns an error when the repository field is non-empty but

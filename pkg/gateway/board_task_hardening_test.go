@@ -315,7 +315,7 @@ func TestBoardTaskStart_CompletionVsRequeueRace(t *testing.T) {
 	assert.True(t, activeCallbackWrote,
 		"callback MUST write done/result when t.Status == 'active' — proves guard allows active tasks through")
 	finalActive, _ := api.readBoardTask(activeTaskID)
-	assert.Equal(t, "done", finalActive.Status, "active task must be updated to done by callback")
+	assert.Equal(t, boardtask.StatusDone, finalActive.Status, "active task must be updated to done by callback")
 }
 
 // ── C2: real agent-path completion ───────────────────────────────────────────
@@ -490,7 +490,10 @@ func TestBoardTaskPost_RejectsUnknownAgentID(t *testing.T) {
 		now := time.Now().UTC().Format(time.RFC3339)
 		data := fmt.Sprintf(
 			`{"id":%q,"name":"StartRejectTask","status":"inbox","agent_id":%q,"prompt":"do it","created_at":%q,"updated_at":%q}`,
-			taskID, unknownID, now, now,
+			taskID,
+			unknownID,
+			now,
+			now,
 		)
 		require.NoError(t, os.WriteFile(filepath.Join(tasksDir, taskID+".json"), []byte(data), 0o600))
 
@@ -665,7 +668,7 @@ func TestReconcileStuckBoardTasks(t *testing.T) {
 	// Active task must now be failed with a non-empty diagnostic result.
 	gotActive, err := api.readBoardTask(activeID)
 	require.NoError(t, err, "readBoardTask (active→failed) must not error")
-	assert.Equal(t, "failed", gotActive.Status,
+	assert.Equal(t, boardtask.StatusFailed, gotActive.Status,
 		"reconcile must reset active task to failed")
 	assert.NotEmpty(t, gotActive.Result,
 		"reconciled active task must have a non-empty diagnostic result")
@@ -673,7 +676,7 @@ func TestReconcileStuckBoardTasks(t *testing.T) {
 	// Done task must be unchanged.
 	gotDone, err := api.readBoardTask(doneID)
 	require.NoError(t, err, "readBoardTask (done) must not error")
-	assert.Equal(t, "done", gotDone.Status,
+	assert.Equal(t, boardtask.StatusDone, gotDone.Status,
 		"reconcile must leave done tasks untouched")
 	assert.Equal(t, "all tests passed", gotDone.Result,
 		"done task result must not be modified by reconcile")

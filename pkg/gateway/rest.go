@@ -2176,7 +2176,7 @@ func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) erro
 	}
 	// Register the content hash of what we just wrote so the config file
 	// watcher knows this is an app-initiated write and does not trigger a
-	// full service reload (channels disconnect/reconnect, cron lanes cancelled).
+	// full service reload (channels disconnect/reconnect, cron lanes canceled).
 	// We register `out` first so even a fast poller tick before the refresh sees
 	// a known hash.
 	if a.selfWriteReg != nil {

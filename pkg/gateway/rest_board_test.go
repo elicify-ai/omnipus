@@ -800,11 +800,13 @@ func TestHandleBoardTasks_FilterByAgentID(t *testing.T) {
 	require.NoError(t, os.MkdirAll(tasksDir, 0o700))
 	alphaData := fmt.Sprintf(
 		`{"id":%q,"name":"Alpha Task","agent_id":%q,"status":"inbox","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
-		alphaTaskID, alphaAgentID,
+		alphaTaskID,
+		alphaAgentID,
 	)
 	betaData := fmt.Sprintf(
 		`{"id":%q,"name":"Beta Task","agent_id":%q,"status":"inbox","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
-		betaTaskID, betaAgentID,
+		betaTaskID,
+		betaAgentID,
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, alphaTaskID+".json"), []byte(alphaData), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, betaTaskID+".json"), []byte(betaData), 0o600))
