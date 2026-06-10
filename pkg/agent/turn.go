@@ -647,12 +647,18 @@ func (ts *turnState) appendAssistantTranscript(content string) {
 		return
 	}
 	agentID := ts.resolveActiveAgentID()
+	// Populate token/cost from accumulated turn stats so scheduled and
+	// non-websocket turns record real usage, mirroring the wsStreamer.Finalize
+	// path (#411). GetTurnStats is safe to call here — the turn is finishing.
+	turnTokens, turnCost := ts.GetTurnStats()
 	entry := session.TranscriptEntry{
 		ID:        fmt.Sprintf("assistant-%d", time.Now().UnixNano()),
 		Role:      "assistant",
 		AgentID:   agentID,
 		Content:   content,
 		Timestamp: time.Now().UTC(),
+		Tokens:    int(turnTokens),
+		Cost:      turnCost,
 	}
 	if err := ts.transcriptStore.AppendTranscript(ts.transcriptSessionID, entry); err != nil {
 		logger.WarnCF("agent", "could not record assistant message to transcript",

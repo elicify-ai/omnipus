@@ -13,6 +13,7 @@ import {
   SheetTitle,
   SheetFooter,
 } from '@/components/ui/sheet'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -315,25 +316,34 @@ function TaskCard({ task, onDelete, onStatusChange, isDeleting, isUpdating }: Ta
               {task.description}
             </p>
           )}
-          {/* Inline status change (US-7) — active excluded (set via /start only) */}
+          {/* Inline status control (US-7).
+              'active' is a runtime state set only via /start — the PUT endpoint
+              returns 403 if you send it directly. Render it read-only as a Badge
+              so the value is visible without offering an invalid mutation. */}
           <div className="flex items-center gap-2">
             <span className="text-xs text-[var(--color-muted)]">Status</span>
-            <Select
-              value={task.status}
-              onValueChange={(v) => onStatusChange(task.id, v as BoardUpdateStatus)}
-              disabled={isUpdating}
-            >
-              <SelectTrigger className="h-7 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] flex-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {CHANGE_STATUS_OPTIONS.map((col) => (
-                  <SelectItem key={col.status} value={col.status} className="text-xs">
-                    {col.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {task.status === 'active' ? (
+              <Badge className="h-7 text-xs bg-yellow-400/10 text-yellow-400 border-transparent rounded-md px-2">
+                Active
+              </Badge>
+            ) : (
+              <Select
+                value={task.status}
+                onValueChange={(v) => onStatusChange(task.id, v as BoardUpdateStatus)}
+                disabled={isUpdating}
+              >
+                <SelectTrigger className="h-7 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] flex-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CHANGE_STATUS_OPTIONS.map((col) => (
+                    <SelectItem key={col.status} value={col.status} className="text-xs">
+                      {col.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </div>
           <button
             type="button"

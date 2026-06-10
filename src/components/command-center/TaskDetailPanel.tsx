@@ -52,8 +52,8 @@ const WORKFLOW_STATUS_OPTIONS: { value: Task['status']; label: string; color: st
 
 // GTD board task statuses for the status-change dropdown (taskMode === 'gtd').
 // 'active' is intentionally excluded — it is set only via /start (a dedicated API
-// action). Offering it in the change dropdown would return a 403. The task's
-// current status badge still shows 'active' when the task IS active (read-only).
+// action). Offering it in the change dropdown would return a 403. When the task IS
+// active the status field renders a read-only Badge instead of this dropdown.
 type GTDChangeStatus = BoardTaskUpdateStatus
 const GTD_STATUS_OPTIONS: { value: GTDChangeStatus; label: string; color: string }[] = [
   { value: 'inbox',   label: 'Inbox',   color: 'text-[var(--color-muted)]' },
@@ -279,18 +279,28 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
         />
       </Field>
 
-      {/* Status change — active excluded (set via /start only); badge above shows read-only current status */}
+      {/* Status — 'active' is a runtime state set only via /start; rendering it
+          inside the SmartSelect (which has no matching option) produces a blank
+          trigger. When active, show a read-only Badge. For all other statuses
+          show the editable dropdown (active is excluded from GTD_STATUS_OPTIONS
+          so the PUT endpoint never receives an invalid value). */}
       <Field label="Status">
-        <SmartSelect
-          value={task.status}
-          onValueChange={(val) => doUpdate({ status: val as GTDChangeStatus })}
-          triggerClassName="h-8 text-xs"
-          items={GTD_STATUS_OPTIONS.map((o) => ({
-            value: o.value,
-            label: o.label,
-            className: cn('text-xs', o.color),
-          }))}
-        />
+        {task.status === 'active' ? (
+          <Badge className="h-8 text-xs bg-yellow-400/10 text-yellow-400 border-transparent rounded-md px-2 inline-flex items-center">
+            Active
+          </Badge>
+        ) : (
+          <SmartSelect
+            value={task.status}
+            onValueChange={(val) => doUpdate({ status: val as GTDChangeStatus })}
+            triggerClassName="h-8 text-xs"
+            items={GTD_STATUS_OPTIONS.map((o) => ({
+              value: o.value,
+              label: o.label,
+              className: cn('text-xs', o.color),
+            }))}
+          />
+        )}
       </Field>
 
       {/* Project */}

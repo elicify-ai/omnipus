@@ -1633,6 +1633,16 @@ func restartServices(
 	if err = runningServices.CronService.Start(); err != nil {
 		return fmt.Errorf("error restarting cron service: %w", err)
 	}
+	// Re-point the restAPI's cronService field to the newly started instance.
+	// restAPI.cronService is assigned once at construction time
+	// (setupAndStartServices). On each reload, restartServices replaces
+	// runningServices.CronService with a new instance whose laneCtx is live;
+	// without this update the restAPI holds a stale pointer whose laneCtx was
+	// cancelled by the previous Stop(), causing "turn not started: context
+	// canceled" on every RunNow call (#412).
+	if runningServices.restAPIRef != nil {
+		runningServices.restAPIRef.cronService = runningServices.CronService
+	}
 	fmt.Println("  ✓ Cron service restarted")
 
 	runningServices.HeartbeatService = heartbeat.NewHeartbeatService(
