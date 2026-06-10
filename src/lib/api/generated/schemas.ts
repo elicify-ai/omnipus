@@ -420,10 +420,25 @@ type GTDBoardTaskStatus =
   | "waiting"
   | "done"
   | "failed";
-type BoardTaskListItem = BoardTask;
 type BoardTaskListResponse = {
   items: Array<BoardTaskListItem>;
   total: number;
+};
+type BoardTaskListItem = {
+  id: string;
+  name: string;
+  description?: string | undefined;
+  status: "inbox" | "next" | "active" | "waiting" | "done" | "failed";
+  project_id?: string | undefined;
+  agent_id?: string | undefined;
+  prompt?: string | undefined;
+  priority?: number | undefined;
+  milestone_id?: string | undefined;
+  session_id?: string | undefined;
+  result?: string | undefined;
+  created_at: string;
+  updated_at: string;
+  owner?: string | undefined;
 };
 type BoardTaskCreateRequest = {
   name: string;
@@ -1629,6 +1644,27 @@ export const MilestoneUpdateRequest = z
   })
   .partial()
   .passthrough();
+export const BoardTaskListItem: z.ZodType<BoardTaskListItem> = z
+  .object({
+    id: z.string(),
+    name: z.string().min(1),
+    description: z.string().max(2000).optional(),
+    status: z.enum(["inbox", "next", "active", "waiting", "done", "failed"]),
+    project_id: z.string().optional(),
+    agent_id: z.string().optional(),
+    prompt: z.string().max(10000).optional(),
+    priority: z.number().int().gte(1).lte(5).optional(),
+    milestone_id: z.string().optional(),
+    session_id: z.string().optional(),
+    result: z.string().max(50000).optional(),
+    created_at: z.string().datetime({ offset: true }),
+    updated_at: z.string().datetime({ offset: true }),
+    owner: z.string().optional(),
+  })
+  .passthrough();
+export const BoardTaskListResponse: z.ZodType<BoardTaskListResponse> = z
+  .object({ items: z.array(BoardTaskListItem), total: z.number().int() })
+  .passthrough();
 export const GTDBoardTaskStatus = z.enum([
   "inbox",
   "next",
@@ -1637,6 +1673,18 @@ export const GTDBoardTaskStatus = z.enum([
   "done",
   "failed",
 ]);
+export const BoardTaskCreateRequest: z.ZodType<BoardTaskCreateRequest> = z
+  .object({
+    name: z.string().min(1).max(200),
+    description: z.string().max(2000).optional(),
+    status: GTDBoardTaskStatus.optional(),
+    project_id: z.string().optional(),
+    agent_id: z.string().optional(),
+    prompt: z.string().max(10000).optional(),
+    priority: z.number().int().gte(1).lte(5).optional(),
+    milestone_id: z.string().optional(),
+  })
+  .passthrough();
 export const BoardTask: z.ZodType<BoardTask> = z
   .object({
     id: z.string(),
@@ -1653,22 +1701,6 @@ export const BoardTask: z.ZodType<BoardTask> = z
     created_at: z.string().datetime({ offset: true }),
     updated_at: z.string().datetime({ offset: true }),
     owner: z.string().optional(),
-  })
-  .passthrough();
-export const BoardTaskListItem: z.ZodType<BoardTaskListItem> = BoardTask;
-export const BoardTaskListResponse: z.ZodType<BoardTaskListResponse> = z
-  .object({ items: z.array(BoardTaskListItem), total: z.number().int() })
-  .passthrough();
-export const BoardTaskCreateRequest: z.ZodType<BoardTaskCreateRequest> = z
-  .object({
-    name: z.string().min(1).max(200),
-    description: z.string().max(2000).optional(),
-    status: GTDBoardTaskStatus.optional(),
-    project_id: z.string().optional(),
-    agent_id: z.string().optional(),
-    prompt: z.string().max(10000).optional(),
-    priority: z.number().int().gte(1).lte(5).optional(),
-    milestone_id: z.string().optional(),
   })
   .passthrough();
 export const BoardTaskUpdateStatus = z.enum([

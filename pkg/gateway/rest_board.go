@@ -353,7 +353,7 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		Prompt      *string                              `json:"prompt,omitempty"`
 		Result      *string                              `json:"result,omitempty"`
 		SessionId   *string                              `json:"session_id,omitempty"`
-		Status      gen.BoardTaskListResponseItemsStatus `json:"status"`
+		Status      gen.BoardTaskListItemStatus `json:"status"`
 		UpdatedAt   time.Time                            `json:"updated_at"`
 	}
 	type boardTaskListShim struct { // not-wire-format: wrapper for anonymous generated struct, mirrors BoardTaskListResponse exactly
@@ -380,7 +380,7 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 			// t.Status is a validated GTD status string (readBoardTask/listBoardTasks
 			// reject non-GTD values); convert via the source string rather than an
 			// enum-to-enum cast.
-			Status:    gen.BoardTaskListResponseItemsStatus(t.Status),
+			Status:    gen.BoardTaskListItemStatus(t.Status),
 			UpdatedAt: wt.UpdatedAt,
 		})
 	}

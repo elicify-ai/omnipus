@@ -393,7 +393,20 @@ components:
     BoardTaskListItem:
       $ref: ./components/schemas/BoardTaskListItem.yaml
     BoardTaskListResponse:
-      $ref: ./components/schemas/BoardTaskListResponse.yaml
+      type: object
+      description: Paginated list response for GET /board/tasks
+      required:
+        - items
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BoardTaskListItem'
+        total:
+          type: integer
+          description: Total number of tasks matching the filter (before pagination).
+          example: 42
     BoardTaskCreateRequest:
       $ref: ./components/schemas/BoardTaskCreateRequest.yaml
     BoardTaskUpdateRequest:

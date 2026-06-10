@@ -619,36 +619,6 @@ func (e BoardTaskListItemStatus) Valid() bool {
 	}
 }
 
-// Defines values for BoardTaskListResponseItemsStatus.
-const (
-	BoardTaskListResponseItemsStatusActive  BoardTaskListResponseItemsStatus = "active"
-	BoardTaskListResponseItemsStatusDone    BoardTaskListResponseItemsStatus = "done"
-	BoardTaskListResponseItemsStatusFailed  BoardTaskListResponseItemsStatus = "failed"
-	BoardTaskListResponseItemsStatusInbox   BoardTaskListResponseItemsStatus = "inbox"
-	BoardTaskListResponseItemsStatusNext    BoardTaskListResponseItemsStatus = "next"
-	BoardTaskListResponseItemsStatusWaiting BoardTaskListResponseItemsStatus = "waiting"
-)
-
-// Valid indicates whether the value is a known member of the BoardTaskListResponseItemsStatus enum.
-func (e BoardTaskListResponseItemsStatus) Valid() bool {
-	switch e {
-	case BoardTaskListResponseItemsStatusActive:
-		return true
-	case BoardTaskListResponseItemsStatusDone:
-		return true
-	case BoardTaskListResponseItemsStatusFailed:
-		return true
-	case BoardTaskListResponseItemsStatusInbox:
-		return true
-	case BoardTaskListResponseItemsStatusNext:
-		return true
-	case BoardTaskListResponseItemsStatusWaiting:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for BoardTaskUpdateRequestStatus.
 const (
 	BoardTaskUpdateRequestStatusDone    BoardTaskUpdateRequestStatus = "done"
@@ -2838,25 +2808,25 @@ func (e CreateBoardTaskJSONBodyStatus) Valid() bool {
 
 // Defines values for UpdateBoardTaskJSONBodyStatus.
 const (
-	UpdateBoardTaskJSONBodyStatusDone    UpdateBoardTaskJSONBodyStatus = "done"
-	UpdateBoardTaskJSONBodyStatusFailed  UpdateBoardTaskJSONBodyStatus = "failed"
-	UpdateBoardTaskJSONBodyStatusInbox   UpdateBoardTaskJSONBodyStatus = "inbox"
-	UpdateBoardTaskJSONBodyStatusNext    UpdateBoardTaskJSONBodyStatus = "next"
-	UpdateBoardTaskJSONBodyStatusWaiting UpdateBoardTaskJSONBodyStatus = "waiting"
+	Done    UpdateBoardTaskJSONBodyStatus = "done"
+	Failed  UpdateBoardTaskJSONBodyStatus = "failed"
+	Inbox   UpdateBoardTaskJSONBodyStatus = "inbox"
+	Next    UpdateBoardTaskJSONBodyStatus = "next"
+	Waiting UpdateBoardTaskJSONBodyStatus = "waiting"
 )
 
 // Valid indicates whether the value is a known member of the UpdateBoardTaskJSONBodyStatus enum.
 func (e UpdateBoardTaskJSONBodyStatus) Valid() bool {
 	switch e {
-	case UpdateBoardTaskJSONBodyStatusDone:
+	case Done:
 		return true
-	case UpdateBoardTaskJSONBodyStatusFailed:
+	case Failed:
 		return true
-	case UpdateBoardTaskJSONBodyStatusInbox:
+	case Inbox:
 		return true
-	case UpdateBoardTaskJSONBodyStatusNext:
+	case Next:
 		return true
-	case UpdateBoardTaskJSONBodyStatusWaiting:
+	case Waiting:
 		return true
 	default:
 		return false
@@ -3888,7 +3858,7 @@ type BoardTaskCreateRequest struct {
 // BoardTaskCreateRequestStatus GTD board task status.
 type BoardTaskCreateRequestStatus string
 
-// BoardTaskListItem A GTD board task stored in ~/.omnipus/tasks/. Distinct from workflow tasks (pkg/taskstore, /api/v1/tasks) which have different statuses and semantics.
+// BoardTaskListItem A single item in the board task list response. Equivalent to BoardTask. Defined as a plain object (not allOf) so that oapi-codegen emits []BoardTaskListItem rather than an inline anonymous struct in BoardTaskListResponse.
 type BoardTaskListItem struct {
 	// AgentId Optional agent responsible for this task.
 	AgentId   *string   `json:"agent_id,omitempty"`
@@ -3934,52 +3904,11 @@ type BoardTaskListItemStatus string
 
 // BoardTaskListResponse Paginated list response for GET /board/tasks
 type BoardTaskListResponse struct {
-	Items []struct {
-		// AgentId Optional agent responsible for this task.
-		AgentId   *string   `json:"agent_id,omitempty"`
-		CreatedAt time.Time `json:"created_at"`
-
-		// Description Optional task description.
-		Description *string `json:"description,omitempty"`
-
-		// Id UUID task identifier
-		Id string `json:"id"`
-
-		// MilestoneId Optional milestone this task belongs to.
-		MilestoneId *string `json:"milestone_id,omitempty"`
-
-		// Name Task name.
-		Name string `json:"name"`
-
-		// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
-		Owner *string `json:"owner,omitempty"`
-
-		// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified.
-		Priority *int `json:"priority,omitempty"`
-
-		// ProjectId Optional project this task belongs to. Must be an existing project ID. If absent, task is unassigned.
-		ProjectId *string `json:"project_id,omitempty"`
-
-		// Prompt Optional agent prompt attached to the task.
-		Prompt *string `json:"prompt,omitempty"`
-
-		// Result Optional task result or output.
-		Result *string `json:"result,omitempty"`
-
-		// SessionId Optional session linked to this task.
-		SessionId *string `json:"session_id,omitempty"`
-
-		// Status GTD board task status.
-		Status    BoardTaskListResponseItemsStatus `json:"status"`
-		UpdatedAt time.Time                        `json:"updated_at"`
-	} `json:"items"`
+	Items []BoardTaskListItem `json:"items"`
 
 	// Total Total number of tasks matching the filter (before pagination).
 	Total int `json:"total"`
 }
-
-// BoardTaskListResponseItemsStatus GTD board task status.
-type BoardTaskListResponseItemsStatus string
 
 // BoardTaskUpdateRequest defines model for BoardTaskUpdateRequest.
 type BoardTaskUpdateRequest struct {

@@ -5711,8 +5711,61 @@ export interface components {
              */
             owner?: string;
         };
-        /** @description A single item in the board task list response. Equivalent to BoardTask. */
-        BoardTaskListItem: components["schemas"]["BoardTask"];
+        /** @description A single item in the board task list response. Equivalent to BoardTask. Defined as a plain object (not allOf) so that oapi-codegen emits []BoardTaskListItem rather than an inline anonymous struct in BoardTaskListResponse. */
+        BoardTaskListItem: {
+            /**
+             * @description UUID task identifier
+             * @example b2c3d4e5-f6a7-8901-bcde-f12345678901
+             */
+            id: string;
+            /**
+             * @description Task name.
+             * @example Fix login bug
+             */
+            name: string;
+            /** @description Optional task description. */
+            description?: string;
+            /**
+             * @description GTD board task status.
+             * @enum {string}
+             */
+            status: "inbox" | "next" | "active" | "waiting" | "done" | "failed";
+            /**
+             * @description Optional project this task belongs to. Must be an existing project ID. If absent, task is unassigned.
+             * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
+             */
+            project_id?: string;
+            /**
+             * @description Optional agent responsible for this task.
+             * @example mia
+             */
+            agent_id?: string;
+            /** @description Optional agent prompt attached to the task. */
+            prompt?: string;
+            /** @description Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified. */
+            priority?: number;
+            /** @description Optional milestone this task belongs to. */
+            milestone_id?: string;
+            /** @description Optional session linked to this task. */
+            session_id?: string;
+            /** @description Optional task result or output. */
+            result?: string;
+            /**
+             * Format: date-time
+             * @example 2026-06-08T14:22:00Z
+             */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @example 2026-06-08T15:00:00Z
+             */
+            updated_at: string;
+            /**
+             * @description Username of the user who owns this resource. Set server-side at creation; read-only.
+             * @example alice
+             */
+            owner?: string;
+        };
         /** @description Paginated list response for GET /board/tasks */
         BoardTaskListResponse: {
             items: components["schemas"]["BoardTaskListItem"][];
