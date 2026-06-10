@@ -4496,8 +4496,8 @@ turnLoop:
 				// surface as a transport-drop string (classified FailoverTimeout)
 				// rather than context.Canceled. Without this guard the branch would
 				// emit a spurious "Retrying…" message + stray LLMRetry/TurnTimeout
-				// events before the cancelled turnCtx collapses the backoff. Breaking
-				// here lets the cancelled turn finalize quietly.
+				// events before the canceled turnCtx collapses the backoff. Breaking
+				// here lets the canceled turn finalize quietly.
 				if ts.hardAbortRequested() {
 					break
 				}

@@ -82,6 +82,12 @@ test('(d) all tabs reachable via keyboard navigation (ArrowKeys)', async ({ page
   const activePanel = page.locator('[role="tabpanel"][data-state="active"]').first();
   await expect(activePanel).toBeVisible({ timeout: 10_000 });
 
+  // Capture the FIRST tab's aria-controls NOW, while it is the active tab.
+  // initialActive is a LIVE locator for [data-state="active"], so reading it
+  // AFTER the forward walk would resolve to the LAST tab (About) — which made
+  // the wrap-around assertion compare against the wrong value. Snapshot it here.
+  const initialAriaControls = await initialActive.getAttribute('aria-controls');
+
   // Cycle through the remaining tabs via ArrowRight. After each press, the
   // focused tab MUST equal the active tab (automatic activation), and its
   // panel must become visible.
@@ -118,8 +124,6 @@ test('(d) all tabs reachable via keyboard navigation (ArrowKeys)', async ({ page
   // aria-controls to absorb the panel re-render settle.
   const lastActive = tabList.locator('[role="tab"][data-state="active"]').first();
   await expect(lastActive).toBeFocused({ timeout: 5_000 });
-
-  const initialAriaControls = await initialActive.getAttribute('aria-controls');
 
   await page.keyboard.press('ArrowRight');
 
