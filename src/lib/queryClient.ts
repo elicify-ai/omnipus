@@ -1,44 +1,18 @@
 import { QueryClient } from '@tanstack/react-query'
 import { ApiSchemaError, ApiError } from './api'
+import { forceLogout } from './authLogout'
 
 // ── Global 401 logout handler ─────────────────────────────────────────────────
 //
 // Debounced: once a 401 is detected, subsequent concurrent 401 failures within
 // the same 2-second window are suppressed so concurrent polling queries don't
-// each trigger a redirect. Uses a module-level flag rather than setTimeout so
-// the redirect fires synchronously on the first occurrence.
-
-let _logoutScheduled = false
+// each trigger a redirect. The redirect fires synchronously on the first call;
+// only the debounce-flag reset uses setTimeout (see authLogout.ts).
 
 function _handleAuthError(err: unknown): void {
   if (!(err instanceof ApiError)) return
   if (err.status !== 401) return
-  if (_logoutScheduled) return
-  _logoutScheduled = true
-
-  // Clear auth state from both storages (matches the pattern in src/store/auth.ts).
-  sessionStorage.removeItem('omnipus_auth_token')
-  localStorage.removeItem('omnipus_auth_token')
-  localStorage.removeItem('omnipus_auth_role')
-  localStorage.removeItem('omnipus_auth_username')
-
-  // Sync the Zustand auth store if it is already loaded (avoids a circular
-  // import by using a dynamic import on the hot path).
-  void import('@/store/auth')
-    .then(({ useAuthStore }) => {
-      useAuthStore.getState().clearAuth()
-    })
-    .catch(() => {
-      // Store not yet loaded — token removal above is sufficient.
-    })
-
-  // Reset the flag after 2 seconds so a fresh login can trigger a new logout cycle.
-  setTimeout(() => { _logoutScheduled = false }, 2_000)
-
-  // Redirect to login. TanStack Router uses hash-based navigation here.
-  if (typeof window !== 'undefined') {
-    window.location.hash = '/login'
-  }
+  forceLogout()
 }
 
 // Singleton QueryClient — created once and shared between:

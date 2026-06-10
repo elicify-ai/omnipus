@@ -2,6 +2,7 @@
 // Handles: connect, authenticate, streaming frames, reconnect with exponential backoff
 
 import { maybeDevToast } from '@/lib/dev-toast'
+import { forceLogout } from '@/lib/authLogout'
 
 // ── Generated type imports ────────────────────────────────────────────────────
 // All wire-format frame types are sourced from the generated AsyncAPI types.
@@ -766,22 +767,10 @@ export class WsConnection {
       if (!this.intentionalClose) {
         // Close code 1008 = policy violation / auth failure. The server rejected
         // the token. Reconnecting with the same dead token will loop forever —
-        // route through the same logout+redirect path as the QueryClient 401 handler.
+        // route through the shared forceLogout() path (same debounce as the
+        // QueryClient 401 handler, so a simultaneous 401 + 1008 fires teardown once).
         if (event.code === 1008) {
-          sessionStorage.removeItem('omnipus_auth_token')
-          localStorage.removeItem('omnipus_auth_token')
-          localStorage.removeItem('omnipus_auth_role')
-          localStorage.removeItem('omnipus_auth_username')
-          void import('@/store/auth')
-            .then(({ useAuthStore }) => {
-              useAuthStore.getState().clearAuth()
-            })
-            .catch(() => {
-              // Store not yet loaded — token removal above is sufficient.
-            })
-          if (typeof window !== 'undefined') {
-            window.location.hash = '/login'
-          }
+          forceLogout()
           return
         }
         if (event.code !== 1000 && event.code !== 1001) {
