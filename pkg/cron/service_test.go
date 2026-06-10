@@ -154,7 +154,11 @@ func TestCronService_EveryNextRunPerScheduleDiverges(t *testing.T) {
 		t.Fatalf("same cadence + same reference time must yield equal next-run; got A=%d B=%d", *nextA, *nextB)
 	}
 	if *nextA != base+hourMS {
-		t.Fatalf("every next-run must be now+interval (relative, not boundary-aligned); got %d want %d", *nextA, base+hourMS)
+		t.Fatalf(
+			"every next-run must be now+interval (relative, not boundary-aligned); got %d want %d",
+			*nextA,
+			base+hourMS,
+		)
 	}
 	// Distinct backing storage — the equal values are NOT the same pointer/alias.
 	if nextA == nextB {

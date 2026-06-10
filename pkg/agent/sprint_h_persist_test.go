@@ -57,7 +57,7 @@ func TestSpawn_PersistsParentToolCallIDOnChildren(t *testing.T) {
 		DurationMS:       100,
 		ParentToolCallID: session.ToolCallID(ts.parentSpawnCallID),
 	}
-	ts.appendToolCallTranscript(tc, "")
+	ts.appendToolCallTranscript(tc)
 
 	// Read back the transcript from disk.
 	entries, err := store.ReadTranscript(sessionID)
@@ -106,7 +106,7 @@ func TestSpawn_TopLevel_NoParentToolCallID(t *testing.T) {
 		Status:           "success",
 		ParentToolCallID: session.ToolCallID(ts.parentSpawnCallID), // empty
 	}
-	ts.appendToolCallTranscript(tc, "")
+	ts.appendToolCallTranscript(tc)
 
 	entries, err := store.ReadTranscript(sessionID)
 	require.NoError(t, err)

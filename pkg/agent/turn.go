@@ -608,14 +608,11 @@ func (ts *turnState) interruptHintMessage() providers.Message {
 // It is a no-op when no transcript store or session ID is configured, or when
 // the turn has been marked abandoned (B4: suppresses writes from stuck goroutines).
 //
-// attributeAgentID is the agent id the entry should be attributed to. Callers
-// pass the agent that was active BEFORE the tool executed: a handoff tool
-// switches the session's active agent mid-execution, and the handoff tool_call
-// itself belongs to the SOURCE agent (the one that decided to connect the
-// user), not the target it switched to. When attributeAgentID is empty, it
-// falls back to the runtime-current active agent via resolveActiveAgentID so
-// non-handoff callers keep the prior behaviour.
-func (ts *turnState) appendToolCallTranscript(tc session.ToolCall, attributeAgentID string) {
+// Bug 1 fix: the AgentID on the entry reflects the runtime-current active agent
+// (via activeAgentResolver) rather than the turn's starting agent. This ensures
+// that tool_call entries produced after a handoff carry the correct agent_id —
+// the new active agent — instead of the one that initiated the turn.
+func (ts *turnState) appendToolCallTranscript(tc session.ToolCall) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
 		return
@@ -623,10 +620,7 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall, attributeAgen
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
 		return
 	}
-	agentID := attributeAgentID
-	if agentID == "" {
-		agentID = ts.resolveActiveAgentID()
-	}
+	agentID := ts.resolveActiveAgentID()
 	entry := session.TranscriptEntry{
 		ID:        string(tc.ID),
 		Type:      session.EntryTypeToolCall,

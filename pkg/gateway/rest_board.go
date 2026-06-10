@@ -923,7 +923,8 @@ func (a *restAPI) startBoardTaskLocked(
 	// Propagate the board task's owner onto the session so that sysagent tools
 	// running inside this turn inherit the correct owner (SEC-2/#406, Rule-2).
 	taskOwner := existing.Owner
-	if setErr := store.SetMeta(meta.ID, session.MetaPatch{Title: &title, TaskID: &tid, Owner: &taskOwner}); setErr != nil {
+	metaPatch := session.MetaPatch{Title: &title, TaskID: &tid, Owner: &taskOwner}
+	if setErr := store.SetMeta(meta.ID, metaPatch); setErr != nil {
 		slog.Error("rest: board task: start set meta failed — aborting dispatch",
 			"id", id, "session_id", meta.ID, "error", setErr)
 		if delErr := store.DeleteSession(meta.ID); delErr != nil {
