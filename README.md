@@ -70,7 +70,7 @@ Tell them once in Settings → Profile ("be concise", "I use Python", your timez
 
 ### Reach them anywhere
 
-Use the web app, the terminal, or wire your agents into Telegram, Discord, Slack, WhatsApp, and 10 other chat platforms — voice notes and images included.
+Use the web app, the terminal, or wire your agents into Telegram, Discord, Slack, WhatsApp, and 9 other chat platforms — voice notes and images included.
 
 → [Channels](docs/channels.md)
 
@@ -103,9 +103,11 @@ Pick from 35+ AI providers — including fully-local options like Ollama.
 
 **Encrypted credential vault** — AES-256-GCM with an Argon2id KDF. → [Cryptographic design](docs/credential_encryption.md#cryptographic-design)
 
+> Note: the "Credential encryption" link in the First-boot section currently points to a doc that does not exist yet — the target will be re-aimed in a follow-up by another agent.
+
 **Full audit trail** — every tool call, LLM request, and agent event lands in a replayable on-disk transcript that feeds the UI, subprocess hooks, and a tamper-evident audit log. → [Session transcript](docs/observability.md#session-transcript)
 
-**14 in-process chat channels and 35+ LLM providers** — with fallback chains, multi-key rotation, streaming, and vision. → [Channels](docs/channels.md) · [Providers](docs/providers.md#providers)
+**13 in-process chat channels and 35+ LLM providers** — with fallback chains, multi-key rotation, streaming, and vision. → [Channels](docs/channels.md) · [Providers](docs/providers.md#providers)
 
 **Channel-to-agent routing** — binds inbound messages to specific agents by channel, account, guild, team, or peer. → [Inbound bindings](docs/routing.md#inbound-bindings)
 
@@ -337,9 +339,9 @@ WhatsApp uses pure-Go SQLite (`modernc.org/sqlite`) in its own session namespace
 
 ## Tech stack
 
-**Backend:** Go 1.26+ · `chromedp` · `whatsmeow` · `discordgo` · `telebot` · `slack-go` · `golang.org/x/sys/unix` (Landlock, seccomp).
+**Backend:** Go 1.26+ · `chromedp` · `whatsmeow` · `discordgo` · `telego` · `slack-go` · `golang.org/x/sys/unix` (Landlock, seccomp).
 
-**Frontend:** TypeScript · React 19 · Vite 6 · shadcn/ui (Radix + Tailwind v4) · AssistantUI · Phosphor Icons · Zustand · TanStack Query/Router.
+**Frontend:** TypeScript · React 19 · Vite 8 · shadcn/ui (Radix + Tailwind v4) · AssistantUI · Phosphor Icons · Zustand · TanStack Query/Router.
 
 ---
 

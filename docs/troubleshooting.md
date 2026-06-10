@@ -36,7 +36,7 @@ Check `$OMNIPUS_HOME/logs/gateway_panic.log` for the startup error. The runtime 
 
 ### Exit Code 78 ("EX_CONFIG")
 
-The kernel sandbox failed to apply on a kernel that claims Landlock support. This is a **fail-closed** path — the HTTP listener never binds. Inspect `gateway.log` for `sandbox apply failed`, then either lower the kernel's expectations with `omnipus start --sandbox=permissive` (log violations without blocking) or `--sandbox=off` for development.
+The kernel sandbox failed to apply on a kernel that claims Landlock support. This is a **fail-closed** path — the HTTP listener never binds. Inspect `gateway.log` for `sandbox apply failed`, then either lower the kernel's expectations with `omnipus start --sandbox=permissive` (log violations without blocking) or `omnipus start --sandbox=off` for development. The valid values for `--sandbox` are `enforce|permissive|off` (parsed by `sandbox.ParseMode` at `cmd/omnipus/internal/gateway/command.go:62-71`; an invalid value exits 2 with a usage error). The exit-code contract is documented in the command's `Long` help text (`cmd/omnipus/internal/gateway/command.go:45-49`) and the sentinel error path is at `cmd/omnipus/internal/gateway/command.go:100-107`.
 
 Setting `OMNIPUS_ENV=production` causes a recurring stderr nag banner when the sandbox is off or permissive, by design.
 

@@ -646,6 +646,105 @@ test(
   },
 )
 
+// ── Test (f): tool_call badges survive navigate-away → navigate-back ──────────
+//
+// Contract under test: tool_call badges present when a session is first opened
+// must still be present (same count, same data-tool values) after the user
+// navigates away and navigates back to the same session.  A failure would
+// indicate that the gateway replay path drops or reorders tool_call frames
+// on a second attach.
+//
+// BDD:
+//   Given a session with known tool_call transcript entries exists
+//   When the user opens the session (first open — replay path)
+//   Then tool_call badges equal the seeded count with correct data-tool values
+//   When the user navigates away from the session
+//   And the user navigates back to the same session (second open — replay again)
+//   Then the badge count and data-tool values are identical to the first open
+//
+// This test uses the same deterministic seedTranscript approach as tests (a)–(b)
+// to avoid LLM non-determinism while still exercising the reopen / second-attach
+// replay path that tests (a)–(b) do not cover.
+//
+// Traces to: sprint-i-historical-replay-fidelity-spec.md BDD Scenario 1 (tool-call
+//   fidelity) and Scenario 2 (tool attribute values survive reopen); TDD row 23.
+
+test(
+  '(f) real-session replay: tool_call badges survive session reopen',
+  async ({ page }) => {
+    await page.goto('/')
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+    await waitForWsConnected(page)
+
+    // ── Step 1: Create a session seeded with one tool_call entry ──
+    const sessionId = await createSession(page)
+    const sessionTitle = `replay-fidelity-test-f-${Date.now()}`
+    await renameSession(page, sessionId, sessionTitle)
+
+    // Seed transcript: one assistant turn with a completed exec tool call.
+    // This mirrors the JSONL that the gateway writes during a real tool turn.
+    seedTranscript(sessionId, [
+      {
+        id: 'entry-user-f1',
+        role: 'user',
+        content: 'Run echo replay-badge-test',
+        timestamp: new Date(Date.now() - 5000).toISOString(),
+        agent_id: '',
+      },
+      {
+        id: 'entry-asst-f1',
+        role: 'assistant',
+        content: 'Done.',
+        timestamp: new Date(Date.now() - 4000).toISOString(),
+        agent_id: 'mia',
+        tool_calls: [
+          {
+            id: 'tc-f1',
+            tool: 'exec',
+            status: 'success',
+            duration_ms: 31,
+            parameters: { action: 'run', command: 'echo replay-badge-test' },
+            result: { stdout: 'replay-badge-test\n', exit_code: 0 },
+          },
+        ],
+      },
+    ])
+
+    // ── Step 2: Open the session for the first time and capture badge count ──
+    await openSession(page, sessionTitle)
+    await waitForReplayDone(page)
+
+    const badgeLocator = page.locator('[data-testid="tool-call-badge"]')
+    await expect(badgeLocator.first()).toBeVisible({ timeout: 15_000 })
+    const firstOpenCount = await badgeLocator.count()
+    expect(firstOpenCount).toBe(1)
+
+    const toolNames = await badgeLocator.evaluateAll((els) =>
+      els.map((el) => el.getAttribute('data-tool') ?? ''),
+    )
+    expect(toolNames).toEqual(['exec'])
+
+    // ── Step 3: Navigate away ──
+    await page.goto('/')
+    await expect(page.getByRole('banner')).toBeVisible({ timeout: 10_000 })
+    await waitForWsConnected(page)
+
+    // ── Step 4: Navigate back and verify badges are identical ──
+    // This is the core contract: the second open (replay) must produce the
+    // same badges as the first open.
+    await openSession(page, sessionTitle)
+    await waitForReplayDone(page)
+
+    const replayedBadges = page.locator('[data-testid="tool-call-badge"]')
+    await expect(replayedBadges).toHaveCount(firstOpenCount, { timeout: 15_000 })
+
+    const replayedToolNames = await replayedBadges.evaluateAll((els) =>
+      els.map((el) => el.getAttribute('data-tool') ?? ''),
+    )
+    expect(replayedToolNames).toEqual(toolNames)
+  },
+)
+
 // ── Test (e): send button disabled during replay ──────────────────────────────
 //
 // T0.1: Promoted from test.fixme — issue #133 was previously used to suppress

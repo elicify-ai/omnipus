@@ -7,7 +7,7 @@ import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay }
 import { queryClient } from '@/lib/queryClient'
 import type { Message, ToolCall } from '@/lib/api'
 import type { WsReceiveFrame, WsExecApprovalRequestFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
-import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame } from '@/lib/api/generated/asyncapi-types'
+import type { ToolResultRef, TruncatedResult, WhatsAppPairingFrame, NotificationFrame, ExecApprovalExpiredFrame } from '@/lib/api/generated/asyncapi-types'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
 import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
@@ -498,7 +498,7 @@ const EMPTY_BUCKET = emptySessionState()
 const SESSION_SCOPED_FRAME_TYPES = new Set([
   'token', 'done', 'tool_call_start', 'tool_call_result',
   'subagent_start', 'subagent_end', 'replay_message', 'replay_done',
-  'agent_switched', 'task_status_changed', 'exec_approval_request',
+  'agent_switched', 'task_status_changed', 'exec_approval_request', 'exec_approval_expired',
   'tool_approval_required', 'rate_limit', 'media', 'session_started',
   'system_overload', 'session_close_ack', 'cancel_stage',
 ])
@@ -1633,22 +1633,20 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   msg.isStreaming = false
                   msg.status = msg.status === 'interrupted' ? 'interrupted' : 'done'
                 }
-                // End-of-replay bake: gateway emits tool_call_start + tool_call_result
-                // frames for each persisted ToolCall during replay (pkg/gateway/replay.go),
-                // and the last turn's done frame is the only signal that those frames are
-                // complete. The replay_message bake (~1964) only fires when a *next*
-                // replay_message arrives, so tool calls in the final assistant entry
-                // are never baked onto message.tool_calls — VirtualAssistantMessageRow
-                // then renders no tool block / no iframe.
-                //
-                // GUARD: only bake during replay. For a LIVE turn the live
-                // toolCallOrder/toolCalls maps must survive `done` so the
-                // runtime adapter (buildContentParts) keeps rendering them as
-                // live tool calls on the last assistant; they get baked into
-                // message.tool_calls when the NEXT turn's sendMessage runs
-                // (see the prevAssistant bake in sendMessage). Baking on a live
-                // done instead clears the maps and drops the call count to 0.
-                if (wasReplaying && lastMsgId && draft.toolCallOrder.length > 0) {
+                // Bake any pending tool calls into the last assistant message so
+                // VirtualAssistantMessageRow can render them from message.tool_calls.
+                // This covers two cases:
+                //   1. Replay: replay_message coalesces into the empty placeholder and
+                //      returns before baking; done is the only signal that all frames
+                //      for the final entry are complete.
+                //   2. Live turns: tool calls stay in toolCallOrder until the next
+                //      sendMessage bakes them, causing them to disappear the moment
+                //      isStreaming goes false and the message moves to the historical
+                //      renderer (VirtualAssistantMessageRow reads message.tool_calls, not
+                //      the bucket live map). Confirmed: ChatScreen.tsx switches to
+                //      VirtualAssistantMessageRow at isStreaming=false, so baking at
+                //      done is required for live turns too (hotfix/v0.1.1 aff2caa).
+                if (lastMsgId && draft.toolCallOrder.length > 0) {
                   const baked = draft.toolCallOrder
                     .filter((id) => draft.toolCalls[id])
                     .map((id) => {
@@ -2024,6 +2022,29 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }
           break
 
+        // Server-side approval timeout: remove from pendingApprovals and notify the user
+        case 'exec_approval_expired': {
+          const expiredFrame = frame as ExecApprovalExpiredFrame
+          let removed = false
+          if (targetSid) {
+            withBucket(targetSid, (b) => {
+              const prevLength = b.pendingApprovals.length
+              const nextApprovals = b.pendingApprovals.filter((a) => a.id !== expiredFrame.id)
+              if (nextApprovals.length < prevLength) {
+                removed = true
+              }
+              return { pendingApprovals: nextApprovals }
+            })
+          }
+          if (removed) {
+            useUiStore.getState().addToast({
+              message: 'Approval timed out — the tool call was denied automatically.',
+              variant: 'error',
+            })
+          }
+          break
+        }
+
         case 'task_status_changed':
           queryClient.invalidateQueries({ queryKey: ['tasks'] })
           break
@@ -2089,6 +2110,24 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   if (draft.messagesById[draft.messageOrder[i]]?.role === 'assistant') { lastMsgId = draft.messageOrder[i]; break }
                 }
                 if (lastMsgId && (draft.messagesById[lastMsgId].content ?? '') === '') {
+                  // Bake any tool calls that belong to this turn BEFORE taking the early
+                  // return. Without this, toolCallOrder accumulates across turns and ends
+                  // up baked onto the wrong (later) assistant message.
+                  if (draft.toolCallOrder.length > 0) {
+                    const baked = draft.toolCallOrder
+                      .filter((id) => draft.toolCalls[id])
+                      .map((id) => {
+                        const tc = draft.toolCalls[id]
+                        return { id, tool: tc.tool, params: tc.params ?? {}, result: tc.result, status: tc.status, duration_ms: tc.duration_ms, error: tc.error }
+                      })
+                    const existing = draft.messagesById[lastMsgId].tool_calls ?? []
+                    const mergedById = new Map(existing.map((tc) => [tc.id, tc]))
+                    for (const tc of baked) mergedById.set(tc.id, tc)
+                    draft.messagesById[lastMsgId].tool_calls = Array.from(mergedById.values())
+                    draft.toolCalls = {}
+                    draft.toolCallOrder = []
+                    draft.textAtToolCallStart = {}
+                  }
                   const m = draft.messagesById[lastMsgId]
                   m.content = text
                   m.status = 'done'

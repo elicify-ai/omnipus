@@ -21,10 +21,18 @@ Active development. Most of the system is implemented and running on `main`: age
 Three-phase plan locked 2026-05-03.
 
 - **v0.1 — Stabilize `feature/iframe-preview-tier13`.** Ship `web_serve` unification, kernel-enforced bind-port allow-list, sandbox-aware `exec`, iframe preview as one PR. Plan: `/home/Daniel/.claude/plans/quizzical-marinating-frog.md`. No memory/projects creep.
-- **v0.2 — Security hardening (pentest quick wins).** Issue [#155](https://github.com/dapicom-ai/omnipus/issues/155). Quick fixes only: env var allowlist (`pkg/sandbox/hardened_exec.go::sensitiveEnvKeys`), `master.key` 0600 check, shell-guard hardening, internal-CIDR egress blocking, audit HMAC chain, auth-endpoint rate limiting. Structural fixes → v0.3.
+- **v0.2 — Security hardening (pentest quick wins).** Issue [#155](https://github.com/dapicom-ai/omnipus/issues/155). Quick fixes only: env var allowlist (`pkg/sandbox/hardened_exec.go::allowedChildEnvKeys`), `master.key` 0600 check, shell-guard hardening, internal-CIDR egress blocking, audit HMAC chain, auth-endpoint rate limiting. Structural fixes → v0.3.
 - **v0.3 / 1.0 — "Rooms" redesign (memory + projects + tasks + sandbox topology).** Issue [#156](https://github.com/dapicom-ai/omnipus/issues/156). Fresh-build, no back-compat. Five locked design docs in `docs/internal/design/`: `sandbox-redesign-2026-05.md` (two-room topology), `memory-redesign-2026-05.md` (4-tier memory, remember/recall/retrospective, Dreamcatcher, bleve+JSONL+MinHash, no embeddings), `tasks-redesign-2026-05.md` (per-room tasks, cascade-delete), `projects-ui-2026-05.md` (3 SPA surfaces), `settings-notifications-2026-05.md`.
 
 **Routing rule:** when new work comes up, ask which phase it belongs to first. Pentest findings → v0.2 unless structural (→ v0.3). Memory/projects/tasks/room-topology → v0.3. Anything else not completing v0.1 → flag the scope question.
+
+## Merging to main (MANDATORY)
+
+**Never force-merge, admin-bypass, or auto-merge PRs to `main` without explicit human approval.** A human must review and approve the PR before it lands on `main`, regardless of CI status.
+
+- Do **NOT** use `gh pr merge --admin`, `--auto`, or any mechanism that bypasses branch protection or skips required reviews.
+- If CI is green but no human has approved: wait. Ask the user whether to proceed.
+- Why: the v0.1.0 hotfix PR (#363) was merged with `--admin` flag before the user had a chance to review. The user explicitly stated this is unacceptable.
 
 ## Git commit authorship (MANDATORY)
 
@@ -50,11 +58,11 @@ Three-phase plan locked 2026-05-03.
 
 ## Tech Stack
 
-**Backend:** Go (go.mod requires 1.26.3; targets 1.22+). Key packages: `golang.org/x/sys/unix` (Landlock/seccomp), `chromedp`, `whatsmeow` (WhatsApp), `discordgo`, `telebot`, `slack-go`, `go-nostr`, `modernc.org/sqlite` (pure-Go SQLite for whatsmeow, no CGo). All channels are in-process Go. Channels wrapping a non-Go runtime (e.g. Signal → `signal-cli`) spawn a sidecar from their own `Start()` and talk over localhost HTTP — there is no generic stdio bridge protocol. (WhatsApp is pure-Go in-process via whatsmeow, NOT a sidecar example.)
+**Backend:** Go (go.mod requires 1.26.4; targets 1.22+). Key packages: `golang.org/x/sys/unix` (Landlock/seccomp), `chromedp`, `whatsmeow` (WhatsApp), `discordgo`, `mymmrac/telego` (Telegram), `slack-go`, `modernc.org/sqlite` (pure-Go SQLite for whatsmeow, no CGo). All channels are in-process Go. Channels wrapping a non-Go runtime (e.g. Signal → `signal-cli`) spawn a sidecar from their own `Start()` and talk over localhost HTTP — there is no generic stdio bridge protocol. (WhatsApp is pure-Go in-process via whatsmeow, NOT a sidecar example.)
 
 **Frontend:** TypeScript, React 19, Vite 6, shadcn/ui (Radix + Tailwind v4), AssistantUI (chat), Phosphor Icons, Zustand (UI state), TanStack Query (server state), TanStack Router, Framer Motion. Vite builds to `dist/spa/`, copied to `pkg/gateway/spa/`, embedded via `go:embed`.
 
-**Storage:** File-based only (JSON/JSONL); no PostgreSQL/Redis. SQLite is isolated to WhatsApp session storage only. Data dir `~/.omnipus/`. Atomic writes (temp file + rename, `fileutil.WriteFileAtomic`). Credentials in `credentials.json` (AES-256-GCM, Argon2id), never in `config.json`. Sessions: day-partitioned JSONL (`sessions/<id>/<YYYY-MM-DD>.jsonl`, default 90-day retention). Context compression is **single-layer**: `forceCompression` (`pkg/agent/loop.go:4473-4550`) drops ~50% of oldest turns + writes a summary (no second "tool result pruning" pass). Concurrency: per-entity files for hot data (tasks, pins); sessions/memory use a 64-shard mutex pool keyed by FNV hash (`pkg/memory/jsonl.go:21-77`). Advisory `unix.Flock` on Linux/macOS; Windows uses the single-writer goroutine pattern (no `LockFileEx`).
+**Storage:** File-based only (JSON/JSONL); no PostgreSQL/Redis. SQLite is isolated to WhatsApp session storage only. Data dir `~/.omnipus/`. Atomic writes (temp file + rename, `fileutil.WriteFileAtomic`). Credentials in `credentials.json` (AES-256-GCM, Argon2id), never in `config.json`. Sessions: day-partitioned JSONL (`sessions/<id>/<YYYY-MM-DD>.jsonl`, default 90-day retention). Context compression is **single-layer**: `forceCompression` (`pkg/agent/loop.go:5749-5800+`) drops ~50% of oldest turns + writes a summary (no second "tool result pruning" pass). Concurrency: per-entity files for hot data (tasks, pins); sessions/memory use a 64-shard mutex pool keyed by FNV hash (`pkg/memory/jsonl.go:21-77`). Advisory `unix.Flock` on Linux/macOS; Windows uses the single-writer goroutine pattern (no `LockFileEx`).
 
 ### Credential provisioning
 
@@ -79,7 +87,7 @@ Manual key file: `openssl rand -hex 32 > master.key && chmod 600 master.key && e
 
 **Sandboxing:** `SandboxBackend` interface — Linux (Landlock+seccomp), Windows (Job Objects+Restricted Tokens+DACL), Fallback (app-level). Policy + audit are cross-platform; only the enforcement backend varies.
 
-**Channel model:** All channels implement `Channel` (`pkg/channels/base.go:47-56`) plus opt-in capability interfaces (`TypingCapable`, `MessageEditor`, `MessageDeleter`, `ReactionCapable`, `PlaceholderCapable`, `StreamingCapable`, `CommandRegistrarCapable` — `pkg/channels/interfaces.go:13-70`). Each registers a factory at compile time via `channels.RegisterFactory(name, factory)` in a `func init()`; activation is a hardcoded if-ladder in `Manager.initChannels()` (`pkg/channels/manager.go:513-625`). Channels talk to the agent loop only via the in-process `MessageBus` (`pkg/bus/bus.go`). There is **no** `BridgeAdapter`, **no** stdio bridge protocol, **no** Channel SDK (issue #151 tracks the planned unified plugin system).
+**Channel model:** All channels implement `Channel` (`pkg/channels/base.go:47-56`) plus opt-in capability interfaces (`TypingCapable`, `MessageEditor`, `MessageDeleter`, `ReactionCapable`, `PlaceholderCapable`, `StreamingCapable`, `CommandRegistrarCapable` — `pkg/channels/interfaces.go:13-70`). Each registers a factory at compile time via `channels.RegisterFactory(name, factory)` in a `func init()`; activation is a hardcoded if-ladder in `Manager.initChannels()` (`pkg/channels/manager.go:582-708`). Channels talk to the agent loop only via the in-process `MessageBus` (`pkg/bus/bus.go`). There is **no** `BridgeAdapter`, **no** stdio bridge protocol, **no** Channel SDK (issue #151 tracks the planned unified plugin system).
 
 **Channels UI + routing:** dedicated top-level **Channels** screen (`src/routes/_app/channels.tsx`), per-channel config in a Configure slide-over (`ChannelConfigPanel`). Agent routing resolved by `pkg/routing/route.go::ResolveRoute` from `cfg.Bindings[]` (most-specific first: peer → guild → team → account → channel-wildcard → default). Per-channel **Default agent** control backed by `GET/PUT /api/v1/channels/{id}/routing` (`ChannelRouting` wire type). **Channel secrets are credential-store-routed** (SEC-23, #289 via #296): `configureChannel` (`pkg/gateway/rest.go`) detects secret fields (token/secret/password/key/api_key), stores each in the encrypted store, writes a `<field>_ref` to `config.json` — no plaintext secret persisted. `Test` validates via `credentialRefResolves`.
 
@@ -133,21 +141,6 @@ Runs **twice**: after EACH feature (before its PR merges to base) AND on the WHO
 - **Security work:** security-lead + backend-lead → qa-lead
 - **Full-stack features:** frontend-lead + backend-lead (parallel) → qa-lead
 - **Design questions:** architect
-
-### Review pipeline — the 7-reviewer quality gate (MANDATORY)
-
-**This gate runs twice: after EACH completed feature (before its PR merges to its base branch) AND again on the WHOLE epic diff before the final `→ main` PR.** All seven must be clean (or every finding explicitly deferred with a tracked issue) before merging. This is a hard release rule, on par with Hard Constraint #7.
-
-**The 7 reviewers:**
-1. `pr-review-toolkit:code-reviewer` — CLAUDE.md compliance, bugs, quality
-2. `pr-review-toolkit:code-simplifier` — simplify for clarity and maintainability
-3. `pr-review-toolkit:comment-analyzer` — verify comment accuracy
-4. `pr-review-toolkit:pr-test-analyzer` — test coverage quality
-5. `pr-review-toolkit:silent-failure-hunter` — find silent failures, bad error handling
-6. `pr-review-toolkit:type-design-analyzer` — type/interface design quality
-7. **Architect pass via the `/grill-code` skill** — correctness, security, error handling, testing quality, observability, overcomplexity, and (when a spec/tasks exist) spec compliance + task completeness. Run `/grill-code` over the change as the 7th reviewer.
-
-Run reviewers 1–6 in parallel; run the `/grill-code` architect pass (7) as its own read-only audit. **Resolve findings:** fix (spawn the relevant implementing subagent) or defer-with-issue; re-run any failed reviewer after fixes. Only open/merge the PR when all seven pass.
 
 ## Quality Gates
 
@@ -209,7 +202,7 @@ The binary embeds the SPA from `pkg/gateway/spa/` — **not** the Vite output (`
 
 ```bash
 npm run build                          # → dist/spa/
-rm -rf pkg/gateway/spa/assets          # drop stale assets
+rm -rf pkg/gateway/spa                 # drop stale embed dir
 cp -r dist/spa/* pkg/gateway/spa/      # sync to embed dir
 CGO_ENABLED=0 go build -o /tmp/omnipus ./cmd/omnipus/
 ```
@@ -227,8 +220,8 @@ OMNIPUS_BEARER_TOKEN="" ./omnipus gateway --allow-empty &
 ```
 
 **Known blockers:**
-1. **Port conflict** — default port 3000; if taken (e.g. Next.js) the gateway silently fails to bind. Check `lsof -i :3000 | grep LISTEN`; set `gateway.port` in `$OMNIPUS_HOME/config.json`.
-2. **`gateway.dev_mode_bypass`** — auth tree (`pkg/gateway/auth.go:55-98`): no Bearer header → 401 always; `Gateway.Users` populated → token must match a user; `OMNIPUS_BEARER_TOKEN` set → constant-time match; no users AND no env token → bypass=true lets caller through as admin (one-time WARN), bypass=false → 401. **Onboarding does NOT need bypass** (`/api/v1/state`, `/onboarding/*`, `/auth/login`, `/auth/register-admin`, `/providers`, `/media/`, `/uploads/` use `withOptionalAuth`). Set bypass=true only to drive a `withAuth` endpoint pre-onboarding, for Go test scaffolding, or local dev. `RequireNotBypass` middleware returns **503** when bypass=true on high-blast-radius admin routes (e.g. sandbox-config PUT) — never set in production, never remove the guard without an ADR. **Default: false.**
+1. **Port conflict** — default port 5000; if taken the gateway fails to bind. Check `lsof -i :5000 | grep LISTEN`; set `gateway.port` in `$OMNIPUS_HOME/config.json`.
+2. **`gateway.dev_mode_bypass`** — auth tree (`pkg/gateway/auth.go:55-102`, the `checkBearerAuth` function): no Bearer header → 401 always; `Gateway.Users` populated → token must match a user; `OMNIPUS_BEARER_TOKEN` set → constant-time match; no users AND no env token → bypass=true lets caller through as admin (one-time WARN), bypass=false → 401. The `withAuth`, `withOptionalAuth`, and `withRateLimit` middleware helpers live in `pkg/gateway/rest_auth.go` (and `pkg/gateway/rest.go` for `withAuth`). **Onboarding does NOT need bypass** (`/api/v1/state`, `/onboarding/*`, `/auth/login`, `/auth/register-admin`, `/providers`, `/media/`, `/uploads/` use `withOptionalAuth`). Set bypass=true only to drive a `withAuth` endpoint pre-onboarding, for Go test scaffolding, or local dev. `RequireNotBypass` middleware returns **503** when bypass=true on high-blast-radius admin routes (e.g. sandbox-config PUT) — never set in production, never remove the guard without an ADR. **Default: false.**
 3. **Model must support tool use** — Omnipus sends tools every request; a non-tool model (e.g. `google/gemma-2-9b-it`) returns 404. Use `z-ai/glm-5-turbo`, `google/gemini-2.5-flash`, or `anthropic/claude-3.5-haiku`.
 4. **Logs** — `$OMNIPUS_HOME/logs/`: `gateway.log` (runtime), `gateway_panic.log` (startup; check if gateway exits silently).
 

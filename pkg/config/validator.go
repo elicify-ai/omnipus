@@ -296,14 +296,7 @@ func validateBootConfig(cfg *Config) error {
 		}
 	}
 
-	// Default workspace_shell_enabled to false (deny-by-default per hard constraint #6).
-	// Absent key → false. Operators who want the tool must explicitly opt in:
-	// {"sandbox": {"experimental": {"workspace_shell_enabled": true}}}.
-	// Jim (core agent) also flips this to true in coreagent.SeedConfig.
-	if cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil {
-		f := false
-		cfg.Sandbox.Experimental.WorkspaceShellEnabled = &f
-	}
+	// WorkspaceShellEnabled: nil = unset; resolved per-agent in loop.go (false fallback). Jim's seed forces true for fresh installs and for upgrades where the prior validator wrote &false.
 
 	// Validate Tier3Commands: each entry must have ≥2 non-empty tokens after
 	// strings.Fields. The baseline allow-list always uses "binary subcommand"

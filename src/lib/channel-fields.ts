@@ -2,6 +2,7 @@
 // Each entry maps to the Go ChannelsConfig struct fields in pkg/config/config.go
 
 import type { ChannelId } from '@/lib/api/generated/openapi-types'
+import { WHATSAPP_NATIVE_CHANNEL_ID } from '@/components/skills/whatsappChannelId'
 
 export interface ChannelField { // not-wire-format: UI form-field descriptor for channel config forms; never serialised over any HTTP/WS boundary
   key: string
@@ -620,5 +621,11 @@ export function getChannelFields(channelId: string): ChannelField[] {
   // CHANNEL_FIELDS is keyed by the generated ChannelId enum (drift-guard). The
   // caller passes an arbitrary string, so cast at the lookup site; an unknown id
   // simply falls through to the empty default.
-  return CHANNEL_FIELDS[channelId.toLowerCase() as ChannelId] ?? []
+  //
+  // WHATSAPP_NATIVE_CHANNEL_ID ('whatsapp_native') is the internal registry name for
+  // the whatsmeow channel; the REST API uses 'whatsapp' as the canonical ChannelId
+  // (normalised in the backend). Both names must resolve to the same field descriptor
+  // so the config panel works regardless of which ID the caller holds.
+  const normalised = channelId.toLowerCase() === WHATSAPP_NATIVE_CHANNEL_ID ? 'whatsapp' : channelId.toLowerCase()
+  return CHANNEL_FIELDS[normalised as ChannelId] ?? []
 }

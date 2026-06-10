@@ -161,9 +161,10 @@ export function resetConfigCoercionCount(): void {
   _configCoercionCount = 0
 }
 
-// Expose counters on window.__omnipus_test_hooks in DEV/test builds AND when
-// navigator.webdriver is true (Playwright driving a production build) so E2E
-// tests can assert on validation health without reaching into module internals.
+// Expose counters on window.__omnipus_test_hooks in DEV/test builds and in
+// Playwright automation (navigator.webdriver=true) so E2E tests against
+// production builds can assert on validation health without reaching into module
+// internals.
 if ((import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver)) && typeof window !== 'undefined') {
   const w = window as unknown as { __omnipus_test_hooks?: Record<string, unknown> }
   w.__omnipus_test_hooks ??= {}
@@ -618,6 +619,9 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   message_count: number
   total_tokens?: number
   total_cost?: number
+  // Channel identifier that initiated this session (e.g. "webchat", "telegram").
+  // Legacy sessions may omit this field; callers should treat undefined as "webchat".
+  channel?: string
   // Multi-agent session fields — present on sessions created with the joined
   // session model. For legacy single-agent sessions these are absent; callers
   // should fall back to [agent_id] when agent_ids is undefined.
@@ -634,6 +638,7 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   task_id?: string
   created_at: string
   updated_at: string
+  channel?: string
   agent_ids?: string[]
   active_agent_id?: string
   stats?: {
@@ -663,6 +668,7 @@ function rawToSession(raw: RawSession): Session {
     message_count: raw.stats?.message_count ?? 0,
     total_tokens: raw.stats?.tokens_total,
     total_cost: raw.stats?.cost,
+    channel: raw.channel,
     agent_ids: raw.agent_ids,
     active_agent_id: raw.active_agent_id,
   }
@@ -1032,6 +1038,7 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
   agents?: {
     defaults?: {
       default_agent_id?: string
+      // Previously missing — silently stripped by rawToFrontendConfig/frontendToRawConfig before this fix
       model_name?: string
       provider?: string
     }

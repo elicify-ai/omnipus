@@ -30,12 +30,19 @@ ToolApprover    ApproveTool(ctx, *ToolApprovalRequest) → (ApprovalDecision, er
 
 A single hook struct may implement any combination of these interfaces.
 
-**Where hooks are used in production today.** The only non-test `MountHook` call site at HEAD is `pkg/gateway/websocket.go`, which mounts a `ToolApprover` that drives the interactive tool-approval flow over the WebSocket. Every `ask`/`always-ask` policy decision in the per-agent tool policy (see `docs/internal/specs/tool-registry-redesign-spec.md` "Approval round-trip" and `pkg/policy/admin_ask_fence.go`) eventually arrives at that hook. Custom hooks can supplement it; if you replace it, you take over the approval round-trip.
+**Where hooks are used in production today.** The non-test `MountHook` call sites at HEAD are:
+
+- `pkg/gateway/websocket.go:478` — WebSocket-mounted `ToolApprover` driving the interactive tool-approval flow. Every `ask`/`always-ask` policy decision in the per-agent tool policy (see `docs/internal/specs/tool-registry-redesign-spec.md` "Approval round-trip" and `pkg/policy/admin_ask_fence.go`) eventually arrives at that hook.
+- `pkg/agent/hook_mount.go:153` — builtin hooks loaded from `hooks.builtins.<name>` config.
+- `pkg/agent/hook_mount.go:176` — process hooks loaded from `hooks.processes.<name>` config.
+- `pkg/agent/hook_process.go:507` — re-registration path inside the process-hook handshake helper.
+
+Custom hooks can supplement these; if you replace the WebSocket `ToolApprover`, you take over the approval round-trip.
 
 ## Hook Actions
 
 Interceptor hooks return a `HookDecision` with one of these `action` values
-(`pkg/agent/hooks.go:29-35`):
+(`pkg/agent/hooks.go:35-41`):
 
 | Action | Interceptor stages | Meaning |
 |---|---|---|
@@ -46,10 +53,10 @@ Interceptor hooks return a `HookDecision` with one of these `action` values
 | `hard_abort` | all | Stop the current turn immediately |
 
 An empty action string is normalised to `continue`
-(`pkg/agent/hooks.go:42-47`).
+(`pkg/agent/hooks.go:48-53`).
 
 `ToolApprover` returns an `ApprovalDecision` with a `Verdict` field
-(`pkg/agent/hooks.go:63-79`):
+(`pkg/agent/hooks.go:67-72`):
 
 ```
 type ApprovalDecision struct {
@@ -64,7 +71,7 @@ session.
 
 ## Execution Order
 
-`HookManager.rebuildOrdered()` (`pkg/agent/hooks.go:494-508`) sorts the hook
+`HookManager.rebuildOrdered()` (`pkg/agent/hooks.go:500-512`) sorts the hook
 slice in this order:
 
 1. In-process hooks before subprocess hooks (by `HookSource` value: 0 vs 1)
@@ -73,7 +80,7 @@ slice in this order:
 
 ## Timeouts
 
-Default timeout constants (`pkg/agent/hooks.go:17-25`):
+Default timeout constants (`pkg/agent/hooks.go:17-30`):
 
 | Stage | Default |
 |---|---|
@@ -294,7 +301,7 @@ func (h *ExampleLoggerHook) record(stage string, meta agent.EventMeta, payload a
 
 ### Mounting via code
 
-Call this after `AgentLoop` is initialized (`pkg/agent/loop.go:1969-1975`):
+Call this after `AgentLoop` is initialized (`MountHook` is defined at `pkg/agent/loop.go:1991-1992`):
 
 ```go
 hook := myhooks.NewExampleLoggerHook(myhooks.ExampleLoggerHookOptions{
@@ -307,7 +314,7 @@ if err := al.MountHook(agent.NamedHook("example-logger", hook)); err != nil {
 }
 ```
 
-`NamedHook` is a convenience constructor defined in `pkg/agent/hooks.go:95-101`
+`NamedHook` is a convenience constructor defined in `pkg/agent/hooks.go:101-107`
 that sets `Source: HookSourceInProcess` with zero priority.
 
 ### Mounting via config (builtin factory)
@@ -578,12 +585,12 @@ Omnipus starts the external process via `exec.Command`. One JSON object per line
 
 `hook.event` is a **notification** (no `id`, no response expected). All other methods are request/response: `hook.hello`, `hook.before_llm`, `hook.after_llm`, `hook.before_tool`, `hook.after_tool`, `hook.approve_tool`.
 
-`stderr` is drained by the host and forwarded to the gateway log at `WARN` level (`pkg/agent/hook_process.go:442-450`). The host does not currently accept RPCs initiated by the process. A subprocess hook can only respond to Omnipus calls; it cannot call back into the host.
+`stderr` is drained by the host and forwarded to the gateway log at `WARN` level (`pkg/agent/hook_process.go:448-456`, started at `pkg/agent/hook_process.go:138`). The host does not currently accept RPCs initiated by the process. A subprocess hook can only respond to Omnipus calls; it cannot call back into the host.
 
 ### Handshake
 
 On startup, before any hook request is dispatched, the host sends
-`hook.hello` (`pkg/agent/hook_process.go:281-302`):
+`hook.hello` (`pkg/agent/hook_process.go:287-307`):
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"hook.hello","params":{"name":"py_review_gate","version":1,"modes":["observe","tool","approve"]}}
@@ -656,6 +663,7 @@ follow_up_queued      interrupt_received    subturn_spawn
 subturn_end           subturn_result_delivered  subturn_orphan
 error                 turn_timeout          empty_response_retry
 compaction_retry      background_process_kill   rate_limit
+whatsapp_pairing      notification
 ```
 
 Use `"*"` or `"all"` in the `observe` list to subscribe to every kind.
@@ -674,7 +682,7 @@ An empty string `""` entry has the same effect.
 
 ### `hooks.defaults`
 
-Fields match `HookDefaultsConfig` in `pkg/config/config.go:325-329`:
+Fields match `HookDefaultsConfig` in `pkg/config/config.go:326-330`:
 
 | Field | Type | Description |
 |---|---|---|
@@ -684,7 +692,7 @@ Fields match `HookDefaultsConfig` in `pkg/config/config.go:325-329`:
 
 ### `hooks.builtins.<name>`
 
-Fields match `BuiltinHookConfig` in `pkg/config/config.go:331-335`:
+Fields match `BuiltinHookConfig` in `pkg/config/config.go:332-336`:
 
 | Field | Type | Description |
 |---|---|---|
@@ -694,7 +702,7 @@ Fields match `BuiltinHookConfig` in `pkg/config/config.go:331-335`:
 
 ### `hooks.processes.<name>`
 
-Fields match `ProcessHookConfig` in `pkg/config/config.go:337-346`:
+Fields match `ProcessHookConfig` in `pkg/config/config.go:338-347`:
 
 | Field | Type | Description |
 |---|---|---|
@@ -751,7 +759,7 @@ protocol is fine — the request simply did not reach the expected stage.
 
 ### Hung handshake
 
-If the subprocess starts but never replies to `hook.hello`, the host currently waits as long as the caller's context allows — which can mean the entire turn lifetime. There is no defensive deadline inside `NewProcessHook` for non-nil contexts (`pkg/agent/hook_process.go`). Kill the hook subprocess to recover. Tracked in [#163](https://github.com/elicify-ai/omnipus/issues/163).
+`NewProcessHook` does **not** wait on the caller's context for `hook.hello`. After normalising the incoming `ctx` to `context.Background()` when nil, it derives a hard-coded 5-second deadline via `helloCtx, cancel := context.WithTimeout(parent, 5*time.Second)` and then calls `ph.hello(helloCtx)` (`pkg/agent/hook_process.go:147-156`). If the subprocess never replies within 5 s the handshake returns an error and the hook is closed. The block-level comment at `pkg/agent/hook_process.go:141-146` documents the rationale (turn-scoped contexts cannot be trusted to have a deadline, and a missing reply would otherwise stall the gateway turn that triggered `ensureHooksInitialized`). No additional kill is required; the per-process recovery is automatic.
 
 ## Scope and Limits
 
@@ -781,4 +789,4 @@ If the subprocess crashes, closes stdout, or sends malformed JSON, the host mark
 
 #### Observer buffer
 
-**Observer buffer is `hookObserverBufferSize = 64`** events per observer (`pkg/agent/hooks.go`). A slow `EventObserver` (e.g. a subprocess hook lagging on stdout writes) will silently drop older events when its subscription channel fills. The drop is logged at DEBUG level only and is not tested under sustained high event volume — consider this a soft limit for high-throughput use cases. Tracked in [#165](https://github.com/elicify-ai/omnipus/issues/165).
+**Observer buffer is `hookObserverBufferSize = 1024`** events per observer (`pkg/agent/hooks.go:30`, with rationale at `pkg/agent/hooks.go:24-29`). A slow `EventObserver` (e.g. a subprocess hook lagging on stdout writes) will silently drop older events when its subscription channel fills. The drop is logged at DEBUG level only. The previous value of 64 was raised to 1024 because it had a 44% drop rate under a tight 200-event producer burst (regression guard for #165).

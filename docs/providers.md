@@ -22,7 +22,6 @@
 | `cerebras`   | LLM (Cerebras direct)                   | [cerebras.ai](https://cerebras.ai)                           |
 | `vivgrid`    | LLM (Vivgrid direct)                    | [vivgrid.com](https://vivgrid.com)                           |
 | `nvidia`     | LLM (NVIDIA NIM)                        | [build.nvidia.com](https://build.nvidia.com)                 |
-| `moonshot`   | LLM (Kimi/Moonshot direct)              | [platform.moonshot.cn](https://platform.moonshot.cn)         |
 | `minimax`    | LLM (Minimax direct)                    | [platform.minimaxi.com](https://platform.minimaxi.com)      |
 | `avian`      | LLM (Avian direct)                      | [avian.io](https://avian.io)                                 |
 | `mistral`    | LLM (Mistral direct)                    | [console.mistral.ai](https://console.mistral.ai)            |
@@ -30,9 +29,9 @@
 | `modelscope` | LLM (ModelScope direct)                 | [modelscope.cn](https://modelscope.cn)                       |
 | `mimo`       | LLM (Xiaomi MiMo direct)                | [platform.xiaomimimo.com](https://platform.xiaomimimo.com)   |
 
-### Model Configuration (model_list)
+### Model Configuration
 
-> **What's New?** Omnipus now uses a **model-centric** configuration approach. Simply specify `vendor/model` format (e.g., `zhipu/glm-4.7`) to add new providers—**zero code changes required!**
+The `providers` key holds an array of model entries, each shaped as `{"model_name": "<alias>", "model": "<vendor>/<model-id>"}` (e.g. `zhipu/glm-4.7`). Note: `providers` has always been the JSON key name — in the legacy v0 schema it was an *object* keyed by vendor; in the current v1 schema it is an *array* of model entries. The new shape supports per-entry credential references, multi-key failover, and per-agent model selection. (The legacy `model_list` key is still accepted and silently renamed to `providers` on load.)
 
 This design also enables **multi-agent support** with flexible provider selection. Each agent can use its own LLM provider. You can configure primary and fallback models for resilience, distribute requests across multiple endpoints for load balancing, and manage all providers in one place through centralized configuration.
 
@@ -47,7 +46,6 @@ This design also enables **multi-agent support** with flexible provider selectio
 | **DeepSeek**        | `deepseek/`       | `https://api.deepseek.com/v1`                       | OpenAI    | [Get Key](https://platform.deepseek.com)                         |
 | **Google Gemini**   | `gemini/`         | `https://generativelanguage.googleapis.com/v1beta`  | OpenAI    | [Get Key](https://aistudio.google.com/api-keys)                  |
 | **Groq**            | `groq/`           | `https://api.groq.com/openai/v1`                    | OpenAI    | [Get Key](https://console.groq.com)                              |
-| **Moonshot**        | `moonshot/`       | `https://api.moonshot.cn/v1`                        | OpenAI    | [Get Key](https://platform.moonshot.cn)                          |
 | **通义千问 (Qwen)** | `qwen/`           | `https://dashscope.aliyuncs.com/compatible-mode/v1` | OpenAI    | [Get Key](https://dashscope.console.aliyun.com)                  |
 | **NVIDIA**          | `nvidia/`         | `https://integrate.api.nvidia.com/v1`               | OpenAI    | [Get Key](https://build.nvidia.com)                              |
 | **Ollama**          | `ollama/`         | `http://localhost:11434/v1`                         | OpenAI    | Local (no key needed)                                            |
@@ -57,7 +55,6 @@ This design also enables **multi-agent support** with flexible provider selectio
 | **Cerebras**        | `cerebras/`       | `https://api.cerebras.ai/v1`                        | OpenAI    | [Get Key](https://cerebras.ai)                                   |
 | **VolcEngine (Doubao)** | `volcengine/`     | `https://ark.cn-beijing.volces.com/api/v3`          | OpenAI    | [Get Key](https://www.volcengine.com/activity/codingplan?utm_campaign=Omnipus&utm_content=Omnipus&utm_medium=devrel&utm_source=OWO&utm_term=Omnipus)                        |
 | **神算云**          | `shengsuanyun/`   | `https://router.shengsuanyun.com/api/v1`            | OpenAI    | -                                                                |
-| **BytePlus**        | `byteplus/`       | `https://ark.ap-southeast.bytepluses.com/api/v3`    | OpenAI    | [Get Key](https://www.byteplus.com)                        |
 | **Vivgrid**         | `vivgrid/`        | `https://api.vivgrid.com/v1`                        | OpenAI    | [Get Key](https://vivgrid.com)                                   |
 | **LongCat**         | `longcat/`        | `https://api.longcat.chat/openai`                   | OpenAI    | [Get Key](https://longcat.chat/platform)                         |
 | **ModelScope (魔搭)**| `modelscope/`    | `https://api-inference.modelscope.cn/v1`            | OpenAI    | [Get Token](https://modelscope.cn/my/tokens)                     |
@@ -70,26 +67,26 @@ This design also enables **multi-agent support** with flexible provider selectio
 
 ```json
 {
-  "model_list": [
+  "providers": [
     {
       "model_name": "ark-code-latest",
       "model": "volcengine/ark-code-latest",
-      "api_key": "sk-your-api-key"
+      "api_key_ref": "VOLCENGINE_API_KEY"
     },
     {
       "model_name": "gpt-5.4",
       "model": "openai/gpt-5.4",
-      "api_key": "sk-your-openai-key"
+      "api_key_ref": "OPENAI_API_KEY"
     },
     {
       "model_name": "claude-sonnet-4.6",
       "model": "anthropic/claude-sonnet-4.6",
-      "api_key": "sk-ant-your-key"
+      "api_key_ref": "ANTHROPIC_API_KEY"
     },
     {
       "model_name": "glm-4.7",
       "model": "zhipu/glm-4.7",
-      "api_key": "your-zhipu-key"
+      "api_key_ref": "ZHIPU_API_KEY"
     }
   ],
   "agents": {
@@ -100,6 +97,8 @@ This design also enables **multi-agent support** with flexible provider selectio
 }
 ```
 
+> **Note:** `api_key_ref` is the production schema: it references a named credential in `credentials.json` (which is decrypted at load and injected into the process environment). The legacy plaintext `api_key` field is silently dropped by the loader.
+
 #### Voice Transcription
 
 You can configure a dedicated model for audio transcription with `voice.model_name`. This lets you reuse existing multimodal providers that support audio input instead of relying only on Groq.
@@ -108,21 +107,21 @@ If `voice.model_name` is not configured, Omnipus will continue to fall back to G
 
 ```json
 {
-  "model_list": [
+  "providers": [
     {
       "model_name": "voice-gemini",
       "model": "gemini/gemini-2.5-flash",
-      "api_key": "your-gemini-key"
+      "api_key_ref": "GEMINI_API_KEY"
+    },
+    {
+      "model_name": "groq",
+      "model": "groq/llama-3.3-70b-versatile",
+      "api_key_ref": "GROQ_API_KEY"
     }
   ],
   "voice": {
     "model_name": "voice-gemini",
     "echo_transcription": false
-  },
-  "providers": {
-    "groq": {
-      "api_key": "gsk_xxx"
-    }
   }
 }
 ```
@@ -135,7 +134,7 @@ If `voice.model_name` is not configured, Omnipus will continue to fall back to G
 {
   "model_name": "gpt-5.4",
   "model": "openai/gpt-5.4",
-  "api_key": "sk-..."
+  "api_key_ref": "OPENAI_API_KEY"
 }
 ```
 
@@ -145,7 +144,7 @@ If `voice.model_name` is not configured, Omnipus will continue to fall back to G
 {
   "model_name": "ark-code-latest",
   "model": "volcengine/ark-code-latest",
-  "api_key": "sk-..."
+  "api_key_ref": "VOLCENGINE_API_KEY"
 }
 ```
 
@@ -155,7 +154,7 @@ If `voice.model_name` is not configured, Omnipus will continue to fall back to G
 {
   "model_name": "glm-4.7",
   "model": "zhipu/glm-4.7",
-  "api_key": "your-key"
+  "api_key_ref": "ZHIPU_API_KEY"
 }
 ```
 
@@ -165,7 +164,7 @@ If `voice.model_name` is not configured, Omnipus will continue to fall back to G
 {
   "model_name": "glm-4.7",
   "model": "openai/glm-4.7",
-  "api_key": "your-z.ai-key"
+  "api_key_ref": "ZAI_API_KEY",
   "api_base": "https://api.z.ai/api/coding/paas/v4"
 }
 ```
@@ -176,7 +175,7 @@ If `voice.model_name` is not configured, Omnipus will continue to fall back to G
 {
   "model_name": "deepseek-chat",
   "model": "deepseek/deepseek-chat",
-  "api_key": "sk-..."
+  "api_key_ref": "DEEPSEEK_API_KEY"
 }
 ```
 
@@ -186,7 +185,7 @@ If `voice.model_name` is not configured, Omnipus will continue to fall back to G
 {
   "model_name": "claude-sonnet-4.6",
   "model": "anthropic/claude-sonnet-4.6",
-  "api_key": "sk-ant-your-key"
+  "api_key_ref": "ANTHROPIC_API_KEY"
 }
 ```
 
@@ -200,7 +199,7 @@ For direct Anthropic API access or custom endpoints that only support Anthropic'
 {
   "model_name": "claude-opus-4-6",
   "model": "anthropic-messages/claude-opus-4-6",
-  "api_key": "sk-ant-your-key",
+  "api_key_ref": "ANTHROPIC_API_KEY",
   "api_base": "https://api.anthropic.com"
 }
 ```
@@ -228,7 +227,7 @@ For direct Anthropic API access or custom endpoints that only support Anthropic'
   "model_name": "my-custom-model",
   "model": "openai/custom-model",
   "api_base": "https://my-proxy.com/v1",
-  "api_key": "sk-...",
+  "api_key_ref": "CUSTOM_PROXY_KEY",
   "request_timeout": 300
 }
 ```
@@ -240,7 +239,7 @@ For direct Anthropic API access or custom endpoints that only support Anthropic'
   "model_name": "lite-gpt4",
   "model": "litellm/lite-gpt4",
   "api_base": "http://localhost:4000/v1",
-  "api_key": "sk-..."
+  "api_key_ref": "LITELLM_PROXY_KEY"
 }
 ```
 
@@ -254,7 +253,7 @@ If the standard Zhipu endpoint (`https://open.bigmodel.cn/api/paas/v4`) returns 
 {
   "model_name": "glm-4.7",
   "model": "openai/glm-4.7",
-  "api_key": "your-zhipu-api-key",
+  "api_key_ref": "ZHIPU_API_KEY",
   "api_base": "https://api.z.ai/api/coding/paas/v4"
 }
 ```
@@ -267,18 +266,18 @@ Configure multiple endpoints for the same model name—Omnipus will automaticall
 
 ```json
 {
-  "model_list": [
+  "providers": [
     {
       "model_name": "gpt-5.4",
       "model": "openai/gpt-5.4",
       "api_base": "https://api1.example.com/v1",
-      "api_key": "sk-key1"
+      "api_key_ref": "OPENAI_KEY_1"
     },
     {
       "model_name": "gpt-5.4",
       "model": "openai/gpt-5.4",
       "api_base": "https://api2.example.com/v1",
-      "api_key": "sk-key2"
+      "api_key_ref": "OPENAI_KEY_2"
     }
   ]
 }
@@ -292,22 +291,22 @@ It also applies cooldown tracking per candidate to avoid immediately retrying a 
 
 ```json
 {
-  "model_list": [
+  "providers": [
     {
       "model_name": "qwen-main",
       "model": "openai/qwen3.5:cloud",
       "api_base": "https://api.example.com/v1",
-      "api_key": "sk-main"
+      "api_key_ref": "QWEN_MAIN_KEY"
     },
     {
       "model_name": "deepseek-backup",
       "model": "deepseek/deepseek-chat",
-      "api_key": "sk-backup-1"
+      "api_key_ref": "DEEPSEEK_BACKUP_KEY"
     },
     {
       "model_name": "gemini-backup",
       "model": "gemini/gemini-2.5-flash",
-      "api_key": "sk-backup-2"
+      "api_key_ref": "GEMINI_BACKUP_KEY"
     }
   ],
   "agents": {
@@ -333,14 +332,14 @@ The old `providers` configuration is **deprecated** but still supported for back
 {
   "providers": {
     "zhipu": {
-      "api_key": "your-key",
+      "api_key_ref": "ZHIPU_API_KEY",
       "api_base": "https://open.bigmodel.cn/api/paas/v4"
     }
   },
   "agents": {
     "defaults": {
       "provider": "zhipu",
-      "model": "glm-4.7"
+      "model_name": "glm-4.7"
     }
   }
 }
@@ -350,11 +349,11 @@ The old `providers` configuration is **deprecated** but still supported for back
 
 ```json
 {
-  "model_list": [
+  "providers": [
     {
       "model_name": "glm-4.7",
       "model": "zhipu/glm-4.7",
-      "api_key": "your-key"
+      "api_key_ref": "ZHIPU_API_KEY"
     }
   ],
   "agents": {
@@ -388,14 +387,14 @@ Get [API key](https://bigmodel.cn/usercenter/proj-mgmt/apikeys)
     "defaults": {
       "workspace": "~/.omnipus/workspace",
       "model_name": "glm-4.7",
-      "max_tokens": 8192,
+      "max_tokens": 32768,
       "temperature": 0.7,
-      "max_tool_iterations": 20
+      "max_tool_iterations": 50
     }
   },
   "providers": {
     "zhipu": {
-      "api_key": "Your API Key",
+      "api_key_ref": "ZHIPU_API_KEY",
       "api_base": "https://open.bigmodel.cn/api/paas/v4"
     }
   }
@@ -417,20 +416,24 @@ omnipus agent -m "Hello"
 {
   "agents": {
     "defaults": {
-      "model_name": "anthropic/claude-opus-4-5"
+      "model_name": "anthropic/claude-opus-4-6"
     }
   },
   "session": {
     "dm_scope": "per-channel-peer"
   },
-  "providers": {
-    "openrouter": {
-      "api_key": "sk-or-v1-xxx"
+  "providers": [
+    {
+      "model_name": "openrouter-default",
+      "model": "openrouter/auto",
+      "api_key_ref": "OPENROUTER_API_KEY"
     },
-    "groq": {
-      "api_key": "gsk_xxx"
+    {
+      "model_name": "groq",
+      "model": "groq/llama-3.3-70b-versatile",
+      "api_key_ref": "GROQ_API_KEY"
     }
-  },
+  ],
   "voice": {
     "model_name": "voice-gemini",
     "echo_transcription": false
@@ -472,7 +475,7 @@ omnipus agent -m "Hello"
     "web": {
       "brave": {
         "enabled": false,
-        "api_key": "BSA...",
+        "api_key_ref": "BRAVE_API_KEY",
         "max_results": 5
       },
       "duckduckgo": {
@@ -481,7 +484,7 @@ omnipus agent -m "Hello"
       },
       "perplexity": {
         "enabled": false,
-        "api_key": "",
+        "api_key_ref": "PERPLEXITY_API_KEY",
         "max_results": 5
       },
       "searxng": {

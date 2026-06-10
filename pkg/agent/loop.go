@@ -94,7 +94,8 @@ type AgentLoop struct {
 	// diagnostics; incremented atomically from resolveMediaRefs hot path.
 	mediaRefsDropped atomic.Int64
 
-	reloadFunc func() error
+	reloadFunc    func() error
+	reloadPending atomic.Bool // set by TriggerReload; cleared by ClearReloadPending (called from gateway executeReload)
 
 	// Task management
 	taskStore    *taskstore.TaskStore
@@ -250,6 +251,10 @@ type AgentLoop struct {
 	// Resource-aware admission (CPU load, RSS, goroutine count) is out of
 	// scope for v0.1 and filed as a follow-up.
 	admission *AdmissionController
+
+	// channelSessionIdx maps "channel/chatID" → shared session ID for fast per-peer
+	// session resumption. Built on startup and updated on every new channel session.
+	channelSessionIdx sync.Map
 }
 
 // processOptions configures how a message is processed
@@ -335,6 +340,11 @@ const (
 // function during startup, so callers outside tests should treat this as
 // unexpected and log accordingly.
 var ErrReloadNotConfigured = errors.New("reload not configured")
+
+// ErrReloadAlreadyInProgress is returned by TriggerReload when a reload is
+// already running. The caller should treat this as "poll anyway" — the in-flight
+// reload will call ClearReloadPending when it completes, unblocking any poller.
+var ErrReloadAlreadyInProgress = errors.New("reload already in progress")
 
 // RecapModelBootError is returned by NewAgentLoop when AutoRecapEnabled is true
 // and the resolved recap model is not in the cheap-model allow-list (FR-029a).
@@ -443,6 +453,7 @@ func NewAgentLoop(
 				map[string]any{"dir": sharedDir, "error": ssErr.Error()})
 		} else {
 			al.sharedSessionStore = sharedStore
+			al.rebuildChannelSessionIndex()
 		}
 	}
 
@@ -1129,7 +1140,7 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 		// The tool is per-agent because it needs the agent's workspace path,
 		// sandbox profile, and shell policy — the same reason web_serve dev
 		// mode is wired here rather than in the process-level BuiltinRegistry.
-		if resolveBoolWithDefault(cfg.Sandbox.Experimental.WorkspaceShellEnabled, true) {
+		if resolveBoolWithDefault(cfg.Sandbox.Experimental.WorkspaceShellEnabled, false) {
 			// Resolve SandboxProfile for this agent from the global config.
 			// We scan cfg.Agents.List for a matching entry; if not found we
 			// use the global DefaultProfile (which itself defaults to workspace).
@@ -1221,7 +1232,7 @@ func (al *AgentLoop) wireTier13DepsLocked(registry *AgentRegistry, deps Tier13De
 		"served_subdirs_ready":      deps.ServedSubdirs != nil,
 		"dev_server_registry_ready": deps.DevServerRegistry != nil,
 		"egress_proxy_ready":        deps.EgressProxy != nil,
-		"workspace_shell_enabled":   resolveBoolWithDefault(cfg.Sandbox.Experimental.WorkspaceShellEnabled, true),
+		"workspace_shell_enabled":   resolveBoolWithDefault(cfg.Sandbox.Experimental.WorkspaceShellEnabled, false),
 	})
 }
 
@@ -2579,6 +2590,45 @@ func (al *AgentLoop) getLegacyAgentStore(agentID string) *session.UnifiedStore {
 	return al.GetAgentStore(agentID)
 }
 
+// rebuildChannelSessionIndex populates channelSessionIdx from existing shared sessions.
+// Called once after sharedSessionStore is initialized.
+func (al *AgentLoop) rebuildChannelSessionIndex() {
+	if al.sharedSessionStore == nil {
+		return
+	}
+	sessions, _ := al.sharedSessionStore.ListSessions()
+	for _, s := range sessions {
+		if s.Channel != "" && s.Channel != "webchat" && s.PeerID != "" {
+			al.channelSessionIdx.Store(s.Channel+"/"+s.PeerID, s.ID)
+		}
+	}
+}
+
+// resolveOrCreateChannelSession returns the shared session ID for (channel, chatID),
+// creating a new session in the shared store if none exists yet.
+// Returns "" if the shared store is unavailable or inputs are empty.
+func (al *AgentLoop) resolveOrCreateChannelSession(channel, chatID, agentID, displayName string) string {
+	if al.sharedSessionStore == nil || channel == "" || chatID == "" {
+		return ""
+	}
+	key := channel + "/" + chatID
+	if v, ok := al.channelSessionIdx.Load(key); ok {
+		return v.(string)
+	}
+	title := displayName
+	if title == "" {
+		title = chatID
+	}
+	meta, err := al.sharedSessionStore.NewChannelSession(channel, chatID, agentID, title)
+	if err != nil {
+		logger.WarnCF("agent", "Failed to create channel session",
+			map[string]any{"channel": channel, "chat_id": chatID, "error": err.Error()})
+		return ""
+	}
+	al.channelSessionIdx.Store(key, meta.ID)
+	return meta.ID
+}
+
 // ResolveSessionStore finds which UnifiedStore owns the given sessionID.
 // Checks the shared store first, then the main agent's legacy store, then
 // all other per-agent stores. Returns nil if the session cannot be found.
@@ -2888,7 +2938,30 @@ func (al *AgentLoop) TriggerReload() error {
 	if al.reloadFunc == nil {
 		return ErrReloadNotConfigured
 	}
-	return al.reloadFunc()
+	al.reloadPending.Store(true)
+	if err := al.reloadFunc(); err != nil {
+		// Only clear the pending flag if this was a genuine failure.
+		// If another reload is already in progress, that reload owns the flag —
+		// clearing it here would prematurely unblock any concurrent poller.
+		if strings.Contains(err.Error(), "already in progress") {
+			return ErrReloadAlreadyInProgress
+		}
+		al.reloadPending.Store(false)
+		return err
+	}
+	return nil
+}
+
+// IsReloadPending reports whether a config reload is currently in flight.
+// Returns false once ClearReloadPending is called by the executing reload.
+func (al *AgentLoop) IsReloadPending() bool {
+	return al.reloadPending.Load()
+}
+
+// ClearReloadPending marks the in-flight reload as complete.
+// Called by gateway.executeReload (via defer) after the reload finishes.
+func (al *AgentLoop) ClearReloadPending() {
+	al.reloadPending.Store(false)
 }
 
 var audioAnnotationRe = regexp.MustCompile(`\[(voice|audio)(?::[^\]]*)?\]`)
@@ -3266,6 +3339,16 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			"route_channel": route.Channel,
 		})
 
+	// For non-webchat channel messages arriving without a session ID, create or
+	// resume a persistent shared session so they appear in the session history panel.
+	if msg.SessionID == "" && msg.Channel != "webchat" && msg.Channel != "system" && msg.Channel != "" {
+		if sid := al.resolveOrCreateChannelSession(
+			msg.Channel, msg.ChatID, agent.ID, msg.Sender.DisplayName,
+		); sid != "" {
+			msg.SessionID = sid
+		}
+	}
+
 	// Resolve transcript store for tool call recording. SessionID is now
 	// authoritative — populated directly by the gateway from frame.SessionID.
 	var transcriptSessionID string
@@ -3279,6 +3362,28 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 				"session_id present but store not found — tool calls will not be recorded",
 				map[string]any{"session_id": msg.SessionID},
 			)
+		}
+	}
+
+	// Write user message to transcript for channel sessions.
+	// Web-chat user messages are written by the WebSocket handler before the
+	// turn starts (websocket.go); this path covers every other channel
+	// (Telegram, Slack, Discord, etc.) so that replays show the user's prompt
+	// alongside tool calls and assistant responses.
+	channelNeedsTranscript := transcriptStore != nil &&
+		msg.Channel != "webchat" && msg.Channel != "system" &&
+		strings.TrimSpace(msg.Content) != ""
+	if channelNeedsTranscript {
+		entry := session.TranscriptEntry{
+			ID:        fmt.Sprintf("user-%d", time.Now().UnixNano()),
+			Role:      "user",
+			AgentID:   agent.ID,
+			Content:   msg.Content,
+			Timestamp: time.Now().UTC(),
+		}
+		if err := transcriptStore.AppendTranscript(transcriptSessionID, entry); err != nil {
+			logger.WarnCF("agent", "could not record channel user message to transcript",
+				map[string]any{"session_id": transcriptSessionID, "channel": msg.Channel, "error": err.Error()})
 		}
 	}
 

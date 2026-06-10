@@ -179,7 +179,7 @@ With `trust_xff: true` the gateway reads `X-Forwarded-For` for the audit `remote
 | `public_url` | The canonical base URL for the SPA. The gateway uses this to construct `frame-ancestors` CSP directives. |
 | `preview_origin` | The origin the SPA uses as the `src` of `<iframe>` elements embedding preview content. Must match the `preview_host:preview_port` the browser reaches. |
 
-After editing, the gateway picks up the new values on the next `POST /api/v1/reload` or process restart.
+After editing, the gateway picks up the new values on the next `POST /api/v1/reload` or process restart. Note: `preview_listener_enabled` is **not** hot-reloadable. The preview mux is built once at boot (the runtime hot-flip from `true`→`false` is tracked under issue #155 and explicitly skipped in `pkg/gateway/preview_listener_hot_flip_test.go:93`); changing it requires a process restart.
 
 ---
 

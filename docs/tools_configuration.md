@@ -52,12 +52,11 @@ General settings for fetching and processing webpage content.
 
 ### Brave
 
-| Config        | Type     | Default | Description                                    |
-|---------------|----------|---------|------------------------------------------------|
-| `enabled`     | bool     | false   | Enable Brave search                            |
-| `api_key`     | string   | -       | Brave Search API key                           |
-| `api_keys`    | string[] | -       | Multiple API keys for rotation (takes priority over `api_key`) |
-| `max_results` | int      | 5       | Maximum number of results                      |
+| Config        | Type   | Default | Description                                                |
+|---------------|--------|---------|------------------------------------------------------------|
+| `enabled`     | bool   | false   | Enable Brave search                                        |
+| `api_key_ref` | string | -       | Env-var name of the Brave Search credential (see below)    |
+| `max_results` | int    | 5       | Maximum number of results                                  |
 
 ### DuckDuckGo
 
@@ -70,12 +69,12 @@ General settings for fetching and processing webpage content.
 
 Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfan-api/s/Wmbq4z7e5), which is AI-powered and optimized for Chinese-language queries.
 
-| Config        | Type   | Default                                                | Description               |
-|---------------|--------|--------------------------------------------------------|---------------------------|
-| `enabled`     | bool   | false                                                  | Enable Baidu Search       |
-| `api_key`     | string | -                                                      | Qianfan API key           |
-| `base_url`    | string | `https://qianfan.baidubce.com/v2/ai_search/web_search` | Baidu Search API URL      |
-| `max_results` | int    | 5                                                      | Maximum number of results |
+| Config          | Type   | Default                                                | Description                                                |
+|-----------------|--------|--------------------------------------------------------|------------------------------------------------------------|
+| `enabled`       | bool   | false                                                  | Enable Baidu Search                                        |
+| `api_key_ref`   | string | -                                                      | Env-var name of the Qianfan credential                     |
+| `base_url`      | string | `https://qianfan.baidubce.com/v2/ai_search/web_search` | Baidu Search API URL                                       |
+| `max_results`   | int    | 5                                                      | Maximum number of results                                  |
 
 ```json
 {
@@ -83,7 +82,7 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
     "web": {
       "baidu_search": {
         "enabled": true,
-        "api_key": "YOUR_BAIDU_QIANFAN_API_KEY",
+        "api_key_ref": "BAIDU_QIANFAN_API_KEY",
         "max_results": 10
       }
     }
@@ -93,21 +92,20 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 
 ### Perplexity
 
-| Config        | Type     | Default | Description                                    |
-|---------------|----------|---------|------------------------------------------------|
-| `enabled`     | bool     | false   | Enable Perplexity search                       |
-| `api_key`     | string   | -       | Perplexity API key                             |
-| `api_keys`    | string[] | -       | Multiple API keys for rotation (takes priority over `api_key`) |
-| `max_results` | int      | 5       | Maximum number of results                      |
+| Config        | Type   | Default | Description                                              |
+|---------------|--------|---------|----------------------------------------------------------|
+| `enabled`     | bool   | false   | Enable Perplexity search                                 |
+| `api_key_ref` | string | -       | Env-var name of the Perplexity credential                |
+| `max_results` | int    | 5       | Maximum number of results                                |
 
 ### Tavily
 
-| Config        | Type   | Default | Description               |
-|---------------|--------|---------|---------------------------|
-| `enabled`     | bool   | false   | Enable Tavily search      |
-| `api_key`     | string | -       | Tavily API key            |
-| `base_url`    | string | -       | Custom Tavily API base URL |
-| `max_results` | int    | 5       | Maximum number of results |
+| Config        | Type   | Default | Description                                              |
+|---------------|--------|---------|----------------------------------------------------------|
+| `enabled`     | bool   | false   | Enable Tavily search                                     |
+| `api_key_ref` | string | -       | Env-var name of the Tavily credential                    |
+| `base_url`    | string | -       | Custom Tavily API base URL                               |
+| `max_results` | int    | 5       | Maximum number of results                                |
 
 ### SearXNG
 
@@ -119,13 +117,15 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 
 ### GLM Search
 
-| Config          | Type   | Default                                           | Description               |
-|-----------------|--------|---------------------------------------------------|---------------------------|
-| `enabled`       | bool   | false                                             | Enable GLM Search         |
-| `api_key`       | string | -                                                 | GLM API key               |
-| `base_url`      | string | `https://open.bigmodel.cn/api/paas/v4/web_search` | GLM Search API URL        |
-| `search_engine` | string | `search_std`                                      | Search engine type        |
-| `max_results`   | int    | 5                                                 | Maximum number of results |
+| Config          | Type   | Default                                           | Description                              |
+|-----------------|--------|---------------------------------------------------|------------------------------------------|
+| `enabled`       | bool   | false                                             | Enable GLM Search                        |
+| `api_key_ref`   | string | -                                                 | Env-var name of the GLM API credential   |
+| `base_url`      | string | `https://open.bigmodel.cn/api/paas/v4/web_search` | GLM Search API URL                       |
+| `search_engine` | string | `search_std`                                      | Search engine type                       |
+| `max_results`   | int    | 5                                                 | Maximum number of results                |
+
+> **Note:** `api_key_ref` is the production schema: it stores the name of an environment variable (e.g. `BRAVE_API_KEY`) whose value, resolved at load time from the encrypted credential store, holds the actual key. The legacy plaintext `api_key` field is silently dropped by the loader, as is the older `api_keys[]` array form (multi-key rotation now lives on the `providers` config instead — see `docs/providers.md`).
 
 ### Additional Web Settings
 
@@ -288,7 +288,7 @@ and injected into the context for a configured number of turns (`ttl`).
 | Config     | Type    | Required | Description                                                                                                                                                     |
 |------------|---------|----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `enabled`  | bool    | yes      | Enable this MCP server                                                                                                                                          |
-| `deferred` | bool    | no       | Override deferred mode for this server only. `true` = tools are hidden and discoverable via search; `false` = tools are always visible in context. When omitted, the global `discovery.enabled` value applies. |
+| `deferred` | *bool   | no       | Override deferred mode for this server only. `true` = tools are hidden and discoverable via search; `false` = tools are always visible in context. The field is a `*bool` — **omitted/null** (`nil`) means *use the global `discovery.enabled` setting*; an explicit `true` or `false` overrides the global for this server only. |
 | `type`     | string  | no       | Transport type: `stdio`, `sse`, `http`                                                                                                                          |
 | `command`  | string  | stdio    | Executable command for stdio transport                                                                                                                          |
 | `args`     | array   | no       | Command arguments for stdio transport                                                                                                                           |
@@ -454,24 +454,24 @@ The skills tool configures skill discovery and installation via registries like 
 
 ### Registries
 
-| Config                             | Type   | Default              | Description                                  |
-|------------------------------------|--------|----------------------|----------------------------------------------|
-| `registries.clawhub.enabled`       | bool   | true                 | Enable ClawHub registry                      |
-| `registries.clawhub.base_url`      | string | `https://clawhub.ai` | ClawHub base URL                             |
-| `registries.clawhub.auth_token`    | string | `""`                 | Optional Bearer token for higher rate limits |
-| `registries.clawhub.search_path`   | string | `""`                 | Search API path                              |
-| `registries.clawhub.skills_path`   | string | `""`                 | Skills API path                              |
-| `registries.clawhub.download_path` | string | `""`                 | Download API path                            |
-| `registries.clawhub.timeout`       | int    | 0                    | Request timeout in seconds (0 = default)     |
-| `registries.clawhub.max_zip_size`  | int    | 0                    | Max skill zip size in bytes (0 = default)    |
-| `registries.clawhub.max_response_size` | int | 0                   | Max API response size in bytes (0 = default) |
+| Config                                 | Type   | Default              | Description                                                                                  |
+|----------------------------------------|--------|----------------------|----------------------------------------------------------------------------------------------|
+| `registries.clawhub.enabled`           | bool   | true                 | Enable ClawHub registry                                                                      |
+| `registries.clawhub.base_url`          | string | `https://clawhub.ai` | ClawHub base URL                                                                             |
+| `registries.clawhub.auth_token_ref`    | string | `""`                 | Env-var name of the Bearer token (resolved from the credential store at boot; never store the token value here) |
+| `registries.clawhub.search_path`       | string | `""`                 | Search API path                                                                              |
+| `registries.clawhub.skills_path`       | string | `""`                 | Skills API path                                                                              |
+| `registries.clawhub.download_path`     | string | `""`                 | Download API path                                                                            |
+| `registries.clawhub.timeout`           | int    | 0                    | Request timeout in seconds (0 = default)                                                     |
+| `registries.clawhub.max_zip_size`      | int    | 0                    | Max skill zip size in bytes (0 = default)                                                    |
+| `registries.clawhub.max_response_size` | int    | 0                    | Max API response size in bytes (0 = default)                                                 |
 
 ### GitHub Integration
 
-| Config           | Type   | Default | Description                          |
-|------------------|--------|---------|--------------------------------------|
-| `github.proxy`   | string | `""`    | HTTP proxy for GitHub API requests   |
-| `github.token`   | string | `""`    | GitHub personal access token         |
+| Config             | Type   | Default | Description                                                                  |
+|--------------------|--------|---------|------------------------------------------------------------------------------|
+| `github.proxy`     | string | `""`    | HTTP proxy for GitHub API requests                                           |
+| `github.token_ref` | string | `""`    | Env-var name of the GitHub personal access token (resolved from the credential store at boot) |
 
 ### Search Settings
 
@@ -491,12 +491,12 @@ The skills tool configures skill discovery and installation via registries like 
         "clawhub": {
           "enabled": true,
           "base_url": "https://clawhub.ai",
-          "auth_token": ""
+          "auth_token_ref": "CLAWHUB_BEARER_TOKEN"
         }
       },
       "github": {
         "proxy": "",
-        "token": ""
+        "token_ref": "GITHUB_PERSONAL_ACCESS_TOKEN"
       },
       "max_concurrent_searches": 2,
       "search_cache": {

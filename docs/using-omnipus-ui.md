@@ -95,7 +95,7 @@ If you'd rather talk, connect a chat channel that supports voice. On channels li
 
 ## When an agent asks permission
 
-Your agents can do real work — run commands, touch files, automate a browser. For anything sensitive, Omnipus stops and asks **you** first. An approval card appears right in the chat showing exactly what the agent wants to do, with three buttons and a countdown of about **90 seconds**:
+Your agents can do real work — run commands, touch files, automate a browser. For anything sensitive, Omnipus stops and asks **you** first. An approval card appears right in the chat showing exactly what the agent wants to do, with three buttons and a countdown of about **5 minutes** (300 seconds):
 
 | Button | What it does |
 |--------|-------------|

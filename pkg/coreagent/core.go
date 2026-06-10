@@ -204,10 +204,12 @@ func SeedConfig(cfg *config.Config) bool {
 		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
 		// Ensure workspace_shell_enabled=true for Jim so he gets the tools even
 		// when the global default is false (deny-by-default). Applied idempotently —
-		// flips when the pointer is nil OR when it was materialized as &false by the
-		// pre-fix validateBootConfig (heals upgrades from the broken validator).
-		if ca.ID == IDJim &&
-			(cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil || !*cfg.Sandbox.Experimental.WorkspaceShellEnabled) {
+		// fires when nil (unset) OR when currently false so that upgrades from
+		// validator.go's old nil→&false materialization are also fixed.
+		// Jim always has workspace.shell enabled; setting WorkspaceShellEnabled=false
+		// for Jim in config.json is not supported while the gateway is running.
+		wse := cfg.Sandbox.Experimental.WorkspaceShellEnabled
+		if ca.ID == IDJim && (wse == nil || !*wse) {
 			t := true
 			cfg.Sandbox.Experimental.WorkspaceShellEnabled = &t
 			modified = true
@@ -245,10 +247,11 @@ func SeedConfig(cfg *config.Config) bool {
 			},
 		})
 		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
-		// Flip workspace_shell_enabled=true on first seed — also heals &false written
-		// by the old validateBootConfig before the boot-ordering fix.
-		if ca.ID == IDJim &&
-			(cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil || !*cfg.Sandbox.Experimental.WorkspaceShellEnabled) {
+		// Flip workspace_shell_enabled=true when seeding Jim for the first time so
+		// he gets the tools even when the global default is false (deny-by-default).
+		// Fires when nil OR false (covers upgrades from old validator.go materialization).
+		wse2 := cfg.Sandbox.Experimental.WorkspaceShellEnabled
+		if ca.ID == IDJim && (wse2 == nil || !*wse2) {
 			t := true
 			cfg.Sandbox.Experimental.WorkspaceShellEnabled = &t
 		}

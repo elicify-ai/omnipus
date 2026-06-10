@@ -158,7 +158,7 @@ export function resetUnknownFrameTypeCount(): void {
 // Playwright tests can assert dropped/unknown frame counts without needing
 // to import the module directly. Not exposed in production builds.
 
-if ((import.meta.env.DEV || import.meta.env.MODE === 'test') && typeof window !== 'undefined') {
+if ((import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver)) && typeof window !== 'undefined') {
   const w = window as unknown as {
     __omnipus_test_hooks?: Record<string, unknown>
   }
@@ -668,8 +668,9 @@ export class WsConnection {
     // Expose live WebSocket on window so tests can deterministically simulate a
     // network drop by calling ws.close() — there is no other reliable hook for
     // closing only the SPA's WS without disabling the entire network context.
-    // See tests/e2e/ws-reconnect.spec.ts.
-    if (typeof window !== 'undefined') {
+    // See tests/e2e/ws-reconnect.spec.ts. Also enabled when navigator.webdriver
+    // is true (Playwright automation) so E2E tests against production builds work.
+    if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver))) {
       const w = window as unknown as { __ws_instances?: WebSocket[] }
       w.__ws_instances ??= []
       w.__ws_instances.push(this.ws)
@@ -738,7 +739,7 @@ export class WsConnection {
 
     this.ws.onclose = (event: CloseEvent) => {
       // Drop this socket from the test-visible registry before nulling.
-      if (typeof window !== 'undefined') {
+      if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver))) {
         const w = window as unknown as { __ws_instances?: WebSocket[] }
         if (w.__ws_instances && this.ws) {
           const idx = w.__ws_instances.indexOf(this.ws)

@@ -49,7 +49,7 @@ Shipped on `main` as part of `#157` (`feat(v0.1+v0.2): iframe preview, web_serve
 
 | Item | Status | Where |
 |---|---|---|
-| Env-var allowlist switch | ✅ | `pkg/sandbox/hardened_exec.go::sensitiveEnvKeys` |
+| Env-var allowlist switch | ✅ | `pkg/sandbox/hardened_exec.go::allowedChildEnvKeys` |
 | `master.key` permission verification (0600 + path-guard) | ✅ | secrets-subtree path-guard for `master.key` + `credentials.json` |
 | Shell-guard hardening (whitespace fork-bomb regex + RLIMIT_NPROC) | ✅ | `dc2d0f2` |
 | Internal-CIDR egress blocking | ✅ | default-deny for RFC-1918 + link-local on sandboxed children |

@@ -469,9 +469,11 @@ func TestTier3Commands_TwoTokenLoadsFine(t *testing.T) {
 	}
 }
 
-// TestWorkspaceShellEnabled_DefaultFalse verifies deny-by-default: a nil pointer
-// is filled with false by validateBootConfig, matching hard constraint #6.
-func TestWorkspaceShellEnabled_DefaultFalse(t *testing.T) {
+// TestWorkspaceShellEnabled_NilPassthrough verifies that validateBootConfig
+// no longer materializes nil → &false. nil means "unset"; per-agent resolution
+// in loop.go (resolveBoolWithDefault with false fallback) provides deny-by-default.
+// Jim's SeedConfig flips nil or &false → &true so he always gets workspace.shell.
+func TestWorkspaceShellEnabled_NilPassthrough(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Sandbox.Experimental.WorkspaceShellEnabled = nil
 
@@ -479,11 +481,12 @@ func TestWorkspaceShellEnabled_DefaultFalse(t *testing.T) {
 		t.Fatalf("validateBootConfig: %v", err)
 	}
 
-	if cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil {
-		t.Fatal("expected WorkspaceShellEnabled to be non-nil after validateBootConfig")
-	}
-	if *cfg.Sandbox.Experimental.WorkspaceShellEnabled {
-		t.Error("nil WorkspaceShellEnabled must default to false (deny-by-default), got true")
+	// nil must survive validateBootConfig — per-agent resolution handles the default.
+	if cfg.Sandbox.Experimental.WorkspaceShellEnabled != nil {
+		t.Errorf(
+			"validateBootConfig must not materialize nil WorkspaceShellEnabled; got %v",
+			*cfg.Sandbox.Experimental.WorkspaceShellEnabled,
+		)
 	}
 }
 

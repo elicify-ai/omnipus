@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1691,4 +1692,196 @@ func TestHandleValidateToken_TriggerReloadNotConfigured(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "testuser", resp["username"])
 	assert.Equal(t, "admin", resp["role"])
+}
+
+// TestHandleChangePassword_InvalidatesExistingToken verifies that after a
+// successful password change, the existing token is invalidated:
+//  1. token_hash and session_token_hash are cleared in config.json on disk.
+//  2. The old bearer token, when presented to HandleValidateToken without an
+//     active user context (as withAuth behaves when no hash matches), returns 401.
+//
+// BDD: Given a user "tknuser" with password "OldTokenPass1",
+// When POST /auth/login succeeds (token_hash written to config.json)
+// AND POST /auth/change-password with correct current_password succeeds,
+// Then: (a) token_hash is empty in config.json on disk,
+//
+//	(b) session_token_hash is empty in config.json on disk,
+//	(c) the old bearer token presented to /auth/validate (no context user)
+//	    returns 401 Unauthorized.
+//
+// This test is designed to FAIL on code where HandleChangePassword did NOT clear
+// token_hash / session_token_hash, and PASS on the fixed code that clears them.
+func TestHandleChangePassword_InvalidatesExistingToken(t *testing.T) {
+	api, tmpDir := newTestRestAPIWithUser(t, "tknuser", "OldTokenPass1")
+
+	// Step 1: Login to obtain a token and write token_hash to config.json.
+	loginBody := `{"username":"tknuser","password":"OldTokenPass1"}`
+	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(loginBody))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginW := httptest.NewRecorder()
+	api.HandleLogin(loginW, loginReq)
+	require.Equal(t, http.StatusOK, loginW.Code, "login must succeed before password change")
+	var loginResp map[string]any
+	require.NoError(t, json.Unmarshal(loginW.Body.Bytes(), &loginResp))
+	oldToken := loginResp["token"].(string)
+	require.NotEmpty(t, oldToken, "login must return a non-empty token")
+
+	// Confirm token_hash is non-empty on disk after login.
+	diskDataBefore, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
+	require.NoError(t, err)
+	var diskCfgBefore map[string]any
+	require.NoError(t, json.Unmarshal(diskDataBefore, &diskCfgBefore))
+	gwBefore := diskCfgBefore["gateway"].(map[string]any)
+	usersBefore := gwBefore["users"].([]any)
+	require.Len(t, usersBefore, 1)
+	userMapBefore := usersBefore[0].(map[string]any)
+	require.NotEmpty(t, userMapBefore["token_hash"],
+		"token_hash must be written to disk after login (precondition)")
+
+	// Step 2: Change password — must clear token_hash and session_token_hash.
+	cpBody := `{"current_password":"OldTokenPass1","new_password":"NewTokenPass2"}`
+	cpReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", strings.NewReader(cpBody))
+	cpReq.Header.Set("Content-Type", "application/json")
+	cpReq = injectUser(cpReq, "tknuser", config.UserRoleAdmin)
+	cpW := httptest.NewRecorder()
+	api.HandleChangePassword(cpW, cpReq)
+	require.Equal(t, http.StatusOK, cpW.Code,
+		"change-password must succeed (got %s)", cpW.Body.String())
+
+	// Step 3a: Verify token_hash and session_token_hash are cleared on disk.
+	diskDataAfter, err := os.ReadFile(filepath.Join(tmpDir, "config.json"))
+	require.NoError(t, err)
+	var diskCfgAfter map[string]any
+	require.NoError(t, json.Unmarshal(diskDataAfter, &diskCfgAfter))
+	gwAfter, ok := diskCfgAfter["gateway"].(map[string]any)
+	require.True(t, ok, "gateway key must be present in config.json after change-password")
+	usersAfter, ok := gwAfter["users"].([]any)
+	require.True(t, ok, "users array must be present in config.json after change-password")
+	require.Len(t, usersAfter, 1)
+	userMapAfter, ok := usersAfter[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "", userMapAfter["token_hash"],
+		"token_hash must be cleared in config.json after password change — "+
+			"old token must be invalidated")
+	assert.Equal(t, "", userMapAfter["session_token_hash"],
+		"session_token_hash must be cleared in config.json after password change")
+
+	// Step 3b: The old token, routed through withAuth (which calls checkBearerAuth
+	// and bcrypt-compares against token_hash in the in-memory config), must yield
+	// 401 because HandleChangePassword cleared token_hash above.
+	//
+	// safeUpdateConfigJSON calls refreshConfigAndRewireServices after every write,
+	// so GetConfig() already reflects the empty token_hash — no process restart
+	// required. This assertion FAILS if HandleChangePassword does NOT clear
+	// token_hash (the hash still matches → withAuth injects the user → 200).
+	validateHandler := api.withAuth(api.HandleValidateToken)
+	validateReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/validate", nil)
+	validateReq.Header.Set("Authorization", "Bearer "+oldToken)
+	validateW := httptest.NewRecorder()
+	validateHandler(validateW, validateReq)
+	assert.Equal(t, http.StatusUnauthorized, validateW.Code,
+		"old bearer token must be rejected after password change (token_hash cleared)")
+}
+
+// --- triggerReloadAndWait tests (B5 poll loop) ---
+
+// newTestRestAPIForReload builds a minimal restAPI backed by a temp dir and
+// returns both the api and the underlying AgentLoop so tests can configure
+// SetReloadFunc and drive ClearReloadPending.
+func newTestRestAPIForReload(t *testing.T) (*restAPI, *agentLoopWrapper) {
+	t.Helper()
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
+	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: tmpDir,
+				ModelName: "test-model",
+				MaxTokens: 4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	apiObj := &restAPI{
+		agentLoop:     al,
+		homePath:      tmpDir,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		taskStore:     taskstore.New(tmpDir + "/tasks"),
+	}
+	return apiObj, &agentLoopWrapper{al: al}
+}
+
+// agentLoopWrapper gives access to reload control methods in tests without
+// importing agent.AgentLoop directly (the interface enforces only what we need).
+type agentLoopWrapper struct {
+	al interface {
+		SetReloadFunc(fn func() error)
+		ClearReloadPending()
+	}
+}
+
+// TestTriggerReloadAndWait_PollsUntilNotPending verifies that triggerReloadAndWait
+// returns nil once IsReloadPending() clears — i.e., the polling loop unblocks
+// when a goroutine calls ClearReloadPending after ~50ms.
+//
+// BDD: Given a reloadFunc that keeps reloadPending=true until ClearReloadPending
+// is called by a goroutine, when triggerReloadAndWait is called,
+// then it blocks briefly and returns nil once the pending flag clears.
+func TestTriggerReloadAndWait_PollsUntilNotPending(t *testing.T) {
+	apiObj, wrap := newTestRestAPIForReload(t)
+
+	// reloadFunc simply returns nil; TriggerReload sets reloadPending=true before
+	// calling it. The goroutine below clears the flag after 50ms so the poll loop
+	// has something real to wait for.
+	wrap.al.SetReloadFunc(func() error {
+		return nil
+	})
+
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		wrap.al.ClearReloadPending()
+	}()
+
+	start := time.Now()
+	err := apiObj.triggerReloadAndWait()
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "triggerReloadAndWait must return nil when reload completes")
+	// Must have polled for at least 40ms (pending was set), but well under 5s deadline.
+	assert.GreaterOrEqual(t, elapsed.Milliseconds(), int64(40),
+		"triggerReloadAndWait must poll until the pending flag clears")
+	assert.Less(t, elapsed, 5*time.Second,
+		"triggerReloadAndWait must return well before the 5s deadline")
+}
+
+// TestTriggerReloadAndWait_AlreadyInProgress_PollsThrough verifies that when
+// TriggerReload returns ErrReloadAlreadyInProgress, triggerReloadAndWait falls
+// through to the polling loop and returns nil when IsReloadPending() clears.
+//
+// BDD: Given a reloadFunc that simulates "already in progress", when
+// triggerReloadAndWait is called, then it polls until the pending flag is
+// cleared and returns nil.
+func TestTriggerReloadAndWait_AlreadyInProgress_PollsThrough(t *testing.T) {
+	apiObj, wrap := newTestRestAPIForReload(t)
+
+	// reloadFunc returns the "already in progress" sentinel string. TriggerReload
+	// sets reloadPending=true before calling it, so the poll loop will see pending=true.
+	wrap.al.SetReloadFunc(func() error {
+		return fmt.Errorf("reload already in progress")
+	})
+
+	// Clear the pending flag from a goroutine after ~50ms.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		wrap.al.ClearReloadPending()
+	}()
+
+	err := apiObj.triggerReloadAndWait()
+	require.NoError(t, err,
+		"triggerReloadAndWait must return nil on ErrReloadAlreadyInProgress poll-through")
 }

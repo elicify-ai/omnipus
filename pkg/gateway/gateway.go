@@ -165,9 +165,9 @@ type services struct {
 
 	// restAPIRef holds a pointer to the restAPI constructed by setupAndStartServices.
 	// Used by RunContextWithOptions to update builtinRegistry after live-deps are wired
-	// (the M16 re-population at ~line 715 creates a fresh *BuiltinRegistry that must
-	// reach the already-constructed restAPI; storing the ref here avoids
-	// a larger refactor of setupAndStartServices).
+	// (the M16 live-deps re-population in RunContextWithOptions creates a fresh
+	// *BuiltinRegistry that must reach the already-constructed restAPI; storing the
+	// ref here avoids a larger refactor of setupAndStartServices).
 	restAPIRef *restAPI
 
 	// selfWriteReg is the shared registry of config.json content hashes that
@@ -891,11 +891,13 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			newCfg, err := config.LoadConfigWithStore(configPath, credStore)
 			if err != nil {
 				logger.Errorf("Error loading config for manual reload: %v", err)
+				agentLoop.ClearReloadPending()
 				runningServices.reloading.Store(false)
 				continue
 			}
 			if err = newCfg.ValidateProviders(); err != nil {
 				logger.Errorf("Config validation failed: %v", err)
+				agentLoop.ClearReloadPending()
 				runningServices.reloading.Store(false)
 				continue
 			}
@@ -949,7 +951,13 @@ func executeReload(
 	msgBus *bus.MessageBus,
 	allowEmptyStartup bool,
 ) error {
+	// Defers run LIFO: ClearReloadPending fires first (unblocks triggerReloadAndWait pollers),
+	// then reloading fires (allows the next CAS to succeed). A concurrent TriggerReload
+	// that races between these two defers gets ErrReloadAlreadyInProgress and polls — safe
+	// because triggerReloadAndWait polls through ErrReloadAlreadyInProgress so the pending
+	// flag is never cleared prematurely.
 	defer runningServices.reloading.Store(false)
+	defer agentLoop.ClearReloadPending()
 
 	// Snapshot all service fields that restartServices mutates so they can be
 	// restored atomically if the reload fails. bundle and ChannelManager are
@@ -1119,17 +1127,11 @@ func setupAndStartServices(
 
 	agentLoop.SetChannelManager(runningServices.ChannelManager)
 	agentLoop.SetMediaStore(runningServices.MediaStore)
-	// Wire the agent loop as the CancelInterceptor so Tier B channels can fire
-	// /cancel via text-parsing (FR-2). Must happen after SetChannelManager so
-	// the Manager already has its channels map populated.
-	runningServices.ChannelManager.SetCancelInterceptor(agentLoop)
-	// #283: bridge WhatsApp native pairing (QR/status) → agent event bus so the
-	// per-connection WS forwarder broadcasts a whatsapp_pairing frame to the SPA.
-	runningServices.ChannelManager.SetPairingObserver(
-		func(channelID string, status channels.PairingStatus, qr, message string) {
-			agentLoop.EmitWhatsAppPairing(channelID, status, qr, message)
-		},
-	)
+	// Wire all observer callbacks (CancelInterceptor, PairingObserver, …) via
+	// the shared helper so this path stays in sync with restartServices.
+	// Must happen after SetChannelManager so the Manager's channels map is
+	// already populated when SetCancelInterceptor is called.
+	wireChannelManager(runningServices.ChannelManager, agentLoop)
 
 	if transcriber := voice.DetectTranscriber(cfg, runningServices.bundle); transcriber != nil {
 		agentLoop.SetTranscriber(transcriber)
@@ -1393,8 +1395,8 @@ func setupAndStartServices(
 	}
 	api.cronService.Store(runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
 	// Stash the api ref so RunContextWithOptions can update builtinRegistry
-	// after the M16 live-deps re-population (the ~line 715 reassignment creates a fresh
-	// *BuiltinRegistry that would otherwise not reach the already-constructed api).
+	// after the M16 live-deps re-population (which creates a fresh *BuiltinRegistry
+	// that would otherwise not reach the already-constructed api).
 	runningServices.restAPIRef = api
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/sessions", api.withAuth(api.HandleSessions))
 	// /api/v1/sessions/ handles: sessions CRUD AND the tool-results sub-resource
@@ -1661,6 +1663,38 @@ func handleConfigReload(
 	return nil
 }
 
+// wireChannelManager consolidates all observer wiring that must be (re-)applied
+// whenever a ChannelManager becomes active.  It is called once at initial boot
+// (in setupAndStartServices) and twice per reload (in restartServices):
+//
+//  1. Before ChannelManager.Reload() — so channels whose Start() runs inside
+//     Reload already have the CancelInterceptor and PairingObserver set when
+//     they first emit events.
+//
+//  2. After ChannelManager.Reload() — because Reload may recreate channel
+//     instances (new struct value with nil fields), which clears the observer
+//     pointer set in the pre-Reload call.  Re-wiring guarantees the observers
+//     are always live after the reload completes.
+//
+// Callers are responsible for calling SetChannelManager on the agent loop
+// before invoking this helper, because SetCancelInterceptor requires that the
+// Manager's channels map is already populated.
+func wireChannelManager(cm *channels.Manager, al *agent.AgentLoop) {
+	// Wire the agent loop as the CancelInterceptor so Tier B channels can fire
+	// /cancel via text-parsing (FR-2).
+	cm.SetCancelInterceptor(al)
+	// #283 / #368: bridge WhatsApp native pairing (QR/status) → agent event bus
+	// so the per-connection WS forwarder broadcasts a whatsapp_pairing frame to
+	// the SPA.  Re-wiring on reload ensures the observer survives channel restarts
+	// (the Manager creates new channel instances on Reload, which clears the old
+	// observer pointer).
+	cm.SetPairingObserver(
+		func(channelID string, status channels.PairingStatus, qr, message string) {
+			al.EmitWhatsAppPairing(channelID, status, qr, message)
+		},
+	)
+}
+
 func restartServices(
 	al *agent.AgentLoop,
 	runningServices *services,
@@ -1753,11 +1787,19 @@ func restartServices(
 	}
 
 	al.SetChannelManager(runningServices.ChannelManager)
-	runningServices.ChannelManager.SetCancelInterceptor(al)
+	// Pre-Reload wire: set observers before Reload() so that channels whose
+	// Start() runs *inside* Reload() already have the CancelInterceptor and
+	// PairingObserver set when they first emit events.
+	wireChannelManager(runningServices.ChannelManager, al)
 
 	if err = runningServices.ChannelManager.Reload(context.Background(), cfg, runningServices.bundle); err != nil {
 		return fmt.Errorf("error reload channels: %w", err)
 	}
+	// Post-Reload re-wire: Reload() may have recreated channel instances (new
+	// struct value with nil fields), which clears the observer pointer set
+	// above.  Re-wiring here ensures the observers are always live once the
+	// reload completes, regardless of whether instances were recreated.
+	wireChannelManager(runningServices.ChannelManager, al)
 	fmt.Println("  ✓ Channels restarted.")
 
 	enabledChannels := runningServices.ChannelManager.GetEnabledChannels()

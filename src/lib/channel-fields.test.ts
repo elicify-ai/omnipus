@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { CHANNEL_FIELDS } from './channel-fields'
+import { CHANNEL_FIELDS, getChannelFields } from './channel-fields'
 
 describe('helpLinkScheme.test — M-4: every helpLink.url must be https://', () => {
   it('all helpLink.url values across all channel descriptors start with https://', () => {
@@ -85,5 +85,12 @@ describe('helpLinkScheme.test — M-4: every helpLink.url must be https://', () 
         expect(knownGroups.has(field.authGroup)).toBe(true)
       }
     }
+  })
+})
+
+describe('getChannelFields — whatsapp_native normalisation', () => {
+  it('normalises whatsapp_native to whatsapp for field lookup', () => {
+    expect(getChannelFields('whatsapp_native')).toEqual(getChannelFields('whatsapp'))
+    expect(getChannelFields('whatsapp_native').length).toBeGreaterThan(0)
   })
 })

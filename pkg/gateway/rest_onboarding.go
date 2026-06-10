@@ -59,6 +59,15 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		jsonErr(w, http.StatusInternalServerError, "onboarding failed")
 		return
 	}
+	// committed-guard: release the reservation on any early-return path so
+	// callers can retry. Set committed=true only after commitOnboarding()
+	// succeeds (phase-2 write) to prevent a bricked-onboarding state.
+	committed := false
+	defer func() {
+		if !committed {
+			a.onboardingMgr.ReleaseReservation()
+		}
+	}()
 
 	var body gen.OnboardingCompleteRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
@@ -87,6 +96,11 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		jsonErr(w, http.StatusBadRequest, "admin.username is required")
 		return
 	}
+	// Enforce username constraints regardless of ValidateInbound schema validation.
+	if !usernameRE.MatchString(body.Admin.Username) {
+		jsonErr(w, http.StatusBadRequest, usernameInvalidMsg)
+		return
+	}
 	if body.Admin.Password == "" {
 		jsonErr(w, http.StatusBadRequest, "admin.password is required")
 		return
@@ -100,7 +114,6 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// Refuses the operation if the store is locked (SEC-23: no plaintext fallback).
 	credRefName, credErr := a.storeCredential(body.Provider.Id+"_API_KEY", body.Provider.ApiKey)
 	if credErr != nil {
-		a.onboardingMgr.ReleaseReservation()
 		slog.Error("rest: credential store unavailable during onboarding", "error", credErr)
 		jsonErr(
 			w,
@@ -145,14 +158,12 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// avoid holding configMu for ~300ms across three bcrypt operations.
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(body.Admin.Password), bcrypt.DefaultCost)
 	if err != nil {
-		a.onboardingMgr.ReleaseReservation()
 		slog.Error("onboarding: bcrypt password hash failed", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "onboarding failed")
 		return
 	}
 	token, err := generateUserToken(body.Admin.Username)
 	if err != nil {
-		a.onboardingMgr.ReleaseReservation()
 		slog.Error("onboarding: generate token failed", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "onboarding failed")
 		return
@@ -162,7 +173,6 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// the bearer-token SET so later logins append rather than evict.
 	tokenHash, err := bcrypt.GenerateFromPassword([]byte(config.TokenSecret(token)), bcrypt.DefaultCost)
 	if err != nil {
-		a.onboardingMgr.ReleaseReservation()
 		slog.Error("onboarding: bcrypt token hash failed", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "onboarding failed")
 		return
@@ -286,8 +296,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		// succeeds (two-phase commit). Do NOT call CompleteOnboarding() here.
 		return nil
 	}); err != nil {
-		// config.json write failed — release the reservation so a retry is possible.
-		a.onboardingMgr.ReleaseReservation()
+		// config.json write failed — defer will release the reservation so a retry is possible.
 		slog.Error("onboarding: complete transaction failed", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "onboarding failed")
 		return
@@ -304,10 +313,14 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		// Do NOT return an error to the caller — config is committed.
 		// The admin user exists and the token is valid.
 	}
+	// Phase-2 complete: config.json is committed. Mark committed so the defer does NOT release the reservation.
+	// Note: state.json may have failed above (logged as non-fatal) — the process-level reservation correctly
+	// stays held since config.json represents the canonical commit.
+	committed = true
 
 	// Trigger a reload so the in-memory config picks up the new user.
 	// Reload failure is non-fatal — token is on disk and active after next config poll.
-	if err := a.awaitReload(); err != nil {
+	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Warn("onboarding: hot-reload after complete failed; token active after next restart", "error", err)
 	}
 
