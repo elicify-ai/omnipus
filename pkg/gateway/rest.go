@@ -677,6 +677,21 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id strin
 	jsonOK(w, map[string]bool{"success": true})
 }
 
+// firstEnabledAgentID returns the ID of the first active/enabled agent in the
+// config list, or "" when no agents are configured. Used as a last-resort fallback
+// after GetDefaultAgent() — mirrors resolveDefaultAgentID in pkg/routing/route.go.
+func firstEnabledAgentID(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	for _, ag := range cfg.Agents.List {
+		if ag.IsActive() {
+			return ag.ID
+		}
+	}
+	return ""
+}
+
 func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	var req gen.SessionCreateRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
@@ -697,13 +712,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		if agentID == "" {
 			// Fall back to the first enabled agent (mirrors handleBoardTaskStart /
 			// resolveDefaultAgentID in pkg/routing/route.go).
-			cfg := a.agentLoop.GetConfig()
-			for _, ag := range cfg.Agents.List {
-				if ag.IsActive() {
-					agentID = ag.ID
-					break
-				}
-			}
+			agentID = firstEnabledAgentID(a.agentLoop.GetConfig())
 		}
 	}
 	if err := validateEntityID(agentID); err != nil {

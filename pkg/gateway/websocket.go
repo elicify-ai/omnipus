@@ -855,13 +855,7 @@ func (h *WSHandler) handleChatMessage(
 		if targetAgentID == "" {
 			// Fall back to the first enabled agent (mirrors handleBoardTaskStart /
 			// resolveDefaultAgentID in pkg/routing/route.go).
-			cfg := h.agentLoop.GetConfig()
-			for _, ag := range cfg.Agents.List {
-				if ag.IsActive() {
-					targetAgentID = ag.ID
-					break
-				}
-			}
+			targetAgentID = firstEnabledAgentID(h.agentLoop.GetConfig())
 		}
 	}
 

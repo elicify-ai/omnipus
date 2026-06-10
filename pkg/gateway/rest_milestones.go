@@ -217,9 +217,7 @@ func (a *restAPI) handleMilestoneList(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	callerUser, callerRole := callerIdentity(r)
-	if !canAccess(proj.Owner, callerUser, callerRole) {
-		jsonErr(w, http.StatusNotFound, "project not found")
+	if a.denyIfNoAccess(w, callerIdentity(r), proj.Owner, "project not found") {
 		return
 	}
 
@@ -304,9 +302,8 @@ func (a *restAPI) handleMilestonePost(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	callerUser, callerRole := callerIdentity(r)
-	if !canAccess(proj.Owner, callerUser, callerRole) {
-		jsonErr(w, http.StatusNotFound, "project not found")
+	c := callerIdentity(r)
+	if a.denyIfNoAccess(w, c, proj.Owner, "project not found") {
 		return
 	}
 
@@ -346,7 +343,7 @@ func (a *restAPI) handleMilestonePost(w http.ResponseWriter, r *http.Request, pr
 		DueDate:   dueDate,
 		// SEC-2: stamp the creating user's username as owner. In dev-mode bypass,
 		// the caller has no username — stamp empty string (unowned/shared).
-		Owner:     callerUser,
+		Owner:     c.Username,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -395,9 +392,7 @@ func (a *restAPI) handleMilestoneGet(
 	if !ok {
 		return
 	}
-	callerUser, callerRole := callerIdentity(r)
-	if !canAccess(proj.Owner, callerUser, callerRole) {
-		jsonErr(w, http.StatusNotFound, "project not found")
+	if a.denyIfNoAccess(w, callerIdentity(r), proj.Owner, "project not found") {
 		return
 	}
 
@@ -476,9 +471,7 @@ func (a *restAPI) handleMilestonePut(
 	if !ok {
 		return
 	}
-	callerUser, callerRole := callerIdentity(r)
-	if !canAccess(proj.Owner, callerUser, callerRole) {
-		jsonErr(w, http.StatusNotFound, "project not found")
+	if a.denyIfNoAccess(w, callerIdentity(r), proj.Owner, "project not found") {
 		return
 	}
 
@@ -632,9 +625,7 @@ func (a *restAPI) handleMilestoneDelete(
 	if !ok {
 		return
 	}
-	callerUser, callerRole := callerIdentity(r)
-	if !canAccess(proj.Owner, callerUser, callerRole) {
-		jsonErr(w, http.StatusNotFound, "project not found")
+	if a.denyIfNoAccess(w, callerIdentity(r), proj.Owner, "project not found") {
 		return
 	}
 

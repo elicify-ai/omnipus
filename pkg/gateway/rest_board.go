@@ -56,54 +56,36 @@ func (a *restAPI) boardTaskLock(taskID string) *sync.Mutex {
 
 // validateBoardTaskAgentID checks that the given agent ID exists in the registry
 // when the registry is non-nil and has at least one registered agent.
-// Returns (errMsg, true) when the agent ID is invalid, or ("", false) when it passes.
-// Skips the check when the registry is empty (fresh install / test fixture with no agents).
-func (a *restAPI) validateBoardTaskAgentID(agentID string) (string, bool) {
+// Returns nil when the agent ID is valid or when the check is skipped (empty registry).
+// Returns an error when the agent ID is non-empty and not found in a populated registry.
+func (a *restAPI) validateBoardTaskAgentID(agentID string) error {
 	if agentID == "" {
-		return "", false // empty agent_id is valid (start resolves default)
+		return nil // empty agent_id is valid (start resolves default)
 	}
 	reg := a.agentLoop.GetRegistry()
 	if reg == nil {
-		return "", false
+		return nil
 	}
 	if len(reg.ListAgentIDs()) == 0 {
 		// No agents registered — skip validation (fresh install or test fixture).
-		return "", false
+		return nil
 	}
 	if _, ok := reg.GetAgent(agentID); !ok {
-		return fmt.Sprintf("agent %q not found", agentID), true
+		return fmt.Errorf("agent %q not found", agentID)
 	}
-	return "", false
-}
-
-// allowedPUTTransitions defines which target statuses are reachable from a given
-// source status via a PUT request. "active" is intentionally absent from all
-// target sets — it is only reachable via POST /start.
-//
-// Invariant: a PUT may never set status=active; /start is the only path.
-var allowedPUTTransitions = map[string]map[string]bool{
-	"inbox":   {"inbox": true, "next": true, "waiting": true, "done": true, "failed": true},
-	"next":    {"inbox": true, "next": true, "waiting": true, "done": true, "failed": true},
-	"waiting": {"inbox": true, "next": true, "waiting": true, "done": true, "failed": true},
-	"active":  {"inbox": true, "next": true, "waiting": true, "done": true, "failed": true},
-	"done":    {"inbox": true, "next": true, "waiting": true, "done": true, "failed": true},
-	"failed":  {"inbox": true, "next": true, "waiting": true, "done": true, "failed": true},
+	return nil
 }
 
 // validateStatusTransition returns an error when a PUT is attempting an illegal
-// status transition. Specifically, it blocks any PUT that tries to reach "active"
-// (only /start may do that) and blocks nonsense transitions to unrecognised statuses.
-func validateStatusTransition(oldStatus, newStatus string) error {
+// status transition. The only rule is: "active" may only be set via POST /start,
+// never via PUT. All other transitions between GTD statuses are permitted — the
+// allowedPUTTransitions map previously encoded a 6×5 table that reduced to this
+// single rule (every source mapped to the same five non-active targets).
+//
+// Invariant: a PUT may never set status=active; /start is the only path.
+func validateStatusTransition(_, newStatus string) error {
 	if newStatus == "active" {
 		return fmt.Errorf("status 'active' can only be set via POST /start, not via PUT")
-	}
-	targets, known := allowedPUTTransitions[oldStatus]
-	if !known {
-		// Unknown source status — allow the write (defensive: don't lock out repair).
-		return nil
-	}
-	if !targets[newStatus] {
-		return fmt.Errorf("transition from %q to %q is not allowed", oldStatus, newStatus)
 	}
 	return nil
 }
@@ -304,7 +286,7 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	callerUser, callerRole := callerIdentity(r)
+	c := callerIdentity(r)
 
 	all, err := a.listBoardTasks()
 	if err != nil {
@@ -317,7 +299,7 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 	// SEC-2: tasks with a non-empty owner that doesn't match the caller are hidden.
 	filtered := make([]boardTask, 0, len(all))
 	for _, t := range all {
-		if !canAccess(t.Owner, callerUser, callerRole) {
+		if !c.canAccess(t.Owner) {
 			continue
 		}
 		if projectFilter != "" && t.ProjectID != projectFilter {
@@ -423,9 +405,7 @@ func (a *restAPI) handleBoardTaskGet(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	callerUser, callerRole := callerIdentity(r)
-	if !canAccess(t.Owner, callerUser, callerRole) {
-		jsonErr(w, http.StatusNotFound, "board task not found")
+	if a.denyIfNoAccess(w, callerIdentity(r), t.Owner, "board task not found") {
 		return
 	}
 	jsonOK(w, toWireBoardTask(t))
@@ -462,6 +442,10 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// SEC-2: resolve caller identity early — needed for both the owner stamp and
+	// the cross-owner reference check on project_id / milestone_id.
+	c := callerIdentity(r)
+
 	projectID := ""
 	if req.ProjectId != nil {
 		projectID = *req.ProjectId
@@ -474,15 +458,18 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 				jsonErr(w, http.StatusBadRequest, "invalid project_id")
 				return
 			}
-			if _, projErr := readProjectFile(a.homePath, projectID); errors.Is(
-				projErr,
-				errProjectNotFound,
-			) ||
-				errors.Is(projErr, os.ErrNotExist) {
+			proj, projErr := readProjectFile(a.homePath, projectID)
+			if errors.Is(projErr, errProjectNotFound) || errors.Is(projErr, os.ErrNotExist) {
 				jsonErr(w, http.StatusBadRequest, "project not found")
 				return
 			} else if projErr != nil {
 				jsonErr(w, http.StatusInternalServerError, "failed to validate project_id")
+				return
+			}
+			// SEC-2: cross-owner reference is an enumeration oracle. Return the
+			// same "project not found" 400 on denial so there is no oracle.
+			if !c.canAccess(proj.Owner) {
+				jsonErr(w, http.StatusBadRequest, "project not found")
 				return
 			}
 		}
@@ -501,8 +488,8 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			// A2: validate agent_id exists in the registry (when registry is populated).
-			if msg, bad := a.validateBoardTaskAgentID(agentID); bad {
-				jsonErr(w, http.StatusBadRequest, msg)
+			if err := a.validateBoardTaskAgentID(agentID); err != nil {
+				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
 		}
@@ -541,16 +528,15 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 		milestoneID = *req.MilestoneId
 		if milestoneID != "" {
 			// Validate milestone FK: must exist and belong to the same project.
+			// The milestone's parent project access was already checked above
+			// (validateMilestoneFK reads the milestone and verifies project_id match;
+			// parent project access was guarded when project_id was validated).
 			if err := validateMilestoneFK(a.homePath, milestoneID, projectID); err != nil {
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
 		}
 	}
-
-	// SEC-2: stamp the creating user's username as owner. In dev-mode bypass,
-	// the caller has no username — stamp empty string (unowned/shared).
-	callerUser, _ := callerIdentity(r)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	t := boardTask{
@@ -563,9 +549,11 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 		Status:      status,
 		ProjectID:   projectID,
 		AgentID:     agentID,
-		Owner:       callerUser,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		// SEC-2: stamp the creating user's username as owner. In dev-mode bypass,
+		// the caller has no username — stamp empty string (unowned/shared).
+		Owner:     c.Username,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	if err := a.writeBoardTask(t); err != nil {
@@ -626,9 +614,8 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
 	// owner is immutable — the stored value is always preserved; any owner field
 	// in the request body is ignored.
-	callerUser, callerRole := callerIdentity(r)
-	if !canAccess(existing.Owner, callerUser, callerRole) {
-		jsonErr(w, http.StatusNotFound, "board task not found")
+	c := callerIdentity(r)
+	if a.denyIfNoAccess(w, c, existing.Owner, "board task not found") {
 		return
 	}
 
@@ -727,15 +714,18 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 				jsonErr(w, http.StatusBadRequest, "invalid project_id")
 				return
 			}
-			if _, projErr := readProjectFile(a.homePath, *req.ProjectId); errors.Is(
-				projErr,
-				errProjectNotFound,
-			) ||
-				errors.Is(projErr, os.ErrNotExist) {
+			proj, projErr := readProjectFile(a.homePath, *req.ProjectId)
+			if errors.Is(projErr, errProjectNotFound) || errors.Is(projErr, os.ErrNotExist) {
 				jsonErr(w, http.StatusBadRequest, "project not found")
 				return
 			} else if projErr != nil {
 				jsonErr(w, http.StatusInternalServerError, "failed to validate project_id")
+				return
+			}
+			// SEC-2: cross-owner reference is an enumeration oracle. Return the
+			// same "project not found" 400 on denial so there is no oracle.
+			if !c.canAccess(proj.Owner) {
+				jsonErr(w, http.StatusBadRequest, "project not found")
 				return
 			}
 		}
@@ -765,8 +755,8 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 				return
 			}
 			// A2: validate agent_id exists in the registry (when registry is populated).
-			if msg, bad := a.validateBoardTaskAgentID(agentID); bad {
-				jsonErr(w, http.StatusBadRequest, msg)
+			if err := a.validateBoardTaskAgentID(agentID); err != nil {
+				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
 		}
@@ -819,9 +809,7 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	callerUser, callerRole := callerIdentity(r)
-	if !canAccess(existing.Owner, callerUser, callerRole) {
-		jsonErr(w, http.StatusNotFound, "board task not found")
+	if a.denyIfNoAccess(w, callerIdentity(r), existing.Owner, "board task not found") {
 		return
 	}
 
@@ -879,8 +867,7 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 	}
 
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	callerUser, callerRole := callerIdentity(r)
-	if !canAccess(existing.Owner, callerUser, callerRole) {
+	if !callerIdentity(r).canAccess(existing.Owner) {
 		mu.Unlock()
 		jsonErr(w, http.StatusNotFound, "board task not found")
 		return
@@ -900,14 +887,7 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 			}
 		}
 		if agentID == "" {
-			// fall back to first enabled agent
-			cfg := a.agentLoop.GetConfig()
-			for _, ag := range cfg.Agents.List {
-				if ag.IsActive() {
-					agentID = ag.ID
-					break
-				}
-			}
+			agentID = firstEnabledAgentID(a.agentLoop.GetConfig())
 		}
 	}
 	if agentID == "" {
@@ -918,9 +898,9 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 
 	// A2: validate that the resolved agent actually exists in the registry
 	// (when the registry is non-empty — empty means fresh install or test fixture).
-	if msg, bad := a.validateBoardTaskAgentID(agentID); bad {
+	if err := a.validateBoardTaskAgentID(agentID); err != nil {
 		mu.Unlock()
-		jsonErr(w, http.StatusBadRequest, msg)
+		jsonErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -959,12 +939,18 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 	// H2: Link session metadata back to this task — treat failure as fatal.
 	// An orphaned session (metadata not linked to the task) would be invisible
 	// from the UI and cannot be cleaned up; abort dispatch rather than proceed.
+	// M-2: best-effort delete the just-created session before returning 500 so
+	// the abort path does not leak an orphan session that is invisible from the UI.
 	title := existing.Name
 	tid := id
 	if setErr := store.SetMeta(meta.ID, session.MetaPatch{Title: &title, TaskID: &tid}); setErr != nil {
 		mu.Unlock()
 		slog.Error("rest: board task: start set meta failed — aborting dispatch",
 			"id", id, "session_id", meta.ID, "error", setErr)
+		if delErr := store.DeleteSession(meta.ID); delErr != nil {
+			slog.Warn("rest: board task: start orphan session cleanup failed",
+				"id", id, "session_id", meta.ID, "error", delErr)
+		}
 		jsonErr(w, http.StatusInternalServerError, "failed to link session metadata")
 		return
 	}
@@ -980,6 +966,10 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 		mu.Unlock()
 		slog.Error("rest: board task: start transcript write failed — aborting dispatch",
 			"id", id, "session_id", meta.ID, "error", appendErr)
+		if delErr := store.DeleteSession(meta.ID); delErr != nil {
+			slog.Warn("rest: board task: start orphan session cleanup failed",
+				"id", id, "session_id", meta.ID, "error", delErr)
+		}
 		jsonErr(w, http.StatusInternalServerError, "failed to write session transcript")
 		return
 	}

@@ -734,9 +734,9 @@ func (a *restAPI) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 // the 8-hex-char (32-bit) ID is non-secret routing metadata, not part of the
 // authentication secret.
 //
-// The signature is unchanged from the legacy single-token model so callers that
-// only need the raw token (e.g. onboarding's legacy token_hash path) keep
-// compiling; the ID is derived on demand via config.TokenIDFromRaw.
+// The signature accepts a (currently unused) username parameter so existing call
+// sites compile unchanged; the token is user-agnostic — the caller stamps the ID
+// after the fact via config.TokenIDFromRaw.
 func generateUserToken(_ string) (string, error) {
 	idBytes := make([]byte, 4) // 32-bit non-secret routing prefix
 	if _, err := rand.Read(idBytes); err != nil {

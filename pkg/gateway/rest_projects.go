@@ -50,38 +50,67 @@ type storedProject struct { // not-wire-format: internal disk-cache struct, mapp
 	UpdatedAt string `json:"updated_at"`
 }
 
-// canAccess returns true when a caller may read or mutate a resource.
+// caller holds the identity of the authenticated request caller.
+// Passed by value; zero value is unauthenticated (empty username, empty role).
+type caller struct {
+	Username string
+	Role     config.UserRole
+}
+
+// canAccess returns true when the caller may read or mutate a resource.
 //
 // Access rules (SEC-2):
 //   - Admin callers see and modify everything regardless of owner.
 //   - Resources with empty owner are unowned/shared: accessible by any authenticated user
 //     (back-compat: legacy data written before ownership stamping was introduced).
 //   - Resources with a non-empty owner are only accessible by that owner.
-func canAccess(resourceOwner, callerUsername string, callerRole config.UserRole) bool {
-	if callerRole == config.UserRoleAdmin {
+func (c caller) canAccess(resourceOwner string) bool {
+	if c.Role == config.UserRoleAdmin {
 		return true
 	}
 	// Empty owner means unowned/shared — any authenticated user may access.
 	if resourceOwner == "" {
 		return true
 	}
-	return resourceOwner == callerUsername
+	return resourceOwner == c.Username
+}
+
+// denyIfNoAccess writes a 404 JSON error and returns true when the caller cannot
+// access the given resource owner, centralising the SEC-2 "404-not-403" invariant.
+// Returns false (access granted) without writing anything when access is permitted.
+func (a *restAPI) denyIfNoAccess(w http.ResponseWriter, c caller, owner, notFoundMsg string) bool {
+	if c.canAccess(owner) {
+		return false
+	}
+	jsonErr(w, http.StatusNotFound, notFoundMsg)
+	return true
 }
 
 // callerIdentity extracts the caller's username and role from the request context.
 // In dev-mode bypass (no UserContextKey set), the caller is treated as admin with
-// an empty username — consistent with how bypass is described in CLAUDE.md.
-func callerIdentity(r *http.Request) (username string, role config.UserRole) {
+// an empty username. All current callers of this function are behind withAuth, so
+// the dev-bypass→admin case is intentional and does not silently grant least-privilege
+// to anonymous callers — it only fires when the gateway is explicitly started with
+// bypass enabled (e.g. local dev / test fixtures without a configured user list).
+func callerIdentity(r *http.Request) caller {
+	var c caller
 	if u, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && u != nil {
-		username = u.Username
+		c.Username = u.Username
 	}
 	if ro, ok := r.Context().Value(RoleContextKey{}).(config.UserRole); ok && ro != "" {
-		role = ro
+		c.Role = ro
 	} else {
 		// No role in context → dev-mode bypass or no-auth; treat as admin.
-		role = config.UserRoleAdmin
+		c.Role = config.UserRoleAdmin
 	}
-	return username, role
+	return c
+}
+
+// canAccess is a package-level shim retained for backward compatibility with call
+// sites that have not yet been migrated to caller.canAccess. New code must use
+// caller.canAccess directly.
+func canAccess(resourceOwner, callerUsername string, callerRole config.UserRole) bool {
+	return (caller{Username: callerUsername, Role: callerRole}).canAccess(resourceOwner)
 }
 
 // validateRepositoryURL returns an error when the repository field is non-empty but
@@ -304,7 +333,7 @@ func projectToWire(p storedProject, taskCount int) gen.Project {
 
 // deleteTasksForProject removes all GTD task files whose project_id matches projectID.
 // Only GTD tasks (status ∈ {inbox,next,active,waiting,done,failed}) are deleted; workflow
-// tasks from pkg/taskstore share the same directory and are preserved.
+// tasks from pkg/taskstore live in ~/.omnipus/workflow-tasks/ and are not touched here.
 // Per FR-007: individual task-file deletion failures are logged and skipped (best-effort);
 // only a scan failure (cannot enumerate the tasks directory) causes a non-nil return.
 func deleteTasksForProject(home, projectID string) error {
@@ -439,7 +468,7 @@ func (a *restAPI) handleProjectList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	callerUser, callerRole := callerIdentity(r)
+	c := callerIdentity(r)
 
 	projects, err := listProjectFiles(a.homePath)
 	if err != nil {
@@ -460,7 +489,7 @@ func (a *restAPI) handleProjectList(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		// SEC-2: skip projects the caller cannot access.
-		if !canAccess(p.Owner, callerUser, callerRole) {
+		if !c.canAccess(p.Owner) {
 			continue
 		}
 		result = append(result, projectToWire(p, taskCounts[p.ID]))
@@ -528,7 +557,7 @@ func (a *restAPI) handleProjectPost(w http.ResponseWriter, r *http.Request) {
 
 	// SEC-2: stamp the creating user's username as owner. In dev-mode bypass, the
 	// caller is admin with no username — stamp empty string (unowned/shared).
-	callerUser, _ := callerIdentity(r)
+	c := callerIdentity(r)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	p := storedProject{
@@ -537,7 +566,7 @@ func (a *restAPI) handleProjectPost(w http.ResponseWriter, r *http.Request) {
 		Status:    string(gen.ProjectStatusActive),
 		Pinned:    false,
 		PinOrder:  0,
-		Owner:     callerUser,
+		Owner:     c.Username,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -579,9 +608,7 @@ func (a *restAPI) handleProjectGet(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	callerUser, callerRole := callerIdentity(r)
-	if !canAccess(p.Owner, callerUser, callerRole) {
-		jsonErr(w, http.StatusNotFound, "project not found")
+	if a.denyIfNoAccess(w, callerIdentity(r), p.Owner, "project not found") {
 		return
 	}
 	jsonOK(w, projectToWire(p, countTasksForProject(a.homePath, id)))
@@ -639,9 +666,7 @@ func (a *restAPI) handleProjectPut(w http.ResponseWriter, r *http.Request, id st
 	}
 
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	callerUser, callerRole := callerIdentity(r)
-	if !canAccess(p.Owner, callerUser, callerRole) {
-		jsonErr(w, http.StatusNotFound, "project not found")
+	if a.denyIfNoAccess(w, callerIdentity(r), p.Owner, "project not found") {
 		return
 	}
 
@@ -718,9 +743,7 @@ func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id
 	}
 
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	callerUser, callerRole := callerIdentity(r)
-	if !canAccess(p.Owner, callerUser, callerRole) {
-		jsonErr(w, http.StatusNotFound, "project not found")
+	if a.denyIfNoAccess(w, callerIdentity(r), p.Owner, "project not found") {
 		return
 	}
 
@@ -798,9 +821,7 @@ func (a *restAPI) handleProjectSessions(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	callerUser, callerRole := callerIdentity(r)
-	if !canAccess(p.Owner, callerUser, callerRole) {
-		jsonErr(w, http.StatusNotFound, "project not found")
+	if a.denyIfNoAccess(w, callerIdentity(r), p.Owner, "project not found") {
 		return
 	}
 
