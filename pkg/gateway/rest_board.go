@@ -286,7 +286,7 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c := callerIdentity(r)
+	c := a.callerIdentity(r)
 
 	all, err := a.listBoardTasks()
 	if err != nil {
@@ -405,7 +405,7 @@ func (a *restAPI) handleBoardTaskGet(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	if a.denyIfNoAccess(w, callerIdentity(r), t.Owner, "board task not found") {
+	if a.denyIfNoAccess(w, a.callerIdentity(r), t.Owner, "board task not found") {
 		return
 	}
 	jsonOK(w, toWireBoardTask(t))
@@ -444,7 +444,7 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 
 	// SEC-2: resolve caller identity early — needed for both the owner stamp and
 	// the cross-owner reference check on project_id / milestone_id.
-	c := callerIdentity(r)
+	c := a.callerIdentity(r)
 
 	projectID := ""
 	if req.ProjectId != nil {
@@ -614,7 +614,7 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
 	// owner is immutable — the stored value is always preserved; any owner field
 	// in the request body is ignored.
-	c := callerIdentity(r)
+	c := a.callerIdentity(r)
 	if a.denyIfNoAccess(w, c, existing.Owner, "board task not found") {
 		return
 	}
@@ -809,7 +809,7 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	if a.denyIfNoAccess(w, callerIdentity(r), existing.Owner, "board task not found") {
+	if a.denyIfNoAccess(w, a.callerIdentity(r), existing.Owner, "board task not found") {
 		return
 	}
 
@@ -867,7 +867,7 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 	}
 
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	if !callerIdentity(r).canAccess(existing.Owner) {
+	if !a.callerIdentity(r).canAccess(existing.Owner) {
 		mu.Unlock()
 		jsonErr(w, http.StatusNotFound, "board task not found")
 		return
@@ -943,7 +943,10 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 	// the abort path does not leak an orphan session that is invisible from the UI.
 	title := existing.Name
 	tid := id
-	if setErr := store.SetMeta(meta.ID, session.MetaPatch{Title: &title, TaskID: &tid}); setErr != nil {
+	// Propagate the board task's owner onto the session so that sysagent tools
+	// running inside this turn inherit the correct owner (SEC-2/#406, Rule-2).
+	taskOwner := existing.Owner
+	if setErr := store.SetMeta(meta.ID, session.MetaPatch{Title: &title, TaskID: &tid, Owner: &taskOwner}); setErr != nil {
 		mu.Unlock()
 		slog.Error("rest: board task: start set meta failed — aborting dispatch",
 			"id", id, "session_id", meta.ID, "error", setErr)

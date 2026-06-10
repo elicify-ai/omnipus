@@ -925,8 +925,11 @@ func (h *WSHandler) handleChatMessage(
 			} else {
 				title = content
 			}
-			if err := store.SetMeta(meta.ID, session.MetaPatch{Title: &title}); err != nil {
-				slog.Warn("ws: could not set session title", "session_id", meta.ID, "error", err)
+			// Stamp the session owner from the authenticated WebSocket user (SEC-2/#406).
+			// wc.userID is set at auth time (FR-073); empty on dev-mode bypass.
+			ownerCopy := wc.userID
+			if err := store.SetMeta(meta.ID, session.MetaPatch{Title: &title, Owner: &ownerCopy}); err != nil {
+				slog.Warn("ws: could not set session title/owner", "session_id", meta.ID, "error", err)
 			}
 			// Ack the new session_id so the SPA can associate all subsequent frames.
 			startedFrame := generated.SessionStartedFrame{

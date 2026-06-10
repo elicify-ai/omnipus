@@ -217,7 +217,7 @@ func (a *restAPI) handleMilestoneList(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	if a.denyIfNoAccess(w, callerIdentity(r), proj.Owner, "project not found") {
+	if a.denyIfNoAccess(w, a.callerIdentity(r), proj.Owner, "project not found") {
 		return
 	}
 
@@ -302,7 +302,7 @@ func (a *restAPI) handleMilestonePost(w http.ResponseWriter, r *http.Request, pr
 		return
 	}
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	c := callerIdentity(r)
+	c := a.callerIdentity(r)
 	if a.denyIfNoAccess(w, c, proj.Owner, "project not found") {
 		return
 	}
@@ -392,7 +392,7 @@ func (a *restAPI) handleMilestoneGet(
 	if !ok {
 		return
 	}
-	if a.denyIfNoAccess(w, callerIdentity(r), proj.Owner, "project not found") {
+	if a.denyIfNoAccess(w, a.callerIdentity(r), proj.Owner, "project not found") {
 		return
 	}
 
@@ -471,7 +471,7 @@ func (a *restAPI) handleMilestonePut(
 	if !ok {
 		return
 	}
-	if a.denyIfNoAccess(w, callerIdentity(r), proj.Owner, "project not found") {
+	if a.denyIfNoAccess(w, a.callerIdentity(r), proj.Owner, "project not found") {
 		return
 	}
 
@@ -625,7 +625,7 @@ func (a *restAPI) handleMilestoneDelete(
 	if !ok {
 		return
 	}
-	if a.denyIfNoAccess(w, callerIdentity(r), proj.Owner, "project not found") {
+	if a.denyIfNoAccess(w, a.callerIdentity(r), proj.Owner, "project not found") {
 		return
 	}
 

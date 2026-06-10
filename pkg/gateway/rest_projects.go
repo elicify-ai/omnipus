@@ -55,22 +55,31 @@ type storedProject struct { // not-wire-format: internal disk-cache struct, mapp
 type caller struct {
 	Username string
 	Role     config.UserRole
+	// MultiUser is true when the gateway has more than one registered user.
+	// When true, empty-owner resources are restricted to admin only (not shared)
+	// to prevent cross-tenant access in multi-user deployments (SEC-2/#406).
+	// When false (single-user or dev-mode bypass), empty-owner resources remain
+	// accessible to any authenticated caller for back-compat.
+	MultiUser bool
 }
 
 // canAccess returns true when the caller may read or mutate a resource.
 //
-// Access rules (SEC-2):
+// Access rules (SEC-2 + #406 multi-user gate):
 //   - Admin callers see and modify everything regardless of owner.
-//   - Resources with empty owner are unowned/shared: accessible by any authenticated user
-//     (back-compat: legacy data written before ownership stamping was introduced).
+//   - Single-user / dev-mode: resources with empty owner are unowned/shared,
+//     accessible by any authenticated user (back-compat).
+//   - Multi-user: resources with empty owner are admin-only (prevents cross-
+//     tenant access to legacy/agent-created resources).
 //   - Resources with a non-empty owner are only accessible by that owner.
 func (c caller) canAccess(resourceOwner string) bool {
 	if c.Role == config.UserRoleAdmin {
 		return true
 	}
-	// Empty owner means unowned/shared — any authenticated user may access.
 	if resourceOwner == "" {
-		return true
+		// Multi-user: unowned resources are admin-only to close the cross-tenant hole.
+		// Single-user: keep sharing for back-compat with existing data.
+		return !c.MultiUser
 	}
 	return resourceOwner == c.Username
 }
@@ -86,13 +95,14 @@ func (a *restAPI) denyIfNoAccess(w http.ResponseWriter, c caller, owner, notFoun
 	return true
 }
 
-// callerIdentity extracts the caller's username and role from the request context.
-// In dev-mode bypass (no UserContextKey set), the caller is treated as admin with
-// an empty username. All current callers of this function are behind withAuth, so
-// the dev-bypass→admin case is intentional and does not silently grant least-privilege
-// to anonymous callers — it only fires when the gateway is explicitly started with
-// bypass enabled (e.g. local dev / test fixtures without a configured user list).
-func callerIdentity(r *http.Request) caller {
+// callerIdentity extracts the caller's username, role, and multi-user flag from
+// the request context and gateway config. In dev-mode bypass (no UserContextKey
+// set), the caller is treated as admin with an empty username. All current
+// callers of this method are behind withAuth, so the dev-bypass→admin case is
+// intentional and does not silently grant least-privilege to anonymous callers —
+// it only fires when the gateway is explicitly started with bypass enabled (e.g.
+// local dev / test fixtures without a configured user list).
+func (a *restAPI) callerIdentity(r *http.Request) caller {
 	var c caller
 	if u, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && u != nil {
 		c.Username = u.Username
@@ -101,6 +111,27 @@ func callerIdentity(r *http.Request) caller {
 		c.Role = ro
 	} else {
 		// No role in context → dev-mode bypass or no-auth; treat as admin.
+		c.Role = config.UserRoleAdmin
+	}
+	// Compute MultiUser once from the live config: true when >1 user registered.
+	if cfg := a.agentLoop.GetConfig(); cfg != nil {
+		c.MultiUser = len(cfg.Gateway.Users) > 1
+	}
+	return c
+}
+
+// callerIdentityFromRequest is a package-level shim retained for backward
+// compatibility with call sites that cannot easily access a *restAPI. New code
+// must use a.callerIdentity(r) directly to get the MultiUser flag set correctly.
+// This shim sets MultiUser=false (single-user / shared mode).
+func callerIdentityFromRequest(r *http.Request) caller {
+	var c caller
+	if u, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && u != nil {
+		c.Username = u.Username
+	}
+	if ro, ok := r.Context().Value(RoleContextKey{}).(config.UserRole); ok && ro != "" {
+		c.Role = ro
+	} else {
 		c.Role = config.UserRoleAdmin
 	}
 	return c
@@ -468,7 +499,7 @@ func (a *restAPI) handleProjectList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c := callerIdentity(r)
+	c := a.callerIdentity(r)
 
 	projects, err := listProjectFiles(a.homePath)
 	if err != nil {
@@ -557,7 +588,7 @@ func (a *restAPI) handleProjectPost(w http.ResponseWriter, r *http.Request) {
 
 	// SEC-2: stamp the creating user's username as owner. In dev-mode bypass, the
 	// caller is admin with no username — stamp empty string (unowned/shared).
-	c := callerIdentity(r)
+	c := a.callerIdentity(r)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	p := storedProject{
@@ -608,7 +639,7 @@ func (a *restAPI) handleProjectGet(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	if a.denyIfNoAccess(w, callerIdentity(r), p.Owner, "project not found") {
+	if a.denyIfNoAccess(w, a.callerIdentity(r), p.Owner, "project not found") {
 		return
 	}
 	jsonOK(w, projectToWire(p, countTasksForProject(a.homePath, id)))
@@ -666,7 +697,7 @@ func (a *restAPI) handleProjectPut(w http.ResponseWriter, r *http.Request, id st
 	}
 
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	if a.denyIfNoAccess(w, callerIdentity(r), p.Owner, "project not found") {
+	if a.denyIfNoAccess(w, a.callerIdentity(r), p.Owner, "project not found") {
 		return
 	}
 
@@ -743,7 +774,7 @@ func (a *restAPI) handleProjectDelete(w http.ResponseWriter, r *http.Request, id
 	}
 
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	if a.denyIfNoAccess(w, callerIdentity(r), p.Owner, "project not found") {
+	if a.denyIfNoAccess(w, a.callerIdentity(r), p.Owner, "project not found") {
 		return
 	}
 
@@ -821,7 +852,7 @@ func (a *restAPI) handleProjectSessions(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	if a.denyIfNoAccess(w, callerIdentity(r), p.Owner, "project not found") {
+	if a.denyIfNoAccess(w, a.callerIdentity(r), p.Owner, "project not found") {
 		return
 	}
 

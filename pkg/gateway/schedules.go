@@ -441,6 +441,33 @@ func isTransientRunError(err error) bool {
 	return false
 }
 
+// stampScheduledSessionOwner sets the user-owner on a scheduled session from
+// job.CreatedBy. Only stamps when the session has no owner yet (new or
+// explicitly unowned). Errors are non-fatal and logged as warnings — a missing
+// owner on a scheduled session degrades gracefully to the shared/unowned
+// behaviour rather than aborting the run (SEC-2/#406).
+func (r *scheduledRunner) stampScheduledSessionOwner(store *session.UnifiedStore, sessionID, userOwner string) {
+	if userOwner == "" {
+		return
+	}
+	meta, err := store.GetMeta(sessionID)
+	if err != nil {
+		logger.WarnCF("gateway", "scheduled run: could not read session meta for owner stamp",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return
+	}
+	// Only stamp on sessions that have no owner yet to avoid clobbering an
+	// existing owner on continue/main sessions that already carry one.
+	if meta.Owner != "" {
+		return
+	}
+	ownerCopy := userOwner
+	if setErr := store.SetMeta(sessionID, session.MetaPatch{Owner: &ownerCopy}); setErr != nil {
+		logger.WarnCF("gateway", "scheduled run: could not stamp session owner",
+			map[string]any{"session_id": sessionID, "owner": userOwner, "error": setErr.Error()})
+	}
+}
+
 // pickSession resolves the session id for the run per session mode (W-2). The
 // session is created/looked up BEFORE the run so ProcessScheduled can register
 // the cancellable turn under it. On a pruned continue-session, it falls back to
@@ -456,6 +483,11 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 		mode = cron.SessionModeIsolated
 	}
 
+	// userOwner is the authenticated user who created the schedule; used to
+	// stamp the session owner so sysagent tools inherit the correct owner
+	// during the run (SEC-2/#406, Rule-2). Distinct from owner (agentID).
+	userOwner := job.CreatedBy
+
 	switch mode {
 	case cron.SessionModeContinue:
 		id := job.SessionID
@@ -467,6 +499,7 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 				return "", fmt.Errorf("continue session create: %w", err)
 			}
 			job.SessionID = fresh.ID
+			r.stampScheduledSessionOwner(store, fresh.ID, userOwner)
 			return fresh.ID, nil
 		}
 		meta, err := store.GetOrCreateScheduledSession(id, owner)
@@ -478,8 +511,10 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 			if ferr != nil {
 				return "", fmt.Errorf("continue fallback create: %w", ferr)
 			}
+			r.stampScheduledSessionOwner(store, fresh.ID, userOwner)
 			return fresh.ID, nil
 		}
+		r.stampScheduledSessionOwner(store, meta.ID, userOwner)
 		return meta.ID, nil
 
 	case cron.SessionModeMain:
@@ -488,6 +523,7 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 		if err != nil {
 			return "", fmt.Errorf("main session create: %w", err)
 		}
+		r.stampScheduledSessionOwner(store, meta.ID, userOwner)
 		return meta.ID, nil
 
 	default: // isolated
@@ -495,6 +531,7 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 		if err != nil {
 			return "", fmt.Errorf("isolated session create: %w", err)
 		}
+		r.stampScheduledSessionOwner(store, fresh.ID, userOwner)
 		return fresh.ID, nil
 	}
 }

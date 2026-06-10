@@ -53,7 +53,7 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 	}
 }
 
-func (t *TaskCreateTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	name, _ := args["name"].(string)
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
@@ -74,6 +74,14 @@ func (t *TaskCreateTool) Execute(_ context.Context, args map[string]any) *tools.
 	if v, ok := args["description"].(string); ok {
 		tk.Description = v
 	}
+	// Sysagent ownership rule (SEC-2/#406), in priority order:
+	//   Rule 1: if creating a task under an existing project, inherit that project's
+	//           owner (ensures agent-created tasks under a user-owned project stay
+	//           scoped to that owner).
+	//   Rule 2: fall back to the session owner from context (stamped at session
+	//           creation and injected into turnCtx by the agent loop).
+	//   Rule 3: default owner="" (unowned/shared, back-compat).
+	sessionOwner := tools.ToolSessionOwner(ctx)
 	if v, ok := args["project_id"].(string); ok && v != "" {
 		if err := validateID(v); err != nil {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid project_id: not found", "project_id"))
@@ -84,19 +92,15 @@ func (t *TaskCreateTool) Execute(_ context.Context, args map[string]any) *tools.
 		}
 		tk.ProjectID = v
 
-		// Sysagent ownership rule (SEC-2), rule 1: if creating a task under an existing
-		// project, inherit that project's owner. This ensures agent-created tasks under
-		// a user-owned project are accessible only by the project's owner (and admins).
+		// Rule 1: inherit the project's owner.
 		tk.Owner = proj.Owner
 	}
-	// Sysagent ownership rule (SEC-2), rules 2 & 3:
-	// If no project was provided (or the project had no owner), tk.Owner is still "".
-	//   Rule 2: if the executing agent's session/board-task has a resolvable owner, use it.
-	//     — Deps carries no session/board-task context today; this path is not reachable.
-	//   Rule 3: default owner="" (unowned/shared, visible to all authenticated users).
-	// TODO(ownership): to implement rule 2, the agent loop would need to pass the
-	// triggering board-task's owner (or the HTTP session's user) into Deps. Until that
-	// plumbing exists, tasks without a project context are unowned/shared.
+	// Rule 2: if no owner set via Rule 1 (no project or project had empty owner),
+	// use the session owner from context.
+	if tk.Owner == "" && sessionOwner != "" {
+		tk.Owner = sessionOwner
+	}
+	// Rule 3: tk.Owner remains "" (unowned/shared) if both Rules 1 and 2 gave "".
 	if v, ok := args["agent_id"].(string); ok {
 		tk.AgentID = v
 	}

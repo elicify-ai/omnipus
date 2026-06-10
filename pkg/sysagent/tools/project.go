@@ -168,7 +168,7 @@ func (t *ProjectCreateTool) Parameters() map[string]any {
 	}
 }
 
-func (t *ProjectCreateTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *ProjectCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	name, _ := args["name"].(string)
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
@@ -177,26 +177,21 @@ func (t *ProjectCreateTool) Execute(_ context.Context, args map[string]any) *too
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name exceeds 200 characters", ""))
 	}
 
-	// Sysagent ownership rule (SEC-2):
-	// The system.project.* tools run inside the agent loop, not an HTTP request,
-	// so there is no UserContextKey in context. Ownership is determined as follows
-	// (in priority order):
-	//   1. If creating a task under an existing project, inherit that project's owner
-	//      — not applicable here (project creation, not task creation).
-	//   2. If the executing agent's session or board-task has a resolvable owner, use it.
-	//      — Deps carries no session/board-task context today; this path is not reachable.
-	//   3. Default: stamp owner="" (unowned/shared).
-	// TODO(ownership): to implement rule 2, the agent loop would need to pass the
-	// triggering board-task's owner (or the HTTP session's user) into Deps. The
-	// BoardTask.Owner field is the source of truth for that. Until that plumbing exists,
-	// agent-created projects are unowned/shared and visible to all authenticated users.
+	// Sysagent ownership rule (SEC-2/#406):
+	// The system.project.* tools run inside the agent loop, not an HTTP request.
+	// Ownership is determined in priority order:
+	//   1. Not applicable here (project creation has no parent project).
+	//   2. Session owner from context (stamped at session creation by WS/board/schedule
+	//      trigger) — injected into turnCtx by the agent loop via WithSessionOwner.
+	//   3. Default: owner="" (unowned/shared, back-compat).
+	owner := tools.ToolSessionOwner(ctx)
 	p := project{
 		ID:        ulid.Make().String(),
 		Name:      name,
 		Status:    "active",
 		Pinned:    false,
 		PinOrder:  0,
-		Owner:     "", // unowned/shared — see sysagent ownership rule above
+		Owner:     owner,
 		CreatedAt: nowISO(),
 		UpdatedAt: nowISO(),
 	}

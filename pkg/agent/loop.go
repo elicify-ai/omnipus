@@ -3749,6 +3749,16 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	turnCtx = tools.WithTranscriptSessionID(turnCtx, ts.opts.TranscriptSessionID)
+	// Inject the session owner so sysagent tools (system.project.create,
+	// system.task.create) can stamp the owner on newly created entities
+	// (Rule-2 of the sysagent ownership rule, SEC-2/#406).
+	if ts.opts.TranscriptSessionID != "" {
+		if store := al.ResolveSessionStore(ts.opts.TranscriptSessionID); store != nil {
+			if meta, err := store.GetMeta(ts.opts.TranscriptSessionID); err == nil && meta.Owner != "" {
+				turnCtx = tools.WithSessionOwner(turnCtx, meta.Owner)
+			}
+		}
+	}
 
 	al.registerActiveTurn(ts)
 	// B1: Finish must run before clearActiveTurn so that IsAlive() goes false

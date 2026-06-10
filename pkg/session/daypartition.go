@@ -85,6 +85,11 @@ type SessionMeta struct {
 
 	LastCompactionSummary string `json:"last_compaction_summary,omitempty"`
 
+	// Owner is the username of the authenticated user who created this session.
+	// Empty means unowned/shared (agent-created or legacy sessions). Internal
+	// use only — not serialized to any REST response or wire format.
+	Owner string `json:"owner,omitempty"`
+
 	// v2 multi-agent fields (joined session model)
 	AgentIDs            []string          `json:"agent_ids,omitempty"`
 	ActiveAgentID       string            `json:"active_agent_id,omitempty"`
