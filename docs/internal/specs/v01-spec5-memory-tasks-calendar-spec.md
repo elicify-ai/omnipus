@@ -19,10 +19,9 @@ Land the memory **structure** (not behaviour): **two rooms** — a **private** p
 ### Symbols Involved
 | Symbol | Role | Context |
 |---|---|---|
-| `pkg/memory/*.go` (`jsonl.go` — 64-shard mutex, append-only `.jsonl`) | extend / restructure | today: agent-global, `.jsonl` history; the rooms + 3 tools + file format are **new** (memory-redesign-2026-05) |
-| `MEMORY.md` (monolithic) | **replace** | by the per-memory file format + 3 tools |
-| the 3 tools `remember`/`recall`/`retrospective` | **NEW** | not present in `pkg/memory`/`pkg/sysagent/tools` today |
-| **bleve** | **NEW dep** | `0` in go.mod — a new **pure-Go** FTS dep (Constraint-#1 decision, like `emersion/go-imap`); no CGo, no SQLite |
+| `pkg/memory/*.go` + `pkg/agent/memory.go::MemoryStore` (`MEMORY.md` + day-partitioned `_retro.md` + literal-substring `SearchEntries`; audit hooks + rate limiter) | **REWRITE** (live subsystem, NOT greenfield — C-1/M-2) | restructured into the rooms + file format; existing MEMORY.md data MUST migrate (M-2) |
+| the 3 tools — **EXIST** (`pkg/tools/memory.go`: `RememberTool`→`remember`, `RecallMemoryTool`→**`recall_memory`**, `RetrospectiveTool`→`retrospective`) | **re-point** to the rooms | NOT new (C-1); keep the registered tool names (`recall_memory`, M-1) or alias |
+| **bleve** | **NEW dep** | `0` in go.mod — MUST use the **pure-Go `scorch` index** and **FORBID the CGo `leveldb`/`rocksdb` backends** (the tree already has CGo creep via `mattn/go-sqlite3` indirect — C-4); a CI check asserts no new CGo. ADR-019 FR-7 records the dep. |
 | the append-only logs (`sessions/` · `counters.jsonl` · `born_in`/`cited_in`) | **freeze formats + start writing** | record schemas pinned in v0.1.0 (NFR-1) |
 | `pkg/boardtask/boardtask.go` + `contracts/.../BoardTask*.yaml` | **add** `start·due·recurrence·blocked_by` | additive; `blocked_by` absent today (Spec-1 grounding) |
 | `task_status_changed` WS frame + `SetOnComplete` (Spec-3) | the validator + Orchestrator hook | Spec-3 owns the coordinator; this spec owns the fields + validator |
@@ -142,10 +141,11 @@ Scenario: Task fields regenerate clean
 ## 7. Functional Requirements & Success Criteria
 
 - **FR-7.1:** MUST create the 2-room topology — private `agents/<id>/.omnipus/` (agent-global) + shared `<workspace>/.omnipus/` (Spec-1 Workspace-keyed); the workspace room has 3 tiers + `last-session.md`, no sessions dir (D19).
-- **FR-7.2:** MUST define the **full per-memory file format** (frontmatter — all fields present even if unused, NFR-7) replacing `MEMORY.md`.
-- **FR-7.3:** MUST add the 3 tools `remember`/`recall`/`retrospective` (register in the tool catalog; contract if boundary-crossing).
-- **FR-7.4:** MUST add **bleve** (new pure-Go dep — Constraint-#1 decision, no CGo/SQLite) for BM25 recall; the index is **derived/rebuildable** from the `.md` sources; **no embeddings**.
-- **FR-7.5:** MUST **freeze the append-only LOG RECORD FORMATS** (`sessions/` · `counters.jsonl` · `born_in`/`cited_in`) and start writing them in v0.1.0 (NFR-1 — no v0.2 backfill); **MinHash** dedup on write.
+- **FR-7.2 (C-3):** MUST define the **full per-memory frontmatter schema** — the field set MUST be **transcribed verbatim from `docs/internal/design/memory-redesign-2026-05.md` into this spec** (NOT left as `…`/"pin at impl"); every field present even if unused (NFR-7). *Acceptance gate: the spec is not implementation-ready until the literal schema is inlined here.*
+- **FR-7.3 (C-1, M-1):** MUST **re-point the EXISTING tools** (`remember` / `recall_memory` / `retrospective`, `pkg/tools/memory.go`, backed by `MemoryStore`) to the rooms — keeping the registered names (`recall_memory`, not `recall`) or a documented alias; the backend is rewritten to the rooms/file-format.
+- **FR-7.4 (C-4):** MUST add **bleve** pinned to the **pure-Go `scorch` index**, **forbidding** the CGo `leveldb`/`rocksdb` backends; a **CI check asserts no new CGo** (`CGO_ENABLED=0` build stays green); the index is **derived/rebuildable** from the `.md` sources; **no embeddings, no SQLite**.
+- **FR-7.5 (C-2):** MUST **define and freeze the append-only LOG RECORD SCHEMAS** — the exact JSON shape of `sessions/` (firehose), `counters.jsonl` (access/citation), `born_in`/`cited_in` MUST be **written into this spec** (transcribed from `memory-redesign-2026-05.md`), not "pinned at impl" (NFR-1 can't freeze an absent schema). **MinHash** dedup on write MUST be **non-destructive** (near-dups linked, not deleted — M-5).
+- **FR-7.6 (M-2):** memory is **NOT greenfield** — there is live `MEMORY.md`/`_retro.md` data + an existing `MigrateFromJSON`. MUST **migrate existing memory into the rooms** on upgrade (no silent loss); migration is one-way + idempotent.
 - **FR-8.1:** MUST add additive task fields `start·due·recurrence·blocked_by`; `verify-contracts` exits 0.
 - **FR-8.2:** MUST ship `blocked_by` with its **write-time cycle/orphan validator** + delete/runtime semantics (cascade-clean edges on task delete + surface dependents; drop orphans) — carried from Spec-1 / operator Q1.
 - **FR-8.3:** MUST add a per-workspace **Calendar/Automations shell** (renders scheduled tasks/events/milestones; the automations *engine* + recurrence *execution* are v0.2.0).
@@ -185,7 +185,7 @@ Scenario: Task fields regenerate clean
 - H6: the Calendar shows a scheduled task; recurrence stored but not auto-run (shell).
 
 ## 11. Assumptions
-- Greenfield: no `MEMORY.md`/old `.jsonl` migrated (rooms are fresh). `[Q6/ADR]`
+- Memory is **NOT greenfield** — existing `MEMORY.md`/`_retro.md` MUST migrate into the rooms (M-2); the Workspace/install is greenfield, but **user memory is preserved**. `[C-1/M-2]`
 - bleve is the approved new pure-Go FTS dep (no CGo/SQLite/embeddings). `[ADR FR-7]`
 - Rooms are keyed to Spec-1's `Workspace`; the shared room is `<workspace>/.omnipus/`. `[cross-spec Spec-1]`
 - The Orchestrator (Spec-3) consumes `blocked_by` via `SetOnComplete`; this spec owns the fields + validator. `[cross-spec Spec-3]`
