@@ -8,7 +8,7 @@
 
 ## 1. Overview
 
-**Skills + self-improvement:** wire the existing **stub** skill tools (`system.skill.{install,remove,search,list}`) to the real `pkg/skills` engine; **add `system.skill.create` + `system.skill.edit`** (the authoring/self-improvement verb — procedural memory); **`go:embed` + first-boot-seed** the default set (`summarize · skill-authoring · plan · daily-briefing`); per-agent **allowlist + progressive disclosure**; skill writes **consent-gated + versioned**. **Plugin/marketplace SHAPE (no installer):** the component-level-hybrid **bundle manifest shape**; the **marketplace-provider LIST** (`RegistryConfig` single ClawHub → list; ClawHub+GitHub first-class). **Protocols (hooks):** MCP is present; ACP/A2A hooks live in Specs 3/4 (cross-ref). **Integrations + auth:** the **Integrations provider-picker UI** (surface the existing `SearchProvider`/`Transcriber`) + a composer **mic**; **single-user/one-password**, sensitive settings = password re-type (`RequireNotBypass`); **Profile vs Settings**; **3-step onboarding** → auto-provision Mia·Assistant.
+**Skills + self-improvement:** wire the existing **stub** skill tools (`system.skill.{install,remove,search,list}`) to the real `pkg/skills` engine; **add `system.skill.create` + `system.skill.edit`** (the authoring/self-improvement verb — procedural memory); **`go:embed` + first-boot-seed** the default set (`summarize · skill-authoring · plan · daily-briefing`); per-agent **allowlist + progressive disclosure**; skill writes **consent-gated + versioned**. **Plugin/marketplace SHAPE (no installer):** the component-level-hybrid **bundle manifest shape**; the **marketplace-provider LIST** (`RegistryConfig` single ClawHub → list; ClawHub+GitHub first-class). **Protocols (hooks):** MCP is present; ACP/A2A hooks live in Specs 3/4 (cross-ref). **Integrations + auth:** the **Integrations provider-picker UI** (surface the existing `SearchProvider`/`Transcriber`) + a composer **mic**; **single-user/one-password**, sensitive settings = password re-type (a **NEW** consent primitive — `RequireNotBypass` is a 503 dev-bypass guard, unrelated; FR-12); **Profile vs Settings**; **3-step onboarding** → auto-provision Mia·Assistant.
 
 **In scope:** wiring the 4 stub skill tools to `pkg/skills`; `system.skill.create`/`edit`; `go:embed` default-set + first-boot seed; per-agent skill allowlist; consent-gated+versioned skill writes; the bundle-manifest **shape** + the marketplace-provider **list** (`RegistryConfig` single→list); the Integrations provider-picker UI + composer mic; single-user/one-password + Profile/Settings split + onboarding.
 **Out of scope:** the plugin **installer** + Marketplaces UI (later); the ACP/A2A **protocol drivers** (Spec-4/later); TTS/image-gen (v0.2.0); the Dreamcatcher proposing skill edits (v0.2.0 behaviour — Spec-5's logs feed it).
@@ -24,7 +24,7 @@
 | skill seeding (`OMNIPUS_BUILTIN_SKILLS`, `<wd>/skills`) | **`go:embed` + first-boot seed** | today filesystem-seeded only (single-binary shippability gap) |
 | `RegistryConfig` (`registry.go:66`, single `ClawHub` field) | **single → list** | `[]Marketplace{name,type,baseURL,key,enabled}` (same single→list as channels/tool-providers) |
 | `SearchProvider` (`pkg/tools/web.go:91`) + `Transcriber` (`pkg/voice/transcriber.go`) | surface in Integrations UI | exist; no provider-picker UI today (LLM-only `ProvidersSection`) |
-| `RequireNotBypass` (`pkg/gateway` middleware) + auth (`auth.go`, register-admin) | password re-type + onboarding | the sensitive-settings gate |
+| **NEW consent primitive** (tool-layer `ws_approval`; HTTP-layer re-auth) + auth (`auth.go`, register-admin) | sensitive-op consent + onboarding | `RequireNotBypass` is a 503 dev-bypass guard, **NOT** consent (C-1) |
 | `coreagent.SeedConfig` (Spec-3 Mia·Assistant) | onboarding auto-provision | Mia is the auto-provisioned Assistant |
 
 ### Impact Assessment
@@ -53,7 +53,7 @@
 
 **US-7 — Integrations provider-picker + mic (P1).** 1. **Given** Settings → Integrations, **When** I view it, **Then** the existing multi-provider **search** (`SearchProvider`) + **voice-in** (`Transcriber`) are configurable (behind password re-type); **When** I use the composer mic, **Then** voice-in captures via the existing transcriber.
 
-**US-8 — Single-user / one-password / Profile / onboarding (P0).** 1. **Given** single-user, **When** I touch a sensitive setting, **Then** I re-type the one password (`RequireNotBypass`); personal settings live under a Profile menu, app config under Settings. 2. **Given** a fresh install, **When** I onboard, **Then** 3 steps (name → password → model key) → Mia·Assistant auto-provisioned in My Workspace.
+**US-8 — Single-user / one-password / Profile / onboarding (P0).** 1. **Given** single-user, **When** I touch a sensitive setting, **Then** I re-type the one password (the **NEW** re-auth check — `RequireNotBypass` is a 503 dev-bypass guard, unrelated); personal settings live under a Profile menu, app config under Settings. 2. **Given** a fresh install, **When** I onboard, **Then** 3 steps (name → password → model key) → Mia·Assistant auto-provisioned in My Workspace.
 
 ### Edge Cases
 - `system.skill.edit` on a built-in → user override (not in-place). · skill write without a consent handler → denied. · `RegistryConfig` empty → no marketplaces (degraded). · go:embed default already present in the seed dir → not overwritten (idempotent). · password re-type failed → sensitive op rejected. · onboarding interrupted → resumable.
@@ -110,7 +110,7 @@ Scenario: Sensitive setting requires the one password
   Category: Error Path
   Given single-user
   When I change a model key without re-typing the password
-  Then the operation is rejected (RequireNotBypass)
+  Then the operation is rejected (the new re-auth check fails)
 
 Scenario: Onboarding auto-provisions Mia
   Traces to: US-8 / AC-2
@@ -130,7 +130,7 @@ Scenario: Onboarding auto-provisions Mia
 | 4 | `TestDefaultSkills_EmbeddedAndSeeded` | Integration | "embedded + seeded" | go:embed + first boot |
 | 5 | `TestSkillAllowlist_PerAgent_OnDemand` | Unit | US-4 | allowlist matrix |
 | 6 | `TestRegistryConfig_List_FanOut` | Integration | "fans out" | single→list |
-| 7 | `TestSensitiveSetting_RequiresPassword` | Integration | "requires one password" | RequireNotBypass |
+| 7 | `TestSensitiveSetting_RequiresReAuth` | Integration | "requires one password" | the new re-auth check (NOT RequireNotBypass) |
 | 8 | `TestOnboarding_AutoProvisionsMia` | Integration | "auto-provisions Mia" | 3-step seed |
 | 9 | `verify-contracts` (CI) | CI | (if skill/registry types cross boundary) | drift = fail |
 | 10 | `e2e: Integrations picker + composer mic; Profile vs Settings` | E2E | US-7/US-8 | SPA |
@@ -142,13 +142,13 @@ Scenario: Onboarding auto-provisions Mia
 ## 7. Functional Requirements & Success Criteria
 
 - **FR-9.1 (C-3):** MUST wire `system.skill.{install,remove,search,list}` (today stubs) to the real `pkg/skills` engine by **adding `SkillsLoader`/`RegistryManager`/`SkillInstaller` to the sysagent tool `Deps`** (`deps.go` has none today) so the tools reach the engine.
-- **FR-9.2 (C-1, C-2, M-2):** MUST add `system.skill.create` + `system.skill.edit`. **Consent** for these **tool-layer** writes routes through the **existing `ws_approval`** (`ToolApprovalRequest`→`ApprovalDecision`) — NOT `RequireNotBypass` (a 503 dev-bypass guard, wrong layer; an HTTP middleware can't gate a tool `Execute()`). **Versioning is NEW** (`pkg/skills` has none) — define a `.versions/` snapshot scheme (rollback required). Editing a built-in writes a **user override** (no in-place mutation).
+- **FR-9.2 (C-1, C-2, M-2):** MUST add `system.skill.create` + `system.skill.edit`. **Consent** for these **tool-layer** writes routes through the **existing `ws_approval`** (`ToolApprovalRequest`→`ApprovalDecision`) — NOT `RequireNotBypass` (a 503 dev-bypass guard, wrong layer; an HTTP middleware can't gate a tool `Execute()`). **Versioning is NEW** (`pkg/skills` has none) — define a `.versions/` snapshot scheme (rollback required). Editing a built-in writes a **user override** (no in-place mutation). **Writes MUST be path-confined to the skills dir (no `..`/traversal), validate the `SKILL.md` (frontmatter + structure), and audit-log every create/edit** — a traversal-attempt test asserts rejection (M-6).
 - **FR-9.3 (M-1):** MUST `go:embed` the default set + first-boot seed. **`go:embed` for skills is NEW infra** (only the SPA is embedded today). Of the 4 defaults only `summarize` exists on disk — **`skill-authoring`, `plan`, `daily-briefing` MUST be AUTHORED** as part of this spec.
-- **FR-9.4:** MUST scope skills **per-agent (allowlist) + progressive disclosure** (the matrix); not all skills in every agent's context.
+- **FR-9.4 (M-5):** MUST scope skills **per-agent (allowlist, default-DENY) + progressive disclosure**, enforced at **prompt-build + tool-resolution** — an agent not allowed a skill **cannot invoke it** (a negative test asserts denial, not just the positive matrix).
 - **FR-10.1 (M-4):** MUST change `RegistryConfig` (`{ClawHub, MaxConcurrentSearches}`) to a **list** of marketplaces; `RegistryManager` already fans out over N, **but GitHub is NOT a `SkillRegistry` today** (separate `SkillInstaller.InstallFromGitHub`) — a **new GitHub `SkillRegistry` adapter** is required for it to participate in search fan-out.
 - **FR-10.2:** MUST define the **component-level-hybrid bundle-manifest SHAPE** (reuse `SKILL.md` + `.mcp.json`; native agents/channels/providers) — installer/UI deferred.
 - **FR-11.1:** MUST keep MCP present; the ACP bidirectional-runner hook is **Spec-4**, the A2A agent-reference + Card-identity hooks are **Spec-3/4** (cross-ref, no new work here).
-- **FR-12.1:** MUST add the **Integrations provider-picker UI** surfacing the existing `SearchProvider` + `Transcriber` (behind password re-type) + a composer **mic**.
+- **FR-12.1 (M-3):** MUST add the **Integrations provider-picker UI** surfacing the existing `SearchProvider` + `Transcriber` + a composer **mic**. The picker reads provider config **across the SPA boundary**, so its wire types are **contract-first (Constraint #8 — not conditional)**; edits behind the new re-auth.
 - **FR-12.2 (C-1):** MUST enforce **single-user/one-password**; sensitive **HTTP-layer** settings = a **NEW re-authentication check** (re-verify the one password) — `RequireNotBypass` is a 503 dev-bypass guard, NOT this (ADR FR-12); **Profile** (personal) vs **Settings** (app) split.
 - **FR-12.3:** MUST ship the **3-step onboarding** (name → password → model key) → auto-provision **Mia·Assistant** in My Workspace.
 
@@ -173,7 +173,7 @@ Scenario: Onboarding auto-provisions Mia
 
 | # | Ambiguous | Likely assumption | Resolution |
 |---|---|---|---|
-| 1 | skill tool types cross boundary? | catalog-registered; contract if the SPA reads them | confirm at impl |
+| 1 | provider config crosses the boundary | the Integrations provider config IS boundary-crossing → contract-first (Constraint #8) | RESOLVED — provider config contract-first (M-3) |
 | 2 | skill versioning mechanism | a `.versions/` dir or git-style snapshots | pin at impl; rollback required |
 | 3 | RegistryConfig list back-compat | greenfield — list is the shape | RESOLVED — single→list, greenfield |
 | 4 | bundle-manifest is doc-only in v0.1.0 | shape pinned, no installer | RESOLVED — shape only |
