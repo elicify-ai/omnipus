@@ -18,6 +18,11 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     node -v; npm -v; go version; gcc --version | head -1
 
+# Go codegen tool needed by scripts/gen-contracts.sh (Step 3/5). Baked into a stable GOBIN on PATH.
+ENV GOBIN=/usr/local/gobin
+ENV PATH=$GOBIN:$PATH
+RUN go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest && oapi-codegen --version
+
 # Persistent caches live on the mounted volume (/cache) so repeat runs are fast.
 ENV GOPATH=/cache/go \
     GOCACHE=/cache/go-build \
