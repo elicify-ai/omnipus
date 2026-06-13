@@ -21,7 +21,9 @@ RUN set -eux; \
 # Go codegen tool needed by scripts/gen-contracts.sh (Step 3/5). Baked into a stable GOBIN on PATH.
 ENV GOBIN=/usr/local/gobin
 ENV PATH=$GOBIN:$PATH
-RUN go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest && oapi-codegen --version
+# Pin to the exact version the committed pkg/api/generated/ was produced with (the version is stamped
+# into the file header → @latest causes spurious verify-contracts drift).
+RUN go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.7.0 && oapi-codegen --version
 
 # Persistent caches live on the mounted volume (/cache) so repeat runs are fast.
 ENV GOPATH=/cache/go \
