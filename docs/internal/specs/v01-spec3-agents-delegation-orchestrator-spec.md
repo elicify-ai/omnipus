@@ -8,9 +8,9 @@
 
 ## 1. Overview
 
-Re-cast the 5 seeded core agents into the **4-base roster** (Mia·Assistant ⭐ · Jim·Orchestrator · Ray·Scout · Ava·Builder; **Max retired from the seeded base**); ship the **full delegation-policy contract** (`to · accept_from · modes · depth · budget`) additively while **enforcing only `to`+`modes`** in v0.1.0 (+ a trust-graph screen, gating the 2 currently-ungated work paths; **handover stays open**); make the **work-target an agent-reference** (local now, `remote-a2a` reserved); seed **Jim·Orchestrator** as the coordinator that runs `blocked_by` task-DAGs on `task_status_changed`; and add a **Max-parallel-agents** setting wired to the existing `AdmissionController`.
+Re-cast the 5 seeded core agents into the **4-base roster** (Mia·Assistant ⭐ · Jim·Orchestrator · Ray·Scout · Ava·Builder; **Max retired from the seeded base**); ship the **full delegation-policy contract** (`to · accept_from · modes · depth · budget`) additively while **enforcing only `to`+`modes`** in v0.1.0 (+ a trust-graph screen, gating the 2 currently-ungated work paths; **handover stays open**); make the **work-target an agent-reference** (local now, `remote-a2a` reserved); seed **Jim·Orchestrator** as the coordinator that runs `blocked_by` task-DAGs via `taskUpdate.SetOnComplete`; and add a **Max-parallel-agents** setting (a **new fan-out concurrency gate** — the existing `AdmissionController` gates inbound sessions only).
 
-**In scope:** the roster re-cast (`pkg/coreagent/core.go` Name/Subtitle/role for Mia/Jim/Ray/Ava; Max removed from the seeded base set; identity stays `Locked`); the agent **`voice`** field on the 4 base personas (VoiceConfig exists); the full delegation-policy schema (contract) + enforcement of `to`+`modes` + the trust-graph UI; gating the 2 ungated work paths (sync subagent · spawn/task); the agent-reference target; the Orchestrator coordinator; the Max-parallel setting → `AdmissionController`; custom base+sub agent creation (ungated; sensitive grants gated).
+**In scope:** the roster re-cast (`coreagent` Name/role + **compiled prompts** + `max` routing refs for Mia/Jim/Ray/Ava; Max removed from the seeded base; identity stays `Locked`); a **NEW** agent **`voice`** field on `AgentConfig` (distinct from the global STT/TTS `VoiceConfig`); the full delegation-policy schema **unifying the 3 allowlists into `to`** + enforcement of `to`+`modes`+`depth` + the trust-graph UI; gating the **1 truly-ungated path (the sync `subagent` tool)** + repointing the already-gated spawn/task to `to`; the agent-reference target; the Orchestrator coordinator (via `SetOnComplete`); the Max-parallel setting (a **new fan-out gate**); custom base+sub agent creation (ungated; sensitive grants gated).
 **Out of scope:** `accept_from`/`budget` *enforcement* (schema ships, enforcement later); the sub-agent `executor`/external runners (Spec-4); the `blocked_by` task fields themselves (Spec-5); marketplace agent packs (later); per-agent memory (Spec-5).
 
 ## 2. Existing Codebase Context (grounded)
@@ -19,11 +19,11 @@ Re-cast the 5 seeded core agents into the **4-base roster** (Mia·Assistant ⭐ 
 | Symbol | Role | Context |
 |---|---|---|
 | `pkg/coreagent/core.go` — `IDMia/IDJim/IDAva/IDRay/IDMax`, `All()`, `SeedConfig`, `Name`/`Subtitle` | **re-cast** Mia/Jim/Ray/Ava roles; **remove Max from the seeded base** (`All()` → 4); keep `Locked=true`, `AgentTypeCore`, Mia=default | `core.go:27-31,147,230,287` |
-| `config.AgentConfig` (`Default`, `Model`, tool policy) + `VoiceConfig` (config.go:127) | ensure `voice` on the 4 base personas | voice schema already exists — confirm agent-scoping (NFR-7: fully pinned) |
-| delegation policy (the 2 allowlists / `pkg/agent` + routing) | **add** full schema `to·accept_from·modes·depth·budget`; enforce `to`+`modes` | ground the exact as-is policy struct during impl |
-| the 2 ungated work paths — **sync subagent** + **spawn/task** (`pkg/agent/{subturn,session_worker,instance,registry}.go`) | **gate** via the policy | per delegation-audit (concept) |
-| `task_status_changed` WS frame + `blocked_by` (Spec-5) | Orchestrator coordinator hook | `asyncapi_types.gen.go:408`; blocked_by = Spec-5 |
-| `AdmissionController` (`pkg/agent/admission.go:12`, "soft-cap gate for concurrent session workers") | **wire** the Max-parallel setting to it | exists — extend, not greenfield |
+| `config.AgentConfig` (id/default/name/description/workspace/model/skills/subagents/can_delegate_to) | **add NEW `voice` field** | `AgentConfig` has **no** voice; global `VoiceConfig` (config.go:1052) is STT/TTS — unrelated (C-4) |
+| **3 allowlists**: `AgentConfig.CanDelegateTo`(451) · `AgentDefaults.CanDelegateTo`(663) · `SubagentsConfig.AllowAgents`(585) | **unify** into the policy `to` (precedence agent>defaults; subagent merges) — no silent authz change | C-2 |
+| the **1** truly-ungated path — **sync `subagent` tool** (`loop.go:~1487`, no checker) | **gate** via `to` | spawn (`CanSpawnSubagent`:1481) + task_create (`buildDelegateChecker`:1502) already gated → repoint to `to` (C-1) |
+| `taskUpdate.SetOnComplete(taskExecutor.onTaskComplete)` (`loop.go:1505-1508`) + `blocked_by` (Spec-5) | Orchestrator coordinator hook | `task_status_changed` WS frame has **no** in-process emitter — use SetOnComplete (C-3) |
+| `AdmissionController` (`admission.go`, **inbound sessions only**); `loop.go:424` hardcodes `newAdmissionController(0)` | **NEW fan-out concurrency gate** for max-parallel | extend admission OR a dedicated semaphore (M-4) |
 | `ChannelEntry.identity{agent\|user}` (Spec-2) + delegation `to` | share the **agent-reference** shape | Phase-3.5 cross-spec |
 
 ### Impact Assessment
@@ -36,7 +36,7 @@ Re-cast the 5 seeded core agents into the **4-base roster** (Mia·Assistant ⭐ 
 
 ## 3. User Stories
 
-**US-1 — 4-base roster, Max retired (P0).** **Independent test:** fresh seed yields 4 base agents (Mia·Assistant ⭐ default · Jim·Orchestrator · Ray·Scout · Ava·Builder); Max is not a seeded base chat agent; `go build` compiles (any dangling `IDMax` base-seed reference is a compile error). 1. **Given** fresh install, **When** seeded, **Then** `coreagent.All()` returns the 4 base agents with the re-cast Names/roles, Mia default, all `Locked`. 2. **Given** the re-cast, **When** I read built-in identity, **Then** it is write-protected and prompts are not surfaced (Spec-1 carried; preserved).
+**US-1 — 4-base roster, Max retired (P0).** **Independent test:** fresh seed yields 4 base agents (Mia·Assistant ⭐ default · Jim·Orchestrator · Ray·Scout · Ava·Builder); Max is not a seeded base chat agent. **Completeness:** the test suite + a grep for `IDMax`/"Max —"/role refs to `max` in live roster code is 0 — Max breakage is mostly **string-literal test assertions** (`wave5b_spec_test.go`, `core_test.go`, `boot_sequence_test.go`), invisible to `go build`, so the suite + grep is the gate, not the compiler (M-1). 1. **Given** fresh install, **When** seeded, **Then** `coreagent.All()` returns the 4 base agents with the re-cast Names/roles, Mia default, all `Locked`. 2. **Given** the re-cast, **When** I read built-in identity, **Then** it is write-protected and prompts are not surfaced (Spec-1 carried; preserved).
 
 **US-2 — voice on base personas (P0, NFR-7).** 1. **Given** the 4 base personas, **When** I read the schema, **Then** each has a nullable `voice` field (full schema pinned, unused until TTS v0.2.0).
 
@@ -142,14 +142,14 @@ Scenario: Policy contract regenerates clean
 
 ## 7. Functional Requirements & Success Criteria
 
-- **FR-3.1:** MUST re-cast Mia→Assistant ⭐(default)/Jim→Orchestrator/Ray→Scout/Ava→Builder in `coreagent`; **remove Max from the seeded base** (`All()`→4); keep `Locked`+`AgentTypeCore`; built-in prompts not surfaced.
-- **FR-3.2:** MUST ensure a nullable `voice` field on the 4 base personas (NFR-7 — pinned, unused until v0.2.0 TTS).
-- **FR-6.1:** MUST add the full delegation-policy contract (`to·accept_from·modes·depth·budget`) additively; `verify-contracts` exits 0.
-- **FR-6.2:** MUST enforce `to`+`modes`(+`depth` as a safety cap) in v0.1.0; `accept_from`+`budget` present-but-not-enforced and **not surfaced in the trust-graph UI**.
-- **FR-6.3:** MUST gate the 2 currently-ungated work paths (sync subagent · spawn/task) via the policy; **handover stays open**.
+- **FR-3.1 (M-2):** MUST re-cast the 4 base agents in `coreagent` — Mia→Assistant ⭐(default)/Jim→Orchestrator/Ray→Scout/Ava→Builder — including **rewriting the compiled persona prompts** (`core.go:~287-654`, today "Jim — General Purpose"/"Max — Automator"/etc.) **and every routing reference to `max`** (e.g. "create a task for Max"); **remove Max from `All()`/the seeded base** (→4); keep `Locked`+`AgentTypeCore`+Mia=default; built-in prompts not surfaced.
+- **FR-3.2 (C-4):** MUST add a **NEW nullable `voice` field to `AgentConfig`** (per-agent persona-voice ref) — distinct from the existing **GLOBAL** `config.VoiceConfig` STT/TTS engine (`config.go:1052`); `AgentConfig` has none today (fields: id/default/name/description/workspace/model/skills/subagents/can_delegate_to). Additive contract change, fully pinned (NFR-7), unused until v0.2.0 TTS.
+- **FR-6.1 (C-2):** MUST add the full delegation-policy contract (`to·accept_from·modes·depth·budget`) and **explicitly UNIFY the three existing allowlists** — `AgentConfig.CanDelegateTo` (config.go:451), `AgentDefaults.CanDelegateTo` (663), `SubagentsConfig.AllowAgents` (585) — into the canonical `to` (precedence: agent `to` > defaults `to`; the subagent allowlist merges in). The migration MUST preserve existing allow semantics (**no silent authz change**); `verify-contracts` exits 0.
+- **FR-6.2:** MUST enforce `to`+`modes`(+`depth` as a safety cap) in v0.1.0; `accept_from`+`budget` present-but-not-enforced and **not surfaced in the trust-graph UI** (NFR-7). `accept_from` being inert MUST NOT be presented as an active authz boundary (M-6).
+- **FR-6.3 (C-1):** the only TRULY ungated path is the **sync `subagent` tool** (`loop.go:~1487`, registered with no checker) — MUST gate it via the unified `to`. `spawn` (`CanSpawnSubagent`, loop.go:1481) and `task_create` (`buildDelegateChecker`, loop.go:1502/1594) are **already gated** — they MUST be repointed to read the unified `to`. **Handover stays open.**
 - **FR-6.4:** MUST model the delegation `to` target as an **agent-reference** (local resolution now; `remote-a2a` kind reserved; shares Spec-2 `identity{kind,id}`).
-- **FR-6.5:** MUST seed Jim·Orchestrator as the coordinator that advances `blocked_by` DAGs (Spec-5) on `task_status_changed`, within the Max-parallel window.
-- **FR-6.6:** MUST add a "Max parallel agents" setting (Settings→Performance, password-gated) wired to `AdmissionController`, with the `clamp(min(cores−2,RAM_GB÷1.5),2,16)` recommendation + over-limit warning.
+- **FR-6.5 (C-3):** MUST seed Jim·Orchestrator as the coordinator that advances `blocked_by` DAGs (Spec-5) via the **real completion seam `taskUpdate.SetOnComplete(taskExecutor.onTaskComplete)`** (`loop.go:1505-1508`) — NOT a `task_status_changed` subscription (that WS frame has **no in-process emitter**). Advance within the Max-parallel window.
+- **FR-6.6 (M-4):** MUST add a "Max parallel agents" setting (Settings→Performance, password-gated) bounding the **subagent/task FAN-OUT** concurrency. The existing `AdmissionController` gates **inbound sessions only** and `loop.go:424` hardcodes `newAdmissionController(0)` — so this is a **NEW config field driving a fan-out concurrency gate** (extend AdmissionController to also cover fan-out, OR a dedicated semaphore on the delegation/subagent dispatch). Recommendation `clamp(min(cores−2,RAM_GB÷1.5),2,16)` + over-limit warning.
 - **FR-3.3:** MUST allow ungated creation of custom base + sub agents; sensitive capability grants gated; built-ins write-protected. (Spec-1 carried.)
 
 **Success Criteria**
@@ -176,7 +176,7 @@ Scenario: Policy contract regenerates clean
 | 1 | `depth` enforced now or later | enforce depth (safety) | RESOLVED — depth enforced as a cap; accept_from/budget not |
 | 2 | voice agent-scoped vs global | VoiceConfig exists — confirm scoping | verify at impl; if global, add per-agent override (additive) |
 | 3 | Max fate | removed from seeded base | RESOLVED — retired from base; ID may remain for a future pack |
-| 4 | as-is delegation policy struct | ground at impl | the exact 2-allowlist struct is grounded in pkg/agent during impl; schema is additive over it |
+| 4 | as-is delegation policy | RESOLVED — **3** allowlists (`AgentConfig`/`AgentDefaults` `CanDelegateTo` + `SubagentsConfig.AllowAgents`) **unified into `to`** with defined precedence; no silent authz change (C-2) |
 | 5 | Orchestrator = agent vs coordinator code | Jim is the named coordinator persona; the DAG-runner is code | RESOLVED — Jim·Orchestrator is the persona; the coordinator runs on task_status_changed |
 
 ## 10. Holdout Evaluation Scenarios *(post-impl; NOT in traceability)*

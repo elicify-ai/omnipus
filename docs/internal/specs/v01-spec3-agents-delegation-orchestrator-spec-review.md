@@ -2,8 +2,33 @@
 
 - **Spec under review:** `docs/internal/specs/v01-spec3-agents-delegation-orchestrator-spec.md`
 - **Mode:** plan-spec (FR/SC/BDD/Traceability present)
-- **Reviewer stance:** adversarial, read-only, grounded against the live tree (`pkg/coreagent`, `pkg/agent`, `pkg/config`, `pkg/routing`, `pkg/api/generated`, `src/`).
+- **Reviewer stance:** adversarial, read-only, grounded against the live tree (`pkg/coreagent`, `pkg/agent`, `pkg/config`, `pkg/api/generated`, `src/`).
 - **Date:** 2026-06-13
+
+---
+
+## ROUND 2 VERDICT — **PASS (GATE C)** · 2026-06-13
+
+The round-1 BLOCK (4 CRITICAL / 7 MAJOR) rested on wrong groundings of the live tree. Round 2 re-grounds every one of those against the actual code, and **all six tracked deltas are now correct in the spec**:
+
+| Was | Round-2 spec claim | Live-tree verification | Status |
+|---|---|---|---|
+| **C-1** "2 ungated work paths" | §2/FR-6.3/US-4: ONLY the sync `subagent` tool is ungated (`loop.go:1487-1489`, no checker); `spawn` (`CanSpawnSubagent`, `loop.go:1480-1482`/`registry.go:126`) + `task_create` (`buildDelegateChecker`, `loop.go:1502`) are already gated and get **repointed** to `to`. | Confirmed: `subagentTool` registered at `loop.go:1487-1489` with no `SetAllowlistChecker`/`SetDelegateChecker`; spawn calls `registry.CanSpawnSubagent`, task_create calls `buildDelegateChecker`. | ✅ FIXED |
+| **C-2** triple allowlist "ground at impl" | §2/FR-6.1/ambig-4: explicitly unify the **3** allowlists — `AgentConfig.CanDelegateTo`(451), `AgentDefaults.CanDelegateTo`(663), `SubagentsConfig.AllowAgents`(585) — into `to` with precedence (agent > defaults; subagent merges), no silent authz change. | Confirmed at `config.go:451 / 585 / 663`. `buildDelegateChecker` (`loop.go:1594`) falls back to defaults; `CanSpawnSubagent` is deny-by-default on `AllowAgents`. | ✅ FIXED |
+| **C-3** `task_status_changed` subscription (no emitter) | §1/FR-6.5/§2: use `taskUpdate.SetOnComplete(taskExecutor.onTaskComplete)` (`loop.go:1505-1508`) — NOT a `task_status_changed` subscription (no in-process emitter). | Confirmed: zero `task_status_changed` emitters in non-test/non-generated Go; `SetOnComplete` wired at `loop.go:1505-1508`. | ✅ FIXED |
+| **C-4** "voice already exists" | §2/FR-3.2/US-2: add a **NEW** nullable `voice` field to `AgentConfig`; global `VoiceConfig` (`config.go:1052`, `Config.Voice` at `:127`) is STT/TTS, unrelated. | Confirmed: `AgentConfig` struct (`config.go:442`) has no voice field; `VoiceConfig` holds `ModelName`/`EchoTranscription`/`ElevenLabsAPIKeyRef`. | ✅ FIXED |
+| **M-1** "compiler surfaces IDMax" | US-1: completeness gate is the **test suite + grep** for `IDMax`/"Max —"/`max` role refs — string-literal assertions, invisible to `go build`. | Confirmed: `core_test.go:69,224`, `delete_locked_test.go:48`, `boot_sequence_test.go:128`, `constructor_seed_test.go:114`, `wave5b_spec_test.go:385` are all string/role literals. | ✅ FIXED |
+| **M-2** re-cast = "Name/role only" | FR-3.1: includes **rewriting the compiled persona prompts** (`core.go:~287-654`) + every `max` routing ref. | Confirmed: prompts hard-code "Jim — General Purpose"/"everyday assistant" (`:288,401`), Mia "Omnipus Guide" (`:330,517`), "Create a task for Max" (`:417`), `handoff(agent_id="max")` (`:553`), "Max — Automator" (`:368`). | ✅ FIXED |
+| **M-4** "wire existing AdmissionController" | §1/FR-6.6/§2: Max-parallel is a **NEW fan-out concurrency gate**; AdmissionController gates inbound sessions only; `loop.go:424` hardcodes `newAdmissionController(0)`. | Confirmed: `admission.go` doc-comment states "Subagent spawn and task-executor dispatch paths are NOT gated"; `loop.go:424` hardcodes `0`. | ✅ FIXED |
+| **M-6** `accept_from` inert | FR-6.2: `accept_from` inert MUST NOT be presented as an active authz boundary. | Confirmed: no `accept_from`/`AcceptFrom` anywhere in Go/contracts today → brand-new inert field; the M-6 hazard guard is now spec'd. | ✅ FIXED |
+
+**Residual (non-blocking).** The remaining round-1 MAJORs are downgraded/absorbed, not ignored: M-3 (Spec-2 `identity{kind,id}` upstream contestation) is now an explicit Phase-3.5 cross-spec dependency (§assumptions) — track in the cross-spec gate, not here; M-5 (`depth` definition) is partially addressed (depth enforced as a cap) but the *unit* it counts (chain length vs nesting) is still implicit — pin during impl, it does not block; M-7 (existing-install `max` orphan) is covered by the "greenfield seed" assumption (§11) which is a legitimate v0.1.0 foundation decision. None of these can cause a wrong implementation given the now-correct groundings. m-1..m-4 / O-1..O-2 stand as written.
+
+**Why PASS now:** every CRITICAL was a *factual* mis-grounding, and all four are corrected to match the live tree; the load-bearing "ground at impl" deferrals (C-2 allowlists, C-3 hook, C-4 voice) are now grounded in the spec body. An engineer implementing FR-3.1/6.1/6.3/6.5/6.6 against this text will hit the real seams. Proceed to `/taskify`.
+
+---
+
+### Round 1 (superseded — BLOCK)
 
 ## Executive Summary
 
