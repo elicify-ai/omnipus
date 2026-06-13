@@ -1,0 +1,18 @@
+# Omnipus CI / test-pipeline worker.
+# A sized, on-demand build+test box: pulls the repo and runs gates so the dev pod stays responsive.
+# No public service — driven via `flyctl ssh console` / `flyctl machine exec`. Stopped when idle to control cost.
+app = "ci-omnipus"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Persistent caches (go build/mod cache, npm, the cloned repo) survive stop/start → fast repeat runs.
+[mounts]
+  source = "ci_cache"
+  destination = "/cache"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 8
+  memory = "16gb"
