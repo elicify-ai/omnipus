@@ -1,0 +1,148 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Decisions &amp; Open Questions · Omnipus concept</title><link rel="stylesheet" href="style.css">
+<style>
+  .rel{display:inline-block;padding:1px 7px;border-radius:999px;font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:600;border:1px solid;white-space:nowrap}
+  .r1{color:#D4AF37;border-color:#D4AF37}.r2{color:#fbbf24;border-color:#fbbf24}.r3{color:#34d399;border-color:#34d399}.r4{color:#a78bfa;border-color:#a78bfa}.r5{color:#60a5fa;border-color:#60a5fa}
+  table.dec td:first-child{font-weight:600;color:#E2E8F0;white-space:nowrap;width:160px}
+  table.dec td.d{color:#cdd3de}
+  .qnum{display:inline-block;min-width:26px;color:var(--gold);font-family:Outfit,sans-serif;font-weight:800}
+</style>
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html" class="active">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / Decisions &amp; Open Questions</div>
+  <div class="eyebrow">The ledger · ready for the ADR</div>
+  <h1>Decisions &amp; Open Questions</h1>
+  <p class="lede">Every decision we've <b style="color:#fff">locked</b> — including a focused interview that settled auth, agents, delegation and onboarding — and the handful still <b style="color:#fff">open</b>. The hand-off sheet for the <span class="mono">/albert</span> ADR and the v0.1.0 plan-spec.</p>
+  <p class="note" style="margin-top:8px">Releases — <span class="rel r1">v0.1.0</span> Foundation · <span class="rel r2">v0.2.0</span> Time &amp; Rules · <span class="rel r3">v0.3.0</span> Connections · <span class="rel r4">v0.4.0</span> Assistant · <span class="rel r5">v1.0.0</span> Integration</p>
+</div></div>
+
+<section><div class="wrap">
+  <div class="eyebrow">Locked decisions</div>
+  <h2>What's settled</h2>
+
+  <h3 style="margin-top:18px">Auth &amp; Onboarding · <span class="tag t-new">settled in interview</span></h3>
+  <table class="dec">
+    <tr><td>Single user</td><td class="d"><b>One user, one password</b> — no multi-user, no RBAC roles, no tenancy, no per-user isolation. Omnipus is a single-user self-hosted app.</td></tr>
+    <tr><td>Sensitive settings</td><td class="d">Protected by <b>re-typing the same password</b> (sudo-style confirm) — model/billing keys, channel setup, security, deletes. <b>Not</b> a second credential. Maps onto the existing <span class="mono">RequireNotBypass</span> guard.</td></tr>
+    <tr><td>Ownership</td><td class="d"><span class="mono">owner=username</span> survives only as <b>attribution</b> ("you" vs which agent) — never an access gate. Workspaces/agents/memory are simply yours.</td></tr>
+    <tr><td>Onboarding</td><td class="d">3 steps: <b>"What should I call you?"</b> → set password → add a model key. Then <b>auto-provision your Assistant</b> in My Workspace ("meet your assistant").</td></tr>
+    <tr><td>Profile vs Settings</td><td class="d"><b>No user management</b> (single user) — the only account action is <b>password reset</b>. Personal settings (name · password · appearance · sessions · log out) live under a top-right <b>Profile menu</b>; <b>Settings</b> is the app's config (sensitive = password re-type). Removes the multi-user <span class="mono">UsersSection</span>.</td></tr>
+  </table>
+
+  <h3 style="margin-top:18px">Naming &amp; Workspaces · <a href="spaces.html">Workspaces</a></h3>
+  <table class="dec">
+    <tr><td>Container word</td><td class="d"><b>"Workspace"</b> (UX-chosen: Jakob's Law · NNG). One pre-seeded default <b>"My Workspace"</b>; named workspaces for real work. No Personal/General split.</td></tr>
+    <tr><td>Context</td><td class="d">The existing <b>sidebar workspace switcher</b> — no scope "mode". Assistant → My Workspace; other agents → the selected workspace.</td></tr>
+    <tr><td>Code rename</td><td class="d"><b><span class="mono">project → workspace</span> end-to-end</b> (code · contracts · storage) — a <span class="rel r1">v0.1.0</span> migration. <i>Pre-ADR: concept-doc only; executed during implementation.</i></td></tr>
+  </table>
+
+  <h3 style="margin-top:18px">Agents — base agents &amp; sub-agent workers · <span class="tag t-new">settled in interview</span></h3>
+  <table class="dec">
+    <tr><td>Base agents</td><td class="d"><b>Four base agents</b> (re-cast cores) — <b>Mia · Assistant ⭐</b> (default front door) · <b>Jim · Orchestrator</b> (planner/PM) · <b>Ray · Scout</b> (research/summarize) · <b>Ava · Builder</b>. You chat with them; heartbeat · own connections · full memory · default-★ · can delegate. Custom base agents allowed.</td></tr>
+    <tr><td>Re-cut of the cores</td><td class="d"><b>Mia → Assistant ⭐</b> · <b>Jim → Orchestrator</b> · <b>Ray → Scout</b> · <b>Ava → Builder</b> (unchanged) · <b>Max → retired</b>. Automation is a <b>platform surface</b> (Calendar &amp; Automations), not a persona — an optional <a href="plugins.html">marketplace pack</a> if wanted.</td></tr>
+    <tr><td>Sub-agent workers</td><td class="d">The seeded <b>general-purpose worker</b> + custom workers, in their own roster section, each carrying an <span class="mono">executor</span> (native | external-cli {Claude Code · opencode · Codex} | future remote-a2a). <b>No heartbeat · no own connection · ephemeral memory · not chat targets · depth-limited · leaner model.</b> A tool you point at work, not a colleague.</td></tr>
+    <tr><td>Assistant</td><td class="d">A base agent that's <b>yours</b> — Mia, auto-provisioned, bound to My Workspace, cross-workspace recall via its agent-global private room.</td></tr>
+    <tr><td>Beyond base</td><td class="d">Everything past the four base agents — creative-media, ops/devops, smart-home, domain specialists — ships as <a href="plugins.html">marketplace agent packs</a>, not baked in. Preinstalled = 4 base agents + 3 runner drivers (Claude Code · opencode · Codex).</td></tr>
+    <tr><td>Voice field</td><td class="d">A nullable <span class="mono">voice</span> field is added to the agent schema in <span class="rel r1">v0.1.0</span> (additive on the base agents Mia · Jim · Ray · Ava) — <b>unused until TTS</b> in <span class="rel r2">v0.2.0</span>, so adding voices later isn't a contract change.</td></tr>
+  </table>
+
+  <h3 style="margin-top:18px">Delegation &amp; Performance · <a href="delegation.html">Delegation</a></h3>
+  <table class="dec">
+    <tr><td>Two primitives</td><td class="d"><b>Handover</b> = routing (the conversation moves) · <b>Delegation</b> = work. Delegation modes: <b>await · background · task</b>; always to a named agent.</td></tr>
+    <tr><td>v0.1.0 policy</td><td class="d"><b>Start simple</b>: the <b>full policy contract schema</b> (<span class="mono">to · accept_from · modes · depth · budget</span>) ships in <span class="rel r1">v0.1.0</span> (additive, complete) — but only <span class="mono">to + modes</span> are enforced/surfaced now (one policy + a <b>trust-graph screen</b> + gate the 2 currently-ungated work paths). <b>Handover stays open</b> (it only moves your conversation). <span class="mono">accept_from</span> + budget enforcement land later — adding it isn't a contract change.</td></tr>
+    <tr><td>Orchestration</td><td class="d">Plans = a DAG of task-delegations (<span class="mono">blocked_by</span>); a coordinator runs them on <span class="mono">task_status_changed</span>.</td></tr>
+    <tr><td>Max parallel agents</td><td class="d"><b>A v0.1.0 setting</b> (Settings → Performance, behind the password re-type): caps concurrent agent runs; excess queues. <b>CPU/RAM-aware recommendation</b> (e.g. "8 cores · 16 GB → 6"), with an over-limit warning. This <i>is</i> the concurrency window — now user-tunable.</td></tr>
+  </table>
+
+  <h3 style="margin-top:18px">Memory &amp; Learning · <a href="memory.html">Memory</a> · <a href="learning.html">Learning</a></h3>
+  <table class="dec">
+    <tr><td>Two rooms</td><td class="d"><b>Private</b> (per-agent, agent-global) + <b>shared workspace room</b>. 3 tiers + <span class="mono">last-session.md</span>. Today already multi-artifact with idle recap.</td></tr>
+    <tr><td>No embeddings</td><td class="d"><b>bleve BM25</b> + graph (6 edges · MOCs) + query-rephrase; <b>MinHash</b> dedup; <b>no SQLite</b>. The <b>Dreamcatcher</b> distills sessions→memories (a scheduled automation).</td></tr>
+    <tr><td>Foundational split</td><td class="d"><b>Structure</b> (room topology + full file format + 3 tools + start the append-only logs) lands <span class="rel r1">v0.1.0</span> — tied to the Workspace key, refactor if deferred. <b>Behaviour</b> (ranking · graph/MOCs · the Dreamcatcher) is <span class="rel r2">v0.2.0</span> over <b>derived, rebuildable</b> data — no migration.</td></tr>
+  </table>
+
+  <h3 style="margin-top:18px">Tools &amp; Multimodal · <a href="tools.html">Tools</a><a href="plugins.html">Plugins</a></h3>
+  <table class="dec">
+    <tr><td>Providers</td><td class="d"><b>Per-tool pluggable providers</b> — search (Brave · Tavily · Perplexity · SearXNG · GLM · Baidu) + voice-in/STT (Groq · ElevenLabs · audio-model) already multi-provider; add <span class="mono">Synthesizer</span> (TTS) + <span class="mono">ImageProvider</span> (image-gen). The provider-picker <i>is</i> the <b>Integrations</b> screen. <b>API default + optional local sidecar</b> (sovereignty).</td></tr>
+    <tr><td>Agent voices</td><td class="d"><b>One voice per agent</b> — a <span class="mono">voice</span> field on the base agents (Mia · Jim · Ray · Ava), spoken via TTS.</td></tr>
+    <tr><td>Vision</td><td class="d"><b>Image-IN already works</b>; image <b>generation</b> is the new piece (display of images is free either way).</td></tr>
+    <tr><td>Placement</td><td class="d"><span class="rel r1">v0.1.0</span> Integrations UI + mic (voice-in) · <span class="rel r2">v0.2.0</span> per-agent voices (TTS) + image-gen · <span class="rel r5">v1.0.0</span> realtime + local sidecars.</td></tr>
+  </table>
+
+  <h3 style="margin-top:18px">Channels, Email, Calendar &amp; Roadmap · <a href="channels.html">Channels</a> · <a href="roadmap.html">Roadmap</a></h3>
+  <table class="dec">
+    <tr><td>Channels</td><td class="d">Multi-instance <b>Connections</b>; identity = agent | user. <span class="rel r1">v0.1.0</span> ships the instance shape <b>capped at one per type</b> + Connectors UI; <span class="rel r3">v0.3.0</span> lifts the cap. Wire = OpenAPI (not asyncapi).</td></tr>
+    <tr><td>Email</td><td class="d"><b>IMAP/SMTP mailbox in <span class="rel r1">v0.1.0</span></b> (your address + app-password, pure-Go); provider one-click OAuth later (Google → MS Graph).</td></tr>
+    <tr><td>Calendar</td><td class="d">Per workspace; import iCal → OAuth → CalDAV; All + 4 filters. Tasks gain <span class="mono">start·due·recurrence·blocked_by</span> (shapes <span class="rel r1">v0.1.0</span>, live <span class="rel r2">v0.2.0</span>).</td></tr>
+    <tr><td>Foundation-first</td><td class="d">Structural shapes land additively in <span class="rel r1">v0.1.0</span> + the one deliberate Connection migration; later releases add behaviour / lift caps.</td></tr>
+  </table>
+
+  <h3 style="margin-top:18px">Plugins &amp; Marketplaces · <a href="plugins.html">Plugins &amp; Marketplaces</a></h3>
+  <table class="dec">
+    <tr><td>Scope</td><td class="d"><b>Design-now, foundation-only</b> — lock the <b>manifest shape</b> + the <b>marketplace-provider list</b> in <span class="rel r1">v0.1.0</span>; the installer + Marketplaces UI come later. Plugins are declarative <b>bundles</b> (skills + agents + MCP + channels + provider-config) — a composition layer over subsystems Omnipus already ships, <b>not a new runtime</b>.</td></tr>
+    <tr><td>Execution</td><td class="d"><b>Own-process, kernel-confined</b> — a bundle's executable parts (stdio MCP server · localhost sidecar) run as their own process under <b>Landlock/seccomp</b> + signed/verified + explicit consent + deny-by-default. <b>No in-process code</b> (would break single-binary/pure-Go). Remote MCP URLs = egress/SSRF controls + a data-leaves-your-machine consent prompt. (Claude Desktop/Code spawn MCP servers <i>unconfined</i> — Omnipus boxes each one with the kernel sandbox it already has.)</td></tr>
+    <tr><td>Manifest</td><td class="d"><b>Component-level hybrid</b> — an Omnipus-native bundle manifest that reuses the universal unit formats verbatim (<span class="mono">SKILL.md</span> · <span class="mono">.mcp.json</span>) so skills + MCP servers import directly; agents/channels/providers use native formats; consume git-repo <span class="mono">marketplace.json</span> for distribution.</td></tr>
+    <tr><td>Marketplaces</td><td class="d"><b>ClawHub</b> (wired, default) · <b>GitHub-repo-as-source</b> (<span class="mono">InstallFromGitHub</span> already works) first-class in <span class="rel r1">v0.1.0</span>. <b>Second batch</b> (<span class="rel r2">v0.2.0</span>+): the <b>Omnipus Marketplace</b> goes live &amp; <b>replaces ClawHub</b> as the default source · <b>MCP registries</b> (official · Smithery · Glama) · <b>Claude Code git-repo marketplaces</b>.</td></tr>
+    <tr><td>Provider model</td><td class="d">The skill-marketplace provider model is the <b>per-tool/per-Connection provider model a third time</b> — <span class="mono">RegistryManager</span> already coordinates N registries (<span class="mono">SearchAll</span> fans out, partial-failure tolerant). Gap = <span class="mono">RegistryConfig</span> single ClawHub config → <b>list of marketplaces</b>: the same one-time single→list refactor as Connections and tool-providers.</td></tr>
+    <tr><td>Security</td><td class="d"><b>Signed/verified-only by default</b> + kernel sandbox + consent + deny-by-default + <b>password-gated install</b>. Backdrop: <b>12–36% of ClawHub skills</b> carry vulns/malware (Koi · Bitdefender · Snyk) plus real MCP supply-chain breaches.</td></tr>
+  </table>
+
+  <h3 style="margin-top:18px">Agents, Runners &amp; Protocols · <a href="plugins.html">Plugins &amp; Marketplaces</a> · <a href="delegation.html">Delegation</a> · <span class="tag t-new">locked</span></h3>
+  <table class="dec">
+    <tr><td>Base roster</td><td class="d"><b>Four base agents</b> (re-cast cores) — <b>Mia · Assistant</b> ⭐ (default; memory-rich personal front door) · <b>Jim · Orchestrator</b> (planner/PM) · <b>Ray · Scout</b> (research &amp; summarize) · <b>Ava · Builder</b> (agent &amp; skill builder). The minimal set shipped on every install.</td></tr>
+    <tr><td>Max retired</td><td class="d"><b>No Max persona in base.</b> Automation is a <b>platform surface</b> (the Calendar &amp; Automations page) — authored by the <b>Assistant</b> from chat ("want me to do this every morning?") and run by the platform, not a personality. (Available as an optional <a href="plugins.html">marketplace pack</a> if wanted.)</td></tr>
+    <tr><td>Marketplace packs</td><td class="d">Everything beyond the four base agents — Maker/creative-media · ops/devops · smart-home · domain specialists — ships as <b>marketplace agent packs</b>, installed as <a href="plugins.html">plugin bundles</a>, not baked in.</td></tr>
+    <tr><td>Orchestrator</td><td class="d"><b>Supervisor pattern on EXISTING primitives</b> — tasks · <span class="mono">blocked_by</span> DAG · the <a href="delegation.html">delegation graph</a> · Max-parallel · git worktrees. No new engine; it coordinates what's already there.</td></tr>
+    <tr><td>External-agent runners</td><td class="d">A Sub-agent gains an <span class="mono">executor</span> field and can drive <b>another coding agent headless</b>. Universal transport = <b>CLI execution with JSON streaming</b> (<span class="mono">claude -p --output-format stream-json</span> · <span class="mono">codex exec</span> · <span class="mono">opencode run --format json</span>/<span class="mono">serve</span>). Preinstalled drivers: <b>Claude Code · opencode · Codex</b>. Each run is <b>own-process, kernel-confined</b> (Landlock/seccomp) + git-worktree-isolated + signed/consent + deny-by-default; per-run minimal permission grant; auth via credential store; three-level timeouts; egress allowlist. Grounded in existing code (<span class="mono">claude_cli_provider.go</span> · <span class="mono">codex_cli_provider.go</span> · <span class="mono">hook_process.go</span> JSON-RPC-stdio · <span class="mono">hardened_exec.go</span>).</td></tr>
+    <tr><td>Preinstalled agents</td><td class="d">On a fresh install: the <b>4 base agents</b> (Assistant ⭐ · Orchestrator · Scout · Ava) + the <b>3 runner drivers</b> (Claude Code · opencode · Codex). Everything else arrives via marketplace packs.</td></tr>
+    <tr><td>Protocol stance</td><td class="d"><b>MCP</b> (agent→tools/data — Linux-Foundation de-facto) = <b>have</b> (<span class="mono">go-sdk v1.4.1</span>, <span class="mono">pkg/mcp</span>) · <b>ACP</b> (Agent Client Protocol, Zed — host→coding-agent driving) = CLI+JSON-streaming floor <b>now</b>, protocol <b>future</b> (Omnipus becomes an ACP client) · <b>A2A</b> (Agent2Agent, Google→Linux Foundation, 150+ orgs — agent↔agent peers, Agent Cards) = <b>future</b>. Clean layering: <b>MCP → tools · ACP → external coding agents · A2A → other agents</b>.</td></tr>
+    <tr><td>Foundation</td><td class="d">The Sub-agent <span class="mono">executor</span> field + an <span class="mono">ExternalAgentRunner</span> interface are the <span class="rel r1">v0.1.0</span> <b>structural shape</b>; the extra drivers, ACP and A2A are <b>additive with no re-cut</b>.</td></tr>
+  </table>
+
+  <h3 style="margin-top:18px">Protocols — defer behaviour, reserve shape · <span class="tag t-new">locked</span></h3>
+  <p class="note">Three protocols, three layers. Each is <b>deferred in behaviour</b> but <b>hooked in shape</b> in <span class="rel r1">v0.1.0</span> — the refactoring-avoidance rule: defer the driver/wire, reserve the addressable shape.</p>
+  <table class="dec">
+    <tr><td>MCP <span class="mono">agent→tools</span></td><td class="d"><b>Have it.</b> <span class="mono">modelcontextprotocol/go-sdk v1.4.1</span>, <span class="mono">pkg/mcp</span> — shipped. The tool/data plug already in place.</td></tr>
+    <tr><td>ACP <span class="mono">host→agent</span></td><td class="d"><b>Deferred (additive driver later).</b> Zed Agent Client Protocol — host drives a coding agent. v0.1.0 hook = the <span class="mono">ExternalAgentRunner</span> interface is <b>bidirectional</b> (events-out: output · tool-calls · diffs · permission-requests + control-in: permission-decisions · cancel · follow-up-input), <b>consent-routed</b> to the consent/policy layer, and <b>resumable</b> (stable run/session id). Not ACP-only speculation — <b>the CLI floor needs the same shape</b> (Claude Code <span class="mono">stream-json</span> + <span class="mono">--permission-prompt-tool</span> + <span class="mono">--resume</span>).</td></tr>
+    <tr><td>A2A <span class="mono">agent↔agent</span></td><td class="d"><b>Deferred — protocol lands <span class="rel r5">v1.0.0</span></b> (server: expose Omnipus agents w/ Agent Card · client: call remote agents · discovery · auth). Agent2Agent (Google → Linux Foundation). v0.1.0 hooks = (1) the <b>work-target is an agent-reference</b> — delegation <span class="mono">to</span> + sub-agent <span class="mono">executor</span> admit a future <span class="mono">remote-a2a</span> kind (v0.1.0 resolves local + CLI only); (2) <b>Card-projectable agent identity</b> — a stable id + declared skills/capabilities/description a future <b>Agent Card</b> (<span class="mono">/.well-known/agent.json</span>) projects from (no new fields — just don't tie identity to something un-addressable).</td></tr>
+    <tr><td>The rule</td><td class="d"><b>Defer the behaviour, reserve the shape.</b> Handover stays <b>local</b> (conversation routing is in-process). The <b>A2A wire format is external</b> — it does <b>not</b> touch <span class="mono">openapi.yaml</span>/<span class="mono">asyncapi.yaml</span>, so <b>Constraint #8 is untouched</b>.</td></tr>
+  </table>
+
+  <h3 style="margin-top:18px">Skills &amp; self-improvement · <a href="plugins.html">Plugins &amp; Marketplaces</a> · <a href="learning.html">Learning</a> · <span class="tag t-new">locked</span></h3>
+  <table class="dec">
+    <tr><td>Default skills</td><td class="d"><b><span class="mono">summarize · skill-authoring · plan · daily-briefing</span></b> — a tiny embedded default set, shipped via <span class="mono">go:embed</span> + a first-boot seed (today filesystem-seeded only).</td></tr>
+    <tr><td>skill-authoring</td><td class="d"><b>Full lifecycle</b> — create · <b>edit/refine</b> · validate · version · deprecate. <b>Replaces the one-shot skill-creator</b>; the <b>edit</b> verb is the self-improvement.</td></tr>
+    <tr><td>New v0.1.0 capability</td><td class="d"><b><span class="mono">system.skill.create</span> + <span class="mono">system.skill.edit</span></b> — the self-improvement verb. Today only <span class="mono">install / remove / search / list</span> exist — <b>and as STUBS</b>, not wired to the real <span class="mono">pkg/skills</span> engine. <b>Two v0.1.0 items</b>: wire the stubs + add create/edit.</td></tr>
+    <tr><td>Scoping</td><td class="d"><b>Per-agent allowlist + progressive disclosure</b> (anti-bloat). Single-user ⇒ gating is <b>per-agent policy + password-re-type consent</b>, not RBAC roles. Skill writes are <b>consent-gated + versioned</b> (rollback/review).</td></tr>
+    <tr><td>Procedural memory</td><td class="d">Skills are the <b>editable arm</b> of self-improvement; the Dreamcatcher / <a href="learning.html">Learning</a> loops propose skill create/edit from repeated workflows.</td></tr>
+  </table>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Open questions</div>
+  <h2>What's left</h2>
+  <p class="sub">The interview closed the big ones (auth, tenancy, agents, delegation). What remains is minor, deferred, or tune-with-traffic.</p>
+  <div class="grid g2">
+    <div class="card"><h3>Small calls for the ADR</h3><ul class="clean">
+      <li><span class="qnum">Q1</span> <b><span class="mono">blocked_by</span> validation</b> — ship the field <b>inert</b> until a cycle/orphan validator exists; don't let the UI write unvalidated edges.</li>
+      <li><span class="qnum">Q2</span> <b>Sub-agent "test run"</b> — do Sub agents get a manual test-run button, or are they invoke-only via delegation? <span class="muted">lean: a test-run button</span></li>
+      <li><span class="qnum">Q3</span> <b>Custom agent creation</b> — can the user create custom Primary <i>and</i> Sub agents, and is that itself password-gated? <span class="muted">lean: yes; not gated (it's yours)</span></li>
+    </ul></div>
+    <div class="card"><h3>Deferred / tune with traffic</h3><ul class="clean">
+      <li><span class="qnum">Q4</span> <b>Memory weights</b> — confidence drift, recall ranking, archive &amp; Dreamcatcher thresholds → spec defaults, tune post-launch.</li>
+      <li><span class="qnum">Q5</span> <b>Provider OAuth lifecycle</b> — Gmail/Calendar <span class="mono">watch</span> renewal + <span class="mono">410</span> resync, the heavy part of <span class="rel r5">v1.0.0</span> (Google first).</li>
+      <li><span class="qnum">Q6</span> <b>Default seed migration</b> — new installs seed <span class="mono">"My Workspace"</span>; existing <span class="mono">"Main"</span> renamed in place.</li>
+      <li><span class="qnum">Q7</span> <b>Realtime approach</b> — native speech-to-speech vs a streaming STT→LLM→TTS pipeline → defer to <span class="rel r5">v1.0.0</span>.</li>
+    </ul></div>
+  </div>
+  <div class="callout b">Nothing here blocks v0.1.0. The grounded as-is for delegation is in the <a href="delegation-audit.html">audit</a>; the cost story is on <a href="impact.html">Impact</a>; the release shape is on the <a href="roadmap.html">Roadmap</a>.</div>
+</div></section>
+
+<footer><div class="wrap"><p><a href="roadmap.html" style="color:var(--muted)">← Roadmap</a> &nbsp;·&nbsp; <a href="index.html">Overview ↑</a> &nbsp;·&nbsp; next: an ADR (<span class="mono">/albert</span>) then the v0.1.0 plan-spec</p></div></footer>
+</body></html>

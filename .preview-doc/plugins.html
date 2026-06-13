@@ -1,0 +1,200 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plugins &amp; Marketplaces · Omnipus concept</title><link rel="stylesheet" href="style.css">
+<style>
+  .rel{display:inline-block;padding:1px 8px;border-radius:999px;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;border:1px solid;white-space:nowrap}
+  .r1{color:#D4AF37;border-color:#D4AF37}.r2{color:#fbbf24;border-color:#fbbf24}.rl{color:#60a5fa;border-color:#60a5fa}
+  table.cap td:first-child{font-weight:600;color:#E2E8F0;white-space:nowrap}
+  table.cap td.e{color:#cdd3de}
+  pre.wire{background:#0c0c0f;border:1px solid var(--line);border-radius:12px;padding:16px 18px;overflow-x:auto;font-family:'JetBrains Mono',monospace;font-size:.78rem;line-height:1.55;color:#cdd3de;margin:8px 0}
+  pre.wire .h{color:var(--gold)} pre.wire .m{color:var(--muted)} pre.wire .g{color:var(--green)} pre.wire .b{color:#60a5fa}
+  td.ok{color:#34d399}td.no{color:#f87171}td.part{color:#fbbf24}
+</style>
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html" class="active">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / Plugins &amp; Marketplaces</div>
+  <div class="eyebrow">Extensibility · grounded in code + ecosystem</div>
+  <h1>Plugins &amp; Marketplaces</h1>
+  <p class="lede">Two ways the system grows: <b style="color:#fff">marketplaces</b> you connect to (a provider model — ClawHub, Omnipus, GitHub) and <b style="color:#fff">plugins</b> you install (a bundle of skills · agents · MCP · channels · provider-config). The surprise from the code: <b style="color:#fff">the multi-marketplace machinery already exists</b>, and a plugin is <b style="color:#fff">composition over subsystems we already ship</b> — not a new runtime.</p>
+</div></div>
+
+<!-- LANDSCAPE -->
+<section><div class="wrap">
+  <div class="eyebrow">What's already a plugin system (verified)</div>
+  <h2>The grounded landscape</h2>
+  <p class="sub">Per <span class="mono">docs/internal/architecture/plugin-extensibility-assessment.md</span> — verdicts from <span class="mono">pkg/</span> source, scored against five plugin properties (discoverable · open-registration · config-only activation · runtime-load · uniform lifecycle).</p>
+  <table class="cap">
+    <tr><th>Subsystem</th><th>Verdict</th><th>Evidence</th></tr>
+    <tr><td>Skills</td><td class="ok">already a plugin system</td><td class="e">FS discovery over 3 roots + <span class="mono">SKILL.md</span> + runtime install via <span class="mono">SkillRegistry</span>. P1–P3 full, P4 substantial.</td></tr>
+    <tr><td>MCP</td><td class="ok">the real plugin transport</td><td class="e">Config-driven external servers (stdio <span class="mono">command/args</span> or remote <span class="mono">url</span>), lifecycle-managed, unified into the tool registry (<span class="mono">MCPTool</span>). The only full P1–P5.</td></tr>
+    <tr><td>Channels</td><td class="no">factory-only, not a plugin system</td><td class="e"><span class="mono">RegisterFactory</span> + <span class="mono">init()</span> exist, but activation is a hardcoded if-ladder + typed config fields. Same single→list refactor as Connections.</td></tr>
+    <tr><td>Native tools</td><td class="no">closed registry</td><td class="e">Hand-curated <span class="mono">BuiltinRegistry</span>. Third-party native tools arrive via MCP, not a tool-plugin loader.</td></tr>
+  </table>
+  <div class="callout b">The headline: <b style="color:var(--blue)">Omnipus already has the parts.</b> Skills are plugins, MCP is the executable-extension transport, and <span class="mono">pkg/skills/registry.go</span> already defines a <span class="mono">RegistryManager</span> that <b>coordinates multiple marketplaces</b>. We aren't building an extension system from scratch — we're <b>lighting one up</b> and adding a bundle manifest on top.</div>
+</div></section>
+
+<!-- MARKETPLACES -->
+<section><div class="wrap">
+  <div class="eyebrow">Part 1 · the provider model, a third time</div>
+  <h2>Skill marketplaces = swappable providers</h2>
+  <p class="sub">A "marketplace" is the same pattern the doc already uses twice — <a href="tools.html">per-tool providers</a> and <a href="channels.html">multi-instance Connections</a>. Configure several; search fans out across all of them.</p>
+  <div class="grid g2">
+    <div class="card"><h3>Already in code</h3><ul class="clean">
+      <li><span class="mono">SkillRegistry</span> interface + <span class="mono">RegistryManager</span> — <span class="mono">AddRegistry</span> / <span class="mono">GetRegistry(name)</span></li>
+      <li><span class="mono">SearchAll</span> <b>fans out across every registry</b>, tolerates partial failure, sorts by score</li>
+      <li><span class="mono">ClawHubRegistry</span> wired (default <span class="mono">clawhub.ai</span>); <span class="mono">InstallFromGitHub</span> installs from any repo, SSRF-guarded + hash-verified</li>
+      <li>Each result already carries <b>verified / malware / suspicious</b> flags</li>
+    </ul></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>The one structural gap</h3><p class="note"><span class="mono">RegistryConfig</span> holds a <b>single typed</b> ClawHub config. To connect many marketplaces it becomes a <b>list</b> — the identical single→list refactor as Connection-as-instance and tool-providers. <b>Do all three together, once, in v0.1.0.</b></p>
+      <ul class="clean" style="margin-top:8px">
+        <li><b>v0.1.0 first-class</b> — ClawHub (default) · GitHub repo</li>
+        <li><b>Second batch</b> — <b>Omnipus Marketplace</b> goes live &amp; <b>replaces ClawHub</b> as default · MCP registries (official · Smithery · Glama) · Claude Code git-repo marketplaces</li>
+      </ul>
+    </div>
+  </div>
+  <pre class="wire"><span class="h">Settings > Marketplaces</span>                                   <span class="m">[re-type password to edit]</span>
+  ────────────────────────────────────────────────────────────
+  <span class="g">ClawHub</span>             https://clawhub.ai          enabled   verified-only [x]  <span class="m">(default)</span>
+  <span class="g">GitHub</span>              github.com/&lt;owner&gt;/&lt;repo&gt;    on-demand install
+  <span class="m">Omnipus Market      https://market.omnipus.ai   2nd batch — becomes default, replaces ClawHub</span>
+  ────────────────────────────────────────────────────────────
+  search fans out across all enabled  ·  install is sandboxed + hash-verified</pre>
+  <p class="note" style="margin-top:4px">The <b>Marketplaces UI</b> itself is deferred; the <b>provider-list shape</b> is the v0.1.0 structural piece.</p>
+</div></section>
+
+<!-- DEFAULT SKILLS + AUTHORING LOOP -->
+<section><div class="wrap">
+  <div class="eyebrow">Part 1b · default skills &amp; the self-improving authoring loop</div>
+  <h2>Ship few, scope per agent, let them improve</h2>
+  <p class="sub">Ship a <b>tiny embedded default set</b> — the bloat lesson is loud: Hermes ships ~70 skills and OpenClaw auto-loads 53, and users end up hand-whitelisting down to ~9. We ship <b>4</b> + a <b>per-agent allowlist from day one</b>. Embedded via <span class="mono">go:embed</span> + a first-boot seed (today they're filesystem-seeded only — a single-binary shippability gap).</p>
+  <table class="cap">
+    <tr><th>Skill / capability</th><th>tier</th><th>Mia · Assistant ⭐</th><th>Jim · Orchestrator</th><th>Ray · Scout</th><th>Ava · Builder</th></tr>
+    <tr><td><span class="mono">summarize</span></td><td class="e">embedded default</td><td class="ok">✓</td><td>○</td><td class="ok">✓</td><td>○</td></tr>
+    <tr><td><span class="mono">daily-briefing</span></td><td class="e">embedded default</td><td class="ok">✓</td><td>—</td><td>—</td><td>—</td></tr>
+    <tr><td><span class="mono">plan</span></td><td class="e">embedded default</td><td>○</td><td class="ok">✓</td><td>○</td><td>○</td></tr>
+    <tr><td><span class="mono">skill-authoring</span></td><td class="e">embedded default</td><td>○</td><td>○</td><td>○</td><td class="ok">✓</td></tr>
+    <tr><td><span class="mono">system.skill.create / .edit</span></td><td class="e">NEW · v0.1.0</td><td class="part">ask</td><td class="part">ask</td><td class="part">ask</td><td class="ok">allow</td></tr>
+    <tr><td><span class="mono">system.skill.{install,remove,search,list}</span></td><td class="e">exists as STUBS → wire</td><td>○</td><td>○</td><td>○</td><td class="ok">✓</td></tr>
+    <tr><td><span class="mono">github</span></td><td class="e">available, off · dev</td><td>○</td><td>○</td><td>—</td><td>—</td></tr>
+    <tr><td>doc / pdf read</td><td class="e">available, off</td><td>○</td><td>—</td><td class="ok">✓</td><td>—</td></tr>
+    <tr><td><span class="mono">google-workspace</span> inbox/cal</td><td class="e">PACK · v0.3 OAuth</td><td class="ok">✓*</td><td>—</td><td>—</td><td>—</td></tr>
+    <tr><td>image-gen · voice/TTS</td><td class="e">PACK · v0.2 Maker</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+  </table>
+  <p class="note" style="margin-top:4px">✓ = on by default · ○ = available, off · — = n/a · <b>*</b> once the pack is installed. Scoping = <b>per-agent allowlist + progressive disclosure</b> (on-demand), so a default install stays lean and each agent sees only what it needs.</p>
+  <div class="callout b">The authoring loop: today only <span class="mono">install / remove / search / list</span> exist — <b>and as stubs</b>. The missing piece is <b>system.skill.create</b> + <b>system.skill.edit</b> — the <span class="mono">skill_manage</span> equivalent that turns a one-shot generator into a <b>self-improving loop</b>: an agent codifies a repeated workflow as a skill, then <b>refines it after each use</b> via the <b>edit</b> verb. <span class="mono">skill-authoring</span> is the full lifecycle (create · <b>edit/refine</b> · validate · version · deprecate) and <b>replaces the one-shot skill-creator</b>. Writes are <b>consent-gated + versioned</b> (rollback / review). This is the editable arm of <a href="learning.html">Learning</a> (procedural memory).</div>
+  <p class="note" style="margin-top:8px">Two v0.1.0 work items: <b>(a)</b> WIRE the 4 stub tools (<span class="mono">install / remove / search / list</span>) to the real <span class="mono">pkg/skills</span> engine; <b>(b)</b> ADD <span class="mono">system.skill.create</span> / <span class="mono">.edit</span>. The engine (<span class="mono">SkillInstaller</span> · <span class="mono">RegistryManager</span> · <span class="mono">ClawHubRegistry</span> · loader) is built; the agent-facing <b>tool surface is hollow + missing the authoring verbs</b>.</p>
+</div></section>
+
+<!-- PLUGINS / BUNDLE -->
+<section><div class="wrap">
+  <div class="eyebrow">Part 2 · plugins as bundles</div>
+  <h2>A plugin = composition over what we already ship</h2>
+  <p class="sub">Your definition — <i>a package of skills + provider config + MCPs + channels + agents</i> — is the convergent industry model (OpenClaw's WhatsApp plugin bundles a tool + skill + provider + channel; Claude Code plugins bundle skills + agents + hooks + MCP). Omnipus's twist: the bundle is <b>declarative</b>, and its installer just fans each component out to the subsystem that already owns it.</p>
+  <pre class="wire"><span class="h">omnipus-plugin.json</span>  <span class="m">— component-level hybrid manifest</span>
+  {
+    "name": "support-desk",  "version": "1.2.0",  "signature": "...",
+    <span class="g">"skills"</span>:    "./skills/",         <span class="m">// SKILL.md verbatim — ecosystem-portable</span>
+    <span class="g">"mcpServers"</span>: "./.mcp.json",         <span class="m">// .mcp.json verbatim — ecosystem-portable</span>
+    <span class="b">"agents"</span>:    "./agents/",         <span class="m">// native AGENT.md + SOUL.md + HEARTBEAT.md</span>
+    <span class="b">"channels"</span>:  "./channels.json",   <span class="m">// native — binds a compiled-in channel</span>
+    <span class="b">"providers"</span>: "./providers.json", <span class="m">// native — per-tool provider config</span>
+    "permissions": { "tools": ["..."], "egress": ["api.x.com"] }
+  }
+  <span class="m">install → skills/ · agents/&lt;id&gt;/ · mcp config · Connection config · provider config</span></pre>
+  <div class="grid g2" style="margin-top:8px">
+    <div class="card"><h3>Component-level hybrid manifest</h3><p class="note">Reuse the <b>universal unit formats</b> verbatim — <span class="mono">SKILL.md</span> + <span class="mono">.mcp.json</span> — so <b>skills &amp; MCP servers from ClawHub / Claude Code marketplaces drop straight in</b>. Agents/channels/providers use Omnipus-native shapes. Distribute via git-repo <span class="mono">marketplace.json</span>.</p></div>
+    <div class="card"><h3>Why not full compatibility?</h3><p class="note">Only <b>skills + MCP servers transfer cleanly</b> across ecosystems. Claude Code agents differ from our <span class="mono">AGENT.md</span>+<span class="mono">SOUL.md</span> (needs a converter); hooks/output-styles/monitors are IDE concepts with no equivalent; <b>OpenClaw plugins are JS</b> — not runnable in a pure-Go binary. So: compat where it's real, native where it isn't.</p></div>
+  </div>
+  <div class="callout b"><b>Beyond the 4 base agents = installable agent packs.</b> Everything past the four cores — Maker/creative-media, ops/devops, smart-home, domain specialists, and Max-style automation — ships as an <b>agent pack</b>: a bundle of <b>agent + skills + providers</b> (the same manifest above). That's why the base stays at <b>four</b> — the rest is opt-in, marketplace-installed, not compiled in.</div>
+  <div class="callout">No new runtime, no in-process code: a bundle carries <b>declarations</b>; its only <b>executable</b> parts are MCP servers / sidecars — which already run out-of-process. This keeps the <b>single static binary, pure-Go, no-CGo</b> constraints intact.</div>
+</div></section>
+
+<!-- EXECUTION / ISOLATION -->
+<section><div class="wrap">
+  <div class="eyebrow">Part 3 · execution, runners &amp; isolation — the differentiator</div>
+  <h2>Own process, kernel-confined</h2>
+  <p class="sub">A bundle's executable parts (a stdio MCP server, a localhost sidecar like Signal's <span class="mono">signal-cli</span>) run as their <b>own process</b> — there is no shared in-process sandbox, because they're separate processes. The question is what wraps that process. The same model extends to a bigger move: a <b>Sub-agent can run another coding agent headless.</b></p>
+  <table class="cap">
+    <tr><th>&nbsp;</th><th>Claude Desktop / Code &amp; most hosts</th><th>Omnipus</th></tr>
+    <tr><td>Process model</td><td class="e">stdio MCP = spawned child; remote = HTTP</td><td class="e">same — own process per executable extension</td></tr>
+    <tr><td>OS confinement</td><td class="no">none — runs with your full user privileges</td><td class="ok">Landlock FS allow-list + seccomp syscall filter, per process</td></tr>
+    <tr><td>Safety model</td><td class="part">call-time approval only (gates the call, not the code)</td><td class="ok">sandbox + signed/verified + explicit consent + deny-by-default</td></tr>
+    <tr><td>Remote servers</td><td class="e">OAuth</td><td class="e">egress/SSRF rules + "data leaves your machine" consent</td></tr>
+    <tr><td>Track record</td><td class="no">fake Postmark MCP exfiltrating email · Figma MCP RCE · Smithery supply-chain</td><td class="ok">the kernel cage is exactly what those attacks needed and didn't face</td></tr>
+  </table>
+  <div class="callout b">This is the sovereign edge: <b>same process model as everyone, a kernel cage almost nobody applies.</b> A hostile MCP server in Omnipus can be boxed into "see only this workspace, make only these syscalls, reach only these hosts" — Landlock + seccomp are <b>already in the binary</b>.</div>
+
+  <h3 style="margin-top:22px">External-agent runners — a Sub-agent that drives Claude Code, opencode or Codex</h3>
+  <p class="sub">A Sub-agent gains an <span class="mono">executor</span> field. Its default is our own loop; set it to a <b>runner driver</b> and the Sub-agent dispatches the work to another coding agent running headless. The <b>universal transport is CLI execution with JSON streaming</b> — the only universal way to drive any of them: <span class="mono">claude -p --output-format stream-json</span> · <span class="mono">codex exec</span> (JSON) · <span class="mono">opencode run --format json</span> / <span class="mono">opencode serve</span>. <b>Preinstalled drivers: Claude Code · opencode · Codex.</b></p>
+  <pre class="wire"><span class="h">Sub-agent · executor</span>  <span class="m">— default = native loop; or a runner driver</span>
+  {
+    "name": "refactor-worker",  "class": "sub",
+    <span class="g">"executor"</span>: <span class="b">"claude-code"</span>     <span class="m">// or "opencode" · "codex" · "native" · (later) "remote-a2a"</span>
+    <span class="m">// transport: CLI + JSON streaming — claude -p --output-format stream-json ·</span>
+    <span class="m">//            codex exec (JSON) · opencode run --format json / opencode serve</span>
+  }
+  <span class="m">each run: own-process · Landlock+seccomp · git-worktree-isolated · signed/consent · deny-by-default</span>
+  <span class="m">per-run minimal permission grant · creds via the credential store · egress allowlist</span>
+  <span class="m">three-level timeouts: per-call · per-task · per-process</span></pre>
+  <div class="callout b">The runner contract — <span class="mono">ExternalAgentRunner</span> — is <b>bidirectional</b>, not fire-and-forget: <b>events-out</b> (output · tool-calls · diffs · permission-requests) and <b>control-in</b> (permission-decisions · cancel · follow-up-input), with every permission-request <b>consent-routed</b> through Omnipus's own consent/policy layer — and <b>resumable</b> via a stable run/session ID. <b>This is not ACP-only:</b> the CLI floor needs exactly this shape too — Claude Code's <span class="mono">--permission-prompt-tool</span> is the permission round-trip and <span class="mono">--resume</span> is the stable session ID. So the bidirectional, consent-routed, resumable interface is the <b>v0.1.0 structural shape</b>; a literal ACP driver slots in behind it later with no re-cut. A reserved future <span class="mono">executor</span> kind — <span class="mono">remote-a2a</span> — lets the Orchestrator's fleet later include <b>remote A2A arms</b> alongside native + external-CLI ones.</div>
+  <table class="cap">
+    <tr><th>Runner property</th><th>How</th></tr>
+    <tr><td>Isolation</td><td class="e">own-process, kernel-confined (Landlock/seccomp) + git-worktree-isolated — the same cage as a bundled MCP, applied to a whole agent</td></tr>
+    <tr><td>Permission</td><td class="e">deny-by-default; each run gets a <b>pre-granted minimal</b> permission set; signed + explicit consent</td></tr>
+    <tr><td>Auth &amp; egress</td><td class="e">auth via the credential store (no plaintext); egress allowlist per run</td></tr>
+    <tr><td>Timeouts</td><td class="e">three levels — per-call · per-task · per-process</td></tr>
+  </table>
+  <div class="callout">Grounded in code that already exists: <span class="mono">pkg/providers/claude_cli_provider.go</span> + <span class="mono">codex_cli_provider.go</span> already spawn the claude/codex CLIs as LLM providers; <span class="mono">pkg/agent/hook_process.go</span> already speaks <b>JSON-RPC-2.0-over-stdio</b>; <span class="mono">pkg/sandbox/hardened_exec.go</span> is the sandbox path. The runner <b>reuses existing machinery</b> — it isn't a new subsystem.</div>
+
+  <h3 style="margin-top:22px">Protocol stack — three layers, each DEFERRED in behaviour but HOOKED in shape</h3>
+  <p class="sub">The agent space has converged on a small set of de-facto standards. The rule is the same for all three: <b>defer the behaviour/driver, reserve the shape</b> — so the protocol slots in later with no re-cut. Omnipus's stance, audited against the codebase:</p>
+  <table class="cap">
+    <tr><th>Layer</th><th>Standard</th><th>Hook now · protocol later</th></tr>
+    <tr><td>Omnipus → tools/data</td><td class="e"><b>MCP</b> (Model Context Protocol) — Linux-Foundation de-facto standard for agent→tools</td><td class="ok"><b>have</b> — <span class="mono">go-sdk v1.4.1</span>, <span class="mono">pkg/mcp</span></td></tr>
+    <tr><td>Omnipus → external coding agents</td><td class="e"><b>ACP</b> (Agent Client Protocol, Zed; JSON-RPC over stdio) — the de-facto for host/editor driving a coding agent</td><td class="part"><b>CLI floor now</b> (CLI + JSON streaming — drives any agent) · the <b>bidirectional-runner shape is reserved</b> (events-out + control/permission-in, consent-routed, resumable — the CLI floor needs it too) · <b>protocol-driver later</b> (Omnipus becomes an ACP client behind the same interface)</td></tr>
+    <tr><td>Omnipus agents ↔ other agents</td><td class="e"><b>A2A</b> (Agent2Agent, Google → Linux Foundation, 150+ orgs) — HTTP+JSON, Agent Cards at <span class="mono">/.well-known/agent.json</span>, OAuth2/OIDC; the de-facto agent-to-agent peer standard</td><td class="part"><b>hooks now</b> — work-target is an <b>agent-reference</b> (delegation <span class="mono">to</span> + sub-agent <span class="mono">executor</span> admit a future <span class="mono">remote-a2a</span> kind; v0.1.0 resolves local + CLI only) + <b>Card-projectable agent identity</b> · <b>protocol v1.0.0</b> (server + client + discovery + auth)</td></tr>
+  </table>
+  <div class="callout b">Three protocols, all LOCKED, each <b>deferred in behaviour but hooked in shape</b>: <b>MCP</b> (→ tools — <b>have</b>) · <b>ACP</b> (→ external coding agents — <b>CLI now</b>, bidirectional-runner shape reserved, <b>protocol-driver later</b>) · <b>A2A</b> (↔ other agents — <b>agent-reference + Card-identity hooks now</b>, <b>protocol v1.0.0</b>). The hooks that land in v0.1.0 are exactly the <b>persisted/structural</b> ones: the bidirectional, consent-routed, resumable <span class="mono">ExternalAgentRunner</span> interface; the work-target as an <span class="mono">executor</span>/<span class="mono">to</span> <b>agent-reference</b>; Card-projectable identity. Drivers, the ACP wire and the A2A server/client are <b>additive with no re-cut</b>. <b>Handover stays LOCAL</b> (conversation routing is in-process), and the <b>A2A wire format is EXTERNAL</b> — it never touches the openapi/asyncapi contract. (Acronym collision, for the record: BeeAI's "Agent Communication Protocol" is folding into A2A; "Agent Commerce Protocol"/UCP is a separate commerce vertical — neither is what we mean by ACP.)</div>
+</div></section>
+
+<!-- SECURITY -->
+<section><div class="wrap">
+  <div class="eyebrow">The perimeter is the attack surface</div>
+  <h2>Security posture</h2>
+  <p class="sub">Independent audits put <b>12–36% of ClawHub skills</b> carrying vulnerabilities or malware (Koi · Bitdefender · Snyk), and MCP has had real supply-chain breaches. The extension perimeter is the #1 risk in this whole space — so deny-by-default is non-negotiable.</p>
+  <div class="grid g3">
+    <div class="card" style="border-color:var(--gold-dim)"><h3>🔏 Signed &amp; verified</h3><p class="note">Verified-only by default; hash verification on install (already in the registry); the malware/suspicious flags surfaced before install.</p></div>
+    <div class="card"><h3>🧱 Sandboxed</h3><p class="note">Every spawned MCP/sidecar boxed by Landlock + seccomp with a per-plugin filesystem + egress allow-list. Remote servers get SSRF/egress controls.</p></div>
+    <div class="card"><h3>🔐 Consent &amp; gate</h3><p class="note">Install + each granted permission behind the single password re-type; deny-by-default tool policy; explicit per-plugin capability consent.</p></div>
+  </div>
+</div></section>
+
+<!-- ROADMAP -->
+<section><div class="wrap">
+  <div class="eyebrow">Where it lands</div>
+  <h2>Sequencing — shapes now, machinery later</h2>
+  <div class="grid g3">
+    <div class="card" style="border-color:var(--gold-dim)"><h3><span class="rel r1">v0.1.0</span> Lock the shapes</h3><ul class="clean">
+      <li>The <b>plugin bundle manifest</b> (component-level hybrid — <span class="mono">SKILL.md</span> + <span class="mono">.mcp.json</span> verbatim, native agents/channels/providers)</li>
+      <li>The <b>marketplace-provider list</b> — <span class="mono">RegistryConfig</span> single→list (same one-time refactor as Connections / tool-providers)</li>
+      <li>ClawHub (default) + GitHub as configurable marketplaces</li>
+    </ul></div>
+    <div class="card"><h3><span class="rel r2">v0.2.0</span>+ Machinery</h3><ul class="clean">
+      <li>The <b>plugin installer</b> (fan-out to subsystems) + <b>Marketplaces UI</b></li>
+      <li><b>Own-process kernel-confined</b> exec for bundled MCP/sidecars (signed · consent · deny-by-default)</li>
+      <li>The <b>Omnipus Marketplace</b> goes live &amp; <b>replaces ClawHub</b> as default; more providers — MCP registries · Claude Code git-repo marketplaces</li>
+    </ul></div>
+    <div class="card"><h3><span class="rel rl">later</span> Optional</h3><ul class="clean">
+      <li><b>WASM (wazero)</b> — pure-Go, in-process-isolated runtime for bundled <i>logic</i> without a subprocess. Strongest isolation, but a large new subsystem and no ecosystem targets it — flagged, not committed.</li>
+    </ul></div>
+  </div>
+  <div class="callout b">Refactoring-avoidance: the <b>manifest shape</b> + the <b>marketplace-provider list</b> are persisted/structural → they land in v0.1.0 so bundles never need migrating. The <b>installer, UI, more providers, and the sandbox-wrapping of bundled processes</b> are additive behaviour → they layer on with no re-cut. See <a href="roadmap.html">Roadmap</a> · <a href="decisions.html">Decisions</a>.</div>
+</div></section>
+
+<footer><div class="wrap"><p><a href="tools.html" style="color:var(--muted)">← Tools</a> &nbsp;·&nbsp; Next: <a href="memory.html">Agent Memory →</a> &nbsp;·&nbsp; Grounded in <span class="mono">pkg/skills</span> · <span class="mono">pkg/mcp</span> · the plugin-extensibility assessment · and prior art (ClawHub · MCP registries · Claude Code &amp; OpenClaw plugins).</p></div></footer>
+</body></html>

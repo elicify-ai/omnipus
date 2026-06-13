@@ -1,0 +1,147 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roadmap &amp; Release Plan · Omnipus concept</title><link rel="stylesheet" href="style.css">
+<style>
+  .rel{display:inline-block;padding:1px 8px;border-radius:999px;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;border:1px solid;white-space:nowrap}
+  .r1{color:#D4AF37;border-color:#D4AF37}.r2{color:#fbbf24;border-color:#fbbf24}.r3{color:#34d399;border-color:#34d399}.r4{color:#a78bfa;border-color:#a78bfa}.r5{color:#60a5fa;border-color:#60a5fa}
+  table.rt td:first-child{white-space:nowrap}
+  table.rt td.b{color:#8b8b97}
+</style>
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html" class="active">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / Roadmap &amp; release plan</div>
+  <div class="eyebrow">How we ship it · v0.1.0 → v1.0.0</div>
+  <h1>Roadmap &amp; release plan</h1>
+  <p class="lede"><b style="color:#fff">v0.1.0 is the foundation</b> — it lands every structural <i>shape</i> (additive) plus the <b style="color:#fff">one deliberate Connection migration</b>, done up front, and stabilizes the build. Every release after only <b style="color:#fff">adds behaviour</b> or <b style="color:#fff">lifts a cap</b>. The foundation is never re-cut.</p>
+</div></div>
+
+<!-- PRINCIPLE -->
+<section><div class="wrap">
+  <div class="eyebrow">The governing rule</div>
+  <h2>Front-load the shapes, defer the behaviour</h2>
+  <p class="sub">The expensive refactors here are <b>wire-format</b>, <b>scoping-key</b> and <b>config-shape</b> changes — each ripples through generated types, storage and UI. So we make all of them <b>once, in v0.1.0</b>: most are <b>additive and behaviour-constrained</b> (new nullable task fields, agent <span class="mono">kind</span>, a delegation-policy type, the Workspace scoping key), plus the <b>one deliberate breaking migration</b> — the Connection-as-instance config shape (one-field-per-type → list, new credential keys, the openapi <span class="mono">ChannelEntry</span>/<span class="mono">ChannelConfigureRequest</span> change). Doing that one migration up front <i>is</i> the thesis. Later releases lift caps and fill behaviour against shapes that never move.</p>
+  <div class="grid g2" style="margin-top:6px">
+    <div class="card" style="border-color:rgba(248,113,113,.3)"><h3>The old trap (avoided)</h3><ul class="clean">
+      <li>Ship a "Connectors" list over a still-singleton backend → rebuilt at multi-instance</li>
+      <li>Ship an empty Calendar shell → rebuilt when data lands</li>
+      <li>Defer the Connection config migration → it hits a feature release as a breaking change</li>
+    </ul></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>The rule (followed)</h3><ul class="clean">
+      <li>Do the <b>Connection-as-instance</b> config migration now (cap at one) → v0.3 just lifts the cap, no second reshape</li>
+      <li>Land the <b>Workspace key</b> + pre-seeded My Workspace now → v0.4 just lights up the My Workspace's PA features</li>
+      <li>Land <b>optional <span class="mono">instance_id</span></b> on the in-process bus structs now → later releases populate it</li>
+      <li>Derived data (indexes, graph map, ranking) is rebuildable → free to defer; persisted <b>shapes</b> + append-only <b>logs</b> start in v0.1.0</li>
+    </ul></div>
+  </div>
+  <div class="fig" style="margin-top:14px">
+  <svg viewBox="0 0 980 120" width="100%" role="img" font-family="Inter,sans-serif">
+    <defs><marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5f6675"/></marker></defs>
+    <line x1="60" y1="58" x2="930" y2="58" stroke="#2a2a31" stroke-width="2" marker-end="url(#a)"/>
+    <g font-family="JetBrains Mono" font-size="11.5" text-anchor="middle">
+      <circle cx="95" cy="58" r="8" fill="#D4AF37"/><text x="95" y="36" fill="#D4AF37" font-weight="700">v0.1.0</text><text x="95" y="84" fill="#8b8b97" font-family="Inter" font-size="11">Foundation</text>
+      <circle cx="300" cy="58" r="7" fill="#fbbf24"/><text x="300" y="36" fill="#fbbf24" font-weight="700">v0.2.0</text><text x="300" y="84" fill="#8b8b97" font-family="Inter" font-size="11">Time &amp; Rules</text>
+      <circle cx="500" cy="58" r="7" fill="#34d399"/><text x="500" y="36" fill="#34d399" font-weight="700">v0.3.0</text><text x="500" y="84" fill="#8b8b97" font-family="Inter" font-size="11">Connections</text>
+      <circle cx="700" cy="58" r="7" fill="#a78bfa"/><text x="700" y="36" fill="#a78bfa" font-weight="700">v0.4.0</text><text x="700" y="84" fill="#8b8b97" font-family="Inter" font-size="11">Assistant</text>
+      <circle cx="900" cy="58" r="7" fill="#60a5fa"/><text x="900" y="36" fill="#60a5fa" font-weight="700">v1.0.0</text><text x="900" y="84" fill="#8b8b97" font-family="Inter" font-size="11">Integration</text>
+    </g>
+  </svg>
+  <div class="figcap">Each release strictly builds on the one before — no release reshapes an earlier one's data.</div>
+  </div>
+</div></section>
+
+<!-- v0.1.0 -->
+<section><div class="wrap">
+  <div class="eyebrow">The foundation</div>
+  <h2><span class="rel r1">v0.1.0</span> · Foundation — lock the shapes, ship the IA, stabilize</h2>
+  <p class="sub">Deliberately <b>shape-heavy and behaviour-light</b>: additive schema + an IA shell that sits on real data + the existing engines surfaced. Low runtime risk; maximum structural runway.</p>
+  <div class="grid g3">
+    <div class="card" style="border-color:var(--gold-dim)"><h3>Shapes — additive + one migration</h3><ul class="clean">
+      <li><b>Additive:</b> <b>Workspace</b> scoping key on tasks/memory/calendar/connections (My Workspace pre-seeded; the sidebar workspace switcher already sets context)</li>
+      <li><b>Additive:</b> agent <b><span class="mono">kind</span></b> + nullable <b><span class="mono">voice</span></b> field · the <b>full delegation-policy contract</b> (<span class="mono">to · accept_from · modes · depth · budget</span>) — complete schema; only <span class="mono">to</span>+<span class="mono">modes</span> enforced now, <span class="mono">accept_from</span>/budget later</li>
+      <li><b>Additive:</b> task fields <span class="mono">start · due · recurrence · blocked_by</span> (nullable)</li>
+      <li><b>Memory structure + start the logs</b> (tied to the Workspace key): room topology (private per-agent <span class="mono">agents/&lt;id&gt;/.omnipus/</span> + shared <span class="mono">&lt;workspace&gt;/.omnipus/</span>) + the <b>full per-memory file format</b> (every frontmatter field present even if unused → files never migrate) + 3 tools (<span class="mono">remember/recall/retrospective</span>) <b>replacing monolithic <span class="mono">MEMORY.md</span></b> + <b>bleve</b> FTS recall + <b>start the append-only event logs</b> (<span class="mono">sessions/</span> firehose · <span class="mono">counters.jsonl</span> access/citation · <span class="mono">born_in/cited_in</span> capture) so v0.2 ranking/graph have history and never need a backfill</li>
+      <li><b>Procedural memory — wire the skill tools:</b> connect the stub <span class="mono">system.skill.*</span> tools to the real <span class="mono">pkg/skills</span> engine + add <b><span class="mono">system.skill.create</span>/<span class="mono">.edit</span></b> (the authoring capability — the self-improvement verb; consent-gated + versioned) · <b>embed the default skill set</b> (<span class="mono">summarize · skill-authoring · plan · daily-briefing</span>) via <span class="mono">go:embed</span> + first-boot seed — see <a href="learning.html">Learning</a></li>
+      <li><b>One migration:</b> <b>Connection-as-instance</b> — config one-field-per-type → list (cap one), new credential keys, openapi <span class="mono">ChannelEntry</span>/<span class="mono">ChannelConfigureRequest</span> change</li>
+      <li>optional <b><span class="mono">instance_id</span></b> on the in-process bus structs (Go field — not a contract change), defaulted</li>
+      <li><b>Additive:</b> the <b><span class="mono">ExternalAgentRunner</span> interface</b> is <b>bidirectional + consent-routed + resumable</b> (ACP-ready, and the CLI floor needs it too — <span class="mono">stream-json</span> + permission-prompt + <span class="mono">--resume</span>)</li>
+      <li><b>Additive:</b> the <b>work-target is an agent-reference</b> (delegation <span class="mono">to</span> + sub-agent <span class="mono">executor</span> admit a future <span class="mono">remote-a2a</span> kind) + <b>Card-projectable agent identity</b> (stable id + declared skills → a future A2A Agent Card; no new fields)</li>
+      <li><b>Extensibility shapes</b> — the plugin <b>bundle manifest</b> (component-level hybrid: reuses <span class="mono">SKILL.md</span> + <span class="mono">.mcp.json</span>, native agents/channels/providers) + the <b>marketplace-provider list</b> (<span class="mono">RegistryConfig</span> single→list — the same one-time refactor as Connections/tool-providers). Installer + Marketplaces UI deferred. See <a href="plugins.html">Plugins</a></li>
+    </ul></div>
+    <div class="card"><h3>IA shell + onboarding</h3><ul class="clean">
+      <li><b>Single-user onboarding</b> — "what should I call you?" + <b>one password</b> + add a model key</li>
+      <li><b>One-password auth</b> — sensitive settings <b>re-type the password</b> (sudo-style; maps onto <span class="mono">RequireNotBypass</span>)</li>
+      <li>the existing sidebar <b>workspace switcher</b> (My Workspace + named workspaces) — sets agent-bound context</li>
+      <li><b>Connectors</b> (Channels renamed) — instance list, one per type</li>
+      <li><b>Tools → Integrations</b> provider-picker (search · voice-in already multi-provider — just surfaced) + a <b>mic</b> in chat (voice-in) — see <a href="tools.html">Tools</a><a href="plugins.html">Plugins</a></li>
+      <li><b>Calendar</b> — shows real tasks · schedules · milestones</li>
+      <li><b>Automations</b> — today's Schedules reframed Trigger→Action (read)</li>
+      <li><b>Delegation</b> tab + trust-graph; tasks show date/repeat fields</li>
+    </ul></div>
+    <div class="card"><h3>Roster, agents + stabilize</h3><ul class="clean">
+      <li><b>Four base agents</b> (re-cast cores) — <b>Mia · Assistant ⭐</b> (default front door) · <b>Jim · Orchestrator</b> (planner/PM) · <b>Ray · Scout</b> (research/summarize) · <b>Ava · Builder</b> — plus the <b>sub-agent worker</b> tier (additive <span class="mono">kind</span> + <span class="mono">executor</span>). <b>Max retired</b> from base (automation = platform surface; optional pack); specialists arrive as <a href="plugins.html">marketplace packs</a></li>
+      <li><b>Preinstalled set</b> = the <b>4 base agents</b> + <b>3 runner drivers</b> (<b>Claude Code · opencode · Codex</b>) — everything else via packs</li>
+      <li><b>"Max parallel agents"</b> setting (Settings → Performance) — CPU/RAM-aware recommendation + over-limit warning</li>
+      <li><b>Delegation trust-graph (simple)</b> — close the two ungated work-paths (handover stays open)</li>
+      <li><b>Basic IMAP/SMTP email</b> — one mailbox (your address + app-password, pure-Go)</li>
+      <li>Green CI; harden channels / tasks / schedules / chat — rendering, security, resilience fixes already landed</li>
+    </ul></div>
+  </div>
+  <div class="callout">Why it's safe <i>and</i> foundational: nearly every shape is additive (nullable fields, agent <span class="mono">kind</span>, new contract types, the Workspace key) — they prepare structure without changing runtime behaviour. The one exception is deliberate: the <b>Connection-as-instance</b> config migration (one-field-per-type → list, new credential keys, openapi change), done <i>once, up front</i>, so v0.3 only lifts the cap. The risk surface is schema + migration correctness, which is testable. The UI is <b>real</b>, not placeholder — see <a href="ui-changes.html">UI Changes</a>.</div>
+</div></section>
+
+<!-- BUILD-UP -->
+<section><div class="wrap">
+  <div class="eyebrow">Behaviour, on top of the foundation</div>
+  <h2>The build-out — each depends only on what's below</h2>
+  <table class="rt">
+    <tr><th>Release</th><th>Builds on</th><th>Ships (behaviour)</th><th>Risk</th></tr>
+    <tr><td><span class="rel r2">v0.2.0</span><br>Time &amp; Rules</td><td class="b">v0.1 task fields + calendar/automations shells</td><td>dates &amp; recurrence go live · iCal subscribe · Automations engine (emit <span class="mono">task_status_changed</span>, rule-matcher) · <span class="mono">blocked_by</span> functional → dependency edges + manual sequencing (a task unblocks when its blocker closes) · memory <b>behaviour</b> over derived/rebuildable data — 5 loops + graph/MOCs + ranking + the <b>Dreamcatcher</b> — no migration, structure + logs already shipped in v0.1.0 · <b>procedural-memory loop</b>: the Dreamcatcher <b>proposes skill edits</b> (codify-after-3× / refine-on-half-fail) over the v0.1.0 <span class="mono">system.skill.create</span>/<span class="mono">.edit</span> surface · <b>per-agent voices (TTS)</b> + voice playback + <b>image generation</b></td><td><span class="lvl l-lo"><i></i></span></td></tr>
+    <tr><td><span class="rel r3">v0.3.0</span><br>Connections</td><td class="b">v0.1 instance model + bus <span class="mono">instance_id</span> + basic email</td><td><b>lift the multi-instance cap</b> (shape already there — no reshape) · <b>multi-mailbox email</b> (agent identity) · generic webhook channel · per-agent bots</td><td><span class="lvl l-md"><i></i></span></td></tr>
+    <tr><td><span class="rel r4">v0.4.0</span><br>Assistant</td><td class="b">v0.1 auto-provisioned Assistant · v0.1 basic email · v0.2 calendar</td><td>the Assistant is <b>auto-provisioned in v0.1.0</b>; here the <b>My Workspace + PA capabilities light up</b> · connected-accounts vault · delegated OAuth (Gmail/Cal) · your email/calendar/tasks · the Assistant <b>leverages memory</b> (agent-global private room + workspace recall = "knows you across your workspaces")</td><td><span class="lvl l-hi"><i></i></span></td></tr>
+    <tr><td><span class="rel r5">v1.0.0</span><br>Integration &amp; Scale</td><td class="b">v0.2 deps · v0.1 delegation graph + roster</td><td>scoped API keys · webhook-out · event feed → Zapier/n8n/Make · full orchestration (coordinator, fan-out scale, budget/concurrency redesign) · two-way calendar · CalDAV · <b>provider email OAuth</b> (Google → MS Graph) · <b>realtime voice</b> + local-sidecar providers · <b>A2A</b> server + client (Agent Cards · remote-agent delegation) · <b>ACP</b> driver (richer host→agent control) — both additive behind the v0.1.0 shapes, A2A wire is external (Constraint #8 untouched)</td><td><span class="lvl l-md"><i></i></span></td></tr>
+    <tr><td><span class="rel r2">v0.2.0</span>+<br>Plugins</td><td class="b">v0.1 bundle manifest + marketplace-provider list</td><td>plugin <b>installer</b> + <b>Marketplaces UI</b> + the <b>Omnipus Marketplace</b> goes live &amp; <b>replaces ClawHub</b> as default + more providers (MCP registries · Claude Code git-repo marketplaces) · <b>own-process kernel-confined exec</b> for bundled MCP/sidecars</td><td><span class="lvl l-md"><i></i></span></td></tr>
+  </table>
+  <div class="callout b">Note the dependency chain: <span class="rel r4">v0.4.0</span> (Assistant capabilities) builds on <b>basic email</b> + the <b>auto-provisioned Assistant</b> (<span class="rel r1">v0.1.0</span>), multi-mailbox email (<span class="rel r3">v0.3.0</span>) <i>and</i> calendar (<span class="rel r2">v0.2.0</span>) — which is exactly why the foundation lands first. The multi-instance "rock" is de-risked because the <b>breaking config/openapi migration</b> (one-field-per-type → list, new credential keys, <span class="mono">ChannelEntry</span>) happened up front in v0.1.0 — so v0.3 only lifts the cap, with no second reshape.</div>
+</div></section>
+
+<!-- RECONCILE -->
+<section><div class="wrap">
+  <div class="eyebrow">Where it fits</div>
+  <h2>Against the existing strategy</h2>
+  <div class="grid g3">
+    <div class="card"><h3>v0.1 / v0.2 (old) ✅</h3><p class="note">The prior internal increments — iframe-preview unification, sandbox/exec, pentest hardening — were <b>pre-release</b> hardening. They fold under the new line as already-shipped groundwork.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>v0.3 "Rooms" → "Workspaces" 🚧</h3><p class="note">The locked Rooms/memory/tasks/sandbox redesign is <b>generalized</b> into the one-container Workspace model and spread across v0.1.0 (shapes) → v0.4.0 (My Workspace + PA), each with a UI home.</p></div>
+    <div class="card"><h3>The 1.0 line 🎯</h3><p class="note">A single climb: stabilized <span class="rel r1">v0.1.0</span> → complete vision <span class="rel r5">v1.0.0</span> (Workspaces · Connections · Calendar · Automations · Assistant · Delegation · open integration).</p></div>
+  </div>
+  <div class="callout">Release numbering: the prior <b>v0.1/v0.2</b> were pre-release hardening increments; the product line now re-baselines on one climb to <b>1.0</b> — the stabilized build ships as <b style="color:var(--gold)">0.1.0</b>, each release adds one capability layer to <b>1.0.0</b>.</div>
+</div></section>
+
+<!-- LOCKED -->
+<section><div class="wrap">
+  <div class="eyebrow">Decisions captured</div>
+  <h2>Locked so far</h2>
+  <ul class="clean" style="max-width:860px">
+    <li><b>Foundation-first sequencing</b> — every structural shape lands in <span class="rel r1">v0.1.0</span>: additively, plus the <b>one deliberate Connection-as-instance migration</b> (config shape + credential keys + openapi) done up front; later releases add behaviour / lift caps only</li>
+    <li><b>Single user, one password</b> — no multi-user, RBAC, or tenancy. One person, one password protects the install; <b>sensitive settings re-type the password</b> (sudo-style, mapping onto the existing <span class="mono">RequireNotBypass</span> guard). <span class="mono">owner</span> stays as <b>attribution</b> on data, not an access-control axis.</li>
+    <li><b>Agent roster</b> — <b>four base agents</b> (re-cast cores: <b>Mia · Assistant ⭐</b> default · <b>Jim · Orchestrator</b> · <b>Ray · Scout</b> · <b>Ava · Builder</b>; Max retired → automation is a platform surface / optional pack) plus a <b>sub-agent worker</b> tier (additive agent <span class="mono">kind</span> + <span class="mono">executor</span>). Preinstalled = the 4 base agents + 3 runner drivers (Claude Code · opencode · Codex); specialists are <a href="plugins.html">marketplace packs</a></li>
+    <li><b>"Max parallel agents"</b> setting (Settings → Performance) — a CPU/RAM-aware recommendation with an over-limit warning; a stabilization guardrail on fan-out</li>
+    <li>Rooms → <b>one container, the Workspace</b>; context is agent-bound, set by the existing sidebar workspace switcher (My Workspace + named workspaces). Pre-seeded <b>My Workspace</b> (the single default); memory is 2 rooms — a <b>private</b> room (per-agent, agent-global) + a <b>workspace</b> room (shared); recall composes the agent's private room + the current workspace room. My Workspace ships v0.1.0; the My Workspace's PA features light up in v0.4.0</li>
+    <li>Memory: <b>two rooms</b> (private per-agent · workspace shared); <b>no embeddings</b> (bleve BM25 + graph + MOCs); the <b>Dreamcatcher</b> distills sessions→memories — see <a href="learning.html">Learning</a></li>
+    <li>Channels → <b>multi-instance Connections</b> (identity = agent | user); the instance <i>config shape migration</i> ships v0.1.0, the <i>cap lifts</i> v0.3.0</li>
+    <li>Agents: <b>two tiers</b> — <b>base agents</b> (the four re-cast cores + custom; you chat with them, heartbeat, own memory, can delegate) and <b>sub-agent workers</b> (general-purpose worker + custom, carrying an <span class="mono">executor</span>: native | external-cli {Claude Code · opencode · Codex} | future remote-a2a; no heartbeat · ephemeral · delegation-only)</li>
+    <li>Delegation: v0.1.0 unifies the two allowlists into <b>one policy</b> (<span class="mono">to</span> · <span class="mono">modes</span>), ships the <b>simple trust-graph</b> UI, and closes the <b>two ungated work-paths</b> (sync subagent · sequential — handover stays open). <span class="mono">accept_from</span> + budget/concurrency land <i>when enforced</i> later. Dependency sequencing via <span class="mono">blocked_by</span> deps; coordinator/autonomous plans are <span class="rel r5">v1.0.0</span>.</li>
+    <li>Personal Assistant: the agent <b>auto-provisioned</b> at onboarding, bound to your <b>My Workspace</b>; its deeper PA capabilities light up <span class="rel r4">v0.4.0</span></li>
+    <li>Email: <b>basic IMAP/SMTP</b> (one mailbox, your address + app-password, pure-Go) ships <span class="rel r1">v0.1.0</span>; multi-mailbox <span class="rel r3">v0.3.0</span>; provider OAuth (Google → MS Graph) <span class="rel r5">v1.0.0</span></li>
+    <li>Calendar + Automations: shapes &amp; shells v0.1.0, live v0.2.0; integration v1.0.0</li>
+    <li>Tools = <b>per-tool pluggable providers</b> (search + voice-in exist; TTS + image-gen + Integrations UI are new); split: Integrations+mic <span class="rel r1">v0.1.0</span> · voices+image <span class="rel r2">v0.2.0</span> · realtime <span class="rel r5">v1.0.0</span> — see <a href="tools.html">Tools</a><a href="plugins.html">Plugins</a></li>
+  </ul>
+  <p style="margin-top:14px">Next step when you're ready: an <b>ADR</b> (<span class="mono">/albert</span>) on the Workspaces + Connections + agent-taxonomy + delegation model, then a phased <b>plan-spec</b> starting with <span class="rel r1">v0.1.0</span>.</p>
+</div></section>
+
+<footer><div class="wrap"><p><a href="impact.html" style="color:var(--muted)">← Impact</a> &nbsp;·&nbsp; <a href="blueprint.html">Blueprint ↑</a></p></div></footer>
+</body></html>

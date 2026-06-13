@@ -1,0 +1,169 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Self-improving Memory · today vs tomorrow · Omnipus concept</title><link rel="stylesheet" href="style.css">
+<style>
+  .rel{display:inline-block;padding:1px 8px;border-radius:999px;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;border:1px solid;white-space:nowrap}
+  .r1{color:#D4AF37;border-color:#D4AF37}.r2{color:#fbbf24;border-color:#fbbf24}.r4{color:#a78bfa;border-color:#a78bfa}
+  .tt td:first-child{font-weight:600;color:#E2E8F0;white-space:nowrap}
+  .tt td.now{color:#8b8b97}.tt td.next{color:#cdd3de}
+  .loop{display:grid;grid-template-columns:42px 1fr;gap:0;border:1px solid #23232a;border-radius:12px;overflow:hidden;margin-bottom:10px}
+  .loop>.n{background:#101014;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:18px;color:var(--gold);border-right:1px solid #23232a}
+  .loop>.b{padding:12px 16px}
+  pre.tree{background:#0c0c0f;border:1px solid var(--line);border-radius:12px;padding:16px 18px;overflow-x:auto;font-family:'JetBrains Mono',monospace;font-size:.78rem;line-height:1.55;color:#cdd3de;margin:8px 0}
+  pre.tree .c{color:var(--faint)}
+</style>
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html" class="active">Learning</a><a href="agents.html">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / <a href="memory.html">Memory</a> / Self-improvement</div>
+  <div class="eyebrow">Self-improving memory · no embeddings</div>
+  <h1>Memory that <span class="gold">learns</span> — without a vector model</h1>
+  <p class="lede">Today's memory already <b style="color:#fff">stores across four artifacts and reflects on idle</b> (an LLM recap writes continuity + a retro) — but it doesn't <b style="color:#fff">rank, relate, dedup, share, or distill across sessions</b>. The redesign adds that learning layer: five deterministic loops + a nightly cross-session distillation, recalling across vocabulary <b style="color:#fff">without a single embedding</b>. Grounded in today's <span class="mono">pkg/agent/memory.go</span> + <span class="mono">session_end.go</span> and <span class="mono">memory-redesign-2026-05.md</span> (D1–D22).</p>
+</div></div>
+
+<!-- TODAY -->
+<section><div class="wrap">
+  <div class="eyebrow">Today · as-is (verified in code)</div>
+  <h2>What we already have — more than a file</h2>
+  <p class="sub">The current system (<span class="mono">pkg/agent/memory.go</span> + <span class="mono">session_end.go</span>) is a real multi-artifact store with idle-time reflection. It's a capable foundation — the redesign adds the layer it lacks.</p>
+  <div class="grid g2">
+    <div class="card"><h3>✅ Storage &amp; tools — already here</h3><ul class="clean">
+      <li><b>Four artifacts</b> (not one file): long-term <span class="mono">MEMORY.md</span> (3 categories) · <b>daily notes</b> <span class="mono">memory/YYYYMM/</span> · <span class="mono">LAST_SESSION.md</span> · per-session <b>retros</b> <span class="mono">sessions/…/_retro.md</span> <span class="muted">(memory.go:24-27)</span></li>
+      <li>Three tools: <span class="mono">remember · recall_memory · retrospective</span></li>
+      <li><span class="mono">recall</span> searches across <b>all</b> artifacts (substring, newest-first, cap 50)</li>
+    </ul></div>
+    <div class="card"><h3>✅ Idle-time reflection — already runs</h3><ul class="clean">
+      <li>A per-session <b>idle ticker</b> → <span class="mono">CloseSession("idle")</span> → an <b>LLM recap</b> (light model) → <span class="mono">LAST_SESSION.md</span> (auto-injected continuity) + a structured <b>retro</b> <span class="muted">(loop.go:790-817 · session_end.go)</span></li>
+      <li><b>Heuristic fallback</b> retro if the LLM is down; a <b>BootstrapRecapPass</b> catches up missed sessions on boot</li>
+      <li>Two write paths: <b>volitional</b> (<span class="mono">remember/retrospective</span>) + <b>mechanical</b> (auto-recap on idle)</li>
+    </ul></div>
+  </div>
+  <div class="callout r"><b>What it lacks — the real gap:</b> no <b>ranking</b> (substring, cap 50) · no <b>revision</b> (supersedes) or <b>dedup</b> · no <b>graph / relationships / MOCs</b> · no confidence/access scoring · <b>per-agent only</b> (no project sharing) · and the recap reflects on <b>one session</b>, not a <b>cross-session distillation</b>. Long-term lives in one <span class="mono">MEMORY.md</span> under a single mutex. So it remembers and reflects — it doesn't yet <b>rank, relate, dedup, share, or distill</b>. <span class="muted">(bleve isn't a dependency yet.)</span></div>
+</div></section>
+
+<!-- FIVE LOOPS -->
+<section><div class="wrap">
+  <div class="eyebrow">Tomorrow · the engine</div>
+  <h2>Five compounding loops — all integer math, <span class="gold">no ML</span></h2>
+  <p class="sub">Self-improvement is <b>structural</b>, not statistical. Each loop is cheap, deterministic, and replayable.</p>
+  <div class="loop"><div class="n">1</div><div class="b"><b>Refinement, not append.</b> <span class="mono">remember(supersedes=X)</span> marks X superseded; default search hides it. Agents <b>revise beliefs</b> instead of stacking contradictions. <span class="muted">(D-loop 1)</span></div></div>
+  <div class="loop"><div class="n">2</div><div class="b"><b>Access counters.</b> When a recalled memory is <i>cited</i> in the agent's text, an <span class="mono">access</span> event appends to <span class="mono">counters.jsonl</span>. Frequently-useful memories <b>rank higher</b> over time. Atomic JSONL appends — multi-agent safe, no row locks.</div></div>
+  <div class="loop"><div class="n">3</div><div class="b"><b>Confidence drift.</b> Acting successfully on a recalled memory → <span class="mono">+0.05</span>; contradicted via supersedes → <span class="mono">−0.20</span>. Below <span class="mono">0.2</span> with no access in 90 days → <b>auto-archived</b> by a non-blocking sweep. Memory <b>forgets the stale</b>.</div></div>
+  <div class="loop"><div class="n">4</div><div class="b"><b>Conflict / near-dup detection.</b> On every <span class="mono">remember()</span>, a <b>MinHash</b> signature is checked against active memories (60% first-line / 50% body + shared-tag thresholds). High overlap → <i>"looks like [[existing-id]] — update that instead?"</i> Stops duplicate drift before it starts.</div></div>
+  <div class="loop"><div class="n">5</div><div class="b"><b>The Dreamcatcher — distillation.</b> Where today's recap reflects on <i>one</i> session, this distills <b>across many</b>. Nightly for workspace rooms (03:00, configurable), on-demand for private. Reads recent <b>sessions + learnings</b>, asks an LLM <i>"what durable memories should I extract?"</i>, writes <b>proposals</b> to <span class="mono">proposals/</span>; an operator or agent accepts via the SPA → it becomes a real memory through <span class="mono">remember()</span>. <b>Sessions become memories over time</b> — and it proposes new topic hubs (MOCs) when a tag cluster emerges. <span class="muted">This is the one LLM-in-the-loop step, and it's human-gated.</span></div></div>
+  <div class="callout">The hot path is <b>regex + arithmetic + BM25 + atomic JSONL appends</b>. An LLM is touched only at session-close (one recap call) and in the Dreamcatcher (nightly, gated). Same inputs → same memory. Auditable and replayable forever (until compaction).</div>
+</div></section>
+
+<!-- PROCEDURAL MEMORY -->
+<section><div class="wrap">
+  <div class="eyebrow">Procedural memory</div>
+  <h2>Skills are the editable arm of <span class="gold">self-improvement</span></h2>
+  <p class="sub">Memory has two halves. <b>Declarative</b> memory — facts, learnings, sessions — is the <a href="memory.html">memory rooms</a> above. <b>Procedural</b> memory is the <a href="plugins.html">skills</a> the agent <i>authors and refines</i>: the how-to that compounds with use.</p>
+  <div class="callout b">A skill created once is dead; a skill <b>refined after each use</b> is learning. The self-improvement loop rests on <b>editing</b> skills, not one-shot creation — the edit verb <i>is</i> the loop.</div>
+  <div class="grid g2" style="margin-top:6px">
+    <div class="card"><h3>The Dreamcatcher proposes skills, not just memories</h3><p class="note">The same learning loops that distill sessions into memories watch for <b>repeated workflows</b>: <i>"you've done this 3× — codify it as a skill?"</i> (create), and later <i>"this skill half-failed — refine it"</i> (edit). Procedural memory compounds the way declarative memory does — by revision, not accretion.</p></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>The mechanism — author &amp; version</h3><ul class="clean">
+      <li>New <span class="mono">system.skill.create</span> + <span class="mono">system.skill.edit</span> tools — the agent writes &amp; refines its own skills (procedural memory), wired to the learning system</li>
+      <li><b>Consent-gated + versioned</b> writes — every create/edit is reviewable and <b>rollback</b>-able</li>
+      <li>The default <span class="mono">skill-authoring</span> skill (create · edit/refine · validate · version · deprecate) <b>replaces</b> one-shot <span class="mono">skill-creator</span></li>
+    </ul></div>
+  </div>
+  <div class="callout r"><b>Today's gap:</b> only <span class="mono">system.skill.{install,remove,search,list}</span> exist — and as <b>stubs</b>. There is <b style="color:var(--red)">no authoring or editing verb</b> — the agent can fetch and run skills but cannot write or refine them. <b>Authoring/editing is the missing self-improvement verb.</b></div>
+  <div class="callout">Phasing matches the rest of this page: the <span class="mono">system.skill.create</span>/<span class="mono">.edit</span> <b>tool surface</b> is a <span class="rel r1">v0.1.0</span> shape; the <b>learning-loop consumer</b> — the Dreamcatcher <i>proposing</i> skill create/edit from repeated workflows — is <span class="rel r2">v0.2.0</span> behaviour over it.</div>
+</div></section>
+
+<!-- NO EMBEDDINGS -->
+<section><div class="wrap">
+  <div class="eyebrow">The hard part, solved cheaply</div>
+  <h2>Recall across vocabulary — with <span class="gold">no embeddings</span> (D20)</h2>
+  <p class="sub">An embedding model would catch "kernel safety" ≈ "Landlock". We get most of that practical recall three other ways — deterministically.</p>
+  <div class="grid g3">
+    <div class="card"><h3>① LLM query-rephrase loop</h3><p class="note">On a weak hit, the agent re-asks with synonyms — a query-expansion loop. <b>Free</b> in an agent system; the model is already in the loop.</p></div>
+    <div class="card"><h3>② Graph traversal</h3><p class="note"><span class="mono">[[wikilinks]]</span> + shared <span class="mono">#tags</span> bridge vocabulary islands. recall walks up to N hops over the in-memory edge map.</p></div>
+    <div class="card"><h3>③ MOC navigation hubs</h3><p class="note">Maps-of-Content cluster related concepts so a near-miss query still lands on the right neighbourhood.</p></div>
+  </div>
+  <div class="grid g2" style="margin-top:12px">
+    <div class="card"><h3>The search stack (pure Go, no CGo, no SQLite)</h3><ul class="clean">
+      <li><b>bleve v2</b> — BM25 ranking + <span class="mono">MoreLikeThis</span> + markdown-aware tokenizer (D16)</li>
+      <li><b>MinHash</b> (<span class="mono">ekzhu/minhash-lsh</span>) — near-dup signatures, ~128 B each (D21)</li>
+      <li>recall rank = a <b>pure formula</b>: <span class="mono">tag×4 + bm25 + log(access+1) − days×0.01 + 0.1·joint</span></li>
+      <li>Derived index is <b>rebuildable</b> from the <span class="mono">.md</span> source — blow it away and re-index</li>
+    </ul></div>
+    <div class="card" style="border-color:var(--gold-dim)"><h3>Why no embeddings is the right call</h3><ul class="clean">
+      <li><b>Determinism &gt; fuzziness</b> — auditable, replayable, no model dependency</li>
+      <li>No vector store, no ML runtime — fits single-binary / pure-Go (Constraints #1–#2)</li>
+      <li>The graph + tags + MOCs compensate for semantic search</li>
+      <li><b>Upgrade path is one schema change</b> — bleve v2.6+ already does vector + RRF hybrid if real gaps appear</li>
+    </ul></div>
+  </div>
+</div></section>
+
+<!-- GRAPH -->
+<section><div class="wrap">
+  <div class="eyebrow">The substrate</div>
+  <h2>A deterministic graph — and no cold start</h2>
+  <p class="sub">Six edge types, each with a fixed creation rule (no inferred or similarity edges, D9). Stored as JSONL + the bleve index; rebuildable; Obsidian-native.</p>
+  <pre class="tree">.omnipus/.index/                 <span class="c">derived, rebuildable — never source of truth</span>
+├── bleve/         <span class="c">BM25 + MoreLikeThis full-text index</span>
+├── edges.jsonl    <span class="c">links_to · tagged · authored_by · supersedes · born_in · cited_in</span>
+├── counters.jsonl <span class="c">access / confidence-drift event log (append-only)</span>
+├── tags.json      <span class="c">tag → memory-ids</span>
+└── minhash.jsonl  <span class="c">near-duplicate signatures</span></pre>
+  <div class="grid g2">
+    <div class="card"><h3>Cold-start solved — 6 seeded MOCs</h3><p class="note">Every project starts with <span class="mono">home · decisions · lessons · people · references · goals</span> — domain-neutral hubs (D12). The graph is never empty. The Dreamcatcher auto-proposes new topical MOCs as tag clusters emerge.</p></div>
+    <div class="card"><h3>Source of truth = markdown</h3><p class="note">One <span class="mono">.md</span> file per memory (atomic temp+rename). Indexes are derived. <b>No schema migrations ever.</b> Workspace rooms are PR-able — per-file git diffs; <b>git is the multi-agent sync layer</b> (no server, no merge daemon).</p></div>
+  </div>
+</div></section>
+
+<!-- TODAY VS TOMORROW -->
+<section><div class="wrap">
+  <div class="eyebrow">The transformation</div>
+  <h2>Today → Tomorrow</h2>
+  <table class="tt">
+    <tr><th>Dimension</th><th>Today (as-is)</th><th>Tomorrow (the design)</th></tr>
+    <tr><td>Storage</td><td class="now"><b>4 artifacts</b>: MEMORY.md + daily notes + last-session + retros</td><td class="next">atomic per-memory <span class="mono">.md</span> files; 3 tiers + <span class="mono">last-session.md</span></td></tr>
+    <tr><td>Search</td><td class="now">substring across all artifacts, cap 50, no rank</td><td class="next"><b>bleve BM25</b> + graph hops + MOC hubs</td></tr>
+    <tr><td>Revision</td><td class="now">none — corrections sit next to errors</td><td class="next"><span class="mono">supersedes</span> — beliefs are revised</td></tr>
+    <tr><td>Dedup</td><td class="now">none</td><td class="next"><b>MinHash</b> conflict check on write</td></tr>
+    <tr><td>Relationships</td><td class="now">none</td><td class="next">6-edge deterministic graph + tags + MOCs</td></tr>
+    <tr><td>Ranking / decay</td><td class="now">newest-first only</td><td class="next">access counters + confidence drift + auto-archive</td></tr>
+    <tr><td>Reflection</td><td class="now"><b>per-session recap + retro on idle</b> (LLM)</td><td class="next">+ <b>cross-session Dreamcatcher</b> — sessions become memories</td></tr>
+    <tr><td>Cross-agent</td><td class="now">none</td><td class="next">shared <b>workspace rooms</b>, attributable, git-synced</td></tr>
+    <tr><td>Concurrency</td><td class="now">single global mutex (bottleneck)</td><td class="next">atomic JSONL appends + per-file flock</td></tr>
+    <tr><td>Embeddings</td><td class="now">n/a</td><td class="next"><b>none</b> — rephrase + graph + MOC (D20)</td></tr>
+  </table>
+</div></section>
+
+<!-- ROADMAP -->
+<section><div class="wrap">
+  <div class="eyebrow">Where it lands</div>
+  <h2>Phasing — it builds on the room topology</h2>
+  <p class="sub">The memory redesign reuses the room topology from the Workspace/sandbox foundation, then layers the engine and the learning loops. It sequences cleanly into the foundation-first plan.</p>
+  <div class="grid g3">
+    <div class="card" style="border-color:var(--gold-dim)"><h3><span class="rel r1">v0.1.0</span> Structure + start the logs</h3><ul class="clean">
+      <li>Room <b>topology</b> — private per-agent <span class="mono">agents/&lt;id&gt;/.omnipus/</span> + shared <span class="mono">&lt;workspace&gt;/.omnipus/</span> dirs (all tied to the Workspace key)</li>
+      <li>The <b>full memory file format</b> (every frontmatter field present even if unused → files never migrate) + the 3 tools (<span class="mono">remember/recall/retrospective</span>), <b>replacing monolithic <span class="mono">MEMORY.md</span></b> — kills the mutex bottleneck</li>
+      <li><b>bleve FTS</b> recall (BM25) — a usable read</li>
+      <li><b>Start the append-only logs</b> (<span class="mono">sessions/</span> firehose · <span class="mono">counters.jsonl</span> access/citation · <span class="mono">born_in/cited_in</span>) so v0.2 ranking/graph have history — no backfill</li>
+    </ul></div>
+    <div class="card"><h3><span class="rel r2">v0.2.0</span> Behaviour over derived data</h3><ul class="clean">
+      <li>The <b>4 ranking/dedup loops (counters · drift · supersede · MinHash) + the Dreamcatcher = the five</b> — ranking by access/drift</li>
+      <li>The <b>graph</b> (6 edges · tags · 6 seeded MOCs) + graph-aware recall + MOC auto-emergence</li>
+      <li>The <b>Dreamcatcher</b> distillation as a scheduled <a href="time.html">automation</a> (nightly trigger → distill action)</li>
+      <li>All <b>derived &amp; rebuildable</b> from the v0.1.0 sources + logs — <b>no migration</b></li>
+    </ul></div>
+    <div class="card"><h3><span class="rel r4">v0.4.0</span> Assistant</h3><ul class="clean">
+      <li>The Assistant <b>leverages</b> memory: its agent-global private room + workspace-room recall = "knows you across your workspaces"</li>
+      <li>Promotion (private → project), multi-agent project-room writes mature with real use</li>
+    </ul></div>
+  </div>
+  <div class="callout">The rule: <b>structure + logs are foundational</b> (v0.1.0) — source shapes and append-only event logs start now so nothing needs migrating. The <b>learning engine reads derived, rebuildable data</b> (indexes, graph map, ranking), so it defers cleanly to v0.2.0 with <b>zero refactor</b> — blow the index away and re-derive from the v0.1.0 sources + logs.</div>
+  <div class="callout b">The room concept itself — two rooms, private per-agent + project shared — is on the <a href="memory.html">Memory page</a>. This page is the <b>learning engine</b> that runs inside those rooms.</div>
+</div></section>
+
+<footer><div class="wrap"><p>Grounded in <span class="mono">docs/internal/design/memory-redesign-2026-05.md</span> (D1–D22, the five loops (incl. the Dreamcatcher), the no-embedding triad) + today's <span class="mono">pkg/agent/memory.go</span>. &nbsp; <a href="memory.html" style="color:var(--muted)">← Memory</a> · <a href="roadmap.html" style="color:var(--muted)">Roadmap →</a></p></div></footer>
+</body></html>

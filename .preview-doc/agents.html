@@ -1,0 +1,125 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agents · Omnipus concept</title><link rel="stylesheet" href="style.css">
+</head><body>
+<header><div class="wrap navrow">
+  <a class="brand" href="index.html"><span class="dot"></span> Omnipus <span class="vtag">v13</span></a>
+  <nav class="top"><a href="index.html">Overview</a><a href="blueprint.html">Blueprint</a><a href="spaces.html">Workspaces</a><a href="channels.html">Channels</a><a href="tools.html">Tools</a><a href="plugins.html">Plugins</a><a href="memory.html">Memory</a><a href="learning.html">Learning</a><a href="agents.html" class="active">Agents</a><a href="delegation.html">Delegation</a><a href="time.html">Calendar</a><a href="ui-changes.html">UI Changes</a><a href="impact.html">Impact</a><a href="roadmap.html">Roadmap</a><a href="decisions.html">Decisions</a></nav>
+</div></header>
+
+<div class="wrap"><div class="hero">
+  <div class="crumb"><a href="index.html">Overview</a> / Agents</div>
+  <div class="eyebrow">The roster · grounded</div>
+  <h1>Agents — your roster</h1>
+  <p class="lede"><b style="color:#fff">Four base agents</b> ship in the box — <b style="color:#fff">Mia</b> (your Assistant ⭐), <b style="color:#fff">Jim</b> (the Orchestrator), <b style="color:#fff">Ray</b> (Scout) and <b style="color:#fff">Ava</b> (the Builder). Below them, a <b style="color:#fff">sub-agent layer</b> of workers. Beyond the box, <b style="color:#fff">marketplace packs</b> add specialists. <span style="color:var(--muted)">(Max is retired from base — automation is now a platform surface, available as an optional pack.)</span></p>
+</div></div>
+
+<section><div class="wrap">
+  <div class="eyebrow">The base roster · four agents in the box</div>
+  <h2>Four <span class="gold">base agents</span> ship by default — the rest is a sub-agent layer + packs</h2>
+  <p class="sub">There's one user: you. The roster (see <a href="blueprint.html">blueprint</a> / <a href="delegation.html">delegation</a>) is <b>base agents</b> vs a <b>sub-agent layer</b> of workers. Four base agents ship in the box — chat targets, with their own connection, heartbeat and durable memory. <b>Max is retired from base</b>: automation is now a platform surface (<a href="ui-changes.html">Automations</a>), available as an optional pack. Specialists and the Maker/creative set arrive via <b>marketplace agent packs</b>.</p>
+  <div class="grid g2">
+    <div class="card" style="border-color:var(--gold-dim)"><h3>⭐ Mia · the Assistant</h3><p class="note"><b>Default.</b> Your memory-rich personal front door — bound to My Workspace, runs your tasks · email · calendar, knows you across workspaces. <span class="mono">owner = you</span>.</p></div>
+    <div class="card"><h3>🧭 Jim · the Orchestrator</h3><p class="note">Planner / PM. Supervises work across the <span class="mono">tasks</span> · <span class="mono">blocked_by</span> DAG and the delegation graph — Max-parallel fan-out, worktrees.</p></div>
+    <div class="card"><h3>🔭 Ray · Scout</h3><p class="note">Research &amp; summarize. Fans out reads, distils findings; the canonical delegation target for "go find out".</p></div>
+    <div class="card"><h3>🛠️ Ava · the Builder</h3><p class="note">Agent &amp; skill authoring (unchanged). Shapes new custom agents and skills from templates.</p></div>
+  </div>
+  <div class="callout">Beyond the base four: <b>sub-agent workers</b> (the tier below) do the labour, and <b>marketplace agent packs</b> — Maker/creative · ops · smart-home · domain specialists — extend the roster on demand. The split is <b>base agents vs sub-agent workers</b>; there is no fixed "5 cores".</div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Mia · your Assistant</div>
+  <h2>The Assistant is <span class="gold">yours</span> — auto-provisioned, the ⭐ default</h2>
+  <p class="sub"><b>Mia</b> is a base agent <b>auto-provisioned for you at onboarding</b> ("meet your Assistant" in My Workspace), seeded from a built-in template, then named and shaped by you. She's the <b>⭐ default</b> chat target.</p>
+  <div class="grid g3">
+    <div class="card" style="border-color:var(--gold-dim)"><h3>🤝 Yours, by ownership</h3><ul class="clean">
+      <li>A <b>base agent you own</b> (<span class="mono">owner = you</span>, attribution) — <b>auto-provisioned at onboarding</b></li>
+      <li>Seeded from a built-in <b>Assistant template</b>, then fully yours — name · tone · model · tools</li>
+      <li>The <b>⭐ default</b> agent on a fresh install</li>
+    </ul></div>
+    <div class="card"><h3>🏠 Bound to My Workspace</h3><ul class="clean">
+      <li>Bound to your <b>My Workspace</b>; runs your email · calendar · tasks</li>
+      <li>The <b>assistant binding</b> = this agent owns your My Workspace (a pre-seeded workspace)</li>
+      <li>Wired to your delegated connections</li>
+    </ul></div>
+    <div class="card"><h3>🧠 Cross-workspace recall</h3><ul class="clean">
+      <li>Its <span class="mono">agent-global private room</span> spans your workspaces — it knows you for free</li>
+      <li>It also reads the shared rooms of the workspaces it works in</li>
+      <li>No special store: the two-room spec already gives this</li>
+    </ul></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">The sub-agent layer · executors</div>
+  <h2>Below the base agents: <span class="gold">sub-agent workers</span></h2>
+  <p class="sub">Workers do the labour. They're <b>not chat targets</b> (the test-run button is the exception) — they're spawned by delegation and carry an <span class="mono">executor</span>.</p>
+  <div class="grid g2">
+    <div class="card"><h3>⚙️ Worker characteristics</h3><ul class="clean">
+      <li>The seeded general-purpose worker + your custom workers</li>
+      <li><b>No heartbeat · no own connection · ephemeral memory · depth-limited · leaner model · not chat targets</b> (test-run button excepted)</li>
+      <li>Ephemeral, task-driven; no user-facing persona</li>
+      <li>Narrow recall: the current workspace's shared room (+ its own private room)</li>
+    </ul></div>
+    <div class="card"><h3>🔌 executor</h3><ul class="clean">
+      <li><span class="mono">native</span> — runs in-process on the agent loop</li>
+      <li><span class="mono">external-cli</span> — Claude Code · opencode · Codex driven as a child process</li>
+      <li><span class="mono">future: remote-a2a</span> — a remote agent over agent-to-agent</li>
+    </ul></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Two identities, one plumbing</div>
+  <h2>Team worker vs. your Assistant</h2>
+  <div class="fig">
+  <svg viewBox="0 0 980 230" width="100%" role="img" font-family="Inter,sans-serif">
+    <defs><linearGradient id="sp" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#D4AF37"/><stop offset="1" stop-color="#7a5f12"/></linearGradient></defs>
+    <text x="245" y="22" fill="#34d399" font-size="11.5" font-family="JetBrains Mono" letter-spacing="2" text-anchor="middle">WORKER · agent identity</text>
+    <text x="735" y="22" fill="#a78bfa" font-size="11.5" font-family="JetBrains Mono" letter-spacing="2" text-anchor="middle">ASSISTANT · your identity</text>
+    <rect x="180" y="38" width="130" height="38" rx="9" fill="#101014" stroke="#34d399"/><text x="245" y="62" text-anchor="middle" fill="#34d399" font-size="13">🤖 Agent Ray</text>
+    <g stroke="#34d399" stroke-width="1.3" opacity=".7"><line x1="210" y1="76" x2="150" y2="120"/><line x1="245" y1="76" x2="245" y2="120"/><line x1="280" y1="76" x2="340" y2="120"/></g>
+    <g font-size="10.5" text-anchor="middle" fill="#cdd3de">
+      <rect x="110" y="122" width="82" height="32" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="151" y="142">@RayBot</text>
+      <rect x="204" y="122" width="82" height="32" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="245" y="142">ray@…</text>
+      <rect x="298" y="122" width="82" height="32" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="339" y="142">webhook</text></g>
+    <text x="245" y="186" text-anchor="middle" fill="#8b8b97" font-size="11">the agent owns the connections</text>
+    <rect x="668" y="38" width="134" height="38" rx="9" fill="#101014" stroke="#a78bfa"/><text x="735" y="62" text-anchor="middle" fill="#a78bfa" font-size="13">👤 You</text>
+    <g stroke="#a78bfa" stroke-width="1.3" opacity=".7"><line x1="700" y1="76" x2="638" y2="120"/><line x1="735" y1="76" x2="735" y2="120"/><line x1="770" y1="76" x2="832" y2="120"/></g>
+    <g font-size="10.5" text-anchor="middle" fill="#cdd3de">
+      <rect x="596" y="122" width="82" height="32" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="637" y="142">Gmail</text>
+      <rect x="690" y="122" width="82" height="32" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="731" y="142">Calendar</text>
+      <rect x="784" y="122" width="82" height="32" rx="7" fill="#16161c" stroke="#2a2a31"/><text x="825" y="142">Tasks</text></g>
+    <rect x="640" y="172" width="190" height="32" rx="9" fill="url(#sp)" opacity=".14" stroke="#a78bfa"/><text x="735" y="193" text-anchor="middle" fill="#a78bfa" font-size="11.5">🤖 your Assistant operates them</text>
+  </svg>
+  <div class="figcap">Same Connection plumbing — only the identity (and the workspace) differ.</div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Grounded · what exists vs. what's new</div>
+  <h2>Half-built already</h2>
+  <table>
+    <tr><th>Piece</th><th>Today in Omnipus</th><th>What's needed</th></tr>
+    <tr><td><b>Tasks for the user</b></td><td><span class="tag t-have">works</span> session <span class="mono">owner</span> threads into tools (<span class="mono">WithSessionOwner → ToolSessionOwner</span>, #406) → agent auto-creates tasks owned by the user, gated by <span class="mono">canAccess</span></td><td>nothing — the proven spine</td></tr>
+    <tr><td><b>Email for you</b></td><td><span class="rel r1" style="color:#D4AF37;border:1px solid #D4AF37;border-radius:999px;padding:1px 8px;font-family:'JetBrains Mono',monospace;font-size:11px">v0.1.0</span></td><td>basic IMAP/SMTP mailbox (your address + app-password) — a your-identity Connection</td></tr>
+    <tr><td><b>Calendar for you</b></td><td><span class="tag t-new">greenfield</span></td><td>calendar + your account via delegated OAuth (later)</td></tr>
+    <tr><td><b>Connected accounts</b></td><td><span class="tag t-new">greenfield</span> OAuth is LLM-login only (no gmail/calendar scopes); token store is provider-keyed</td><td>your accounts vault (encrypted refresh tokens) + delegated OAuth flows</td></tr>
+    <tr><td><b>Agent ⇄ you binding</b></td><td><span class="tag t-part">partial</span> <span class="mono">AgentConfig.owner</span> = creator-attribution; routing has no assistant dimension</td><td>an "assistant" binding (you ↔ your agent) + a My Workspace</td></tr>
+    <tr><td><b>Ownership</b></td><td><span class="tag t-have">works</span> single user — <span class="mono">owner=username</span> (#406) is just attribution, no access gate, no multi-tenancy</td><td>everything is simply yours (the pre-seeded My Workspace is your home)</td></tr>
+  </table>
+  <div class="callout g">The load-bearing insight: the <b style="color:var(--green)">on-behalf-of spine already exists</b> and tasks already use it. Email/calendar tools resolve the user's connected account via the same <span class="mono">ToolSessionOwner(ctx)</span> — so the Assistant is a layered extension on a proven foundation, not a rebuild.</div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="eyebrow">Safety</div>
+  <h2>High blast-radius — handled by existing gates</h2>
+  <div class="grid g3">
+    <div class="card"><h3>Delegated access</h3><p class="note">An agent acting with the user's Google creds is powerful. Calendar/email <b>write</b> actions sit behind the existing <span class="mono">allow / ask / deny</span> per-agent policy; reads (free/busy, triage) are low-risk.</p></div>
+    <div class="card"><h3>Untrusted inbound</h3><p class="note">Inbound email is a command surface → sender allowlist + DMARC/SPF (not raw From). Same Rule-2 ownership gating already in place.</p></div>
+    <div class="card"><h3>Isolation</h3><p class="note">The present gate is <b>owner ownership</b> — <span class="mono">canAccess</span> (#406, <span class="mono">rest_projects.go:75</span>) — so an agent only reaches data in workspaces it owns. <b>Per-workspace kernel isolation is the target</b> (the sandbox-redesign design, unimplemented); today isolation is <b>per-agent-workspace</b>, not per-workspace.</p></div>
+  </div>
+</div></section>
+
+<footer><div class="wrap"><p><a href="spaces.html" style="color:var(--muted)">← Workspaces &amp; Channels</a> &nbsp;·&nbsp; Next: <a href="time.html">Calendar &amp; Automations →</a></p></div></footer>
+</body></html>
