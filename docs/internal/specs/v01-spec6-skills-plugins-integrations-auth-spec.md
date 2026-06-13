@@ -128,14 +128,15 @@ Scenario: Onboarding auto-provisions Mia
 | 2 | `TestSkillCreate_ConsentGated_Versioned` | Integration | "consent-gated + versioned" | authoring |
 | 3 | `TestSkillEdit_BuiltinOverride` | Unit | "built-in override" | no in-place mutation |
 | 4 | `TestDefaultSkills_EmbeddedAndSeeded` | Integration | "embedded + seeded" | go:embed + first boot |
-| 5 | `TestSkillAllowlist_PerAgent_OnDemand` | Unit | US-4 | allowlist matrix |
+| 5 | `TestSkillAllowlist_PerAgent_DefaultDeny` | Unit | US-4 | matrix + **negative: a non-allowlisted skill is DENIED at tool-resolution** (M-5) |
 | 6 | `TestRegistryConfig_List_FanOut` | Integration | "fans out" | single→list |
 | 7 | `TestSensitiveSetting_RequiresReAuth` | Integration | "requires one password" | the new re-auth check (NOT RequireNotBypass) |
 | 8 | `TestOnboarding_AutoProvisionsMia` | Integration | "auto-provisions Mia" | 3-step seed |
-| 9 | `verify-contracts` (CI) | CI | (if skill/registry types cross boundary) | drift = fail |
+| 9 | `verify-contracts` (CI) | CI | "fans out" + Integrations provider config (contract-first, M-3) | drift = fail |
 | 10 | `e2e: Integrations picker + composer mic; Profile vs Settings` | E2E | US-7/US-8 | SPA |
+| 11 | `TestSkillWrite_Confinement_TraversalAndOversize_Rejected` | Unit | "consent-gated…" (M-6) | `..`/traversal + oversize SKILL.md + invalid frontmatter rejected; audit-logged |
 
-**Test Datasets**: skill-tool {stub→real}; create {consent→write, no-consent→deny}; edit-builtin {→override}; embed {empty→seeded, present→idempotent}; registry {[ClawHub,GitHub]→fan-out}; sensitive {no-password→reject}.
+**Test Datasets**: skill-tool {stub→real}; create {consent→write, no-consent→deny}; edit-builtin {→override}; embed {empty→seeded, present→idempotent}; registry {[ClawHub,GitHub]→fan-out}; sensitive {no-reauth→reject}; allowlist {allowed→invoke, not-allowed→**DENY** (M-5)}; skill-write {`..`/traversal→reject, oversize SKILL.md→reject, invalid frontmatter→reject (M-6)}.
 
 **Regression:** wires existing stubs + extends config/auth. (1) The real `pkg/skills` engine (installer/registry/loader) is unchanged — only the tools now call it; (2) the LLM `ProvidersSection` still works (Integrations adds search/voice); (3) the auth tree (`RequireNotBypass`, register-admin) preserved + the Profile split added; (4) NEW: create/edit, embed/seed, allowlist, registry-list, Integrations UI. **CI authority; local scoped.**
 
