@@ -141,15 +141,15 @@ Scenario: Onboarding auto-provisions Mia
 
 ## 7. Functional Requirements & Success Criteria
 
-- **FR-9.1:** MUST wire `system.skill.{install,remove,search,list}` (today stubs) to the real `pkg/skills` engine (`SkillInstaller`/`RegistryManager`/loader).
-- **FR-9.2:** MUST add `system.skill.create` + `system.skill.edit` — **consent-gated (password re-type) + versioned**; editing a built-in writes a **user override** (no in-place mutation).
-- **FR-9.3:** MUST `go:embed` the default set (`summarize · skill-authoring · plan · daily-briefing`) + first-boot seed (today filesystem-seeded only).
+- **FR-9.1 (C-3):** MUST wire `system.skill.{install,remove,search,list}` (today stubs) to the real `pkg/skills` engine by **adding `SkillsLoader`/`RegistryManager`/`SkillInstaller` to the sysagent tool `Deps`** (`deps.go` has none today) so the tools reach the engine.
+- **FR-9.2 (C-1, C-2, M-2):** MUST add `system.skill.create` + `system.skill.edit`. **Consent** for these **tool-layer** writes routes through the **existing `ws_approval`** (`ToolApprovalRequest`→`ApprovalDecision`) — NOT `RequireNotBypass` (a 503 dev-bypass guard, wrong layer; an HTTP middleware can't gate a tool `Execute()`). **Versioning is NEW** (`pkg/skills` has none) — define a `.versions/` snapshot scheme (rollback required). Editing a built-in writes a **user override** (no in-place mutation).
+- **FR-9.3 (M-1):** MUST `go:embed` the default set + first-boot seed. **`go:embed` for skills is NEW infra** (only the SPA is embedded today). Of the 4 defaults only `summarize` exists on disk — **`skill-authoring`, `plan`, `daily-briefing` MUST be AUTHORED** as part of this spec.
 - **FR-9.4:** MUST scope skills **per-agent (allowlist) + progressive disclosure** (the matrix); not all skills in every agent's context.
-- **FR-10.1:** MUST change `RegistryConfig` to a **list** of marketplaces (ClawHub + GitHub first-class); search fans out (the manager already supports N).
+- **FR-10.1 (M-4):** MUST change `RegistryConfig` (`{ClawHub, MaxConcurrentSearches}`) to a **list** of marketplaces; `RegistryManager` already fans out over N, **but GitHub is NOT a `SkillRegistry` today** (separate `SkillInstaller.InstallFromGitHub`) — a **new GitHub `SkillRegistry` adapter** is required for it to participate in search fan-out.
 - **FR-10.2:** MUST define the **component-level-hybrid bundle-manifest SHAPE** (reuse `SKILL.md` + `.mcp.json`; native agents/channels/providers) — installer/UI deferred.
 - **FR-11.1:** MUST keep MCP present; the ACP bidirectional-runner hook is **Spec-4**, the A2A agent-reference + Card-identity hooks are **Spec-3/4** (cross-ref, no new work here).
 - **FR-12.1:** MUST add the **Integrations provider-picker UI** surfacing the existing `SearchProvider` + `Transcriber` (behind password re-type) + a composer **mic**.
-- **FR-12.2:** MUST enforce **single-user/one-password**; sensitive settings = password re-type (`RequireNotBypass`); **Profile** (personal) vs **Settings** (app) split.
+- **FR-12.2 (C-1):** MUST enforce **single-user/one-password**; sensitive **HTTP-layer** settings = a **NEW re-authentication check** (re-verify the one password) — `RequireNotBypass` is a 503 dev-bypass guard, NOT this (ADR FR-12); **Profile** (personal) vs **Settings** (app) split.
 - **FR-12.3:** MUST ship the **3-step onboarding** (name → password → model key) → auto-provision **Mia·Assistant** in My Workspace.
 
 **Success Criteria**
@@ -192,6 +192,6 @@ Scenario: Onboarding auto-provisions Mia
 - The 4 skill tools are stubs today; the real `pkg/skills` engine exists. `[FACT — verified]`
 - `RegistryConfig` single ClawHub → list (greenfield). `[FACT: registry.go:66]`
 - `SearchProvider`/`Transcriber` exist; Integrations surfaces them. `[FACT: web.go:91, voice/transcriber.go]`
-- Consent = Spec-1's password re-type (`RequireNotBypass`); skill writes ride it. `[cross-spec Spec-1]`
+- Consent is **NEW** (does not exist today): tool-layer skill writes ride the existing **`ws_approval`**; HTTP-layer sensitive settings ride a **new re-auth check**. `RequireNotBypass` is a 503 dev-bypass guard, unrelated. `[C-1, ADR FR-12]`
 - ACP/A2A protocol drivers are Spec-4/later; this spec only confirms MCP + the marketplace list. `[ADR FR-11]`
 - The Dreamcatcher proposing skill edits is v0.2.0 behaviour over Spec-5's logs. `[ADR NFR-6]`
