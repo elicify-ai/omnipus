@@ -10,6 +10,7 @@ GATE="${2:-all}"
 REPO_DIR=/cache/omnipus   # on the persistent volume → clone survives stop/start
 TAGS="goolm,stdjson"
 export PATH=/usr/local/go/bin:/cache/go/bin:$PATH
+export HOME="${HOME:-/root}"   # non-login SSH shell has no HOME; gen-contracts.sh uses set -u
 
 log() { printf '\n\033[1;36m=== %s ===\033[0m\n' "$*"; }
 rc=0; step() { local name="$1"; shift; log "$name"; "$@"; local e=$?; printf '\033[1m%s -> exit %d\033[0m\n' "$name" "$e"; [ $e -ne 0 ] && rc=1; return 0; }
@@ -41,7 +42,7 @@ run_govet()    { ensure_spa_stub; CGO_ENABLED=0 go vet -tags "$TAGS" ./...; }
 run_gotest()   { ensure_spa_stub; CGO_ENABLED=0 go test -tags "$TAGS" -count=1 ./...; }   # the 16GB-needing gate
 run_npm()      { npm ci --no-audit --no-fund; }
 run_typecheck(){ npm run typecheck; }
-run_vitest()   { npx vitest run; }
+run_vitest()   { npx vitest run --maxWorkers=4; }  # cap workers: 8 oversubscribe shared vCPUs → perf-test timeouts
 run_contracts(){ make verify-contracts; }
 
 case "$GATE" in
