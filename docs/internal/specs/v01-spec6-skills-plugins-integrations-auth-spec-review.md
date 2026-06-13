@@ -7,6 +7,203 @@
 
 ---
 
+## ROUND-4 VERDICT (2026-06-13) — PASS ✅ (GATE C OPEN)
+
+Re-review after the round-3 REVISE. Round 3 withheld GATE C **solely** on three
+FR↔TDD-plan inconsistencies (one MAJOR-class M-3 contradiction, two MINOR M-5/M-6
+missing-negative-test residues) — explicitly "a documentation-consistency pass over the
+TDD plan, not a redesign". All three are now closed. No new grounding needed; the
+engine/auth/audit/loader claims were verified sound in rounds 2–3 and the spec body of
+FRs is unchanged.
+
+### The three required edits — ALL CONFIRMED CLOSED
+
+| # | Round-3 requirement | Round-4 state | Evidence |
+|---|---------------------|---------------|----------|
+| 1 | **TDD #9 unconditional** — drop "(if skill/registry types cross boundary)"; `verify-contracts` must be unconditional (FR-12.1 declares the boundary crossed). | **CLOSED** | l135 now reads `verify-contracts (CI) … "fans out" + Integrations provider config (contract-first, M-3)` — the conditional is gone and it affirmatively names the contract-first Integrations provider config. Consistent with FR-12.1 (l152) "contract-first (Constraint #8 — not conditional)". |
+| 2 | **TDD #5 load-denied negative** — add an explicit denial test + a `denied` dataset row. | **CLOSED** | l131 renamed `TestSkillAllowlist_PerAgent_DefaultDeny`, traced US-4, asserting "**negative: a non-allowlisted skill is DENIED at tool-resolution** (M-5)". Test Datasets (l139) adds `allowlist {allowed→invoke, not-allowed→DENY (M-5)}`. Matches FR-9.4 (l148) "default-DENY … cannot invoke it … a negative test asserts denial". |
+| 3 | **Oversize + traversal skill-write tests** — restore oversize alongside traversal; add `traversal→reject`/`oversize→reject` to Test Datasets and a row to the TDD table. | **CLOSED** | NEW TDD **#11** (l137) `TestSkillWrite_Confinement_TraversalAndOversize_Rejected` — `..`/traversal + oversize SKILL.md + invalid frontmatter rejected + audit-logged. Test Datasets (l139) adds `skill-write {../traversal→reject, oversize SKILL.md→reject, invalid frontmatter→reject (M-6)}`. Backs FR-9.2 (l146) "path-confined … validate the SKILL.md … audit-log every create/edit". |
+
+### Consistency sweep
+
+- **RequireNotBypass-as-consent:** none survives. All 8 mentions (l11, 27, 56, 133, 141,
+  146, 153, 196) describe it correctly *as* the 503 dev-bypass guard or explicitly disclaim
+  it as consent. C-1r stays closed.
+- **FR↔TDD alignment:** #5↔FR-9.4 (tool-resolution default-DENY + negative), #9↔FR-12.1
+  (unconditional contract-first), #11↔FR-9.2/M-6 (traversal/oversize/invalid + audit) all
+  agree. TDD #11 is broader than FR-9.2's "a traversal-attempt test" (adds oversize +
+  invalid-frontmatter) — strengthening, not contradicting; FR-9.2's "validate the SKILL.md
+  (frontmatter + structure)" backs the extra cases.
+- **Traceability matrix (§8):** unchanged and not made inconsistent. #11 is an additional
+  negative for already-traced FR-9.2 (matrix maps FR-9.2→#2,#3); #5/#9 are renumber/reword
+  in place. The long-standing MINOR (FR-11.1 absent from §8; FR-10.2 "doc"; CI/E2E rows
+  unnumbered) persists but was never gating and is unaffected by these edits.
+
+### Verdict
+
+No CRITICAL, no MAJOR remain. The one MAJOR-class item that held round 3 at REVISE (M-3:
+FR-12.1 vs conditional TDD #9) is resolved — the test gate is now unconditional and matches
+the FR. The two MINOR residues (M-5 negative test, M-6 oversize/traversal datasets) are
+present in the TDD table and Test Datasets. The TDD plan is internally consistent with the
+FRs and the security primitive is described correctly throughout.
+
+**Verdict: PASS. GATE C is OPEN.** Spec-6 is ready for task decomposition.
+
+Residual non-blocking items for the implementer (OBSERVATION, do not gate): O-1 (the
+bundle-manifest shape ships with no consumer — guard against drift before the installer
+arrives), m-1 (§8 matrix lacks FR-11.1/FR-10.2 rows — add explicit "doc-only" markers),
+STRIDE note (registry tokens must route via the credential store like channels, SEC-23 —
+confirm at impl). None of these invalidate any FR/SC.
+
+```
+/taskify docs/internal/specs/v01-spec6-skills-plugins-integrations-auth-spec.md
+```
+
+---
+
+## ROUND-3 VERDICT (2026-06-13) — REVISE (GATE C still withheld)
+
+Re-grounded against the live tree: `bypass_gate.go:35-45` (`RequireNotBypass` returns
+**503** on `cfg.Gateway.DevModeBypass`), `ws_approval.go:84/132` (`ApproveTool` +
+`ApprovalDecision`/`ToolApprovalRequest` — the real tool-layer consent), `pkg/skills/loader.go:28-48`
+(`SkillMetadata` frontmatter + `validate()` — the SKILL.md validation surface exists),
+`pkg/audit/` (audit infrastructure exists), `pkg/agent/loop.go` allowlist/prompt-build surfaces.
+
+### C-1r — CLOSED. All five flagged surfaces purged of RequireNotBypass-as-consent.
+
+| Surface | Round-2 state | Round-3 state |
+|---|---|---|
+| **line 11** (Overview) | "password re-type (`RequireNotBypass`)" | "a **NEW** consent primitive — `RequireNotBypass` is a 503 dev-bypass guard, unrelated" ✓ |
+| **line 27** (Symbols) | "`RequireNotBypass` … the sensitive-settings gate" | row is now "NEW consent primitive (tool-layer `ws_approval`; HTTP-layer re-auth)"; `RequireNotBypass` named "a 503 dev-bypass guard, **NOT** consent" ✓ |
+| **line 56** (US-8) | "I re-type the one password (`RequireNotBypass`)" | "the **NEW** re-auth check — `RequireNotBypass` is a 503 dev-bypass guard, unrelated" ✓ |
+| **line 113** (BDD `Then`) | "rejected (RequireNotBypass)" | "rejected (the new re-auth check fails)" ✓ |
+| **line 133** (TDD #7) | `TestSensitiveSetting_RequiresPassword` → "RequireNotBypass" | `TestSensitiveSetting_RequiresReAuth` → "the new re-auth check (NOT RequireNotBypass)" ✓ |
+
+Every other `RequireNotBypass` mention (140, 145, 152, 195) describes it correctly *as*
+the 503 dev-bypass guard — permitted by the round-2 closure rule. **No surviving
+RequireNotBypass-as-consent reference anywhere.** C-1r is closed; grounding verified
+(bypass_gate.go:35-45, ws_approval.go:84/132).
+
+### The three majors — FR prose closed and grounded; but each left a TDD-plan residue
+
+The round-3 fixes corrected the **FR prose** for M-3/M-5/M-6 correctly and with sound
+grounding. But each repaired only the FR and left the **TDD plan table / Test Datasets**
+carrying the exact conditional/positive-only language round-2 told the author to remove —
+the same FR-fixed-but-test-not failure mode that produced C-1r in round 2. TDD-driven
+implementers execute the test plan first; a negative test mandated in FR prose but absent
+from the test table will be skipped.
+
+| ID | FR prose (load-bearing) | Residue | Sev |
+|----|-------------------------|---------|-----|
+| **M-3** | **CLOSED** — FR-12.1 (l151) "contract-first (Constraint #8 — **not conditional**)"; §9 amb.1 (l176) "RESOLVED — provider config contract-first". | **OPEN (residue):** TDD **#9 (l135)** still reads `verify-contracts (CI) … (if skill/registry types cross boundary)` — the exact conditional round-2 required made unconditional. The FR now says it IS boundary-crossing, so the test gate must be unconditional. Self-contradiction between FR-12.1 and TDD #9. | **MAJOR→MINOR** (FR resolves the contract question; the test row is stale) |
+| **M-5** | **CLOSED** — FR-9.4 (l147): enforcement at "**prompt-build + tool-resolution**", "**default-DENY**", "a negative test asserts denial, not just the positive matrix". | **OPEN (residue):** TDD **#5 (l131)** is unchanged — `TestSkillAllowlist_PerAgent_OnDemand` traced to "allowlist matrix", **still positive-only**, the precise gap round-2 named ("TDD #5 is positive-only"). The mandated load-denied negative test has no table row and no dataset. | **MINOR** |
+| **M-6** | **CLOSED** (mostly) — FR-9.2 (l145): "path-confined … (no `..`/traversal), validate the `SKILL.md` (frontmatter + structure), and audit-log every create/edit". | **OPEN (residue):** (a) the **oversize** negative test round-2 required is **dropped** — only traversal survives in the FR; (b) neither the traversal-rejection test nor an oversize test appears in the **TDD table** or the **Test Datasets** line (l138 still `create {consent→write, no-consent→deny}` — no `traversal→reject`/`oversize→reject`). | **MINOR** |
+
+Grounding for the majors is sound: `loader.go:48 validate()` + `SkillMetadata`
+frontmatter back the SKILL.md-validation requirement; `pkg/audit/` backs the audit-log
+requirement; `pkg/agent/loop.go` allowlist surfaces back the enforcement point.
+
+### Why REVISE, not PASS
+
+No CRITICAL remains — C-1r is fully closed and the three majors' load-bearing FR prose is
+corrected and grounded. But the spec **self-contradicts** between FR-12.1 (contract-first,
+unconditional) and TDD #9 (conditional), and the negative tests that M-5/M-6 FRs now
+*require* are **absent from the test plan an implementer executes**. These are exactly the
+"FR fixed, test not" residues that round-2 escalated to CRITICAL for C-1; here they sit a
+notch lower because the load-bearing requirement is in the FR, but they still mean the spec
+ships an internally inconsistent test plan. One MAJOR-class contradiction (M-3 FR vs TDD #9)
+holds the verdict at REVISE.
+
+### Required to reach GATE C (PASS) — test-plan alignment only
+
+1. **TDD #9 (l135):** drop "(if skill/registry types cross boundary)" → make `verify-contracts`
+   **unconditional** (FR-12.1 already declares the boundary crossed).
+2. **TDD #5 (l131):** add an explicit load-denied negative test (e.g.
+   `TestSkillAllowlist_DeniesUnlisted` — agent without the skill on its allowlist cannot
+   invoke/load it), and a `denied` dataset row.
+3. **FR-9.2 / TDD / Test Datasets:** restore the **oversize** SKILL.md negative test alongside
+   traversal; add `traversal→reject` and `oversize→reject` to the Test Datasets line (l138)
+   and a traversal/oversize test row to the TDD table.
+
+No re-grounding needed — the engine/auth/audit/loader claims all check out against the live
+tree. This is a documentation-consistency pass over the TDD plan, not a redesign.
+
+**Verdict: REVISE.** C-1r closed and verified; M-3/M-5/M-6 FR prose closed and grounded;
+GATE C withheld solely on the FR↔TDD inconsistencies (M-3 FR vs conditional TDD #9 is the
+MAJOR; M-5/M-6 missing negative-test rows are MINOR but were explicitly named in round 2).
+
+```
+/plan-spec --revise docs/internal/specs/v01-spec6-skills-plugins-integrations-auth-spec.md docs/internal/specs/v01-spec6-skills-plugins-integrations-auth-spec-review.md
+```
+
+---
+
+## ROUND-2 VERDICT (2026-06-13) — REVISE (not yet GATE C)
+
+Re-grounded against the live tree: `ws_approval.go` (`ApproveTool(ctx, *ToolApprovalRequest)
+→ ApprovalDecision`, policy `allow`/`ask`/`deny`, interactive frame on `ask`),
+`bypass_gate.go:35` (503 dev-bypass guard), `pkg/sysagent/tools/deps.go:51` (`Deps` has
+no skills handle), `pkg/skills/registry.go:51-117` (one `SkillRegistry` impl: ClawHub;
+GitHub is a `SkillInstaller` method, not a registry; no version/snapshot type), on-disk
+`workspace/skills/` (only `summarize` of the 4 defaults exists), and `ADR-019` line 46
+(consent correction recorded).
+
+### The six listed closures — ALL CONFIRMED CLOSED
+
+| ID | Was | Round-2 state | Grounding |
+|----|-----|---------------|-----------|
+| **C-1** | `RequireNotBypass` = consent (fabricated) | **Closed** *in FR-9.2/FR-12.2/§11* — consent is NEW; tool-layer = `ws_approval`, HTTP-layer = new re-auth; `RequireNotBypass` correctly named a 503 dev-bypass guard. ADR FR-12 records it. | `bypass_gate.go:35` returns 503; `ws_approval.go:132` is the real tool-consent layer; ADR-019:46 |
+| **C-2** | Layer mismatch (HTTP mw gating a tool) | **Closed** — FR-9.2 routes skill-write consent through tool-layer `ws_approval`, not HTTP middleware. | `ws_approval.go:155-167` policy `ask` → interactive |
+| **C-3** | No wiring path | **Closed** — FR-9.1 adds `SkillsLoader`/`RegistryManager`/`SkillInstaller` to the sysagent tool `Deps`. | `deps.go:51` confirmed has none today |
+| **M-1** | Default skills don't exist / no embed | **Closed** — FR-9.3 states `go:embed` is NEW infra and `skill-authoring`/`plan`/`daily-briefing` MUST be authored (only `summarize` on disk). | `workspace/skills/` = {agent-browser,github,skill-creator,summarize,tmux,weather} |
+| **M-2** | Versioning ungrounded | **Closed** — FR-9.2 defines a NEW `.versions/` snapshot scheme. | `pkg/skills` has no snapshot/rollback type (only registry-metadata `Version` strings) |
+| **M-4** | GitHub fan-out misstated | **Closed** — FR-10.1 requires a NEW GitHub `SkillRegistry` adapter for fan-out. | `registry.go` one impl (ClawHub); `installer.go:135 InstallFromGitHub` is not a registry |
+
+The amended FR-9.1/FR-9.2/FR-9.3/FR-10.1/FR-12.2 and the §11 assumptions are now
+correctly grounded. The architectural core of the spec is sound.
+
+### Why this is REVISE and not PASS — three round-1 MAJORs were NOT in the closure list, and C-1's fabrication survives outside the corrected FRs
+
+The author's closure list covered C-1/C-2/C-3/M-1/M-2/M-4. It silently omitted **M-3,
+M-5, M-6** (all still open) and left the **original C-1 fabrication intact in five
+surfaces an implementer actually reads** (Overview, Symbols, US-8, the BDD scenario,
+the TDD test name). A spec that corrects a security primitive in the FR section but
+leaves the wrong primitive in the user story, the executable BDD scenario, and the test
+name will be implemented wrong — the implementer follows the scenario, not the FR prose.
+
+| ID | Sev | Status | Evidence in current spec |
+|----|-----|--------|--------------------------|
+| **C-1r** (residue) | **CRITICAL** | **OPEN** | The corrected FRs coexist with the un-corrected claim in: **line 11** ("sensitive settings = password re-type (`RequireNotBypass`)"), **line 27** (Symbols: "`RequireNotBypass` … password re-type … the sensitive-settings gate"), **line 56** (US-8: "I re-type the one password (`RequireNotBypass`)"), **line 113** (BDD: "rejected (RequireNotBypass)"), **line 133** (TDD `TestSensitiveSetting_RequiresPassword` traces to "RequireNotBypass"). The spec now contradicts itself on its load-bearing security control. |
+| **M-3** | MAJOR | **OPEN** | Contract boundary still conditional: **line 135** TDD #9 "(if skill/registry types cross boundary)"; **§9 amb.1 (line 176)** "confirm at impl". The Integrations picker (FR-12.1) and onboarding state cross the SPA boundary → Constraint #8 requires schemas *before* code; `verify-contracts` must be unconditional. Unchanged from round 1. |
+| **M-5** | MAJOR | **OPEN** | FR-9.4 (line 147) still only "scope skills per-agent (allowlist) + progressive disclosure". No enforcement point (loader filter vs tool policy vs agent config), no default-deny rule, no custom/new-agent behavior, no load-denied negative test (TDD #5 is positive-only). Unchanged from round 1. |
+| **M-6** | MAJOR | **OPEN** | Zero requirements for the self-modifying-write surface: no path-confinement to the user-skills dir, no `SKILL.md` schema validation before persist, no audit-log entry per create/edit, no traversal/oversize negative test. The (now-real) `ws_approval` consent helps, but the write-path hardening C-1/C-2 was paired with is still absent. Unchanged from round 1. |
+
+Round-1 MINORs (m-1 FR-11.1 still absent from §8 matrix; m-2 sensitive-set unenumerated;
+m-3 onboarding replace-vs-extend + resume; m-4 transcriber default/limits) and the STRIDE
+note (registry tokens must route via the credential store like channels, SEC-23 — no
+mention in the spec) also remain open but do not by themselves change the verdict.
+
+### Required to reach GATE C (PASS)
+
+1. **Close C-1r:** purge `RequireNotBypass` as the consent/re-type primitive from **lines 11, 27, 56, 113, 133**. Overview/Symbols/US-8 must say "re-authentication check (re-verify the one password)"; the BDD `Then` and the TDD test must assert the new re-auth check, not `RequireNotBypass`. `RequireNotBypass` may remain only where the spec describes it *as* the 503 dev-bypass guard (it is fine in FR-9.2/FR-12.2/§11).
+2. **Close M-3:** make TDD #9 unconditional; resolve §9 amb.1 by enumerating SPA-read payloads (registry list, provider config, skill list, onboarding state) and requiring OpenAPI/AsyncAPI schemas + generated types per the 5-step process before handler code.
+3. **Close M-5:** pin the allowlist enforcement point and a default-deny rule (agent sees only explicitly-allowlisted skills; custom agents → none by default); add a load-denied negative test.
+4. **Close M-6:** require write confinement to the user-skills dir (no traversal), `SKILL.md` schema validation before persist, an audit entry per create/edit, and traversal/oversize negative tests.
+
+**Verdict: REVISE.** Six listed items genuinely closed and well-grounded; GATE C withheld
+because the spec now self-contradicts on its security primitive (C-1 fabrication left in
+the story/BDD/test it must drive) and three round-1 MAJORs (M-3/M-5/M-6) were not addressed.
+
+```
+/plan-spec --revise docs/internal/specs/v01-spec6-skills-plugins-integrations-auth-spec.md docs/internal/specs/v01-spec6-skills-plugins-integrations-auth-spec-review.md
+```
+
+---
+
+## Round 1 (2026-06-13) — BLOCK (superseded; kept for history)
+
+---
+
 ## Executive Summary
 
 This omnibus spec wires four stub skill tools to the real `pkg/skills` engine, adds
