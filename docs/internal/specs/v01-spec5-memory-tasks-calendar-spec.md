@@ -9,7 +9,7 @@
 
 ## 1. Overview
 
-Land the memory **structure** (not behaviour): **two rooms** — a **private** per-agent room (`agents/<id>/.omnipus/`, agent-global) + a **shared workspace room** (`<workspace>/.omnipus/`, keyed to Spec-1's Workspace); the **full per-memory file format** (frontmatter, every field present even if unused); **3 new tools** `remember`/`recall`/`retrospective` **replacing the monolithic `MEMORY.md`**; **bleve** full-text recall (a **new pure-Go dep**); **freeze the append-only LOG RECORD FORMATS** (`sessions/` firehose · `counters.jsonl` · `born_in`/`cited_in`) so v0.2 ranking never backfills; **no embeddings · MinHash dedup · no SQLite**. Add the **task fields** `start·due·recurrence·blocked_by` (additive; `blocked_by` with its cycle/orphan validator + delete/runtime semantics), and the per-workspace **Calendar/Automations shell** (greenfield).
+Land the memory **structure** (not behaviour): **two rooms** — a **private** per-agent room (`agents/<id>/.omnipus/`, agent-global) + a **shared workspace room** (`<workspace>/.omnipus/`, keyed to Spec-1's Workspace); the **full per-memory file format** (frontmatter, every field present even if unused); the **3 existing tools** `remember`/`recall_memory`/`retrospective` (re-pointed to the rooms, not new — C-1) **replacing the monolithic `MEMORY.md`**; **bleve** full-text recall (a **new pure-Go dep**); **freeze the append-only LOG RECORD FORMATS** (`sessions/` firehose · `counters.jsonl` · `born_in`/`cited_in`) so v0.2 ranking never backfills; **no embeddings · MinHash dedup · no SQLite**. Add the **task fields** `start·due·recurrence·blocked_by` (additive; `blocked_by` with its cycle/orphan validator + delete/runtime semantics), and the per-workspace **Calendar/Automations shell** (greenfield).
 
 **In scope:** the 2-room directory topology (workspace-keyed); the per-memory file format (frontmatter schema, fully pinned); the 3 tools (`remember`/`recall`/`retrospective`); bleve FTS recall (new dep); the frozen log-record formats + starting the logs; MinHash dedup; the additive task fields + the `blocked_by` validator (+ delete/runtime semantics); the Calendar/Automations shell.
 **Out of scope (v0.2.0 behaviour):** confidence drift, recall ranking, the graph (6 edges/MOCs), the Dreamcatcher, weights/thresholds (ADR NFR-6); functional recurrence execution + the automations engine (shell only); embeddings (never).
@@ -53,7 +53,7 @@ Land the memory **structure** (not behaviour): **two rooms** — a **private** p
 **US-7 — Calendar/Automations shell (P1).** 1. **Given** the per-workspace Calendar surface, **When** I view it, **Then** scheduled tasks/events/milestones render (shell — the automations *engine* is v0.2.0). 
 
 ### Edge Cases
-- bleve index missing/corrupt → rebuilt from `.md` (derived). · A workspace with no shared room → created on first write. · MinHash near-duplicate memory → deduped on write. · `blocked_by` cycle → rejected (Spec-1 semantics). · Recurrence field set but engine absent → stored, not executed (shell). · Migrating off `MEMORY.md` → greenfield (no old MEMORY.md read).
+- bleve index missing/corrupt → rebuilt from `.md` (derived). · A workspace with no shared room → created on first write. · MinHash near-duplicate memory → deduped on write. · `blocked_by` cycle → rejected (Spec-1 semantics). · Recurrence field set but engine absent → stored, not executed (shell). · **Migrating** `MEMORY.md`/`_retro.md` → into the rooms (M-2 — memory is NOT greenfield; user memory preserved, no silent loss).
 
 ## 4. Behavioral Contract · Non-Behaviors · Integration Boundaries
 
@@ -136,7 +136,7 @@ Scenario: Task fields regenerate clean
 
 **Test Datasets**: room {private→agents/<id>, shared→<workspace>}; frontmatter {all fields}; recall {match, no-vector}; index {deleted→rebuild}; minhash {near-dup→deduped}; blocked_by {cycle→reject, delete→cascade-clean}; recurrence {set→stored-not-run}.
 
-**Regression:** modifies the memory store (MEMORY.md→rooms) + task model. (1) Greenfield — no old MEMORY.md migrated; (2) the existing `.jsonl` session history (jsonl.go) coexists/migrates to the rooms structure; (3) task CRUD (Spec-1 workspace-keyed) preserved + extended; (4) NEW: rooms, 3 tools, bleve, logs, blocked_by validator, calendar. **CI authority; local scoped only.**
+**Regression:** modifies the memory store (MEMORY.md→rooms) + task model. (1) Memory is **NOT** greenfield — `MEMORY.md`/`_retro.md` MUST migrate into the rooms (M-2, no silent loss); (2) the existing `.jsonl` session history (jsonl.go) coexists/migrates to the rooms structure; (3) task CRUD (Spec-1 workspace-keyed) preserved + extended; (4) NEW: rooms, 3 tools, bleve, logs, blocked_by validator, calendar. **CI authority; local scoped only.**
 
 ## 7. Functional Requirements & Success Criteria
 

@@ -1,5 +1,58 @@
 # Spec Review — Spec-5: Memory Rooms (structure + logs), Task Fields & Calendar Shell
 
+> ## ROUND 2 (2026-06-13) — RE-REVIEW after round-1 BLOCK · **Verdict: PASS (GATE C)**
+>
+> All four round-1 CRITICAL (C-1..C-4) and all seven MAJOR (M-1..M-7) findings are
+> **closed and verified against the codebase**. Remaining items are MINOR /
+> OBSERVATION and do not block. Spec is ready for `/taskify`.
+>
+> | Severity | Round 1 | Round 2 (open) |
+> |----------|---------|----------------|
+> | CRITICAL | 4 | 0 |
+> | MAJOR | 7 | 0 |
+> | MINOR | 5 | 3 (new) |
+> | OBSERVATION | 3 | 3 (new) |
+>
+> ### Round-1 closure verification (grounded in code)
+>
+> | ID | Round-1 defect | Status | Evidence |
+> |----|----------------|--------|----------|
+> | **C-1** | Falsely said 3 tools are NEW | **CLOSED** | §2 row 2 + FR-7.3 now say the tools **EXIST** and are **re-pointed**. Confirmed: `pkg/tools/memory.go` — `RememberTool.Name()="remember"` (L90), `RecallMemoryTool.Name()="recall_memory"` (L262), `RetrospectiveTool.Name()="retrospective"` (L353), all over `MemoryAccess`/`MemorySearcher`→`MemoryStore`. |
+> | **C-2** | Frozen log schemas absent | **CLOSED** | FR-7.5 inlines `counters.jsonl={ts,memory_id,op∈{access\|drift\|cited},by,amount?}` atomic `<PIPE_BUF`; `sessions/<id>/<date>.jsonl` firehose; `born_in`=frontmatter; `cited_in`=`counters` `op:cited`; `.index/` DERIVED. Matches design-doc D15 (memory-redesign-2026-05.md L295-303). |
+> | **C-3** | Frontmatter unpinned (`…`) | **CLOSED** | FR-7.2 inlines the closed set `id·title·type{8-enum}·tags[]·confidence·status{3-enum}·supersedes·author·born_in`+`[[id]]`, "every field present even if empty." Matches design-doc memory shape (L92-114, 8-type enum L99). |
+> | **C-4** | bleve no-CGo asserted, not enforced | **CLOSED** | FR-7.4 pins pure-Go `scorch`, forbids CGo leveldb/rocksdb, mandates `CGO_ENABLED=0` CI gate; M-6 folds in index lifecycle + 64-shard-mutex concurrency. **CGo-creep premise verified real**: `go.mod` L90 `mattn/go-sqlite3 // indirect`. `bleve` confirmed absent from `go.mod`/`go.sum` — genuinely new. |
+> | **M-1** | Wrong tool name `recall` | **CLOSED** | §2/FR-7.3 keep `recall_memory` (= `RecallMemoryTool.Name()`). (Design-doc D6 says `recall`; spec correctly follows code.) |
+> | **M-2** | "Greenfield" hid live data | **CLOSED*** | FR-7.6+§11 mandate migrating live `MEMORY.md`/`_retro.md`; `pkg/agent/memory.go::MemoryStore` confirms real data. *Caveat MIN-001: spec still self-contradicts in Edge-Cases/Regression and silently overrides design-doc D2. |
+> | **M-3** | Cascade misattributed to Spec-1 | **CLOSED** | FR-8.2 states the `blocked_by` edge cleanup is "THIS spec's … distinct from Spec-1's project→task-file cascade (NOT attributed to Spec-1)." |
+> | **M-4** | Validator only handled 2-node cycle | **CLOSED** | FR-8.2: rejects self-edge + 2-node + N-node cycles (full DAG check), drops orphan edges on load, depth-bounded. |
+> | **M-5** | MinHash dedup destructive/unspecified | **CLOSED** | FR-7.5+§1: near-dups linked via `minhash.jsonl`, **not deleted**. |
+> | **M-6** | bleve lifecycle/concurrency | **CLOSED** | FR-7.4: incremental-on-write, rebuild-on-corruption, bleve writer-lock + shard-lock, "no double-write races." |
+> | **M-7** | Calendar surface undefined | **CLOSED** | FR-8.3 defines a SPA Calendar view rendering scheduled tasks/events/milestones; engine deferred to v0.2. |
+>
+> **Cross-spec grounding (Spec-3):** verified `TaskUpdateTool.SetOnComplete` (`pkg/tools/task.go`) wired in `pkg/agent/loop.go` to `taskExecutor.onTaskComplete`, and the generated `task_status_changed` WS frame (`contracts/components/schemas/TaskStatusChangedFrame.yaml`, `pkg/api/generated/asyncapi_types.gen.go`). §6 attribution is correct.
+>
+> ### Remaining non-blocking findings (round 2)
+>
+> - **MIN-001 (Inconsistency, FR-7.6 vs Edge-Cases/Regression/design-doc D2)** — The spec now mandates migration (FR-7.6/§11/US-3) but the **Edge-Cases bullet still says "Migrating off `MEMORY.md` → greenfield (no old MEMORY.md read)"** and **Regression note (1) says "Greenfield — no old MEMORY.md migrated"** — a direct self-contradiction that would re-introduce the M-2 data-loss bug if an implementer follows the wrong line. It also silently overrides design-doc D2/D33 ("no migration"). **Fix:** rewrite the Edge-Cases bullet and Regression (1) to match FR-7.6, and add one line noting the deliberate deviation from D2.
+> - **MIN-002 (Incompleteness, FR-7.3)** — `recall_memory` today exposes only `query`+`limit` (memory.go L270-285); the design doc adds `room=private|project|both`/`scope`/`hops`. Two-room reads (US-1) need a room selector, but FR-7.3 neither pins nor defers it. **Fix:** state whether v0.1.0 `recall_memory` gains a `room`/`scope` param (pin the enum) or recall is room-implicit with the selector deferred.
+> - **MIN-003 (Testability, FR-7.4/SC-5)** — the "no new CGo" CI gate has no SC/TDD anchor. **Fix:** add SC-5b (`CGO_ENABLED=0 … ./...` green with bleve present; no CGo-requiring dep added) + a CI/TDD row.
+> - **OBS-001 (FR-7.2/7.3)** — existing `remember` hard-caps content at 4096 runes (memory.go L132); design-doc Q7 sets 8 KB soft / 64 KB hard. Spec is silent on which survives. Wikilink narratives will exceed 4096. State the v0.1.0 cap.
+> - **OBS-002 (FR-7.2/7.3)** — current `remember` input is `category∈{key_decision|reference|lesson_learned}` (L107-111), but FR-7.2 frontmatter wants `type{8-enum}`+`tags[]`+`supersedes`. The tool's input→frontmatter mapping is unspecified; frontmatter can't be populated without it. Pin the v0.1.0 `remember` param set.
+> - **OBS-003 (FR-8.3)** — Calendar surface names no route/wire-type/data-source. State whether it reads `GET /api/v1/board/tasks` (filtered by `start`/`due`) or needs a new contract-first endpoint (Constraint #8).
+>
+> ### Next action
+> ```
+> Verdict: PASS — spec ready for task decomposition. Run:
+>   /taskify docs/internal/specs/v01-spec5-memory-tasks-calendar-spec.md
+> ```
+> (Recommend fixing MIN-001 first — it is an internal self-contradiction that can resurrect the M-2 data-loss bug — but it does not gate.)
+>
+> ---
+> *Round-1 review (BLOCK) preserved below for the record.*
+> ---
+
+# Round 1 — original review (BLOCK)
+
 - **Spec reviewed:** `docs/internal/specs/v01-spec5-memory-tasks-calendar-spec.md`
 - **Reviewer mode:** adversarial spec-review (read-only). Input classified as **plan-spec** (has BDD Given/When/Then, FR-x, SC-x, Traceability Matrix).
 - **Grounding base:** `pkg/memory/`, `pkg/tools/memory.go`, `pkg/agent/memory.go`, `go.mod`, `contracts/components/schemas/BoardTask*.yaml`, `pkg/boardtask/`, `docs/internal/architecture/ADR-019-v01-workspaces-foundation.md`, Spec-1 (`v01-spec1-workspace-rename-spec.md`, `project-task-management-level1-spec.md`), Spec-3 (`v01-spec3-agents-delegation-orchestrator-spec.md`).
