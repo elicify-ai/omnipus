@@ -566,19 +566,22 @@ func TestRegression_Repository_SchemeValidation(t *testing.T) {
 
 // ── OWN: ownership scoping gaps ──────────────────────────────────────────────
 
-// TestRegression_BoardTask_OwnershipScoping_PUTAndDELETE verifies SEC-2 for the
-// write paths: user B gets 404 on PUT and DELETE of user A's board task, and
-// admin can modify both.
+// TestRegression_BoardTask_OwnershipScoping_PUTAndDELETE verifies FR-1.9 for the
+// write paths: owner is attribution-only (single-user), so any authenticated user
+// may PUT or DELETE any task — cross-owner access is no longer denied.
 //
-// BDD: Given alice creates task T,
-// When bob (role=user) calls PUT /board/tasks/{id} and DELETE /board/tasks/{id},
-// Then 404 is returned (resource enumeration protection).
-// When admin calls the same operations,
-// Then they succeed.
+// BDD: Given alice creates task T (owner="alice"),
+// When bob (role=user) calls PUT /board/tasks/{id},
+// Then 200 is returned and the task name is updated (gate removed — attribution only).
+// When admin calls PUT /board/tasks/{id},
+// Then 200 is returned and the task name is updated.
+// When bob calls DELETE /board/tasks/{id},
+// Then 204 is returned and the task no longer exists.
 //
-// Traces to: feat/level1-project-task-mgmt — SEC-2 ownership scoping for board tasks
+// Traces to: feat/level1-project-task-mgmt — FR-1.9 owner attribution-only,
+// v01-spec1-workspace-rename-spec.md (SEC-2 cross-owner gate removed)
 func TestRegression_BoardTask_OwnershipScoping_PUTAndDELETE(t *testing.T) {
-	// Traces to: SEC-2 — board task ownership scoping: PUT and DELETE
+	// Traces to: FR-1.9 — owner is attribution-only; cross-owner PUT/DELETE must succeed
 	api := newTestRestAPIWithHome(t)
 
 	// Alice creates a task.
@@ -593,7 +596,8 @@ func TestRegression_BoardTask_OwnershipScoping_PUTAndDELETE(t *testing.T) {
 	var task gen.BoardTask
 	require.NoError(t, json.Unmarshal(wPost.Body.Bytes(), &task))
 
-	// Bob PUT → 404.
+	// Bob PUT → 200 (cross-owner access now allowed — FR-1.9 gate removed).
+	// The differentiation assertion (name changes) proves this is not a no-op stub.
 	wPutBob := httptest.NewRecorder()
 	rPutBob := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
 		strings.NewReader(`{"name":"BobOverwrite"}`))
@@ -601,28 +605,14 @@ func TestRegression_BoardTask_OwnershipScoping_PUTAndDELETE(t *testing.T) {
 	rPutBob.URL.Path = "/api/v1/board/tasks/" + task.Id
 	rPutBob = rPutBob.WithContext(contextWithUserRole(rPutBob.Context(), "bob", config.UserRoleUser))
 	api.HandleBoardTasks(wPutBob, rPutBob)
-	assert.Equal(t, http.StatusNotFound, wPutBob.Code,
-		"bob must get 404 on PUT of alice's task; body=%s", wPutBob.Body.String())
+	assert.Equal(t, http.StatusOK, wPutBob.Code,
+		"bob must get 200 on PUT of alice's task (FR-1.9: no ownership gate); body=%s", wPutBob.Body.String())
+	var putResult gen.BoardTask
+	require.NoError(t, json.Unmarshal(wPutBob.Body.Bytes(), &putResult))
+	assert.Equal(t, "BobOverwrite", putResult.Name,
+		"PUT must actually update the task name — not a no-op")
 
-	// Bob DELETE → 404.
-	wDelBob := httptest.NewRecorder()
-	rDelBob := httptest.NewRequest(http.MethodDelete, "/api/v1/board/tasks/"+task.Id, nil)
-	rDelBob.URL.Path = "/api/v1/board/tasks/" + task.Id
-	rDelBob = rDelBob.WithContext(contextWithUserRole(rDelBob.Context(), "bob", config.UserRoleUser))
-	api.HandleBoardTasks(wDelBob, rDelBob)
-	assert.Equal(t, http.StatusNotFound, wDelBob.Code,
-		"bob must get 404 on DELETE of alice's task; body=%s", wDelBob.Body.String())
-
-	// Task must still exist (bob's 404s must not have deleted it).
-	wStillExists := httptest.NewRecorder()
-	rStillExists := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks/"+task.Id, nil)
-	rStillExists.URL.Path = "/api/v1/board/tasks/" + task.Id
-	rStillExists = rStillExists.WithContext(contextWithUserRole(rStillExists.Context(), "alice", config.UserRoleUser))
-	api.HandleBoardTasks(wStillExists, rStillExists)
-	assert.Equal(t, http.StatusOK, wStillExists.Code,
-		"alice's task must still exist after bob's 404 attempts; body=%s", wStillExists.Body.String())
-
-	// Admin PUT → 200.
+	// Admin PUT → 200 (unchanged from before; confirms cross-owner admin access too).
 	wPutAdmin := httptest.NewRecorder()
 	rPutAdmin := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id,
 		strings.NewReader(`{"name":"AdminRename"}`))
@@ -632,6 +622,28 @@ func TestRegression_BoardTask_OwnershipScoping_PUTAndDELETE(t *testing.T) {
 	api.HandleBoardTasks(wPutAdmin, rPutAdmin)
 	assert.Equal(t, http.StatusOK, wPutAdmin.Code,
 		"admin must be able to PUT alice's task; body=%s", wPutAdmin.Body.String())
+	var adminPutResult gen.BoardTask
+	require.NoError(t, json.Unmarshal(wPutAdmin.Body.Bytes(), &adminPutResult))
+	assert.Equal(t, "AdminRename", adminPutResult.Name,
+		"admin PUT must actually update the task name")
+
+	// Bob DELETE → 204 (cross-owner delete now allowed — FR-1.9 gate removed).
+	wDelBob := httptest.NewRecorder()
+	rDelBob := httptest.NewRequest(http.MethodDelete, "/api/v1/board/tasks/"+task.Id, nil)
+	rDelBob.URL.Path = "/api/v1/board/tasks/" + task.Id
+	rDelBob = rDelBob.WithContext(contextWithUserRole(rDelBob.Context(), "bob", config.UserRoleUser))
+	api.HandleBoardTasks(wDelBob, rDelBob)
+	assert.Equal(t, http.StatusNoContent, wDelBob.Code,
+		"bob must get 204 on DELETE of alice's task (FR-1.9: no ownership gate); body=%s", wDelBob.Body.String())
+
+	// Task must be gone after bob's successful DELETE.
+	wGone := httptest.NewRecorder()
+	rGone := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks/"+task.Id, nil)
+	rGone.URL.Path = "/api/v1/board/tasks/" + task.Id
+	rGone = rGone.WithContext(contextWithUserRole(rGone.Context(), "alice", config.UserRoleUser))
+	api.HandleBoardTasks(wGone, rGone)
+	assert.Equal(t, http.StatusNotFound, wGone.Code,
+		"task must be gone after bob's DELETE (204 was real, not a no-op); body=%s", wGone.Body.String())
 }
 
 // TestRegression_BoardTask_EmptyOwner_AccessibleToAll verifies that a legacy
@@ -693,16 +705,18 @@ func TestRegression_BoardTask_EmptyOwner_AccessibleToAll(t *testing.T) {
 	assert.True(t, found, "legacy (empty-owner) task must appear in the list for any user")
 }
 
-// TestRegression_BoardTask_OwnershipScoping_StartBlocked verifies that user B
-// cannot start user A's task via POST /board/tasks/{id}/start.
+// TestRegression_BoardTask_OwnershipScoping_StartAllowed verifies FR-1.9 for
+// POST /board/tasks/{id}/start: the ownership gate in startBoardTaskLocked has
+// been removed, so any authenticated user may start any task regardless of owner.
 //
-// BDD: Given alice creates task T with a prompt,
+// BDD: Given alice creates task T with owner="alice" and a prompt,
 // When bob (role=user) calls POST /board/tasks/{id}/start,
-// Then 404 (ownership enumeration protection).
+// Then 202 Accepted is returned (cross-owner start now allowed — FR-1.9).
 //
-// Traces to: feat/level1-project-task-mgmt — SEC-2 start endpoint ownership
-func TestRegression_BoardTask_OwnershipScoping_StartBlocked(t *testing.T) {
-	// Traces to: SEC-2 — /start must enforce ownership just like GET/PUT/DELETE
+// Traces to: feat/level1-project-task-mgmt — FR-1.9 owner attribution-only,
+// v01-spec1-workspace-rename-spec.md (SEC-2 /start owner gate removed)
+func TestRegression_BoardTask_OwnershipScoping_StartAllowed(t *testing.T) {
+	// Traces to: FR-1.9 — /start must NOT enforce ownership; cross-owner start succeeds
 	api := newTestRestAPIWithAgent(t)
 
 	// Alice creates a task.
@@ -719,21 +733,12 @@ func TestRegression_BoardTask_OwnershipScoping_StartBlocked(t *testing.T) {
 	require.NotNil(t, task.Owner)
 	assert.Equal(t, "alice", *task.Owner)
 
-	// Bob tries to start → 404.
+	// Bob starts alice's task → 202 (cross-owner start now allowed — FR-1.9 gate removed).
 	wStart := httptest.NewRecorder()
 	rStart := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks/"+task.Id+"/start", nil)
 	rStart.URL.Path = "/api/v1/board/tasks/" + task.Id + "/start"
 	rStart = rStart.WithContext(contextWithUserRole(rStart.Context(), "bob", config.UserRoleUser))
 	api.HandleBoardTasks(wStart, rStart)
-	assert.Equal(t, http.StatusNotFound, wStart.Code,
-		"bob must get 404 on POST /start for alice's task; body=%s", wStart.Body.String())
-
-	// Alice herself can start it → 202.
-	wStartAlice := httptest.NewRecorder()
-	rStartAlice := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks/"+task.Id+"/start", nil)
-	rStartAlice.URL.Path = "/api/v1/board/tasks/" + task.Id + "/start"
-	rStartAlice = rStartAlice.WithContext(contextWithUserRole(rStartAlice.Context(), "alice", config.UserRoleUser))
-	api.HandleBoardTasks(wStartAlice, rStartAlice)
-	assert.Equal(t, http.StatusAccepted, wStartAlice.Code,
-		"alice must be able to start her own task; body=%s", wStartAlice.Body.String())
+	assert.Equal(t, http.StatusAccepted, wStart.Code,
+		"bob must get 202 on POST /start for alice's task (FR-1.9: no ownership gate); body=%s", wStart.Body.String())
 }

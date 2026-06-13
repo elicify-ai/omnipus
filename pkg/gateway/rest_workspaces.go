@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -31,6 +32,10 @@ import (
 // errWorkspaceNotFound is returned by readWorkspaceFile when the workspace file
 // does not exist on disk. Callers use errors.Is(err, errWorkspaceNotFound).
 var errWorkspaceNotFound = errors.New("workspace not found")
+
+// defaultWorkspaceSeedMu serialises concurrent calls to ensureDefaultWorkspace
+// (e.g. from two racing gateway boots) so exactly one default workspace is created.
+var defaultWorkspaceSeedMu sync.Mutex
 
 // storedWorkspace mirrors the on-disk format of ~/.omnipus/workspaces/{id}.json.
 type storedWorkspace struct { // not-wire-format: internal disk-cache struct, mapped to gen.Workspace before sending over the wire
@@ -51,32 +56,19 @@ type storedWorkspace struct { // not-wire-format: internal disk-cache struct, ma
 }
 
 // caller holds the identity of the authenticated request caller.
-// Passed by value; zero value is unauthenticated (empty username, empty role).
+// Passed by value; zero value is unauthenticated (empty username).
+// Only Username is used by callers — all post-gate role/multi-user checks
+// were removed when FR-1.9 dropped the owner-gate (attribution only).
 type caller struct {
 	Username string
-	Role     config.UserRole
-	// MultiUser is true when the gateway has more than one registered user.
-	// Retained for future use; the owner gate has been removed (FR-1.9).
-	MultiUser bool
 }
 
-// callerIdentity extracts the caller's username, role, and multi-user flag from
-// the request context and gateway config. In dev-mode bypass (no UserContextKey
-// set), the caller is treated as admin with an empty username.
+// callerIdentity extracts the caller's username from the request context.
+// In dev-mode bypass (no UserContextKey set), Username is empty.
 func (a *restAPI) callerIdentity(r *http.Request) caller {
 	var c caller
 	if u, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && u != nil {
 		c.Username = u.Username
-	}
-	if ro, ok := r.Context().Value(RoleContextKey{}).(config.UserRole); ok && ro != "" {
-		c.Role = ro
-	} else {
-		// No role in context → dev-mode bypass or no-auth; treat as admin.
-		c.Role = config.UserRoleAdmin
-	}
-	// Compute MultiUser once from the live config: true when >1 user registered.
-	if cfg := a.agentLoop.GetConfig(); cfg != nil {
-		c.MultiUser = len(cfg.Gateway.Users) > 1
 	}
 	return c
 }
@@ -321,8 +313,13 @@ func (a *restAPI) loadWorkspace(w http.ResponseWriter, id string) (storedWorkspa
 // ensureDefaultWorkspace checks if the default workspace exists; if not, creates it.
 // Seeds one workspace named "My Workspace" (FR-1.6, US-6).
 // Idempotent: if a workspace with is_default=true already exists, this is a no-op.
+// Thread-safe: serialised by defaultWorkspaceSeedMu to prevent TOCTOU double-seed
+// when two gateway boots race (e.g. rapid restart or dual-process test).
 // On failure, logs an error but returns nil (non-fatal — gateway continues).
 func ensureDefaultWorkspace(home, ownerUsername string) error {
+	defaultWorkspaceSeedMu.Lock()
+	defer defaultWorkspaceSeedMu.Unlock()
+
 	workspaces, err := listWorkspaceFiles(home)
 	if err != nil {
 		return fmt.Errorf("ensureDefaultWorkspace: list workspaces: %w", err)

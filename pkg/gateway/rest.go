@@ -145,7 +145,7 @@ type restAPI struct {
 	// Nil in test setups that do not exercise notifications.
 	notifStore *notifications.Store
 
-	// auditor is the shared audit logger for mutation events on projects and
+	// auditor is the shared audit logger for mutation events on workspaces and
 	// board tasks. Sourced from agentLoop.AuditLogger() at construction time;
 	// may be nil when audit logging is disabled (best-effort — nil-safe callers).
 	auditor *audit.Logger

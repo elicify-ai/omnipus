@@ -25,41 +25,24 @@ const (
 // ProjectSessionLink is one line in project_session_links.jsonl.
 // Exported so that the REST gateway layer can call ReadLinks without
 // duplicating the mutex or file-format logic.
-// The WorkspaceID field is stored as "workspace_id" on disk; legacy lines
-// using "project_id" are accepted via the projectIDCompat field during read.
+// The WorkspaceID field is stored as "workspace_id" on disk.
 type ProjectSessionLink struct {
 	WorkspaceID string `json:"workspace_id"`
 	SessionID   string `json:"session_id"`
 	CreatedAt   string `json:"created_at"`
 }
 
-// projectSessionLinkCompat is used to decode legacy lines that used "project_id".
-type projectSessionLinkCompat struct { //nolint:govet
-	WorkspaceID string `json:"workspace_id"`
-	ProjectID   string `json:"project_id"` // legacy field; migrated on read
-	SessionID   string `json:"session_id"`
-	CreatedAt   string `json:"created_at"`
-}
-
-// decodeLink decodes a JSONL line, transparently migrating the legacy "project_id"
-// field to WorkspaceID when "workspace_id" is absent.
+// decodeLink decodes a JSONL line into a ProjectSessionLink.
+// Lines missing workspace_id or session_id are rejected (return false).
 func decodeLink(line string) (ProjectSessionLink, bool) {
-	var compat projectSessionLinkCompat
-	if json.Unmarshal([]byte(line), &compat) != nil {
+	var link ProjectSessionLink
+	if json.Unmarshal([]byte(line), &link) != nil {
 		return ProjectSessionLink{}, false
 	}
-	wsID := compat.WorkspaceID
-	if wsID == "" {
-		wsID = compat.ProjectID // migrate legacy field
-	}
-	if wsID == "" || compat.SessionID == "" {
+	if link.WorkspaceID == "" || link.SessionID == "" {
 		return ProjectSessionLink{}, false
 	}
-	return ProjectSessionLink{
-		WorkspaceID: wsID,
-		SessionID:   compat.SessionID,
-		CreatedAt:   compat.CreatedAt,
-	}, true
+	return link, true
 }
 
 // linksFilePath returns the absolute path of the link file for the given home dir.

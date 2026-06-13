@@ -53,7 +53,7 @@ var toolPermissions = map[string]ToolPermission{
 	"system.agent.read_metadata":  {MinRole: RoleViewer},
 	"system.agent.write_metadata": {MinRole: RoleOperator},
 
-	// Project management.
+	// Workspace management.
 	"system.workspace.create": {MinRole: RoleOperator},
 	"system.workspace.update": {MinRole: RoleOperator},
 	"system.workspace.delete": {MinRole: RoleAdmin},

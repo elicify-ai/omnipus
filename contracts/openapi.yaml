@@ -49,12 +49,12 @@ tags:
   description: Agent management endpoints
 - name: Settings
   description: Credentials, backup/restore, and storage management
-- name: Projects
-  description: Project management — create, list, update, delete, and session linking.
+- name: Workspaces
+  description: Workspace management — create, list, update, delete, and session linking.
 - name: Board Tasks
   description: GTD board tasks — distinct from workflow tasks at /tasks.
 - name: Milestones
-  description: Project milestones — group tasks under named milestones with optional due dates.
+  description: Workspace milestones — group tasks under named milestones with optional due dates.
 - name: Stats
   description: Usage statistics and aggregations.
 components:

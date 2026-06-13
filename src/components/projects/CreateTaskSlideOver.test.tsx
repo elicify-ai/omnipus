@@ -24,7 +24,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     createBoardTask: vi.fn(),
     boardTasksQueryKeys: { list: () => ['board-tasks'] },
     workspacesQueryKeys: { list: () => ['workspaces'] },
-    projectsQueryKeys: { list: () => ['workspaces'] },
     milestonesQueryKeys: { list: (id: string) => ['milestones', id] },
     isApiError: vi.fn().mockReturnValue(false),
   }

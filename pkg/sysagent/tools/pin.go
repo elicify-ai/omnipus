@@ -58,10 +58,10 @@ func (t *PinListTool) Execute(_ context.Context, args map[string]any) *tools.Too
 		return tools.ErrorResult(errorJSON("LIST_FAILED", err.Error(), ""))
 	}
 	searchQuery, _ := args["search"].(string)
-	projectFilter, _ := args["workspace_id"].(string)
+	workspaceFilter, _ := args["workspace_id"].(string)
 	var filtered []pin
 	for _, p := range all {
-		if projectFilter != "" && p.WorkspaceID != projectFilter {
+		if workspaceFilter != "" && p.WorkspaceID != workspaceFilter {
 			continue
 		}
 		if searchQuery != "" && !strings.Contains(

@@ -23,11 +23,9 @@ import { Route as AppCommandCenterRouteImport } from './routes/_app/command-cent
 import { Route as AppChannelsRouteImport } from './routes/_app/channels'
 import { Route as AppAgentsRouteImport } from './routes/_app/agents'
 import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces.index'
-import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects.index'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents.index'
 import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app/workspaces.$workspaceId'
 import { Route as AppSessionsSessionIdRouteImport } from './routes/_app/sessions.$sessionId'
-import { Route as AppProjectsProjectIdRouteImport } from './routes/_app/projects.$projectId'
 import { Route as AppAgentsAgentIdRouteImport } from './routes/_app/agents.$agentId'
 
 const OnboardingRoute = OnboardingRouteImport.update({
@@ -99,11 +97,6 @@ const AppWorkspacesIndexRoute = AppWorkspacesIndexRouteImport.update({
   path: '/workspaces/',
   getParentRoute: () => AppRoute,
 } as any)
-const AppProjectsIndexRoute = AppProjectsIndexRouteImport.update({
-  id: '/projects/',
-  path: '/projects/',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -118,11 +111,6 @@ const AppWorkspacesWorkspaceIdRoute =
 const AppSessionsSessionIdRoute = AppSessionsSessionIdRouteImport.update({
   id: '/sessions/$sessionId',
   path: '/sessions/$sessionId',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppProjectsProjectIdRoute = AppProjectsProjectIdRouteImport.update({
-  id: '/projects/$projectId',
-  path: '/projects/$projectId',
   getParentRoute: () => AppRoute,
 } as any)
 const AppAgentsAgentIdRoute = AppAgentsAgentIdRouteImport.update({
@@ -145,11 +133,9 @@ export interface FileRoutesByFullPath {
   '/skills': typeof AppSkillsRoute
   '/tasks': typeof AppTasksRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
-  '/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/agents/': typeof AppAgentsIndexRoute
-  '/projects/': typeof AppProjectsIndexRoute
   '/workspaces/': typeof AppWorkspacesIndexRoute
 }
 export interface FileRoutesByTo {
@@ -165,11 +151,9 @@ export interface FileRoutesByTo {
   '/tasks': typeof AppTasksRoute
   '/': typeof AppIndexRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
-  '/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/agents': typeof AppAgentsIndexRoute
-  '/projects': typeof AppProjectsIndexRoute
   '/workspaces': typeof AppWorkspacesIndexRoute
 }
 export interface FileRoutesById {
@@ -188,11 +172,9 @@ export interface FileRoutesById {
   '/_app/tasks': typeof AppTasksRoute
   '/_app/': typeof AppIndexRoute
   '/_app/agents/$agentId': typeof AppAgentsAgentIdRoute
-  '/_app/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/_app/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/_app/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/_app/agents/': typeof AppAgentsIndexRoute
-  '/_app/projects/': typeof AppProjectsIndexRoute
   '/_app/workspaces/': typeof AppWorkspacesIndexRoute
 }
 export interface FileRouteTypes {
@@ -211,11 +193,9 @@ export interface FileRouteTypes {
     | '/skills'
     | '/tasks'
     | '/agents/$agentId'
-    | '/projects/$projectId'
     | '/sessions/$sessionId'
     | '/workspaces/$workspaceId'
     | '/agents/'
-    | '/projects/'
     | '/workspaces/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -231,11 +211,9 @@ export interface FileRouteTypes {
     | '/tasks'
     | '/'
     | '/agents/$agentId'
-    | '/projects/$projectId'
     | '/sessions/$sessionId'
     | '/workspaces/$workspaceId'
     | '/agents'
-    | '/projects'
     | '/workspaces'
   id:
     | '__root__'
@@ -253,11 +231,9 @@ export interface FileRouteTypes {
     | '/_app/tasks'
     | '/_app/'
     | '/_app/agents/$agentId'
-    | '/_app/projects/$projectId'
     | '/_app/sessions/$sessionId'
     | '/_app/workspaces/$workspaceId'
     | '/_app/agents/'
-    | '/_app/projects/'
     | '/_app/workspaces/'
   fileRoutesById: FileRoutesById
 }
@@ -368,13 +344,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWorkspacesIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/projects/': {
-      id: '/_app/projects/'
-      path: '/projects'
-      fullPath: '/projects/'
-      preLoaderRoute: typeof AppProjectsIndexRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/agents/': {
       id: '/_app/agents/'
       path: '/'
@@ -394,13 +363,6 @@ declare module '@tanstack/react-router' {
       path: '/sessions/$sessionId'
       fullPath: '/sessions/$sessionId'
       preLoaderRoute: typeof AppSessionsSessionIdRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/projects/$projectId': {
-      id: '/_app/projects/$projectId'
-      path: '/projects/$projectId'
-      fullPath: '/projects/$projectId'
-      preLoaderRoute: typeof AppProjectsProjectIdRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/agents/$agentId': {
@@ -437,10 +399,8 @@ interface AppRouteChildren {
   AppSkillsRoute: typeof AppSkillsRoute
   AppTasksRoute: typeof AppTasksRoute
   AppIndexRoute: typeof AppIndexRoute
-  AppProjectsProjectIdRoute: typeof AppProjectsProjectIdRoute
   AppSessionsSessionIdRoute: typeof AppSessionsSessionIdRoute
   AppWorkspacesWorkspaceIdRoute: typeof AppWorkspacesWorkspaceIdRoute
-  AppProjectsIndexRoute: typeof AppProjectsIndexRoute
   AppWorkspacesIndexRoute: typeof AppWorkspacesIndexRoute
 }
 
@@ -454,10 +414,8 @@ const AppRouteChildren: AppRouteChildren = {
   AppSkillsRoute: AppSkillsRoute,
   AppTasksRoute: AppTasksRoute,
   AppIndexRoute: AppIndexRoute,
-  AppProjectsProjectIdRoute: AppProjectsProjectIdRoute,
   AppSessionsSessionIdRoute: AppSessionsSessionIdRoute,
   AppWorkspacesWorkspaceIdRoute: AppWorkspacesWorkspaceIdRoute,
-  AppProjectsIndexRoute: AppProjectsIndexRoute,
   AppWorkspacesIndexRoute: AppWorkspacesIndexRoute,
 }
 

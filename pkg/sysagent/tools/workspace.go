@@ -57,22 +57,12 @@ func sanitizeCoreTeam(raw []any) ([]string, error) {
 	return out, nil
 }
 
-// workspaceFromFile reads a workspace JSON and handles the legacy "agent_ids" → "core_team" migration.
+// workspaceFromFile reads a workspace JSON into the workspace struct.
+// Greenfield: no legacy agent_ids→core_team migration (FR-1.10).
 func workspaceFromFile(data []byte) (workspace, error) {
 	var w workspace
 	if err := json.Unmarshal(data, &w); err != nil {
 		return w, err
-	}
-	// Lazy migration: if core_team is empty but agent_ids exists, migrate.
-	if len(w.CoreTeam) == 0 {
-		var raw map[string]json.RawMessage
-		_ = json.Unmarshal(data, &raw)
-		if legacyRaw, ok := raw["agent_ids"]; ok {
-			var legacy []string
-			if json.Unmarshal(legacyRaw, &legacy) == nil {
-				w.CoreTeam = legacy
-			}
-		}
 	}
 	// Legacy files without status field default to active.
 	if w.Status == "" {

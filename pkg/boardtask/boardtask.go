@@ -46,7 +46,7 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	Prompt string `json:"prompt,omitempty"`
 	// Priority is 1 (critical) – 5 (low); 0 = unset (treated as 3 on read).
 	Priority int `json:"priority,omitempty"`
-	// MilestoneID is an optional FK to a milestone in the same project.
+	// MilestoneID is an optional FK to a milestone in the same workspace.
 	MilestoneID string `json:"milestone_id,omitempty"`
 	// SessionID is set when an agent starts executing the task; links to a chat session.
 	SessionID string `json:"session_id,omitempty"`

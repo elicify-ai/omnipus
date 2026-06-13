@@ -2089,16 +2089,10 @@ export const workspacesQueryKeys = {
   sessions: (id: string) => ['workspaces', id, 'sessions'] as const,
 }
 
-/** @deprecated Use workspacesQueryKeys */
-export const projectsQueryKeys = workspacesQueryKeys
-
 export function fetchWorkspaces(params?: { status?: string }): Promise<Workspace[]> {
   const qs = params?.status ? '?' + new URLSearchParams({ status: params.status }).toString() : ''
   return request<Workspace[]>(`/workspaces${qs}`, undefined, z.array(WorkspaceSchema) as ZodType<Workspace[]>)
 }
-
-/** @deprecated Use fetchWorkspaces */
-export const fetchProjects = fetchWorkspaces
 
 export function createWorkspace(body: WorkspaceCreateRequest): Promise<Workspace> {
   return request<Workspace>(
@@ -2108,9 +2102,6 @@ export function createWorkspace(body: WorkspaceCreateRequest): Promise<Workspace
   )
 }
 
-/** @deprecated Use createWorkspace */
-export const createProject = createWorkspace
-
 export function updateWorkspace(id: string, body: WorkspaceUpdateRequest): Promise<Workspace> {
   return request<Workspace>(
     `/workspaces/${encodeURIComponent(id)}`,
@@ -2119,15 +2110,9 @@ export function updateWorkspace(id: string, body: WorkspaceUpdateRequest): Promi
   )
 }
 
-/** @deprecated Use updateWorkspace */
-export const updateProject = updateWorkspace
-
 export function deleteWorkspace(id: string): Promise<void> {
   return request<void>(`/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
-
-/** @deprecated Use deleteWorkspace */
-export const deleteProject = deleteWorkspace
 
 export function fetchWorkspaceSessions(id: string): Promise<WorkspaceSessionLink[]> {
   return request<WorkspaceSessionLink[]>(
@@ -2136,9 +2121,6 @@ export function fetchWorkspaceSessions(id: string): Promise<WorkspaceSessionLink
     z.array(WorkspaceSessionLinkSchema) as ZodType<WorkspaceSessionLink[]>,
   )
 }
-
-/** @deprecated Use fetchWorkspaceSessions */
-export const fetchProjectSessions = fetchWorkspaceSessions
 
 // ── GTD Board Tasks ───────────────────────────────────────────────────────────
 //

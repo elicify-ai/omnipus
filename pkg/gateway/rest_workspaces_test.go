@@ -573,11 +573,11 @@ func TestHandleWorkspaces_ConcurrentDelete(t *testing.T) {
 			"goroutine %d: concurrent DELETE must never return 500; body=%s", i, res.body)
 	}
 
-	// Step 6: Assert the project file is gone after both deletes.
-	projectPath := filepath.Join(api.homePath, "projects", projID+".json")
+	// Step 6: Assert the workspace file is gone after both deletes.
+	projectPath := filepath.Join(api.homePath, "workspaces", projID+".json")
 	_, statErr := os.Stat(projectPath)
 	assert.True(t, os.IsNotExist(statErr),
-		"project file must not exist after concurrent deletes; path=%s, err=%v", projectPath, statErr)
+		"workspace file must not exist after concurrent deletes; path=%s, err=%v", projectPath, statErr)
 
 	// Verify the project is truly gone by trying to GET it.
 	wGet := httptest.NewRecorder()
@@ -591,6 +591,40 @@ func TestHandleWorkspaces_ConcurrentDelete(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Inbox auto-creation and protection tests (project-task-milestone-spec.md)
 // ---------------------------------------------------------------------------
+
+// TestSeed_ConcurrentBoot_NoDoubleSeed verifies that concurrent calls to
+// ensureDefaultWorkspace (e.g. two racing gateway boots) produce exactly ONE
+// default workspace — not two.
+// BDD: Given a fresh home directory with no workspaces,
+// When N goroutines call ensureDefaultWorkspace concurrently under -race,
+// Then exactly one workspace with is_default=true exists on disk afterward.
+// Traces to: TOCTOU-seed guard (defaultWorkspaceSeedMu).
+func TestSeed_ConcurrentBoot_NoDoubleSeed(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	const goroutines = 8
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			_ = ensureDefaultWorkspace(api.homePath, "seeduser")
+		}()
+	}
+	wg.Wait()
+
+	// List all workspace files and count how many have is_default=true.
+	workspaces, err := listWorkspaceFiles(api.homePath)
+	require.NoError(t, err)
+	defaultCount := 0
+	for _, ws := range workspaces {
+		if ws.IsDefault {
+			defaultCount++
+		}
+	}
+	assert.Equal(t, 1, defaultCount,
+		"exactly one default workspace must be created even under concurrent boot; got %d", defaultCount)
+}
 
 // TestHandleWorkspaces_InboxAutoCreated verifies that GET /api/v1/workspaces on a fresh home dir
 // returns a project with is_default=true and display name="Main".
@@ -609,7 +643,8 @@ func TestHandleWorkspaces_ConcurrentDelete(t *testing.T) {
 func TestHandleWorkspaces_DefaultAutoCreated(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	require.NoError(t, ensureDefaultWorkspace(api.homePath, ""),
+	const seedOwner = "alice"
+	require.NoError(t, ensureDefaultWorkspace(api.homePath, seedOwner),
 		"ensureDefaultWorkspace must not error on fresh home")
 
 	w := httptest.NewRecorder()
@@ -629,6 +664,9 @@ func TestHandleWorkspaces_DefaultAutoCreated(t *testing.T) {
 			foundDefault = true
 			assert.Equal(t, "My Workspace", ws.Name, "default workspace name must be 'My Workspace'")
 			assert.Equal(t, gen.WorkspaceStatusActive, ws.Status, "default workspace must be active")
+			// FR-1.6: owner is stamped from the provided username.
+			require.NotNil(t, ws.Owner, "default workspace must have owner set (FR-1.6)")
+			assert.Equal(t, seedOwner, *ws.Owner, "default workspace owner must equal the seed username")
 		}
 	}
 	assert.True(t, foundDefault, "GET /workspaces must contain a workspace with is_default=true")
