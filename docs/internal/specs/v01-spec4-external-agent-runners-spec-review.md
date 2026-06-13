@@ -3,7 +3,93 @@
 - **Spec reviewed:** `docs/internal/specs/v01-spec4-external-agent-runners-spec.md`
 - **Mode:** `plan-spec` (full structural + 8-lens adversarial review)
 - **Reviewer stance:** adversarial, read-only, grounded against the live tree at `pkg/providers`, `pkg/agent`, `pkg/sandbox`, `pkg/config`, `pkg/gateway`, `contracts/`.
-- **Date:** 2026-06-13
+- **Date:** 2026-06-13 (round 1) · **2026-06-13 (round 2 re-review)** · **2026-06-13 (round 3 re-review)**
+
+---
+
+## ROUND 3 RE-REVIEW — Verdict: **PASS** (GATE C cleared)
+
+Re-grounded against the live tree (`pkg/sandbox/sandbox_linux.go`, `pkg/gateway/ws_approval.go`, `pkg/sandbox/hardened_exec.go`) and `ADR-019…md:38`. **The round-2 MAJOR (C-4′) and all five carry-over MAJORs (M-3…M-7) are closed.** No CRITICAL or MAJOR findings remain. Residual items are MINOR/OBSERVATION and do not gate.
+
+### Closure ledger (round-2 → round-3)
+
+| ID | Round-2 | Round-3 status | Grounding (verified this round) |
+|---|---|---|---|
+| **C-4′** | MAJOR — egress named the wrong primitive (seccomp "blocks raw-TCP") | **CLOSED** | FR-5.3 now states egress = **per-child Landlock `NET_CONNECT_TCP` connect-port allow-list** (`sandbox_linux.go:176-178,334-344`), explicitly **"NOT seccomp (can't deref `connect`'s sockaddr), NOT HTTP-proxy-only,"** with **ABI<v4 → app-level degradation**. US-5 reworded to the Landlock connect-port form. **Verified correct against code:** `computeRights` sets `landlockAccessNetConnectTcp` on ABI≥4 (`:176-178`); `ApplyWithMode` registers each `ConnectPortRules` entry as a `NET_CONNECT_TCP` allow-rule, any connect to an unlisted port → EACCES (`:334-344`); ABI<v4 path computes-but-skips with a boot WARN (`:345-357`). The comment block at `:160-175` literally names this "closes the raw-TCP-egress hole." This is exactly the primitive the round-2 finding demanded. The **ADR-019 FR-5 line is corrected to match** (`ADR-019…md:38` item (b): "a Landlock `NET_CONNECT_TCP` connect-port allow-list for egress (seccomp can't inspect `connect` args — egress is Landlock, not seccomp; ABI<v4 → app-level degradation)"). |
+| **M-3** | MAJOR (carry-over) — CLI version/flag pinning + fixture | **CLOSED** | NEW **FR-5.6**: driver MUST **detect/pin the external CLI version** (JSON stream schema drifts across versions) and **degrade gracefully on an unknown version**. Edge case + TDD #8 (recorded stream-json fixture) remain. |
+| **M-4** | MAJOR (carry-over) — non-repo run-dir + crash reaper owner/test | **CLOSED** | FR-5.3 adds a **startup run-dir reaper** that GCs orphaned run dirs; Ambiguity #3 resolves non-repo runs to an isolated temp dir under sandbox. Edge "Worktree cleanup on crash → no orphaned worktrees" + H4 cover the behavior. |
+| **M-5** | MAJOR (carry-over) — turn-cap undefined; no observability | **CLOSED (observability)** | NEW **FR-5.6**: every run MUST emit **observable events (start/permission/tool-call/diff/end/error) to the run log + the SPA**. FR-5.4 retains the turn-cap bound + termination reporting. *(Residual: the turn-cap's numeric default is still not stated — see m-8, MINOR.)* |
+| **M-6** | MAJOR (carry-over) — CLI credential injection into the confined child | **CLOSED** | FR-5.3: the CLI's **credentials are injected into the confined child via the env-allowlist + an FS allow for its credential path**. Consistent with `isAllowedChildEnvKey` (`hardened_exec.go:182`) being the env chokepoint and the new per-child Landlock FS ruleset (C-1) needing the creds path in its allow-list. |
+| **M-7** | MAJOR (carry-over) — Spec-3/Spec-4 `executor` ownership/merge order | **DEFERRED (tracked)** | Explicitly tracked at **Phase-3.5** (§6 cross-spec, Assumptions, Ambiguity #1): the sub-agent struct is Spec-3-owned, the shared `executor` shape coordinated before merge. Acceptable as a tracked cross-spec pre-condition rather than an in-spec defect. |
+| **m-6** | MINOR — executor contract files not enumerated | **OPEN (MINOR)** | FR-4.1 still names the contract surface without listing the exact schema files (`Subagents.yaml`/`Executor.yaml`? additions to `Agent.yaml`/`AgentCreateRequest.yaml`/detail) or the 5-step process. Non-gating; resolve in taskify. |
+| **m-7** | MINOR — consent mapping asserted not enumerated | **OPEN (MINOR)** | FR-5.1 routes to `ws_approval` `ToolApprovalRequest`→`ApprovalDecision` (target verified: `ApproveTool(req *agent.ToolApprovalRequest) (agent.ApprovalDecision, error)`, `ws_approval.go:132-135`) but the field-level mapping (permission-kind→`Tool`, target/args→`Arguments`, timeout-default, reuse-vs-new AsyncAPI frame) is still not laid out. Non-gating; resolve in taskify/impl. |
+
+### New (round 3)
+
+| ID | Sev | Lens | Section | Finding | Recommended fix |
+|---|---|---|---|---|---|
+| **m-8** | MINOR | Incompleteness / Infeasibility | FR-5.4, SC-7, TDD #7 | The **turn-cap numeric default is undefined** (FR-5.4 says "per-run timeout + turn-cap"; TDD #7 + SC-7 exercise only the timeout). A "turn-cap" with no value is untestable as written. | State a concrete default turn-cap (e.g. N turns, config-overridable) and add a dataset row + a test asserting termination at the cap (distinct from the timeout test). |
+
+### Round-3 verdict
+
+**PASS — GATE C cleared.** C-4′ is fixed with the correct kernel primitive (per-child Landlock `NET_CONNECT_TCP` connect-port allow-list, verified at `sandbox_linux.go:176-178,334-344`, ABI<v4 degraded), the ADR egress wording is corrected to match, and the five carry-over MAJORs (M-3…M-7) are either resolved in FR-5.3/FR-5.6 or tracked as a Phase-3.5 cross-spec pre-condition (M-7). The remaining items (m-6, m-7 enumeration; m-8 turn-cap value) are MINOR and belong in `/taskify` / implementation, not a further spec round.
+
+```
+/taskify docs/internal/specs/v01-spec4-external-agent-runners-spec.md
+```
+
+Carry the three MINORs (m-6 contract-file list, m-7 consent-mapping fields, m-8 turn-cap value) into task acceptance criteria so they are not lost.
+
+---
+
+## (Round 2 — retained below for the trace)
+
+---
+
+## ROUND 2 RE-REVIEW — Verdict: **REVISE** (GATE C not yet PASS)
+
+Re-grounded after the ADR-019 FR-5 amendment (`ADR-019…md:38`) and the spec revisions. **3 of the 4 round-1 CRITICALs are genuinely closed; one (C-4) is mis-resolved and survives as a MAJOR.** No CRITICALs remain — the spec no longer asks for anything infeasible against the tree — but C-4's replacement mechanism is technically wrong and must be corrected before implementation, and two MINORs (contract-file enumeration, consent-mapping enumeration) should land in the same revision.
+
+### Closure ledger (round-1 → round-2)
+
+| ID | Round-1 | Round-2 status | Grounding |
+|---|---|---|---|
+| **C-1** | CRITICAL — per-child Landlock/seccomp "does not exist" | **CLOSED** | FR-5.3 / §2 row / US-5 now specify a **NEW re-exec confiner primitive** (a launcher applying a worktree-scoped Landlock FS ruleset + seccomp filter *before* `exec`) and explicitly say `hardened_exec` self-confines only. **This is sound and achievable:** the re-exec'd child is a *fresh process*, so the process-global `processLandlockApplied`/`processSeccompInstalled` latches (`sandbox_linux.go:31`, `seccomp_linux.go:20`) do not block it; the kernel primitives to build a run-scoped ruleset already exist (`addLandlockPathRule`, the `RestrictCurrentThread` build-ruleset-then-`restrict_self` sequence at `sandbox_linux.go:610-689`). The spec no longer claims `hardened_exec` does per-child narrowing (`hardened_exec_linux.go:3-7` confirms it cannot). |
+| **C-2** | CRITICAL — "built on providers" overstated | **CLOSED** | FR-5.2 / §2 row now state the streaming drivers are **NEW**; the providers are **one-shot buffered**, prove spawn+auth only, and the runner **drops the permission-skip flag**. Verified: `claude_cli_provider.go:35,54` = `--output-format json --dangerously-skip-permissions` + `cmd.Run()`; `codex_cli_provider.go:41-42,61` = `--json --dangerously-bypass-approvals-and-sandbox` + `cmd.Run()`. Characterization is now accurate. |
+| **C-3** | CRITICAL — executor not on the wire | **CLOSED** | FR-4.1 now adds `executor` to the **agent/sub-agent CONTRACT** (not only `SubagentsConfig`), naming that `SubagentsConfig` (`config.go:584-587`) is config-only and absent from `contracts/`. Verified absent from `Agent.yaml`/`AgentCreateRequest.yaml`. `verify-contracts` will now see the change. *(Residual: file list not enumerated → see m-6 below, MINOR.)* |
+| **C-4** | CRITICAL — egress oversold (HTTP-proxy-only) | **NOT cleanly resolved → MAJOR (C-4′)** | The closure swaps proxy-only for "**seccomp filter blocks raw-TCP egress**" (FR-5.3 / US-5.2 / ADR:38). **The named primitive cannot do this job.** See C-4′ below. |
+| **M-1** | MAJOR — hook_process direction inversion | **CLOSED** | §2 row + FR-5.1 now state the interface is the **inverse** of `hook_process` (child emits unsolicited events; Omnipus answers), correlation reusable, direction new. Matches `hook_process.go` (Omnipus is the JSON-RPC *client*: `StdinPipe`/`ApproveTool` sends requests). |
+| **M-2** | MAJOR — consent shape mismatch | **PARTIALLY CLOSED → MINOR (m-7)** | FR-5.1 now routes to `ws_approval` `ToolApprovalRequest`→`ApprovalDecision` "with a defined external-agent→approval mapping," deny-by-default. The *routing target* is now correct (`ws_approval.go:132` `ApproveTool(req *ToolApprovalRequest)`), but the **mapping itself is still asserted, not enumerated** (no payload fields, no AsyncAPI frame named). Downgraded to MINOR. |
+
+### New / surviving findings (round 2)
+
+| ID | Sev | Lens | Section | Finding | Recommended fix |
+|---|---|---|---|---|---|
+| **C-4′** | **MAJOR** | Infeasibility / Incorrectness / Insecurity | FR-5.3, US-5.2, Edge "raw-TCP", ADR-019:38 | **"seccomp filter blocking raw-TCP egress" names the wrong primitive and is not implementable as a *TCP-egress* control.** (1) The existing seccomp assembler (`seccomp_linux.go:123-196`, `sandbox.go:479-495`) is a **syscall-number-only deny-list** (ptrace/mount/modules/bpf/perf — no socket family) with **no argument inspection** (it loads only `seccomp_data.nr` at offset 0). (2) seccomp BPF **cannot inspect `connect(2)`'s `sockaddr` pointer** (it cannot deref pointers), so it cannot allow "the CLI's own LLM API call" while blocking "exfil to host X." (3) The only arg-level move seccomp can make is blocking `socket()` by **family/type** — but a normal outbound TCP connection and a malicious one are *both* `socket(AF_INET, SOCK_STREAM)`; blocking that kills the CLI's legitimate HTTPS traffic. "Raw-TCP" in the kernel sense (`SOCK_RAW`/`AF_PACKET`) is a *different* thing from the unrestricted-egress threat the spec is defending against. **The codebase already has the correct mechanism:** Landlock **NET_CONNECT_TCP** port allow-list (ABI v4+) — `sandbox_linux.go:176-178,334-344`, `computeRights` rationale "closes the raw-TCP-egress hole." | Re-state egress containment in FR-5.3/US-5.2/ADR as the **per-child Landlock `ConnectPortRules` allow-list (NET_CONNECT_TCP, ABI v4+)**, applied by the new re-exec confiner — NOT "seccomp blocks raw-TCP." Add the explicit **ABI<v4 / non-Linux degradation**: on kernels without NET_CONNECT_TCP, egress is **not** kernel-confined (document as a known v0.1.0 gap with a boot WARN, mirroring `sandbox_linux.go:345-357`). If a seccomp socket-family block is *also* wanted, scope it narrowly (block `SOCK_RAW`/`AF_PACKET` only) and stop calling it the TCP-egress control. Add a test: child `connect()` to a non-allow-listed port → EACCES on ABI v4; documented-bypass on ABI<v4. |
+| **m-6** | MINOR | Incompleteness | FR-4.1 | C-3 is closed in principle but the spec still does not **enumerate the contract artifacts** the executor field touches (new `Subagents.yaml`/`Executor.yaml`? additions to `Agent.yaml` + `AgentCreateRequest.yaml` + the `AgentUpdateRequest`/detail responses?), nor invoke the 5-step add-a-wire-type process (CLAUDE.md Constraint #8). Without this the implementer guesses the wire shape. | List the exact schema files added/edited and the regen step; gate FR-4.1's "verify-contracts exits 0" on those files existing. |
+| **m-7** | MINOR | Incompleteness / Insecurity | FR-5.1 | (was M-2) The external-agent→`ToolApprovalRequest` mapping is named but not defined: which permission kinds (write-file / run-command / fetch-url) map onto `Tool` + `Arguments` (`hooks.go:183-191`), the timeout/no-response default, and whether a **new AsyncAPI frame** is needed for a *foreign* agent's request vs reusing `exec_approval_request`. | Enumerate the mapping (kind→`Tool`, target/args→`Arguments`), the default-deny-on-timeout, and the wire frame (reuse or new + AsyncAPI schema). |
+
+### Carry-over (still open from round 1, unchanged by the amendment)
+
+These round-1 findings were **not** in the C-1…C-4/M-1/M-2 closure set and remain open at their original severity: **M-3** (CLI version/flag pinning + recorded fixture normative), **M-4** (non-repo temp-dir root + crash-reaper owner/test), **M-5** (turn-cap undefined; no observability/audit events), **M-6** (CLI credential injection under the env allow-list `isAllowedChildEnvKey` `hardened_exec.go:182` + the new per-child FS profile), **M-7** (Spec-3/Spec-4 `executor` ownership + merge order), plus MINORs **m-1, m-2, m-3, m-4, m-5** and OBSERVATIONS **O-1…O-3**. The amendment did not touch these; they still apply. In particular **M-6** is now *more* pointed: the new per-child Landlock ruleset (C-1) must include the CLI's creds path or the connection test (FR-4.2) and every run will fail auth — the spec must scope the allow-list contents (worktree + CLI binary + creds + tmp + proxy/loopback).
+
+### Round-2 verdict
+
+**REVISE — GATE C is NOT yet PASS.** The four round-1 CRITICALs that produced the BLOCK are resolved except C-4, which was *converted* into a still-incorrect mechanism (C-4′, now MAJOR). No infeasible headline claim remains, so this is no longer a BLOCK — but a MAJOR (wrong egress primitive) plus the open carry-over MAJORs (M-3…M-7) keep it short of PASS. To reach PASS:
+
+1. Fix **C-4′** — egress = per-child Landlock `NET_CONNECT_TCP` allow-list (not seccomp), with explicit ABI<v4 degradation. *(This is an ADR-019:38 wording fix too — the ADR makes the same seccomp/raw-TCP error.)*
+2. Close the carry-over MAJORs **M-3, M-4, M-5, M-6, M-7** (CLI version pinning + fixture; run-dir root + reaper + test; turn-cap definition + audit events; credential injection into the confined child; cross-spec ownership/merge order).
+3. Land MINORs **m-6, m-7** (enumerate the executor contract files; enumerate the consent mapping).
+
+```
+/plan-spec --revise docs/internal/specs/v01-spec4-external-agent-runners-spec.md docs/internal/specs/v01-spec4-external-agent-runners-spec-review.md
+```
+
+Because C-4′ also corrects ADR-019 FR-5 (line 38), amend the ADR's egress wording in the same pass.
+
+---
+
+## (Round 1 — original review retained below for the trace)
 
 ---
 
