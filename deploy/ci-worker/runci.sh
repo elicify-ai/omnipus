@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Omnipus CI worker entrypoint for a single gate run.
 # Usage: runci.sh <git-ref> <gate>
-#   gate ∈ { all | go-build | go-vet | go-test | contracts | spa | gofmt | quick }
+#   gate ∈ { all | go-build | go-vet | go-test | contracts | spa | gofmt | quick | embed-build }
 # Requires env GIT_REMOTE (authenticated clone URL), set as a Fly secret.
 set -uo pipefail
 
@@ -21,32 +21,43 @@ fi
 cd "$REPO_DIR" || exit 2
 log "fetch + checkout $REF"
 git fetch --all --prune --quiet || exit 2
-git checkout -f "$REF" || exit 2
+git checkout -f "$REF" 2>/dev/null || git checkout -f "origin/$REF" || exit 2
 git reset --hard "$REF" --quiet 2>/dev/null || git reset --hard "origin/$REF" --quiet 2>/dev/null || true
 echo "HEAD: $(git rev-parse --short HEAD) $(git log -1 --format='%s')"
 
+# Go's //go:embed all:spa needs pkg/gateway/spa/ non-empty. For compile/unit gates a stub is enough
+# (the real SPA is only needed to produce a servable binary → the embed-build gate).
+ensure_spa_stub() {
+  if [ ! -e pkg/gateway/spa/index.html ]; then
+    mkdir -p pkg/gateway/spa
+    printf '<!doctype html><title>ci-stub</title>' > pkg/gateway/spa/index.html
+  fi
+}
+run_spaembed() { npm run build && rm -rf pkg/gateway/spa && cp -r dist/spa pkg/gateway/spa; }
+
 run_gofmt()    { local n; n=$(gofmt -l . 2>/dev/null | grep -v '^$' | wc -l); echo "gofmt unformatted=$n"; [ "$n" = 0 ]; }
-run_gobuild()  { CGO_ENABLED=0 go build -tags "$TAGS" ./...; }
-run_govet()    { CGO_ENABLED=0 go vet -tags "$TAGS" ./...; }
-run_gotest()   { CGO_ENABLED=0 go test -tags "$TAGS" -count=1 ./...; }   # the 16GB-needing gate
+run_gobuild()  { ensure_spa_stub; CGO_ENABLED=0 go build -tags "$TAGS" ./...; }
+run_govet()    { ensure_spa_stub; CGO_ENABLED=0 go vet -tags "$TAGS" ./...; }
+run_gotest()   { ensure_spa_stub; CGO_ENABLED=0 go test -tags "$TAGS" -count=1 ./...; }   # the 16GB-needing gate
 run_npm()      { npm ci --no-audit --no-fund; }
 run_typecheck(){ npm run typecheck; }
 run_vitest()   { npx vitest run; }
 run_contracts(){ make verify-contracts; }
 
 case "$GATE" in
-  gofmt)     step gofmt run_gofmt ;;
-  go-build)  step go-build run_gobuild ;;
-  go-vet)    step go-vet run_govet ;;
-  go-test)   step go-build run_gobuild; step go-test run_gotest ;;
-  contracts) step npm-ci run_npm; step verify-contracts run_contracts ;;
-  spa)       step npm-ci run_npm; step typecheck run_typecheck; step vitest run_vitest ;;
-  quick)     step gofmt run_gofmt; step go-build run_gobuild ;;
+  gofmt)       step gofmt run_gofmt ;;
+  go-build)    step go-build run_gobuild ;;
+  go-vet)      step go-vet run_govet ;;
+  go-test)     step go-build run_gobuild; step go-test run_gotest ;;
+  contracts)   step npm-ci run_npm; step verify-contracts run_contracts ;;
+  spa)         step npm-ci run_npm; step typecheck run_typecheck; step vitest run_vitest ;;
+  quick)       step gofmt run_gofmt; step go-build run_gobuild ;;
+  embed-build) step npm-ci run_npm; step spa-embed run_spaembed; step go-build run_gobuild ;;
   all)
+    step npm-ci run_npm
     step gofmt run_gofmt
     step go-build run_gobuild
     step go-vet run_govet
-    step npm-ci run_npm
     step verify-contracts run_contracts
     step typecheck run_typecheck
     step vitest run_vitest
