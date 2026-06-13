@@ -19,12 +19,11 @@ Give sub-agent workers an **`executor`** (`native | external-cli{claude-code, op
 | Symbol | Role | Context |
 |---|---|---|
 | `SubagentsConfig` (`config.go:584`, `AllowAgents`) / the sub-agent config | **add `executor`** (`{kind, cli?, …}`) | no executor today — NEW additive field |
-| `pkg/providers/claude_cli_provider.go`, `codex_cli_provider.go` | reuse | already spawn the `claude`/`codex` CLIs (as LLM providers) — the runner drives them headless instead |
-| `pkg/agent/hook_process.go` (JSON-RPC 2.0 over stdio) | reuse pattern | the bidirectional stdio control precedent |
-| `pkg/sandbox/hardened_exec.go` (+ `_darwin`) | reuse | own-process Landlock/seccomp confinement + env-allowlist |
-| **opencode driver** | NEW | no opencode in `pkg/` (ADR FR-2 grounding) — net-new CLI+JSON driver |
-| **git-worktree isolation** | NEW | no `git worktree` usage in `pkg/` today — net-new per-run isolation |
-| the policy/consent layer (Spec-1 password re-type; Spec-3 `to`) | route permission-requests | consent-routing target |
+| `claude_cli_provider.go`, `codex_cli_provider.go` | **partial** reuse | spawn the CLIs but are **one-shot buffered** (`cmd.Run`, `--dangerously-skip-permissions`) — prove spawn+auth, NOT streaming (C-2); runner drivers are new |
+| `pkg/agent/hook_process.go` (JSON-RPC/stdio) | reuse **correlation only** | Omnipus is the *client* there; the runner is the **inverse** (child emits, Omnipus answers) — direction new (M-1) |
+| `pkg/sandbox/hardened_exec.go` | **self-confine only** | confines the GATEWAY; **no per-child FS/seccomp API** — v0.1.0 adds a NEW **re-exec confiner** (C-1, ADR FR-5) |
+| `pkg/gateway/ws_approval.go` (`ToolApprovalRequest`→`ApprovalDecision`) | consent-routing target | tool-call-shaped — define the external-agent permission mapping (M-2) |
+| **opencode driver** + **re-exec confiner** + **git-worktree isolation** | NEW | opencode net-new; the per-child confiner + worktree isolation are net-new |
 
 ### Impact Assessment
 | Modified | Risk | Direct (d=1) | Indirect (d=2) |
@@ -44,7 +43,7 @@ Give sub-agent workers an **`executor`** (`native | external-cli{claude-code, op
 
 **US-4 — Universal CLI+JSON transport (P0).** 1. **Given** `executor=external-cli`, **When** dispatched, **Then** the driver invokes the CLI with JSON streaming (`claude -p --output-format stream-json` / `codex exec` JSON / `opencode run --format json`) and parses the structured events.
 
-**US-5 — Own-process, kernel-confined, worktree-isolated (P0, security).** 1. **Given** an external run, **When** it starts, **Then** it is its own process under Landlock/seccomp (filesystem allow-list + syscall filter, via `hardened_exec`) with an egress allow-list, in a **git worktree** isolated from the main tree. 2. **Given** a hostile agent, **Then** it cannot read outside its worktree/allow-list.
+**US-5 — Own-process, kernel-confined, worktree-isolated (P0, security).** 1. **Given** an external run, **When** it starts, **Then** it is its own process under a **per-child re-exec confiner** (worktree-scoped Landlock FS + seccomp incl. raw-TCP-egress block — NOT the gateway's self-confinement, which can't narrow per-child), in a **git worktree** (or isolated temp dir) isolated from the main tree. 2. **Given** a hostile agent, **Then** it cannot read outside its allow-list nor open raw egress sockets.
 
 **US-6 — Connection test (P0).** 1. **Given** an external-cli runner, **When** I click "test connection", **Then** it validates the binary is present, authed, and the JSON handshake works — without running real work. 2. **Given** a missing/un-authed binary, **Then** the test fails with a clear reason.
 
@@ -143,11 +142,11 @@ Scenario: Run exceeding the timeout is terminated
 
 ## 7. Functional Requirements & Success Criteria
 
-- **FR-4.1:** MUST add an `executor` field to the sub-agent config (`native | external-cli{cli} | remote-a2a`); `verify-contracts` exits 0; `native` is the default (existing behaviour).
+- **FR-4.1 (C-3):** MUST add an `executor` field (`native | external-cli{cli} | remote-a2a`) to the **agent/sub-agent CONTRACT** (not only `SubagentsConfig`, which is **config-only today** — absent from `contracts/`) so it crosses the gateway/SPA boundary for the runner UI; regenerate; `verify-contracts` exits 0; `native` = default (existing behaviour).
 - **FR-4.2:** MUST add a per-runner **connection test** (binary present + authed + JSON handshake) that runs no real work.
-- **FR-5.1:** MUST define `ExternalAgentRunner` as **bidirectional** (events-out: output/tool-calls/diffs/permission-requests; control-in: permission-decisions/cancel/input), **consent-routed** (permission-requests → consent; **deny-by-default**), **resumable** (stable run/session id).
-- **FR-5.2:** MUST drive external agents via **CLI + JSON streaming** — Claude Code (`claude -p --output-format stream-json`, built on `claude_cli_provider`), Codex (`codex exec` JSON, on `codex_cli_provider`), opencode (`opencode run --format json`, **net-new** driver).
-- **FR-5.3:** MUST run each external agent as its **own process, kernel-confined** (Landlock/seccomp via `hardened_exec`, env-allowlist, egress allow-list) and **git-worktree-isolated**; cleanup on crash.
+- **FR-5.1 (M-1, M-2):** MUST define `ExternalAgentRunner` as **bidirectional** (events-out: output/tool-calls/diffs/permission-requests; control-in: permission-decisions/cancel/input), **consent-routed** (permission-requests → the existing `ws_approval` layer — `ToolApprovalRequest`→`ApprovalDecision`, with a defined external-agent→approval mapping; **deny-by-default**), **resumable** (stable run/session id). The interface is the **inverse direction** of `hook_process` (child emits unsolicited events; Omnipus answers) — correlation reusable, direction new.
+- **FR-5.2 (C-2):** MUST drive external agents via **NEW streaming CLI+JSON drivers** — Claude Code (`claude -p --output-format stream-json`), Codex (`codex exec` JSON), opencode (`opencode run --format json`). The existing `claude_cli`/`codex_cli` providers are **one-shot buffered** (`cmd.Run()`, `--dangerously-skip-permissions`) — they prove CLI-spawn+auth but **do NOT stream**; the runner drivers are new and **drop the permission-skip flag** (permissions route to consent).
+- **FR-5.3 (C-1, C-4):** MUST run each external agent as its **own process, kernel-confined via a NEW re-exec confiner primitive** — a launcher applying a **per-child worktree-scoped Landlock FS ruleset + a seccomp filter (incl. blocking raw-TCP egress)** before `exec`'ing the CLI. The existing `hardened_exec` **only self-confines the gateway** (children inherit its domain unchanged — no per-child API), so the confiner is **new** (ADR-019 FR-5 decision). Each run is **git-worktree-isolated** (isolated temp dir if not a repo); cleanup on crash. Egress is restricted by the **seccomp filter** (not HTTP-proxy-only — C-4).
 - **FR-5.4:** MUST bound runs (per-run timeout + turn-cap); termination is reported.
 - **FR-5.5:** MUST accept but **not resolve** `remote-a2a` in v0.1.0 (reserved; shares the agent-reference shape).
 
