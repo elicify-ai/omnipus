@@ -19,7 +19,7 @@ Land the memory **structure** (not behaviour): **two rooms** — a **private** p
 ### Symbols Involved
 | Symbol | Role | Context |
 |---|---|---|
-| `pkg/memory/*.go` + `pkg/agent/memory.go::MemoryStore` (`MEMORY.md` + day-partitioned `_retro.md` + literal-substring `SearchEntries`; audit hooks + rate limiter) | **REWRITE** (live subsystem, NOT greenfield — C-1/M-2) | restructured into the rooms + file format; existing MEMORY.md data MUST migrate (M-2) |
+| `pkg/memory/*.go` + `pkg/agent/memory.go::MemoryStore` (`MEMORY.md` + day-partitioned `_retro.md` + literal-substring `SearchEntries`; audit hooks + rate limiter) | **REWRITE** (live subsystem; the CODE is rewritten) | restructured into rooms + file format; existing MEMORY.md **data dropped** (D2/greenfield; optional best-effort import) |
 | the 3 tools — **EXIST** (`pkg/tools/memory.go`: `RememberTool`→`remember`, `RecallMemoryTool`→**`recall_memory`**, `RetrospectiveTool`→`retrospective`) | **re-point** to the rooms | NOT new (C-1); keep the registered tool names (`recall_memory`, M-1) or alias |
 | **bleve** | **NEW dep** | `0` in go.mod — MUST use the **pure-Go `scorch` index** and **FORBID the CGo `leveldb`/`rocksdb` backends** (the tree already has CGo creep via `mattn/go-sqlite3` indirect — C-4); a CI check asserts no new CGo. ADR-019 FR-7 records the dep. |
 | the append-only logs (`sessions/` · `counters.jsonl` · `born_in`/`cited_in`) | **freeze formats + start writing** | record schemas pinned in v0.1.0 (NFR-1) |
@@ -53,7 +53,7 @@ Land the memory **structure** (not behaviour): **two rooms** — a **private** p
 **US-7 — Calendar/Automations shell (P1).** 1. **Given** the per-workspace Calendar surface, **When** I view it, **Then** scheduled tasks/events/milestones render (shell — the automations *engine* is v0.2.0). 
 
 ### Edge Cases
-- bleve index missing/corrupt → rebuilt from `.md` (derived). · A workspace with no shared room → created on first write. · MinHash near-duplicate memory → deduped on write. · `blocked_by` cycle → rejected (Spec-1 semantics). · Recurrence field set but engine absent → stored, not executed (shell). · **Migrating** `MEMORY.md`/`_retro.md` → into the rooms (M-2 — memory is NOT greenfield; user memory preserved, no silent loss).
+- bleve index missing/corrupt → rebuilt from `.md` (derived). · A workspace with no shared room → created on first write. · MinHash near-duplicate memory → deduped on write. · `blocked_by` cycle → rejected (Spec-1 semantics). · Recurrence field set but engine absent → stored, not executed (shell). · Old `MEMORY.md`/`_retro.md` → **not migrated** (D2/greenfield; optional best-effort import — documented, operator-approved).
 
 ## 4. Behavioral Contract · Non-Behaviors · Integration Boundaries
 
@@ -136,7 +136,7 @@ Scenario: Task fields regenerate clean
 
 **Test Datasets**: room {private→agents/<id>, shared→<workspace>}; frontmatter {all fields}; recall {match, no-vector}; index {deleted→rebuild}; minhash {near-dup→deduped}; blocked_by {cycle→reject, delete→cascade-clean}; recurrence {set→stored-not-run}.
 
-**Regression:** modifies the memory store (MEMORY.md→rooms) + task model. (1) Memory is **NOT** greenfield — `MEMORY.md`/`_retro.md` MUST migrate into the rooms (M-2, no silent loss); (2) the existing `.jsonl` session history (jsonl.go) coexists/migrates to the rooms structure; (3) task CRUD (Spec-1 workspace-keyed) preserved + extended; (4) NEW: rooms, 3 tools, bleve, logs, blocked_by validator, calendar. **CI authority; local scoped only.**
+**Regression:** modifies the memory store (MEMORY.md→rooms) + task model. (1) Greenfield per D2 — old `MEMORY.md`/`_retro.md` not preserved (documented, operator-approved; optional best-effort import); (2) the existing `.jsonl` session history (jsonl.go) coexists/migrates to the rooms structure; (3) task CRUD (Spec-1 workspace-keyed) preserved + extended; (4) NEW: rooms, 3 tools, bleve, logs, blocked_by validator, calendar. **CI authority; local scoped only.**
 
 ## 7. Functional Requirements & Success Criteria
 
@@ -145,7 +145,7 @@ Scenario: Task fields regenerate clean
 - **FR-7.3 (C-1, M-1):** MUST **re-point the EXISTING tools** (`remember` / `recall_memory` / `retrospective`, `pkg/tools/memory.go`, backed by `MemoryStore`) to the rooms — keeping the registered names (`recall_memory`, not `recall`) or a documented alias; the backend is rewritten to the rooms/file-format.
 - **FR-7.4 (C-4):** MUST add **bleve** pinned to the **pure-Go `scorch` index**, **forbidding** the CGo `leveldb`/`rocksdb` backends; a **CI check asserts no new CGo** (`CGO_ENABLED=0` build stays green); the index is **derived/rebuildable** from the `.md` sources; **no embeddings, no SQLite**. **Index lifecycle:** built incrementally on memory write, **rebuilt from `.md` on corruption/absence**; **concurrency** coordinated with the existing 64-shard memory mutex (bleve's own writer lock + the shard lock — no double-write races) (M-6).
 - **FR-7.5 (C-2):** the frozen append-only **log record schemas** (inlined from the design doc): **`counters.jsonl`** = `{ts, memory_id, op, by, amount?}` where `op` ∈ {access|drift|cited} — append-only, **atomic** (one event line < `PIPE_BUF` 4 KB, POSIX-safe, multi-process-safe); **`sessions/<id>/<date>.jsonl`** = the existing firehose (one turn per line, 90d retention). **`born_in` is frontmatter** (not a log); **`cited_in` is a `counters.jsonl` `op:cited` event** (recall-hit AND the agent text references the memory id/title). The **`.index/`** (`bleve/`, `edges.jsonl`, `tags.json`, `minhash.jsonl`) is **DERIVED/rebuildable from the `.md` + `counters.jsonl`** — NOT frozen. **MinHash** dedup is **non-destructive** (near-dups linked via `minhash.jsonl`, not deleted — M-5).
-- **FR-7.6 (M-2):** memory is **NOT greenfield** — there is live `MEMORY.md`/`_retro.md` data + an existing `MigrateFromJSON`. MUST **migrate existing memory into the rooms** on upgrade (no silent loss); migration is one-way + idempotent.
+- **FR-7.6 (operator decision — greenfield, per design D2):** **no mandatory migration.** Consistent with design decision **D2** ("drop `MEMORY.md`, no migration") and the operator's greenfield choice (Q6): existing `MEMORY.md`/`_retro.md` data is **not preserved** in v0.1.0 (pre-1.0; few/no real users with precious memory yet). A **best-effort one-shot import is OPTIONAL** (nice-to-have), not required. This is a **documented, operator-approved** drop — not a silent loss (closes the grill's M-2 by explicit acceptance, not migration).
 - **FR-8.1:** MUST add additive task fields `start·due·recurrence·blocked_by`; `verify-contracts` exits 0.
 - **FR-8.2 (M-3, M-4):** MUST ship `blocked_by` with a **write-time validator** rejecting **self-edges, and both 2-node AND N-node cycles** (a full DAG cycle check, not pairwise-only), **dropping orphan edges on load**, with a **depth bound** (the Spec-3 Orchestrator traverses the DAG on every status change). **Delete semantics:** deleting a task **cascade-cleans its inbound+outbound `blocked_by` edges + surfaces dependents** — this is **THIS spec's edge cleanup**, distinct from Spec-1's project→task-file cascade (NOT attributed to Spec-1). Operator Q1.
 - **FR-8.3 (M-7):** MUST add a per-workspace **Calendar/Automations shell** — a **defined SPA surface** (a Calendar view on the workspace) rendering scheduled tasks/events/milestones; the automations *engine* + recurrence *execution* are v0.2.0 (shell only).
@@ -185,7 +185,7 @@ Scenario: Task fields regenerate clean
 - H6: the Calendar shows a scheduled task; recurrence stored but not auto-run (shell).
 
 ## 11. Assumptions
-- Memory is **NOT greenfield** — existing `MEMORY.md`/`_retro.md` MUST migrate into the rooms (M-2); the Workspace/install is greenfield, but **user memory is preserved**. `[C-1/M-2]`
+- Memory is **greenfield per D2** — old `MEMORY.md`/`_retro.md` is **not migrated** (best-effort import optional); consistent with the operator's greenfield choice (Q6). `[D2, operator]`
 - bleve is the approved new pure-Go FTS dep (no CGo/SQLite/embeddings). `[ADR FR-7]`
 - Rooms are keyed to Spec-1's `Workspace`; the shared room is `<workspace>/.omnipus/`. `[cross-spec Spec-1]`
 - The Orchestrator (Spec-3) consumes `blocked_by` via `SetOnComplete`; this spec owns the fields + validator. `[cross-spec Spec-3]`
