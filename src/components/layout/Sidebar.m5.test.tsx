@@ -41,18 +41,18 @@ vi.mock('@/store/auth', () => ({
   useAuthStore: { getState: () => ({ clearAuth: vi.fn() }) },
 }))
 
-// Mock fetchProjects so the Sidebar's useQuery never hits the network in tests.
+// Mock fetchWorkspaces so the Sidebar's useQuery never hits the network in tests.
 vi.mock('@/lib/api', () => ({
-  fetchProjects: () => Promise.resolve([]),
-  projectsQueryKeys: {
-    list: (params?: unknown) => ['projects', params],
+  fetchWorkspaces: () => Promise.resolve([]),
+  workspacesQueryKeys: {
+    list: (params?: unknown) => ['workspaces', params],
   },
 }))
 
 // Mock useProjectsStore used by Sidebar
 vi.mock('@/store/projectsStore', () => ({
   useProjectsStore: (selector?: (s: unknown) => unknown) => {
-    const state = { activeProjectId: null, setActiveProjectId: vi.fn() }
+    const state = { activeWorkspaceId: null, setActiveWorkspaceId: vi.fn() }
     return selector ? selector(state) : state
   },
 }))

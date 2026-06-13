@@ -4,17 +4,17 @@
 
 // Session auto-link integration tests (Tests 34–36).
 //
-// These exercise the project-session linker AFTER-TOOL hook end-to-end through
+// These exercise the workspace-session linker AFTER-TOOL hook end-to-end through
 // runAgentLoop, driven by a scripted ScenarioProvider (no LLM call is made).
 // They verify the hook WIRING — that when a real system.task.create /
-// system.task.update tool call carries a non-empty project_id, a link entry is
+// system.task.update tool call carries a non-empty workspace_id, a link entry is
 // appended to ~/.omnipus/project_session_links.jsonl, and that no link is
-// written when project_id is absent.
+// written when workspace_id is absent.
 //
-// Traces to: project-task-management-level1-spec.md
-//   - Test 34 (line 926): TestAgentLoop_TaskCreate_WithProjectID_LinksSession
-//   - Test 35 (line 927): TestAgentLoop_TaskUpdate_WithProjectID_LinksSession
-//   - Test 36 (line 928): TestAgentLoop_TaskCreate_NoProjectID_NoLink
+// Traces to: project-task-management-level1-spec.md (FR-1.9 rename: project→workspace)
+//   - Test 34 (line 926): TestAgentLoop_TaskCreate_WithWorkspaceID_LinksSession
+//   - Test 35 (line 927): TestAgentLoop_TaskUpdate_WithWorkspaceID_LinksSession
+//   - Test 36 (line 928): TestAgentLoop_TaskCreate_NoWorkspaceID_NoLink
 //   - BDD "Feature: Session Auto-Link" (spec lines 622–660)
 //   - User Story 4, Acceptance Scenarios 1, 2, 3 (spec lines 182–184)
 
@@ -40,7 +40,7 @@ import (
 
 // linkTestEnv is the wired-up agent loop plus the home dir under which the
 // linker writes project_session_links.jsonl and the task tools read/write
-// projects/ and tasks/.
+// workspaces/ and tasks/.
 type linkTestEnv struct {
 	al   *AgentLoop
 	home string // == filepath.Dir(workspace); linker + task tools share this root
@@ -73,7 +73,7 @@ func newLinkTestEnv(t *testing.T, provider *testutil.ScenarioProvider) *linkTest
 	t.Cleanup(func() { al.Close() })
 
 	// Register the real GTD task tools with a Deps rooted at the same home the
-	// linker uses, so project validation in task.create/update reads the project
+	// linker uses, so workspace validation in task.create/update reads the workspace
 	// files we write, and the resulting tool name (system.task.create /
 	// system.task.update) is exactly what the linker's AfterTool hook keys on.
 	deps := &systools.Deps{Home: home}
@@ -97,23 +97,23 @@ func newLinkTestEnv(t *testing.T, provider *testutil.ScenarioProvider) *linkTest
 	return &linkTestEnv{al: al, home: home}
 }
 
-// writeProjectFile writes a minimal valid project JSON to <home>/projects/<id>.json
-// so that task.create / task.update project_id validation (readProjectFromDisk)
-// succeeds. Returns the project id.
-func writeProjectFile(t *testing.T, home, name string) string {
+// writeWorkspaceFile writes a minimal valid workspace JSON to <home>/workspaces/<id>.json
+// so that task.create / task.update workspace_id validation (readWorkspaceFromDisk)
+// succeeds. Returns the workspace id.
+func writeWorkspaceFile(t *testing.T, home, name string) string {
 	t.Helper()
 	id := ulid.Make().String()
-	dir := filepath.Join(home, "projects")
+	dir := filepath.Join(home, "workspaces")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
-	// Field names mirror the systools.project struct JSON tags.
-	proj := map[string]any{
+	// Field names mirror the systools.workspace struct JSON tags.
+	ws := map[string]any{
 		"id":         id,
 		"name":       name,
 		"status":     "active",
 		"created_at": "2026-06-08T00:00:00Z",
 		"updated_at": "2026-06-08T00:00:00Z",
 	}
-	data, err := json.MarshalIndent(proj, "", "  ")
+	data, err := json.MarshalIndent(ws, "", "  ")
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, id+".json"), data, 0o600))
 	return id
@@ -122,18 +122,18 @@ func writeProjectFile(t *testing.T, home, name string) string {
 // writeTaskFile writes a minimal valid GTD task JSON to <home>/tasks/<id>.json
 // so that task.update (which reads the existing task first) succeeds. Returns
 // the task id.
-func writeTaskFile(t *testing.T, home, name, projectID string) string {
+func writeTaskFile(t *testing.T, home, name, workspaceID string) string {
 	t.Helper()
 	id := ulid.Make().String()
 	dir := filepath.Join(home, "tasks")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	task := map[string]any{
-		"id":         id,
-		"name":       name,
-		"status":     "inbox",
-		"project_id": projectID,
-		"created_at": "2026-06-08T00:00:00Z",
-		"updated_at": "2026-06-08T00:00:00Z",
+		"id":           id,
+		"name":         name,
+		"status":       "inbox",
+		"workspace_id": workspaceID,
+		"created_at":   "2026-06-08T00:00:00Z",
+		"updated_at":   "2026-06-08T00:00:00Z",
 	}
 	data, err := json.MarshalIndent(task, "", "  ")
 	require.NoError(t, err)
@@ -162,115 +162,115 @@ func runOneToolTurn(t *testing.T, env *linkTestEnv, sessionID string) {
 	require.NoError(t, err, "runAgentLoop must complete without error")
 }
 
-// TestAgentLoop_TaskCreate_WithProjectID_LinksSession (Test 34).
+// TestAgentLoop_TaskCreate_WithWorkspaceID_LinksSession (Test 34).
 //
-// BDD: Given session S is active and project P exists,
+// BDD: Given session S is active and workspace W exists,
 //
-//	When an agent executes system.task.create with project_id "P" during S,
-//	Then a link entry {project_id:"P", session_id:"S", created_at:…} is
+//	When an agent executes system.task.create with workspace_id "W" during S,
+//	Then a link entry {workspace_id:"W", session_id:"S", created_at:…} is
 //	appended to project_session_links.jsonl.
 //
 // Traces to: project-task-management-level1-spec.md line 926 (Test 34);
 //
 //	User Story 4, Acceptance Scenario 1 (line 182);
-//	BDD "Agent task.create with project_id writes link entry" (line 624).
-func TestAgentLoop_TaskCreate_WithProjectID_LinksSession(t *testing.T) {
+//	BDD "Agent task.create with workspace_id writes link entry" (line 624).
+func TestAgentLoop_TaskCreate_WithWorkspaceID_LinksSession(t *testing.T) {
 	provider := testutil.NewScenario()
 	env := newLinkTestEnv(t, provider)
 
-	projectID := writeProjectFile(t, env.home, "website-api")
+	workspaceID := writeWorkspaceFile(t, env.home, "website-api")
 	const sessionID = "session_TASKCREATE_34"
 
-	// Precondition: no link exists yet for this project.
-	require.Empty(t, systools.ReadLinks(env.home, projectID),
+	// Precondition: no link exists yet for this workspace.
+	require.Empty(t, systools.ReadLinks(env.home, workspaceID),
 		"precondition: no link should exist before the tool call")
 
-	// Step 1: scripted tool call to system.task.create with a real project_id.
+	// Step 1: scripted tool call to system.task.create with a real workspace_id.
 	// Step 2: scripted text so the turn completes after the tool result.
 	provider.
-		WithToolCall("system.task.create", `{"name":"fix login","project_id":"`+projectID+`"}`).
+		WithToolCall("system.task.create", `{"name":"fix login","workspace_id":"`+workspaceID+`"}`).
 		WithText("Created the task.")
 
 	runOneToolTurn(t, env, sessionID)
 
-	// Assert: exactly one link entry for (projectID, sessionID) was written.
-	links := systools.ReadLinks(env.home, projectID)
+	// Assert: exactly one link entry for (workspaceID, sessionID) was written.
+	links := systools.ReadLinks(env.home, workspaceID)
 	require.Len(t, links, 1,
-		"CRITICAL: system.task.create with project_id must append exactly one link entry "+
+		"CRITICAL: system.task.create with workspace_id must append exactly one link entry "+
 			"(linker AfterTool hook did not fire or did not write)")
-	assert.Equal(t, projectID, links[0].ProjectID,
-		"link entry project_id must match the project_id passed to system.task.create")
+	assert.Equal(t, workspaceID, links[0].WorkspaceID,
+		"link entry workspace_id must match the workspace_id passed to system.task.create")
 	assert.Equal(t, sessionID, links[0].SessionID,
 		"link entry session_id must be the transcript session id of the turn")
 	assert.NotEmpty(t, links[0].CreatedAt,
 		"link entry must carry a non-empty created_at timestamp")
 
-	// Differentiation: a DIFFERENT project id must have no link — proves the
-	// session_id/project_id are real and not hardcoded.
-	otherProject := writeProjectFile(t, env.home, "unrelated")
-	assert.Empty(t, systools.ReadLinks(env.home, otherProject),
-		"a project that was never named in a tool call must have zero links")
+	// Differentiation: a DIFFERENT workspace id must have no link — proves the
+	// session_id/workspace_id are real and not hardcoded.
+	otherWorkspace := writeWorkspaceFile(t, env.home, "unrelated")
+	assert.Empty(t, systools.ReadLinks(env.home, otherWorkspace),
+		"a workspace that was never named in a tool call must have zero links")
 }
 
-// TestAgentLoop_TaskUpdate_WithProjectID_LinksSession (Test 35).
+// TestAgentLoop_TaskUpdate_WithWorkspaceID_LinksSession (Test 35).
 //
-// BDD: Given session S already linked to project A,
+// BDD: Given session S already linked to workspace A,
 //
-//	When the agent executes system.task.update on a task in project B,
+//	When the agent executes system.task.update on a task in workspace B,
 //	Then a new link entry for (B, S) is appended — (A, S) is NOT removed
 //	(many-to-many accumulate).
 //
 // Traces to: project-task-management-level1-spec.md line 927 (Test 35);
 //
 //	User Story 4, Acceptance Scenario 2 (line 183).
-func TestAgentLoop_TaskUpdate_WithProjectID_LinksSession(t *testing.T) {
+func TestAgentLoop_TaskUpdate_WithWorkspaceID_LinksSession(t *testing.T) {
 	provider := testutil.NewScenario()
 	env := newLinkTestEnv(t, provider)
 
-	projectA := writeProjectFile(t, env.home, "project-a")
-	projectB := writeProjectFile(t, env.home, "project-b")
-	// A task that already lives in project B; update will re-assert project_id B.
-	taskID := writeTaskFile(t, env.home, "wire the form", projectB)
+	workspaceA := writeWorkspaceFile(t, env.home, "workspace-a")
+	workspaceB := writeWorkspaceFile(t, env.home, "workspace-b")
+	// A task that already lives in workspace B; update will re-assert workspace_id B.
+	taskID := writeTaskFile(t, env.home, "wire the form", workspaceB)
 	const sessionID = "session_TASKUPDATE_35"
 
-	// Turn 1: task.create in project A — establishes the (A, S) link.
-	// Turn 2: task.update in project B — must ADD (B, S) without removing (A, S).
+	// Turn 1: task.create in workspace A — establishes the (A, S) link.
+	// Turn 2: task.update in workspace B — must ADD (B, S) without removing (A, S).
 	provider.
 		// turn 1 (create in A)
-		WithToolCall("system.task.create", `{"name":"seed","project_id":"`+projectA+`"}`).
-		WithText("Linked to project A.").
+		WithToolCall("system.task.create", `{"name":"seed","workspace_id":"`+workspaceA+`"}`).
+		WithText("Linked to workspace A.").
 		// turn 2 (update in B)
-		WithToolCall("system.task.update", `{"id":"`+taskID+`","status":"active","project_id":"`+projectB+`"}`).
-		WithText("Updated and linked to project B.")
+		WithToolCall("system.task.update", `{"id":"`+taskID+`","status":"active","workspace_id":"`+workspaceB+`"}`).
+		WithText("Updated and linked to workspace B.")
 
 	runOneToolTurn(t, env, sessionID) // create in A
 	runOneToolTurn(t, env, sessionID) // update in B
 
 	// Assert (A, S) still present (accumulate, not replace).
-	linksA := systools.ReadLinks(env.home, projectA)
-	require.Len(t, linksA, 1, "the original (A, S) link must survive a later update on project B")
+	linksA := systools.ReadLinks(env.home, workspaceA)
+	require.Len(t, linksA, 1, "the original (A, S) link must survive a later update on workspace B")
 	assert.Equal(t, sessionID, linksA[0].SessionID, "(A, S) link session must be unchanged")
 
 	// Assert (B, S) was added by the update.
-	linksB := systools.ReadLinks(env.home, projectB)
+	linksB := systools.ReadLinks(env.home, workspaceB)
 	require.Len(t, linksB, 1,
-		"CRITICAL: system.task.update with project_id must append a (B, S) link entry")
-	assert.Equal(t, projectB, linksB[0].ProjectID, "new link project_id must be project B")
+		"CRITICAL: system.task.update with workspace_id must append a (B, S) link entry")
+	assert.Equal(t, workspaceB, linksB[0].WorkspaceID, "new link workspace_id must be workspace B")
 	assert.Equal(t, sessionID, linksB[0].SessionID, "new link session must be the same session S")
 }
 
-// TestAgentLoop_TaskCreate_NoProjectID_NoLink (Test 36).
+// TestAgentLoop_TaskCreate_NoWorkspaceID_NoLink (Test 36).
 //
 // BDD: Given session S is active,
 //
-//	When the agent executes system.task.create WITHOUT a project_id,
+//	When the agent executes system.task.create WITHOUT a workspace_id,
 //	Then no new line is appended to project_session_links.jsonl.
 //
 // Traces to: project-task-management-level1-spec.md line 928 (Test 36);
 //
 //	User Story 4, Acceptance Scenario 3 (line 184);
-//	BDD "task.create without project_id writes no link entry" (line 644).
-func TestAgentLoop_TaskCreate_NoProjectID_NoLink(t *testing.T) {
+//	BDD "task.create without workspace_id writes no link entry" (line 644).
+func TestAgentLoop_TaskCreate_NoWorkspaceID_NoLink(t *testing.T) {
 	provider := testutil.NewScenario()
 	env := newLinkTestEnv(t, provider)
 
@@ -282,7 +282,7 @@ func TestAgentLoop_TaskCreate_NoProjectID_NoLink(t *testing.T) {
 	require.True(t, os.IsNotExist(statErr),
 		"precondition: link file must not exist before the tool call")
 
-	// Step 1: scripted task.create with NO project_id.
+	// Step 1: scripted task.create with NO workspace_id.
 	// Step 2: scripted text so the turn completes.
 	provider.
 		WithToolCall("system.task.create", `{"name":"write docs"}`).
@@ -293,11 +293,11 @@ func TestAgentLoop_TaskCreate_NoProjectID_NoLink(t *testing.T) {
 	// Assert: no link file was created (nothing to write means no append).
 	_, statErr = os.Stat(linkFile)
 	assert.True(t, os.IsNotExist(statErr),
-		"CRITICAL: a task.create without project_id must NOT create the link file")
+		"CRITICAL: a task.create without workspace_id must NOT create the link file")
 
-	// Differentiation: prove the negative is meaningful — a real project that was
+	// Differentiation: prove the negative is meaningful — a real workspace that was
 	// never referenced has zero links even though the turn ran a real tool.
-	someProject := writeProjectFile(t, env.home, "never-referenced")
-	assert.Empty(t, systools.ReadLinks(env.home, someProject),
-		"no project should have any links after a no-project_id task.create")
+	someWorkspace := writeWorkspaceFile(t, env.home, "never-referenced")
+	assert.Empty(t, systools.ReadLinks(env.home, someWorkspace),
+		"no workspace should have any links after a no-workspace_id task.create")
 }

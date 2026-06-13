@@ -12,33 +12,33 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
-// projectLinkerAdapter adapts ProjectSessionLinker to the ToolInterceptor interface.
-// It fires on system.task.create and system.task.update when a project_id argument
-// is present, recording a session→project link in ~/.omnipus/project_session_links.jsonl.
-type projectLinkerAdapter struct {
+// workspaceLinkerAdapter adapts ProjectSessionLinker to the ToolInterceptor interface.
+// It fires on system.task.create and system.task.update when a workspace_id argument
+// is present, recording a session→workspace link in ~/.omnipus/project_session_links.jsonl.
+type workspaceLinkerAdapter struct {
 	linker *systools.ProjectSessionLinker
 }
 
-func (a *projectLinkerAdapter) BeforeTool(
+func (a *workspaceLinkerAdapter) BeforeTool(
 	ctx context.Context,
 	call *ToolCallHookRequest,
 ) (*ToolCallHookRequest, HookDecision, error) {
 	return call, HookDecision{Action: HookActionContinue}, nil
 }
 
-func (a *projectLinkerAdapter) AfterTool(
+func (a *workspaceLinkerAdapter) AfterTool(
 	ctx context.Context,
 	result *ToolResultHookResponse,
 ) (*ToolResultHookResponse, HookDecision, error) {
 	if result.Tool == "system.task.create" || result.Tool == "system.task.update" {
-		if projectID, _ := result.Arguments["project_id"].(string); projectID != "" {
+		if workspaceID, _ := result.Arguments["workspace_id"].(string); workspaceID != "" {
 			sessionID := tools.ToolTranscriptSessionID(ctx)
 			if sessionID == "" {
-				slog.Warn("project-session-linker: skipping link for non-tracked session",
-					"tool", result.Tool, "project_id", projectID)
+				slog.Warn("workspace-session-linker: skipping link for non-tracked session",
+					"tool", result.Tool, "workspace_id", workspaceID)
 				return result, HookDecision{Action: HookActionContinue}, nil
 			}
-			a.linker.LinkSession(projectID, sessionID)
+			a.linker.LinkSession(workspaceID, sessionID)
 		}
 	}
 	return result, HookDecision{Action: HookActionContinue}, nil

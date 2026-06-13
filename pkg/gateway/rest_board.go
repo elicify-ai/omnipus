@@ -182,10 +182,10 @@ func toWireBoardTask(t boardTask) gen.BoardTask {
 		d := t.Description
 		desc = &d
 	}
-	var projectID *string
-	if t.ProjectID != "" {
-		p := t.ProjectID
-		projectID = &p
+	var workspaceID *string
+	if t.WorkspaceID != "" {
+		p := t.WorkspaceID
+		workspaceID = &p
 	}
 	var agentID *string
 	if t.AgentID != "" {
@@ -246,7 +246,7 @@ func toWireBoardTask(t boardTask) gen.BoardTask {
 		SessionId:   sessionID,
 		Result:      result,
 		Status:      gen.BoardTaskStatus(t.Status),
-		ProjectId:   projectID,
+		WorkspaceId: workspaceID,
 		AgentId:     agentID,
 		Owner:       owner,
 		CreatedAt:   createdAt,
@@ -256,7 +256,7 @@ func toWireBoardTask(t boardTask) gen.BoardTask {
 
 // handleBoardTaskList handles GET /api/v1/board/tasks with optional filters.
 func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
-	projectFilter := r.URL.Query().Get("project_id")
+	workspaceFilter := r.URL.Query().Get("workspace_id")
 	statusFilter := r.URL.Query().Get("status")
 	agentFilter := r.URL.Query().Get("agent_id")
 	milestoneFilter := r.URL.Query().Get("milestone_id")
@@ -284,8 +284,6 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c := a.callerIdentity(r)
-
 	all, err := a.listBoardTasks()
 	if err != nil {
 		slog.Error("rest: board task: list failed", "error", err)
@@ -293,14 +291,11 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply ownership scope, then project_id, status, agent_id, milestone_id filters.
-	// SEC-2: tasks with a non-empty owner that doesn't match the caller are hidden.
+	// Apply workspace_id, status, agent_id, milestone_id filters.
+	// FR-1.9: owner gate removed — all tasks are visible regardless of owner.
 	filtered := make([]boardTask, 0, len(all))
 	for _, t := range all {
-		if !c.canAccess(t.Owner) {
-			continue
-		}
-		if projectFilter != "" && t.ProjectID != projectFilter {
+		if workspaceFilter != "" && t.WorkspaceID != workspaceFilter {
 			continue
 		}
 		if statusFilter != "" && string(t.Status) != statusFilter {
@@ -347,9 +342,9 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 			Id:          wt.Id,
 			MilestoneId: wt.MilestoneId,
 			Name:        wt.Name,
+			WorkspaceId: wt.WorkspaceId,
 			Owner:       wt.Owner,
 			Priority:    wt.Priority,
-			ProjectId:   wt.ProjectId,
 			Prompt:      wt.Prompt,
 			Result:      wt.Result,
 			SessionId:   wt.SessionId,
@@ -379,10 +374,7 @@ func (a *restAPI) handleBoardTaskGet(w http.ResponseWriter, r *http.Request, id 
 		jsonErr(w, http.StatusInternalServerError, "could not read board task")
 		return
 	}
-	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	if a.denyIfNoAccess(w, a.callerIdentity(r), t.Owner, "board task not found") {
-		return
-	}
+	// FR-1.9: owner gate removed — owner is attribution only.
 	jsonOK(w, toWireBoardTask(t))
 }
 
@@ -417,36 +409,30 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SEC-2: resolve caller identity early — needed for both the owner stamp and
-	// the cross-owner reference check on project_id / milestone_id.
+	// Resolve caller identity for owner stamp.
 	c := a.callerIdentity(r)
 
-	projectID := ""
-	if req.ProjectId != nil {
-		projectID = *req.ProjectId
-		if len(projectID) > 50 {
-			jsonErr(w, http.StatusBadRequest, "project_id must be 50 characters or fewer")
+	workspaceID := ""
+	if req.WorkspaceId != nil {
+		workspaceID = *req.WorkspaceId
+		if len(workspaceID) > 50 {
+			jsonErr(w, http.StatusBadRequest, "workspace_id must be 50 characters or fewer")
 			return
 		}
-		if projectID != "" {
-			if err := validateEntityID(projectID); err != nil {
-				jsonErr(w, http.StatusBadRequest, "invalid project_id")
+		if workspaceID != "" {
+			if err := validateEntityID(workspaceID); err != nil {
+				jsonErr(w, http.StatusBadRequest, "invalid workspace_id")
 				return
 			}
-			proj, projErr := readProjectFile(a.homePath, projectID)
-			if errors.Is(projErr, errProjectNotFound) || errors.Is(projErr, os.ErrNotExist) {
-				jsonErr(w, http.StatusBadRequest, "project not found")
+			_, wsErr := readWorkspaceFile(a.homePath, workspaceID)
+			if errors.Is(wsErr, errWorkspaceNotFound) || errors.Is(wsErr, os.ErrNotExist) {
+				jsonErr(w, http.StatusBadRequest, "workspace not found")
 				return
-			} else if projErr != nil {
-				jsonErr(w, http.StatusInternalServerError, "failed to validate project_id")
-				return
-			}
-			// SEC-2: cross-owner reference is an enumeration oracle. Return the
-			// same "project not found" 400 on denial so there is no oracle.
-			if !c.canAccess(proj.Owner) {
-				jsonErr(w, http.StatusBadRequest, "project not found")
+			} else if wsErr != nil {
+				jsonErr(w, http.StatusInternalServerError, "failed to validate workspace_id")
 				return
 			}
+			// FR-1.9: owner gate removed — no cross-owner check.
 		}
 	}
 
@@ -502,11 +488,8 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 	if req.MilestoneId != nil {
 		milestoneID = *req.MilestoneId
 		if milestoneID != "" {
-			// Validate milestone FK: must exist, be accessible to the caller, and
-			// belong to the same project (when project_id is provided).
-			// Pass the caller so cross-owner milestones are denied without an oracle
-			// (SEC-2: same "milestone not found" 400 as the not-exist case).
-			if err := validateMilestoneFK(a.homePath, milestoneID, projectID, c); err != nil {
+			// Validate milestone FK: must exist and belong to the same workspace (when workspace_id is provided).
+			if err := validateMilestoneFK(a.homePath, milestoneID, workspaceID); err != nil {
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
@@ -522,10 +505,9 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 		Priority:    priority,
 		MilestoneID: milestoneID,
 		Status:      status,
-		ProjectID:   projectID,
+		WorkspaceID: workspaceID,
 		AgentID:     agentID,
-		// SEC-2: stamp the creating user's username as owner. In dev-mode bypass,
-		// the caller has no username — stamp empty string (unowned/shared).
+		// Stamp the creating user's username as owner (attribution only).
 		Owner:     c.Username,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -586,13 +568,8 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
-	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
 	// owner is immutable — the stored value is always preserved; any owner field
 	// in the request body is ignored.
-	c := a.callerIdentity(r)
-	if a.denyIfNoAccess(w, c, existing.Owner, "board task not found") {
-		return
-	}
 
 	// Track whether the request explicitly provided session_id (for #405 auto-clear logic below).
 	reqExplicitSessionID := req.SessionId != nil
@@ -680,40 +657,33 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		}
 		existing.SessionID = ""
 	}
-	if req.ProjectId != nil {
-		if len(*req.ProjectId) > 50 {
-			jsonErr(w, http.StatusBadRequest, "project_id must be 50 characters or fewer")
+	if req.WorkspaceId != nil {
+		if len(*req.WorkspaceId) > 50 {
+			jsonErr(w, http.StatusBadRequest, "workspace_id must be 50 characters or fewer")
 			return
 		}
-		if *req.ProjectId != "" {
-			if err := validateEntityID(*req.ProjectId); err != nil {
-				jsonErr(w, http.StatusBadRequest, "invalid project_id")
+		if *req.WorkspaceId != "" {
+			if err := validateEntityID(*req.WorkspaceId); err != nil {
+				jsonErr(w, http.StatusBadRequest, "invalid workspace_id")
 				return
 			}
-			proj, projErr := readProjectFile(a.homePath, *req.ProjectId)
-			if errors.Is(projErr, errProjectNotFound) || errors.Is(projErr, os.ErrNotExist) {
-				jsonErr(w, http.StatusBadRequest, "project not found")
+			_, wsErr := readWorkspaceFile(a.homePath, *req.WorkspaceId)
+			if errors.Is(wsErr, errWorkspaceNotFound) || errors.Is(wsErr, os.ErrNotExist) {
+				jsonErr(w, http.StatusBadRequest, "workspace not found")
 				return
-			} else if projErr != nil {
-				jsonErr(w, http.StatusInternalServerError, "failed to validate project_id")
-				return
-			}
-			// SEC-2: cross-owner reference is an enumeration oracle. Return the
-			// same "project not found" 400 on denial so there is no oracle.
-			if !c.canAccess(proj.Owner) {
-				jsonErr(w, http.StatusBadRequest, "project not found")
+			} else if wsErr != nil {
+				jsonErr(w, http.StatusInternalServerError, "failed to validate workspace_id")
 				return
 			}
 		}
-		existing.ProjectID = *req.ProjectId
+		existing.WorkspaceID = *req.WorkspaceId
 	}
 	if req.MilestoneId != nil {
 		milestoneID := *req.MilestoneId
 		if milestoneID != "" {
-			// Use the (possibly updated) project_id for FK validation.
-			// Pass the caller for SEC-2 ownership check (anti-enumeration oracle).
-			effectiveProjectID := existing.ProjectID
-			if err := validateMilestoneFK(a.homePath, milestoneID, effectiveProjectID, c); err != nil {
+			// Use the (possibly updated) workspace_id for FK validation.
+			effectiveWorkspaceID := existing.WorkspaceID
+			if err := validateMilestoneFK(a.homePath, milestoneID, effectiveWorkspaceID); err != nil {
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
@@ -774,19 +744,13 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 	}
 
 	// Confirm the file exists and is a GTD task before deleting.
-	existing, err := a.readBoardTask(id)
-	if err != nil {
+	if _, err := a.readBoardTask(id); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			jsonErr(w, http.StatusNotFound, "board task not found")
 			return
 		}
 		slog.Error("rest: board task: delete read failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not read board task")
-		return
-	}
-
-	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	if a.denyIfNoAccess(w, a.callerIdentity(r), existing.Owner, "board task not found") {
 		return
 	}
 
@@ -822,11 +786,11 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 // startDispatchParams holds the parameters extracted by startBoardTaskLocked
 // that are needed to dispatch agent execution after the lock is released.
 type startDispatchParams struct {
-	agentID   string
-	sessionID string
-	prompt    string
-	projectID string
-	task      boardTask // final task state written to disk (status=active)
+	agentID     string
+	sessionID   string
+	prompt      string
+	workspaceID string
+	task        boardTask // final task state written to disk (status=active)
 }
 
 // startBoardTaskLocked performs the locked read→validate→mutate→write phase of
@@ -841,7 +805,6 @@ type startDispatchParams struct {
 // On success it returns (params, 0, ""). On error it returns (zero, httpStatus, errMsg).
 func (a *restAPI) startBoardTaskLocked(
 	id string,
-	callerCanAccess func(owner string) bool,
 ) (startDispatchParams, int, string) {
 	mu := a.boardTaskLock().Get(id)
 	mu.Lock()
@@ -854,11 +817,6 @@ func (a *restAPI) startBoardTaskLocked(
 		}
 		slog.Error("rest: board task: start read failed", "id", id, "error", err)
 		return startDispatchParams{}, http.StatusInternalServerError, "could not read board task"
-	}
-
-	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	if !callerCanAccess(existing.Owner) {
-		return startDispatchParams{}, http.StatusNotFound, "board task not found"
 	}
 
 	if existing.Status == boardtask.StatusActive || existing.Status == boardtask.StatusDone ||
@@ -971,11 +929,11 @@ func (a *restAPI) startBoardTaskLocked(
 	}
 
 	return startDispatchParams{
-		agentID:   agentID,
-		sessionID: meta.ID,
-		prompt:    prompt,
-		projectID: existing.ProjectID,
-		task:      existing,
+		agentID:     agentID,
+		sessionID:   meta.ID,
+		prompt:      prompt,
+		workspaceID: existing.WorkspaceID,
+		task:        existing,
 	}, 0, ""
 }
 
@@ -990,19 +948,18 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 	// using defer mu.Unlock() so every error path is covered without explicit unlocks.
 	// The lock is released before this function returns, so dispatch is always
 	// outside the critical section (lock held only for synchronous RMW, not execution).
-	c := a.callerIdentity(r)
-	params, httpStatus, errMsg := a.startBoardTaskLocked(id, c.canAccess)
+	params, httpStatus, errMsg := a.startBoardTaskLocked(id)
 	if httpStatus != 0 {
 		jsonErr(w, httpStatus, errMsg)
 		return
 	}
 
-	// A1: record the project↔session link so GET /projects/{id}/sessions works for board tasks.
-	if params.projectID != "" {
-		if linkErr := systools.AppendLinkExported(a.homePath, params.projectID, params.sessionID); linkErr != nil {
+	// Record the workspace↔session link so GET /workspaces/{id}/sessions works for board tasks.
+	if params.workspaceID != "" {
+		if linkErr := systools.AppendLinkExported(a.homePath, params.workspaceID, params.sessionID); linkErr != nil {
 			// Non-fatal: log but continue; the task is already dispatched.
-			slog.Warn("rest: board task: start project session link failed",
-				"id", id, "project_id", params.projectID, "session_id", params.sessionID, "error", linkErr)
+			slog.Warn("rest: board task: start workspace session link failed",
+				"id", id, "workspace_id", params.workspaceID, "session_id", params.sessionID, "error", linkErr)
 		}
 	}
 
@@ -1106,25 +1063,16 @@ func (a *restAPI) HandleBoardTasks(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// validateMilestoneFK validates that a milestone exists, is accessible to the
-// caller, and (when projectID is non-empty) belongs to the given project.
+// validateMilestoneFK validates that a milestone exists and (when workspaceID is
+// non-empty) belongs to the given workspace.
 // Returns a user-facing error string on failure (caller writes 400), nil on success.
-//
-// SEC-2 / anti-enumeration: when the milestone exists but the caller cannot
-// access it (cross-owner), we return the same "milestone not found" error as the
-// not-exist case so that non-admin users cannot enumerate other users' milestones
-// via the 400 vs. success distinction.
-func validateMilestoneFK(homePath, milestoneID, projectID string, c caller) error {
+func validateMilestoneFK(homePath, milestoneID, workspaceID string) error {
 	m, err := readMilestoneFile(homePath, milestoneID)
 	if err != nil {
 		return errors.New("milestone not found")
 	}
-	// Ownership check: deny access with the same error as not-found (no oracle).
-	if !c.canAccess(m.Owner) {
-		return errors.New("milestone not found")
-	}
-	if projectID != "" && m.ProjectID != projectID {
-		return errors.New("milestone does not belong to this project")
+	if workspaceID != "" && m.WorkspaceID != workspaceID {
+		return errors.New("milestone does not belong to this workspace")
 	}
 	return nil
 }

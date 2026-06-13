@@ -106,9 +106,9 @@ import {
   ScheduleRunResult as ScheduleRunResultSchema,
   // #264 Notifications (contract-first #8):
   NotificationList as NotificationListSchema,
-  // Level-1 projects + board tasks + token stats (contract-first #8):
-  Project as ProjectSchema,
-  ProjectSessionLink as ProjectSessionLinkSchema,
+  // Level-1 workspaces + board tasks + token stats (contract-first #8):
+  Workspace as WorkspaceSchema,
+  WorkspaceSessionLink as WorkspaceSessionLinkSchema,
   BoardTask as BoardTaskSchema,
   BoardTaskListResponse as BoardTaskListResponseSchema,
   TokenUsageSummary as TokenUsageSummarySchema,
@@ -269,13 +269,13 @@ import type {
   AgentUpdateRequest,
   AgentCreateRequest,
   ChannelRouting,
-  // Level-1 projects + board tasks + token stats (contract-first #8):
-  Project,
-  ProjectCreateRequest,
-  ProjectUpdateRequest,
+  // Level-1 workspaces + board tasks + token stats (contract-first #8):
+  Workspace,
+  WorkspaceCreateRequest,
+  WorkspaceUpdateRequest,
   BoardTask,
   BoardTaskListResponse,
-  ProjectSessionLink,
+  WorkspaceSessionLink,
   TokenUsageSummary,
   // #264 Schedules (contract-first #8):
   Schedule,
@@ -375,13 +375,13 @@ export type {
   AgentUpdateRequest,
   AgentCreateRequest,
   ChannelRouting,
-  // Level-1 projects + board tasks + token stats:
-  Project,
-  ProjectCreateRequest,
-  ProjectUpdateRequest,
+  // Level-1 workspaces + board tasks + token stats:
+  Workspace,
+  WorkspaceCreateRequest,
+  WorkspaceUpdateRequest,
   BoardTask,
   BoardTaskListResponse,
-  ProjectSessionLink,
+  WorkspaceSessionLink,
   TokenUsageSummary,
   BoardTaskCreateRequest,
   BoardTaskUpdateRequest,
@@ -2083,44 +2083,62 @@ export function fetchToolResult(sessionId: string, ref: string): Promise<unknown
 // re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/Project*.yaml.
 
-export const projectsQueryKeys = {
-  list: (params?: { status?: string }) => ['projects', params] as const,
-  detail: (id: string) => ['projects', id] as const,
-  sessions: (id: string) => ['projects', id, 'sessions'] as const,
+export const workspacesQueryKeys = {
+  list: (params?: { status?: string }) => ['workspaces', params] as const,
+  detail: (id: string) => ['workspaces', id] as const,
+  sessions: (id: string) => ['workspaces', id, 'sessions'] as const,
 }
 
-export function fetchProjects(params?: { status?: string }): Promise<Project[]> {
+/** @deprecated Use workspacesQueryKeys */
+export const projectsQueryKeys = workspacesQueryKeys
+
+export function fetchWorkspaces(params?: { status?: string }): Promise<Workspace[]> {
   const qs = params?.status ? '?' + new URLSearchParams({ status: params.status }).toString() : ''
-  return request<Project[]>(`/projects${qs}`, undefined, z.array(ProjectSchema) as ZodType<Project[]>)
+  return request<Workspace[]>(`/workspaces${qs}`, undefined, z.array(WorkspaceSchema) as ZodType<Workspace[]>)
 }
 
-export function createProject(body: ProjectCreateRequest): Promise<Project> {
-  return request<Project>(
-    '/projects',
+/** @deprecated Use fetchWorkspaces */
+export const fetchProjects = fetchWorkspaces
+
+export function createWorkspace(body: WorkspaceCreateRequest): Promise<Workspace> {
+  return request<Workspace>(
+    '/workspaces',
     { method: 'POST', body: JSON.stringify(body) },
-    ProjectSchema as ZodType<Project>,
+    WorkspaceSchema as ZodType<Workspace>,
   )
 }
 
-export function updateProject(id: string, body: ProjectUpdateRequest): Promise<Project> {
-  return request<Project>(
-    `/projects/${encodeURIComponent(id)}`,
+/** @deprecated Use createWorkspace */
+export const createProject = createWorkspace
+
+export function updateWorkspace(id: string, body: WorkspaceUpdateRequest): Promise<Workspace> {
+  return request<Workspace>(
+    `/workspaces/${encodeURIComponent(id)}`,
     { method: 'PUT', body: JSON.stringify(body) },
-    ProjectSchema as ZodType<Project>,
+    WorkspaceSchema as ZodType<Workspace>,
   )
 }
 
-export function deleteProject(id: string): Promise<void> {
-  return request<void>(`/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
+/** @deprecated Use updateWorkspace */
+export const updateProject = updateWorkspace
+
+export function deleteWorkspace(id: string): Promise<void> {
+  return request<void>(`/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
-export function fetchProjectSessions(id: string): Promise<ProjectSessionLink[]> {
-  return request<ProjectSessionLink[]>(
-    `/projects/${encodeURIComponent(id)}/sessions`,
+/** @deprecated Use deleteWorkspace */
+export const deleteProject = deleteWorkspace
+
+export function fetchWorkspaceSessions(id: string): Promise<WorkspaceSessionLink[]> {
+  return request<WorkspaceSessionLink[]>(
+    `/workspaces/${encodeURIComponent(id)}/sessions`,
     undefined,
-    z.array(ProjectSessionLinkSchema) as ZodType<ProjectSessionLink[]>,
+    z.array(WorkspaceSessionLinkSchema) as ZodType<WorkspaceSessionLink[]>,
   )
 }
+
+/** @deprecated Use fetchWorkspaceSessions */
+export const fetchProjectSessions = fetchWorkspaceSessions
 
 // ── GTD Board Tasks ───────────────────────────────────────────────────────────
 //
@@ -2128,7 +2146,7 @@ export function fetchProjectSessions(id: string): Promise<ProjectSessionLink[]> 
 // openapi-types (contract-first #8). See contracts/components/schemas/BoardTask*.yaml.
 
 export const boardTasksQueryKeys = {
-  list: (params?: { project_id?: string; status?: string; milestone_id?: string; agent_id?: string }) => {
+  list: (params?: { workspace_id?: string; status?: string; milestone_id?: string; agent_id?: string }) => {
     const cleaned = params
       ? Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined))
       : {}
@@ -2137,9 +2155,9 @@ export const boardTasksQueryKeys = {
   detail: (id: string) => ['board-tasks', id] as const,
 }
 
-export function fetchBoardTasks(params?: { project_id?: string; status?: string; milestone_id?: string; agent_id?: string }): Promise<BoardTask[]> {
+export function fetchBoardTasks(params?: { workspace_id?: string; status?: string; milestone_id?: string; agent_id?: string }): Promise<BoardTask[]> {
   const search = new URLSearchParams()
-  if (params?.project_id) search.set('project_id', params.project_id)
+  if (params?.workspace_id) search.set('workspace_id', params.workspace_id)
   if (params?.status) search.set('status', params.status)
   if (params?.milestone_id) search.set('milestone_id', params.milestone_id)
   if (params?.agent_id) search.set('agent_id', params.agent_id)
@@ -2181,7 +2199,7 @@ export function startBoardTask(id: string): Promise<BoardTask> {
 
 // ── Milestones ────────────────────────────────────────────────────────────────
 //
-// Milestones are scoped to a project. All types are re-exported from generated
+// Milestones are scoped to a workspace. All types are re-exported from generated
 // openapi-types (contract-first #8). See contracts/components/schemas/Milestone*.yaml.
 //
 // The generated Milestone type does not include `progress` (computed field added
@@ -2189,8 +2207,8 @@ export function startBoardTask(id: string): Promise<BoardTask> {
 // as optional and use a passthrough schema to avoid strict validation failures.
 
 export const milestonesQueryKeys = {
-  list: (projectId: string) => ['milestones', projectId] as const,
-  detail: (projectId: string, milestoneId: string) => ['milestones', projectId, milestoneId] as const,
+  list: (workspaceId: string) => ['milestones', workspaceId] as const,
+  detail: (workspaceId: string, milestoneId: string) => ['milestones', workspaceId, milestoneId] as const,
 }
 
 /** Milestone with optional computed progress field (0–1, added by backend at read time). */
@@ -2210,41 +2228,41 @@ const MilestoneWithProgressListResponseSchema: ZodType<{ milestones: MilestoneWi
   total: z.number().int(),
 }).passthrough()
 
-export function fetchMilestones(projectId: string): Promise<MilestoneWithProgress[]> {
+export function fetchMilestones(workspaceId: string): Promise<MilestoneWithProgress[]> {
   return request<{ milestones: MilestoneWithProgress[]; total: number }>(
-    `/projects/${encodeURIComponent(projectId)}/milestones`,
+    `/workspaces/${encodeURIComponent(workspaceId)}/milestones`,
     undefined,
     MilestoneWithProgressListResponseSchema,
   ).then((res) => res.milestones)
 }
 
-export function getMilestone(projectId: string, milestoneId: string): Promise<MilestoneWithProgress> {
+export function getMilestone(workspaceId: string, milestoneId: string): Promise<MilestoneWithProgress> {
   return request<MilestoneWithProgress>(
-    `/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}`,
+    `/workspaces/${encodeURIComponent(workspaceId)}/milestones/${encodeURIComponent(milestoneId)}`,
     undefined,
     MilestoneWithProgressSchema,
   )
 }
 
-export function createMilestone(projectId: string, body: MilestoneCreateRequest): Promise<MilestoneWithProgress> {
+export function createMilestone(workspaceId: string, body: MilestoneCreateRequest): Promise<MilestoneWithProgress> {
   return request<MilestoneWithProgress>(
-    `/projects/${encodeURIComponent(projectId)}/milestones`,
+    `/workspaces/${encodeURIComponent(workspaceId)}/milestones`,
     { method: 'POST', body: JSON.stringify(body) },
     MilestoneWithProgressSchema,
   )
 }
 
-export function updateMilestone(projectId: string, milestoneId: string, body: MilestoneUpdateRequest): Promise<MilestoneWithProgress> {
+export function updateMilestone(workspaceId: string, milestoneId: string, body: MilestoneUpdateRequest): Promise<MilestoneWithProgress> {
   return request<MilestoneWithProgress>(
-    `/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}`,
+    `/workspaces/${encodeURIComponent(workspaceId)}/milestones/${encodeURIComponent(milestoneId)}`,
     { method: 'PUT', body: JSON.stringify(body) },
     MilestoneWithProgressSchema,
   )
 }
 
-export function deleteMilestone(projectId: string, milestoneId: string): Promise<void> {
+export function deleteMilestone(workspaceId: string, milestoneId: string): Promise<void> {
   return request<void>(
-    `/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}`,
+    `/workspaces/${encodeURIComponent(workspaceId)}/milestones/${encodeURIComponent(milestoneId)}`,
     { method: 'DELETE' },
   )
 }

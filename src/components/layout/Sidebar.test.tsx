@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
-import { fetchProjects } from '@/lib/api'
+import { fetchWorkspaces } from '@/lib/api'
 
 // JSDOM does not implement window.matchMedia — Sidebar uses it for pin breakpoint detection.
 // Return matches: true so canPin=true and the pin toggle button renders in tests.
@@ -39,19 +39,19 @@ vi.mock('@tanstack/react-router', () => ({
 // Mock SVG URL import
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/mock-avatar.svg' }))
 
-// Mock fetchProjects so the Sidebar's useQuery never hits the network in tests.
+// Mock fetchWorkspaces so the Sidebar's useQuery never hits the network in tests.
 // Using vi.fn() so individual tests can override the resolved value with mockResolvedValueOnce.
 vi.mock('@/lib/api', () => ({
-  fetchProjects: vi.fn().mockResolvedValue([]),
-  projectsQueryKeys: {
-    list: (params?: unknown) => ['projects', params],
+  fetchWorkspaces: vi.fn().mockResolvedValue([]),
+  workspacesQueryKeys: {
+    list: (params?: unknown) => ['workspaces', params],
   },
 }))
 
 // Mock useProjectsStore used by Sidebar
 vi.mock('@/store/projectsStore', () => ({
   useProjectsStore: (selector?: (s: unknown) => unknown) => {
-    const state = { activeProjectId: null, setActiveProjectId: vi.fn() }
+    const state = { activeWorkspaceId: null, setActiveWorkspaceId: vi.fn() }
     return selector ? selector(state) : state
   },
 }))
@@ -92,8 +92,8 @@ beforeEach(() => {
   act(() => {
     useSidebarStore.setState({ isOpen: false, isPinned: false })
   })
-  // Reset fetchProjects to the default empty-list response before each test.
-  vi.mocked(fetchProjects).mockResolvedValue([])
+  // Reset fetchWorkspaces to the default empty-list response before each test.
+  vi.mocked(fetchWorkspaces).mockResolvedValue([])
 })
 
 // test_sidebar_overlay_rendering
@@ -229,7 +229,7 @@ describe('Sidebar — Archive section (F7-F06)', () => {
     // Active-projects query returns empty; archived-projects query returns one project.
     // fetchProjects is called with { status: 'active' } for the main list and
     // { status: 'archived' } for the archive section (enabled only after archiveOpen=true).
-    vi.mocked(fetchProjects).mockImplementation((params?: { status?: string }) => {
+    vi.mocked(fetchWorkspaces).mockImplementation((params?: { status?: string }) => {
       if (params?.status === 'archived') {
         return Promise.resolve([
           {
@@ -282,7 +282,7 @@ describe('Sidebar — Inline search (F7-F07)', () => {
     // BDD: Then a search input (aria-label "Filter projects") appears
     // Traces to: project-task-management-level1-spec.md line 684
 
-    vi.mocked(fetchProjects).mockResolvedValue([
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'p1', name: 'Alpha Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
       { id: 'p2', name: 'Beta Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
     ])
@@ -314,7 +314,7 @@ describe('Sidebar — Inline search (F7-F07)', () => {
     // BDD: And "Beta Project" is NOT visible
     // Traces to: project-task-management-level1-spec.md line 684 — case-insensitive substring
 
-    vi.mocked(fetchProjects).mockResolvedValue([
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'p1', name: 'Alpha Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
       { id: 'p2', name: 'Beta Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
     ])
@@ -349,7 +349,7 @@ describe('Sidebar — Inline search (F7-F07)', () => {
     // BDD: Then "Alpha Project" still matches (case-insensitive)
     // Traces to: project-task-management-level1-spec.md line 692 — "typing 'MOB' would also match"
 
-    vi.mocked(fetchProjects).mockResolvedValue([
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'p1', name: 'Alpha Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
       { id: 'p2', name: 'Beta Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
     ])
@@ -377,7 +377,7 @@ describe('Sidebar — Inline search (F7-F07)', () => {
     // BDD: Then search input disappears and both projects are visible
     // Traces to: project-task-management-level1-spec.md line 684 (Sidebar inline search scenario)
 
-    vi.mocked(fetchProjects).mockResolvedValue([
+    vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'p1', name: 'Alpha Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
       { id: 'p2', name: 'Beta Project', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
     ])

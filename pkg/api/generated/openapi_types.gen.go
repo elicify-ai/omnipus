@@ -1513,42 +1513,6 @@ func (e ProbeProviderRequestId) Valid() bool {
 	}
 }
 
-// Defines values for ProjectStatus.
-const (
-	ProjectStatusActive   ProjectStatus = "active"
-	ProjectStatusArchived ProjectStatus = "archived"
-)
-
-// Valid indicates whether the value is a known member of the ProjectStatus enum.
-func (e ProjectStatus) Valid() bool {
-	switch e {
-	case ProjectStatusActive:
-		return true
-	case ProjectStatusArchived:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ProjectUpdateRequestStatus.
-const (
-	ProjectUpdateRequestStatusActive   ProjectUpdateRequestStatus = "active"
-	ProjectUpdateRequestStatusArchived ProjectUpdateRequestStatus = "archived"
-)
-
-// Valid indicates whether the value is a known member of the ProjectUpdateRequestStatus enum.
-func (e ProjectUpdateRequestStatus) Valid() bool {
-	switch e {
-	case ProjectUpdateRequestStatusActive:
-		return true
-	case ProjectUpdateRequestStatusArchived:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for PromptGuardResponseLevel.
 const (
 	PromptGuardResponseLevelHigh   PromptGuardResponseLevel = "high"
@@ -2746,6 +2710,42 @@ func (e ValidateTokenResponseRole) Valid() bool {
 	}
 }
 
+// Defines values for WorkspaceStatus.
+const (
+	WorkspaceStatusActive   WorkspaceStatus = "active"
+	WorkspaceStatusArchived WorkspaceStatus = "archived"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceStatus enum.
+func (e WorkspaceStatus) Valid() bool {
+	switch e {
+	case WorkspaceStatusActive:
+		return true
+	case WorkspaceStatusArchived:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkspaceUpdateRequestStatus.
+const (
+	WorkspaceUpdateRequestStatusActive   WorkspaceUpdateRequestStatus = "active"
+	WorkspaceUpdateRequestStatusArchived WorkspaceUpdateRequestStatus = "archived"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceUpdateRequestStatus enum.
+func (e WorkspaceUpdateRequestStatus) Valid() bool {
+	switch e {
+	case WorkspaceUpdateRequestStatusActive:
+		return true
+	case WorkspaceUpdateRequestStatusArchived:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListBoardTasksParamsStatus.
 const (
 	ListBoardTasksParamsStatusActive  ListBoardTasksParamsStatus = "active"
@@ -2848,27 +2848,6 @@ func (e DeleteCredential200JSONResponseBodyStatus) Valid() bool {
 	}
 }
 
-// Defines values for ListProjectsParamsStatus.
-const (
-	Active   ListProjectsParamsStatus = "active"
-	All      ListProjectsParamsStatus = "all"
-	Archived ListProjectsParamsStatus = "archived"
-)
-
-// Valid indicates whether the value is a known member of the ListProjectsParamsStatus enum.
-func (e ListProjectsParamsStatus) Valid() bool {
-	switch e {
-	case Active:
-		return true
-	case All:
-		return true
-	case Archived:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for RestoreBackup200JSONResponseBodyStatus.
 const (
 	Restored RestoreBackup200JSONResponseBodyStatus = "restored"
@@ -2956,6 +2935,27 @@ func (e ListTasksParamsStatus) Valid() bool {
 	case ListTasksParamsStatusQueued:
 		return true
 	case ListTasksParamsStatusRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListWorkspacesParamsStatus.
+const (
+	Active   ListWorkspacesParamsStatus = "active"
+	All      ListWorkspacesParamsStatus = "all"
+	Archived ListWorkspacesParamsStatus = "archived"
+)
+
+// Valid indicates whether the value is a known member of the ListWorkspacesParamsStatus enum.
+func (e ListWorkspacesParamsStatus) Valid() bool {
+	switch e {
+	case Active:
+		return true
+	case All:
+		return true
+	case Archived:
 		return true
 	default:
 		return false
@@ -3821,9 +3821,6 @@ type BoardTask struct {
 	// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified.
 	Priority *int `json:"priority,omitempty"`
 
-	// ProjectId Optional project this task belongs to. Must be an existing project ID. If absent, task is unassigned.
-	ProjectId *string `json:"project_id,omitempty"`
-
 	// Prompt Optional agent prompt attached to the task.
 	Prompt *string `json:"prompt,omitempty"`
 
@@ -3836,6 +3833,9 @@ type BoardTask struct {
 	// Status GTD board task status.
 	Status    BoardTaskStatus `json:"status"`
 	UpdatedAt time.Time       `json:"updated_at"`
+
+	// WorkspaceId Optional workspace this task belongs to. Must be an existing workspace ID. If absent, task is unassigned.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // BoardTaskStatus GTD board task status.
@@ -3848,11 +3848,11 @@ type BoardTaskCreateRequest struct {
 	MilestoneId *string `json:"milestone_id,omitempty"`
 	Name        string  `json:"name"`
 	Priority    *int    `json:"priority,omitempty"`
-	ProjectId   *string `json:"project_id,omitempty"`
 	Prompt      *string `json:"prompt,omitempty"`
 
 	// Status GTD board task status.
-	Status *BoardTaskCreateRequestStatus `json:"status,omitempty"`
+	Status      *BoardTaskCreateRequestStatus `json:"status,omitempty"`
+	WorkspaceId *string                       `json:"workspace_id,omitempty"`
 }
 
 // BoardTaskCreateRequestStatus GTD board task status.
@@ -3882,9 +3882,6 @@ type BoardTaskListItem struct {
 	// Priority Task priority from 1 (highest) to 5 (lowest). Defaults to 3 when not specified.
 	Priority *int `json:"priority,omitempty"`
 
-	// ProjectId Optional project this task belongs to. Must be an existing project ID. If absent, task is unassigned.
-	ProjectId *string `json:"project_id,omitempty"`
-
 	// Prompt Optional agent prompt attached to the task.
 	Prompt *string `json:"prompt,omitempty"`
 
@@ -3897,6 +3894,9 @@ type BoardTaskListItem struct {
 	// Status GTD board task status.
 	Status    BoardTaskListItemStatus `json:"status"`
 	UpdatedAt time.Time               `json:"updated_at"`
+
+	// WorkspaceId Optional workspace this task belongs to. Must be an existing workspace ID. If absent, task is unassigned.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // BoardTaskListItemStatus GTD board task status.
@@ -3917,13 +3917,13 @@ type BoardTaskUpdateRequest struct {
 	MilestoneId *string `json:"milestone_id,omitempty"`
 	Name        *string `json:"name,omitempty"`
 	Priority    *int    `json:"priority,omitempty"`
-	ProjectId   *string `json:"project_id,omitempty"`
 	Prompt      *string `json:"prompt,omitempty"`
 	Result      *string `json:"result,omitempty"`
 	SessionId   *string `json:"session_id,omitempty"`
 
 	// Status GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
-	Status *BoardTaskUpdateRequestStatus `json:"status,omitempty"`
+	Status      *BoardTaskUpdateRequestStatus `json:"status,omitempty"`
+	WorkspaceId *string                       `json:"workspace_id,omitempty"`
 }
 
 // BoardTaskUpdateRequestStatus GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
@@ -4536,11 +4536,11 @@ type Milestone struct {
 	// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
 	Owner *string `json:"owner,omitempty"`
 
-	// ProjectId Project this milestone belongs to.
-	ProjectId string `json:"project_id"`
-
 	// UpdatedAt RFC3339 UTC last-update timestamp.
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// WorkspaceId Workspace this milestone belongs to.
+	WorkspaceId string `json:"workspace_id"`
 }
 
 // MilestoneCreateRequest defines model for MilestoneCreateRequest.
@@ -4576,11 +4576,11 @@ type MilestoneListResponse struct {
 		// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
 		Owner *string `json:"owner,omitempty"`
 
-		// ProjectId Project this milestone belongs to.
-		ProjectId string `json:"project_id"`
-
 		// UpdatedAt RFC3339 UTC last-update timestamp.
 		UpdatedAt time.Time `json:"updated_at"`
+
+		// WorkspaceId Workspace this milestone belongs to.
+		WorkspaceId string `json:"workspace_id"`
 	} `json:"milestones"`
 
 	// Total Total number of milestones for this project.
@@ -4768,91 +4768,6 @@ type ProbeProviderResponse struct {
 	// Success Whether the provider accepted the API key.
 	Success bool `json:"success"`
 }
-
-// Project A Level 1 project record. Projects are lightweight metadata — no filesystem directories or room topology. task_count is computed at read time and never stored. core_team is a default agent roster, not an access gate.
-type Project struct {
-	// CoreTeam Default agent roster for this project. Not an access gate — any agent can work on any project's tasks. Deduplicated at write time. Max 20 entries.
-	CoreTeam *[]string `json:"core_team,omitempty"`
-
-	// CreatedAt RFC3339 UTC creation timestamp
-	CreatedAt time.Time `json:"created_at"`
-
-	// Description Optional free-text description.
-	Description *string `json:"description,omitempty"`
-
-	// Id UUID project identifier
-	Id string `json:"id"`
-
-	// IsDefault True only for the auto-created Inbox project. The Inbox project cannot be deleted and always appears first in the sidebar.
-	IsDefault *bool `json:"is_default,omitempty"`
-
-	// Name Human-readable project name. Not unique.
-	Name string `json:"name"`
-
-	// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
-	Owner *string `json:"owner,omitempty"`
-
-	// PinOrder Ascending sort position among pinned projects. 0 for unpinned projects. Last-writer-wins; tiebreak by created_at ascending.
-	PinOrder int `json:"pin_order"`
-
-	// Pinned Whether this project is pinned to the top of the sidebar.
-	Pinned bool `json:"pinned"`
-
-	// Repository Optional git repository URL. Stored as-is, not validated for reachability. Frontend opens in new tab.
-	Repository *string `json:"repository,omitempty"`
-
-	// Status Project visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
-	Status ProjectStatus `json:"status"`
-
-	// TaskCount Number of GTD board tasks with this project_id. Computed at read time from ~/.omnipus/tasks/. Never stored in the project JSON file.
-	TaskCount int `json:"task_count"`
-
-	// UpdatedAt RFC3339 UTC last-update timestamp
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// ProjectStatus Project visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
-type ProjectStatus string
-
-// ProjectCreateRequest Request body for POST /projects
-type ProjectCreateRequest struct {
-	// CoreTeam Optional default agent roster. Deduplicated at write time.
-	CoreTeam *[]string `json:"core_team,omitempty"`
-
-	// Description Optional description.
-	Description *string `json:"description,omitempty"`
-
-	// Name Project name. Required. Not unique.
-	Name string `json:"name"`
-
-	// Repository Optional git repository URL.
-	Repository *string `json:"repository,omitempty"`
-}
-
-// ProjectSessionLink A session that has been auto-linked to a project via tool use.
-type ProjectSessionLink struct {
-	// CreatedAt RFC3339 UTC timestamp when the link was first created.
-	CreatedAt time.Time `json:"created_at"`
-
-	// SessionId Session identifier.
-	SessionId string `json:"session_id"`
-}
-
-// ProjectUpdateRequest Request body for PUT /projects/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged.
-type ProjectUpdateRequest struct {
-	CoreTeam    *[]string `json:"core_team,omitempty"`
-	Description *string   `json:"description,omitempty"`
-	Name        *string   `json:"name,omitempty"`
-	PinOrder    *int      `json:"pin_order,omitempty"`
-	Pinned      *bool     `json:"pinned,omitempty"`
-	Repository  *string   `json:"repository,omitempty"`
-
-	// Status Archive or restore a project.
-	Status *ProjectUpdateRequestStatus `json:"status,omitempty"`
-}
-
-// ProjectUpdateRequestStatus Archive or restore a project.
-type ProjectUpdateRequestStatus string
 
 // PromptGuardResponse Prompt injection guard level returned by GET /api/v1/security/prompt-guard.
 type PromptGuardResponse struct {
@@ -5576,9 +5491,6 @@ type Session struct {
 	// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 	Partitions []string `json:"partitions"`
 
-	// ProjectId Associated project ID (optional, future v0.3 feature).
-	ProjectId *string `json:"project_id,omitempty"`
-
 	// Provider Provider identifier (e.g. "anthropic", "openai") for this session.
 	Provider *string `json:"provider,omitempty"`
 
@@ -5617,6 +5529,9 @@ type Session struct {
 
 	// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// WorkspaceId Associated workspace ID (optional, future v0.3 feature).
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // SessionStatus Current lifecycle status of the session.
@@ -5767,9 +5682,6 @@ type SessionDetail struct {
 		// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 		Partitions []string `json:"partitions"`
 
-		// ProjectId Associated project ID (optional, future v0.3 feature).
-		ProjectId *string `json:"project_id,omitempty"`
-
 		// Provider Provider identifier (e.g. "anthropic", "openai") for this session.
 		Provider *string `json:"provider,omitempty"`
 
@@ -5808,6 +5720,9 @@ type SessionDetail struct {
 
 		// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
 		UpdatedAt time.Time `json:"updated_at"`
+
+		// WorkspaceId Associated workspace ID (optional, future v0.3 feature).
+		WorkspaceId *string `json:"workspace_id,omitempty"`
 	} `json:"session"`
 }
 
@@ -6395,6 +6310,91 @@ type VersionResponse struct {
 	Version string `json:"version"`
 }
 
+// Workspace A Level 1 workspace record. Workspaces are lightweight metadata — no filesystem directories or room topology. task_count is computed at read time and never stored. core_team is a default agent roster, not an access gate.
+type Workspace struct {
+	// CoreTeam Default agent roster for this workspace. Not an access gate — any agent can work on any workspace's tasks. Deduplicated at write time. Max 20 entries.
+	CoreTeam *[]string `json:"core_team,omitempty"`
+
+	// CreatedAt RFC3339 UTC creation timestamp
+	CreatedAt time.Time `json:"created_at"`
+
+	// Description Optional free-text description.
+	Description *string `json:"description,omitempty"`
+
+	// Id UUID workspace identifier
+	Id string `json:"id"`
+
+	// IsDefault True only for the auto-created default workspace. The default workspace cannot be deleted and always appears first in the sidebar.
+	IsDefault *bool `json:"is_default,omitempty"`
+
+	// Name Human-readable workspace name. Not unique.
+	Name string `json:"name"`
+
+	// Owner Username of the user who created this workspace. Set server-side at creation; read-only. Attribution only — not an access gate.
+	Owner *string `json:"owner,omitempty"`
+
+	// PinOrder Ascending sort position among pinned workspaces. 0 for unpinned workspaces. Last-writer-wins; tiebreak by created_at ascending.
+	PinOrder int `json:"pin_order"`
+
+	// Pinned Whether this workspace is pinned to the top of the sidebar.
+	Pinned bool `json:"pinned"`
+
+	// Repository Optional git repository URL. Stored as-is, not validated for reachability. Frontend opens in new tab.
+	Repository *string `json:"repository,omitempty"`
+
+	// Status Workspace visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
+	Status WorkspaceStatus `json:"status"`
+
+	// TaskCount Number of GTD board tasks with this workspace_id. Computed at read time from ~/.omnipus/tasks/. Never stored in the workspace JSON file.
+	TaskCount int `json:"task_count"`
+
+	// UpdatedAt RFC3339 UTC last-update timestamp
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// WorkspaceStatus Workspace visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
+type WorkspaceStatus string
+
+// WorkspaceCreateRequest Request body for POST /workspaces
+type WorkspaceCreateRequest struct {
+	// CoreTeam Optional default agent roster. Deduplicated at write time.
+	CoreTeam *[]string `json:"core_team,omitempty"`
+
+	// Description Optional description.
+	Description *string `json:"description,omitempty"`
+
+	// Name Workspace name. Required. Not unique.
+	Name string `json:"name"`
+
+	// Repository Optional git repository URL.
+	Repository *string `json:"repository,omitempty"`
+}
+
+// WorkspaceSessionLink A session that has been auto-linked to a workspace via tool use.
+type WorkspaceSessionLink struct {
+	// CreatedAt RFC3339 UTC timestamp when the link was first created.
+	CreatedAt time.Time `json:"created_at"`
+
+	// SessionId Session identifier.
+	SessionId string `json:"session_id"`
+}
+
+// WorkspaceUpdateRequest Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged.
+type WorkspaceUpdateRequest struct {
+	CoreTeam    *[]string `json:"core_team,omitempty"`
+	Description *string   `json:"description,omitempty"`
+	Name        *string   `json:"name,omitempty"`
+	PinOrder    *int      `json:"pin_order,omitempty"`
+	Pinned      *bool     `json:"pinned,omitempty"`
+	Repository  *string   `json:"repository,omitempty"`
+
+	// Status Archive or restore a workspace.
+	Status *WorkspaceUpdateRequestStatus `json:"status,omitempty"`
+}
+
+// WorkspaceUpdateRequestStatus Archive or restore a workspace.
+type WorkspaceUpdateRequestStatus string
+
 // N400BadRequest Standard error envelope returned by all non-2xx responses.
 type N400BadRequest = ErrorResponse
 
@@ -6427,8 +6427,8 @@ type bearerAuthContextKey string
 
 // ListBoardTasksParams defines parameters for ListBoardTasks.
 type ListBoardTasksParams struct {
-	// ProjectId Filter by project ID.
-	ProjectId *string `form:"project_id,omitempty" json:"project_id,omitempty"`
+	// WorkspaceId Filter by workspace ID.
+	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 
 	// Status Filter by GTD status.
 	Status *ListBoardTasksParamsStatus `form:"status,omitempty" json:"status,omitempty"`
@@ -6456,11 +6456,11 @@ type CreateBoardTaskJSONBody struct {
 	MilestoneId *string `json:"milestone_id,omitempty"`
 	Name        string  `json:"name"`
 	Priority    *int    `json:"priority,omitempty"`
-	ProjectId   *string `json:"project_id,omitempty"`
 	Prompt      *string `json:"prompt,omitempty"`
 
 	// Status GTD board task status.
-	Status *CreateBoardTaskJSONBodyStatus `json:"status,omitempty"`
+	Status      *CreateBoardTaskJSONBodyStatus `json:"status,omitempty"`
+	WorkspaceId *string                        `json:"workspace_id,omitempty"`
 }
 
 // CreateBoardTaskJSONBodyStatus defines parameters for CreateBoardTask.
@@ -6473,13 +6473,13 @@ type UpdateBoardTaskJSONBody struct {
 	MilestoneId *string `json:"milestone_id,omitempty"`
 	Name        *string `json:"name,omitempty"`
 	Priority    *int    `json:"priority,omitempty"`
-	ProjectId   *string `json:"project_id,omitempty"`
 	Prompt      *string `json:"prompt,omitempty"`
 	Result      *string `json:"result,omitempty"`
 	SessionId   *string `json:"session_id,omitempty"`
 
 	// Status GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
-	Status *UpdateBoardTaskJSONBodyStatus `json:"status,omitempty"`
+	Status      *UpdateBoardTaskJSONBodyStatus `json:"status,omitempty"`
+	WorkspaceId *string                        `json:"workspace_id,omitempty"`
 }
 
 // UpdateBoardTaskJSONBodyStatus defines parameters for UpdateBoardTask.
@@ -6490,15 +6490,6 @@ type ConfigureChannelJSONBody map[string]interface{}
 
 // DeleteCredential200JSONResponseBodyStatus defines parameters for DeleteCredential.
 type DeleteCredential200JSONResponseBodyStatus string
-
-// ListProjectsParams defines parameters for ListProjects.
-type ListProjectsParams struct {
-	// Status Filter by project status. Defaults to active.
-	Status *ListProjectsParamsStatus `form:"status,omitempty" json:"status,omitempty"`
-}
-
-// ListProjectsParamsStatus defines parameters for ListProjects.
-type ListProjectsParamsStatus string
 
 // RestoreBackup200JSONResponseBodyStatus defines parameters for RestoreBackup.
 type RestoreBackup200JSONResponseBodyStatus string
@@ -6572,6 +6563,15 @@ type UploadFilesParams struct {
 	SessionId *string `form:"session_id,omitempty" json:"session_id,omitempty"`
 }
 
+// ListWorkspacesParams defines parameters for ListWorkspaces.
+type ListWorkspacesParams struct {
+	// Status Filter by workspace status. Defaults to active.
+	Status *ListWorkspacesParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+}
+
+// ListWorkspacesParamsStatus defines parameters for ListWorkspaces.
+type ListWorkspacesParamsStatus string
+
 // CreateAgentJSONRequestBody defines body for CreateAgent for application/json ContentType.
 type CreateAgentJSONRequestBody = AgentCreateRequest
 
@@ -6619,18 +6619,6 @@ type CompleteOnboardingJSONRequestBody = OnboardingCompleteRequest
 
 // ProbeProviderJSONRequestBody defines body for ProbeProvider for application/json ContentType.
 type ProbeProviderJSONRequestBody = ProbeProviderRequest
-
-// CreateProjectJSONRequestBody defines body for CreateProject for application/json ContentType.
-type CreateProjectJSONRequestBody = ProjectCreateRequest
-
-// UpdateProjectJSONRequestBody defines body for UpdateProject for application/json ContentType.
-type UpdateProjectJSONRequestBody = ProjectUpdateRequest
-
-// CreateProjectMilestoneJSONRequestBody defines body for CreateProjectMilestone for application/json ContentType.
-type CreateProjectMilestoneJSONRequestBody = MilestoneCreateRequest
-
-// UpdateProjectMilestoneJSONRequestBody defines body for UpdateProjectMilestone for application/json ContentType.
-type UpdateProjectMilestoneJSONRequestBody = MilestoneUpdateRequest
 
 // UpdateProviderJSONRequestBody defines body for UpdateProvider for application/json ContentType.
 type UpdateProviderJSONRequestBody = ProviderUpdateRequest
@@ -6709,6 +6697,18 @@ type ResetUserPasswordJSONRequestBody = UserResetPasswordRequest
 
 // ChangeUserRoleJSONRequestBody defines body for ChangeUserRole for application/json ContentType.
 type ChangeUserRoleJSONRequestBody = UserRoleChangeRequest
+
+// CreateWorkspaceJSONRequestBody defines body for CreateWorkspace for application/json ContentType.
+type CreateWorkspaceJSONRequestBody = WorkspaceCreateRequest
+
+// UpdateWorkspaceJSONRequestBody defines body for UpdateWorkspace for application/json ContentType.
+type UpdateWorkspaceJSONRequestBody = WorkspaceUpdateRequest
+
+// CreateWorkspaceMilestoneJSONRequestBody defines body for CreateWorkspaceMilestone for application/json ContentType.
+type CreateWorkspaceMilestoneJSONRequestBody = MilestoneCreateRequest
+
+// UpdateWorkspaceMilestoneJSONRequestBody defines body for UpdateWorkspaceMilestone for application/json ContentType.
+type UpdateWorkspaceMilestoneJSONRequestBody = MilestoneUpdateRequest
 
 // Getter for additional properties for ChannelConfigureRequest. Returns the specified
 // element and whether it was found

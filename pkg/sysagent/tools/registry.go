@@ -25,12 +25,12 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 		NewAgentReadMetadataTool(d),
 		NewAgentWriteMetadataTool(d),
 
-		// Project management (5)
-		NewProjectCreateTool(d),
-		NewProjectUpdateTool(d),
-		NewProjectDeleteTool(d),
-		NewProjectListTool(d),
-		NewProjectGetTool(d),
+		// Workspace management (5)
+		NewWorkspaceCreateTool(d),
+		NewWorkspaceUpdateTool(d),
+		NewWorkspaceDeleteTool(d),
+		NewWorkspaceListTool(d),
+		NewWorkspaceGetTool(d),
 
 		// Task management (4)
 		NewTaskCreateTool(d),

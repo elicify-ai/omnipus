@@ -505,8 +505,8 @@ func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
 	if m.Provider != "" {
 		s.Provider = &m.Provider
 	}
-	if m.ProjectID != "" {
-		s.ProjectId = &m.ProjectID
+	if m.WorkspaceID != "" {
+		s.WorkspaceId = &m.WorkspaceID
 	}
 	if m.TaskID != "" {
 		s.TaskId = &m.TaskID
@@ -2680,8 +2680,8 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/status", a.withAuth(a.HandleStatus))
 	cm.RegisterHTTPHandler("/api/v1/tasks", a.withAuth(a.HandleTasks))
 	cm.RegisterHTTPHandler("/api/v1/tasks/", a.withAuth(a.HandleTasks))
-	cm.RegisterHTTPHandler("/api/v1/projects", a.withAuth(withRateLimit(configLimiter, a.HandleProjects)))
-	cm.RegisterHTTPHandler("/api/v1/projects/", a.withAuth(withRateLimit(configLimiter, a.HandleProjects)))
+	cm.RegisterHTTPHandler("/api/v1/workspaces", a.withAuth(withRateLimit(configLimiter, a.HandleWorkspaces)))
+	cm.RegisterHTTPHandler("/api/v1/workspaces/", a.withAuth(withRateLimit(configLimiter, a.HandleWorkspaces)))
 	cm.RegisterHTTPHandler("/api/v1/providers", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/providers/", a.withOptionalAuth(a.HandleProviders))
 	cm.RegisterHTTPHandler("/api/v1/mcp-servers", a.withAuth(a.HandleMCPServers))

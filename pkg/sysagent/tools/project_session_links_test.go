@@ -43,7 +43,7 @@ func TestProjectSessionLinker_LinkAndRead(t *testing.T) {
 	sessionIDs := make([]string, 0, len(links))
 	for _, l := range links {
 		sessionIDs = append(sessionIDs, l.SessionID)
-		assert.Equal(t, "proj1", l.ProjectID, "every link must have project_id=proj1")
+		assert.Equal(t, "proj1", l.WorkspaceID, "every link must have project_id=proj1")
 		assert.NotEmpty(t, l.CreatedAt, "every link must have a non-empty created_at")
 	}
 	assert.Contains(t, sessionIDs, "sess1", "ReadLinks must include sess1")

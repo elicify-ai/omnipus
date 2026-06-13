@@ -62,7 +62,7 @@ import (
 // When taskstore.List() and taskstore.Get() are called,
 // Then the GTD board task at tasks/<id>.json is UNCHANGED (not moved, not
 //
-//	rewritten, project_id intact) and is still readable via readBoardTask.
+//	rewritten, workspace_id intact) and is still readable via readBoardTask.
 //
 // Traces to: feat/level1-project-task-mgmt — #402/#397 storage-separation fix
 func TestRegression_TaskstoreList_DoesNotCorruptGTDFiles(t *testing.T) {
@@ -70,17 +70,17 @@ func TestRegression_TaskstoreList_DoesNotCorruptGTDFiles(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	// Create a GTD board task via the REST API.
-	projID := createProjectViaAPI(t, api, "CollisionProject", "")
+	projID := createWorkspaceViaAPI(t, api, "CollisionProject", "")
 	task := createBoardTaskViaAPI(t, api, "GTD Task Under Test", "inbox")
 
 	// Attach the task to the project so project_id is set on disk.
-	putBody := fmt.Sprintf(`{"project_id":%q}`, projID)
+	putBody := fmt.Sprintf(`{"workspace_id":%q}`, projID)
 	wPut := httptest.NewRecorder()
 	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/board/tasks/"+task.Id, strings.NewReader(putBody))
 	rPut.Header.Set("Content-Type", "application/json")
 	rPut.URL.Path = "/api/v1/board/tasks/" + task.Id
 	api.HandleBoardTasks(wPut, rPut)
-	require.Equal(t, http.StatusOK, wPut.Code, "PUT with project_id must return 200; body=%s", wPut.Body.String())
+	require.Equal(t, http.StatusOK, wPut.Code, "PUT with workspace_id must return 200; body=%s", wPut.Body.String())
 
 	// Now construct a taskstore rooted at workflow-tasks/ — the correct dir for workflow tasks.
 	// Call List() and Get() as the heartbeat does: it should silently skip non-workflow files.
@@ -90,13 +90,13 @@ func TestRegression_TaskstoreList_DoesNotCorruptGTDFiles(t *testing.T) {
 	require.NoError(t, err, "taskstore.List() must not error on an empty workflow-tasks dir")
 	assert.Empty(t, tasks, "workflow-tasks dir must be empty — the GTD task lives in tasks/, not here")
 
-	// The GTD task must still be readable and its project_id must be intact.
+	// The GTD task must still be readable and its workspace_id must be intact.
 	got, readErr := api.readBoardTask(task.Id)
 	require.NoError(t, readErr, "readBoardTask must still succeed after taskstore.List()")
 	require.Equal(t, task.Id, got.ID, "GTD task ID must be intact")
 	require.Equal(t, "GTD Task Under Test", got.Name, "GTD task name must be intact")
-	assert.Equal(t, projID, got.ProjectID,
-		"project_id on GTD task must be intact after taskstore.List() — not overwritten by taskstore")
+	assert.Equal(t, projID, got.WorkspaceID,
+		"workspace_id on GTD task must be intact after taskstore.List() — not overwritten by taskstore")
 }
 
 // TestRegression_TaskstoreGet_IgnoresGTDFile guards against taskstore.Get()
@@ -262,14 +262,14 @@ func TestRegression_RESTPut_PreservesAllFields(t *testing.T) {
 	// Traces to: #404 secondary — REST PUT must do a read-modify-write, not overwrite
 	api := newTestRestAPIWithHome(t)
 
-	projID := createProjectViaAPI(t, api, "PUTFieldPreservationProject", "")
+	projID := createWorkspaceViaAPI(t, api, "PUTFieldPreservationProject", "")
 
 	// Create a milestone.
 	wMil := httptest.NewRecorder()
-	rMil := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+projID+"/milestones",
+	rMil := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+projID+"/milestones",
 		strings.NewReader(`{"name":"Put Field Milestone"}`))
 	rMil.Header.Set("Content-Type", "application/json")
-	rMil.URL.Path = "/api/v1/projects/" + projID + "/milestones"
+	rMil.URL.Path = "/api/v1/workspaces/" + projID + "/milestones"
 	api.HandleMilestones(wMil, rMil)
 	require.Equal(t, http.StatusCreated, wMil.Code)
 	var milResp struct {
@@ -282,7 +282,7 @@ func TestRegression_RESTPut_PreservesAllFields(t *testing.T) {
 	const wantPrompt = "Run the full integration suite"
 	wantPriority := 2
 	createBody := fmt.Sprintf(
-		`{"name":"OriginalName","project_id":%q,"milestone_id":%q,"prompt":%q,"priority":%d}`,
+		`{"name":"OriginalName","workspace_id":%q,"milestone_id":%q,"prompt":%q,"priority":%d}`,
 		projID, milID, wantPrompt, wantPriority,
 	)
 	wPost := httptest.NewRecorder()
@@ -345,9 +345,9 @@ func TestRegression_RESTPut_PreservesAllFields(t *testing.T) {
 	assert.Equal(t, milID, *got.MilestoneId,
 		"milestone_id must survive a partial PUT")
 
-	require.NotNil(t, got.ProjectId, "project_id must not be nil after partial PUT")
-	assert.Equal(t, projID, *got.ProjectId,
-		"project_id must survive a partial PUT")
+	require.NotNil(t, got.WorkspaceId, "workspace_id must not be nil after partial PUT")
+	assert.Equal(t, projID, *got.WorkspaceId,
+		"workspace_id must survive a partial PUT")
 
 	require.NotNil(t, got.Owner, "owner must not be nil after partial PUT")
 	assert.Equal(t, "alice", *got.Owner,
@@ -414,10 +414,10 @@ func TestRegression_RestartPersistence(t *testing.T) {
 	apiA := buildAPI()
 
 	// Create project.
-	projID := createProjectViaAPI(t, apiA, "PersistenceProject", "test project")
+	projID := createWorkspaceViaAPI(t, apiA, "PersistenceProject", "test project")
 
 	// Create board task with extended fields.
-	body := fmt.Sprintf(`{"name":"PersistenceTask","project_id":%q,"prompt":"Run checks","priority":1}`, projID)
+	body := fmt.Sprintf(`{"name":"PersistenceTask","workspace_id":%q,"prompt":"Run checks","priority":1}`, projID)
 	wPost := httptest.NewRecorder()
 	rPost := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body))
 	rPost.Header.Set("Content-Type", "application/json")
@@ -434,14 +434,14 @@ func TestRegression_RestartPersistence(t *testing.T) {
 
 	// Project must be readable.
 	wGetProj := httptest.NewRecorder()
-	rGetProj := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+projID, nil)
-	rGetProj.URL.Path = "/api/v1/projects/" + projID
-	apiB.HandleProjects(wGetProj, rGetProj)
+	rGetProj := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+projID, nil)
+	rGetProj.URL.Path = "/api/v1/workspaces/" + projID
+	apiB.HandleWorkspaces(wGetProj, rGetProj)
 	require.Equal(t, http.StatusOK, wGetProj.Code,
-		"GET project must return 200 on fresh API (restart persistence); body=%s", wGetProj.Body.String())
-	var proj gen.Project
+		"GET workspace must return 200 on fresh API (restart persistence); body=%s", wGetProj.Body.String())
+	var proj gen.Workspace
 	require.NoError(t, json.Unmarshal(wGetProj.Body.Bytes(), &proj))
-	assert.Equal(t, projID, proj.Id, "project ID must persist across restart")
+	assert.Equal(t, projID, proj.Id, "workspace ID must persist across restart")
 	assert.Equal(t, "PersistenceProject", proj.Name, "project name must persist across restart")
 
 	// Board task must be readable with all fields intact.
@@ -457,10 +457,10 @@ func TestRegression_RestartPersistence(t *testing.T) {
 	assert.Equal(t, createdTask.Id, persistedTask.Id,
 		"task ID must persist across restart")
 
-	// project_id must survive.
-	require.NotNil(t, persistedTask.ProjectId, "project_id must not be nil after restart")
-	assert.Equal(t, projID, *persistedTask.ProjectId,
-		"project_id must persist across gateway restart (#403)")
+	// workspace_id must survive.
+	require.NotNil(t, persistedTask.WorkspaceId, "workspace_id must not be nil after restart")
+	assert.Equal(t, projID, *persistedTask.WorkspaceId,
+		"workspace_id must persist across gateway restart (#403)")
 
 	// prompt must survive.
 	require.NotNil(t, persistedTask.Prompt, "prompt must not be nil after restart")
@@ -478,7 +478,7 @@ func TestRegression_RestartPersistence(t *testing.T) {
 		"owner must persist across gateway restart")
 
 	// Differentiation: a second task created by bob must be distinct and readable.
-	body2 := fmt.Sprintf(`{"name":"BobTask","project_id":%q}`, projID)
+	body2 := fmt.Sprintf(`{"name":"BobTask","workspace_id":%q}`, projID)
 	wPost2 := httptest.NewRecorder()
 	rPost2 := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body2))
 	rPost2.Header.Set("Content-Type", "application/json")
@@ -542,26 +542,26 @@ func TestRegression_Repository_SchemeValidation(t *testing.T) {
 				bodyStr = fmt.Sprintf(`{"name":"RepoProject","repository":%q}`, tc.repository)
 			}
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPost, "/api/v1/projects", strings.NewReader(bodyStr))
+			r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces", strings.NewReader(bodyStr))
 			r.Header.Set("Content-Type", "application/json")
-			r.URL.Path = "/api/v1/projects"
-			api.HandleProjects(w, r)
+			r.URL.Path = "/api/v1/workspaces"
+			api.HandleWorkspaces(w, r)
 			assert.Equal(t, tc.expectedCode, w.Code,
-				"POST /projects with repository=%q must return %d; body=%s",
+				"POST /workspaces with repository=%q must return %d; body=%s",
 				tc.repository, tc.expectedCode, w.Body.String())
 		})
 	}
 
 	// PUT repository validation: set a valid project then try to update with a bad URL.
-	projID := createProjectViaAPI(t, api, "PUTRepoProject", "")
+	projID := createWorkspaceViaAPI(t, api, "PUTRepoProject", "")
 	wPutBad := httptest.NewRecorder()
-	rPutBad := httptest.NewRequest(http.MethodPut, "/api/v1/projects/"+projID,
+	rPutBad := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+projID,
 		strings.NewReader(`{"repository":"javascript:alert(1)"}`))
 	rPutBad.Header.Set("Content-Type", "application/json")
-	rPutBad.URL.Path = "/api/v1/projects/" + projID
-	api.HandleProjects(wPutBad, rPutBad)
+	rPutBad.URL.Path = "/api/v1/workspaces/" + projID
+	api.HandleWorkspaces(wPutBad, rPutBad)
 	assert.Equal(t, http.StatusBadRequest, wPutBad.Code,
-		"PUT /projects/{id} with javascript: repository must return 400; body=%s", wPutBad.Body.String())
+		"PUT /workspaces/{id} with javascript: repository must return 400; body=%s", wPutBad.Body.String())
 }
 
 // ── OWN: ownership scoping gaps ──────────────────────────────────────────────

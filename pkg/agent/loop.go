@@ -431,11 +431,11 @@ func NewAgentLoop(
 	al.taskStore = taskstore.New(filepath.Join(homePath, "workflow-tasks"))
 	al.taskExecutor = newTaskExecutor(al, al.taskStore)
 
-	// Register project session linker: auto-links sessions to projects on task create/update.
-	if err := al.hooks.Mount(NamedHook("project-session-linker", &projectLinkerAdapter{
+	// Register workspace session linker: auto-links sessions to workspaces on task create/update.
+	if err := al.hooks.Mount(NamedHook("workspace-session-linker", &workspaceLinkerAdapter{
 		linker: systools.NewProjectSessionLinker(homePath),
 	})); err != nil {
-		logger.WarnCF("agent", "Failed to mount project-session-linker hook", map[string]any{
+		logger.WarnCF("agent", "Failed to mount workspace-session-linker hook", map[string]any{
 			"error": err.Error(),
 		})
 	}
@@ -3854,7 +3854,7 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	turnCtx = tools.WithTranscriptSessionID(turnCtx, ts.opts.TranscriptSessionID)
-	// Inject the session owner so sysagent tools (system.project.create,
+	// Inject the session owner so sysagent tools (system.workspace.create,
 	// system.task.create) can stamp the owner on newly created entities
 	// (Rule-2 of the sysagent ownership rule, SEC-2/#406).
 	if ts.opts.TranscriptSessionID != "" {

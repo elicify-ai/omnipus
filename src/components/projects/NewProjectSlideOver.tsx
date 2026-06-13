@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { X } from '@phosphor-icons/react'
-import { createProject, fetchAgents, isApiError } from '@/lib/api'
+import { createWorkspace, fetchAgents, isApiError, workspacesQueryKeys } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
 interface NewProjectSlideOverProps {
@@ -50,22 +50,22 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
 
   const mutation = useMutation({
     mutationFn: () =>
-      createProject({
+      createWorkspace({
         name: form.name.trim(),
         description: form.description.trim() || undefined,
         repository: form.repository.trim() || undefined,
         core_team: form.core_team.length > 0 ? form.core_team : undefined,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
-      addToast({ message: 'Project created', variant: 'success' })
+      queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
+      addToast({ message: 'Workspace created', variant: 'success' })
       setForm(INITIAL_FORM)
       setFieldErrors({})
       onOpenChange(false)
     },
     onError: (err) => {
       const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Unexpected error'
-      addToast({ message: `Failed to create project: ${msg}`, variant: 'error' })
+      addToast({ message: `Failed to create workspace: ${msg}`, variant: 'error' })
     },
   })
 
@@ -105,7 +105,7 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
       <SheetContent side="right" className="w-full sm:max-w-md flex flex-col">
         <SheetHeader>
           <SheetTitle className="font-headline text-[var(--color-secondary)]">
-            New project
+            New workspace
           </SheetTitle>
         </SheetHeader>
 
@@ -280,7 +280,7 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
               disabled={mutation.isPending}
               className="flex-1 bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent)]/90"
             >
-              {mutation.isPending ? 'Creating…' : 'Create project'}
+              {mutation.isPending ? 'Creating…' : 'Create workspace'}
             </Button>
           </SheetFooter>
         </form>

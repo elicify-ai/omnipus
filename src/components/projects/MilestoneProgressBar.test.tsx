@@ -17,7 +17,7 @@ import type { MilestoneWithProgress } from '@/lib/api'
 function makeMilestone(overrides: Partial<MilestoneWithProgress> = {}): MilestoneWithProgress {
   return {
     id: 'ms-1',
-    project_id: 'proj-1',
+    workspace_id: 'proj-1',
     name: 'Test Milestone',
     progress: 0,
     created_at: '2026-01-01T00:00:00Z',

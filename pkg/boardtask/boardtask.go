@@ -51,13 +51,11 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// SessionID is set when an agent starts executing the task; links to a chat session.
 	SessionID string `json:"session_id,omitempty"`
 	// Result is the execution output; set on done/failed.
-	Result    string `json:"result,omitempty"`
-	Status    Status `json:"status"`
-	ProjectID string `json:"project_id,omitempty"`
-	AgentID   string `json:"agent_id,omitempty"`
-	// Owner is the username of the user who owns this task. Set at creation; read-only.
-	// Carried through all reads/writes so it is never lost, even though enforcement
-	// is deferred to a later implementation wave.
+	Result      string `json:"result,omitempty"`
+	Status      Status `json:"status"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
+	AgentID     string `json:"agent_id,omitempty"`
+	// Owner is the username of the user who created this task. Attribution only — not an access gate.
 	Owner     string `json:"owner,omitempty"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`

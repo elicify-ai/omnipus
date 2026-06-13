@@ -30,12 +30,11 @@ import (
 // not-wire-format: internal disk-cache struct, mapped to wire type before serving.
 type milestone struct { // not-wire-format: on-disk JSON cache; mapped to generated wire type before serving
 	ID          string `json:"id"`
-	ProjectID   string `json:"project_id"`
+	WorkspaceID string `json:"workspace_id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	DueDate     string `json:"due_date,omitempty"`
-	// Owner is the username of the user who created this milestone. Set at creation;
-	// never updated. Empty string means unowned/shared (legacy data or agent-created).
+	// Owner is the username of the user who created this milestone. Attribution only — not an access gate.
 	Owner     string `json:"owner,omitempty"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
@@ -46,7 +45,7 @@ type milestone struct { // not-wire-format: on-disk JSON cache; mapped to genera
 // (not stored on disk, computed at read time per FR-L2-010).
 type milestoneWithProgress struct { // not-wire-format: serialized directly to HTTP response; extends on-disk type with computed progress field
 	ID          string    `json:"id"`
-	ProjectID   string    `json:"project_id"`
+	WorkspaceID string    `json:"workspace_id"`
 	Name        string    `json:"name"`
 	Description *string   `json:"description,omitempty"`
 	DueDate     *string   `json:"due_date,omitempty"`
@@ -128,12 +127,12 @@ func milestoneToWireWithProgress(
 	progress float64,
 ) milestoneWithProgress {
 	mwp := milestoneWithProgress{
-		ID:        m.ID,
-		ProjectID: m.ProjectID,
-		Name:      m.Name,
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
-		Progress:  progress,
+		ID:          m.ID,
+		WorkspaceID: m.WorkspaceID,
+		Name:        m.Name,
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
+		Progress:    progress,
 	}
 	if m.Description != "" {
 		d := m.Description
@@ -204,43 +203,38 @@ func clearMilestoneOnTasks(home, milestoneID string) {
 	}
 }
 
-// handleMilestoneList handles GET /api/v1/projects/{project_id}/milestones.
-func (a *restAPI) handleMilestoneList(w http.ResponseWriter, r *http.Request, projectID string) {
-	if err := validateEntityID(projectID); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid project ID")
+// handleMilestoneList handles GET /api/v1/workspaces/{workspace_id}/milestones.
+func (a *restAPI) handleMilestoneList(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if err := validateEntityID(workspaceID); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
 		return
 	}
 
-	// Verify project exists and caller can access it.
-	proj, ok := a.loadProject(w, projectID)
-	if !ok {
-		return
-	}
-	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
-	if a.denyIfNoAccess(w, a.callerIdentity(r), proj.Owner, "project not found") {
+	// Verify workspace exists.
+	if _, ok := a.loadWorkspace(w, workspaceID); !ok {
 		return
 	}
 
 	all, err := listMilestoneFiles(a.homePath)
 	if err != nil {
-		slog.Error("rest: milestones: list failed", "project_id", projectID, "error", err)
+		slog.Error("rest: milestones: list failed", "workspace_id", workspaceID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not list milestones")
 		return
 	}
 
-	// Filter to this project.
-	var projectMilestones []milestone
+	// Filter to this workspace.
+	var workspaceMilestones []milestone
 	for _, m := range all {
-		if m.ProjectID == projectID {
-			projectMilestones = append(projectMilestones, m)
+		if m.WorkspaceID == workspaceID {
+			workspaceMilestones = append(workspaceMilestones, m)
 		}
 	}
 
 	// Sort: due_date ASC, empty due_date last; then created_at ASC (FR-L2-013).
-	sort.Slice(projectMilestones, func(i, j int) bool {
-		a, b := projectMilestones[i].DueDate, projectMilestones[j].DueDate
+	sort.Slice(workspaceMilestones, func(i, j int) bool {
+		a, b := workspaceMilestones[i].DueDate, workspaceMilestones[j].DueDate
 		if a == "" && b == "" {
-			return projectMilestones[i].CreatedAt < projectMilestones[j].CreatedAt
+			return workspaceMilestones[i].CreatedAt < workspaceMilestones[j].CreatedAt
 		}
 		if a == "" {
 			return false
@@ -251,16 +245,16 @@ func (a *restAPI) handleMilestoneList(w http.ResponseWriter, r *http.Request, pr
 		if a != b {
 			return a < b
 		}
-		return projectMilestones[i].CreatedAt < projectMilestones[j].CreatedAt
+		return workspaceMilestones[i].CreatedAt < workspaceMilestones[j].CreatedAt
 	})
 
-	// Single-pass compute progress for all milestones in this project.
+	// Single-pass compute progress for all milestones in this workspace.
 	mCounts, err := computeMilestoneCounts(a.homePath)
 	if err != nil {
 		slog.Warn(
 			"rest: milestones: could not compute progress",
-			"project_id",
-			projectID,
+			"workspace_id",
+			workspaceID,
 			"error",
 			err,
 		)
@@ -271,8 +265,8 @@ func (a *restAPI) handleMilestoneList(w http.ResponseWriter, r *http.Request, pr
 		Milestones []milestoneWithProgress `json:"milestones"`
 		Total      int                     `json:"total"`
 	}
-	result := make([]milestoneWithProgress, 0, len(projectMilestones))
-	for _, m := range projectMilestones {
+	result := make([]milestoneWithProgress, 0, len(workspaceMilestones))
+	for _, m := range workspaceMilestones {
 		createdAt, err := time.Parse(time.RFC3339, m.CreatedAt)
 		if err != nil {
 			createdAt = time.Now().UTC()
@@ -289,23 +283,18 @@ func (a *restAPI) handleMilestoneList(w http.ResponseWriter, r *http.Request, pr
 	jsonOK(w, listMilestoneShim{Milestones: result, Total: len(result)})
 }
 
-// handleMilestonePost handles POST /api/v1/projects/{project_id}/milestones → 201 Created.
-func (a *restAPI) handleMilestonePost(w http.ResponseWriter, r *http.Request, projectID string) {
-	if err := validateEntityID(projectID); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid project ID")
+// handleMilestonePost handles POST /api/v1/workspaces/{workspace_id}/milestones → 201 Created.
+func (a *restAPI) handleMilestonePost(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	if err := validateEntityID(workspaceID); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
 		return
 	}
 
-	// Verify project exists and caller can access it.
-	proj, ok := a.loadProject(w, projectID)
-	if !ok {
+	// Verify workspace exists.
+	if _, ok := a.loadWorkspace(w, workspaceID); !ok {
 		return
 	}
-	// SEC-2: 404 on cross-owner access to avoid resource enumeration.
 	c := a.callerIdentity(r)
-	if a.denyIfNoAccess(w, c, proj.Owner, "project not found") {
-		return
-	}
 
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var req gen.MilestoneCreateRequest
@@ -337,12 +326,11 @@ func (a *restAPI) handleMilestonePost(w http.ResponseWriter, r *http.Request, pr
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	m := milestone{
-		ID:        ulid.Make().String(),
-		ProjectID: projectID,
-		Name:      req.Name,
-		DueDate:   dueDate,
-		// SEC-2: stamp the creating user's username as owner. In dev-mode bypass,
-		// the caller has no username — stamp empty string (unowned/shared).
+		ID:          ulid.Make().String(),
+		WorkspaceID: workspaceID,
+		Name:        req.Name,
+		DueDate:     dueDate,
+		// Stamp the creating user's username as owner (attribution only).
 		Owner:     c.Username,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -361,7 +349,7 @@ func (a *restAPI) handleMilestonePost(w http.ResponseWriter, r *http.Request, pr
 		_ = a.auditor.Log(
 			&audit.Entry{
 				Event: "milestone.create", Decision: audit.DecisionAllow,
-				Details: map[string]any{"id": m.ID, "project_id": projectID},
+				Details: map[string]any{"id": m.ID, "workspace_id": workspaceID},
 			},
 		)
 	}
@@ -372,14 +360,14 @@ func (a *restAPI) handleMilestonePost(w http.ResponseWriter, r *http.Request, pr
 	jsonCreated(w, milestoneToWireWithProgress(m, createdAt, updatedAt, 0.0))
 }
 
-// handleMilestoneGet handles GET /api/v1/projects/{project_id}/milestones/{id}.
+// handleMilestoneGet handles GET /api/v1/workspaces/{workspace_id}/milestones/{id}.
 func (a *restAPI) handleMilestoneGet(
 	w http.ResponseWriter,
 	r *http.Request,
-	projectID, milestoneID string,
+	workspaceID, milestoneID string,
 ) {
-	if err := validateEntityID(projectID); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid project ID")
+	if err := validateEntityID(workspaceID); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
 		return
 	}
 	if err := validateEntityID(milestoneID); err != nil {
@@ -387,12 +375,8 @@ func (a *restAPI) handleMilestoneGet(
 		return
 	}
 
-	// SEC-2: verify the caller can access the parent project first.
-	proj, ok := a.loadProject(w, projectID)
-	if !ok {
-		return
-	}
-	if a.denyIfNoAccess(w, a.callerIdentity(r), proj.Owner, "project not found") {
+	// Verify workspace exists.
+	if _, ok := a.loadWorkspace(w, workspaceID); !ok {
 		return
 	}
 
@@ -407,8 +391,8 @@ func (a *restAPI) handleMilestoneGet(
 		return
 	}
 
-	// Validate milestone belongs to the project.
-	if m.ProjectID != projectID {
+	// Validate milestone belongs to the workspace.
+	if m.WorkspaceID != workspaceID {
 		jsonErr(w, http.StatusNotFound, "milestone not found")
 		return
 	}
@@ -451,14 +435,14 @@ type milestoneUpdateRequest struct { // not-wire-format: PUT decode target only;
 	// sets *json.RawMessage to nil for both absent and null, making them indistinguishable.
 }
 
-// handleMilestonePut handles PUT /api/v1/projects/{project_id}/milestones/{id} → 200.
+// handleMilestonePut handles PUT /api/v1/workspaces/{workspace_id}/milestones/{id} → 200.
 func (a *restAPI) handleMilestonePut(
 	w http.ResponseWriter,
 	r *http.Request,
-	projectID, milestoneID string,
+	workspaceID, milestoneID string,
 ) {
-	if err := validateEntityID(projectID); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid project ID")
+	if err := validateEntityID(workspaceID); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
 		return
 	}
 	if err := validateEntityID(milestoneID); err != nil {
@@ -466,12 +450,8 @@ func (a *restAPI) handleMilestonePut(
 		return
 	}
 
-	// SEC-2: verify the caller can access the parent project first.
-	proj, ok := a.loadProject(w, projectID)
-	if !ok {
-		return
-	}
-	if a.denyIfNoAccess(w, a.callerIdentity(r), proj.Owner, "project not found") {
+	// Verify workspace exists.
+	if _, ok := a.loadWorkspace(w, workspaceID); !ok {
 		return
 	}
 
@@ -485,7 +465,7 @@ func (a *restAPI) handleMilestonePut(
 		jsonErr(w, http.StatusInternalServerError, "could not read milestone")
 		return
 	}
-	if m.ProjectID != projectID {
+	if m.WorkspaceID != workspaceID {
 		jsonErr(w, http.StatusNotFound, "milestone not found")
 		return
 	}
@@ -592,7 +572,7 @@ func (a *restAPI) handleMilestonePut(
 		_ = a.auditor.Log(
 			&audit.Entry{
 				Event: "milestone.update", Decision: audit.DecisionAllow,
-				Details: map[string]any{"id": milestoneID, "project_id": projectID},
+				Details: map[string]any{"id": milestoneID, "workspace_id": workspaceID},
 			},
 		)
 	}
@@ -605,14 +585,14 @@ func (a *restAPI) handleMilestonePut(
 	jsonOK(w, milestoneToWireWithProgress(m, createdAt, updatedAt, progress))
 }
 
-// handleMilestoneDelete handles DELETE /api/v1/projects/{project_id}/milestones/{id} → 204.
+// handleMilestoneDelete handles DELETE /api/v1/workspaces/{workspace_id}/milestones/{id} → 204.
 func (a *restAPI) handleMilestoneDelete(
 	w http.ResponseWriter,
 	r *http.Request,
-	projectID, milestoneID string,
+	workspaceID, milestoneID string,
 ) {
-	if err := validateEntityID(projectID); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid project ID")
+	if err := validateEntityID(workspaceID); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
 		return
 	}
 	if err := validateEntityID(milestoneID); err != nil {
@@ -620,12 +600,8 @@ func (a *restAPI) handleMilestoneDelete(
 		return
 	}
 
-	// SEC-2: verify the caller can access the parent project first.
-	proj, ok := a.loadProject(w, projectID)
-	if !ok {
-		return
-	}
-	if a.denyIfNoAccess(w, a.callerIdentity(r), proj.Owner, "project not found") {
+	// Verify workspace exists.
+	if _, ok := a.loadWorkspace(w, workspaceID); !ok {
 		return
 	}
 
@@ -639,7 +615,7 @@ func (a *restAPI) handleMilestoneDelete(
 		jsonErr(w, http.StatusInternalServerError, "could not read milestone")
 		return
 	}
-	if m.ProjectID != projectID {
+	if m.WorkspaceID != workspaceID {
 		jsonErr(w, http.StatusNotFound, "milestone not found")
 		return
 	}
@@ -658,20 +634,20 @@ func (a *restAPI) handleMilestoneDelete(
 		_ = a.auditor.Log(
 			&audit.Entry{
 				Event: "milestone.delete", Decision: audit.DecisionAllow,
-				Details: map[string]any{"id": milestoneID, "project_id": projectID},
+				Details: map[string]any{"id": milestoneID, "workspace_id": workspaceID},
 			},
 		)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// HandleMilestones dispatches all /api/v1/projects/{project_id}/milestones* requests.
+// HandleMilestones dispatches all /api/v1/workspaces/{workspace_id}/milestones* requests.
 func (a *restAPI) HandleMilestones(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 
-	// Extract project_id from path: /api/v1/projects/{project_id}/milestones[/{id}]
-	// Strip prefix /api/v1/projects/
-	rest := strings.TrimPrefix(path, "/api/v1/projects/")
+	// Extract workspace_id from path: /api/v1/workspaces/{workspace_id}/milestones[/{id}]
+	// Strip prefix /api/v1/workspaces/
+	rest := strings.TrimPrefix(path, "/api/v1/workspaces/")
 
 	// Find the /milestones segment.
 	milestoneIdx := strings.Index(rest, "/milestones")
@@ -679,28 +655,28 @@ func (a *restAPI) HandleMilestones(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	projectID := rest[:milestoneIdx]
+	workspaceID := rest[:milestoneIdx]
 	after := rest[milestoneIdx+len("/milestones"):]
 
-	if projectID == "" {
-		jsonErr(w, http.StatusBadRequest, "invalid project ID")
+	if workspaceID == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
 		return
 	}
 
 	if after == "" || after == "/" {
-		// /api/v1/projects/{project_id}/milestones
+		// /api/v1/workspaces/{workspace_id}/milestones
 		switch r.Method {
 		case http.MethodGet:
-			a.handleMilestoneList(w, r, projectID)
+			a.handleMilestoneList(w, r, workspaceID)
 		case http.MethodPost:
-			a.handleMilestonePost(w, r, projectID)
+			a.handleMilestonePost(w, r, workspaceID)
 		default:
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
 		return
 	}
 
-	// /api/v1/projects/{project_id}/milestones/{id}
+	// /api/v1/workspaces/{workspace_id}/milestones/{id}
 	milestoneID := strings.TrimPrefix(after, "/")
 	if strings.Contains(milestoneID, "/") {
 		http.NotFound(w, r)
@@ -709,11 +685,11 @@ func (a *restAPI) HandleMilestones(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		a.handleMilestoneGet(w, r, projectID, milestoneID)
+		a.handleMilestoneGet(w, r, workspaceID, milestoneID)
 	case http.MethodPut:
-		a.handleMilestonePut(w, r, projectID, milestoneID)
+		a.handleMilestonePut(w, r, workspaceID, milestoneID)
 	case http.MethodDelete:
-		a.handleMilestoneDelete(w, r, projectID, milestoneID)
+		a.handleMilestoneDelete(w, r, workspaceID, milestoneID)
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

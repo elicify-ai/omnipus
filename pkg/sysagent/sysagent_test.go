@@ -175,7 +175,7 @@ func TestRBACEnforcement(t *testing.T) {
 		{
 			"operator cannot delete projects",
 			sysagent.RoleOperator,
-			"system.project.delete",
+			"system.workspace.delete",
 			true,
 			"operators cannot delete projects",
 		},
@@ -226,7 +226,7 @@ func TestRBACBypassSingleUser(t *testing.T) {
 
 	destructiveTools := []string{
 		"system.agent.delete",
-		"system.project.delete",
+		"system.workspace.delete",
 		"system.task.delete",
 		"system.skill.remove",
 		"system.mcp.remove",
@@ -470,7 +470,7 @@ func TestConfirmationRequired(t *testing.T) {
 		tool string
 	}{
 		{"agent delete", "system.agent.delete"},
-		{"project delete", "system.project.delete"},
+		{"project delete", "system.workspace.delete"},
 		{"task delete", "system.task.delete"},
 		{"channel disable", "system.channel.disable"},
 		{"skill remove", "system.skill.remove"},
@@ -493,7 +493,7 @@ func TestConfirmationRequired(t *testing.T) {
 		{"agent create", "system.agent.create"},
 		{"task create", "system.task.create"},
 		{"agent list", "system.agent.list"},
-		{"project list", "system.project.list"},
+		{"project list", "system.workspace.list"},
 		{"provider list", "system.provider.list"},
 		{"doctor run", "system.doctor.run"},
 		{"navigate", "system.navigate"},
@@ -676,8 +676,8 @@ func TestToolPermissionsMapCoversAll41Tools(t *testing.T) {
 		"system.agent.list", "system.agent.activate", "system.agent.deactivate",
 		"system.agent.read_metadata", "system.agent.write_metadata",
 		// Project management (4)
-		"system.project.create", "system.project.update",
-		"system.project.delete", "system.project.list",
+		"system.workspace.create", "system.workspace.update",
+		"system.workspace.delete", "system.workspace.list",
 		// Task management (4)
 		"system.task.create", "system.task.update",
 		"system.task.delete", "system.task.list",

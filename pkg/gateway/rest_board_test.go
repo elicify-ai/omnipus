@@ -80,7 +80,7 @@ func writeWorkflowTaskFile(t *testing.T, homePath, taskID, projectID string) {
 	tasksDir := filepath.Join(homePath, "tasks")
 	require.NoError(t, os.MkdirAll(tasksDir, 0o700))
 	data := fmt.Sprintf(
-		`{"id":%q,"title":"workflow task","status":"queued","project_id":%q,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
+		`{"id":%q,"title":"workflow task","status":"queued","workspace_id":%q,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
 		taskID,
 		projectID,
 	)
@@ -476,17 +476,17 @@ func TestHandleBoardTasks_Boundaries(t *testing.T) {
 }
 
 // TestHandleBoardTasks_FKValidation verifies that POST and PUT /api/v1/board/tasks
-// enforce FK integrity on the project_id field.
+// enforce FK integrity on the workspace_id field.
 //
-// BDD: Given a POST /api/v1/board/tasks with a project_id that does not exist,
+// BDD: Given a POST /api/v1/board/tasks with a workspace_id that does not exist,
 // When the request is handled,
 // Then 400 with a body containing "project".
 //
-// BDD: Given a valid board task (no project_id),
-// When PUT /api/v1/board/tasks/{id} is called with a project_id that does not exist,
+// BDD: Given a valid board task (no workspace_id),
+// When PUT /api/v1/board/tasks/{id} is called with a workspace_id that does not exist,
 // Then 400 with a body containing "project".
 //
-// BDD: Given a POST /api/v1/board/tasks with project_id containing path-traversal characters,
+// BDD: Given a POST /api/v1/board/tasks with workspace_id containing path-traversal characters,
 // When the request is handled,
 // Then 400 (validateEntityID rejects the value before any filesystem access).
 //
@@ -496,8 +496,8 @@ func TestHandleBoardTasks_FKValidation(t *testing.T) {
 
 	nonExistentProjectID := "01JXNOEXISTPROJECT000001"
 
-	// --- POST with non-existent project_id → 400 containing "project" ---
-	postBody := `{"name":"Task with bad project","project_id":"` + nonExistentProjectID + `"}`
+	// --- POST with non-existent workspace_id → 400 containing "project" ---
+	postBody := `{"name":"Task with bad project","workspace_id":"` + nonExistentProjectID + `"}`
 	wPost := httptest.NewRecorder()
 	rPost := httptest.NewRequest(
 		http.MethodPost,
@@ -512,17 +512,17 @@ func TestHandleBoardTasks_FKValidation(t *testing.T) {
 		t,
 		http.StatusBadRequest,
 		wPost.Code,
-		"POST /board/tasks with non-existent project_id must return 400; body=%s",
+		"POST /board/tasks with non-existent workspace_id must return 400; body=%s",
 		wPost.Body.String(),
 	)
-	assert.Contains(t, strings.ToLower(wPost.Body.String()), "project",
-		"400 body for non-existent project_id must mention 'project'; body=%s", wPost.Body.String())
+	assert.Contains(t, strings.ToLower(wPost.Body.String()), "workspace",
+		"400 body for non-existent workspace_id must mention 'workspace'; body=%s", wPost.Body.String())
 
-	// --- PUT with non-existent project_id → 400 ---
-	// First create a valid task without a project_id.
+	// --- PUT with non-existent workspace_id → 400 ---
+	// First create a valid task without a workspace_id.
 	existingTask := createBoardTaskViaAPI(t, api, "TaskForPUTFKTest", "inbox")
 
-	putBody := `{"project_id":"` + nonExistentProjectID + `"}`
+	putBody := `{"workspace_id":"` + nonExistentProjectID + `"}`
 	wPut := httptest.NewRecorder()
 	rPut := httptest.NewRequest(
 		http.MethodPut,
@@ -537,18 +537,18 @@ func TestHandleBoardTasks_FKValidation(t *testing.T) {
 		t,
 		http.StatusBadRequest,
 		wPut.Code,
-		"PUT /board/tasks/{id} with non-existent project_id must return 400; body=%s",
+		"PUT /board/tasks/{id} with non-existent workspace_id must return 400; body=%s",
 		wPut.Body.String(),
 	)
 	assert.Contains(
 		t,
 		strings.ToLower(wPut.Body.String()),
-		"project",
-		"400 body for non-existent project_id (PUT) must mention 'project'; body=%s",
+		"workspace",
+		"400 body for non-existent workspace_id (PUT) must mention 'workspace'; body=%s",
 		wPut.Body.String(),
 	)
 
-	// --- POST with path-traversal project_id → 400 (validateEntityID catches it) ---
+	// --- POST with path-traversal workspace_id → 400 (validateEntityID catches it) ---
 	traversalCases := []struct {
 		name      string
 		projectID string
@@ -558,7 +558,7 @@ func TestHandleBoardTasks_FKValidation(t *testing.T) {
 	}
 	for _, tc := range traversalCases {
 		t.Run("path_traversal_"+tc.name, func(t *testing.T) {
-			body := `{"name":"traversal test","project_id":"` + tc.projectID + `"}`
+			body := `{"name":"traversal test","workspace_id":"` + tc.projectID + `"}`
 			wTrav := httptest.NewRecorder()
 			rTrav := httptest.NewRequest(
 				http.MethodPost,
@@ -570,7 +570,7 @@ func TestHandleBoardTasks_FKValidation(t *testing.T) {
 			api.HandleBoardTasks(wTrav, rTrav)
 
 			assert.Equal(t, http.StatusBadRequest, wTrav.Code,
-				"POST /board/tasks with path-traversal project_id=%q must return 400; body=%s",
+				"POST /board/tasks with path-traversal workspace_id=%q must return 400; body=%s",
 				tc.projectID, wTrav.Body.String())
 		})
 	}
@@ -589,18 +589,18 @@ func TestHandleBoardTasks_FKValidation(t *testing.T) {
 func TestHandleBoardTasks_ExtendedFields(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — FR-L2-005 prompt, FR-L2-007 priority, FR-L2-008 milestone_id
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "ExtendedFieldsProject", "")
+	projID := createWorkspaceViaAPI(t, api, "ExtendedFieldsProject", "")
 
 	// Create a milestone in the project.
 	midBody := `{"name":"Ext Test Milestone"}`
 	wMil := httptest.NewRecorder()
 	rMil := httptest.NewRequest(
 		http.MethodPost,
-		"/api/v1/projects/"+projID+"/milestones",
+		"/api/v1/workspaces/"+projID+"/milestones",
 		strings.NewReader(midBody),
 	)
 	rMil.Header.Set("Content-Type", "application/json")
-	rMil.URL.Path = "/api/v1/projects/" + projID + "/milestones"
+	rMil.URL.Path = "/api/v1/workspaces/" + projID + "/milestones"
 	api.HandleMilestones(wMil, rMil)
 	require.Equal(t, http.StatusCreated, wMil.Code, "create milestone for test must return 201")
 	var milResp struct {
@@ -612,7 +612,7 @@ func TestHandleBoardTasks_ExtendedFields(t *testing.T) {
 	// POST task with extended fields.
 	priority := 2
 	body := fmt.Sprintf(
-		`{"name":"Extended Task","project_id":%q,"milestone_id":%q,"prompt":"Do this","priority":%d}`,
+		`{"name":"Extended Task","workspace_id":%q,"milestone_id":%q,"prompt":"Do this","priority":%d}`,
 		projID,
 		milID,
 		priority,
@@ -897,15 +897,15 @@ func TestHandleBoardTasks_FilterByMilestoneID(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	// Set up two projects, each with a milestone.
-	proj1ID := createProjectViaAPI(t, api, "MilFilterProj1", "")
-	proj2ID := createProjectViaAPI(t, api, "MilFilterProj2", "")
+	proj1ID := createWorkspaceViaAPI(t, api, "MilFilterProj1", "")
+	proj2ID := createWorkspaceViaAPI(t, api, "MilFilterProj2", "")
 
 	// Create milestone M1 in proj1.
 	wM1 := httptest.NewRecorder()
-	rM1 := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+proj1ID+"/milestones",
+	rM1 := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+proj1ID+"/milestones",
 		strings.NewReader(`{"name":"Milestone Filter 1"}`))
 	rM1.Header.Set("Content-Type", "application/json")
-	rM1.URL.Path = "/api/v1/projects/" + proj1ID + "/milestones"
+	rM1.URL.Path = "/api/v1/workspaces/" + proj1ID + "/milestones"
 	api.HandleMilestones(wM1, rM1)
 	require.Equal(t, http.StatusCreated, wM1.Code)
 	var m1 struct {
@@ -915,10 +915,10 @@ func TestHandleBoardTasks_FilterByMilestoneID(t *testing.T) {
 
 	// Create milestone M2 in proj2.
 	wM2 := httptest.NewRecorder()
-	rM2 := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+proj2ID+"/milestones",
+	rM2 := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+proj2ID+"/milestones",
 		strings.NewReader(`{"name":"Milestone Filter 2"}`))
 	rM2.Header.Set("Content-Type", "application/json")
-	rM2.URL.Path = "/api/v1/projects/" + proj2ID + "/milestones"
+	rM2.URL.Path = "/api/v1/workspaces/" + proj2ID + "/milestones"
 	api.HandleMilestones(wM2, rM2)
 	require.Equal(t, http.StatusCreated, wM2.Code)
 	var m2 struct {
@@ -927,7 +927,7 @@ func TestHandleBoardTasks_FilterByMilestoneID(t *testing.T) {
 	require.NoError(t, json.Unmarshal(wM2.Body.Bytes(), &m2))
 
 	// Create one task per milestone.
-	body1 := fmt.Sprintf(`{"name":"Task for M1","project_id":%q,"milestone_id":%q}`, proj1ID, m1.ID)
+	body1 := fmt.Sprintf(`{"name":"Task for M1","workspace_id":%q,"milestone_id":%q}`, proj1ID, m1.ID)
 	wT1 := httptest.NewRecorder()
 	rT1 := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body1))
 	rT1.Header.Set("Content-Type", "application/json")
@@ -939,7 +939,7 @@ func TestHandleBoardTasks_FilterByMilestoneID(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(wT1.Body.Bytes(), &task1))
 
-	body2 := fmt.Sprintf(`{"name":"Task for M2","project_id":%q,"milestone_id":%q}`, proj2ID, m2.ID)
+	body2 := fmt.Sprintf(`{"name":"Task for M2","workspace_id":%q,"milestone_id":%q}`, proj2ID, m2.ID)
 	wT2 := httptest.NewRecorder()
 	rT2 := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body2))
 	rT2.Header.Set("Content-Type", "application/json")
@@ -1042,14 +1042,14 @@ func TestHandleBoardTasks_ActiveRequiresStart(t *testing.T) {
 // TestHandleBoardTasks_TaskCount_ExcludesWorkflowTasks verifies project task_count
 // only counts GTD tasks, not workflow tasks.
 // BDD: Given a project with one GTD task and one workflow task,
-// When GET /api/v1/projects/{id} is called,
+// When GET /api/v1/workspaces/{id} is called,
 // Then task_count == 1 (only GTD task counted).
 // Traces to: FR-002, MEDIUM-5 fix
 func TestHandleBoardTasks_TaskCount_ExcludesWorkflowTasks(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	// Create a project.
-	projID := createProjectViaAPI(t, api, "TaskCountProject", "")
+	projID := createWorkspaceViaAPI(t, api, "TaskCountProject", "")
 
 	// Write a GTD task for the project.
 	gtdTaskID := "01JXGTDCOUNT0000000000001"
@@ -1060,7 +1060,7 @@ func TestHandleBoardTasks_TaskCount_ExcludesWorkflowTasks(t *testing.T) {
 	tasksDir := filepath.Join(api.homePath, "tasks")
 	require.NoError(t, os.MkdirAll(tasksDir, 0o700))
 	workflowData := fmt.Sprintf(
-		`{"id":%q,"title":"workflow task","status":"queued","project_id":%q,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
+		`{"id":%q,"title":"workflow task","status":"queued","workspace_id":%q,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`,
 		workflowTaskID,
 		projID,
 	)
@@ -1069,14 +1069,14 @@ func TestHandleBoardTasks_TaskCount_ExcludesWorkflowTasks(t *testing.T) {
 		os.WriteFile(filepath.Join(tasksDir, workflowTaskID+".json"), []byte(workflowData), 0o600),
 	)
 
-	// GET /api/v1/projects/{id} → task_count must be 1 (only GTD task counted).
+	// GET /api/v1/workspaces/{id} → task_count must be 1 (only GTD task counted).
 	wGet := httptest.NewRecorder()
-	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+projID, nil)
-	rGet.URL.Path = "/api/v1/projects/" + projID
-	api.HandleProjects(wGet, rGet)
+	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+projID, nil)
+	rGet.URL.Path = "/api/v1/workspaces/" + projID
+	api.HandleWorkspaces(wGet, rGet)
 
 	require.Equal(t, http.StatusOK, wGet.Code)
-	var proj gen.Project
+	var proj gen.Workspace
 	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &proj))
 	assert.Equal(t, 1, proj.TaskCount,
 		"task_count must be 1 (GTD only); workflow tasks must not be counted")
@@ -1486,44 +1486,44 @@ func TestHandleBoardTasks_Start(t *testing.T) {
 	})
 }
 
-// TestEnsureInboxProject verifies the ensureInboxProject function is idempotent and
+// TestEnsureDefaultWorkspace verifies the ensureDefaultWorkspace function is idempotent and
 // creates the Inbox default project on first call.
 //
 // BDD:
 //
 //	Given a fresh home directory,
-//	When ensureInboxProject is called,
-//	Then GET /api/v1/projects?status=active returns exactly one project with is_default=true and name="Main".
-//	When ensureInboxProject is called again,
+//	When ensureDefaultWorkspace is called,
+//	Then GET /api/v1/projects?status=active returns exactly one project with is_default=true and name="My Workspace".
+//	When ensureDefaultWorkspace is called again,
 //	Then GET /api/v1/projects?status=active still returns exactly one default project (idempotent).
 //
 // Traces to: FR-L2-001 (auto-create Inbox project)
-func TestEnsureInboxProject(t *testing.T) {
+func TestEnsureDefaultWorkspace(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
 	// First call: must create the Inbox project.
 	require.NoError(
 		t,
-		ensureInboxProject(api.homePath),
-		"first ensureInboxProject call must not return an error",
+		ensureDefaultWorkspace(api.homePath, ""),
+		"first ensureDefaultWorkspace call must not return an error",
 	)
 
-	// GET /api/v1/projects → must contain exactly one default project named "Main".
+	// GET /api/v1/projects → must contain exactly one default project named "My Workspace".
 	wList := httptest.NewRecorder()
-	rList := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
-	rList.URL.Path = "/api/v1/projects"
-	api.HandleProjects(wList, rList)
+	rList := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
+	rList.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(wList, rList)
 	require.Equal(t, http.StatusOK, wList.Code, "GET /projects must return 200")
 
-	var projects []gen.Project
+	var projects []gen.Workspace
 	require.NoError(t, json.Unmarshal(wList.Body.Bytes(), &projects))
 
 	defaultCount := 0
 	for _, p := range projects {
 		if p.IsDefault != nil && *p.IsDefault {
 			defaultCount++
-			assert.Equal(t, "Main", p.Name, "default project display name must be 'Main' (renamed from 'Inbox')")
-			assert.Equal(t, gen.ProjectStatusActive, p.Status, "default project must have status=active")
+			assert.Equal(t, "My Workspace", p.Name, "default project display name must be 'Main' (renamed from 'Inbox')")
+			assert.Equal(t, gen.WorkspaceStatusActive, p.Status, "default project must have status=active")
 		}
 	}
 	assert.Equal(t, 1, defaultCount, "exactly one default project must exist after first call")
@@ -1531,17 +1531,17 @@ func TestEnsureInboxProject(t *testing.T) {
 	// Second call: must be idempotent — still exactly one default project.
 	require.NoError(
 		t,
-		ensureInboxProject(api.homePath),
-		"second ensureInboxProject call must not return an error",
+		ensureDefaultWorkspace(api.homePath, ""),
+		"second ensureDefaultWorkspace call must not return an error",
 	)
 
 	wList2 := httptest.NewRecorder()
-	rList2 := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
-	rList2.URL.Path = "/api/v1/projects"
-	api.HandleProjects(wList2, rList2)
+	rList2 := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces", nil)
+	rList2.URL.Path = "/api/v1/workspaces"
+	api.HandleWorkspaces(wList2, rList2)
 	require.Equal(t, http.StatusOK, wList2.Code)
 
-	var projects2 []gen.Project
+	var projects2 []gen.Workspace
 	require.NoError(t, json.Unmarshal(wList2.Body.Bytes(), &projects2))
 
 	defaultCount2 := 0
@@ -1554,23 +1554,24 @@ func TestEnsureInboxProject(t *testing.T) {
 		t,
 		1,
 		defaultCount2,
-		"ensureInboxProject must be idempotent: still exactly one default project after second call",
+		"ensureDefaultWorkspace must be idempotent: still exactly one default project after second call",
 	)
 }
 
 // ---------------------------------------------------------------------------
-// Board task ownership scoping tests (SEC-2)
+// Board task ownership attribution tests (FR-1.9)
 // ---------------------------------------------------------------------------
 
-// TestHandleBoardTasks_OwnershipScoping verifies SEC-2: user A cannot see user B's task.
-// BDD: Given alice creates task T,
+// TestHandleBoardTasks_OwnershipScoping verifies FR-1.9: owner is attribution-only;
+// any authenticated user can access any board task.
+// BDD: Given alice creates task T with owner "alice",
 // When bob (role=user) calls GET /api/v1/board/tasks/{id},
-// Then 404.
+// Then 200 (FR-1.9: owner gate removed).
 // When bob calls GET /api/v1/board/tasks (list),
-// Then T is absent.
+// Then T appears in the list.
 // When admin calls GET /api/v1/board/tasks/{id},
 // Then 200.
-// Traces to: SEC-2
+// Traces to: FR-1.9 (owner gate removed)
 func TestHandleBoardTasks_OwnershipScoping(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
@@ -1587,20 +1588,20 @@ func TestHandleBoardTasks_OwnershipScoping(t *testing.T) {
 	require.NoError(t, json.Unmarshal(wPost.Body.Bytes(), &task))
 	require.NotEmpty(t, task.Id)
 
-	// Verify owner is set to alice.
-	require.NotNil(t, task.Owner, "owner must be set on create")
+	// Verify owner is set to alice (attribution).
+	require.NotNil(t, task.Owner, "owner must be set on create (attribution)")
 	assert.Equal(t, "alice", *task.Owner, "owner must equal alice")
 
-	// Bob calls GET /api/v1/board/tasks/{id} → 404.
+	// FR-1.9: Bob calls GET /api/v1/board/tasks/{id} → 200 (owner gate removed).
 	wGetBob := httptest.NewRecorder()
 	rGetBob := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks/"+task.Id, nil)
 	rGetBob.URL.Path = "/api/v1/board/tasks/" + task.Id
 	rGetBob = rGetBob.WithContext(contextWithUserRole(rGetBob.Context(), "bob", config.UserRoleUser))
 	api.HandleBoardTasks(wGetBob, rGetBob)
-	assert.Equal(t, http.StatusNotFound, wGetBob.Code,
-		"bob must get 404 on alice's task; body=%s", wGetBob.Body.String())
+	assert.Equal(t, http.StatusOK, wGetBob.Code,
+		"FR-1.9: bob must get 200 on alice's task (owner attribution-only); body=%s", wGetBob.Body.String())
 
-	// Bob calls GET /api/v1/board/tasks (list) — alice's task must not appear.
+	// FR-1.9: Bob calls GET /api/v1/board/tasks (list) — alice's task must appear.
 	wListBob := httptest.NewRecorder()
 	rListBob := httptest.NewRequest(http.MethodGet, "/api/v1/board/tasks", nil)
 	rListBob.URL.Path = "/api/v1/board/tasks"
@@ -1612,9 +1613,13 @@ func TestHandleBoardTasks_OwnershipScoping(t *testing.T) {
 		Total int             `json:"total"`
 	}
 	require.NoError(t, json.Unmarshal(wListBob.Body.Bytes(), &listResp))
+	foundAlice := false
 	for _, item := range listResp.Items {
-		assert.NotEqual(t, task.Id, item.Id, "alice's task must NOT appear in bob's task list")
+		if item.Id == task.Id {
+			foundAlice = true
+		}
 	}
+	assert.True(t, foundAlice, "FR-1.9: alice's task must appear in bob's task list (no owner gate)")
 
 	// Admin calls GET /api/v1/board/tasks/{id} → 200.
 	wGetAdmin := httptest.NewRecorder()

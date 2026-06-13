@@ -62,13 +62,13 @@ func (*PinListTool) RequiresAdminAsk() bool   { return true }
 func (*PinCreateTool) RequiresAdminAsk() bool { return true }
 func (*PinDeleteTool) RequiresAdminAsk() bool { return true }
 
-// Project tools
+// Workspace tools
 
-func (*ProjectCreateTool) RequiresAdminAsk() bool { return true }
-func (*ProjectUpdateTool) RequiresAdminAsk() bool { return true }
-func (*ProjectDeleteTool) RequiresAdminAsk() bool { return true }
-func (*ProjectListTool) RequiresAdminAsk() bool   { return true }
-func (*ProjectGetTool) RequiresAdminAsk() bool    { return true }
+func (*WorkspaceCreateTool) RequiresAdminAsk() bool { return true }
+func (*WorkspaceUpdateTool) RequiresAdminAsk() bool { return true }
+func (*WorkspaceDeleteTool) RequiresAdminAsk() bool { return true }
+func (*WorkspaceListTool) RequiresAdminAsk() bool   { return true }
+func (*WorkspaceGetTool) RequiresAdminAsk() bool    { return true }
 
 // Provider tools
 

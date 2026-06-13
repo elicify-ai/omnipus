@@ -36,18 +36,18 @@ func NewTaskCreateTool(d *Deps) *TaskCreateTool  { return &TaskCreateTool{deps: 
 func (t *TaskCreateTool) Name() string           { return "system.task.create" }
 func (t *TaskCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskCreateTool) Description() string {
-	return "Create a task on the GTD board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a project name, call system.project.list first to get the project_id.\nParameters: name (required, the task title), description (optional), project_id (optional, from system.project.list), agent_id (optional, agent to assign), status (optional: inbox=new/unscheduled, next=prioritized for soon, active=in-progress, waiting=blocked/waiting, done=complete — defaults to inbox)."
+	return "Create a task on the GTD board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call system.workspace.list first to get the workspace_id.\nParameters: name (required, the task title), description (optional), workspace_id (optional, from system.workspace.list), agent_id (optional, agent to assign), status (optional: inbox=new/unscheduled, next=prioritized for soon, active=in-progress, waiting=blocked/waiting, done=complete — defaults to inbox)."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"name":        map[string]any{"type": "string"},
-			"description": map[string]any{"type": "string"},
-			"project_id":  map[string]any{"type": "string"},
-			"agent_id":    map[string]any{"type": "string"},
-			"status":      map[string]any{"type": "string"},
+			"name":         map[string]any{"type": "string"},
+			"description":  map[string]any{"type": "string"},
+			"workspace_id": map[string]any{"type": "string"},
+			"agent_id":     map[string]any{"type": "string"},
+			"status":       map[string]any{"type": "string"},
 		},
 		"required": []string{"name"},
 	}
@@ -74,33 +74,27 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	if v, ok := args["description"].(string); ok {
 		tk.Description = v
 	}
-	// Sysagent ownership rule (SEC-2/#406), in priority order:
-	//   Rule 1: if creating a task under an existing project, inherit that project's
-	//           owner (ensures agent-created tasks under a user-owned project stay
-	//           scoped to that owner).
-	//   Rule 2: fall back to the session owner from context (stamped at session
-	//           creation and injected into turnCtx by the agent loop).
-	//   Rule 3: default owner="" (unowned/shared, back-compat).
+	// Owner is stamped from the session context (attribution only — not an access gate).
 	sessionOwner := tools.ToolSessionOwner(ctx)
-	if v, ok := args["project_id"].(string); ok && v != "" {
+	if v, ok := args["workspace_id"].(string); ok && v != "" {
 		if err := validateID(v); err != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid project_id: not found", "project_id"))
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
 		}
-		proj, projErr := readProjectFromDisk(t.deps.Home, v)
-		if projErr != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid project_id: not found", "project_id"))
+		ws, wsErr := readWorkspaceFromDisk(t.deps.Home, v)
+		if wsErr != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
 		}
-		tk.ProjectID = v
+		tk.WorkspaceID = v
 
-		// Rule 1: inherit the project's owner.
-		tk.Owner = proj.Owner
+		// Inherit the workspace's owner (attribution stamping).
+		if ws.Owner != "" {
+			tk.Owner = ws.Owner
+		}
 	}
-	// Rule 2: if no owner set via Rule 1 (no project or project had empty owner),
-	// use the session owner from context.
+	// Fall back to session owner if workspace didn't set one.
 	if tk.Owner == "" && sessionOwner != "" {
 		tk.Owner = sessionOwner
 	}
-	// Rule 3: tk.Owner remains "" (unowned/shared) if both Rules 1 and 2 gave "".
 	if v, ok := args["agent_id"].(string); ok {
 		tk.AgentID = v
 	}
@@ -109,7 +103,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	}
 	return tools.NewToolResult(successJSON(map[string]any{
 		"id": id, "name": name, "status": string(status),
-		"project_id": tk.ProjectID, "agent_id": tk.AgentID,
+		"workspace_id": tk.WorkspaceID, "agent_id": tk.AgentID,
 	}))
 }
 
@@ -121,19 +115,19 @@ func NewTaskUpdateTool(d *Deps) *TaskUpdateTool  { return &TaskUpdateTool{deps: 
 func (t *TaskUpdateTool) Name() string           { return "system.task.update" }
 func (t *TaskUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskUpdateTool) Description() string {
-	return "Update an existing GTD board task. Call this to change status, reassign, rename, or link to a project. Use system.task.list first to find the task id. If linking to a project by name, call system.project.list first to get the project_id.\nParameters: id (required, from system.task.list), name, description, project_id (from system.project.list), agent_id, status (inbox=new/unscheduled, next=prioritized, active=in-progress, waiting=blocked, done=complete). Only provided fields are updated."
+	return "Update an existing GTD board task. Call this to change status, reassign, rename, or link to a workspace. Use system.task.list first to find the task id. If linking to a workspace by name, call system.workspace.list first to get the workspace_id.\nParameters: id (required, from system.task.list), name, description, workspace_id (from system.workspace.list), agent_id, status (inbox=new/unscheduled, next=prioritized, active=in-progress, waiting=blocked, done=complete). Only provided fields are updated."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id":          map[string]any{"type": "string"},
-			"name":        map[string]any{"type": "string"},
-			"description": map[string]any{"type": "string"},
-			"status":      map[string]any{"type": "string"},
-			"agent_id":    map[string]any{"type": "string"},
-			"project_id":  map[string]any{"type": "string"},
+			"id":           map[string]any{"type": "string"},
+			"name":         map[string]any{"type": "string"},
+			"description":  map[string]any{"type": "string"},
+			"status":       map[string]any{"type": "string"},
+			"agent_id":     map[string]any{"type": "string"},
+			"workspace_id": map[string]any{"type": "string"},
 		},
 		"required": []string{"id"},
 	}
@@ -154,8 +148,6 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 	defer mu.Unlock()
 
 	// Field-preserving read: load the FULL on-disk struct so no fields are lost.
-	// The old code used the minimal 8-field `task` struct, which dropped prompt,
-	// priority, milestone_id, session_id, result, and owner on every write.
 	var tk gtdTask
 	if err := readEntity(tasksDir(t.deps.Home), id, &tk); err != nil {
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
@@ -175,7 +167,6 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 		updated = append(updated, "description")
 	}
 	if v, ok := args["status"].(string); ok && gtdStatusSet[v] {
-		// A4: apply the same transition guard as the REST PUT handler.
 		// Only /start may reach "active"; the tool path cannot bypass this.
 		if v == string(boardtask.StatusActive) {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
@@ -185,23 +176,21 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 		updated = append(updated, "status")
 	}
 	// Only overwrite agent_id when the caller explicitly provides a non-empty value.
-	// An empty string in args["agent_id"] is ignored to avoid clobbering the existing
-	// assignment (mirrors how "name" is guarded above).
 	if v, ok := args["agent_id"].(string); ok && v != "" {
 		tk.AgentID = v
 		updated = append(updated, "agent_id")
 	}
-	if v, ok := args["project_id"].(string); ok {
+	if v, ok := args["workspace_id"].(string); ok {
 		if v != "" {
 			if err := validateID(v); err != nil {
-				return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid project_id: not found", "project_id"))
+				return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
 			}
-			if _, projErr := readProjectFromDisk(t.deps.Home, v); projErr != nil {
-				return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid project_id: not found", "project_id"))
+			if _, wsErr := readWorkspaceFromDisk(t.deps.Home, v); wsErr != nil {
+				return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
 			}
 		}
-		tk.ProjectID = v
-		updated = append(updated, "project_id")
+		tk.WorkspaceID = v
+		updated = append(updated, "workspace_id")
 	}
 	tk.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := writeEntity(tasksDir(t.deps.Home), id, tk); err != nil {
@@ -266,16 +255,16 @@ func NewTaskListTool(d *Deps) *TaskListTool    { return &TaskListTool{deps: d} }
 func (t *TaskListTool) Name() string           { return "system.task.list" }
 func (t *TaskListTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskListTool) Description() string {
-	return "List tasks with optional filters.\nParameters: project_id, agent_id, status (all optional)."
+	return "List tasks with optional filters.\nParameters: workspace_id, agent_id, status (all optional)."
 }
 
 func (t *TaskListTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"project_id": map[string]any{"type": "string"},
-			"agent_id":   map[string]any{"type": "string"},
-			"status":     map[string]any{"type": "string"},
+			"workspace_id": map[string]any{"type": "string"},
+			"agent_id":     map[string]any{"type": "string"},
+			"status":       map[string]any{"type": "string"},
 		},
 	}
 }
@@ -285,7 +274,7 @@ func (t *TaskListTool) Execute(_ context.Context, args map[string]any) *tools.To
 	if err != nil {
 		return tools.ErrorResult(errorJSON("LIST_FAILED", err.Error(), ""))
 	}
-	projectFilter, _ := args["project_id"].(string)
+	workspaceFilter, _ := args["workspace_id"].(string)
 	agentFilter, _ := args["agent_id"].(string)
 	statusFilter, _ := args["status"].(string)
 
@@ -294,7 +283,7 @@ func (t *TaskListTool) Execute(_ context.Context, args map[string]any) *tools.To
 		if !gtdStatusSet[string(tk.Status)] {
 			continue
 		}
-		if projectFilter != "" && tk.ProjectID != projectFilter {
+		if workspaceFilter != "" && tk.WorkspaceID != workspaceFilter {
 			continue
 		}
 		if agentFilter != "" && tk.AgentID != agentFilter {

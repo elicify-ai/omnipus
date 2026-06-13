@@ -25,7 +25,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
 import { useAuthStore } from '@/store/auth'
 import { useProjectsStore } from '@/store/projectsStore'
-import { fetchProjects, projectsQueryKeys } from '@/lib/api'
+import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import { NewProjectSlideOver } from '@/components/projects/NewProjectSlideOver'
 import { cn } from '@/lib/utils'
 import avatarUrl from '@/assets/logo/omnipus-avatar.svg?url'
@@ -46,7 +46,7 @@ export function Sidebar() {
   const { isOpen, isPinned, close, toggle, togglePin } = useSidebarStore()
   const location = useLocation()
   const navigate = useNavigate()
-  const { activeProjectId, setActiveProjectId } = useProjectsStore()
+  const { activeWorkspaceId, setActiveWorkspaceId } = useProjectsStore()
 
   const queryClient = useQueryClient()
   const [newProjectOpen, setNewProjectOpen] = useState(false)
@@ -74,22 +74,22 @@ export function Sidebar() {
     navigate({ to: '/login' })
   }, [navigate])
 
-  // Projects query — refetch every 30s
+  // Workspaces query — refetch every 30s
   const { data: projects = [], isLoading: projectsLoading, isError: projectsError } = useQuery({
-    queryKey: projectsQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchProjects({ status: 'active' }),
+    queryKey: workspacesQueryKeys.list({ status: 'active' }),
+    queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
     refetchInterval: 30_000,
   })
 
-  // Archived projects query — only enabled when archive section is open
+  // Archived workspaces query — only enabled when archive section is open
   const {
     data: archivedProjects = [],
     isError: archivedError,
     refetch: refetchArchived,
   } = useQuery({
-    queryKey: projectsQueryKeys.list({ status: 'archived' }),
-    queryFn: () => fetchProjects({ status: 'archived' }),
+    queryKey: workspacesQueryKeys.list({ status: 'archived' }),
+    queryFn: () => fetchWorkspaces({ status: 'archived' }),
     enabled: archiveOpen,
     staleTime: 30_000,
   })
@@ -271,7 +271,7 @@ export function Sidebar() {
               <span className="text-xs text-[var(--color-error)] flex-1">Could not load projects</span>
               <button
                 type="button"
-                onClick={() => queryClient.invalidateQueries({ queryKey: projectsQueryKeys.list() })}
+                onClick={() => queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })}
                 aria-label="Retry loading projects"
                 className="rounded p-0.5 text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
               >
@@ -296,30 +296,30 @@ export function Sidebar() {
           {/* Empty state */}
           {!projectsLoading && !projectsError && projects.length === 0 && (
             <div className="px-4 py-1.5">
-              <span className="text-xs text-[var(--color-muted)]">No projects yet — </span>
+              <span className="text-xs text-[var(--color-muted)]">No workspaces yet — </span>
               <button
                 type="button"
                 onClick={() => setNewProjectOpen(true)}
                 className="text-xs text-[var(--color-accent)] hover:underline"
               >
-                New project
+                New workspace
               </button>
             </div>
           )}
 
-          {/* Project list — filtered by search query when showSearch is active */}
+          {/* Workspace list — filtered by search query when showSearch is active */}
           {!projectsLoading && visibleProjects
             .filter((p) => !showSearch || p.name.toLowerCase().includes(searchQuery.toLowerCase()))
             .map((project) => {
-            const isActive = activeProjectId === project.id
+            const isActive = activeWorkspaceId === project.id
             const isInbox = project.is_default === true
             return (
               <button
                 key={project.id}
                 type="button"
                 onClick={() => {
-                  setActiveProjectId(project.id)
-                  navigate({ to: '/projects/$projectId', params: { projectId: project.id } })
+                  setActiveWorkspaceId(project.id)
+                  navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: project.id } })
                   if (!effectivelyPinned) close()
                 }}
                 className={cn(
@@ -376,7 +376,7 @@ export function Sidebar() {
 
           {archiveOpen && archivedError && (
             <div className="flex items-center justify-between gap-2 px-4 py-2 text-xs text-[var(--color-error)]">
-              <span>Could not load archived projects</span>
+              <span>Could not load archived workspaces</span>
               <button
                 type="button"
                 onClick={() => refetchArchived()}
@@ -393,8 +393,8 @@ export function Sidebar() {
                 key={project.id}
                 type="button"
                 onClick={() => {
-                  setActiveProjectId(project.id)
-                  navigate({ to: '/projects/$projectId', params: { projectId: project.id } })
+                  setActiveWorkspaceId(project.id)
+                  navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: project.id } })
                   if (!effectivelyPinned) close()
                 }}
                 className="flex items-center gap-2 w-full px-4 py-2 mx-0 text-sm transition-colors text-left opacity-70 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"

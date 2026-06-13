@@ -23,7 +23,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchMilestones: vi.fn().mockResolvedValue([]),
     createBoardTask: vi.fn(),
     boardTasksQueryKeys: { list: () => ['board-tasks'] },
-    projectsQueryKeys: { list: () => ['projects'] },
+    workspacesQueryKeys: { list: () => ['workspaces'] },
+    projectsQueryKeys: { list: () => ['workspaces'] },
     milestonesQueryKeys: { list: (id: string) => ['milestones', id] },
     isApiError: vi.fn().mockReturnValue(false),
   }
@@ -51,13 +52,13 @@ function makeClient() {
 function renderSlideOver(props: Partial<{
   open: boolean
   onOpenChange: (open: boolean) => void
-  projectId: string
+  workspaceId: string
   milestoneId: string | null
 }> = {}) {
   const defaults = {
     open: true,
     onOpenChange: vi.fn(),
-    projectId: 'proj-test',
+    workspaceId: 'proj-test',
     milestoneId: null,
   }
   const merged = { ...defaults, ...props }
@@ -66,7 +67,7 @@ function renderSlideOver(props: Partial<{
       <CreateTaskSlideOver
         open={merged.open}
         onOpenChange={merged.onOpenChange}
-        projectId={merged.projectId}
+        workspaceId={merged.workspaceId}
         milestoneId={merged.milestoneId}
       />
     </QueryClientProvider>,
@@ -143,7 +144,7 @@ describe('CreateTaskSlideOver — Create button calls createBoardTask with statu
     const callArg = vi.mocked(createBoardTask).mock.calls[0][0]
     expect(callArg.name).toBe('My task')
     expect(callArg.status).toBe('inbox')
-    expect(callArg.project_id).toBe('proj-test')
+    expect(callArg.workspace_id).toBe('proj-test')
   })
 
   it('differentiation test: Create sends inbox, Create & Start sends next — different statuses', async () => {
@@ -157,7 +158,7 @@ describe('CreateTaskSlideOver — Create button calls createBoardTask with statu
     // First render — Create → inbox
     const { unmount } = render(
       <QueryClientProvider client={makeClient()}>
-        <CreateTaskSlideOver open onOpenChange={onOpenChange} projectId="proj-1" />
+        <CreateTaskSlideOver open onOpenChange={onOpenChange} workspaceId="proj-1" />
       </QueryClientProvider>,
     )
     vi.mocked(createBoardTask).mockResolvedValueOnce(inboxTask as never)
@@ -172,7 +173,7 @@ describe('CreateTaskSlideOver — Create button calls createBoardTask with statu
     // Second render — Create & Start → next
     render(
       <QueryClientProvider client={makeClient()}>
-        <CreateTaskSlideOver open onOpenChange={vi.fn()} projectId="proj-1" />
+        <CreateTaskSlideOver open onOpenChange={vi.fn()} workspaceId="proj-1" />
       </QueryClientProvider>,
     )
     vi.mocked(createBoardTask).mockResolvedValueOnce(nextTask as never)
@@ -277,7 +278,7 @@ describe('CreateTaskSlideOver — Cancel closes the slide-over', () => {
 
     render(
       <QueryClientProvider client={makeClient()}>
-        <CreateTaskSlideOver open onOpenChange={onOpenChange} projectId="proj-test" />
+        <CreateTaskSlideOver open onOpenChange={onOpenChange} workspaceId="proj-test" />
       </QueryClientProvider>,
     )
 

@@ -31,8 +31,8 @@ import {
   updateBoardTask,
   deleteBoardTask,
   boardTasksQueryKeys,
-  fetchProjects,
-  projectsQueryKeys,
+  fetchWorkspaces,
+  workspacesQueryKeys,
   isApiError,
   ApiSchemaError,
 } from '@/lib/api'
@@ -73,17 +73,17 @@ interface CreateTaskForm {
   name: string
   description: string
   status: BoardStatus
-  project_id: string
+  workspace_id: string
 }
 
 function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
-  const activeProjectId = useProjectsStore((s) => s.activeProjectId)
+  const activeWorkspaceId = useProjectsStore((s) => s.activeWorkspaceId)
 
   const { data: projects = [] } = useQuery({
-    queryKey: projectsQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchProjects({ status: 'active' }),
+    queryKey: workspacesQueryKeys.list({ status: 'active' }),
+    queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
   })
 
@@ -91,14 +91,14 @@ function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
     name: '',
     description: '',
     status: 'inbox',
-    project_id: activeProjectId ?? '__none__',
+    workspace_id: activeWorkspaceId ?? '__none__',
   })
   const [nameError, setNameError] = useState('')
 
-  // Sync form.project_id when activeProjectId changes while slide-over is open
+  // Sync form.workspace_id when activeWorkspaceId changes while slide-over is open
   useEffect(() => {
-    setForm((f) => ({ ...f, project_id: activeProjectId ?? '__none__' }))
-  }, [activeProjectId])
+    setForm((f) => ({ ...f, workspace_id: activeWorkspaceId ?? '__none__' }))
+  }, [activeWorkspaceId])
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -106,13 +106,13 @@ function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
         name: form.name.trim(),
         description: form.description.trim() || undefined,
         status: form.status,
-        project_id: form.project_id === '__none__' ? undefined : form.project_id || undefined,
+        workspace_id: form.workspace_id === '__none__' ? undefined : form.workspace_id || undefined,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
-      queryClient.invalidateQueries({ queryKey: projectsQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
       addToast({ message: 'Task created', variant: 'success' })
-      setForm({ name: '', description: '', status: 'inbox', project_id: activeProjectId ?? '__none__' })
+      setForm({ name: '', description: '', status: 'inbox', workspace_id: activeWorkspaceId ?? '__none__' })
       setNameError('')
       onOpenChange(false)
     },
@@ -136,7 +136,7 @@ function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
 
   function handleOpenChange(next: boolean) {
     if (!next) {
-      setForm({ name: '', description: '', status: 'inbox', project_id: activeProjectId ?? '__none__' })
+      setForm({ name: '', description: '', status: 'inbox', workspace_id: activeWorkspaceId ?? '__none__' })
       setNameError('')
     }
     onOpenChange(next)
@@ -212,24 +212,24 @@ function CreateTaskSlideOver({ open, onOpenChange }: CreateTaskSlideOverProps) {
             </Select>
           </div>
 
-          {/* Project */}
+          {/* Workspace */}
           {projects.length > 0 && (
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="new-task-project" className="text-[var(--color-secondary)]">
-                Project
+              <Label htmlFor="new-task-workspace" className="text-[var(--color-secondary)]">
+                Workspace
               </Label>
               <Select
-                value={form.project_id || '__none__'}
-                onValueChange={(v) => setForm((s) => ({ ...s, project_id: v === '__none__' ? '__none__' : v }))}
+                value={form.workspace_id || '__none__'}
+                onValueChange={(v) => setForm((s) => ({ ...s, workspace_id: v === '__none__' ? '__none__' : v }))}
               >
                 <SelectTrigger
-                  id="new-task-project"
+                  id="new-task-workspace"
                   className="bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)]"
                 >
-                  <SelectValue placeholder="No project" />
+                  <SelectValue placeholder="No workspace" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none__">No project</SelectItem>
+                  <SelectItem value="__none__">No workspace</SelectItem>
                   {projects.map((p) => (
                     <SelectItem key={p.id} value={p.id}>
                       {p.name}
@@ -412,30 +412,30 @@ function Column({ label, tasks, onDelete, onStatusChange, deletingIds, updatingI
 export function TasksScreen() {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
-  const { activeProjectId, setActiveProjectId } = useProjectsStore()
+  const { activeWorkspaceId, setActiveWorkspaceId } = useProjectsStore()
   const [createTaskOpen, setCreateTaskOpen] = useState(false)
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set())
   const [updatingIds, setUpdatingIds] = useState<Set<string>>(new Set())
 
-  // Fetch projects for filter pill label
+  // Fetch workspaces for filter pill label
   const { data: projects = [] } = useQuery({
-    queryKey: projectsQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchProjects({ status: 'active' }),
+    queryKey: workspacesQueryKeys.list({ status: 'active' }),
+    queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
   })
-  const activeProject = activeProjectId ? projects.find((p) => p.id === activeProjectId) : null
+  const activeProject = activeWorkspaceId ? projects.find((p) => p.id === activeWorkspaceId) : null
 
-  // Clear stale activeProjectId when the project no longer exists in the loaded list
+  // Clear stale activeWorkspaceId when the workspace no longer exists in the loaded list
   useEffect(() => {
-    if (activeProjectId && projects.length > 0 && !projects.find((p) => p.id === activeProjectId)) {
-      setActiveProjectId(null)
+    if (activeWorkspaceId && projects.length > 0 && !projects.find((p) => p.id === activeWorkspaceId)) {
+      setActiveWorkspaceId(null)
     }
-  }, [activeProjectId, projects, setActiveProjectId])
+  }, [activeWorkspaceId, projects, setActiveWorkspaceId])
 
-  // Board tasks query — filtered by active project if set
+  // Board tasks query — filtered by active workspace if set
   const { data: tasks = [], isError: tasksError, isLoading } = useQuery({
-    queryKey: boardTasksQueryKeys.list(activeProjectId ? { project_id: activeProjectId } : undefined),
-    queryFn: () => fetchBoardTasks(activeProjectId ? { project_id: activeProjectId } : undefined),
+    queryKey: boardTasksQueryKeys.list(activeWorkspaceId ? { workspace_id: activeWorkspaceId } : undefined),
+    queryFn: () => fetchBoardTasks(activeWorkspaceId ? { workspace_id: activeWorkspaceId } : undefined),
     refetchInterval: 15_000,
     staleTime: 10_000,
   })
@@ -446,7 +446,7 @@ export function TasksScreen() {
     onMutate: (id) => setDeletingIds((prev) => new Set([...prev, id])),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
-      queryClient.invalidateQueries({ queryKey: projectsQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
       addToast({ message: 'Task deleted', variant: 'success' })
     },
     onError: (err) => {
@@ -474,7 +474,7 @@ export function TasksScreen() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
-      queryClient.invalidateQueries({ queryKey: projectsQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
       addToast({ message: 'Task updated', variant: 'success' })
     },
     onError: (err, _vars, context) => {
@@ -499,19 +499,19 @@ export function TasksScreen() {
           Tasks
         </h2>
 
-        {/* Active project filter pill */}
+        {/* Active workspace filter pill */}
         {activeProject && (
           <div
             role="status"
-            aria-label={`Filtered by project: ${activeProject.name}`}
+            aria-label={`Filtered by workspace: ${activeProject.name}`}
             className="flex items-center gap-1.5 rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-surface-2)] px-3 py-1 text-xs text-[var(--color-accent)]"
           >
             <FolderOpen size={12} />
             <span className="max-w-[140px] truncate">{activeProject.name}</span>
             <button
               type="button"
-              onClick={() => setActiveProjectId(null)}
-              aria-label="Clear project filter"
+              onClick={() => setActiveWorkspaceId(null)}
+              aria-label="Clear workspace filter"
               className="ml-0.5 rounded-full hover:bg-[var(--color-accent)]/20 p-0.5 transition-colors"
             >
               <X size={10} />

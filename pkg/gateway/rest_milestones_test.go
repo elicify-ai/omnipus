@@ -30,7 +30,7 @@ import (
 // generated gen.Milestone which lacks a progress field).
 type milestoneResponse struct { // not-wire-format: test-local decode struct matching milestoneWithProgress JSON
 	ID          string    `json:"id"`
-	ProjectID   string    `json:"project_id"`
+	WorkspaceID string    `json:"workspace_id"`
 	Name        string    `json:"name"`
 	Description *string   `json:"description,omitempty"`
 	DueDate     *string   `json:"due_date,omitempty"`
@@ -60,11 +60,11 @@ func createMilestoneViaAPI(
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(
 		http.MethodPost,
-		"/api/v1/projects/"+projectID+"/milestones",
+		"/api/v1/workspaces/"+projectID+"/milestones",
 		strings.NewReader(body),
 	)
 	r.Header.Set("Content-Type", "application/json")
-	r.URL.Path = "/api/v1/projects/" + projectID + "/milestones"
+	r.URL.Path = "/api/v1/workspaces/" + projectID + "/milestones"
 	api.HandleMilestones(w, r)
 	require.Equal(
 		t,
@@ -86,7 +86,7 @@ func createBoardTaskWithMilestone(
 	name, projectID, milestoneID, status string,
 ) string {
 	t.Helper()
-	body := fmt.Sprintf(`{"name":%q,"project_id":%q,"milestone_id":%q,"status":%q}`,
+	body := fmt.Sprintf(`{"name":%q,"workspace_id":%q,"milestone_id":%q,"status":%q}`,
 		name, projectID, milestoneID, status)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/board/tasks", strings.NewReader(body))
@@ -137,10 +137,10 @@ func getMilestoneViaAPI(
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(
 		http.MethodGet,
-		"/api/v1/projects/"+projectID+"/milestones/"+milestoneID,
+		"/api/v1/workspaces/"+projectID+"/milestones/"+milestoneID,
 		nil,
 	)
-	r.URL.Path = "/api/v1/projects/" + projectID + "/milestones/" + milestoneID
+	r.URL.Path = "/api/v1/workspaces/" + projectID + "/milestones/" + milestoneID
 	api.HandleMilestones(w, r)
 	if w.Code != http.StatusOK {
 		return milestoneResponse{}, w.Code
@@ -157,19 +157,19 @@ func getMilestoneViaAPI(
 // TestHandleMilestones_Create verifies POST /projects/{id}/milestones returns 201 with
 // milestone fields and progress=0.
 // BDD: Given a valid project,
-// When POST /api/v1/projects/{id}/milestones with {"name":"Sprint 1"},
+// When POST /api/v1/workspaces/{id}/milestones with {"name":"Sprint 1"},
 // Then 201, id non-empty, name="Sprint 1", progress=0.0, milestone file exists on disk.
 // Traces to: project-task-milestone-spec.md — FR-L2-009; BDD Scenario "Create milestone"
 func TestHandleMilestones_Create(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md line ~418 (BDD: Create milestone / happy path)
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "MilestoneProject", "")
+	projID := createWorkspaceViaAPI(t, api, "MilestoneProject", "")
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+projID+"/milestones",
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+projID+"/milestones",
 		strings.NewReader(`{"name":"Sprint 1"}`))
 	r.Header.Set("Content-Type", "application/json")
-	r.URL.Path = "/api/v1/projects/" + projID + "/milestones"
+	r.URL.Path = "/api/v1/workspaces/" + projID + "/milestones"
 	api.HandleMilestones(w, r)
 
 	require.Equal(
@@ -185,7 +185,7 @@ func TestHandleMilestones_Create(t *testing.T) {
 	// Content test: assert on actual field values, not just shape.
 	assert.NotEmpty(t, m.ID, "created milestone must have non-empty id")
 	assert.Equal(t, "Sprint 1", m.Name, "name must match request")
-	assert.Equal(t, projID, m.ProjectID, "project_id must match request")
+	assert.Equal(t, projID, m.WorkspaceID, "workspace_id must match request")
 	assert.Equal(t, 0.0, m.Progress, "progress must be 0 for a new milestone with no tasks")
 	assert.False(t, m.CreatedAt.IsZero(), "created_at must not be zero")
 
@@ -206,7 +206,7 @@ func TestHandleMilestones_Create(t *testing.T) {
 
 // TestHandleMilestones_Create_ProjectNotFound verifies POST to a non-existent project returns 404.
 // BDD: Given no project with ID "01JXNOEXISTPROJECT000001",
-// When POST /api/v1/projects/01JXNOEXISTPROJECT000001/milestones,
+// When POST /api/v1/workspaces/01JXNOEXISTPROJECT000001/milestones,
 // Then 404.
 // Traces to: project-task-milestone-spec.md — FR-L2-009 (error path)
 func TestHandleMilestones_Create_ProjectNotFound(t *testing.T) {
@@ -216,11 +216,11 @@ func TestHandleMilestones_Create_ProjectNotFound(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(
 		http.MethodPost,
-		"/api/v1/projects/01JXNOEXISTPROJECT000001/milestones",
+		"/api/v1/workspaces/01JXNOEXISTPROJECT000001/milestones",
 		strings.NewReader(`{"name":"Orphan Milestone"}`),
 	)
 	r.Header.Set("Content-Type", "application/json")
-	r.URL.Path = "/api/v1/projects/01JXNOEXISTPROJECT000001/milestones"
+	r.URL.Path = "/api/v1/workspaces/01JXNOEXISTPROJECT000001/milestones"
 	api.HandleMilestones(w, r)
 
 	assert.Equal(t, http.StatusNotFound, w.Code,
@@ -233,23 +233,23 @@ func TestHandleMilestones_Create_ProjectNotFound(t *testing.T) {
 
 // TestHandleMilestones_Create_NameTooLong verifies a name of 201 chars returns 400.
 // BDD: Given a POST body with name longer than 200 characters,
-// When POST /api/v1/projects/{id}/milestones,
+// When POST /api/v1/workspaces/{id}/milestones,
 // Then 400.
 // Traces to: project-task-milestone-spec.md — FR-L2-009, dataset row #3 boundary validation
 func TestHandleMilestones_Create_NameTooLong(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — Milestone name validation (maxLength: 200)
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "ValidationProject", "")
+	projID := createWorkspaceViaAPI(t, api, "ValidationProject", "")
 
 	longName := strings.Repeat("x", 201)
 	body, err := json.Marshal(map[string]any{"name": longName})
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+projID+"/milestones",
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+projID+"/milestones",
 		strings.NewReader(string(body)))
 	r.Header.Set("Content-Type", "application/json")
-	r.URL.Path = "/api/v1/projects/" + projID + "/milestones"
+	r.URL.Path = "/api/v1/workspaces/" + projID + "/milestones"
 	api.HandleMilestones(w, r)
 
 	assert.Equal(
@@ -265,10 +265,10 @@ func TestHandleMilestones_Create_NameTooLong(t *testing.T) {
 	body200, err := json.Marshal(map[string]any{"name": exactName})
 	require.NoError(t, err)
 	w200 := httptest.NewRecorder()
-	r200 := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+projID+"/milestones",
+	r200 := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+projID+"/milestones",
 		strings.NewReader(string(body200)))
 	r200.Header.Set("Content-Type", "application/json")
-	r200.URL.Path = "/api/v1/projects/" + projID + "/milestones"
+	r200.URL.Path = "/api/v1/workspaces/" + projID + "/milestones"
 	api.HandleMilestones(w200, r200)
 	assert.Equal(
 		t,
@@ -285,23 +285,23 @@ func TestHandleMilestones_Create_NameTooLong(t *testing.T) {
 
 // TestHandleMilestones_Create_DescriptionTooLong verifies description of 2001 chars returns 400.
 // BDD: Given a POST body with description longer than 2000 characters,
-// When POST /api/v1/projects/{id}/milestones,
+// When POST /api/v1/workspaces/{id}/milestones,
 // Then 400.
 // Traces to: project-task-milestone-spec.md — FR-L2-009 (description maxLength: 2000)
 func TestHandleMilestones_Create_DescriptionTooLong(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — Milestone description validation
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "DescValidProject", "")
+	projID := createWorkspaceViaAPI(t, api, "DescValidProject", "")
 
 	longDesc := strings.Repeat("d", 2001)
 	body, err := json.Marshal(map[string]any{"name": "Valid Name", "description": longDesc})
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+projID+"/milestones",
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+projID+"/milestones",
 		strings.NewReader(string(body)))
 	r.Header.Set("Content-Type", "application/json")
-	r.URL.Path = "/api/v1/projects/" + projID + "/milestones"
+	r.URL.Path = "/api/v1/workspaces/" + projID + "/milestones"
 	api.HandleMilestones(w, r)
 
 	assert.Equal(
@@ -317,10 +317,10 @@ func TestHandleMilestones_Create_DescriptionTooLong(t *testing.T) {
 	body2000, err := json.Marshal(map[string]any{"name": "Valid Name", "description": exactDesc})
 	require.NoError(t, err)
 	w2000 := httptest.NewRecorder()
-	r2000 := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+projID+"/milestones",
+	r2000 := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+projID+"/milestones",
 		strings.NewReader(string(body2000)))
 	r2000.Header.Set("Content-Type", "application/json")
-	r2000.URL.Path = "/api/v1/projects/" + projID + "/milestones"
+	r2000.URL.Path = "/api/v1/workspaces/" + projID + "/milestones"
 	api.HandleMilestones(w2000, r2000)
 	assert.Equal(
 		t,
@@ -337,13 +337,13 @@ func TestHandleMilestones_Create_DescriptionTooLong(t *testing.T) {
 
 // TestHandleMilestones_Get verifies GET /projects/{id}/milestones/{mid} returns 200 with correct fields.
 // BDD: Given an existing milestone M in project P,
-// When GET /api/v1/projects/P/milestones/M,
-// Then 200 with id=M, name matching create request, project_id=P, progress=0.
+// When GET /api/v1/workspaces/P/milestones/M,
+// Then 200 with id=M, name matching create request, workspace_id=P, progress=0.
 // Traces to: project-task-milestone-spec.md — FR-L2-009 (get milestone)
 func TestHandleMilestones_Get(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — BDD Scenario "Get milestone returns correct fields"
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "GetMilestoneProject", "")
+	projID := createWorkspaceViaAPI(t, api, "GetMilestoneProject", "")
 	m := createMilestoneViaAPI(t, api, projID, "Alpha Release", nil)
 
 	got, code := getMilestoneViaAPI(t, api, projID, m.ID)
@@ -352,7 +352,7 @@ func TestHandleMilestones_Get(t *testing.T) {
 	// Content test: verify all key fields match what was created.
 	assert.Equal(t, m.ID, got.ID, "GET must return the correct milestone id")
 	assert.Equal(t, "Alpha Release", got.Name, "GET must return the correct name")
-	assert.Equal(t, projID, got.ProjectID, "GET must return the correct project_id")
+	assert.Equal(t, projID, got.WorkspaceID, "GET must return the correct workspace_id")
 	assert.Equal(t, 0.0, got.Progress, "GET of new milestone must have progress=0")
 	assert.False(t, got.CreatedAt.IsZero(), "created_at must not be zero")
 }
@@ -363,21 +363,21 @@ func TestHandleMilestones_Get(t *testing.T) {
 
 // TestHandleMilestones_Get_NotFound verifies GET with a non-existent milestone ID returns 404.
 // BDD: Given an existing project P but no milestone with ID "01JXNOMILESTONE0000000001",
-// When GET /api/v1/projects/P/milestones/01JXNOMILESTONE0000000001,
+// When GET /api/v1/workspaces/P/milestones/01JXNOMILESTONE0000000001,
 // Then 404.
 // Traces to: project-task-milestone-spec.md — FR-L2-009 (error path)
 func TestHandleMilestones_Get_NotFound(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — Milestone not found → 404
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "GetNotFoundProject", "")
+	projID := createWorkspaceViaAPI(t, api, "GetNotFoundProject", "")
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(
 		http.MethodGet,
-		"/api/v1/projects/"+projID+"/milestones/01JXNOMILESTONE0000000001",
+		"/api/v1/workspaces/"+projID+"/milestones/01JXNOMILESTONE0000000001",
 		nil,
 	)
-	r.URL.Path = "/api/v1/projects/" + projID + "/milestones/01JXNOMILESTONE0000000001"
+	r.URL.Path = "/api/v1/workspaces/" + projID + "/milestones/01JXNOMILESTONE0000000001"
 	api.HandleMilestones(w, r)
 
 	assert.Equal(t, http.StatusNotFound, w.Code,
@@ -390,19 +390,19 @@ func TestHandleMilestones_Get_NotFound(t *testing.T) {
 
 // TestHandleMilestones_List verifies GET /projects/{id}/milestones returns all milestones for the project.
 // BDD: Given project P with 2 milestones,
-// When GET /api/v1/projects/P/milestones,
+// When GET /api/v1/workspaces/P/milestones,
 // Then 200 with total=2 and both milestones present.
 // Traces to: project-task-milestone-spec.md — FR-L2-009 (list milestones)
 func TestHandleMilestones_List(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — BDD Scenario "List milestones returns all for project"
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "ListMilestonesProject", "")
+	projID := createWorkspaceViaAPI(t, api, "ListMilestonesProject", "")
 	m1 := createMilestoneViaAPI(t, api, projID, "Milestone One", nil)
 	m2 := createMilestoneViaAPI(t, api, projID, "Milestone Two", nil)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+projID+"/milestones", nil)
-	r.URL.Path = "/api/v1/projects/" + projID + "/milestones"
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+projID+"/milestones", nil)
+	r.URL.Path = "/api/v1/workspaces/" + projID + "/milestones"
 	api.HandleMilestones(w, r)
 
 	require.Equal(
@@ -433,13 +433,13 @@ func TestHandleMilestones_List(t *testing.T) {
 // TestHandleMilestones_List_SortedByDueDate verifies milestones are sorted earliest due_date first,
 // no-due_date last.
 // BDD: Given 3 milestones: M-later (due 2027-06-01), M-earlier (due 2026-12-01), M-noduedate (no due_date),
-// When GET /api/v1/projects/{id}/milestones,
+// When GET /api/v1/workspaces/{id}/milestones,
 // Then order is M-earlier, M-later, M-noduedate.
 // Traces to: project-task-milestone-spec.md — FR-L2-013 (sort order: due_date ASC, no-date last)
 func TestHandleMilestones_List_SortedByDueDate(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — FR-L2-013
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "SortMilestonesProject", "")
+	projID := createWorkspaceViaAPI(t, api, "SortMilestonesProject", "")
 
 	laterDue := "2027-06-01"
 	earlierDue := "2026-12-01"
@@ -451,8 +451,8 @@ func TestHandleMilestones_List_SortedByDueDate(t *testing.T) {
 	mEarlier := createMilestoneViaAPI(t, api, projID, "Earlier Due", &earlierDue)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+projID+"/milestones", nil)
-	r.URL.Path = "/api/v1/projects/" + projID + "/milestones"
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+projID+"/milestones", nil)
+	r.URL.Path = "/api/v1/workspaces/" + projID + "/milestones"
 	api.HandleMilestones(w, r)
 
 	require.Equal(
@@ -499,13 +499,13 @@ func TestHandleMilestones_List_SortedByDueDate(t *testing.T) {
 
 // TestHandleMilestones_Progress verifies that milestone progress equals done_tasks/total_tasks.
 // BDD: Given milestone M in project P with 2 tasks (1 done, 1 next),
-// When GET /api/v1/projects/P/milestones/M,
+// When GET /api/v1/workspaces/P/milestones/M,
 // Then progress=0.5.
 // Traces to: project-task-milestone-spec.md — FR-L2-010 (milestone progress)
 func TestHandleMilestones_Progress(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — FR-L2-010: progress = done/total
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "ProgressMilestoneProject", "")
+	projID := createWorkspaceViaAPI(t, api, "ProgressMilestoneProject", "")
 	m := createMilestoneViaAPI(t, api, projID, "Progress Test", nil)
 
 	// Create 2 tasks linked to milestone M: 1 done, 1 next.
@@ -528,13 +528,13 @@ func TestHandleMilestones_Progress(t *testing.T) {
 // TestHandleMilestones_Progress_FailedCountsAsDenominator verifies that failed tasks
 // count toward the denominator but not the done count.
 // BDD: Given milestone M with 1 done task and 1 failed task,
-// When GET /api/v1/projects/P/milestones/M,
+// When GET /api/v1/workspaces/P/milestones/M,
 // Then progress=0.5 (1 done / 2 total).
 // Traces to: project-task-milestone-spec.md — FR-L2-010 (failed tasks count toward total)
 func TestHandleMilestones_Progress_FailedCountsAsDenominator(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — FR-L2-010: failed counts as total, not done
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "FailedProgressProject", "")
+	projID := createWorkspaceViaAPI(t, api, "FailedProgressProject", "")
 	m := createMilestoneViaAPI(t, api, projID, "Failed Progress Test", nil)
 
 	taskDoneID := createBoardTaskWithMilestone(t, api, "Done Task", projID, m.ID, "next")
@@ -562,21 +562,21 @@ func TestHandleMilestones_Progress_FailedCountsAsDenominator(t *testing.T) {
 
 // TestHandleMilestones_Update verifies PUT /projects/{id}/milestones/{mid} updates the milestone.
 // BDD: Given milestone M with name "Old Name",
-// When PUT /api/v1/projects/P/milestones/M with {"name":"New Name"},
+// When PUT /api/v1/workspaces/P/milestones/M with {"name":"New Name"},
 // Then 200, subsequent GET returns name="New Name".
 // Traces to: project-task-milestone-spec.md — FR-L2-009 (update milestone)
 func TestHandleMilestones_Update(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — BDD Scenario "Update milestone name"
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "UpdateMilestoneProject", "")
+	projID := createWorkspaceViaAPI(t, api, "UpdateMilestoneProject", "")
 	m := createMilestoneViaAPI(t, api, projID, "Old Name", nil)
 
 	// PUT with new name → 200.
 	wUp := httptest.NewRecorder()
-	rUp := httptest.NewRequest(http.MethodPut, "/api/v1/projects/"+projID+"/milestones/"+m.ID,
+	rUp := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+projID+"/milestones/"+m.ID,
 		strings.NewReader(`{"name":"New Name"}`))
 	rUp.Header.Set("Content-Type", "application/json")
-	rUp.URL.Path = "/api/v1/projects/" + projID + "/milestones/" + m.ID
+	rUp.URL.Path = "/api/v1/workspaces/" + projID + "/milestones/" + m.ID
 	api.HandleMilestones(wUp, rUp)
 
 	require.Equal(
@@ -603,7 +603,7 @@ func TestHandleMilestones_Update(t *testing.T) {
 
 // TestHandleMilestones_Update_ClearDueDate verifies PUT with due_date: null clears the due_date.
 // BDD: Given milestone M with due_date="2026-12-31",
-// When PUT /api/v1/projects/P/milestones/M with {"due_date":null},
+// When PUT /api/v1/workspaces/P/milestones/M with {"due_date":null},
 // Then 200, GET shows due_date absent.
 // Traces to: project-task-milestone-spec.md — FR-L2-009 (due_date null clears field)
 //
@@ -621,7 +621,7 @@ func TestHandleMilestones_Update_ClearDueDate(t *testing.T) {
 	// BLOCKED: production bug — omitempty on *json.RawMessage eats JSON null values.
 	// This test deliberately fails to surface the defect. Do NOT remove or skip.
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "ClearDueDateProject", "")
+	projID := createWorkspaceViaAPI(t, api, "ClearDueDateProject", "")
 	dueDate := "2026-12-31"
 	m := createMilestoneViaAPI(t, api, projID, "Dated Milestone", &dueDate)
 	require.NotNil(t, m.DueDate, "milestone must have due_date after creation")
@@ -629,10 +629,10 @@ func TestHandleMilestones_Update_ClearDueDate(t *testing.T) {
 
 	// PUT {"due_date":null} → 200, due_date cleared.
 	wUp := httptest.NewRecorder()
-	rUp := httptest.NewRequest(http.MethodPut, "/api/v1/projects/"+projID+"/milestones/"+m.ID,
+	rUp := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+projID+"/milestones/"+m.ID,
 		strings.NewReader(`{"due_date":null}`))
 	rUp.Header.Set("Content-Type", "application/json")
-	rUp.URL.Path = "/api/v1/projects/" + projID + "/milestones/" + m.ID
+	rUp.URL.Path = "/api/v1/workspaces/" + projID + "/milestones/" + m.ID
 	api.HandleMilestones(wUp, rUp)
 
 	require.Equal(
@@ -658,23 +658,23 @@ func TestHandleMilestones_Update_ClearDueDate(t *testing.T) {
 // TestHandleMilestones_Delete verifies DELETE /projects/{id}/milestones/{mid} returns 204
 // and subsequent GET returns 404.
 // BDD: Given milestone M in project P,
-// When DELETE /api/v1/projects/P/milestones/M,
-// Then 204; GET /api/v1/projects/P/milestones/M → 404.
+// When DELETE /api/v1/workspaces/P/milestones/M,
+// Then 204; GET /api/v1/workspaces/P/milestones/M → 404.
 // Traces to: project-task-milestone-spec.md — FR-L2-009 (delete milestone)
 func TestHandleMilestones_Delete(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — BDD Scenario "Delete milestone"
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "DeleteMilestoneProject", "")
+	projID := createWorkspaceViaAPI(t, api, "DeleteMilestoneProject", "")
 	m := createMilestoneViaAPI(t, api, projID, "To Be Deleted", nil)
 
 	// DELETE → 204.
 	wDel := httptest.NewRecorder()
 	rDel := httptest.NewRequest(
 		http.MethodDelete,
-		"/api/v1/projects/"+projID+"/milestones/"+m.ID,
+		"/api/v1/workspaces/"+projID+"/milestones/"+m.ID,
 		nil,
 	)
-	rDel.URL.Path = "/api/v1/projects/" + projID + "/milestones/" + m.ID
+	rDel.URL.Path = "/api/v1/workspaces/" + projID + "/milestones/" + m.ID
 	api.HandleMilestones(wDel, rDel)
 
 	assert.Equal(t, http.StatusNoContent, wDel.Code,
@@ -699,13 +699,13 @@ func TestHandleMilestones_Delete(t *testing.T) {
 // TestHandleMilestones_Delete_ClearsMilestoneIDOnTasks verifies that deleting milestone M
 // clears milestone_id on all tasks that referenced it (FR-L2-011).
 // BDD: Given task T with milestone_id=M,
-// When DELETE /api/v1/projects/P/milestones/M,
+// When DELETE /api/v1/workspaces/P/milestones/M,
 // Then 204; GET /api/v1/board/tasks/T → milestone_id absent.
 // Traces to: project-task-milestone-spec.md — FR-L2-011 (cascade clear milestone_id)
 func TestHandleMilestones_Delete_ClearsMilestoneIDOnTasks(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — FR-L2-011
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "CascadeClearProject", "")
+	projID := createWorkspaceViaAPI(t, api, "CascadeClearProject", "")
 	m := createMilestoneViaAPI(t, api, projID, "Cascade Milestone", nil)
 
 	// Create a task with milestone_id=M.
@@ -733,10 +733,10 @@ func TestHandleMilestones_Delete_ClearsMilestoneIDOnTasks(t *testing.T) {
 	wDel := httptest.NewRecorder()
 	rDel := httptest.NewRequest(
 		http.MethodDelete,
-		"/api/v1/projects/"+projID+"/milestones/"+m.ID,
+		"/api/v1/workspaces/"+projID+"/milestones/"+m.ID,
 		nil,
 	)
-	rDel.URL.Path = "/api/v1/projects/" + projID + "/milestones/" + m.ID
+	rDel.URL.Path = "/api/v1/workspaces/" + projID + "/milestones/" + m.ID
 	api.HandleMilestones(wDel, rDel)
 	require.Equal(t, http.StatusNoContent, wDel.Code, "DELETE milestone must return 204")
 
@@ -755,19 +755,19 @@ func TestHandleMilestones_Delete_ClearsMilestoneIDOnTasks(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestHandleProjects_Delete_CascadesMilestones
+// TestHandleWorkspaces_Delete_CascadesMilestones
 // ---------------------------------------------------------------------------
 
-// TestHandleProjects_Delete_CascadesMilestones verifies that deleting project P
+// TestHandleWorkspaces_Delete_CascadesMilestones verifies that deleting workspace W
 // removes all its milestones (FR-L2-028).
-// BDD: Given project P with milestone M,
-// When DELETE /api/v1/projects/P,
+// BDD: Given workspace W with milestone M,
+// When DELETE /api/v1/workspaces/W,
 // Then 204; milestone file for M is deleted from disk.
-// Traces to: project-task-milestone-spec.md — FR-L2-028 (project cascade deletes milestones)
-func TestHandleProjects_Delete_CascadesMilestones(t *testing.T) {
+// Traces to: project-task-milestone-spec.md — FR-L2-028 (workspace cascade deletes milestones)
+func TestHandleWorkspaces_Delete_CascadesMilestones(t *testing.T) {
 	// Traces to: project-task-milestone-spec.md — FR-L2-028
 	api := newTestRestAPIWithHome(t)
-	projID := createProjectViaAPI(t, api, "CascadeProjectWithMilestones", "")
+	projID := createWorkspaceViaAPI(t, api, "CascadeProjectWithMilestones", "")
 	m := createMilestoneViaAPI(t, api, projID, "Will Be Deleted", nil)
 
 	// Verify milestone file exists.
@@ -777,9 +777,9 @@ func TestHandleProjects_Delete_CascadesMilestones(t *testing.T) {
 
 	// DELETE project → 204.
 	wDel := httptest.NewRecorder()
-	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/projects/"+projID, nil)
-	rDel.URL.Path = "/api/v1/projects/" + projID
-	api.HandleProjects(wDel, rDel)
+	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+projID, nil)
+	rDel.URL.Path = "/api/v1/workspaces/" + projID
+	api.HandleWorkspaces(wDel, rDel)
 	require.Equal(t, http.StatusNoContent, wDel.Code, "DELETE project must return 204")
 
 	// Milestone file must be gone.
@@ -789,72 +789,70 @@ func TestHandleProjects_Delete_CascadesMilestones(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Milestone ownership scoping tests (SEC-2)
+// Milestone ownership scoping tests (FR-1.9 — owner attribution-only)
 // ---------------------------------------------------------------------------
 
-// TestHandleMilestones_OwnershipScoping verifies SEC-2: user A cannot access
-// milestones belonging to user B's project.
-// BDD: Given alice owns project P and milestone M under P,
-// When bob (role=user) calls GET /api/v1/projects/{P}/milestones,
-// Then 404 (bob cannot see alice's project).
-// When bob calls GET /api/v1/projects/{P}/milestones/{M},
-// Then 404.
-// When admin calls GET /api/v1/projects/{P}/milestones,
+// TestHandleMilestones_OwnershipScoping verifies FR-1.9: owner is attribution-only;
+// any authenticated user can access milestones regardless of workspace owner.
+// BDD: Given alice owns workspace P and milestone M under P,
+// When bob (role=user) calls GET /api/v1/workspaces/{P}/milestones,
+// Then 200 (bob can see alice's workspace — owner gate removed).
+// When bob calls GET /api/v1/workspaces/{P}/milestones/{M},
 // Then 200.
-// Traces to: SEC-2
+// Traces to: FR-1.9 (owner gate removed)
 func TestHandleMilestones_OwnershipScoping(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	// Alice creates project P.
+	// Alice creates workspace P.
 	wProj := httptest.NewRecorder()
-	rProj := httptest.NewRequest(http.MethodPost, "/api/v1/projects",
-		strings.NewReader(`{"name":"AliceMilestoneProject"}`))
+	rProj := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces",
+		strings.NewReader(`{"name":"AliceMilestoneWorkspace"}`))
 	rProj.Header.Set("Content-Type", "application/json")
-	rProj.URL.Path = "/api/v1/projects"
+	rProj.URL.Path = "/api/v1/workspaces"
 	rProj = rProj.WithContext(contextWithUserRole(rProj.Context(), "alice", config.UserRoleUser))
-	api.HandleProjects(wProj, rProj)
+	api.HandleWorkspaces(wProj, rProj)
 	require.Equal(t, http.StatusCreated, wProj.Code,
-		"alice POST project must return 201; body=%s", wProj.Body.String())
-	var proj gen.Project
+		"alice POST workspace must return 201; body=%s", wProj.Body.String())
+	var proj gen.Workspace
 	require.NoError(t, json.Unmarshal(wProj.Body.Bytes(), &proj))
 
 	// Alice creates milestone M under P.
 	wMS := httptest.NewRecorder()
-	rMS := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+proj.Id+"/milestones",
+	rMS := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+proj.Id+"/milestones",
 		strings.NewReader(`{"name":"AliceMilestone"}`))
 	rMS.Header.Set("Content-Type", "application/json")
-	rMS.URL.Path = "/api/v1/projects/" + proj.Id + "/milestones"
+	rMS.URL.Path = "/api/v1/workspaces/" + proj.Id + "/milestones"
 	rMS = rMS.WithContext(contextWithUserRole(rMS.Context(), "alice", config.UserRoleUser))
-	api.HandleProjects(wMS, rMS)
+	api.HandleWorkspaces(wMS, rMS)
 	require.Equal(t, http.StatusCreated, wMS.Code,
 		"alice POST milestone must return 201; body=%s", wMS.Body.String())
 	var ms milestoneResponse
 	require.NoError(t, json.Unmarshal(wMS.Body.Bytes(), &ms))
 
-	// Bob calls GET /api/v1/projects/{P}/milestones → 404 (cannot see alice's project).
+	// Bob calls GET /api/v1/workspaces/{P}/milestones → 200 (FR-1.9: owner gate removed).
 	wListBob := httptest.NewRecorder()
-	rListBob := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+proj.Id+"/milestones", nil)
-	rListBob.URL.Path = "/api/v1/projects/" + proj.Id + "/milestones"
+	rListBob := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+proj.Id+"/milestones", nil)
+	rListBob.URL.Path = "/api/v1/workspaces/" + proj.Id + "/milestones"
 	rListBob = rListBob.WithContext(contextWithUserRole(rListBob.Context(), "bob", config.UserRoleUser))
-	api.HandleProjects(wListBob, rListBob)
-	assert.Equal(t, http.StatusNotFound, wListBob.Code,
-		"bob must get 404 on alice's project milestones; body=%s", wListBob.Body.String())
+	api.HandleWorkspaces(wListBob, rListBob)
+	assert.Equal(t, http.StatusOK, wListBob.Code,
+		"bob must get 200 on alice's workspace milestones (FR-1.9); body=%s", wListBob.Body.String())
 
-	// Bob calls GET /api/v1/projects/{P}/milestones/{M} → 404.
+	// Bob calls GET /api/v1/workspaces/{P}/milestones/{M} → 200.
 	wGetBob := httptest.NewRecorder()
-	rGetBob := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+proj.Id+"/milestones/"+ms.ID, nil)
-	rGetBob.URL.Path = "/api/v1/projects/" + proj.Id + "/milestones/" + ms.ID
+	rGetBob := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+proj.Id+"/milestones/"+ms.ID, nil)
+	rGetBob.URL.Path = "/api/v1/workspaces/" + proj.Id + "/milestones/" + ms.ID
 	rGetBob = rGetBob.WithContext(contextWithUserRole(rGetBob.Context(), "bob", config.UserRoleUser))
-	api.HandleProjects(wGetBob, rGetBob)
-	assert.Equal(t, http.StatusNotFound, wGetBob.Code,
-		"bob must get 404 on alice's milestone; body=%s", wGetBob.Body.String())
+	api.HandleWorkspaces(wGetBob, rGetBob)
+	assert.Equal(t, http.StatusOK, wGetBob.Code,
+		"bob must get 200 on alice's milestone (FR-1.9); body=%s", wGetBob.Body.String())
 
-	// Admin calls GET /api/v1/projects/{P}/milestones → 200.
+	// Admin calls GET /api/v1/workspaces/{P}/milestones → 200.
 	wListAdmin := httptest.NewRecorder()
-	rListAdmin := httptest.NewRequest(http.MethodGet, "/api/v1/projects/"+proj.Id+"/milestones", nil)
-	rListAdmin.URL.Path = "/api/v1/projects/" + proj.Id + "/milestones"
+	rListAdmin := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+proj.Id+"/milestones", nil)
+	rListAdmin.URL.Path = "/api/v1/workspaces/" + proj.Id + "/milestones"
 	rListAdmin = rListAdmin.WithContext(contextWithUserRole(rListAdmin.Context(), "admin", config.UserRoleAdmin))
-	api.HandleProjects(wListAdmin, rListAdmin)
+	api.HandleWorkspaces(wListAdmin, rListAdmin)
 	assert.Equal(t, http.StatusOK, wListAdmin.Code,
-		"admin must get 200 on alice's project milestones; body=%s", wListAdmin.Body.String())
+		"admin must get 200 on alice's workspace milestones; body=%s", wListAdmin.Body.String())
 }

@@ -4,13 +4,13 @@ import { PencilSimple, Check, X, Link } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { MilestoneProgressBar } from './MilestoneProgressBar'
-import { fetchMilestones, updateProject, milestonesQueryKeys, projectsQueryKeys, isApiError } from '@/lib/api'
-import type { Project } from '@/lib/api'
+import { fetchMilestones, updateWorkspace, milestonesQueryKeys, workspacesQueryKeys, isApiError } from '@/lib/api'
+import type { Workspace } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
 
 interface ProjectHeaderProps {
-  project: Project
+  project: Workspace
 }
 
 export function ProjectHeader({ project }: ProjectHeaderProps) {
@@ -27,15 +27,15 @@ export function ProjectHeader({ project }: ProjectHeaderProps) {
   })
 
   const updateMutation = useMutation({
-    mutationFn: (name: string) => updateProject(project.id, { name }),
+    mutationFn: (name: string) => updateWorkspace(project.id, { name }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: projectsQueryKeys.list() })
-      queryClient.invalidateQueries({ queryKey: projectsQueryKeys.detail(project.id) })
-      addToast({ message: 'Project updated', variant: 'success' })
+      queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.detail(project.id) })
+      addToast({ message: 'Workspace updated', variant: 'success' })
       setEditingName(false)
     },
     onError: (err) => {
-      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update project'
+      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update workspace'
       addToast({ message: msg, variant: 'error' })
     },
   })

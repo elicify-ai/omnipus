@@ -22,8 +22,10 @@ import { Route as AppMonitorRouteImport } from './routes/_app/monitor'
 import { Route as AppCommandCenterRouteImport } from './routes/_app/command-center'
 import { Route as AppChannelsRouteImport } from './routes/_app/channels'
 import { Route as AppAgentsRouteImport } from './routes/_app/agents'
+import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces.index'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects.index'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents.index'
+import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app/workspaces.$workspaceId'
 import { Route as AppSessionsSessionIdRouteImport } from './routes/_app/sessions.$sessionId'
 import { Route as AppProjectsProjectIdRouteImport } from './routes/_app/projects.$projectId'
 import { Route as AppAgentsAgentIdRouteImport } from './routes/_app/agents.$agentId'
@@ -92,6 +94,11 @@ const AppAgentsRoute = AppAgentsRouteImport.update({
   path: '/agents',
   getParentRoute: () => AppRoute,
 } as any)
+const AppWorkspacesIndexRoute = AppWorkspacesIndexRouteImport.update({
+  id: '/workspaces/',
+  path: '/workspaces/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppProjectsIndexRoute = AppProjectsIndexRouteImport.update({
   id: '/projects/',
   path: '/projects/',
@@ -102,6 +109,12 @@ const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppAgentsRoute,
 } as any)
+const AppWorkspacesWorkspaceIdRoute =
+  AppWorkspacesWorkspaceIdRouteImport.update({
+    id: '/workspaces/$workspaceId',
+    path: '/workspaces/$workspaceId',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppSessionsSessionIdRoute = AppSessionsSessionIdRouteImport.update({
   id: '/sessions/$sessionId',
   path: '/sessions/$sessionId',
@@ -134,8 +147,10 @@ export interface FileRoutesByFullPath {
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
+  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/agents/': typeof AppAgentsIndexRoute
   '/projects/': typeof AppProjectsIndexRoute
+  '/workspaces/': typeof AppWorkspacesIndexRoute
 }
 export interface FileRoutesByTo {
   '/landing': typeof LandingRoute
@@ -152,8 +167,10 @@ export interface FileRoutesByTo {
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
+  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/agents': typeof AppAgentsIndexRoute
   '/projects': typeof AppProjectsIndexRoute
+  '/workspaces': typeof AppWorkspacesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -173,8 +190,10 @@ export interface FileRoutesById {
   '/_app/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/_app/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/_app/sessions/$sessionId': typeof AppSessionsSessionIdRoute
+  '/_app/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/_app/agents/': typeof AppAgentsIndexRoute
   '/_app/projects/': typeof AppProjectsIndexRoute
+  '/_app/workspaces/': typeof AppWorkspacesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -194,8 +213,10 @@ export interface FileRouteTypes {
     | '/agents/$agentId'
     | '/projects/$projectId'
     | '/sessions/$sessionId'
+    | '/workspaces/$workspaceId'
     | '/agents/'
     | '/projects/'
+    | '/workspaces/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/landing'
@@ -212,8 +233,10 @@ export interface FileRouteTypes {
     | '/agents/$agentId'
     | '/projects/$projectId'
     | '/sessions/$sessionId'
+    | '/workspaces/$workspaceId'
     | '/agents'
     | '/projects'
+    | '/workspaces'
   id:
     | '__root__'
     | '/_app'
@@ -232,8 +255,10 @@ export interface FileRouteTypes {
     | '/_app/agents/$agentId'
     | '/_app/projects/$projectId'
     | '/_app/sessions/$sessionId'
+    | '/_app/workspaces/$workspaceId'
     | '/_app/agents/'
     | '/_app/projects/'
+    | '/_app/workspaces/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -336,6 +361,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAgentsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/workspaces/': {
+      id: '/_app/workspaces/'
+      path: '/workspaces'
+      fullPath: '/workspaces/'
+      preLoaderRoute: typeof AppWorkspacesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/projects/': {
       id: '/_app/projects/'
       path: '/projects'
@@ -349,6 +381,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/agents/'
       preLoaderRoute: typeof AppAgentsIndexRouteImport
       parentRoute: typeof AppAgentsRoute
+    }
+    '/_app/workspaces/$workspaceId': {
+      id: '/_app/workspaces/$workspaceId'
+      path: '/workspaces/$workspaceId'
+      fullPath: '/workspaces/$workspaceId'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/sessions/$sessionId': {
       id: '/_app/sessions/$sessionId'
@@ -400,7 +439,9 @@ interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppProjectsProjectIdRoute: typeof AppProjectsProjectIdRoute
   AppSessionsSessionIdRoute: typeof AppSessionsSessionIdRoute
+  AppWorkspacesWorkspaceIdRoute: typeof AppWorkspacesWorkspaceIdRoute
   AppProjectsIndexRoute: typeof AppProjectsIndexRoute
+  AppWorkspacesIndexRoute: typeof AppWorkspacesIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -415,7 +456,9 @@ const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppProjectsProjectIdRoute: AppProjectsProjectIdRoute,
   AppSessionsSessionIdRoute: AppSessionsSessionIdRoute,
+  AppWorkspacesWorkspaceIdRoute: AppWorkspacesWorkspaceIdRoute,
   AppProjectsIndexRoute: AppProjectsIndexRoute,
+  AppWorkspacesIndexRoute: AppWorkspacesIndexRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

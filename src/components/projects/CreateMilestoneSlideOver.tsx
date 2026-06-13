@@ -17,7 +17,7 @@ import { useUiStore } from '@/store/ui'
 interface CreateMilestoneSlideOverProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  projectId: string
+  workspaceId: string
 }
 
 interface FormState {
@@ -31,7 +31,7 @@ const INITIAL_FORM: FormState = { name: '', description: '', due_date: '' }
 export function CreateMilestoneSlideOver({
   open,
   onOpenChange,
-  projectId,
+  workspaceId,
 }: CreateMilestoneSlideOverProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
@@ -40,13 +40,13 @@ export function CreateMilestoneSlideOver({
 
   const mutation = useMutation({
     mutationFn: () =>
-      createMilestone(projectId, {
+      createMilestone(workspaceId, {
         name: form.name.trim(),
         description: form.description.trim() || undefined,
         due_date: form.due_date || undefined,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: milestonesQueryKeys.list(projectId) })
+      queryClient.invalidateQueries({ queryKey: milestonesQueryKeys.list(workspaceId) })
       addToast({ message: 'Milestone created', variant: 'success' })
       resetAndClose()
     },

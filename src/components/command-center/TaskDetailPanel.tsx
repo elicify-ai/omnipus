@@ -5,14 +5,14 @@ import {
   fetchAgents,
   fetchSubtasks,
   fetchMilestones,
-  fetchProjects,
+  fetchWorkspaces,
   updateTask,
   updateBoardTask,
   startBoardTask,
   startTask,
   isApiError,
   milestonesQueryKeys,
-  projectsQueryKeys,
+  workspacesQueryKeys,
 } from '@/lib/api'
 import type { Task, BoardTask, BoardTaskUpdateRequest } from '@/lib/api'
 import type { BoardTaskUpdateStatus } from '@/lib/api/generated/openapi-types'
@@ -118,27 +118,27 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
 
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
-  const [selectedProjectId, setSelectedProjectId] = useState(task?.project_id ?? '')
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(task?.workspace_id ?? '')
 
   useEffect(() => {
     setPromptDraft(task?.prompt ?? '')
     setEditingPrompt(false)
-    setSelectedProjectId(task?.project_id ?? '')
-  }, [task?.id, task?.prompt, task?.project_id])
+    setSelectedWorkspaceId(task?.workspace_id ?? '')
+  }, [task?.id, task?.prompt, task?.workspace_id])
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
 
   const { data: projects = [] } = useQuery({
-    queryKey: projectsQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchProjects({ status: 'active' }),
+    queryKey: workspacesQueryKeys.list({ status: 'active' }),
+    queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
   })
 
-  // Milestones for the task's assigned project
+  // Milestones for the task's assigned workspace
   const { data: milestones = [] } = useQuery({
-    queryKey: milestonesQueryKeys.list(selectedProjectId),
-    queryFn: () => fetchMilestones(selectedProjectId),
-    enabled: !!selectedProjectId,
+    queryKey: milestonesQueryKeys.list(selectedWorkspaceId),
+    queryFn: () => fetchMilestones(selectedWorkspaceId),
+    enabled: !!selectedWorkspaceId,
     staleTime: 30_000,
   })
 
@@ -149,7 +149,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['workspaces'] })
     },
     onError: (err: unknown) =>
       addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update task', variant: 'error' }),
@@ -162,7 +162,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['workspaces'] })
       if (data.session_id) {
         void navigate({ to: '/sessions/$sessionId', params: { sessionId: data.session_id } })
       } else {
@@ -180,7 +180,7 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['board-tasks'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['workspaces'] })
       addToast({ message: 'Task retried — moved to Next.', variant: 'success' })
     },
     onError: (err: unknown) =>
@@ -303,11 +303,11 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
         )}
       </Field>
 
-      {/* Project */}
-      <Field label="Project">
+      {/* Workspace */}
+      <Field label="Workspace">
         <p className="text-xs text-[var(--color-muted)]">
-          {task.project_id
-            ? (projects.find((p) => p.id === task.project_id)?.name ?? task.project_id)
+          {task.workspace_id
+            ? (projects.find((p) => p.id === task.workspace_id)?.name ?? task.workspace_id)
             : '—'}
         </p>
       </Field>

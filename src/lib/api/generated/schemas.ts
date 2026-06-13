@@ -20,7 +20,7 @@ type Session = {
   model?: string | undefined;
   provider?: string | undefined;
   stats: SessionStats;
-  project_id?: string | undefined;
+  workspace_id?: string | undefined;
   task_id?: string | undefined;
   channel: string;
   partitions: Array<string>;
@@ -402,7 +402,7 @@ type BoardTask = {
   name: string;
   description?: string | undefined;
   status: GTDBoardTaskStatus;
-  project_id?: string | undefined;
+  workspace_id?: string | undefined;
   agent_id?: string | undefined;
   prompt?: string | undefined;
   priority?: number | undefined;
@@ -429,7 +429,7 @@ type BoardTaskListItem = {
   name: string;
   description?: string | undefined;
   status: "inbox" | "next" | "active" | "waiting" | "done" | "failed";
-  project_id?: string | undefined;
+  workspace_id?: string | undefined;
   agent_id?: string | undefined;
   prompt?: string | undefined;
   priority?: number | undefined;
@@ -444,7 +444,7 @@ type BoardTaskCreateRequest = {
   name: string;
   description?: string | undefined;
   status?: GTDBoardTaskStatus | undefined;
-  project_id?: string | undefined;
+  workspace_id?: string | undefined;
   agent_id?: string | undefined;
   prompt?: string | undefined;
   priority?: number | undefined;
@@ -454,7 +454,7 @@ type BoardTaskUpdateRequest = Partial<{
   name: string;
   description: string;
   status: BoardTaskUpdateStatus;
-  project_id: string;
+  workspace_id: string;
   agent_id: string;
   prompt: string;
   priority: number;
@@ -469,7 +469,7 @@ type MilestoneListResponse = {
 };
 type Milestone = {
   id: string;
-  project_id: string;
+  workspace_id: string;
   name: string;
   description?: string | undefined;
   due_date?: (string | null) | undefined;
@@ -628,7 +628,7 @@ export const Session: z.ZodType<Session> = z.object({
   model: z.string().optional(),
   provider: z.string().optional(),
   stats: SessionStats,
-  project_id: z.string().optional(),
+  workspace_id: z.string().optional(),
   task_id: z.string().optional(),
   channel: z.string(),
   partitions: z.array(z.string()).max(3650),
@@ -1571,7 +1571,7 @@ export const NotificationList: z.ZodType<NotificationList> = z.object({
   notifications: z.array(Notification),
   unread_count: z.number().int(),
 });
-export const Project = z
+export const Workspace = z
   .object({
     id: z.string(),
     name: z.string().min(1),
@@ -1588,7 +1588,7 @@ export const Project = z
     owner: z.string().optional(),
   })
   .passthrough();
-export const ProjectCreateRequest = z
+export const WorkspaceCreateRequest = z
   .object({
     name: z.string().min(1).max(200),
     description: z.string().max(2000).optional(),
@@ -1596,7 +1596,7 @@ export const ProjectCreateRequest = z
     repository: z.string().optional(),
   })
   .passthrough();
-export const ProjectUpdateRequest = z
+export const WorkspaceUpdateRequest = z
   .object({
     name: z.string().min(1).max(200),
     description: z.string().max(2000),
@@ -1608,7 +1608,7 @@ export const ProjectUpdateRequest = z
   })
   .partial()
   .passthrough();
-export const ProjectSessionLink = z
+export const WorkspaceSessionLink = z
   .object({
     session_id: z.string(),
     created_at: z.string().datetime({ offset: true }),
@@ -1617,7 +1617,7 @@ export const ProjectSessionLink = z
 export const Milestone: z.ZodType<Milestone> = z
   .object({
     id: z.string(),
-    project_id: z.string(),
+    workspace_id: z.string(),
     name: z.string().min(1).max(200),
     description: z.string().max(2000).optional(),
     due_date: z.string().nullish(),
@@ -1650,7 +1650,7 @@ export const BoardTaskListItem: z.ZodType<BoardTaskListItem> = z
     name: z.string().min(1),
     description: z.string().max(2000).optional(),
     status: z.enum(["inbox", "next", "active", "waiting", "done", "failed"]),
-    project_id: z.string().optional(),
+    workspace_id: z.string().optional(),
     agent_id: z.string().optional(),
     prompt: z.string().max(10000).optional(),
     priority: z.number().int().gte(1).lte(5).optional(),
@@ -1678,7 +1678,7 @@ export const BoardTaskCreateRequest: z.ZodType<BoardTaskCreateRequest> = z
     name: z.string().min(1).max(200),
     description: z.string().max(2000).optional(),
     status: GTDBoardTaskStatus.optional(),
-    project_id: z.string().optional(),
+    workspace_id: z.string().optional(),
     agent_id: z.string().optional(),
     prompt: z.string().max(10000).optional(),
     priority: z.number().int().gte(1).lte(5).optional(),
@@ -1691,7 +1691,7 @@ export const BoardTask: z.ZodType<BoardTask> = z
     name: z.string().min(1),
     description: z.string().max(2000).optional(),
     status: GTDBoardTaskStatus,
-    project_id: z.string().optional(),
+    workspace_id: z.string().optional(),
     agent_id: z.string().optional(),
     prompt: z.string().max(10000).optional(),
     priority: z.number().int().gte(1).lte(5).optional(),
@@ -1715,7 +1715,7 @@ export const BoardTaskUpdateRequest: z.ZodType<BoardTaskUpdateRequest> = z
     name: z.string().min(1).max(200),
     description: z.string().max(2000),
     status: BoardTaskUpdateStatus,
-    project_id: z.string(),
+    workspace_id: z.string(),
     agent_id: z.string(),
     prompt: z.string().max(10000),
     priority: z.number().int().gte(1).lte(5),
@@ -2349,12 +2349,12 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/board/tasks",
     alias: "listBoardTasks",
-    description: `Returns GTD board tasks from ~/.omnipus/tasks/. Distinct from workflow tasks at /tasks. Supports filtering by project_id and status. Default limit 200, max 1000.
+    description: `Returns GTD board tasks from ~/.omnipus/tasks/. Distinct from workflow tasks at /tasks. Supports filtering by workspace_id and status. Default limit 200, max 1000.
 `,
     requestFormat: "json",
     parameters: [
       {
-        name: "project_id",
+        name: "workspace_id",
         type: "Query",
         schema: z.string().optional(),
       },
@@ -3321,356 +3321,6 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Token not found or expired.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/projects",
-    alias: "listProjects",
-    description: `Returns all projects, newest-first. Excludes archived projects by default. Use ?status&#x3D;archived to list archived projects or ?status&#x3D;all for everything. task_count is computed live from the GTD task store.
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "status",
-        type: "Query",
-        schema: z.enum(["active", "archived", "all"]).optional(),
-      },
-    ],
-    response: z.array(Project),
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/projects",
-    alias: "createProject",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: ProjectCreateRequest,
-      },
-    ],
-    response: Project,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/projects/:id",
-    alias: "getProject",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: Project,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "put",
-    path: "/projects/:id",
-    alias: "updateProject",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: ProjectUpdateRequest,
-      },
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: Project,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "delete",
-    path: "/projects/:id",
-    alias: "deleteProject",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: z.void(),
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/projects/:id/milestones",
-    alias: "listProjectMilestones",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: MilestoneListResponse,
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/projects/:id/milestones",
-    alias: "createProjectMilestone",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: MilestoneCreateRequest,
-      },
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: Milestone,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/projects/:id/milestones/:milestoneId",
-    alias: "getProjectMilestone",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-      {
-        name: "milestoneId",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: Milestone,
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "put",
-    path: "/projects/:id/milestones/:milestoneId",
-    alias: "updateProjectMilestone",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: MilestoneUpdateRequest,
-      },
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-      {
-        name: "milestoneId",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: Milestone,
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "delete",
-    path: "/projects/:id/milestones/:milestoneId",
-    alias: "deleteProjectMilestone",
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-      {
-        name: "milestoneId",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: z.void(),
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "get",
-    path: "/projects/:id/sessions",
-    alias: "listProjectSessions",
-    description: `Returns sessions that were auto-linked when an agent created or updated a GTD task with this project_id. Returns 200 with empty array when project exists but has no links. Returns 404 when project does not exist.
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "id",
-        type: "Path",
-        schema: z.string(),
-      },
-    ],
-    response: z.array(ProjectSessionLink),
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
         schema: ErrorResponse,
       },
     ],
@@ -5704,6 +5354,356 @@ Returns HTTP 201 on success.
       {
         status: 503,
         description: `Agent has no owner and must be reassigned.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces",
+    alias: "listWorkspaces",
+    description: `Returns all workspaces, newest-first. Excludes archived workspaces by default. Use ?status&#x3D;archived to list archived workspaces or ?status&#x3D;all for everything. task_count is computed live from the GTD task store.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "status",
+        type: "Query",
+        schema: z.enum(["active", "archived", "all"]).optional(),
+      },
+    ],
+    response: z.array(Workspace),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces",
+    alias: "createWorkspace",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: WorkspaceCreateRequest,
+      },
+    ],
+    response: Workspace,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id",
+    alias: "getWorkspace",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Workspace,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/workspaces/:id",
+    alias: "updateWorkspace",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: WorkspaceUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Workspace,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/workspaces/:id",
+    alias: "deleteWorkspace",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/milestones",
+    alias: "listWorkspaceMilestones",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: MilestoneListResponse,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/milestones",
+    alias: "createWorkspaceMilestone",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MilestoneCreateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Milestone,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/milestones/:milestoneId",
+    alias: "getWorkspaceMilestone",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "milestoneId",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Milestone,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/workspaces/:id/milestones/:milestoneId",
+    alias: "updateWorkspaceMilestone",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MilestoneUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "milestoneId",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Milestone,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/workspaces/:id/milestones/:milestoneId",
+    alias: "deleteWorkspaceMilestone",
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "milestoneId",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/sessions",
+    alias: "listWorkspaceSessions",
+    description: `Returns sessions that were auto-linked when an agent created or updated a GTD task with this workspace_id. Returns 200 with empty array when workspace exists but has no links. Returns 404 when workspace does not exist.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(WorkspaceSessionLink),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
         schema: ErrorResponse,
       },
     ],

@@ -24,7 +24,7 @@ import {
   fetchAgents,
   fetchMilestones,
   boardTasksQueryKeys,
-  projectsQueryKeys,
+  workspacesQueryKeys,
   milestonesQueryKeys,
   isApiError,
 } from '@/lib/api'
@@ -36,8 +36,8 @@ import { PRIORITY_BADGE } from './TaskCard'
 interface CreateTaskSlideOverProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** Pre-fill the project selector */
-  projectId: string
+  /** Pre-fill the workspace selector */
+  workspaceId: string
   /** Pre-fill the milestone selector (from active filter pill) */
   milestoneId?: string | null
 }
@@ -61,7 +61,7 @@ const INITIAL_FORM: FormState = {
 export function CreateTaskSlideOver({
   open,
   onOpenChange,
-  projectId,
+  workspaceId,
   milestoneId,
 }: CreateTaskSlideOverProps) {
   const queryClient = useQueryClient()
@@ -81,10 +81,10 @@ export function CreateTaskSlideOver({
   }, [open, milestoneId])
 
   const { data: milestones = [] } = useQuery({
-    queryKey: milestonesQueryKeys.list(projectId),
-    queryFn: () => fetchMilestones(projectId),
+    queryKey: milestonesQueryKeys.list(workspaceId),
+    queryFn: () => fetchMilestones(workspaceId),
     staleTime: 30_000,
-    enabled: !!projectId,
+    enabled: !!workspaceId,
   })
 
   const { data: agents = [] } = useQuery({
@@ -99,7 +99,7 @@ export function CreateTaskSlideOver({
       prompt: form.prompt.trim() || undefined,
       priority: form.priority,
       status,
-      project_id: projectId,
+      workspace_id: workspaceId,
       milestone_id: form.milestoneId === '__none__' ? undefined : form.milestoneId || undefined,
       agent_id: form.agentId === '__none__' ? undefined : form.agentId || undefined,
     }
@@ -109,7 +109,7 @@ export function CreateTaskSlideOver({
     mutationFn: (status: BoardTask['status']) => createBoardTask(buildBody(status)),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: boardTasksQueryKeys.list() })
-      queryClient.invalidateQueries({ queryKey: projectsQueryKeys.list() })
+      queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
       addToast({ message: 'Task created', variant: 'success' })
       resetAndClose()
     },
@@ -133,6 +133,7 @@ export function CreateTaskSlideOver({
     setNameError('')
     onOpenChange(false)
   }
+
 
   function handleOpenChange(next: boolean) {
     if (!next) resetAndClose()

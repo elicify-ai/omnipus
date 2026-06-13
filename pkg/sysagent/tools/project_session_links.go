@@ -25,10 +25,41 @@ const (
 // ProjectSessionLink is one line in project_session_links.jsonl.
 // Exported so that the REST gateway layer can call ReadLinks without
 // duplicating the mutex or file-format logic.
+// The WorkspaceID field is stored as "workspace_id" on disk; legacy lines
+// using "project_id" are accepted via the projectIDCompat field during read.
 type ProjectSessionLink struct {
-	ProjectID string `json:"project_id"`
-	SessionID string `json:"session_id"`
-	CreatedAt string `json:"created_at"`
+	WorkspaceID string `json:"workspace_id"`
+	SessionID   string `json:"session_id"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// projectSessionLinkCompat is used to decode legacy lines that used "project_id".
+type projectSessionLinkCompat struct { //nolint:govet
+	WorkspaceID string `json:"workspace_id"`
+	ProjectID   string `json:"project_id"` // legacy field; migrated on read
+	SessionID   string `json:"session_id"`
+	CreatedAt   string `json:"created_at"`
+}
+
+// decodeLink decodes a JSONL line, transparently migrating the legacy "project_id"
+// field to WorkspaceID when "workspace_id" is absent.
+func decodeLink(line string) (ProjectSessionLink, bool) {
+	var compat projectSessionLinkCompat
+	if json.Unmarshal([]byte(line), &compat) != nil {
+		return ProjectSessionLink{}, false
+	}
+	wsID := compat.WorkspaceID
+	if wsID == "" {
+		wsID = compat.ProjectID // migrate legacy field
+	}
+	if wsID == "" || compat.SessionID == "" {
+		return ProjectSessionLink{}, false
+	}
+	return ProjectSessionLink{
+		WorkspaceID: wsID,
+		SessionID:   compat.SessionID,
+		CreatedAt:   compat.CreatedAt,
+	}, true
 }
 
 // linksFilePath returns the absolute path of the link file for the given home dir.
@@ -43,18 +74,18 @@ func linksFilePath(home string) string {
 var linkFileMu sync.RWMutex
 
 // AppendLinkExported is the exported wrapper around appendLink for use by callers
-// outside this package (e.g. pkg/gateway) that need to record a project↔session
+// outside this package (e.g. pkg/gateway) that need to record a workspace↔session
 // link without going through the ProjectSessionLinker's LRU dedup logic.
-// Use this when the caller already knows the (projectID, sessionID) pair is new
+// Use this when the caller already knows the (workspaceID, sessionID) pair is new
 // (e.g. just created a fresh session for a board task).
-func AppendLinkExported(home, projectID, sessionID string) error {
-	return appendLink(home, projectID, sessionID)
+func AppendLinkExported(home, workspaceID, sessionID string) error {
+	return appendLink(home, workspaceID, sessionID)
 }
 
-// appendLink appends one (projectID, sessionID) entry to the link file.
+// appendLink appends one (workspaceID, sessionID) entry to the link file.
 // The file is opened with O_APPEND|O_CREATE so concurrent appenders on the same
 // OS stay coherent; linkFileMu ensures our own process is serialized.
-func appendLink(home, projectID, sessionID string) error {
+func appendLink(home, workspaceID, sessionID string) error {
 	linkFileMu.Lock()
 	defer linkFileMu.Unlock()
 
@@ -66,9 +97,9 @@ func appendLink(home, projectID, sessionID string) error {
 	defer f.Close()
 
 	entry := ProjectSessionLink{
-		ProjectID: projectID,
-		SessionID: sessionID,
-		CreatedAt: nowISO(),
+		WorkspaceID: workspaceID,
+		SessionID:   sessionID,
+		CreatedAt:   nowISO(),
 	}
 	data, err := json.Marshal(entry)
 	if err != nil {
@@ -78,11 +109,12 @@ func appendLink(home, projectID, sessionID string) error {
 	return err
 }
 
-// ReadLinks returns deduplicated links for a given projectID.
+// ReadLinks returns deduplicated links for a given workspaceID.
 // Exported for use by the REST gateway layer without duplicating mutex or I/O.
-// Dedup key: (project_id, session_id) pair — keeps earliest entry (first seen).
+// Dedup key: (workspace_id, session_id) pair — keeps earliest entry (first seen).
 // Returns nil when the file is absent or empty (not an error condition).
-func ReadLinks(home, projectID string) []ProjectSessionLink {
+// Legacy lines with "project_id" are migrated transparently on read.
+func ReadLinks(home, workspaceID string) []ProjectSessionLink {
 	linkFileMu.RLock()
 	defer linkFileMu.RUnlock()
 
@@ -102,14 +134,14 @@ func ReadLinks(home, projectID string) []ProjectSessionLink {
 		if line == "" {
 			continue
 		}
-		var link ProjectSessionLink
-		if json.Unmarshal([]byte(line), &link) != nil {
-			continue // skip malformed lines
-		}
-		if link.ProjectID != projectID {
+		link, ok := decodeLink(line)
+		if !ok {
 			continue
 		}
-		key := link.ProjectID + ":" + link.SessionID
+		if link.WorkspaceID != workspaceID {
+			continue
+		}
+		key := link.WorkspaceID + ":" + link.SessionID
 		if _, dup := seen[key]; dup {
 			continue
 		}
@@ -118,7 +150,7 @@ func ReadLinks(home, projectID string) []ProjectSessionLink {
 	}
 	if err := scanner.Err(); err != nil {
 		slog.Warn("project_session_links: ReadLinks scan error — partial result returned",
-			"error", err, "project_id", projectID)
+			"error", err, "workspace_id", workspaceID)
 	}
 	return out
 }
@@ -144,12 +176,17 @@ func rewriteLinks(home string, keep func(ProjectSessionLink) bool) error {
 		if line == "" {
 			continue
 		}
-		var link ProjectSessionLink
-		if json.Unmarshal([]byte(line), &link) != nil {
+		link, ok := decodeLink(line)
+		if !ok {
 			continue // drop malformed lines
 		}
 		if keep(link) {
-			kept = append(kept, line)
+			// Re-encode in the new format (workspace_id).
+			reencoded, encErr := json.Marshal(link)
+			if encErr != nil {
+				continue
+			}
+			kept = append(kept, string(reencoded))
 		}
 	}
 
@@ -160,15 +197,15 @@ func rewriteLinks(home string, keep func(ProjectSessionLink) bool) error {
 	return fileutil.WriteFileAtomic(path, content, 0o600)
 }
 
-// RemoveLinksForProject rewrites the link file excluding all entries for projectID.
-// Called during cascade delete (project.delete tool) and from
-// pkg/gateway/rest_projects.go::handleProjectDelete.
+// RemoveLinksForProject rewrites the link file excluding all entries for workspaceID.
+// Called during cascade delete (workspace.delete tool) and from
+// pkg/gateway/rest_workspaces.go::handleWorkspaceDelete.
 // A missing file is a no-op; write failures are logged at Warn level (best-effort).
-func RemoveLinksForProject(home, projectID string) {
+func RemoveLinksForProject(home, workspaceID string) {
 	if err := rewriteLinks(home, func(l ProjectSessionLink) bool {
-		return l.ProjectID != projectID
+		return l.WorkspaceID != workspaceID
 	}); err != nil {
-		slog.Warn("project_session_links: RemoveLinksForProject failed", "error", err, "project_id", projectID)
+		slog.Warn("project_session_links: RemoveLinksForProject failed", "error", err, "workspace_id", workspaceID)
 	}
 }
 
@@ -186,12 +223,12 @@ func compactLinksIfNeeded(home string) {
 	}()
 }
 
-// compactLinks rewrites the link file with duplicate (project_id, session_id) pairs removed.
+// compactLinks rewrites the link file with duplicate (workspace_id, session_id) pairs removed.
 // Keeps the earliest entry for each pair.
 func compactLinks(home string) {
 	seen := make(map[string]struct{})
 	if err := rewriteLinks(home, func(l ProjectSessionLink) bool {
-		key := l.ProjectID + ":" + l.SessionID
+		key := l.WorkspaceID + ":" + l.SessionID
 		if _, dup := seen[key]; dup {
 			return false
 		}
@@ -203,7 +240,7 @@ func compactLinks(home string) {
 }
 
 // ProjectSessionLinker is instantiated once at gateway start and records which
-// sessions have worked on which projects. Because pkg/agent imports
+// sessions have worked on which workspaces. Because pkg/agent imports
 // pkg/sysagent/tools, this type cannot implement agent.ToolInterceptor directly
 // (that would create a circular import). Instead it exposes LinkSession, and a
 // thin adapter in pkg/agent/project_linker_hook.go wraps it to satisfy the
@@ -222,11 +259,11 @@ func NewProjectSessionLinker(home string) *ProjectSessionLinker {
 	}
 }
 
-// lruCheck returns true if the (projectID, sessionID) pair is new and should be
+// lruCheck returns true if the (workspaceID, sessionID) pair is new and should be
 // written; false if it has already been seen this instance's lifetime.
 // When the set is full it is cleared (best-effort eviction, not true LRU).
-func (l *ProjectSessionLinker) lruCheck(projectID, sessionID string) bool {
-	key := projectID + ":" + sessionID
+func (l *ProjectSessionLinker) lruCheck(workspaceID, sessionID string) bool {
+	key := workspaceID + ":" + sessionID
 	l.lruMu.Lock()
 	defer l.lruMu.Unlock()
 	if _, seen := l.lruSet[key]; seen {
@@ -239,21 +276,21 @@ func (l *ProjectSessionLinker) lruCheck(projectID, sessionID string) bool {
 	return true
 }
 
-// LinkSession records that sessionID worked on projectID.
+// LinkSession records that sessionID worked on workspaceID.
 // Both arguments must be non-empty; if either is blank the call is a no-op.
-// Duplicate (projectID, sessionID) pairs within the same instance are deduplicated
+// Duplicate (workspaceID, sessionID) pairs within the same instance are deduplicated
 // by the LRU set and not re-written to disk.
 // Write failures are logged at Warn level and do not propagate (best-effort).
-func (l *ProjectSessionLinker) LinkSession(projectID, sessionID string) {
-	if projectID == "" || sessionID == "" {
+func (l *ProjectSessionLinker) LinkSession(workspaceID, sessionID string) {
+	if workspaceID == "" || sessionID == "" {
 		return
 	}
-	if !l.lruCheck(projectID, sessionID) {
+	if !l.lruCheck(workspaceID, sessionID) {
 		return
 	}
-	if err := appendLink(l.home, projectID, sessionID); err != nil {
+	if err := appendLink(l.home, workspaceID, sessionID); err != nil {
 		slog.Warn("project_session_links: append failed",
-			"error", err, "project_id", projectID, "session_id", sessionID)
+			"error", err, "workspace_id", workspaceID, "session_id", sessionID)
 	} else {
 		compactLinksIfNeeded(l.home)
 	}

@@ -11,11 +11,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgents: vi.fn(),
-    createProject: vi.fn(),
+    createWorkspace: vi.fn(),
   }
 })
 
-import { fetchAgents, createProject } from '@/lib/api'
+import { fetchAgents, createWorkspace } from '@/lib/api'
 
 // Traces to: project-task-management-level1-spec.md — core_team graceful degradation (F7-02 follow-on)
 // When the agents fetch fails, the slide-over must degrade gracefully and surface
@@ -61,7 +61,7 @@ describe('NewProjectSlideOver — create flow', () => {
   beforeEach(() => {
     // Most create-flow tests use a successful agents fetch so the Select renders.
     vi.mocked(fetchAgents).mockResolvedValue([])
-    vi.mocked(createProject).mockReset()
+    vi.mocked(createWorkspace).mockReset()
   })
 
   it('shows validation error when name is empty', async () => {
@@ -72,11 +72,11 @@ describe('NewProjectSlideOver — create flow', () => {
     renderSlideOver()
 
     // Name field starts empty — submit immediately.
-    fireEvent.click(screen.getByRole('button', { name: /create project/i }))
+    fireEvent.click(screen.getByRole('button', { name: /create workspace/i }))
 
     // Inline error must appear without any API call.
     expect(await screen.findByText('Name is required')).toBeInTheDocument()
-    expect(vi.mocked(createProject)).not.toHaveBeenCalled()
+    expect(vi.mocked(createWorkspace)).not.toHaveBeenCalled()
   })
 
   it('shows validation error when name is over 200 chars', async () => {
@@ -92,21 +92,21 @@ describe('NewProjectSlideOver — create flow', () => {
     // does not enforce maxLength in JSDOM — the validate() function does the check).
     // We fire a change event directly to bypass the DOM maxLength attribute.
     fireEvent.change(nameInput, { target: { value: 'a'.repeat(201) } })
-    fireEvent.click(screen.getByRole('button', { name: /create project/i }))
+    fireEvent.click(screen.getByRole('button', { name: /create workspace/i }))
 
     expect(await screen.findByText(/Name must be 200 characters or fewer/i)).toBeInTheDocument()
-    expect(vi.mocked(createProject)).not.toHaveBeenCalled()
+    expect(vi.mocked(createWorkspace)).not.toHaveBeenCalled()
   })
 
-  it('calls createProject with correct data and shows success toast on submit', async () => {
+  it('calls createWorkspace with correct data and shows success toast on submit', async () => {
     // BDD: Given the slide-over is open with valid form data,
-    // When the user fills in Name and Description and clicks "Create project",
-    // Then createProject is called with the trimmed form values,
-    // And a success toast with message "Project created" is shown,
+    // When the user fills in Name and Description and clicks "Create workspace",
+    // Then createWorkspace is called with the trimmed form values,
+    // And a success toast with message "Workspace created" is shown,
     // And the slide-over closes (onOpenChange(false) is called).
     // Traces to: project-task-management-level1-spec.md — TC-003 happy path
     const onOpenChange = vi.fn()
-    const createdProject = {
+    const createdWorkspace = {
       id: 'new-proj',
       name: 'My New Project',
       status: 'active',
@@ -116,7 +116,7 @@ describe('NewProjectSlideOver — create flow', () => {
       created_at: '2026-06-01T00:00:00Z',
       updated_at: '2026-06-01T00:00:00Z',
     }
-    vi.mocked(createProject).mockResolvedValueOnce(createdProject as never)
+    vi.mocked(createWorkspace).mockResolvedValueOnce(createdWorkspace as never)
 
     render(
       <QueryClientProvider client={makeClient()}>
@@ -130,32 +130,32 @@ describe('NewProjectSlideOver — create flow', () => {
     fireEvent.change(screen.getByLabelText(/description/i), { target: { value: 'A great project' } })
 
     // Submit.
-    fireEvent.click(screen.getByRole('button', { name: /create project/i }))
+    fireEvent.click(screen.getByRole('button', { name: /create workspace/i }))
 
-    // Verify createProject was called with trimmed values.
-    await waitFor(() => expect(vi.mocked(createProject)).toHaveBeenCalledOnce())
-    const callArg = vi.mocked(createProject).mock.calls[0][0]
+    // Verify createWorkspace was called with trimmed values.
+    await waitFor(() => expect(vi.mocked(createWorkspace)).toHaveBeenCalledOnce())
+    const callArg = vi.mocked(createWorkspace).mock.calls[0][0]
     expect(callArg.name).toBe('My New Project')
     expect(callArg.description).toBe('A great project')
 
     // Verify success toast was added to the real Zustand store.
     await waitFor(() => {
       const toasts = useUiStore.getState().toasts
-      expect(toasts.some((t) => t.message === 'Project created' && t.variant === 'success')).toBe(true)
+      expect(toasts.some((t) => t.message === 'Workspace created' && t.variant === 'success')).toBe(true)
     })
 
     // Verify the slide-over closes.
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
   })
 
-  it('shows error toast when createProject rejects', async () => {
+  it('shows error toast when createWorkspace rejects', async () => {
     // BDD: Given the slide-over is open with a valid name,
-    // When createProject rejects with an error,
-    // Then an error toast containing "Failed to create project" is shown,
+    // When createWorkspace rejects with an error,
+    // Then an error toast containing "Failed to create workspace" is shown,
     // And the slide-over remains open.
     // Traces to: project-task-management-level1-spec.md — TC-003 error path
     const onOpenChange = vi.fn()
-    vi.mocked(createProject).mockRejectedValueOnce(new Error('server unavailable'))
+    vi.mocked(createWorkspace).mockRejectedValueOnce(new Error('server unavailable'))
 
     render(
       <QueryClientProvider client={makeClient()}>
@@ -163,16 +163,16 @@ describe('NewProjectSlideOver — create flow', () => {
       </QueryClientProvider>,
     )
 
-    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Doomed Project' } })
-    fireEvent.click(screen.getByRole('button', { name: /create project/i }))
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Doomed Workspace' } })
+    fireEvent.click(screen.getByRole('button', { name: /create workspace/i }))
 
-    await waitFor(() => expect(vi.mocked(createProject)).toHaveBeenCalledOnce())
+    await waitFor(() => expect(vi.mocked(createWorkspace)).toHaveBeenCalledOnce())
 
     // Verify error toast was added.
     await waitFor(() => {
       const toasts = useUiStore.getState().toasts
       expect(
-        toasts.some((t) => t.message.includes('Failed to create project') && t.variant === 'error'),
+        toasts.some((t) => t.message.includes('Failed to create workspace') && t.variant === 'error'),
       ).toBe(true)
     })
 
@@ -198,6 +198,6 @@ describe('NewProjectSlideOver — create flow', () => {
     await user.click(screen.getByRole('button', { name: /cancel/i }))
 
     expect(onOpenChange).toHaveBeenCalledWith(false)
-    expect(vi.mocked(createProject)).not.toHaveBeenCalled()
+    expect(vi.mocked(createWorkspace)).not.toHaveBeenCalled()
   })
 })

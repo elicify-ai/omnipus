@@ -1856,7 +1856,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/projects": {
+    "/workspaces": {
         parameters: {
             query?: never;
             header?: never;
@@ -1864,39 +1864,39 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List projects
-         * @description Returns all projects, newest-first. Excludes archived projects by default. Use ?status=archived to list archived projects or ?status=all for everything. task_count is computed live from the GTD task store.
+         * List workspaces
+         * @description Returns all workspaces, newest-first. Excludes archived workspaces by default. Use ?status=archived to list archived workspaces or ?status=all for everything. task_count is computed live from the GTD task store.
          */
-        get: operations["listProjects"];
+        get: operations["listWorkspaces"];
         put?: never;
-        /** Create a project */
-        post: operations["createProject"];
+        /** Create a workspace */
+        post: operations["createWorkspace"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/projects/{id}": {
+    "/workspaces/{id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get a project by ID */
-        get: operations["getProject"];
-        /** Update a project (partial update — absent fields unchanged) */
-        put: operations["updateProject"];
+        /** Get a workspace by ID */
+        get: operations["getWorkspace"];
+        /** Update a workspace (partial update — absent fields unchanged) */
+        put: operations["updateWorkspace"];
         post?: never;
-        /** Delete a project and cascade-delete its tasks and session links */
-        delete: operations["deleteProject"];
+        /** Delete a workspace and cascade-delete its tasks and session links */
+        delete: operations["deleteWorkspace"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/projects/{id}/sessions": {
+    "/workspaces/{id}/sessions": {
         parameters: {
             query?: never;
             header?: never;
@@ -1904,10 +1904,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List sessions auto-linked to this project
-         * @description Returns sessions that were auto-linked when an agent created or updated a GTD task with this project_id. Returns 200 with empty array when project exists but has no links. Returns 404 when project does not exist.
+         * List sessions auto-linked to this workspace
+         * @description Returns sessions that were auto-linked when an agent created or updated a GTD task with this workspace_id. Returns 200 with empty array when workspace exists but has no links. Returns 404 when workspace does not exist.
          */
-        get: operations["listProjectSessions"];
+        get: operations["listWorkspaceSessions"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1916,25 +1916,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/projects/{id}/milestones": {
+    "/workspaces/{id}/milestones": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List milestones for a project */
-        get: operations["listProjectMilestones"];
+        /** List milestones for a workspace */
+        get: operations["listWorkspaceMilestones"];
         put?: never;
-        /** Create a milestone for a project */
-        post: operations["createProjectMilestone"];
+        /** Create a milestone for a workspace */
+        post: operations["createWorkspaceMilestone"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/projects/{id}/milestones/{milestoneId}": {
+    "/workspaces/{id}/milestones/{milestoneId}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1942,12 +1942,12 @@ export interface paths {
             cookie?: never;
         };
         /** Get a milestone by ID */
-        get: operations["getProjectMilestone"];
+        get: operations["getWorkspaceMilestone"];
         /** Update a milestone (partial update) */
-        put: operations["updateProjectMilestone"];
+        put: operations["updateWorkspaceMilestone"];
         post?: never;
         /** Delete a milestone */
-        delete: operations["deleteProjectMilestone"];
+        delete: operations["deleteWorkspaceMilestone"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1962,7 +1962,7 @@ export interface paths {
         };
         /**
          * List GTD board tasks
-         * @description Returns GTD board tasks from ~/.omnipus/tasks/. Distinct from workflow tasks at /tasks. Supports filtering by project_id and status. Default limit 200, max 1000.
+         * @description Returns GTD board tasks from ~/.omnipus/tasks/. Distinct from workflow tasks at /tasks. Supports filtering by workspace_id and status. Default limit 200, max 1000.
          */
         get: operations["listBoardTasks"];
         put?: never;
@@ -2383,10 +2383,10 @@ export interface components {
             provider?: string;
             stats: components["schemas"]["SessionStats"];
             /**
-             * @description Associated project ID (optional, future v0.3 feature).
-             * @example proj-123
+             * @description Associated workspace ID (optional, future v0.3 feature).
+             * @example ws-123
              */
-            project_id?: string;
+            workspace_id?: string;
             /**
              * @description Associated task ID when this session was created to service a task.
              * @example task-456
@@ -5551,15 +5551,15 @@ export interface components {
             /** @description Number of unread notifications for the badge. */
             unread_count: number;
         };
-        /** @description A Level 1 project record. Projects are lightweight metadata — no filesystem directories or room topology. task_count is computed at read time and never stored. core_team is a default agent roster, not an access gate. */
-        Project: {
+        /** @description A Level 1 workspace record. Workspaces are lightweight metadata — no filesystem directories or room topology. task_count is computed at read time and never stored. core_team is a default agent roster, not an access gate. */
+        Workspace: {
             /**
-             * @description UUID project identifier
+             * @description UUID workspace identifier
              * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
              */
             id: string;
             /**
-             * @description Human-readable project name. Not unique.
+             * @description Human-readable workspace name. Not unique.
              * @example website-api
              */
             name: string;
@@ -5569,23 +5569,23 @@ export interface components {
              */
             description?: string;
             /**
-             * @description Project visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
+             * @description Workspace visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
              * @example active
              * @enum {string}
              */
             status: "active" | "archived";
             /**
-             * @description Whether this project is pinned to the top of the sidebar.
+             * @description Whether this workspace is pinned to the top of the sidebar.
              * @example false
              */
             pinned: boolean;
             /**
-             * @description Ascending sort position among pinned projects. 0 for unpinned projects. Last-writer-wins; tiebreak by created_at ascending.
+             * @description Ascending sort position among pinned workspaces. 0 for unpinned workspaces. Last-writer-wins; tiebreak by created_at ascending.
              * @example 0
              */
             pin_order: number;
             /**
-             * @description Default agent roster for this project. Not an access gate — any agent can work on any project's tasks. Deduplicated at write time. Max 20 entries.
+             * @description Default agent roster for this workspace. Not an access gate — any agent can work on any workspace's tasks. Deduplicated at write time. Max 20 entries.
              * @example [
              *       "mia",
              *       "jim"
@@ -5598,12 +5598,12 @@ export interface components {
              */
             repository?: string;
             /**
-             * @description Number of GTD board tasks with this project_id. Computed at read time from ~/.omnipus/tasks/. Never stored in the project JSON file.
+             * @description Number of GTD board tasks with this workspace_id. Computed at read time from ~/.omnipus/tasks/. Never stored in the workspace JSON file.
              * @example 3
              */
             task_count: number;
             /**
-             * @description True only for the auto-created Inbox project. The Inbox project cannot be deleted and always appears first in the sidebar.
+             * @description True only for the auto-created default workspace. The default workspace cannot be deleted and always appears first in the sidebar.
              * @example false
              */
             is_default?: boolean;
@@ -5620,14 +5620,14 @@ export interface components {
              */
             updated_at: string;
             /**
-             * @description Username of the user who owns this resource. Set server-side at creation; read-only.
+             * @description Username of the user who created this workspace. Set server-side at creation; read-only. Attribution only — not an access gate.
              * @example alice
              */
             owner?: string;
         };
-        /** @description Request body for POST /projects */
-        ProjectCreateRequest: {
-            /** @description Project name. Required. Not unique. */
+        /** @description Request body for POST /workspaces */
+        WorkspaceCreateRequest: {
+            /** @description Workspace name. Required. Not unique. */
             name: string;
             /** @description Optional description. */
             description?: string;
@@ -5636,12 +5636,12 @@ export interface components {
             /** @description Optional git repository URL. */
             repository?: string;
         };
-        /** @description Request body for PUT /projects/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged. */
-        ProjectUpdateRequest: {
+        /** @description Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged. */
+        WorkspaceUpdateRequest: {
             name?: string;
             description?: string;
             /**
-             * @description Archive or restore a project.
+             * @description Archive or restore a workspace.
              * @enum {string}
              */
             status?: "active" | "archived";
@@ -5676,10 +5676,10 @@ export interface components {
             description?: string;
             status: components["schemas"]["GTDBoardTaskStatus"];
             /**
-             * @description Optional project this task belongs to. Must be an existing project ID. If absent, task is unassigned.
+             * @description Optional workspace this task belongs to. Must be an existing workspace ID. If absent, task is unassigned.
              * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
              */
-            project_id?: string;
+            workspace_id?: string;
             /**
              * @description Optional agent responsible for this task.
              * @example mia
@@ -5731,10 +5731,10 @@ export interface components {
              */
             status: "inbox" | "next" | "active" | "waiting" | "done" | "failed";
             /**
-             * @description Optional project this task belongs to. Must be an existing project ID. If absent, task is unassigned.
+             * @description Optional workspace this task belongs to. Must be an existing workspace ID. If absent, task is unassigned.
              * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
              */
-            project_id?: string;
+            workspace_id?: string;
             /**
              * @description Optional agent responsible for this task.
              * @example mia
@@ -5779,7 +5779,7 @@ export interface components {
             name: string;
             description?: string;
             status?: components["schemas"]["GTDBoardTaskStatus"];
-            project_id?: string;
+            workspace_id?: string;
             agent_id?: string;
             prompt?: string;
             priority?: number;
@@ -5789,7 +5789,7 @@ export interface components {
             name?: string;
             description?: string;
             status?: components["schemas"]["BoardTaskUpdateStatus"];
-            project_id?: string;
+            workspace_id?: string;
             agent_id?: string;
             prompt?: string;
             priority?: number;
@@ -5797,8 +5797,8 @@ export interface components {
             session_id?: string;
             result?: string;
         };
-        /** @description A session that has been auto-linked to a project via tool use. */
-        ProjectSessionLink: {
+        /** @description A session that has been auto-linked to a workspace via tool use. */
+        WorkspaceSessionLink: {
             /**
              * @description Session identifier.
              * @example sess_abc123
@@ -5818,10 +5818,10 @@ export interface components {
              */
             id: string;
             /**
-             * @description Project this milestone belongs to.
+             * @description Workspace this milestone belongs to.
              * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
              */
-            project_id: string;
+            workspace_id: string;
             /**
              * @description Human-readable milestone name.
              * @example v1.0 Launch
@@ -9769,10 +9769,10 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
-    listProjects: {
+    listWorkspaces: {
         parameters: {
             query?: {
-                /** @description Filter by project status. Defaults to active. */
+                /** @description Filter by workspace status. Defaults to active. */
                 status?: "active" | "archived" | "all";
             };
             header?: never;
@@ -9781,20 +9781,20 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Project list */
+            /** @description Workspace list */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Project"][];
+                    "application/json": components["schemas"]["Workspace"][];
                 };
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
         };
     };
-    createProject: {
+    createWorkspace: {
         parameters: {
             query?: never;
             header?: never;
@@ -9803,24 +9803,24 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ProjectCreateRequest"];
+                "application/json": components["schemas"]["WorkspaceCreateRequest"];
             };
         };
         responses: {
-            /** @description Project created */
+            /** @description Workspace created */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Project"];
+                    "application/json": components["schemas"]["Workspace"];
                 };
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
         };
     };
-    getProject: {
+    getWorkspace: {
         parameters: {
             query?: never;
             header?: never;
@@ -9831,13 +9831,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Project */
+            /** @description Workspace */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Project"];
+                    "application/json": components["schemas"]["Workspace"];
                 };
             };
             400: components["responses"]["400BadRequest"];
@@ -9845,7 +9845,7 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
-    updateProject: {
+    updateWorkspace: {
         parameters: {
             query?: never;
             header?: never;
@@ -9856,17 +9856,17 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ProjectUpdateRequest"];
+                "application/json": components["schemas"]["WorkspaceUpdateRequest"];
             };
         };
         responses: {
-            /** @description Updated project */
+            /** @description Updated workspace */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Project"];
+                    "application/json": components["schemas"]["Workspace"];
                 };
             };
             400: components["responses"]["400BadRequest"];
@@ -9874,7 +9874,7 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
-    deleteProject: {
+    deleteWorkspace: {
         parameters: {
             query?: never;
             header?: never;
@@ -9897,7 +9897,7 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
-    listProjectSessions: {
+    listWorkspaceSessions: {
         parameters: {
             query?: never;
             header?: never;
@@ -9914,7 +9914,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProjectSessionLink"][];
+                    "application/json": components["schemas"]["WorkspaceSessionLink"][];
                 };
             };
             400: components["responses"]["400BadRequest"];
@@ -9922,12 +9922,12 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
-    listProjectMilestones: {
+    listWorkspaceMilestones: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Project ID. */
+                /** @description Workspace ID. */
                 id: string;
             };
             cookie?: never;
@@ -9947,12 +9947,12 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
-    createProjectMilestone: {
+    createWorkspaceMilestone: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Project ID. */
+                /** @description Workspace ID. */
                 id: string;
             };
             cookie?: never;
@@ -9977,12 +9977,12 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
-    getProjectMilestone: {
+    getWorkspaceMilestone: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Project ID. */
+                /** @description Workspace ID. */
                 id: string;
                 /** @description Milestone ID. */
                 milestoneId: string;
@@ -10004,12 +10004,12 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
-    updateProjectMilestone: {
+    updateWorkspaceMilestone: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Project ID. */
+                /** @description Workspace ID. */
                 id: string;
                 /** @description Milestone ID. */
                 milestoneId: string;
@@ -10036,12 +10036,12 @@ export interface operations {
             404: components["responses"]["404NotFound"];
         };
     };
-    deleteProjectMilestone: {
+    deleteWorkspaceMilestone: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Project ID. */
+                /** @description Workspace ID. */
                 id: string;
                 /** @description Milestone ID. */
                 milestoneId: string;
@@ -10064,8 +10064,8 @@ export interface operations {
     listBoardTasks: {
         parameters: {
             query?: {
-                /** @description Filter by project ID. */
-                project_id?: string;
+                /** @description Filter by workspace ID. */
+                workspace_id?: string;
                 /** @description Filter by GTD status. */
                 status?: "inbox" | "next" | "active" | "waiting" | "done" | "failed";
                 /** @description Filter by agent ID. */
@@ -10385,9 +10385,9 @@ export type ScheduleList = components["schemas"]["ScheduleList"];
 export type ScheduleRunResult = components["schemas"]["ScheduleRunResult"];
 export type Notification = components["schemas"]["Notification"];
 export type NotificationList = components["schemas"]["NotificationList"];
-export type Project = components["schemas"]["Project"];
-export type ProjectCreateRequest = components["schemas"]["ProjectCreateRequest"];
-export type ProjectUpdateRequest = components["schemas"]["ProjectUpdateRequest"];
+export type Workspace = components["schemas"]["Workspace"];
+export type WorkspaceCreateRequest = components["schemas"]["WorkspaceCreateRequest"];
+export type WorkspaceUpdateRequest = components["schemas"]["WorkspaceUpdateRequest"];
 export type GTDBoardTaskStatus = components["schemas"]["GTDBoardTaskStatus"];
 export type BoardTaskUpdateStatus = components["schemas"]["BoardTaskUpdateStatus"];
 export type BoardTask = components["schemas"]["BoardTask"];
@@ -10395,7 +10395,7 @@ export type BoardTaskListItem = components["schemas"]["BoardTaskListItem"];
 export type BoardTaskListResponse = components["schemas"]["BoardTaskListResponse"];
 export type BoardTaskCreateRequest = components["schemas"]["BoardTaskCreateRequest"];
 export type BoardTaskUpdateRequest = components["schemas"]["BoardTaskUpdateRequest"];
-export type ProjectSessionLink = components["schemas"]["ProjectSessionLink"];
+export type WorkspaceSessionLink = components["schemas"]["WorkspaceSessionLink"];
 export type Milestone = components["schemas"]["Milestone"];
 export type MilestoneCreateRequest = components["schemas"]["MilestoneCreateRequest"];
 export type MilestoneUpdateRequest = components["schemas"]["MilestoneUpdateRequest"];

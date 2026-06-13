@@ -57,13 +57,13 @@ func (*PinListTool) Category() tools.ToolCategory   { return tools.CategorySyste
 func (*PinCreateTool) Category() tools.ToolCategory { return tools.CategorySystem }
 func (*PinDeleteTool) Category() tools.ToolCategory { return tools.CategorySystem }
 
-// Project tools
+// Workspace tools
 
-func (*ProjectCreateTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*ProjectUpdateTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*ProjectDeleteTool) Category() tools.ToolCategory { return tools.CategorySystem }
-func (*ProjectListTool) Category() tools.ToolCategory   { return tools.CategorySystem }
-func (*ProjectGetTool) Category() tools.ToolCategory    { return tools.CategorySystem }
+func (*WorkspaceCreateTool) Category() tools.ToolCategory { return tools.CategorySystem }
+func (*WorkspaceUpdateTool) Category() tools.ToolCategory { return tools.CategorySystem }
+func (*WorkspaceDeleteTool) Category() tools.ToolCategory { return tools.CategorySystem }
+func (*WorkspaceListTool) Category() tools.ToolCategory   { return tools.CategorySystem }
+func (*WorkspaceGetTool) Category() tools.ToolCategory    { return tools.CategorySystem }
 
 // Provider tools
 

@@ -1,0 +1,15 @@
+type: object
+description: A session that has been auto-linked to a workspace via tool use.
+required:
+  - session_id
+  - created_at
+properties:
+  session_id:
+    type: string
+    description: Session identifier.
+    example: "sess_abc123"
+  created_at:
+    type: string
+    format: date-time
+    description: RFC3339 UTC timestamp when the link was first created.
+    example: "2026-06-08T14:22:00Z"

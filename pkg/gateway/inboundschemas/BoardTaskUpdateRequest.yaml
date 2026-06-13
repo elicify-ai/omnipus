@@ -9,7 +9,7 @@ properties:
     maxLength: 2000
   status:
     $ref: './BoardTaskUpdateStatus.yaml'
-  project_id:
+  workspace_id:
     type: string
   agent_id:
     type: string

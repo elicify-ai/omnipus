@@ -378,12 +378,12 @@ components:
       $ref: ./components/schemas/Notification.yaml
     NotificationList:
       $ref: ./components/schemas/NotificationList.yaml
-    Project:
-      $ref: ./components/schemas/Project.yaml
-    ProjectCreateRequest:
-      $ref: ./components/schemas/ProjectCreateRequest.yaml
-    ProjectUpdateRequest:
-      $ref: ./components/schemas/ProjectUpdateRequest.yaml
+    Workspace:
+      $ref: ./components/schemas/Workspace.yaml
+    WorkspaceCreateRequest:
+      $ref: ./components/schemas/WorkspaceCreateRequest.yaml
+    WorkspaceUpdateRequest:
+      $ref: ./components/schemas/WorkspaceUpdateRequest.yaml
     GTDBoardTaskStatus:
       $ref: ./components/schemas/GTDBoardTaskStatus.yaml
     BoardTaskUpdateStatus:
@@ -411,8 +411,8 @@ components:
       $ref: ./components/schemas/BoardTaskCreateRequest.yaml
     BoardTaskUpdateRequest:
       $ref: ./components/schemas/BoardTaskUpdateRequest.yaml
-    ProjectSessionLink:
-      $ref: ./components/schemas/ProjectSessionLink.yaml
+    WorkspaceSessionLink:
+      $ref: ./components/schemas/WorkspaceSessionLink.yaml
     Milestone:
       $ref: ./components/schemas/Milestone.yaml
     MilestoneCreateRequest:
@@ -4074,16 +4074,16 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
 
-  /projects:
+  /workspaces:
     get:
-      operationId: listProjects
-      summary: List projects
+      operationId: listWorkspaces
+      summary: List workspaces
       description: >
-        Returns all projects, newest-first. Excludes archived projects by default.
-        Use ?status=archived to list archived projects or ?status=all for everything.
+        Returns all workspaces, newest-first. Excludes archived workspaces by default.
+        Use ?status=archived to list archived workspaces or ?status=all for everything.
         task_count is computed live from the GTD task store.
       tags:
-      - Projects
+      - Workspaces
       security:
       - BearerAuth: []
       parameters:
@@ -4093,25 +4093,25 @@ paths:
         schema:
           type: string
           enum: [active, archived, all]
-        description: Filter by project status. Defaults to active.
+        description: Filter by workspace status. Defaults to active.
       responses:
         '200':
-          description: Project list
+          description: Workspace list
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Project'
+                  $ref: '#/components/schemas/Workspace'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
     post:
-      operationId: createProject
-      summary: Create a project
+      operationId: createWorkspace
+      summary: Create a workspace
       tags:
-      - Projects
+      - Workspaces
       security:
       - BearerAuth: []
       requestBody:
@@ -4119,25 +4119,25 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ProjectCreateRequest'
+              $ref: '#/components/schemas/WorkspaceCreateRequest'
       responses:
         '201':
-          description: Project created
+          description: Workspace created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Project'
+                $ref: '#/components/schemas/Workspace'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
 
-  /projects/{id}:
+  /workspaces/{id}:
     get:
-      operationId: getProject
-      summary: Get a project by ID
+      operationId: getWorkspace
+      summary: Get a workspace by ID
       tags:
-      - Projects
+      - Workspaces
       security:
       - BearerAuth: []
       parameters:
@@ -4148,11 +4148,11 @@ paths:
           type: string
       responses:
         '200':
-          description: Project
+          description: Workspace
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Project'
+                $ref: '#/components/schemas/Workspace'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -4160,10 +4160,10 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
     put:
-      operationId: updateProject
-      summary: Update a project (partial update — absent fields unchanged)
+      operationId: updateWorkspace
+      summary: Update a workspace (partial update — absent fields unchanged)
       tags:
-      - Projects
+      - Workspaces
       security:
       - BearerAuth: []
       parameters:
@@ -4177,14 +4177,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ProjectUpdateRequest'
+              $ref: '#/components/schemas/WorkspaceUpdateRequest'
       responses:
         '200':
-          description: Updated project
+          description: Updated workspace
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Project'
+                $ref: '#/components/schemas/Workspace'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -4192,10 +4192,10 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
     delete:
-      operationId: deleteProject
-      summary: Delete a project and cascade-delete its tasks and session links
+      operationId: deleteWorkspace
+      summary: Delete a workspace and cascade-delete its tasks and session links
       tags:
-      - Projects
+      - Workspaces
       security:
       - BearerAuth: []
       parameters:
@@ -4214,16 +4214,16 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
 
-  /projects/{id}/sessions:
+  /workspaces/{id}/sessions:
     get:
-      operationId: listProjectSessions
-      summary: List sessions auto-linked to this project
+      operationId: listWorkspaceSessions
+      summary: List sessions auto-linked to this workspace
       description: >
         Returns sessions that were auto-linked when an agent created or updated
-        a GTD task with this project_id. Returns 200 with empty array when project
-        exists but has no links. Returns 404 when project does not exist.
+        a GTD task with this workspace_id. Returns 200 with empty array when workspace
+        exists but has no links. Returns 404 when workspace does not exist.
       tags:
-      - Projects
+      - Workspaces
       security:
       - BearerAuth: []
       parameters:
@@ -4240,7 +4240,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/ProjectSessionLink'
+                  $ref: '#/components/schemas/WorkspaceSessionLink'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -4248,10 +4248,10 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
 
-  /projects/{id}/milestones:
+  /workspaces/{id}/milestones:
     get:
-      operationId: listProjectMilestones
-      summary: List milestones for a project
+      operationId: listWorkspaceMilestones
+      summary: List milestones for a workspace
       tags:
       - Milestones
       security:
@@ -4262,7 +4262,7 @@ paths:
         required: true
         schema:
           type: string
-        description: Project ID.
+        description: Workspace ID.
       responses:
         '200':
           description: Milestone list with total count
@@ -4275,8 +4275,8 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
     post:
-      operationId: createProjectMilestone
-      summary: Create a milestone for a project
+      operationId: createWorkspaceMilestone
+      summary: Create a milestone for a workspace
       tags:
       - Milestones
       security:
@@ -4287,7 +4287,7 @@ paths:
         required: true
         schema:
           type: string
-        description: Project ID.
+        description: Workspace ID.
       requestBody:
         required: true
         content:
@@ -4308,9 +4308,9 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
 
-  /projects/{id}/milestones/{milestoneId}:
+  /workspaces/{id}/milestones/{milestoneId}:
     get:
-      operationId: getProjectMilestone
+      operationId: getWorkspaceMilestone
       summary: Get a milestone by ID
       tags:
       - Milestones
@@ -4322,7 +4322,7 @@ paths:
         required: true
         schema:
           type: string
-        description: Project ID.
+        description: Workspace ID.
       - name: milestoneId
         in: path
         required: true
@@ -4341,7 +4341,7 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
     put:
-      operationId: updateProjectMilestone
+      operationId: updateWorkspaceMilestone
       summary: Update a milestone (partial update)
       tags:
       - Milestones
@@ -4353,7 +4353,7 @@ paths:
         required: true
         schema:
           type: string
-        description: Project ID.
+        description: Workspace ID.
       - name: milestoneId
         in: path
         required: true
@@ -4380,7 +4380,7 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
     delete:
-      operationId: deleteProjectMilestone
+      operationId: deleteWorkspaceMilestone
       summary: Delete a milestone
       tags:
       - Milestones
@@ -4392,7 +4392,7 @@ paths:
         required: true
         schema:
           type: string
-        description: Project ID.
+        description: Workspace ID.
       - name: milestoneId
         in: path
         required: true
@@ -4413,19 +4413,19 @@ paths:
       summary: List GTD board tasks
       description: >
         Returns GTD board tasks from ~/.omnipus/tasks/. Distinct from workflow
-        tasks at /tasks. Supports filtering by project_id and status.
+        tasks at /tasks. Supports filtering by workspace_id and status.
         Default limit 200, max 1000.
       tags:
       - Board Tasks
       security:
       - BearerAuth: []
       parameters:
-      - name: project_id
+      - name: workspace_id
         in: query
         required: false
         schema:
           type: string
-        description: Filter by project ID.
+        description: Filter by workspace ID.
       - name: status
         in: query
         required: false

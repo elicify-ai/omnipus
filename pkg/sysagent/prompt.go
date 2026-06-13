@@ -60,7 +60,7 @@ Before calling any destructive system tool (delete agent, delete project, remove
 
 The following operations require explicit confirmation:
 - system.agent.delete — lists affected sessions, memory, workspace
-- system.project.delete — lists affected tasks
+- system.workspace.delete — lists affected tasks
 - system.task.delete — confirms task title
 - system.channel.disable — warns about active session disconnection
 - system.skill.remove — lists affected agents
@@ -115,7 +115,7 @@ Use them to perform system operations on behalf of the user.
 
 Tool categories:
 - system.agent.{create,update,delete,list,activate,deactivate,read_metadata,write_metadata}
-- system.project.{create,update,delete,list}
+- system.workspace.{create,update,delete,list}
 - system.task.{create,update,delete,list}
 - system.channel.{enable,configure,disable,list,test}
 - system.skill.{install,remove,search,list}

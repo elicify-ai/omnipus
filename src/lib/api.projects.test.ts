@@ -1,4 +1,4 @@
-// BDD: API functions for projects, board tasks, and token stats.
+// BDD: API functions for workspaces, board tasks, and token stats.
 // Traces to: wave4-level1-project-task-mgmt spec — API layer request shapes.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -46,25 +46,25 @@ afterEach(() => {
 
 // ── fetchProjects ─────────────────────────────────────────────────────────────
 
-describe('fetchProjects', () => {
-  it('calls GET /api/v1/projects and returns the Project array', async () => {
-    // BDD: Given a server that returns 2 projects,
-    // When fetchProjects() is called,
-    // Then GET /api/v1/projects is requested and 2 projects are returned.
-    // Traces to: wave4-level1-project-task-mgmt spec — fetchProjects shape
+describe('fetchWorkspaces', () => {
+  it('calls GET /api/v1/workspaces and returns the Workspace array', async () => {
+    // BDD: Given a server that returns 2 workspaces,
+    // When fetchWorkspaces() is called,
+    // Then GET /api/v1/workspaces is requested and 2 workspaces are returned.
+    // Traces to: wave4-level1-project-task-mgmt spec — fetchWorkspaces shape
     const payload = [
       { id: 'p1', name: 'Project Alpha', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
       { id: 'p2', name: 'Project Beta', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-02T00:00:00Z', updated_at: '2026-01-02T00:00:00Z' },
     ]
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(payload))
 
-    const { fetchProjects } = await import('./api')
-    const result = await fetchProjects()
+    const { fetchWorkspaces } = await import('./api')
+    const result = await fetchWorkspaces()
 
     // Verify the correct URL was called.
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('/api/v1/projects')
+    expect(url).toContain('/api/v1/workspaces')
 
     // Verify the result contains both projects.
     expect(result).toHaveLength(2)
@@ -75,14 +75,14 @@ describe('fetchProjects', () => {
   })
 
   it('appends status query param when provided', async () => {
-    // BDD: Given fetchProjects({ status: "archived" }),
+    // BDD: Given fetchWorkspaces({ status: "archived" }),
     // When the call is made,
     // Then URL contains ?status=archived.
-    // Traces to: wave4-level1-project-task-mgmt spec — project list filters
+    // Traces to: wave4-level1-project-task-mgmt spec — workspace list filters
     fetchSpy.mockResolvedValueOnce(makeJsonResponse([]))
 
-    const { fetchProjects } = await import('./api')
-    await fetchProjects({ status: 'archived' })
+    const { fetchWorkspaces } = await import('./api')
+    await fetchWorkspaces({ status: 'archived' })
 
     const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('status=archived')
@@ -91,13 +91,13 @@ describe('fetchProjects', () => {
 
 // ── createProject ─────────────────────────────────────────────────────────────
 
-describe('createProject', () => {
-  it('calls POST /api/v1/projects and returns the created Project', async () => {
-    // BDD: Given a valid ProjectCreateRequest,
-    // When createProject({ name: "Test" }) is called,
-    // Then POST /api/v1/projects is requested with the correct body,
-    // And the created project is returned.
-    // Traces to: wave4-level1-project-task-mgmt spec — createProject shape
+describe('createWorkspace', () => {
+  it('calls POST /api/v1/workspaces and returns the created Workspace', async () => {
+    // BDD: Given a valid WorkspaceCreateRequest,
+    // When createWorkspace({ name: "Test" }) is called,
+    // Then POST /api/v1/workspaces is requested with the correct body,
+    // And the created workspace is returned.
+    // Traces to: wave4-level1-project-task-mgmt spec — createWorkspace shape
     const created = {
       id: 'new-proj-id',
       name: 'Test',
@@ -110,12 +110,12 @@ describe('createProject', () => {
     }
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(created, 201))
 
-    const { createProject } = await import('./api')
-    const result = await createProject({ name: 'Test' })
+    const { createWorkspace } = await import('./api')
+    const result = await createWorkspace({ name: 'Test' })
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('/api/v1/projects')
+    expect(url).toContain('/api/v1/workspaces')
     expect((init as RequestInit).method).toBe('POST')
 
     // Verify the request body contains the project name.
@@ -128,9 +128,9 @@ describe('createProject', () => {
     expect(result.status).toBe('active')
   })
 
-  it('differentiation test: creating two different projects returns different ids', async () => {
+  it('differentiation test: creating two different workspaces returns different ids', async () => {
     // Anti-hardcode: two POST calls with different names must produce different results.
-    // Traces to: wave4-level1-project-task-mgmt spec — createProject differentiation
+    // Traces to: wave4-level1-project-task-mgmt spec — createWorkspace differentiation
     const created1 = { id: 'id-alpha', name: 'Alpha', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' }
     const created2 = { id: 'id-beta', name: 'Beta', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-06-01T00:00:01Z', updated_at: '2026-06-01T00:00:01Z' }
 
@@ -138,9 +138,9 @@ describe('createProject', () => {
       .mockResolvedValueOnce(makeJsonResponse(created1, 201))
       .mockResolvedValueOnce(makeJsonResponse(created2, 201))
 
-    const { createProject } = await import('./api')
-    const r1 = await createProject({ name: 'Alpha' })
-    const r2 = await createProject({ name: 'Beta' })
+    const { createWorkspace } = await import('./api')
+    const r1 = await createWorkspace({ name: 'Alpha' })
+    const r2 = await createWorkspace({ name: 'Beta' })
 
     expect(r1.id).toBe('id-alpha')
     expect(r2.id).toBe('id-beta')
@@ -151,22 +151,22 @@ describe('createProject', () => {
 
 // ── deleteProject ─────────────────────────────────────────────────────────────
 
-describe('deleteProject', () => {
-  it('calls DELETE /api/v1/projects/{id} with the correct URL and method', async () => {
-    // BDD: Given an existing project id,
-    // When deleteProject("id") is called,
-    // Then DELETE /api/v1/projects/id is requested.
+describe('deleteWorkspace', () => {
+  it('calls DELETE /api/v1/workspaces/{id} with the correct URL and method', async () => {
+    // BDD: Given an existing workspace id,
+    // When deleteWorkspace("id") is called,
+    // Then DELETE /api/v1/workspaces/id is requested.
     // Note: request() always calls res.json(); mock returns {} so it parses cleanly.
-    // Traces to: wave4-level1-project-task-mgmt spec — deleteProject shape
+    // Traces to: wave4-level1-project-task-mgmt spec — deleteWorkspace shape
     fetchSpy.mockResolvedValueOnce(makeJsonResponse({}, 200))
 
-    const { deleteProject } = await import('./api')
-    // deleteProject returns void — should not throw.
-    await expect(deleteProject('test-id')).resolves.not.toThrow()
+    const { deleteWorkspace } = await import('./api')
+    // deleteWorkspace returns void — should not throw.
+    await expect(deleteWorkspace('test-id')).resolves.not.toThrow()
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('/api/v1/projects/test-id')
+    expect(url).toContain('/api/v1/workspaces/test-id')
     expect((init as RequestInit).method).toBe('DELETE')
   })
 
@@ -177,8 +177,8 @@ describe('deleteProject', () => {
     // Traces to: wave4-level1-project-task-mgmt spec — deleteProject URL encoding
     fetchSpy.mockResolvedValueOnce(makeJsonResponse({}, 200))
 
-    const { deleteProject } = await import('./api')
-    await deleteProject('proj-xyz-001')
+    const { deleteWorkspace } = await import('./api')
+    await deleteWorkspace('proj-xyz-001')
 
     const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('proj-xyz-001')
@@ -196,10 +196,10 @@ describe('deleteProject', () => {
       }),
     )
 
-    const { deleteProject, ApiError, isApiError } = await import('./api')
+    const { deleteWorkspace, ApiError, isApiError } = await import('./api')
     let thrown: unknown
     try {
-      await deleteProject('missing-id')
+      await deleteWorkspace('missing-id')
     } catch (err) {
       thrown = err
     }
@@ -210,13 +210,13 @@ describe('deleteProject', () => {
 
 // ── updateProject ─────────────────────────────────────────────────────────────
 
-describe('updateProject', () => {
-  it('calls PUT /api/v1/projects/{id} and returns the updated Project', async () => {
-    // BDD: Given an existing project id and a valid ProjectUpdateRequest,
-    // When updateProject("proj-123", { name: "Renamed" }) is called,
-    // Then PUT /api/v1/projects/proj-123 is requested with the correct body,
-    // And the updated project is returned.
-    // Traces to: project-task-management-level1-spec.md — updateProject shape
+describe('updateWorkspace', () => {
+  it('calls PUT /api/v1/workspaces/{id} and returns the updated Workspace', async () => {
+    // BDD: Given an existing workspace id and a valid WorkspaceUpdateRequest,
+    // When updateWorkspace("proj-123", { name: "Renamed" }) is called,
+    // Then PUT /api/v1/workspaces/proj-123 is requested with the correct body,
+    // And the updated workspace is returned.
+    // Traces to: project-task-management-level1-spec.md — updateWorkspace shape
     const updated = {
       id: 'proj-123',
       name: 'Renamed',
@@ -229,12 +229,12 @@ describe('updateProject', () => {
     }
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(updated))
 
-    const { updateProject } = await import('./api')
-    const result = await updateProject('proj-123', { name: 'Renamed' })
+    const { updateWorkspace } = await import('./api')
+    const result = await updateWorkspace('proj-123', { name: 'Renamed' })
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('/api/v1/projects/proj-123')
+    expect(url).toContain('/api/v1/workspaces/proj-123')
     expect((init as RequestInit).method).toBe('PUT')
 
     // Verify request body contains the update fields.
@@ -257,9 +257,9 @@ describe('updateProject', () => {
       .mockResolvedValueOnce(makeJsonResponse(first))
       .mockResolvedValueOnce(makeJsonResponse(second))
 
-    const { updateProject } = await import('./api')
-    const r1 = await updateProject('id-one', { name: 'First Updated' })
-    const r2 = await updateProject('id-two', { status: 'archived' })
+    const { updateWorkspace } = await import('./api')
+    const r1 = await updateWorkspace('id-one', { name: 'First Updated' })
+    const r2 = await updateWorkspace('id-two', { status: 'archived' })
 
     expect(r1.id).toBe('id-one')
     expect(r2.id).toBe('id-two')
@@ -279,10 +279,10 @@ describe('updateProject', () => {
       }),
     )
 
-    const { updateProject, ApiError, isApiError } = await import('./api')
+    const { updateWorkspace, ApiError, isApiError } = await import('./api')
     let thrown: unknown
     try {
-      await updateProject('missing-id', { name: 'Ghost' })
+      await updateWorkspace('missing-id', { name: 'Ghost' })
     } catch (err) {
       thrown = err
     }
@@ -293,25 +293,25 @@ describe('updateProject', () => {
 
 // ── fetchProjectSessions ──────────────────────────────────────────────────────
 
-describe('fetchProjectSessions', () => {
-  it('calls GET /api/v1/projects/{id}/sessions and returns ProjectSessionLink array', async () => {
-    // BDD: Given a project id with linked sessions,
-    // When fetchProjectSessions("proj-abc") is called,
-    // Then GET /api/v1/projects/proj-abc/sessions is requested,
+describe('fetchWorkspaceSessions', () => {
+  it('calls GET /api/v1/workspaces/{id}/sessions and returns WorkspaceSessionLink array', async () => {
+    // BDD: Given a workspace id with linked sessions,
+    // When fetchWorkspaceSessions("proj-abc") is called,
+    // Then GET /api/v1/workspaces/proj-abc/sessions is requested,
     // And the returned array contains the session links.
-    // Traces to: project-task-management-level1-spec.md — fetchProjectSessions shape
+    // Traces to: project-task-management-level1-spec.md — fetchWorkspaceSessions shape
     const payload: { session_id: string; created_at: string }[] = [
       { session_id: 'sess_001', created_at: '2026-06-01T10:00:00Z' },
       { session_id: 'sess_002', created_at: '2026-06-01T11:00:00Z' },
     ]
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(payload))
 
-    const { fetchProjectSessions } = await import('./api')
-    const result = await fetchProjectSessions('proj-abc')
+    const { fetchWorkspaceSessions } = await import('./api')
+    const result = await fetchWorkspaceSessions('proj-abc')
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('/api/v1/projects/proj-abc/sessions')
+    expect(url).toContain('/api/v1/workspaces/proj-abc/sessions')
     // GET request — no method override needed, but should not be a mutating method.
     expect((init as RequestInit | undefined)?.method).toBeUndefined()
 
@@ -323,9 +323,9 @@ describe('fetchProjectSessions', () => {
     expect(result[0].created_at).toBe('2026-06-01T10:00:00Z')
   })
 
-  it('differentiation test: two different project ids produce different session lists', async () => {
-    // Anti-hardcode: two GET calls with different project ids must return different results.
-    // Traces to: project-task-management-level1-spec.md — fetchProjectSessions differentiation
+  it('differentiation test: two different workspace ids produce different session lists', async () => {
+    // Anti-hardcode: two GET calls with different workspace ids must return different results.
+    // Traces to: project-task-management-level1-spec.md — fetchWorkspaceSessions differentiation
     const sessions1 = [{ session_id: 'sess_alpha', created_at: '2026-06-01T10:00:00Z' }]
     const sessions2 = [
       { session_id: 'sess_beta', created_at: '2026-06-02T10:00:00Z' },
@@ -336,24 +336,24 @@ describe('fetchProjectSessions', () => {
       .mockResolvedValueOnce(makeJsonResponse(sessions1))
       .mockResolvedValueOnce(makeJsonResponse(sessions2))
 
-    const { fetchProjectSessions } = await import('./api')
-    const r1 = await fetchProjectSessions('proj-x')
-    const r2 = await fetchProjectSessions('proj-y')
+    const { fetchWorkspaceSessions } = await import('./api')
+    const r1 = await fetchWorkspaceSessions('proj-x')
+    const r2 = await fetchWorkspaceSessions('proj-y')
 
     expect(r1).toHaveLength(1)
     expect(r2).toHaveLength(2)
     expect(r1[0].session_id).not.toBe(r2[0].session_id)
   })
 
-  it('returns empty array when project has no linked sessions', async () => {
-    // BDD: Given a project with no sessions,
-    // When fetchProjectSessions is called,
+  it('returns empty array when workspace has no linked sessions', async () => {
+    // BDD: Given a workspace with no sessions,
+    // When fetchWorkspaceSessions is called,
     // Then an empty array is returned without error.
-    // Traces to: project-task-management-level1-spec.md — fetchProjectSessions empty
+    // Traces to: project-task-management-level1-spec.md — fetchWorkspaceSessions empty
     fetchSpy.mockResolvedValueOnce(makeJsonResponse([]))
 
-    const { fetchProjectSessions } = await import('./api')
-    const result = await fetchProjectSessions('proj-empty')
+    const { fetchWorkspaceSessions } = await import('./api')
+    const result = await fetchWorkspaceSessions('proj-empty')
 
     expect(result).toEqual([])
   })
@@ -405,16 +405,16 @@ describe('fetchBoardTasks', () => {
 
     const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
     expect(url).not.toContain('status=')
-    expect(url).not.toContain('project_id=')
+    expect(url).not.toContain('workspace_id=')
     expect(result).toEqual([])
   })
 
-  it('fetchBoardTasks includes project_id in query string when provided', async () => {
-    // BDD: Given fetchBoardTasks({ project_id: 'proj-abc' }) is called,
+  it('fetchBoardTasks includes workspace_id in query string when provided', async () => {
+    // BDD: Given fetchBoardTasks({ workspace_id: 'proj-abc' }) is called,
     // When the API request is made,
-    // Then the URL contains 'project_id=proj-abc',
+    // Then the URL contains 'workspace_id=proj-abc',
     // And the URL does NOT contain 'status='.
-    // Traces to: project-task-management-level1-spec.md — TC-002 fetchBoardTasks project_id filter
+    // Traces to: project-task-management-level1-spec.md — TC-002 fetchBoardTasks workspace_id filter
     const payload = {
       items: [
         { id: 't-proj-1', name: 'Project task', status: 'inbox', created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' },
@@ -424,13 +424,13 @@ describe('fetchBoardTasks', () => {
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(payload))
 
     const { fetchBoardTasks } = await import('./api')
-    const result = await fetchBoardTasks({ project_id: 'proj-abc' })
+    const result = await fetchBoardTasks({ workspace_id: 'proj-abc' })
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
 
-    // Must include the project_id filter.
-    expect(url).toContain('project_id=proj-abc')
+    // Must include the workspace_id filter.
+    expect(url).toContain('workspace_id=proj-abc')
 
     // Must NOT include a status filter (none was requested).
     expect(url).not.toContain('status=')

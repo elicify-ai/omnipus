@@ -1417,10 +1417,15 @@ func setupAndStartServices(
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/skills/", api.withAuth(api.HandleSkills))
 	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/doctor", api.withAuth(api.HandleDoctor))
 
-	// Ensure the default Inbox project exists (FR-L2-001). Best-effort: a failure
+	// Ensure the default workspace exists (FR-1.6). Best-effort: a failure
 	// is logged but does not abort gateway startup.
-	if inboxErr := ensureInboxProject(homePath); inboxErr != nil {
-		slog.Error("gateway: inbox project auto-creation failed", "error", inboxErr)
+	// ownerUsername is taken from the first configured user (empty on fresh install — that is fine).
+	ownerUsername := ""
+	if len(cfg.Gateway.Users) > 0 {
+		ownerUsername = cfg.Gateway.Users[0].Username
+	}
+	if wsErr := ensureDefaultWorkspace(homePath, ownerUsername); wsErr != nil {
+		slog.Error("gateway: default workspace auto-creation failed", "error", wsErr)
 	}
 
 	// Recover board tasks left "active" by a crashed/abandoned previous process.

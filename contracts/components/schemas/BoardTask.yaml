@@ -24,10 +24,10 @@ properties:
     description: Optional task description.
   status:
     $ref: './GTDBoardTaskStatus.yaml'
-  project_id:
+  workspace_id:
     type: string
     description: >
-      Optional project this task belongs to. Must be an existing project ID.
+      Optional workspace this task belongs to. Must be an existing workspace ID.
       If absent, task is unassigned.
     example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
   agent_id:

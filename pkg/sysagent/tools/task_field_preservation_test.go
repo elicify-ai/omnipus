@@ -72,7 +72,7 @@ func TestRegression_SysagentTaskUpdate_PreservesAllFields(t *testing.T) {
 		SessionID:   wantSessionID,
 		Result:      wantResult,
 		Status:      boardtask.StatusInbox,
-		ProjectID:   "",
+		WorkspaceID: "",
 		AgentID:     wantAgentID,
 		Owner:       wantOwner,
 		CreatedAt:   now,

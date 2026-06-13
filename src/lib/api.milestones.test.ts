@@ -54,17 +54,17 @@ afterEach(() => {
 // ── fetchMilestones ───────────────────────────────────────────────────────────
 
 describe('fetchMilestones', () => {
-  it('calls GET /api/v1/projects/{id}/milestones and returns the milestones array', async () => {
-    // BDD: Given a project with milestones,
+  it('calls GET /api/v1/workspaces/{id}/milestones and returns the milestones array', async () => {
+    // BDD: Given a workspace with milestones,
     // When fetchMilestones('p1') is called,
-    // Then GET /api/v1/projects/p1/milestones is requested,
+    // Then GET /api/v1/workspaces/p1/milestones is requested,
     // And the returned array contains the milestones with progress fields.
     // Traces to: project-task-management-level1-spec.md — fetchMilestones shape
     const payload = {
       milestones: [
         {
           id: 'ms-1',
-          project_id: 'p1',
+          workspace_id: 'p1',
           name: 'Alpha Release',
           progress: 0.4,
           created_at: '2026-01-01T00:00:00Z',
@@ -72,7 +72,7 @@ describe('fetchMilestones', () => {
         },
         {
           id: 'ms-2',
-          project_id: 'p1',
+          workspace_id: 'p1',
           name: 'Beta Launch',
           progress: 0,
           created_at: '2026-02-01T00:00:00Z',
@@ -89,7 +89,7 @@ describe('fetchMilestones', () => {
     // Verify the correct URL was called.
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('/api/v1/projects/p1/milestones')
+    expect(url).toContain('/api/v1/workspaces/p1/milestones')
 
     // Verify the result contains both milestones.
     expect(result).toHaveLength(2)
@@ -101,10 +101,10 @@ describe('fetchMilestones', () => {
   })
 
   it('differentiation test: two different project IDs call different URLs', async () => {
-    // Anti-hardcode: fetching milestones for different projects must use different URLs.
+    // Anti-hardcode: fetching milestones for different workspaces must use different URLs.
     // Traces to: project-task-management-level1-spec.md — fetchMilestones differentiation
-    const msP1 = { milestones: [{ id: 'ms-p1', project_id: 'p1', name: 'P1 Milestone', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }], total: 1 }
-    const msP2 = { milestones: [{ id: 'ms-p2', project_id: 'p2', name: 'P2 Milestone', created_at: '2026-02-01T00:00:00Z', updated_at: '2026-02-01T00:00:00Z' }], total: 1 }
+    const msP1 = { milestones: [{ id: 'ms-p1', workspace_id: 'p1', name: 'P1 Milestone', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }], total: 1 }
+    const msP2 = { milestones: [{ id: 'ms-p2', workspace_id: 'p2', name: 'P2 Milestone', created_at: '2026-02-01T00:00:00Z', updated_at: '2026-02-01T00:00:00Z' }], total: 1 }
 
     fetchSpy
       .mockResolvedValueOnce(makeJsonResponse(msP1))
@@ -117,8 +117,8 @@ describe('fetchMilestones', () => {
     // Different project IDs → different URLs
     const [url1] = fetchSpy.mock.calls[0] as [string, RequestInit]
     const [url2] = fetchSpy.mock.calls[1] as [string, RequestInit]
-    expect(url1).toContain('/projects/p1/milestones')
-    expect(url2).toContain('/projects/p2/milestones')
+    expect(url1).toContain('/workspaces/p1/milestones')
+    expect(url2).toContain('/workspaces/p2/milestones')
     expect(url1).not.toBe(url2)
 
     // Different milestones returned
@@ -158,15 +158,15 @@ describe('fetchMilestones', () => {
 // ── createMilestone ───────────────────────────────────────────────────────────
 
 describe('createMilestone', () => {
-  it('calls POST /api/v1/projects/{id}/milestones with the correct body', async () => {
+  it('calls POST /api/v1/workspaces/{id}/milestones with the correct body', async () => {
     // BDD: Given a valid MilestoneCreateRequest,
     // When createMilestone('p1', { name: 'Beta' }) is called,
-    // Then POST /api/v1/projects/p1/milestones is requested with the correct body,
+    // Then POST /api/v1/workspaces/p1/milestones is requested with the correct body,
     // And the created milestone is returned.
     // Traces to: project-task-management-level1-spec.md — createMilestone shape
     const created = {
       id: 'new-ms-id',
-      project_id: 'p1',
+      workspace_id: 'p1',
       name: 'Beta',
       created_at: '2026-06-09T10:00:00Z',
       updated_at: '2026-06-09T10:00:00Z',
@@ -179,7 +179,7 @@ describe('createMilestone', () => {
     // Verify the correct URL and method.
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('/api/v1/projects/p1/milestones')
+    expect(url).toContain('/api/v1/workspaces/p1/milestones')
     expect((init as RequestInit).method).toBe('POST')
 
     // Verify the request body contains the name.
@@ -189,14 +189,14 @@ describe('createMilestone', () => {
     // Verify the returned milestone has the correct fields.
     expect(result.id).toBe('new-ms-id')
     expect(result.name).toBe('Beta')
-    expect(result.project_id).toBe('p1')
+    expect(result.workspace_id).toBe('p1')
   })
 
   it('differentiation test: creating two different milestones returns different results', async () => {
     // Anti-hardcode: two POST calls with different names must produce different results.
     // Traces to: project-task-management-level1-spec.md — createMilestone differentiation
-    const ms1 = { id: 'ms-alpha', project_id: 'p1', name: 'Alpha', created_at: '2026-06-09T10:00:00Z', updated_at: '2026-06-09T10:00:00Z' }
-    const ms2 = { id: 'ms-beta', project_id: 'p1', name: 'Beta', created_at: '2026-06-09T11:00:00Z', updated_at: '2026-06-09T11:00:00Z' }
+    const ms1 = { id: 'ms-alpha', workspace_id: 'p1', name: 'Alpha', created_at: '2026-06-09T10:00:00Z', updated_at: '2026-06-09T10:00:00Z' }
+    const ms2 = { id: 'ms-beta', workspace_id: 'p1', name: 'Beta', created_at: '2026-06-09T11:00:00Z', updated_at: '2026-06-09T11:00:00Z' }
 
     fetchSpy
       .mockResolvedValueOnce(makeJsonResponse(ms1, 201))
@@ -219,7 +219,7 @@ describe('createMilestone', () => {
     // Traces to: project-task-management-level1-spec.md — createMilestone due_date
     const created = {
       id: 'ms-due',
-      project_id: 'p1',
+      workspace_id: 'p1',
       name: 'Deadline Milestone',
       due_date: '2026-12-31',
       created_at: '2026-06-09T10:00:00Z',
@@ -242,7 +242,7 @@ describe('deleteMilestone', () => {
   it('calls DELETE /api/v1/projects/{id}/milestones/{milestoneId}', async () => {
     // BDD: Given an existing project and milestone,
     // When deleteMilestone('p1', 'm1') is called,
-    // Then DELETE /api/v1/projects/p1/milestones/m1 is requested,
+    // Then DELETE /api/v1/workspaces/p1/milestones/m1 is requested,
     // And the function resolves without throwing.
     // Traces to: project-task-management-level1-spec.md — deleteMilestone shape
     fetchSpy.mockResolvedValueOnce(makeJsonResponse({}, 200))
@@ -252,7 +252,7 @@ describe('deleteMilestone', () => {
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-    expect(url).toContain('/api/v1/projects/p1/milestones/m1')
+    expect(url).toContain('/api/v1/workspaces/p1/milestones/m1')
     expect((init as RequestInit).method).toBe('DELETE')
   })
 

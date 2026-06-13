@@ -24,9 +24,9 @@ var toolConfirmation = map[string]ConfirmationLevel{
 	"system.agent.list":         ConfirmationNone,
 	"system.agent.activate":     ConfirmationNone,
 	"system.agent.deactivate":   ConfirmationNone,
-	"system.project.create":     ConfirmationNone,
-	"system.project.update":     ConfirmationNone,
-	"system.project.list":       ConfirmationNone,
+	"system.workspace.create":   ConfirmationNone,
+	"system.workspace.update":   ConfirmationNone,
+	"system.workspace.list":     ConfirmationNone,
 	"system.task.create":        ConfirmationNone,
 	"system.task.update":        ConfirmationNone,
 	"system.task.list":          ConfirmationNone,
@@ -52,14 +52,14 @@ var toolConfirmation = map[string]ConfirmationLevel{
 	"system.backup.create":      ConfirmationNone,
 
 	// UI confirmation required — destructive operations.
-	"system.agent.delete":    ConfirmationUI,
-	"system.project.delete":  ConfirmationUI,
-	"system.task.delete":     ConfirmationUI,
-	"system.channel.disable": ConfirmationUI,
-	"system.skill.remove":    ConfirmationUI,
-	"system.mcp.remove":      ConfirmationUI,
-	"system.pin.delete":      ConfirmationUI,
-	"system.config.set":      ConfirmationNone, // set is safe; security.* keys get UI confirmation at tool level
+	"system.agent.delete":     ConfirmationUI,
+	"system.workspace.delete": ConfirmationUI,
+	"system.task.delete":      ConfirmationUI,
+	"system.channel.disable":  ConfirmationUI,
+	"system.skill.remove":     ConfirmationUI,
+	"system.mcp.remove":       ConfirmationUI,
+	"system.pin.delete":       ConfirmationUI,
+	"system.config.set":       ConfirmationNone, // set is safe; security.* keys get UI confirmation at tool level
 }
 
 // RequiresConfirmation returns the confirmation level for a named tool.

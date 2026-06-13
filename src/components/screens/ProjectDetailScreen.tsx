@@ -12,11 +12,11 @@ import { CreateTaskSlideOver } from '@/components/projects/CreateTaskSlideOver'
 import { CreateMilestoneSlideOver } from '@/components/projects/CreateMilestoneSlideOver'
 import {
   fetchBoardTasks,
-  fetchProjects,
+  fetchWorkspaces,
   fetchMilestones,
   fetchAgents,
   boardTasksQueryKeys,
-  projectsQueryKeys,
+  workspacesQueryKeys,
   milestonesQueryKeys,
 } from '@/lib/api'
 import { useProjectsStore } from '@/store/projectsStore'
@@ -25,10 +25,10 @@ import { cn } from '@/lib/utils'
 type ViewMode = 'board' | 'list' | 'execution'
 
 interface ProjectDetailScreenProps {
-  projectId: string
+  workspaceId: string
 }
 
-export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
+export function ProjectDetailScreen({ workspaceId }: ProjectDetailScreenProps) {
   const navigate = useNavigate()
   const { activeMilestoneId, setActiveMilestoneId } = useProjectsStore()
   const [viewMode, setViewMode] = useState<ViewMode>('board')
@@ -38,60 +38,60 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
   const [createTaskOpen, setCreateTaskOpen] = useState(false)
   const [createMilestoneOpen, setCreateMilestoneOpen] = useState(false)
 
-  // Load projects to find this project's metadata
+  // Load workspaces to find this workspace's metadata
   const { data: projects = [], isError: projectsError, isLoading: projectsLoading } = useQuery({
-    queryKey: projectsQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchProjects({ status: 'active' }),
+    queryKey: workspacesQueryKeys.list({ status: 'active' }),
+    queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
   })
 
-  // Redirect /projects/inbox to the real default project ID.
-  // "inbox" is a human-readable alias; the actual project has a real UUID.
+  // Redirect /workspaces/inbox to the real default workspace ID.
+  // "inbox" is a human-readable alias; the actual workspace has a real UUID.
   useEffect(() => {
-    if (projectId !== 'inbox') return
+    if (workspaceId !== 'inbox') return
     if (projects.length === 0) return
     const defaultProject = projects.find((p) => p.is_default)
     if (defaultProject) {
-      void navigate({ to: '/projects/$projectId', params: { projectId: defaultProject.id }, replace: true })
+      void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: defaultProject.id }, replace: true })
     }
-    // No default project — fall through so the "not found" state renders below.
-  }, [projectId, projects, navigate])
+    // No default workspace — fall through so the "not found" state renders below.
+  }, [workspaceId, projects, navigate])
 
-  // Reset milestone filter whenever the active project changes.
+  // Reset milestone filter whenever the active workspace changes.
   useEffect(() => {
     setActiveMilestoneId(null)
-  }, [projectId, setActiveMilestoneId])
+  }, [workspaceId, setActiveMilestoneId])
 
-  // Also try archived projects for direct URL access
+  // Also try archived workspaces for direct URL access
   const { data: archivedProjects = [], isLoading: archivedLoading } = useQuery({
-    queryKey: projectsQueryKeys.list({ status: 'archived' }),
-    queryFn: () => fetchProjects({ status: 'archived' }),
+    queryKey: workspacesQueryKeys.list({ status: 'archived' }),
+    queryFn: () => fetchWorkspaces({ status: 'archived' }),
     staleTime: 60_000,
-    enabled: projects.length > 0 && !projects.find((p) => p.id === projectId),
+    enabled: projects.length > 0 && !projects.find((p) => p.id === workspaceId),
   })
 
-  const project = projects.find((p) => p.id === projectId)
-    ?? archivedProjects.find((p) => p.id === projectId)
+  const project = projects.find((p) => p.id === workspaceId)
+    ?? archivedProjects.find((p) => p.id === workspaceId)
 
-  // Milestones for this project
+  // Milestones for this workspace
   const { data: milestones = [], isError: milestonesError } = useQuery({
-    queryKey: milestonesQueryKeys.list(projectId),
-    queryFn: () => fetchMilestones(projectId),
+    queryKey: milestonesQueryKeys.list(workspaceId),
+    queryFn: () => fetchMilestones(workspaceId),
     staleTime: 30_000,
-    enabled: !!projectId && projectId !== 'inbox',
+    enabled: !!workspaceId && workspaceId !== 'inbox',
   })
 
-  // Board tasks filtered by project
+  // Board tasks filtered by workspace
   const {
     data: tasks = [],
     isLoading: tasksLoading,
     isError: tasksError,
   } = useQuery({
-    queryKey: boardTasksQueryKeys.list({ project_id: projectId }),
-    queryFn: () => fetchBoardTasks({ project_id: projectId }),
+    queryKey: boardTasksQueryKeys.list({ workspace_id: workspaceId }),
+    queryFn: () => fetchBoardTasks({ workspace_id: workspaceId }),
     refetchInterval: 15_000,
     staleTime: 10_000,
-    enabled: !!projectId && projectId !== 'inbox',
+    enabled: !!workspaceId && workspaceId !== 'inbox',
   })
 
   // Agents for list view filter
@@ -106,10 +106,10 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
   // board-tasks query; the panel reads from the fresh array, not the snapshot).
   const selectedTask = selectedTaskId != null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null
 
-  // 'inbox' is a redirect alias — suppress render while the useEffect navigates to the real project ID.
+  // 'inbox' is a redirect alias — suppress render while the useEffect navigates to the real workspace ID.
   // Without this, archivedLoading can flip to false before navigate() completes, causing a crash
   // on any render path that accesses `project.name` when project is still undefined.
-  if (projectId === 'inbox') return null
+  if (workspaceId === 'inbox') return null
 
   if (projectsError) {
     return (
@@ -270,7 +270,7 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
       <CreateTaskSlideOver
         open={createTaskOpen}
         onOpenChange={setCreateTaskOpen}
-        projectId={projectId}
+        workspaceId={workspaceId}
         milestoneId={
           activeMilestoneId !== null && activeMilestoneId !== MILESTONE_FILTER_UNSCHEDULED
             ? activeMilestoneId
@@ -282,7 +282,7 @@ export function ProjectDetailScreen({ projectId }: ProjectDetailScreenProps) {
       <CreateMilestoneSlideOver
         open={createMilestoneOpen}
         onOpenChange={setCreateMilestoneOpen}
-        projectId={projectId}
+        workspaceId={workspaceId}
       />
     </div>
   )
