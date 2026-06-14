@@ -412,7 +412,8 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
 }
 
 // ── Workflow Task Detail Panel ─────────────────────────────────────────────────
-// Preserves original behavior for CommandCenterScreen usage
+// The legacy workflow-task variant of the detail panel (Task wire type), kept
+// for the sessions route and project task slide-over consumers.
 
 function WorkflowTaskDetailPanel({
   task,

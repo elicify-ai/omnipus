@@ -93,6 +93,62 @@ export function resolveLastActiveAgentId(sessionId: string): string | null {
   return null;
 }
 
+// Minimal surface of WsConnection used by reattachActiveSession — just the
+// send method — so the reattach logic can be unit-tested without a real
+// WebSocket. Pick keeps the signature exactly in sync with WsConnection.send
+// (typed against ClientFrame) so a real connection is assignable.
+export type ReattachSender = Pick<WsConnection, 'send'>;
+
+// Re-binds the active session to a freshly-opened WS connection (the onConnected
+// path). Extracted from the inline handler so the failed-reattach branch can be
+// tested directly: a FAILED send must PRESERVE the existing transcript bucket
+// (no replay will rebuild it), while a SUCCESSFUL send resets the bucket so the
+// gateway's replay repopulates it from scratch.
+//
+// setConnectionError is injected so the helper can surface the "please reload"
+// error without reaching into the connection store directly.
+// Returns true when the attach frame was sent (replay in flight), false otherwise.
+export function reattachActiveSession(
+  conn: ReattachSender,
+  setConnectionError: (msg: string | null) => void,
+): boolean {
+  const activeSessionId = useSessionStore.getState().activeSessionId;
+  if (!activeSessionId) {
+    return false;
+  }
+  // Re-seed the header/composer agent from the authoritative last-active agent
+  // BEFORE replay starts. After a handover (e.g. Mia → Jim) a full reload must
+  // keep the header on Jim (active_agent_id), not revert to the creating agent.
+  const seedAgentId = resolveLastActiveAgentId(activeSessionId);
+  if (seedAgentId) {
+    useSessionStore.getState().setActiveSession(activeSessionId, seedAgentId);
+  }
+  // The gateway will replay the entire transcript. Mark the session as replaying
+  // symmetrically here (same as in attachToSession).
+  useChatStore.setState({ isReplaying: true });
+  // Pass the since-cursor so the gateway only replays frames the SPA hasn't seen.
+  const since =
+    useChatStore.getState().sessionsById[activeSessionId]?.lastReceivedEventTime ?? undefined;
+  // Reset the bucket ONLY on the success path, where the gateway's replay is in
+  // flight and will repopulate it from scratch (preventing duplicate
+  // "Browse to … / Browse to …" bubbles). If send() fails, the reattach never
+  // happens and no replay will rebuild the transcript, so wiping the bucket
+  // would leave the user a blank chat behind the "please reload" error. Preserve
+  // the existing transcript instead.
+  const sent = conn.send({ type: "attach_session", session_id: activeSessionId, since });
+  if (!sent) {
+    // send() returned false — socket closed between onopen and here. Preserve
+    // local state (do not wipe bucket) and surface an error. Clear the replaying
+    // flag we optimistically set above so the composer re-enables instead of
+    // wedging on a replay that will never arrive.
+    useChatStore.setState({ isReplaying: false });
+    setConnectionError('Failed to reattach session — please reload');
+    return false;
+  }
+  resetChatBucketForReplay(activeSessionId);
+  return true;
+}
+
 // Manages WebSocket connection lifecycle — renders nothing, only side effects.
 function WsLifecycle() {
   const handleFrame = useChatStore((s) => s.handleFrame);
@@ -114,44 +170,10 @@ function WsLifecycle() {
         // gateway's per-connection sessionID is restored. Without this, a
         // browser-suspended WS that auto-reconnects on focus would cause the
         // next user message to spawn a new session and the agent loses
-        // transcript context.
-        const activeSessionId = useSessionStore.getState().activeSessionId;
-        if (activeSessionId) {
-          // Re-seed the header/composer agent from the authoritative
-          // last-active agent BEFORE replay starts. After a handover (e.g.
-          // Mia → Jim) a full reload must keep the header on Jim
-          // (active_agent_id), not revert to the session's creating agent
-          // (agent_id). The route loader sets this on cold load, but on the
-          // WS-(re)connect attach path we re-assert it from the cached session
-          // detail so this path can never regress to the creating agent.
-          //
-          // Resolution order, all preferring active_agent_id over agent_id:
-          //   1. cached ['session-detail', id] (freshest — set by the route loader)
-          //   2. cached ['sessions'] list entry
-          //   3. the live store value (never downgrade to the creating agent)
-          const seedAgentId = resolveLastActiveAgentId(activeSessionId);
-          if (seedAgentId) {
-            useSessionStore.getState().setActiveSession(activeSessionId, seedAgentId);
-          }
-          // The gateway will replay the entire transcript. Mark the session
-          // as replaying symmetrically here (same as in attachToSession).
-          useChatStore.setState({ isReplaying: true });
-          // The gateway will replay the entire transcript. Clear the local
-          // bucket BEFORE replay starts so frames rebuild it from scratch
-          // rather than appending duplicates ("Browse to … / Browse to …"
-          // doubled bubbles after every reconnect).
-          // Pass the since-cursor so the gateway only replays frames the SPA hasn't seen.
-          const since = useChatStore.getState().sessionsById[activeSessionId]?.lastReceivedEventTime ?? undefined
-          const sent = conn.send({ type: "attach_session", session_id: activeSessionId, since });
-          if (!sent) {
-            // send() returned false — socket closed between onopen and here.
-            // Preserve local state (do not wipe bucket) and surface an error.
-            resetChatBucketForReplay(activeSessionId);
-            setConnectionError('Failed to reattach session — please reload');
-          } else {
-            resetChatBucketForReplay(activeSessionId);
-          }
-        }
+        // transcript context. The reattach logic (seed agent, success/failure
+        // bucket handling) lives in reattachActiveSession so it can be unit
+        // tested directly.
+        reattachActiveSession(conn, setConnectionError);
       },
       onDisconnected: () => {
         setConnected(false);

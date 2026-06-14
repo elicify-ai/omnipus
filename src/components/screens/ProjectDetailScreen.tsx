@@ -19,7 +19,7 @@ import {
   workspacesQueryKeys,
   milestonesQueryKeys,
 } from '@/lib/api'
-import { useProjectsStore } from '@/store/projectsStore'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import { cn } from '@/lib/utils'
 
 type ViewMode = 'board' | 'list' | 'execution'
@@ -30,7 +30,7 @@ interface ProjectDetailScreenProps {
 
 export function ProjectDetailScreen({ workspaceId }: ProjectDetailScreenProps) {
   const navigate = useNavigate()
-  const { activeMilestoneId, setActiveMilestoneId } = useProjectsStore()
+  const { activeMilestoneId, setActiveMilestoneId } = useWorkspacesStore()
   const [viewMode, setViewMode] = useState<ViewMode>('board')
   // F2 fix: store task id only; derive the displayed task from live query data
   // so the detail panel reflects post-mutation state immediately.

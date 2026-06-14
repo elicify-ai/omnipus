@@ -3,9 +3,9 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 
-// FR-L2-016: /tasks redirects to the Inbox project (is_default: true).
-// Shows a brief spinner while projects list loads.
-// Falls back to / if the fetch fails.
+// FR-L2-016: /tasks redirects to the Inbox workspace (is_default: true) at
+// /workspaces/$workspaceId. Shows a brief spinner while the workspaces list
+// loads. Falls back to / if the fetch fails.
 
 function TasksRedirect() {
   const navigate = useNavigate()

@@ -2262,11 +2262,11 @@ export function fetchToolResult(sessionId: string, ref: string): Promise<unknown
   )
 }
 
-// ── Level-1 Projects ──────────────────────────────────────────────────────────
+// ── Workspaces ────────────────────────────────────────────────────────────────
 //
-// Projects are lightweight metadata records (no filesystem dirs). All types are
+// Workspaces are lightweight metadata records (no filesystem dirs). All types are
 // re-exported from generated openapi-types (contract-first #8).
-// See contracts/components/schemas/Project*.yaml.
+// See contracts/components/schemas/Workspace*.yaml.
 
 export const workspacesQueryKeys = {
   list: (params?: { status?: string }) => ['workspaces', params] as const,

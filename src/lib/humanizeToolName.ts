@@ -1,4 +1,4 @@
-// Humanized, Title-Case labels for tool-call chips.
+// Humanized, sentence-case labels for tool-call chips.
 //
 // Tool IDs mix conventions across the system: bare verbs (`remember`),
 // snake_case (`recall_memory`), dotted namespaces (`browser.navigate`,

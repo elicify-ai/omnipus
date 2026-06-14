@@ -9,7 +9,7 @@ interface WorkspacesState {
   setActiveMilestoneId: (id: string | null) => void
 }
 
-export const useProjectsStore = create<WorkspacesState>((set) => ({
+export const useWorkspacesStore = create<WorkspacesState>((set) => ({
   activeWorkspaceId: null,
   setActiveWorkspaceId: (id) => set({ activeWorkspaceId: id }),
   activeMilestoneId: null,

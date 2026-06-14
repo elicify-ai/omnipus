@@ -25,7 +25,7 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
 import { useAuthStore } from '@/store/auth'
-import { useProjectsStore } from '@/store/projectsStore'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import { NewProjectSlideOver } from '@/components/projects/NewProjectSlideOver'
 import { cn } from '@/lib/utils'
@@ -47,7 +47,7 @@ export function Sidebar() {
   const { isOpen, isPinned, close, toggle, togglePin } = useSidebarStore()
   const location = useLocation()
   const navigate = useNavigate()
-  const { activeWorkspaceId, setActiveWorkspaceId } = useProjectsStore()
+  const { activeWorkspaceId, setActiveWorkspaceId } = useWorkspacesStore()
 
   const queryClient = useQueryClient()
   const [newProjectOpen, setNewProjectOpen] = useState(false)
@@ -95,7 +95,7 @@ export function Sidebar() {
     staleTime: 30_000,
   })
 
-  // Inbox project (is_default: true) always appears first; other projects: pinned then unpinned.
+  // Inbox workspace (is_default: true) always appears first; other workspaces: pinned then unpinned.
   const inboxProject = projects.find((p) => p.is_default)
   const nonInboxProjects = projects.filter((p) => !p.is_default)
   const pinnedProjects = nonInboxProjects.filter((p) => p.pinned)
@@ -170,7 +170,7 @@ export function Sidebar() {
         </span>
       </div>
 
-      {/* Primary nav + Projects section */}
+      {/* Primary nav + Workspaces section */}
       <div className="flex-1 overflow-y-auto py-3">
         {NAV_ITEMS.map(({ to, label, Icon }) => {
           const isActive = location.pathname === to
@@ -207,7 +207,7 @@ export function Sidebar() {
           )
         })}
 
-        {/* Projects section */}
+        {/* Workspaces section */}
         <div
           className="mt-3 mb-1"
           role="group"
@@ -478,7 +478,7 @@ export function Sidebar() {
         )}
       </div>
 
-      {/* New project slide-over — rendered inside nav to avoid stacking context issues */}
+      {/* New workspace slide-over — rendered inside nav to avoid stacking context issues */}
       <NewProjectSlideOver open={newProjectOpen} onOpenChange={setNewProjectOpen} />
     </nav>
   )

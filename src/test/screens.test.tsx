@@ -139,33 +139,6 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={makeClient()}>{children}</QueryClientProvider>
 }
 
-describe('Command Center screen — empty state', () => {
-  let CommandCenterScreen: () => JSX.Element
-
-  beforeAll(async () => {
-    // The command-center route now lazy-loads its screen; import the screen
-    // module directly so the test renders real content (not the Suspense fallback).
-    const mod = await import('@/components/screens/CommandCenterScreen')
-    CommandCenterScreen = mod.CommandCenterScreen as () => JSX.Element
-  }, 60_000)
-
-  it('renders "Command Center" screen with StatusBar and TaskList', () => {
-    // Traces to: wave5a-wire-ui-spec.md — US-13: Command Center renders StatusBar and TaskList
-    // Note: CommandCenterScreen has no <h1>; StatusBar + TaskList are the top-level sections.
-    // Checking for TaskList h2 "Tasks" as the primary landmark.
-    render(<CommandCenterScreen />, { wrapper })
-    // TaskList renders an h2 "Tasks"
-    expect(screen.getByRole('heading', { name: /Tasks/i })).toBeInTheDocument()
-  })
-
-  it('TaskList heading has font-headline class (Outfit Bold)', () => {
-    // Note: CommandCenterScreen has no h1; checking TaskList h2 for font-headline.
-    const { container } = render(<CommandCenterScreen />, { wrapper })
-    const h2 = container.querySelector('h2')
-    expect(h2?.className).toContain('font-headline')
-  })
-})
-
 describe('Agents screen — empty state', () => {
   let AgentsScreen: () => JSX.Element
 

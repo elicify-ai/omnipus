@@ -48,9 +48,9 @@ vi.mock('@/lib/api', () => ({
   },
 }))
 
-// Mock useProjectsStore used by Sidebar
-vi.mock('@/store/projectsStore', () => ({
-  useProjectsStore: (selector?: (s: unknown) => unknown) => {
+// Mock useWorkspacesStore used by Sidebar
+vi.mock('@/store/workspacesStore', () => ({
+  useWorkspacesStore: (selector?: (s: unknown) => unknown) => {
     const state = { activeWorkspaceId: null, setActiveWorkspaceId: vi.fn() }
     return selector ? selector(state) : state
   },

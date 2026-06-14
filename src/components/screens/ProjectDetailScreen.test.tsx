@@ -57,10 +57,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-// Mock projectsStore — the useEffect resets activeMilestoneId on project change;
+// Mock workspacesStore — the useEffect resets activeMilestoneId on project change;
 // we stub it so we don't need a real Zustand store.
-vi.mock('@/store/projectsStore', () => ({
-  useProjectsStore: vi.fn(() => ({
+vi.mock('@/store/workspacesStore', () => ({
+  useWorkspacesStore: vi.fn(() => ({
     activeMilestoneId: null,
     setActiveMilestoneId: vi.fn(),
   })),

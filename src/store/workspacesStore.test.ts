@@ -1,39 +1,39 @@
-// BDD: projectsStore tests — initial state and setActiveWorkspaceId mutations.
+// BDD: workspacesStore tests — initial state and setActiveWorkspaceId mutations.
 // Traces to: wave4-level1-project-task-mgmt spec — Zustand store for active workspace filter.
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
-import { useProjectsStore } from './projectsStore'
+import { useWorkspacesStore } from './workspacesStore'
 
 function resetStore() {
   act(() => {
-    useProjectsStore.setState({ activeWorkspaceId: null })
+    useWorkspacesStore.setState({ activeWorkspaceId: null })
   })
 }
 
 beforeEach(resetStore)
 
-describe('projectsStore — initial state', () => {
+describe('workspacesStore — initial state', () => {
   it('activeWorkspaceId is null initially', () => {
     // BDD: Given a fresh store,
     // When activeWorkspaceId is read,
     // Then it is null.
     // Traces to: wave4-level1-project-task-mgmt spec — store initial state
-    const state = useProjectsStore.getState()
+    const state = useWorkspacesStore.getState()
     expect(state.activeWorkspaceId).toBeNull()
   })
 })
 
-describe('projectsStore — setActiveWorkspaceId mutations', () => {
+describe('workspacesStore — setActiveWorkspaceId mutations', () => {
   it('setActiveWorkspaceId("id1") sets activeWorkspaceId to "id1"', () => {
     // BDD: Given activeWorkspaceId is null,
     // When setActiveWorkspaceId("id1") is called,
     // Then activeWorkspaceId is "id1".
     // Traces to: wave4-level1-project-task-mgmt spec — workspace selection
     act(() => {
-      useProjectsStore.getState().setActiveWorkspaceId('id1')
+      useWorkspacesStore.getState().setActiveWorkspaceId('id1')
     })
-    expect(useProjectsStore.getState().activeWorkspaceId).toBe('id1')
+    expect(useWorkspacesStore.getState().activeWorkspaceId).toBe('id1')
   })
 
   it('setActiveWorkspaceId(null) resets activeWorkspaceId to null', () => {
@@ -42,28 +42,28 @@ describe('projectsStore — setActiveWorkspaceId mutations', () => {
     // Then activeWorkspaceId is null.
     // Traces to: wave4-level1-project-task-mgmt spec — clear workspace filter
     act(() => {
-      useProjectsStore.getState().setActiveWorkspaceId('id1')
+      useWorkspacesStore.getState().setActiveWorkspaceId('id1')
     })
-    expect(useProjectsStore.getState().activeWorkspaceId).toBe('id1')
+    expect(useWorkspacesStore.getState().activeWorkspaceId).toBe('id1')
 
     act(() => {
-      useProjectsStore.getState().setActiveWorkspaceId(null)
+      useWorkspacesStore.getState().setActiveWorkspaceId(null)
     })
-    expect(useProjectsStore.getState().activeWorkspaceId).toBeNull()
+    expect(useWorkspacesStore.getState().activeWorkspaceId).toBeNull()
   })
 
   it('setActiveWorkspaceId with different values produces different outputs (differentiation test)', () => {
     // Anti-hardcode: two different inputs must produce two different outputs.
     // Traces to: wave4-level1-project-task-mgmt spec — store mutation correctness
     act(() => {
-      useProjectsStore.getState().setActiveWorkspaceId('workspace-a')
+      useWorkspacesStore.getState().setActiveWorkspaceId('workspace-a')
     })
-    const stateA = useProjectsStore.getState().activeWorkspaceId
+    const stateA = useWorkspacesStore.getState().activeWorkspaceId
 
     act(() => {
-      useProjectsStore.getState().setActiveWorkspaceId('workspace-b')
+      useWorkspacesStore.getState().setActiveWorkspaceId('workspace-b')
     })
-    const stateB = useProjectsStore.getState().activeWorkspaceId
+    const stateB = useWorkspacesStore.getState().activeWorkspaceId
 
     expect(stateA).toBe('workspace-a')
     expect(stateB).toBe('workspace-b')
