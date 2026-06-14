@@ -129,6 +129,9 @@ type Config struct {
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty" yaml:"-"`
 
+	// Performance controls the max-parallel fan-out gate for task/subagent dispatch.
+	Performance PerformanceConfig `json:"performance,omitempty" yaml:"-"`
+
 	// Omnipus-specific sections (additive, does not break Omnipus compatibility).
 	Storage         OmnipusStorageConfig            `json:"storage,omitempty"          yaml:"-"`
 	ChannelPolicies map[string]OmnipusChannelPolicy `json:"channel_policies,omitempty" yaml:"-"`
@@ -315,6 +318,66 @@ func (c *Config) FilterSensitiveData(content string) string {
 		return content
 	}
 	return c.SensitiveDataReplacer().Replace(content)
+}
+
+// PerformanceConfig controls the max-parallel fan-out gate for task/subagent dispatch.
+// It is stored in config.json under the "performance" key and may also be overridden
+// at runtime via the OMNIPUS_MAX_PARALLEL_AGENTS env var.
+type PerformanceConfig struct {
+	// MaxParallelAgents is the maximum number of concurrent task/subagent dispatches.
+	// 0 means "use the auto-detected default" (clamped from CPU and RAM).
+	// The runtime clamps this to [2, min(NumCPU-2, RAM/1.5 GB)] ≤ 16.
+	// Overridden by OMNIPUS_MAX_PARALLEL_AGENTS env var when set.
+	MaxParallelAgents int `json:"max_parallel_agents,omitempty" env:"OMNIPUS_MAX_PARALLEL_AGENTS"`
+}
+
+// EffectiveMaxParallelAgents returns the clamped, environment-override-aware
+// value for MaxParallelAgents. It applies:
+//  1. An env-var override (OMNIPUS_MAX_PARALLEL_AGENTS) if set and valid.
+//  2. The configured value (p.MaxParallelAgents), if non-zero.
+//  3. An auto-detect heuristic: min(NumCPU-2, RAM_GB/1.5), floor 2, ceiling 16.
+func (p PerformanceConfig) EffectiveMaxParallelAgents() int {
+	// Env-var override has highest priority.
+	if s := os.Getenv("OMNIPUS_MAX_PARALLEL_AGENTS"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v >= 1 {
+			return clampParallel(v)
+		}
+	}
+	if p.MaxParallelAgents > 0 {
+		return clampParallel(p.MaxParallelAgents)
+	}
+	return autoDetectMaxParallel()
+}
+
+// clampParallel clamps v to [2, 16].
+func clampParallel(v int) int {
+	const minPar, maxPar = 2, 16
+	if v < minPar {
+		return minPar
+	}
+	if v > maxPar {
+		return maxPar
+	}
+	return v
+}
+
+// autoDetectMaxParallel returns min(NumCPU-2, RAM_GB/1.5) clamped to [2, 16].
+// RAM_GB is derived from the virtual memory total reported by the OS.
+func autoDetectMaxParallel() int {
+	cpuBased := runtime.NumCPU() - 2
+	ramBased := int(float64(totalRAMBytes()) / (1.5 * 1024 * 1024 * 1024))
+	val := cpuBased
+	if ramBased < val {
+		val = ramBased
+	}
+	return clampParallel(val)
+}
+
+// totalRAMBytes returns the total physical memory in bytes. It reads
+// /proc/meminfo on Linux and falls back to a conservative 4 GB constant
+// on other platforms.
+func totalRAMBytes() uint64 {
+	return readMemTotalBytes()
 }
 
 type HooksConfig struct {

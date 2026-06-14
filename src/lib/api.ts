@@ -114,6 +114,8 @@ import {
   TokenUsageSummary as TokenUsageSummarySchema,
   // Milestones (contract-first #8):
   Milestone as MilestoneSchema,
+  // Spec-3 max-parallel + orchestrator (contract-first #8):
+  PerformanceSettings as PerformanceSettingsSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -293,6 +295,9 @@ import type {
   MilestoneCreateRequest,
   MilestoneUpdateRequest,
   MilestoneListResponse,
+  // Spec-3 max-parallel + orchestrator (contract-first #8):
+  PerformanceSettings,
+  PerformanceSettingsUpdate,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -1944,6 +1949,26 @@ export function updateRetention(body: RetentionUpdateBody): Promise<RetentionUpd
 
 export function triggerRetentionSweep(): Promise<RetentionSweepResult> {
   return request<RetentionSweepResult>('/security/retention/sweep', { method: 'POST' }, RetentionSweepResultSchema)
+}
+
+// Performance — max-parallel agent concurrency settings.
+// PerformanceSettings and PerformanceSettingsUpdate are re-exported from
+// generated openapi-types (contract-first #8).
+// See contracts/components/schemas/PerformanceSettings.yaml.
+
+export type { PerformanceSettings, PerformanceSettingsUpdate }
+
+export function fetchPerformanceSettings(): Promise<PerformanceSettings> {
+  return request<PerformanceSettings>('/performance', undefined, PerformanceSettingsSchema)
+}
+
+export function updatePerformanceSettings(
+  body: PerformanceSettingsUpdate,
+): Promise<PerformanceSettings> {
+  return request<PerformanceSettings>('/performance', {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  }, PerformanceSettingsSchema)
 }
 
 // Users — list, create, delete, reset password, change role.
