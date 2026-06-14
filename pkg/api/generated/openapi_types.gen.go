@@ -3549,14 +3549,14 @@ type Agent struct {
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol. Requires the "cli" field.
+	// "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-	// When absent the default is "native".
+	// When absent the default is "native". Only "native" is functional in v0.1.0.
 	Executor *struct {
 		// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
 		Cli *AgentExecutorCli `json:"cli,omitempty"`
 
-		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
 		Kind AgentExecutorKind `json:"kind"`
 	} `json:"executor,omitempty"`
 
@@ -3711,7 +3711,7 @@ type AgentDelegationPolicyToKind string
 // AgentExecutorCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
 type AgentExecutorCli string
 
-// AgentExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+// AgentExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
 type AgentExecutorKind string
 
 // AgentSandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. "off" = god-mode (requires --allow-god-mode at gateway boot).
@@ -3779,14 +3779,14 @@ type AgentCreateRequest struct {
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol. Requires the "cli" field.
+	// "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-	// When absent the default is "native".
+	// When absent the default is "native". Only "native" is functional in v0.1.0.
 	Executor *struct {
 		// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
 		Cli *AgentCreateRequestExecutorCli `json:"cli,omitempty"`
 
-		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
 		Kind AgentCreateRequestExecutorKind `json:"kind"`
 	} `json:"executor,omitempty"`
 
@@ -3872,7 +3872,7 @@ type AgentCreateRequestDelegationPolicyToKind string
 // AgentCreateRequestExecutorCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
 type AgentCreateRequestExecutorCli string
 
-// AgentCreateRequestExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+// AgentCreateRequestExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
 type AgentCreateRequestExecutorKind string
 
 // AgentCreateRequestToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
@@ -4177,14 +4177,14 @@ type AgentUpdateRequest struct {
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol. Requires the "cli" field.
+	// "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-	// When absent the default is "native".
+	// When absent the default is "native". Only "native" is functional in v0.1.0.
 	Executor *struct {
 		// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
 		Cli *AgentUpdateRequestExecutorCli `json:"cli,omitempty"`
 
-		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
 		Kind AgentUpdateRequestExecutorKind `json:"kind"`
 	} `json:"executor,omitempty"`
 
@@ -4307,7 +4307,7 @@ type AgentUpdateRequestDelegationPolicyToKind string
 // AgentUpdateRequestExecutorCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
 type AgentUpdateRequestExecutorCli string
 
-// AgentUpdateRequestExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+// AgentUpdateRequestExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
 type AgentUpdateRequestExecutorKind string
 
 // AgentUpdateRequestSandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
@@ -4988,21 +4988,21 @@ type ExecProxyStatus struct {
 
 // ExecutorConfig Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 // "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
-// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol. Requires the "cli" field.
+// "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
 // "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-// When absent the default is "native".
+// When absent the default is "native". Only "native" is functional in v0.1.0.
 type ExecutorConfig struct {
 	// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
 	Cli *ExecutorConfigCli `json:"cli,omitempty"`
 
-	// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+	// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
 	Kind ExecutorConfigKind `json:"kind"`
 }
 
 // ExecutorConfigCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
 type ExecutorConfigCli string
 
-// ExecutorConfigKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+// ExecutorConfigKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
 type ExecutorConfigKind string
 
 // GTDBoardTaskStatus GTD board task status.

@@ -828,16 +828,26 @@ func IsDelegationAllowedAny(toList []AgentRef) bool {
 
 // ExecutorKind enumerates the runtime used to execute a sub-agent task.
 // "native" runs the task inside the existing Omnipus agent loop (default, existing behaviour).
-// "external-cli" drives an external CLI tool over JSON streaming (Claude Code, Codex, opencode).
-// "remote-a2a" is reserved for future A2A protocol resolution; NOT resolvable in v0.1.0 —
-// the schema accepts it so configs can be written forward-compatibly, but dispatch rejects it.
+//
+// "external-cli" and "remote-a2a" are both RESERVED/experimental and NOT yet wired
+// in v0.1.0: the schema accepts them so configs can be written forward-compatibly,
+// but dispatch (runner.ResolveDispatch) rejects both with a sentinel error rather
+// than executing them. Setting either is a documented no-op, not a working feature.
+//   - "external-cli" would drive an external CLI tool (Claude Code, Codex, opencode)
+//     over JSON streaming. It is reserved because its consent is fundamentally
+//     post-hoc (the CLI runs a tool before Omnipus can gate it — see
+//     pkg/agent/runner/consent.go's POST-HOC CONSENT LIMITATION), so it must not be
+//     presented as a safe, working executor until a pre-emptive consent path exists.
+//   - "remote-a2a" is reserved for future A2A protocol resolution.
 type ExecutorKind string
 
 const (
 	// ExecutorKindNative is the default: sub-agent runs inside the Omnipus agent loop.
 	ExecutorKindNative ExecutorKind = "native"
-	// ExecutorKindExternalCLI drives an external CLI agent (claude-code, codex, opencode)
-	// over a JSON-streaming subprocess protocol.
+	// ExecutorKindExternalCLI would drive an external CLI agent (claude-code, codex,
+	// opencode) over a JSON-streaming subprocess protocol. RESERVED/experimental and
+	// NOT yet wired in v0.1.0: accepted in the schema, rejected at dispatch with
+	// runner.ErrExternalCLINotWired (post-hoc consent — see consent.go).
 	ExecutorKindExternalCLI ExecutorKind = "external-cli"
 	// ExecutorKindRemoteA2A is reserved. Accepted in schema; rejected at dispatch in v0.1.0.
 	ExecutorKindRemoteA2A ExecutorKind = "remote-a2a"
@@ -845,12 +855,17 @@ const (
 
 // ExecutorConfig specifies how a sub-agent's tasks are executed.
 // When nil (the default), behaviour is identical to Kind="native".
+//
+// Only Kind="native" is functional in v0.1.0. Kind="external-cli" and
+// Kind="remote-a2a" are RESERVED/experimental and not yet wired — dispatch rejects
+// them with a sentinel error (see ExecutorKind and runner.ResolveDispatch).
 type ExecutorConfig struct { // not-wire-format
 	// Kind selects the execution runtime. Defaults to "native" when absent.
 	Kind ExecutorKind `json:"kind"`
 	// CLI names the external CLI tool for Kind="external-cli".
 	// Valid values: "claude-code", "codex", "opencode".
-	// Required when Kind="external-cli"; ignored otherwise.
+	// Only consulted if external-cli is later wired; in v0.1.0 external-cli is reserved
+	// (see Kind), so this field is currently a documented no-op.
 	CLI string `json:"cli,omitempty"`
 }
 

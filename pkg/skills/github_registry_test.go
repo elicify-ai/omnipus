@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -320,5 +321,30 @@ func TestGitHubRegistry_InstallResult_Shape(t *testing.T) {
 	if err != nil {
 		// Expected: the installer refuses to overwrite.
 		assert.Contains(t, err.Error(), "owner/myskill")
+	}
+}
+
+// TestGitHubRegistry_UnscannedResult_NotCleanBill verifies that a successful
+// GitHub install reports "unscanned" rather than a clean bill of health: because
+// GitHub has no moderation pipeline, IsSuspicious must be true (flag for review),
+// IsMalwareBlocked must be false (nothing actively blocked it), Verified must be
+// false (no registry hash), and the Summary must state the content was not scanned.
+func TestGitHubRegistry_UnscannedResult_NotCleanBill(t *testing.T) {
+	res := unscannedGitHubResult("owner/repo")
+
+	if !res.IsSuspicious {
+		t.Error("IsSuspicious = false, want true (GitHub installs are unscanned, not a clean bill)")
+	}
+	if res.IsMalwareBlocked {
+		t.Error("IsMalwareBlocked = true, want false (nothing actively blocked the install)")
+	}
+	if res.Verified {
+		t.Error("Verified = true, want false (no registry-side hash to verify)")
+	}
+	if res.Version != "owner/repo" {
+		t.Errorf("Version = %q, want owner/repo", res.Version)
+	}
+	if !strings.Contains(strings.ToLower(res.Summary), "not scanned") {
+		t.Errorf("Summary = %q, want it to state the content was not scanned", res.Summary)
 	}
 }

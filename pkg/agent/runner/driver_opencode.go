@@ -34,6 +34,11 @@ import (
 // this driver (FR-5.6).
 var knownOpencodeVersionPrefixes = []string{"0.", "1."}
 
+// opencodeBinName is the executable name invoked by the opencode driver. It is a
+// package var only so in-package tests can point at a stub process; production
+// never overrides it.
+var opencodeBinName = "opencode"
+
 // OpencodeDriver implements ExternalAgentRunner for the `opencode` CLI.
 type OpencodeDriver struct {
 	mu      sync.Mutex
@@ -59,7 +64,7 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 	}
 
 	// Detect and pin CLI version (FR-5.6).
-	if ver, err := detectCLIVersion(ctx, "opencode"); err != nil {
+	if ver, err := detectCLIVersion(ctx, opencodeBinName); err != nil {
 		slog.Warn("runner/opencode: version check failed — proceeding with unknown version", "err", err)
 	} else {
 		d.logVersionCheck(ver)
@@ -77,7 +82,7 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 		runCtx, cancelFn = context.WithTimeout(runCtx, time.Duration(opts.TimeoutSeconds)*time.Second)
 	}
 
-	cmd := exec.CommandContext(runCtx, "opencode", args...)
+	cmd := exec.CommandContext(runCtx, opencodeBinName, args...)
 	if opts.WorkDir != "" {
 		cmd.Dir = opts.WorkDir
 	}
@@ -113,11 +118,26 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 		}
 	}()
 
+	// Waiter goroutine: wait for the process to exit, then close the pipe write
+	// ends so the reader goroutines see EOF (the write end is held here, not by exec).
+	waitErr := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		_ = pw.Close()
+		_ = stderrW.Close()
+		waitErr <- err
+	}()
+
 	// Parse stdout NDJSON → emit RunEvents.
 	go func() {
 		defer func() {
-			_ = pw.Close()
-			_ = stderrW.Close()
+			_ = pr.Close()
+			// Reset run state so a subsequent Run/Resume is accepted (resumability).
+			d.mu.Lock()
+			d.eventCh = nil
+			d.cmd = nil
+			d.cancel = nil
+			d.mu.Unlock()
 			close(ch)
 			cancelFn()
 		}()
@@ -128,13 +148,12 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 		}
 		turnCount := 0
 
-		streamParser(runCtx, pr, runID, func(raw []byte) (RunEvent, bool) {
+		emittedFatal := streamParser(runCtx, pr, runID, func(raw []byte) (RunEvent, bool) {
 			return d.parseLine(raw, runID, &turnCount, maxTurns)
 		}, ch)
 
-		err := cmd.Wait()
-		_ = pr.Close()
-		if err != nil && runCtx.Err() == nil {
+		err := <-waitErr
+		if err != nil && runCtx.Err() == nil && !emittedFatal {
 			slog.Warn("runner/opencode: process exited with error", "run_id", runID, "err", err)
 			ch <- RunEvent{
 				Kind:      EventKindError,
@@ -142,7 +161,7 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 				Timestamp: time.Now().UTC(),
 				Err:       &ErrorEvent{Message: fmt.Sprintf("opencode exited: %v", err), Fatal: true},
 			}
-		} else if runCtx.Err() == context.DeadlineExceeded {
+		} else if runCtx.Err() == context.DeadlineExceeded && !emittedFatal {
 			ch <- RunEvent{
 				Kind:      EventKindError,
 				RunID:     runID,
@@ -306,11 +325,16 @@ func (d *OpencodeDriver) parseToolStart(raw []byte, runID string) (RunEvent, boo
 }
 
 // Decide routes a permission decision (FR-5.1).
-// opencode does not have a bidirectional stdin channel; a deny cancels the run.
+// opencode does not have a bidirectional stdin channel; a deny cancels the run,
+// an allow is a no-op. Best-effort post-hoc cancellation — see the consent.go
+// package doc. The run ID is read under d.mu for the log only.
 func (d *OpencodeDriver) Decide(decision PermissionDecision) {
 	if !decision.Allow {
+		d.mu.Lock()
+		runID := d.runID
+		d.mu.Unlock()
 		slog.Info("runner/opencode: permission denied — cancelling run",
-			"run_id", d.runID, "request_id", decision.RequestID, "reason", decision.Reason)
+			"run_id", runID, "request_id", decision.RequestID, "reason", decision.Reason)
 		d.Cancel()
 	}
 }

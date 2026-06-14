@@ -3335,13 +3335,13 @@ export interface components {
         /**
          * @description Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
          *     "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
-         *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol. Requires the "cli" field.
+         *     "external-cli" is RESERVED/experimental and NOT yet wired in v0.1.0. It would drive an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol, but its consent is fundamentally post-hoc (the CLI runs a tool before Omnipus can gate it), so it is not presented as a safe, working executor. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("reserved and not yet wired"). Setting it is a documented no-op.
          *     "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-         *     When absent the default is "native".
+         *     When absent the default is "native". Only "native" is functional in v0.1.0.
          */
         ExecutorConfig: {
             /**
-             * @description Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+             * @description Execution runtime selector. "native" = run inside the Omnipus agent loop (default; the only functional kind in v0.1.0). "external-cli" = RESERVED/experimental; would delegate to an external CLI agent process, but is not yet wired in v0.1.0 (post-hoc consent) — dispatch rejects it. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
              * @example native
              * @enum {string}
              */

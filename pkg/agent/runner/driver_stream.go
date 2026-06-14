@@ -33,20 +33,24 @@ import (
 //
 // parseLine must be non-nil. It receives the raw JSON bytes for a single
 // NDJSON line and returns (event, ok). When ok=false the event is skipped.
+//
+// It returns emittedFatal=true if it sent at least one fatal EventKindError
+// (either from a parseLine result or from a stream read error). Callers use
+// this to suppress a duplicate terminal error event after cmd.Wait().
 func streamParser(
 	ctx context.Context,
 	r io.Reader,
 	runID string,
 	parseLine func(raw []byte) (RunEvent, bool),
 	out chan<- RunEvent,
-) {
+) (emittedFatal bool) {
 	scanner := bufio.NewScanner(r)
 	// Increase the default buffer: some CLIs emit large single lines.
 	scanner.Buffer(make([]byte, 512*1024), 1024*1024)
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return emittedFatal
 		default:
 		}
 		if !scanner.Scan() {
@@ -66,10 +70,13 @@ func streamParser(
 		if ev.RunID == "" {
 			ev.RunID = runID
 		}
+		if ev.Kind == EventKindError && ev.Err != nil && ev.Err.Fatal {
+			emittedFatal = true
+		}
 		select {
 		case out <- ev:
 		case <-ctx.Done():
-			return
+			return emittedFatal
 		}
 	}
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
@@ -81,9 +88,11 @@ func streamParser(
 			Timestamp: time.Now().UTC(),
 			Err:       &ErrorEvent{Message: fmt.Sprintf("stream read error: %v", err), Fatal: true},
 		}:
+			emittedFatal = true
 		default:
 		}
 	}
+	return emittedFatal
 }
 
 // detectCLIVersion runs `<binary> --version` and returns the version string.
