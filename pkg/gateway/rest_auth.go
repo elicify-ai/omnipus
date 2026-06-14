@@ -587,8 +587,10 @@ func (a *restAPI) HandleRegisterAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleLogout handles POST /api/v1/auth/logout.
-// Invalidates the authenticated user's token by clearing token_hash and
-// session_token_hash in config.json, then revokes both browser-side cookies.
+// Revokes ONLY the caller's presented bearer token (SEC-1 / UAT #399) — the
+// user's other tokens stay valid, so concurrent sessions on other tabs/devices
+// are unaffected. It also clears the single-slot session_token_hash in
+// config.json and revokes both browser-side cookies (session + CSRF).
 func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")

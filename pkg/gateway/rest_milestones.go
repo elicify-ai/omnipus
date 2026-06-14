@@ -44,6 +44,16 @@ type milestone struct { // not-wire-format: on-disk JSON cache; mapped to genera
 // dueDatePattern validates YYYY-MM-DD format.
 var dueDatePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
+// milestoneFileLock is the process-wide striped mutex pool for milestone file
+// read-modify-write paths, keyed by milestone ID. It mirrors boardtask.TaskFileLock
+// (same StripedLock type): the milestone PUT handler must acquire the per-ID lock
+// across the WHOLE read→mutate→write so two concurrent PUTs on the same milestone
+// cannot lose an update. The advisory flock inside writeMilestoneFile only serialises
+// the write itself, not the preceding read, so it is insufficient on its own.
+//
+//nolint:gochecknoglobals
+var milestoneFileLock = &boardtask.StripedLock{}
+
 // milestonesDir returns the absolute path of ~/.omnipus/milestones/.
 func (a *restAPI) milestonesDir() string {
 	return filepath.Join(a.homePath, "milestones")
@@ -481,6 +491,14 @@ func (a *restAPI) handleMilestonePut(
 	if _, ok := a.loadWorkspace(w, workspaceID); !ok {
 		return
 	}
+
+	// Hold the per-milestone striped lock across the WHOLE read-modify-write so
+	// two concurrent PUTs on the same milestone cannot lose an update. Mirrors the
+	// board-task RMW (boardtask.TaskFileLock). The advisory flock inside
+	// writeMilestoneFile only spans the write, not the read, so it is insufficient.
+	mu := milestoneFileLock.Get(milestoneID)
+	mu.Lock()
+	defer mu.Unlock()
 
 	m, err := readMilestoneFile(a.homePath, milestoneID)
 	if err != nil {

@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -855,4 +856,95 @@ func TestHandleMilestones_OwnershipScoping(t *testing.T) {
 	api.HandleWorkspaces(wListAdmin, rListAdmin)
 	assert.Equal(t, http.StatusOK, wListAdmin.Code,
 		"admin must get 200 on alice's workspace milestones; body=%s", wListAdmin.Body.String())
+}
+
+// ---------------------------------------------------------------------------
+// TestHandleMilestones_ConcurrentPUT_NoLostUpdate
+// ---------------------------------------------------------------------------
+
+// TestHandleMilestones_ConcurrentPUT_NoLostUpdate proves the milestone PUT
+// read-modify-write holds the per-ID striped lock (milestoneFileLock) across the
+// WHOLE read→mutate→write, so concurrent PUTs touching DIFFERENT fields of the
+// same milestone cannot lose an update. Mirrors the board-task lost-update test.
+//
+// The milestone PUT is a partial-update RMW: a body with only "name" reads the
+// whole milestone, mutates name, and writes the full struct back (preserving the
+// read description), and vice-versa. The classic lost update is therefore:
+//
+//	A (name-only): reads {name=Base, desc=Base}, writes {name=A,   desc=Base}
+//	B (desc-only): reads {name=Base, desc=Base}, writes {name=Base, desc=B}
+//	A then B → final {name=Base, desc=B}: A's name change is LOST.
+//
+// This test fires N name-only PUTs and N description-only PUTs concurrently on
+// the same milestone (all distinct from the seed "Base"). With the read→write
+// serialized under milestoneFileLock, BOTH a name change AND a description change
+// must survive — the final on-disk milestone must have name != "Base" AND
+// description != "Base". Without the lock, a stale-read writer clobbers the other
+// field and one of the two changes is lost.
+//
+// BDD:
+//
+//	Given a milestone M seeded with name="Base", description="Base",
+//	When N goroutines PUT only {name} and N goroutines PUT only {description}
+//	    concurrently on M,
+//	Then the final on-disk milestone has both name != "Base" and
+//	    description != "Base" (neither update was lost), and the file stays valid.
+//
+// Traces to: pkg/gateway/rest_milestones.go handleMilestonePut — striped-lock RMW.
+func TestHandleMilestones_ConcurrentPUT_NoLostUpdate(t *testing.T) {
+	const (
+		rounds = 25 // independent contention rounds per test run
+		pairs  = 8  // name-only + description-only writer pairs per round
+	)
+	api := newTestRestAPIWithHome(t)
+	projID := createWorkspaceViaAPI(t, api, "ConcurrentMilestoneProject", "")
+	m := createMilestoneViaAPI(t, api, projID, "Base", nil)
+
+	putField := func(field, value string) {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPut,
+			"/api/v1/workspaces/"+projID+"/milestones/"+m.ID,
+			strings.NewReader(fmt.Sprintf(`{%q:%q}`, field, value)))
+		r.Header.Set("Content-Type", "application/json")
+		r.URL.Path = "/api/v1/workspaces/" + projID + "/milestones/" + m.ID
+		api.HandleMilestones(w, r)
+	}
+
+	for round := 0; round < rounds; round++ {
+		// Reset both fields to "Base" so each round starts from a known baseline.
+		putField("name", "Base")
+		putField("description", "Base")
+
+		var wg sync.WaitGroup
+		for i := 0; i < pairs; i++ {
+			wg.Add(2)
+			go func(idx int) {
+				defer wg.Done()
+				putField("name", fmt.Sprintf("Name-%d", idx))
+			}(i)
+			go func(idx int) {
+				defer wg.Done()
+				putField("description", fmt.Sprintf("Desc-%d", idx))
+			}(i)
+		}
+		wg.Wait()
+
+		// Both field updates must have survived this round: a lost update leaves
+		// one field still at the "Base" baseline because a stale-read writer
+		// (which mutated only the other field) clobbered it on write-back.
+		got, code := getMilestoneViaAPI(t, api, projID, m.ID)
+		require.Equal(t, http.StatusOK, code,
+			"round %d: milestone must be readable after concurrent PUTs", round)
+		require.NotNil(t, got.Description,
+			"round %d: description must be set after concurrent PUTs", round)
+
+		assert.NotEqualf(t, "Base", got.Name,
+			"round %d: final name must reflect a concurrent name-only PUT, not the baseline — "+
+				"name==Base means a description-only writer clobbered the name (lost update); got %q",
+			round, got.Name)
+		assert.NotEqualf(t, "Base", *got.Description,
+			"round %d: final description must reflect a concurrent description-only PUT, not the baseline — "+
+				"description==Base means a name-only writer clobbered the description (lost update); got %q",
+			round, *got.Description)
+	}
 }
