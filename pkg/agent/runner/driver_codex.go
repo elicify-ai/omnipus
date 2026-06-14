@@ -34,6 +34,11 @@ import (
 // this driver (FR-5.6).
 var knownCodexVersionPrefixes = []string{"0.", "1.", "2."}
 
+// codexBinName is the executable name invoked by the Codex driver. It is a
+// package var only so in-package tests can point at a stub process; production
+// never overrides it.
+var codexBinName = "codex"
+
 // codexStreamEvent mirrors the shape from pkg/providers/codex_cli_provider.go.
 // It is defined locally to avoid an import cycle and is kept in sync with the
 // provider's codexEvent type by convention (both unmarshal the same NDJSON).
@@ -95,7 +100,7 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 	}
 
 	// Detect and pin CLI version (FR-5.6).
-	if ver, err := detectCLIVersion(ctx, "codex"); err != nil {
+	if ver, err := detectCLIVersion(ctx, codexBinName); err != nil {
 		slog.Warn("runner/codex: version check failed — proceeding with unknown version", "err", err)
 	} else {
 		d.logVersionCheck(ver)
@@ -113,7 +118,7 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 		runCtx, cancelFn = context.WithTimeout(runCtx, time.Duration(opts.TimeoutSeconds)*time.Second)
 	}
 
-	cmd := exec.CommandContext(runCtx, "codex", args...)
+	cmd := exec.CommandContext(runCtx, codexBinName, args...)
 	if opts.WorkDir != "" {
 		cmd.Dir = opts.WorkDir
 	}
@@ -150,11 +155,26 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 		}
 	}()
 
+	// Waiter goroutine: wait for the process to exit, then close the pipe write
+	// ends so the reader goroutines see EOF (the write end is held here, not by exec).
+	waitErr := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		_ = pw.Close()
+		_ = stderrW.Close()
+		waitErr <- err
+	}()
+
 	// Parse stdout NDJSON → emit RunEvents.
 	go func() {
 		defer func() {
-			_ = pw.Close()
-			_ = stderrW.Close()
+			_ = pr.Close()
+			// Reset run state so a subsequent Run/Resume is accepted (resumability).
+			d.mu.Lock()
+			d.eventCh = nil
+			d.cmd = nil
+			d.cancel = nil
+			d.mu.Unlock()
 			close(ch)
 			cancelFn()
 		}()
@@ -165,13 +185,12 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 		}
 		turnCount := 0
 
-		streamParser(runCtx, pr, runID, func(raw []byte) (RunEvent, bool) {
+		emittedFatal := streamParser(runCtx, pr, runID, func(raw []byte) (RunEvent, bool) {
 			return d.parseLine(raw, runID, &turnCount, maxTurns)
 		}, ch)
 
-		err := cmd.Wait()
-		_ = pr.Close()
-		if err != nil && runCtx.Err() == nil {
+		err := <-waitErr
+		if err != nil && runCtx.Err() == nil && !emittedFatal {
 			slog.Warn("runner/codex: process exited with error", "run_id", runID, "err", err)
 			ch <- RunEvent{
 				Kind:      EventKindError,
@@ -179,7 +198,7 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 				Timestamp: time.Now().UTC(),
 				Err:       &ErrorEvent{Message: fmt.Sprintf("codex exited: %v", err), Fatal: true},
 			}
-		} else if runCtx.Err() == context.DeadlineExceeded {
+		} else if runCtx.Err() == context.DeadlineExceeded && !emittedFatal {
 			ch <- RunEvent{
 				Kind:      EventKindError,
 				RunID:     runID,
@@ -268,6 +287,10 @@ func (d *CodexDriver) parseLine(
 			if reqID == "" {
 				reqID = fmt.Sprintf("codex-tool-%d", time.Now().UnixNano())
 			}
+			// Build RawInput with json.Marshal so commands containing control
+			// characters or quotes produce valid JSON (a %q-built string can be
+			// invalid JSON for control chars).
+			rawInput := safeMarshal(map[string]string{"command": ev.Item.Command})
 			return RunEvent{
 				Kind:  EventKindPermissionRequest,
 				RunID: runID,
@@ -275,7 +298,7 @@ func (d *CodexDriver) parseLine(
 					RequestID:   reqID,
 					ToolName:    ev.Item.Command,
 					Description: fmt.Sprintf("Codex wants to run command %q", ev.Item.Command),
-					RawInput:    []byte(fmt.Sprintf(`{"command":%q}`, ev.Item.Command)),
+					RawInput:    rawInput,
 				},
 			}, true
 		}
@@ -326,11 +349,15 @@ func (d *CodexDriver) parseLine(
 // Decide routes a permission decision (FR-5.1).
 // Codex in streaming mode does not have a bidirectional stdin channel for
 // permission responses; a deny cancels the run, an allow is a no-op (the
-// run continues unless cancelled).
+// run continues unless cancelled). Best-effort post-hoc cancellation — see
+// the consent.go package doc. The run ID is read under d.mu for the log only.
 func (d *CodexDriver) Decide(decision PermissionDecision) {
 	if !decision.Allow {
+		d.mu.Lock()
+		runID := d.runID
+		d.mu.Unlock()
 		slog.Info("runner/codex: permission denied — cancelling run",
-			"run_id", d.runID, "request_id", decision.RequestID, "reason", decision.Reason)
+			"run_id", runID, "request_id", decision.RequestID, "reason", decision.Reason)
 		d.Cancel()
 	}
 }

@@ -46,15 +46,29 @@ import (
 // with a WARN log but are not rejected — the JSON schema is stable enough.
 var knownClaudeVersionPrefixes = []string{"1.", "2.", "0."}
 
+// claudeBinName is the executable name invoked by the Claude driver. It is a
+// package var (not a const) solely so in-package tests can point the driver at a
+// stub process to exercise the full run lifecycle without a real CLI. Production
+// never overrides it.
+var claudeBinName = "claude"
+
 // ClaudeDriver implements ExternalAgentRunner for the `claude` CLI (Claude Code).
 // It drives `claude -p --output-format stream-json` and routes permission
 // requests to the wired ConsentHandler.
+//
+// POST-HOC CONSENT LIMITATION (external-CLI; see consent.go package doc):
+// `claude -p` is non-interactive and exposes no mid-run permission fence that
+// Omnipus can answer. A tool_use event is surfaced as a PermissionRequestEvent
+// for observability, but by the time Omnipus sees it the CLI has already begun
+// the call. A DENY therefore cannot veto the individual call — it can only
+// CANCEL the whole run (kill the process). Consent here is best-effort post-hoc
+// cancellation; the CLI's own sandbox plus the isolated worktree are the real
+// security boundary. This is one reason external-cli stays reserved in v0.1.0.
 type ClaudeDriver struct {
 	mu      sync.Mutex
 	cmd     *exec.Cmd
 	cancel  context.CancelFunc
 	eventCh chan RunEvent
-	decided map[string]chan bool // pending permission decisions keyed by RequestID
 	consent ConsentHandler
 	runID   string
 }
@@ -64,7 +78,6 @@ type ClaudeDriver struct {
 func NewClaudeDriver(consent ConsentHandler) *ClaudeDriver {
 	return &ClaudeDriver{
 		consent: consent,
-		decided: make(map[string]chan bool),
 	}
 }
 
@@ -79,11 +92,11 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 	}
 
 	// Detect and pin CLI version (FR-5.6).
-	if ver, err := detectCLIVersion(ctx, "claude"); err != nil {
+	if ver, err := detectCLIVersion(ctx, claudeBinName); err != nil {
 		slog.Warn("runner/claude: version check failed — proceeding with unknown version",
 			"err", err)
 	} else {
-		d.logVersionCheck("claude", ver)
+		d.logVersionCheck(claudeBinName, ver)
 	}
 
 	runID := opts.RunID
@@ -98,7 +111,7 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 		runCtx, cancelFn = context.WithTimeout(runCtx, time.Duration(opts.TimeoutSeconds)*time.Second)
 	}
 
-	cmd := exec.CommandContext(runCtx, "claude", args...)
+	cmd := exec.CommandContext(runCtx, claudeBinName, args...)
 	if opts.WorkDir != "" {
 		cmd.Dir = opts.WorkDir
 	}
@@ -112,9 +125,8 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 
 	pr, pw := io.Pipe()
 	cmd.Stdout = pw
-	cmd.Stderr = io.Discard // stderr goes to slog via separate goroutine below
 
-	// Capture stderr for diagnostic logging.
+	// Capture stderr for diagnostic logging (piped to slog in the goroutine below).
 	stderrR, stderrW := io.Pipe()
 	cmd.Stderr = stderrW
 
@@ -137,11 +149,27 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 		}
 	}()
 
+	// Waiter goroutine: wait for the process to exit, then close the stdout/stderr
+	// pipe write ends so the reader goroutines see EOF. Without this, streamParser
+	// would block forever reading pr (the write end is held here, not by exec).
+	waitErr := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		_ = pw.Close()
+		_ = stderrW.Close()
+		waitErr <- err
+	}()
+
 	// Goroutine: parse NDJSON stdout → emit RunEvents.
 	go func() {
 		defer func() {
-			_ = pw.Close()
-			_ = stderrW.Close()
+			_ = pr.Close()
+			// Reset run state so a subsequent Run/Resume is accepted (resumability).
+			d.mu.Lock()
+			d.eventCh = nil
+			d.cmd = nil
+			d.cancel = nil
+			d.mu.Unlock()
 			close(ch)
 			cancelFn()
 		}()
@@ -153,14 +181,15 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 		}
 		turnCount := 0
 
-		streamParser(runCtx, pr, runID, func(raw []byte) (RunEvent, bool) {
+		emittedFatal := streamParser(runCtx, pr, runID, func(raw []byte) (RunEvent, bool) {
 			return d.parseLine(raw, runID, &turnCount, maxTurns)
 		}, ch)
 
-		// Wait for the process to exit and emit a final end/error event.
-		err := cmd.Wait()
-		_ = pr.Close()
-		if err != nil && runCtx.Err() == nil {
+		// Collect the process exit status and emit a final end/error event.
+		err := <-waitErr
+		// Suppress a second terminal error event when the stream parser already
+		// emitted a fatal error (avoids a duplicate error event to the caller).
+		if err != nil && runCtx.Err() == nil && !emittedFatal {
 			slog.Warn("runner/claude: process exited with error", "run_id", runID, "err", err)
 			ch <- RunEvent{
 				Kind:      EventKindError,
@@ -168,7 +197,7 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 				Timestamp: time.Now().UTC(),
 				Err:       &ErrorEvent{Message: fmt.Sprintf("claude exited: %v", err), Fatal: true},
 			}
-		} else if runCtx.Err() == context.DeadlineExceeded {
+		} else if runCtx.Err() == context.DeadlineExceeded && !emittedFatal {
 			ch <- RunEvent{
 				Kind:      EventKindError,
 				RunID:     runID,
@@ -411,19 +440,21 @@ func (d *ClaudeDriver) parseResultEvent(raw []byte, runID string) (RunEvent, boo
 	}
 }
 
-// Decide routes a permission decision back to any pending consent wait.
-// In the streaming model, Claude Code permission prompts cause the process
-// to emit a PermissionRequestEvent; the consent layer calls Decide which
-// either lets the run continue (Allow=true) or cancels it (Allow=false).
+// Decide routes a permission decision back to the running claude process.
+//
+// `claude -p` has no bidirectional permission channel: Omnipus cannot inject a
+// per-tool "allow" mid-run. An Allow is therefore a no-op (the run continues);
+// a DENY cancels the whole run (kills the process). This is best-effort post-hoc
+// cancellation — see the type-level POST-HOC CONSENT LIMITATION note and the
+// consent.go package doc. The run ID is read under d.mu for the log only.
 func (d *ClaudeDriver) Decide(decision PermissionDecision) {
-	d.mu.Lock()
-	ch, ok := d.decided[decision.RequestID]
-	d.mu.Unlock()
-	if ok {
-		select {
-		case ch <- decision.Allow:
-		default:
-		}
+	if !decision.Allow {
+		d.mu.Lock()
+		runID := d.runID
+		d.mu.Unlock()
+		slog.Info("runner/claude: permission denied — cancelling run",
+			"run_id", runID, "request_id", decision.RequestID, "reason", decision.Reason)
+		d.Cancel()
 	}
 }
 

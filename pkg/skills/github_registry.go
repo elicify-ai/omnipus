@@ -117,6 +117,15 @@ func (g *GitHubRegistry) GetSkillMeta(_ context.Context, _ string) (*SkillMeta, 
 //
 // Returns an InstallResult with Verified=false (no registry-side hash to
 // check) and the slug as the Version field.
+//
+// MODERATION: GitHub is a raw VCS host with no moderation pipeline. Unlike the
+// ClawHub path — where IsMalwareBlocked/IsSuspicious come from registry-side
+// moderation metadata — there is no scanner here to give the checked-out tree a
+// clean bill of health. We therefore must NOT report IsSuspicious=false (which a
+// caller would read as "scanned and found clean"). Instead the result reflects
+// "unscanned": IsSuspicious=true flags the install for caller attention/review,
+// and Summary states the content was not moderated. IsMalwareBlocked stays false
+// because nothing actively blocked the install (it is not a known-malicious slug).
 func (g *GitHubRegistry) DownloadAndInstall(
 	ctx context.Context,
 	slug, _ /* version */, _ /* targetDir */ string,
@@ -127,11 +136,19 @@ func (g *GitHubRegistry) DownloadAndInstall(
 	if err := g.installer.InstallFromGitHub(ctx, slug); err != nil {
 		return nil, fmt.Errorf("github registry %q: install from %q failed: %w", g.name, slug, err)
 	}
+	return unscannedGitHubResult(slug), nil
+}
+
+// unscannedGitHubResult builds the InstallResult for a successful GitHub install.
+// GitHub has no moderation pipeline, so the result must reflect "unscanned" rather
+// than a clean bill of health: IsSuspicious=true flags it for caller review, while
+// IsMalwareBlocked stays false (nothing actively blocked the install).
+func unscannedGitHubResult(slug string) *InstallResult {
 	return &InstallResult{
 		Version:          slug,
 		IsMalwareBlocked: false,
-		IsSuspicious:     false,
-		Summary:          fmt.Sprintf("Installed from GitHub: %s", slug),
+		IsSuspicious:     true,
+		Summary:          fmt.Sprintf("Installed from GitHub: %s (unmoderated source — content not scanned, review before trusting)", slug),
 		Verified:         false,
-	}, nil
+	}
 }

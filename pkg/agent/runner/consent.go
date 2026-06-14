@@ -4,6 +4,28 @@
 // agent.ToolApprovalRequest and routes it through the ToolApprover hook
 // (the same consent layer used for Omnipus-native tool approvals).
 //
+// ┌─────────────────────────────────────────────────────────────────────────┐
+// │ POST-HOC CONSENT LIMITATION — READ BEFORE WIRING external-cli            │
+// │                                                                          │
+// │ External-CLI consent is fundamentally POST-HOC and BEST-EFFORT. The      │
+// │ three supported CLIs (claude -p, codex exec, opencode run) run in        │
+// │ non-interactive streaming mode with NO bidirectional permission fence    │
+// │ that Omnipus can answer mid-call. By the time a tool_use / tool_call /   │
+// │ tool.start event reaches Omnipus and the consent layer renders a prompt, │
+// │ the CLI has ALREADY started (or finished) that tool call. A DENY         │
+// │ therefore CANNOT veto the individual call — it can only CANCEL the whole │
+// │ run by killing the process (drivers call Cancel() on !Allow). An ALLOW   │
+// │ is a no-op; the run simply continues.                                    │
+// │                                                                          │
+// │ The REAL security boundary for external-cli is the CLI's own sandbox     │
+// │ plus the isolated git worktree the run executes in (RunOptions.WorkDir   │
+// │ — FR-5.3), NOT this consent layer. Because consent cannot gate a call    │
+// │ before it runs, external-cli is RESERVED/experimental in v0.1.0 and is   │
+// │ NOT wired into production sub-agent dispatch (ResolveDispatch returns     │
+// │ ErrExternalCLINotWired). Do not present external-cli as a safe, working  │
+// │ feature until a genuinely pre-emptive consent path exists.               │
+// └─────────────────────────────────────────────────────────────────────────┘
+//
 // Spec-4 FR-5.1 contract:
 //   - Permission requests from external runners MUST be routed to the consent layer.
 //   - Deny-by-default when no consent handler is registered.

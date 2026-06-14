@@ -67,15 +67,21 @@ func TestResolveDispatch_Native(t *testing.T) {
 	}
 }
 
-// TestResolveDispatch_ExternalCLI verifies that external-cli dispatch is returned.
-func TestResolveDispatch_ExternalCLI(t *testing.T) {
+// TestResolveDispatch_ExternalCLI_Reserved verifies that external-cli is accepted
+// in the config schema but rejected at dispatch with ErrExternalCLINotWired —
+// external-cli is RESERVED/experimental in v0.1.0 (post-hoc consent, not wired
+// into production dispatch).
+func TestResolveDispatch_ExternalCLI_Reserved(t *testing.T) {
 	ec := &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"}
 	kind, err := runner.ResolveDispatch(ec)
-	if err != nil {
-		t.Fatalf("ResolveDispatch(external-cli) error = %v, want nil", err)
+	if err == nil {
+		t.Fatalf("ResolveDispatch(external-cli) error = nil, want ErrExternalCLINotWired")
 	}
-	if kind != runner.DispatchKindExternalCLI {
-		t.Errorf("ResolveDispatch(external-cli) kind = %q, want %q", kind, runner.DispatchKindExternalCLI)
+	if err != runner.ErrExternalCLINotWired {
+		t.Errorf("ResolveDispatch(external-cli) error = %v, want ErrExternalCLINotWired", err)
+	}
+	if kind != "" {
+		t.Errorf("ResolveDispatch(external-cli) kind = %q, want empty", kind)
 	}
 }
 
