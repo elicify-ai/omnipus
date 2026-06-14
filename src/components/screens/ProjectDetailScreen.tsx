@@ -114,7 +114,7 @@ export function ProjectDetailScreen({ workspaceId }: ProjectDetailScreenProps) {
   if (projectsError) {
     return (
       <div className="flex items-center justify-center h-full p-8 text-[var(--color-muted)] text-sm">
-        Failed to load project. Check your connection and try again.
+        Failed to load workspace. Check your connection and try again.
       </div>
     )
   }
@@ -151,7 +151,7 @@ export function ProjectDetailScreen({ workspaceId }: ProjectDetailScreenProps) {
     }
     return (
       <div className="flex items-center justify-center h-full p-8 text-[var(--color-muted)] text-sm">
-        Project not found.
+        Workspace not found.
       </div>
     )
   }

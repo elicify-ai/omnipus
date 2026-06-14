@@ -211,7 +211,7 @@ export function Sidebar() {
         <div
           className="mt-3 mb-1"
           role="group"
-          aria-label="Projects"
+          aria-label="Workspaces"
           tabIndex={-1}
           onKeyDown={(e: React.KeyboardEvent<HTMLDivElement>) => {
             if (e.key === '/' && !showSearch) {
@@ -224,12 +224,12 @@ export function Sidebar() {
           {/* Section header */}
           <div className="flex items-center justify-between px-4 py-1">
             <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
-              Projects
+              Workspaces
             </span>
             <button
               type="button"
               onClick={() => setNewProjectOpen(true)}
-              aria-label="New project"
+              aria-label="New workspace"
               className="rounded p-0.5 text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
             >
               <Plus size={14} />
@@ -257,8 +257,8 @@ export function Sidebar() {
                     setSearchQuery('')
                     setShowSearch(false)
                   }}
-                  placeholder="Filter projects…"
-                  aria-label="Filter projects"
+                  placeholder="Filter workspaces…"
+                  aria-label="Filter workspaces"
                   className="flex-1 bg-transparent text-xs text-[var(--color-secondary)] outline-none placeholder:text-[var(--color-muted)]"
                 />
               </div>
@@ -269,11 +269,11 @@ export function Sidebar() {
           {projectsError && (
             <div className="px-4 py-1.5 flex items-center gap-1.5">
               <WarningCircle size={14} className="text-[var(--color-error)] flex-shrink-0" />
-              <span className="text-xs text-[var(--color-error)] flex-1">Could not load projects</span>
+              <span className="text-xs text-[var(--color-error)] flex-1">Could not load workspaces</span>
               <button
                 type="button"
                 onClick={() => queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })}
-                aria-label="Retry loading projects"
+                aria-label="Retry loading workspaces"
                 className="rounded p-0.5 text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
               >
                 <ArrowClockwise size={12} />

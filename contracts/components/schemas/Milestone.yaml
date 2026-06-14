@@ -43,3 +43,13 @@ properties:
     type: string
     description: "Username of the user who owns this resource. Set server-side at creation; read-only."
     example: "alice"
+  progress:
+    type: number
+    minimum: 0
+    maximum: 1
+    readOnly: true
+    description: >
+      Completion fraction (0–1) computed server-side at read time as done/total
+      over the milestone's GTD board tasks. 0 when no tasks are associated.
+      Read-only; never accepted on create/update.
+    example: 0.5

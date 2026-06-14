@@ -6106,11 +6106,7 @@ export interface components {
             name: string;
             /** @description Optional task description. */
             description?: string;
-            /**
-             * @description GTD board task status.
-             * @enum {string}
-             */
-            status: "inbox" | "next" | "active" | "waiting" | "done" | "failed";
+            status: components["schemas"]["GTDBoardTaskStatus"];
             /**
              * @description Optional workspace this task belongs to. Must be an existing workspace ID. If absent, task is unassigned.
              * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
@@ -6301,6 +6297,11 @@ export interface components {
              * @example alice
              */
             owner?: string;
+            /**
+             * @description Completion fraction (0–1) computed server-side at read time as done/total over the milestone's GTD board tasks. 0 when no tasks are associated. Read-only; never accepted on create/update.
+             * @example 0.5
+             */
+            readonly progress?: number;
         };
         MilestoneCreateRequest: {
             /** @description Milestone name. Required. */
@@ -6318,9 +6319,10 @@ export interface components {
             /** @description Optional due date (ISO 8601 date string or null). */
             due_date?: string | null;
         };
+        /** @description List response for GET /workspaces/{id}/milestones */
         MilestoneListResponse: {
             milestones: components["schemas"]["Milestone"][];
-            /** @description Total number of milestones for this project. */
+            /** @description Total number of milestones for this workspace. */
             total: number;
         };
         /** @description Per-agent token usage entry within a TokenUsageSummary. */

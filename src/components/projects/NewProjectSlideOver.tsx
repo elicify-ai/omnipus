@@ -119,7 +119,7 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
               id="new-project-name"
               value={form.name}
               onChange={(e) => setForm((s) => ({ ...s, name: e.target.value }))}
-              placeholder="My project"
+              placeholder="My workspace"
               maxLength={200}
               autoFocus
               aria-invalid={!!fieldErrors.name}
@@ -141,7 +141,7 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
               id="new-project-desc"
               value={form.description}
               onChange={(e) => setForm((s) => ({ ...s, description: e.target.value }))}
-              placeholder="Optional project description"
+              placeholder="Optional workspace description"
               rows={3}
               maxLength={2000}
               aria-invalid={!!fieldErrors.description}

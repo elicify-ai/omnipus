@@ -1,4 +1,4 @@
-import type { BoardTask, MilestoneWithProgress } from '@/lib/api'
+import type { BoardTask, Milestone } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { TaskCard } from './TaskCard'
 
@@ -11,7 +11,7 @@ const EXECUTION_COLUMNS = [
 
 interface ExecutionViewProps {
   tasks: BoardTask[]
-  milestones: MilestoneWithProgress[]
+  milestones: Milestone[]
   onTaskClick: (task: BoardTask) => void
 }
 

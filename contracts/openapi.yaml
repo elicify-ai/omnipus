@@ -469,7 +469,19 @@ components:
     MilestoneUpdateRequest:
       $ref: ./components/schemas/MilestoneUpdateRequest.yaml
     MilestoneListResponse:
-      $ref: ./components/schemas/MilestoneListResponse.yaml
+      type: object
+      description: List response for GET /workspaces/{id}/milestones
+      required:
+        - milestones
+        - total
+      properties:
+        milestones:
+          type: array
+          items:
+            $ref: '#/components/schemas/Milestone'
+        total:
+          type: integer
+          description: Total number of milestones for this workspace.
     AgentTokenEntry:
       $ref: ./components/schemas/AgentTokenEntry.yaml
     TokenUsageSummary:

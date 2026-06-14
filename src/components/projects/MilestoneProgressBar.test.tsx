@@ -10,11 +10,11 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MilestoneProgressBar } from './MilestoneProgressBar'
-import type { MilestoneWithProgress } from '@/lib/api'
+import type { Milestone } from '@/lib/api'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function makeMilestone(overrides: Partial<MilestoneWithProgress> = {}): MilestoneWithProgress {
+function makeMilestone(overrides: Partial<Milestone> = {}): Milestone {
   return {
     id: 'ms-1',
     workspace_id: 'proj-1',

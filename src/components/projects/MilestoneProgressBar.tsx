@@ -1,8 +1,8 @@
 import { cn } from '@/lib/utils'
-import type { MilestoneWithProgress } from '@/lib/api'
+import type { Milestone } from '@/lib/api'
 
 interface MilestoneProgressBarProps {
-  milestone: MilestoneWithProgress
+  milestone: Milestone
 }
 
 function daysUntil(dateStr: string): number | null {

@@ -2,7 +2,7 @@ import { Plus } from '@phosphor-icons/react'
 import { TaskCard } from './TaskCard'
 import { cn } from '@/lib/utils'
 import type { BoardTask } from '@/lib/api'
-import type { MilestoneWithProgress } from '@/lib/api'
+import type { Milestone } from '@/lib/api'
 import { MILESTONE_FILTER_UNSCHEDULED } from './MilestoneFilterPills'
 
 type BoardStatus = BoardTask['status']
@@ -24,7 +24,7 @@ const COLUMNS: ColumnConfig[] = [
 
 interface BoardViewProps {
   tasks: BoardTask[]
-  milestones: MilestoneWithProgress[]
+  milestones: Milestone[]
   activeMilestoneId: string | null
   onTaskClick: (task: BoardTask) => void
   onNewTask: (status?: BoardStatus) => void
@@ -61,7 +61,7 @@ function filterByMilestone(tasks: BoardTask[], activeMilestoneId: string | null)
 interface BoardColumnProps {
   config: ColumnConfig
   tasks: BoardTask[]
-  milestones: MilestoneWithProgress[]
+  milestones: Milestone[]
   onTaskClick: (task: BoardTask) => void
   onNewTask: () => void
 }

@@ -8,7 +8,7 @@
 //
 // Data sources (OBS-003: no new wire type needed):
 //   - Board tasks:  GET /api/v1/board/tasks?workspace_id={id}  (BoardTask[])
-//   - Milestones:   GET /api/v1/workspaces/{id}/milestones     (MilestoneWithProgress[])
+//   - Milestones:   GET /api/v1/workspaces/{id}/milestones     (Milestone[])
 //
 // Both endpoints already exist; the new `start`, `due`, and `recurrence` fields
 // on BoardTask are used here to build the calendar view.
@@ -20,7 +20,7 @@ import {
   fetchMilestones,
   boardTasksQueryKeys,
   milestonesQueryKeys,
-  type MilestoneWithProgress,
+  type Milestone,
 } from '@/lib/api'
 import type { BoardTask } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -34,7 +34,7 @@ interface CalendarScreenProps {
 type CalendarEvent =
   | { kind: 'task-start'; date: Date; task: BoardTask }
   | { kind: 'task-due'; date: Date; task: BoardTask }
-  | { kind: 'milestone'; date: Date; milestone: MilestoneWithProgress }
+  | { kind: 'milestone'; date: Date; milestone: Milestone }
 
 /** Parse a date string (date or date-time, ISO 8601). Returns null on failure. */
 function parseDate(s: string | null | undefined): Date | null {
