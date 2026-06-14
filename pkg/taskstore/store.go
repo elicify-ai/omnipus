@@ -21,6 +21,16 @@ import (
 // ErrNotFound is returned when a task ID does not exist on disk.
 var ErrNotFound = errors.New("task not found")
 
+// ErrCycle is returned when a parent_task_id edge would create a cycle in the
+// task dependency graph (e.g. A→B→A), or when the parent chain exceeds
+// maxParentDepth. The task graph must remain a DAG.
+var ErrCycle = errors.New("task parent edge would create a cycle")
+
+// maxParentDepth bounds how far Create walks the parent chain before treating
+// the graph as malformed. It also acts as a backstop against an extremely deep
+// (or, on a corrupt store, looping) chain. Mirrors the executor's maxTaskDepth.
+const maxParentDepth = 10
+
 // TaskEntity is the persistent shape for one workflow task stored at
 // ~/.omnipus/workflow-tasks/<id>.json.
 type TaskEntity struct {
@@ -326,9 +336,56 @@ func (s *TaskStore) Create(entity *TaskEntity) error {
 	if entity.CreatedBy == "" {
 		entity.CreatedBy = "user"
 	}
+	// Reject a parent edge that would create a cycle or exceed the depth bound.
+	// The task graph (parent_task_id edges) must remain a DAG so the executor's
+	// parent-walk and result-aggregation terminate.
+	if entity.ParentTaskID != "" {
+		if err := s.checkParentAcyclic(entity.ID, entity.ParentTaskID); err != nil {
+			return err
+		}
+	}
 	entity.CreatedAt = time.Now().UTC()
 
 	return s.write(entity)
+}
+
+// checkParentAcyclic walks the parent chain starting at parentID and rejects the
+// edge newID → parentID if it would form a cycle. An edge creates a cycle when
+// the chain from parentID reaches back to newID (the task being created) or
+// revisits any node already seen on the walk. It also rejects chains deeper than
+// maxParentDepth. A missing parent is rejected so callers cannot point at a
+// non-existent task.
+//
+// Caller must hold s.mu (Create does).
+func (s *TaskStore) checkParentAcyclic(newID, parentID string) error {
+	if parentID == newID {
+		return fmt.Errorf("%w: task %q cannot be its own parent", ErrCycle, newID)
+	}
+	visited := map[string]bool{}
+	if newID != "" {
+		// Seed the visited set with the node being created so that any chain
+		// looping back to it is caught even before it is written to disk.
+		visited[newID] = true
+	}
+	cur := parentID
+	for depth := 0; cur != ""; depth++ {
+		if depth >= maxParentDepth {
+			return fmt.Errorf("%w: parent chain exceeds max depth %d", ErrCycle, maxParentDepth)
+		}
+		if visited[cur] {
+			return fmt.Errorf("%w: parent edge %q → %q closes a loop at %q", ErrCycle, newID, parentID, cur)
+		}
+		visited[cur] = true
+		parent, err := s.load(cur)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return fmt.Errorf("%w: parent task %q does not exist", ErrNotFound, cur)
+			}
+			return fmt.Errorf("taskstore: walk parent chain at %q: %w", cur, err)
+		}
+		cur = parent.ParentTaskID
+	}
+	return nil
 }
 
 // Update applies patch to the task identified by id and persists the result.

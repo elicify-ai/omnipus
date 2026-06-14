@@ -7,7 +7,6 @@ package systools
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -128,7 +127,8 @@ func NewBackupCreateTool(d *Deps) *BackupCreateTool { return &BackupCreateTool{d
 func (t *BackupCreateTool) Name() string            { return "system.backup.create" }
 func (t *BackupCreateTool) Scope() tools.ToolScope  { return tools.ScopeCore }
 func (t *BackupCreateTool) Description() string {
-	return "Create a backup of the Omnipus data directory. Parameters: encrypt (bool, default false)."
+	return "[NOT IMPLEMENTED] Creating a backup archive of the data directory is not yet built. " +
+		"This tool always returns a NOT_IMPLEMENTED error and does NOT create any file."
 }
 
 func (t *BackupCreateTool) Parameters() map[string]any {
@@ -138,27 +138,10 @@ func (t *BackupCreateTool) Parameters() map[string]any {
 	}
 }
 
-func (t *BackupCreateTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	encrypt, _ := args["encrypt"].(bool)
-	backupsDir := filepath.Join(t.deps.Home, "backups")
-	if err := os.MkdirAll(backupsDir, 0o700); err != nil {
-		return tools.ErrorResult(errorJSON("BACKUP_FAILED", err.Error(), ""))
-	}
-	timestamp := time.Now().UTC().Format("2006-01-02T15-04-05Z")
-	suffix := ".tar"
-	if encrypt {
-		suffix = ".tar.enc"
-	}
-	backupPath := filepath.Join(backupsDir, fmt.Sprintf("omnipus-backup-%s%s", timestamp, suffix))
-	slog.Info("sysagent: stub tool invoked", "tool", "system.backup.create", "path", backupPath)
-	return tools.NewToolResult(successJSON(map[string]any{
-		"path":       backupPath,
-		"size_bytes": 0,
-		"encrypted":  encrypt,
-		"created_at": timestamp,
-		"status":     "stub",
-		"note":       "not yet implemented — this is a placeholder response",
-	}))
+func (t *BackupCreateTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
+	return tools.ErrorResult(errorJSON("NOT_IMPLEMENTED",
+		"system.backup.create is not implemented: no archive is produced.",
+		"Back up the data directory manually (copy ~/.omnipus/) until this tool is built."))
 }
 
 // ---- system.cost.query ----
@@ -169,7 +152,9 @@ func NewCostQueryTool(d *Deps) *CostQueryTool   { return &CostQueryTool{deps: d}
 func (t *CostQueryTool) Name() string           { return "system.cost.query" }
 func (t *CostQueryTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *CostQueryTool) Description() string {
-	return "Query LLM cost data by period. Parameters: period (today/week/month/custom), start_date, end_date, agent_id, group_by."
+	return "[NOT IMPLEMENTED] Querying LLM cost data by period/agent is not yet built. " +
+		"The only cost data Omnipus persists today is a single running total for the current UTC day " +
+		"(no historical periods, per-agent breakdown, or grouping). This tool always returns a NOT_IMPLEMENTED error."
 }
 
 func (t *CostQueryTool) Parameters() map[string]any {
@@ -185,18 +170,9 @@ func (t *CostQueryTool) Parameters() map[string]any {
 	}
 }
 
-func (t *CostQueryTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	period, _ := args["period"].(string)
-	if period == "" {
-		period = "today"
-	}
-	slog.Info("sysagent: stub tool invoked", "tool", "system.cost.query", "period", period)
-	return tools.NewToolResult(successJSON(map[string]any{
-		"period":       period,
-		"total_cost":   0.0,
-		"total_tokens": 0,
-		"breakdown":    []any{},
-		"status":       "stub",
-		"note":         "not yet implemented — this is a placeholder response",
-	}))
+func (t *CostQueryTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
+	return tools.ErrorResult(errorJSON("NOT_IMPLEMENTED",
+		"system.cost.query is not implemented: no per-period cost store exists. "+
+			"Omnipus persists only a single running total for the current UTC day.",
+		"View today's spend in the UI; a queryable cost-history store is not yet built."))
 }

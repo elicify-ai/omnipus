@@ -333,6 +333,46 @@ func successJSON(v any) string {
 	return string(b)
 }
 
+// stringSliceArg coerces a JSON-decoded tool argument into a []string.
+// JSON arrays decode to []any; non-string elements are skipped. Returns nil
+// for nil/empty/non-array inputs so callers can leave the field unset.
+func stringSliceArg(v any) []string {
+	raw, ok := v.([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, e := range raw {
+		if s, ok := e.(string); ok {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// stringMapArg coerces a JSON-decoded tool argument into a map[string]string.
+// JSON objects decode to map[string]any; non-string values are skipped. Returns
+// nil for nil/empty/non-object inputs so callers can leave the field unset.
+func stringMapArg(v any) map[string]string {
+	raw, ok := v.(map[string]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for k, e := range raw {
+		if s, ok := e.(string); ok {
+			out[k] = s
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // errorJSON returns a consistent error response per D.10.1.
 func errorJSON(code, message, suggestion string) string {
 	b, err := json.MarshalIndent(map[string]any{
