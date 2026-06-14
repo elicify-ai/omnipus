@@ -639,14 +639,27 @@ func TestConcurrentBuildSystemPromptWithCache(t *testing.T) {
 		"SOUL.md":              "# Soul\nBe helpful.",
 		"skills/demo/SKILL.md": "---\nname: demo\ndescription: \"demo skill\"\n---\n# Demo",
 	})
-	// Spec-5: seed a memory via AppendLongTerm to exercise the memory path.
-	ms := NewMemoryStore(tmpDir, os.TempDir())
-	if err := ms.AppendLongTerm("user prefers Go", "reference"); err != nil {
-		t.Fatalf("seed memory: %v", err)
-	}
 	defer os.RemoveAll(tmpDir)
 
 	cb := NewContextBuilder(tmpDir)
+
+	// Spec-5: seed a memory via AppendLongTerm to exercise the memory path.
+	//
+	// CI-robustness: seed through cb.Memory() — the SAME MemoryStore the
+	// ContextBuilder uses — rather than a separate NewMemoryStore(tmpDir, …).
+	// Each MemoryStore lazily opens a bleve/scorch index under
+	// <room.Root>/.index/bleve/, and scorch's bolt root store takes an
+	// exclusive OS file lock with bolt's default INFINITE timeout. Two stores
+	// on one path therefore deadlock: the seeding store opened+cached (never
+	// closed) the index, then the ContextBuilder's store blocked forever in
+	// bolt.Open waiting for that lock — a hang under any scheduling (it failed
+	// the same way on baseline). Production never opens two stores per
+	// workspace, so the second store was an unrealistic test artefact. Using
+	// the builder's own store keeps the memory path fully exercised
+	// (GetMemoryContext → SearchEntries → bleve) with no second lock holder.
+	if err := cb.Memory().AppendLongTerm("user prefers Go", "reference"); err != nil {
+		t.Fatalf("seed memory: %v", err)
+	}
 
 	const goroutines = 20
 	const iterations = 50

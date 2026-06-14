@@ -631,12 +631,26 @@ func TestReplay_BoundaryResult_NoTruncation(t *testing.T) {
 // Traces to: temporal-puzzling-melody.md W2-13, TDD row 15, FR-I-005
 func TestReplay_CtxCancelled_StopsCleanly(t *testing.T) {
 	// W2-13: Instrument goroutine leak detection for goroutines started BY streamReplay.
-	// The following goroutines are background infrastructure workers started by other tests
-	// in the same package (those using newTestWSHandler, which creates a full AgentLoop).
-	// They are NOT started by streamReplay and must be excluded from the leak check.
-	// streamReplay itself starts no goroutines — any goroutine actually leaked by the
-	// function under test would still be caught here.
+	//
+	// streamReplay is a synchronous loop — it starts NO goroutines of its own. The only
+	// goroutines alive in this test binary are persistent background infrastructure workers
+	// started by OTHER tests in the same package (newTestWSHandler builds a full AgentLoop:
+	// session manager, hook dispatcher, bleve analysis workers, etc.). Those are not under
+	// test here, but a fixed IgnoreTopFunction allowlist is fragile: under a CPU-contended CI
+	// box, any background worker that happens to be mid-spawn or winding down with a top
+	// function NOT on the list trips a false positive (the test passed in isolation locally
+	// but failed twice on the 16 GB CI box at -p4).
+	//
+	// IgnoreCurrent() snapshots EVERY goroutine alive *before* the function under test runs
+	// and ignores exactly those — immune to whichever background workers happen to be present.
+	// Because streamReplay spawns nothing, a real leak (a goroutine it started that outlives
+	// the call) would be a NEW goroutine not in the snapshot and would still fail the test.
+	// goleak also retries with backoff (~20 attempts), absorbing goroutines that are exiting.
+	//
+	// The explicit IgnoreTopFunction entries are kept as defence-in-depth for the known
+	// persistent workers, in case one is spawned *after* the snapshot by a concurrent test.
 	defer goleak.VerifyNone(t,
+		goleak.IgnoreCurrent(),
 		goleak.IgnoreTopFunction("github.com/dapicom-ai/omnipus/pkg/tools.NewSessionManager.func1"),
 		goleak.IgnoreTopFunction("github.com/dapicom-ai/omnipus/pkg/agent.(*HookManager).dispatchEvents"),
 		// bleve analysis workers are started at package-init time by the memory/bleve
