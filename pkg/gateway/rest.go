@@ -1297,6 +1297,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 			copy(skills, ac.Skills)
 			ag.Skills = &skills
 		}
+		setAgentExecutorResponse(&ag, ac.Subagents)
 		agents = append(agents, ag)
 	}
 
@@ -1348,6 +1349,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 				copy(skills, ac.Skills)
 				ag.Skills = &skills
 			}
+			setAgentExecutorResponse(&ag, ac.Subagents)
 			jsonOK(w, ag)
 			return
 		}
@@ -1399,6 +1401,18 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if req.Skills != nil && len(*req.Skills) > 0 {
 		ac.Skills = make([]string, len(*req.Skills))
 		copy(ac.Skills, *req.Skills)
+	}
+	// Sub-agent executor (kind/cli). Mapped into AgentConfig.Subagents.Executor so
+	// it is actually persisted (previously the contract field was write-dropped).
+	if req.Executor != nil {
+		execCfg, errMsg := executorConfigFromRequest(string(req.Executor.Kind), executorCliStr(req.Executor.Cli))
+		if errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
+			return
+		}
+		if execCfg != nil {
+			ac.Subagents = &config.SubagentsConfig{Executor: execCfg}
+		}
 	}
 	// Seed the privilege rail (FR-008/FR-022): custom agents always get
 	// system.*: deny unless the caller explicitly overrides it.
@@ -1493,6 +1507,11 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		if len(ac.Skills) > 0 {
 			newAgent["skills"] = ac.Skills
 		}
+		if ac.Subagents != nil && ac.Subagents.Executor != nil {
+			newAgent["subagents"] = map[string]any{
+				"executor": executorConfigToMap(ac.Subagents.Executor),
+			}
+		}
 		agents["list"] = append(list, newAgent)
 		return nil
 	}); err != nil {
@@ -1538,6 +1557,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		copy(skills, ac.Skills)
 		ag.Skills = &skills
 	}
+	setAgentExecutorResponse(&ag, ac.Subagents)
 	if createReloadWarning != "" {
 		ag.Warning = &createReloadWarning
 	}
@@ -1663,6 +1683,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
 		}
+	}
+	// Validate the executor (kind/cli) before any work so a bad request 400s
+	// rather than persisting an invalid combination.
+	var updatedExecutor *config.ExecutorConfig
+	if req.Executor != nil {
+		execCfg, errMsg := executorConfigFromRequest(string(req.Executor.Kind), executorCliStr(req.Executor.Cli))
+		if errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
+			return
+		}
+		updatedExecutor = execCfg
 	}
 	// Persist to config.json BEFORE mutating the live config.
 	// Capture the new values to apply after persistence succeeds.
@@ -1824,6 +1855,26 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 						tcMap["mcp"] = mcpMap
 					}
 					agentMap["tools_cfg"] = tcMap
+				}
+				// Executor: write the sub-agent executor under subagents.executor when
+				// the caller sends it. kind="native" with no cli clears any prior
+				// external-cli config (executorConfigFromRequest returns nil → delete).
+				if req.Executor != nil {
+					subMap, _ := agentMap["subagents"].(map[string]any)
+					if updatedExecutor == nil {
+						if subMap != nil {
+							delete(subMap, "executor")
+							if len(subMap) == 0 {
+								delete(agentMap, "subagents")
+							}
+						}
+					} else {
+						if subMap == nil {
+							subMap = map[string]any{}
+							agentMap["subagents"] = subMap
+						}
+						subMap["executor"] = executorConfigToMap(updatedExecutor)
+					}
 				}
 				// Skills: replace the agent's skill list when the caller sends the field.
 				// An explicit empty array removes all skills. Nil (absent) leaves unchanged.
@@ -2011,8 +2062,9 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	if reloadWarning != "" {
 		ag.Warning = &reloadWarning
 	}
-	// Populate Default and Skills from the live config after the write (handles
-	// both the req.Default=true case and the leave-unchanged case).
+	// Populate Default, Skills, and Executor from the live config after the write
+	// (handles both the req.Default=true case and the leave-unchanged case, and
+	// ensures a GET→edit→PUT round-trip echoes the persisted executor).
 	if liveCfg := a.agentLoop.GetConfig(); liveCfg != nil {
 		for _, ac := range liveCfg.Agents.List {
 			if ac.ID == agentID {
@@ -2022,6 +2074,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					copy(skills, ac.Skills)
 					ag.Skills = &skills
 				}
+				setAgentExecutorResponse(&ag, ac.Subagents)
 				break
 			}
 		}

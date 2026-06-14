@@ -134,6 +134,11 @@ func TestExternalDispatch_RoutesPermissionToConsent_DenyCancels(t *testing.T) {
 	fr, restore := withFakeDriver(t)
 	defer restore()
 
+	// Inject ONLY the permission request. The deny decision itself must cancel the
+	// run (FakeRunner.Decide calls Cancel() on !Allow, matching the real-driver
+	// contract). We deliberately do NOT inject EventKindEnd or call fr.Cancel()
+	// here: if the deny did not cancel, the drain would block until the test ctx
+	// times out — making the deny-cancel assertions load-bearing.
 	go func() {
 		fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindPermissionRequest,
@@ -144,13 +149,15 @@ func TestExternalDispatch_RoutesPermissionToConsent_DenyCancels(t *testing.T) {
 				RawInput:    []byte(`{"cmd":"rm -rf /"}`),
 			},
 		})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
-		fr.Cancel()
 	}()
 
-	_, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
-	if err != nil {
-		t.Fatalf("runExternalCLISubTurn error: %v", err)
+	// Bound the run with a context so a regression (deny no longer cancels) fails
+	// fast instead of hanging the suite.
+	runCtx, cancelRun := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelRun()
+	res, err := runExternalCLISubTurn(runCtx, al, ts, "task", 30*time.Second)
+	if err == nil {
+		t.Fatalf("expected denial error from a denied permission request, got nil (res=%+v)", res)
 	}
 
 	// The approver must have been consulted for the permission request.
@@ -174,6 +181,21 @@ func TestExternalDispatch_RoutesPermissionToConsent_DenyCancels(t *testing.T) {
 	if !fr.IsCancelled() {
 		t.Error("driver was not cancelled after a deny decision")
 	}
+
+	// [MAJOR] The returned ToolResult MUST reflect the denial — not a success — so
+	// the delegating agent is told the sub-run was aborted, not completed.
+	if res == nil {
+		t.Fatal("expected a non-nil ToolResult on denial")
+	}
+	if res.Err == nil {
+		t.Error("ToolResult.Err is nil on denial; the run must surface an error")
+	}
+	if !strings.Contains(strings.ToLower(res.ForLLM), "denied") {
+		t.Errorf("ToolResult.ForLLM = %q, want it to state the run was denied/aborted", res.ForLLM)
+	}
+	if reason := "denied for test"; res.Err != nil && !strings.Contains(res.Err.Error(), reason) {
+		t.Errorf("ToolResult.Err = %v, want it to carry the deny reason %q", res.Err, reason)
+	}
 }
 
 // TestExternalDispatch_NoConsentHandler_DeniesByDefault proves that when no
@@ -188,6 +210,10 @@ func TestExternalDispatch_NoConsentHandler_DeniesByDefault(t *testing.T) {
 	fr, restore := withFakeDriver(t)
 	defer restore()
 
+	// Inject only the permission request. With no approver wired the request is
+	// denied by default, and the deny (via FakeRunner.Decide) cancels the run — so
+	// we must NOT inject EventKindEnd / Cancel ourselves (that would send on the
+	// channel the deny already closed).
 	go func() {
 		fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindPermissionRequest,
@@ -196,12 +222,14 @@ func TestExternalDispatch_NoConsentHandler_DeniesByDefault(t *testing.T) {
 				ToolName:  "write",
 			},
 		})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
-		fr.Cancel()
 	}()
 
-	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second); err != nil {
-		t.Fatalf("runExternalCLISubTurn error: %v", err)
+	runCtx, cancelRun := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelRun()
+	res, err := runExternalCLISubTurn(runCtx, al, ts, "task", 30*time.Second)
+	// Deny-by-default aborts the run: it must surface as an error, not a success.
+	if err == nil {
+		t.Fatalf("expected deny-by-default to abort the run, got nil error (res=%+v)", res)
 	}
 
 	decisions := fr.ReceivedDecisions()
@@ -210,6 +238,9 @@ func TestExternalDispatch_NoConsentHandler_DeniesByDefault(t *testing.T) {
 	}
 	if decisions[0].Allow {
 		t.Error("decision Allow = true, want false (deny-by-default with no approver wired)")
+	}
+	if res == nil || res.Err == nil {
+		t.Fatal("expected ToolResult.Err set on deny-by-default")
 	}
 }
 

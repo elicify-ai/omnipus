@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
@@ -143,18 +144,26 @@ func runExternalCLISubTurn(
 		runner.ConsentDispatcher(runCtx, evCh, driver, runID, childTS.transcriptSessionID, consent, out)
 	}()
 
-	result := drainExternalRun(runCtx, childTS, runID, cli, out)
+	result := drainExternalRun(runCtx, childTS, runID, cli, out, consent)
 	return result, result.Err
 }
 
 // drainExternalRun consumes the runner's event stream, mirrors each event into the
 // sub-agent session transcript, and aggregates the run's textual output into a
 // tools.ToolResult. It returns when the stream closes (run end/error) or ctx ends.
+//
+// consent carries the post-hoc consent state. A DENY decision cancels the run
+// (the driver kills the process and suppresses its own ctx-cancel error), so the
+// stream can close with runErr==nil and ended==false. Without consulting the
+// consent state we would mis-report that path as success. We therefore treat a
+// recorded denial as a terminal failure: the delegating agent MUST be told the
+// sub-run was aborted, not that it completed (review finding [MAJOR]).
 func drainExternalRun(
 	ctx context.Context,
 	childTS *turnState,
 	runID, cli string,
 	out <-chan runner.RunEvent,
+	consent *policyApproverConsent,
 ) *tools.ToolResult {
 	var sb strings.Builder
 	var runErr error
@@ -211,8 +220,16 @@ done:
 	if output != "" {
 		childTS.appendAssistantTranscript(output)
 	}
+
+	// A recorded consent DENY is terminal: the driver cancels the run (and
+	// suppresses its own runCtx-cancel error), so we would otherwise see
+	// runErr==nil, ended==false and wrongly report success. Surface the denial
+	// as the run's outcome so the delegating agent learns the sub-run was aborted.
+	denied, denyReason := consent.lastDeny()
+
 	slog.Info("external-cli dispatch: run finished",
-		"run_id", runID, "cli", cli, "ended", ended, "err", runErr, "output_len", len(output))
+		"run_id", runID, "cli", cli, "ended", ended, "denied", denied,
+		"err", runErr, "output_len", len(output))
 
 	if runErr != nil {
 		return &tools.ToolResult{
@@ -220,6 +237,27 @@ done:
 			ForLLM: fmt.Sprintf("External CLI run (%s) failed: %v", cli, runErr),
 		}
 	}
+
+	if denied {
+		// The run did not complete on its own (a successful EventKindEnd was never
+		// followed by a denial in practice — the deny cancels before/at the kill),
+		// so treat any recorded denial as an aborted run regardless of `ended`.
+		reason := strings.TrimSpace(denyReason)
+		if reason == "" {
+			reason = "permission denied"
+		}
+		denyErr := fmt.Errorf("external-cli run denied: %s", reason)
+		msg := fmt.Sprintf(
+			"External CLI run (%s) was DENIED and aborted (a permission request was rejected: %s). "+
+				"The delegated task did NOT complete.", cli, reason)
+		childTS.appendIntermediateAssistantTranscript("[external-cli denied] " + reason)
+		return &tools.ToolResult{
+			Err:     denyErr,
+			ForLLM:  msg,
+			ForUser: msg,
+		}
+	}
+
 	if output == "" {
 		output = fmt.Sprintf("External CLI run (%s) completed with no textual output.", cli)
 	}
@@ -238,12 +276,20 @@ func recordExternalToolCall(childTS *turnState, tc *runner.ToolCallEvent) {
 	}
 	var args map[string]any
 	if len(tc.ToolInput) > 0 {
-		_ = json.Unmarshal(tc.ToolInput, &args)
+		if uErr := json.Unmarshal(tc.ToolInput, &args); uErr != nil {
+			slog.Debug("external-cli dispatch: tool-call input is not a JSON object",
+				"tool", tc.ToolName, "call_id", id, "err", uErr)
+		}
 	}
+	// The external CLI emits the tool-call event when the call STARTS; Omnipus
+	// consent is post-hoc and we never observe the call's own success/failure from
+	// the stream. Recording "success" would assert an outcome we did not verify.
+	// Use "completed" — the call was transcribed/observed, with no success claim
+	// (review finding [MINOR]).
 	childTS.appendToolCallTranscript(session.ToolCall{
 		ID:         session.ToolCallID(id),
 		Tool:       tc.ToolName,
-		Status:     "success",
+		Status:     "completed",
 		Parameters: args,
 	})
 }
@@ -281,10 +327,21 @@ type policyApproverConsent struct {
 	agentID   string
 	sessionID string
 	turnID    string
+
+	// mu guards the deny-tracking fields. RequestConsent runs on the consent
+	// dispatcher goroutine while drainExternalRun reads via lastDeny() on the
+	// dispatch goroutine, so the access must be synchronized.
+	mu         sync.Mutex
+	denied     bool
+	denyReason string
 }
 
 // RequestConsent routes an external-runner permission request to the policy approver
 // and returns its verdict. Implements runner.ConsentHandler.
+//
+// A DENY is recorded so the dispatch path can surface the run as aborted: a denial
+// cancels the run (the driver kills the process and suppresses its ctx-cancel
+// error), which would otherwise look like a clean, no-output success.
 func (c *policyApproverConsent) RequestConsent(ctx context.Context, req runner.ConsentRequest) (bool, string) {
 	approver := c.al.loadToolApprover()
 	approved, reason := approver.RequestApproval(ctx, PolicyApprovalReq{
@@ -298,7 +355,21 @@ func (c *policyApproverConsent) RequestConsent(ctx context.Context, req runner.C
 		// non-admin (the CLI's own sandbox is the real boundary).
 		RequiresAdmin: false,
 	})
+	if !approved {
+		c.mu.Lock()
+		c.denied = true
+		c.denyReason = reason
+		c.mu.Unlock()
+	}
 	return approved, reason
+}
+
+// lastDeny reports whether any permission request in this run was denied, and the
+// reason of the most recent denial. Safe for concurrent use.
+func (c *policyApproverConsent) lastDeny() (bool, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.denied, c.denyReason
 }
 
 // compile-time interface assertion

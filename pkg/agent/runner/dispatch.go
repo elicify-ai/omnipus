@@ -33,7 +33,10 @@ var ErrRemoteA2AReserved = fmt.Errorf("executor kind %q is reserved and not avai
 // cleanly rather than silently delegating nowhere.
 func NewDriver(cli string, consent ConsentHandler) (ExternalAgentRunner, error) {
 	switch cli {
-	case "claude-code", "claude":
+	case "claude-code":
+		// "claude-code" is the canonical config value (matches conntest.go
+		// supportedCLIs and the AgentExecutorCli enum). No "claude" alias — the
+		// run path and the connection-test path must agree on the same key.
 		return NewClaudeDriver(consent), nil
 	case "codex":
 		return NewCodexDriver(consent), nil
