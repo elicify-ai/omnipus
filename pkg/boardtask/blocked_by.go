@@ -32,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 )
@@ -268,6 +269,164 @@ func DropOrphanEdges(tasksDir string) (int, error) {
 		}
 	}
 	return removed, nil
+}
+
+// AdvanceBlockedDependents implements the user-facing GTD board half of the
+// Orchestrator's blocked_by DAG advance (FR-6.5). It is called after a board
+// task reaches the terminal "done" status.
+//
+// For every GTD task in tasksDir whose blocked_by list contains completedID and
+// whose own status is "waiting", it checks whether ALL of that task's blocked_by
+// dependencies are now "done". If so, the dependent is un-gated by transitioning
+// it "waiting" → "next" (ready to be picked up). GTD semantics: this only marks
+// the task ready — it does NOT auto-dispatch an agent.
+//
+// The operation is:
+//   - Idempotent: a dependent already past "waiting" (e.g. already "next",
+//     "active", "done") is left untouched, so re-running on the same completedID
+//     is a no-op.
+//   - Cycle-safe: the write-time validator (ValidateBlockedBy) guarantees the
+//     graph is a DAG, and this function performs no recursion — it only inspects
+//     the direct dependencies of each candidate dependent.
+//   - Concurrency-safe: each rewritten dependent is guarded by its per-task
+//     striped lock (TaskFileLock). The caller MUST NOT hold the lock for any
+//     dependent task when calling this; it is safe to call after releasing the
+//     completed task's own lock.
+//
+// Returns the IDs of dependents advanced to "next" and any directory-scan I/O
+// error. Per-task read/write failures are logged and skipped (partial progress
+// is preserved) rather than aborting the whole advance.
+func AdvanceBlockedDependents(tasksDir, completedID string) (advancedIDs []string, err error) {
+	entries, err := os.ReadDir(tasksDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("boardtask: AdvanceBlockedDependents: ReadDir: %w", err)
+	}
+
+	// Cache of task statuses so we can answer "are all deps done?" without
+	// re-reading the same dependency file repeatedly. Keyed by task ID.
+	statusCache := make(map[string]Status)
+	readStatus := func(depID string) (Status, bool) {
+		if s, ok := statusCache[depID]; ok {
+			return s, true
+		}
+		data, readErr := os.ReadFile(filepath.Join(tasksDir, depID+".json"))
+		if readErr != nil {
+			return "", false
+		}
+		var dt Task
+		if jsonErr := json.Unmarshal(data, &dt); jsonErr != nil {
+			return "", false
+		}
+		if dt.Name == "" || !IsGTDStatus(string(dt.Status)) {
+			return "", false
+		}
+		statusCache[depID] = dt.Status
+		return dt.Status, true
+	}
+
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		id := name[:len(name)-5]
+		if id == completedID {
+			continue // the completed task is not its own dependent
+		}
+		path := filepath.Join(tasksDir, name)
+
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			slog.Warn("boardtask: AdvanceBlockedDependents: skipping unreadable file", "file", name, "error", readErr)
+			continue
+		}
+		var t Task
+		if jsonErr := json.Unmarshal(data, &t); jsonErr != nil {
+			slog.Warn("boardtask: AdvanceBlockedDependents: skipping corrupt file", "file", name, "error", jsonErr)
+			continue
+		}
+		// Only GTD tasks currently gated as "waiting" are candidates.
+		if t.Name == "" || !IsGTDStatus(string(t.Status)) {
+			continue
+		}
+		if t.Status != StatusWaiting {
+			continue
+		}
+		// Must directly depend on the just-completed task.
+		dependsOnCompleted := false
+		for _, dep := range t.BlockedBy {
+			if dep == completedID {
+				dependsOnCompleted = true
+				break
+			}
+		}
+		if !dependsOnCompleted {
+			continue
+		}
+		// Gate check: every dependency must be "done". An orphan/unreadable dep
+		// (e.g. one already deleted) is treated as NOT satisfied, leaving the
+		// dependent waiting — CascadeDeleteEdges handles deletions separately.
+		allDone := true
+		for _, dep := range t.BlockedBy {
+			if dep == completedID {
+				continue // we know this one just reached done
+			}
+			depStatus, ok := readStatus(dep)
+			if !ok || depStatus != StatusDone {
+				allDone = false
+				break
+			}
+		}
+		if !allDone {
+			continue
+		}
+
+		// Advance waiting → next under the per-task lock. Re-read inside the lock
+		// to avoid clobbering a concurrent mutation (e.g. the user moved it).
+		mu := TaskFileLock.Get(id)
+		mu.Lock()
+		freshData, reReadErr := os.ReadFile(path)
+		if reReadErr != nil {
+			mu.Unlock()
+			slog.Warn("boardtask: AdvanceBlockedDependents: re-read failed", "file", name, "error", reReadErr)
+			continue
+		}
+		var fresh Task
+		if jsonErr := json.Unmarshal(freshData, &fresh); jsonErr != nil {
+			mu.Unlock()
+			slog.Warn("boardtask: AdvanceBlockedDependents: re-read corrupt", "file", name, "error", jsonErr)
+			continue
+		}
+		// Idempotency / race guard: only advance if still waiting.
+		if fresh.Status != StatusWaiting {
+			mu.Unlock()
+			continue
+		}
+		fresh.Status = StatusNext
+		fresh.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		newData, marshalErr := json.MarshalIndent(fresh, "", "  ")
+		if marshalErr != nil {
+			mu.Unlock()
+			slog.Warn("boardtask: AdvanceBlockedDependents: marshal failed", "file", name, "error", marshalErr)
+			continue
+		}
+		writeErr := fileutil.WriteFileAtomic(path, newData, 0o600)
+		mu.Unlock()
+		if writeErr != nil {
+			slog.Warn("boardtask: AdvanceBlockedDependents: write failed", "file", name, "error", writeErr)
+			continue
+		}
+		slog.Info("boardtask: advanced blocked dependent waiting→next",
+			"task_id", id, "completed_dep", completedID)
+		advancedIDs = append(advancedIDs, id)
+	}
+	return advancedIDs, nil
 }
 
 // CascadeDeleteEdges removes deletedID from the blocked_by list of every

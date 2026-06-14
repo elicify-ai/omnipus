@@ -1429,13 +1429,17 @@ func registerSharedTools(
 					// means spawn was called outside of an agent loop (e.g. tests or raw
 					// invocations). The ad-hoc state is functional but has no session.
 					logger.WarnCF("agent", "Spawn callback using ad-hoc turnState: no parent turnState in context", nil)
+					// Drive the ad-hoc semaphore capacity from the resolved MaxParallelAgents
+					// value (FR-6.6) so that even out-of-loop spawn calls respect the
+					// configured fan-out ceiling instead of the former hardcoded 5.
+					adHocSemCap := al.getSubTurnConfig().maxConcurrent
 					parentTS = &turnState{
 						ctx:            ctx,
 						turnID:         "adhoc-root",
 						depth:          0,
 						session:        nil, // Ephemeral session not needed for adhoc spawn
 						pendingResults: make(chan *tools.ToolResult, 16),
-						concurrencySem: make(chan struct{}, 5),
+						concurrencySem: make(chan struct{}, adHocSemCap),
 					}
 				}
 

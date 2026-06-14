@@ -35,6 +35,9 @@ var (
 )
 
 // getSubTurnConfig returns the effective SubTurn configuration with defaults applied.
+// When SubTurn.MaxConcurrent is not explicitly set (≤ 0), it falls back to the
+// resolved MaxParallelAgents value so the in-turn fan-out cap tracks the same
+// global ceiling as the async workflow dispatch path (FR-6.6).
 func (al *AgentLoop) getSubTurnConfig() subTurnRuntimeConfig {
 	cfg := al.cfg.Agents.Defaults.SubTurn
 
@@ -45,7 +48,9 @@ func (al *AgentLoop) getSubTurnConfig() subTurnRuntimeConfig {
 
 	maxConcurrent := cfg.MaxConcurrent
 	if maxConcurrent <= 0 {
-		maxConcurrent = defaultMaxConcurrentSubTurns
+		// Fall back to MaxParallelAgents so that the synchronous spawn/subagent
+		// fan-out is capped by the same knob as the async task dispatch path.
+		maxConcurrent = al.cfg.Performance.EffectiveMaxParallelAgents()
 	}
 
 	concurrencyTimeout := time.Duration(cfg.ConcurrencyTimeoutSec) * time.Second

@@ -336,20 +336,40 @@ type PerformanceConfig struct {
 //  1. An env-var override (OMNIPUS_MAX_PARALLEL_AGENTS) if set and valid.
 //  2. The configured value (p.MaxParallelAgents), if non-zero.
 //  3. An auto-detect heuristic: min(NumCPU-2, RAM_GB/1.5), floor 2, ceiling 16.
+//
+// An explicit MaxParallelAgents=1 is honoured — only the auto-detect path
+// enforces a floor of 2 (to prevent accidental single-flight on capable hardware).
 func (p PerformanceConfig) EffectiveMaxParallelAgents() int {
 	// Env-var override has highest priority.
 	if s := os.Getenv("OMNIPUS_MAX_PARALLEL_AGENTS"); s != "" {
 		if v, err := strconv.Atoi(s); err == nil && v >= 1 {
-			return clampParallel(v)
+			return clampParallelExplicit(v)
 		}
 	}
 	if p.MaxParallelAgents > 0 {
-		return clampParallel(p.MaxParallelAgents)
+		// Explicit user-set value: allow 1 (single-flight); cap at 16.
+		return clampParallelExplicit(p.MaxParallelAgents)
 	}
 	return autoDetectMaxParallel()
 }
 
-// clampParallel clamps v to [2, 16].
+// clampParallelExplicit clamps an explicitly configured value to [1, 16].
+// The floor is 1 so that a user who deliberately sets max_parallel_agents=1
+// gets single-flight behaviour. Use autoDetectMaxParallel for the auto path
+// (which floors at 2 to avoid accidental single-flight on capable hardware).
+func clampParallelExplicit(v int) int {
+	const minPar, maxPar = 1, 16
+	if v < minPar {
+		return minPar
+	}
+	if v > maxPar {
+		return maxPar
+	}
+	return v
+}
+
+// clampParallel clamps the auto-detected value to [2, 16].
+// Only used by autoDetectMaxParallel; explicit user values use clampParallelExplicit.
 func clampParallel(v int) int {
 	const minPar, maxPar = 2, 16
 	if v < minPar {

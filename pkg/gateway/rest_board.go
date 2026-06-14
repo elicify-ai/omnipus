@@ -629,6 +629,25 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
+	// becameDone records that this PUT transitions the task to terminal "done";
+	// advanceDeps is armed only after the write succeeds. The deferred closure
+	// below runs AFTER the per-task lock is released and un-gates any waiting
+	// dependents whose blocked_by deps are now all done (FR-6.5). Registered
+	// before the unlock defer so it executes last (LIFO).
+	becameDone := false
+	advanceDeps := false
+	defer func() {
+		if !advanceDeps {
+			return
+		}
+		if advanced, advErr := boardtask.AdvanceBlockedDependents(a.boardTasksDir(), id); advErr != nil {
+			slog.Warn("rest: board task: advance dependents failed", "id", id, "error", advErr)
+		} else if len(advanced) > 0 {
+			slog.Info("rest: board task: completed task advanced dependents",
+				"completed_id", id, "advanced_ids", advanced)
+		}
+	}()
+
 	// Hold the per-task striped lock for the entire read→mutate→write so that
 	// two concurrent PUTs on the same task do not race.
 	mu := a.boardTaskLock().Get(id)
@@ -710,6 +729,11 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		}
 		oldStatus := existing.Status
 		existing.Status = newStatus
+		// FR-6.5: record when a board task newly reaches terminal "done"; the
+		// post-unlock dependent advance is armed only after a successful write.
+		if newStatus == boardtask.StatusDone && oldStatus != boardtask.StatusDone {
+			becameDone = true
+		}
 		// #405: when transitioning from a terminal/active state to a re-queue state
 		// (next/inbox), auto-clear session_id UNLESS the request explicitly sets it.
 		// This is the defensive backend half; the SPA already sends session_id:"" on retry.
@@ -820,6 +844,11 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		slog.Error("rest: board task: put write failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not update board task")
 		return
+	}
+	// Write succeeded: arm the post-unlock dependent advance if this PUT
+	// completed the task (FR-6.5).
+	if becameDone {
+		advanceDeps = true
 	}
 
 	if a.auditor != nil {

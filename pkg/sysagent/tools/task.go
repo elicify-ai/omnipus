@@ -184,6 +184,25 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 	// so that a concurrent gateway PUT on the same task cannot interleave and lose
 	// updates (#407). The gateway's handleBoardTaskPut and handleBoardTaskStart use
 	// the same boardtask.TaskFileLock singleton keyed by task ID.
+	// becameDone records that this update transitions the task to terminal "done";
+	// advanceDeps is armed only after a successful write. The deferred closure runs
+	// AFTER the per-task lock is released and un-gates any waiting dependents whose
+	// blocked_by deps are now all done (FR-6.5). Registered before the unlock defer
+	// so it executes last (LIFO).
+	becameDone := false
+	advanceDeps := false
+	defer func() {
+		if !advanceDeps {
+			return
+		}
+		if advanced, advErr := boardtask.AdvanceBlockedDependents(tasksDir(t.deps.Home), id); advErr != nil {
+			slog.Warn("system.task.update: advance dependents failed", "id", id, "error", advErr)
+		} else if len(advanced) > 0 {
+			slog.Info("system.task.update: completed task advanced dependents",
+				"completed_id", id, "advanced_ids", advanced)
+		}
+	}()
+
 	mu := boardtask.TaskFileLock.Get(id)
 	mu.Lock()
 	defer mu.Unlock()
@@ -198,6 +217,7 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No GTD task %q", id),
 			"Use system.task.list to see available tasks"))
 	}
+	oldStatus := tk.Status
 	updated := []string{}
 	if v, ok := args["name"].(string); ok && v != "" {
 		tk.Name = v
@@ -215,6 +235,11 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 		}
 		tk.Status = boardtask.Status(v)
 		updated = append(updated, "status")
+		// FR-6.5: record when a board task newly reaches terminal "done"; the
+		// post-unlock dependent advance is armed only after a successful write.
+		if tk.Status == boardtask.StatusDone && oldStatus != boardtask.StatusDone {
+			becameDone = true
+		}
 	}
 	// Only overwrite agent_id when the caller explicitly provides a non-empty value.
 	if v, ok := args["agent_id"].(string); ok && v != "" {
@@ -276,6 +301,11 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 	tk.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := writeEntity(tasksDir(t.deps.Home), id, tk); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
+	}
+	// Write succeeded: arm the post-unlock dependent advance if this update
+	// completed the task (FR-6.5).
+	if becameDone {
+		advanceDeps = true
 	}
 	return tools.NewToolResult(successJSON(map[string]any{"id": id, "updated_fields": updated}))
 }
