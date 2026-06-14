@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,6 +30,8 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/memrooms"
+	memindex "github.com/dapicom-ai/omnipus/pkg/memrooms/index"
+	"github.com/dapicom-ai/omnipus/pkg/memrooms/minhash"
 	"github.com/dapicom-ai/omnipus/pkg/validation"
 )
 
@@ -108,6 +111,11 @@ type Retro struct {
 // Thread safety: AppendLongTerm / AppendRetro use per-file flocks via
 // fileutil.WriteFileAtomic + pkg/fileutil.AppendJSONL (which is POSIX-safe).
 // SearchEntries reads are safe to call concurrently.
+//
+// Bleve integration (FR-7.4): a per-room scorch index is lazily opened on first
+// use and cached by room-root path. The index cache is protected by indexMu.
+// MinHash dedup (FR-7.5 / M-5): signatures of known memories are kept in sigCache;
+// a near-dup write appends a NearDupRecord to minhash.jsonl (non-destructive).
 type MemoryStore struct {
 	// privateRoom is the per-agent private room. Never nil after NewMemoryStore.
 	privateRoom memrooms.Room
@@ -118,6 +126,16 @@ type MemoryStore struct {
 	// sharedRoom is the active workspace shared room for the current turn.
 	// Nil when no workspace_id is set. Set by SetWorkspaceID before each turn.
 	sharedRoom *memrooms.Room
+
+	// indexMu protects indexCache and sigCache maps.
+	indexMu sync.Mutex
+	// indexCache maps room.Root → open bleve RoomIndex. Lazily populated.
+	indexCache map[string]*memindex.RoomIndex
+	// sigCache maps room.Root → slice of known MinHash signatures for dedup.
+	// In-memory only; rebuilt from .md files on next access after restart.
+	sigCache map[string][]minhash.Signature
+	// sigIDs maps room.Root → memory ID parallel to sigCache entries (same indices).
+	sigIDs map[string][]string
 }
 
 // NewMemoryStore creates a MemoryStore with the given agent workspace directory.
@@ -131,7 +149,111 @@ func NewMemoryStore(agentWorkspace, omnipusHome string) *MemoryStore {
 	return &MemoryStore{
 		privateRoom: private,
 		omnipusHome: omnipusHome,
+		indexCache:  make(map[string]*memindex.RoomIndex),
+		sigCache:    make(map[string][]minhash.Signature),
+		sigIDs:      make(map[string][]string),
 	}
+}
+
+// Close releases all open bleve indexes held by this store.
+// Safe to call more than once. After Close, the store must not be used.
+func (ms *MemoryStore) Close() {
+	ms.indexMu.Lock()
+	defer ms.indexMu.Unlock()
+	for root, ri := range ms.indexCache {
+		if err := ri.Close(); err != nil {
+			logger.WarnCF("agent.memory", "Close: failed to close bleve index",
+				map[string]any{"room_root": root, "error": err.Error()})
+		}
+	}
+	ms.indexCache = make(map[string]*memindex.RoomIndex)
+}
+
+// roomIndex returns the bleve RoomIndex for room, lazily opening it.
+// MUST be called with ms.indexMu held.
+func (ms *MemoryStore) roomIndexLocked(room memrooms.Room) *memindex.RoomIndex {
+	ri, ok := ms.indexCache[room.Root]
+	if ok {
+		return ri
+	}
+	var openErr error
+	ri, openErr = memindex.OpenOrCreate(room)
+	if openErr != nil {
+		logger.WarnCF("agent.memory", "roomIndex: failed to open bleve index; BM25 disabled for room",
+			map[string]any{"room_root": room.Root, "error": openErr.Error()})
+		return nil
+	}
+	ms.indexCache[room.Root] = ri
+	return ri
+}
+
+// ensureSigCache lazily loads the MinHash signature cache for room.
+// Scans all .md files the first time; afterwards incremental via addSigLocked.
+// MUST be called with ms.indexMu held.
+func (ms *MemoryStore) ensureSigCacheLocked(room memrooms.Room) {
+	if _, ok := ms.sigCache[room.Root]; ok {
+		return
+	}
+	memories, err := memrooms.ScanMemories(room.MemoriesDir)
+	if err != nil {
+		logger.WarnCF("agent.memory", "ensureSigCache: scan failed",
+			map[string]any{"room_root": room.Root, "error": err.Error()})
+		ms.sigCache[room.Root] = nil
+		ms.sigIDs[room.Root] = nil
+		return
+	}
+	sigs := make([]minhash.Signature, 0, len(memories))
+	ids := make([]string, 0, len(memories))
+	for _, mf := range memories {
+		text := mf.Frontmatter.Title + " " + mf.Body
+		sig := minhash.Compute(text, minhash.DefaultNumPerm)
+		sigs = append(sigs, sig)
+		ids = append(ids, mf.Frontmatter.ID)
+	}
+	ms.sigCache[room.Root] = sigs
+	ms.sigIDs[room.Root] = ids
+}
+
+// checkAndRegisterSig checks if content is a near-duplicate of any known memory
+// in room. If it is, appends a NearDupRecord to minhash.jsonl and returns true.
+// If not, registers the new signature and returns false.
+// MUST be called with ms.indexMu held.
+func (ms *MemoryStore) checkAndRegisterSigLocked(room memrooms.Room, id, content string) bool {
+	ms.ensureSigCacheLocked(room)
+
+	newSig := minhash.Compute(content, minhash.DefaultNumPerm)
+	sigs := ms.sigCache[room.Root]
+	ids := ms.sigIDs[room.Root]
+
+	for i, existing := range sigs {
+		if minhash.IsNearDup(newSig, existing, minhash.DefaultThreshold) {
+			existingID := ids[i]
+			j := minhash.Jaccard(newSig, existing)
+			rec := minhash.NearDupRecord{
+				TS:         time.Now().UTC(),
+				NewID:      id,
+				ExistingID: existingID,
+				Jaccard:    j,
+				RoomRoot:   room.Root,
+			}
+			mhPath := filepath.Join(room.Root, ".index", minhash.MinHashJSONLFile)
+			if appendErr := minhash.AppendNearDupRecord(mhPath, rec); appendErr != nil {
+				logger.WarnCF("agent.memory", "checkAndRegisterSig: failed to append minhash record",
+					map[string]any{"room_root": room.Root, "new_id": id, "existing_id": existingID, "error": appendErr.Error()})
+			}
+			logger.WarnCF("agent.memory", "near-duplicate memory detected (non-destructive link written)",
+				map[string]any{"new_id": id, "existing_id": existingID, "jaccard": j})
+			// Still register the new sig so we track it for future dedup.
+			ms.sigCache[room.Root] = append(sigs, newSig)
+			ms.sigIDs[room.Root] = append(ids, id)
+			return true
+		}
+	}
+
+	// Not a near-dup — register the signature.
+	ms.sigCache[room.Root] = append(sigs, newSig)
+	ms.sigIDs[room.Root] = append(ids, id)
+	return false
 }
 
 // SetWorkspaceID wires the shared workspace room for the active turn.
@@ -232,7 +354,36 @@ func (ms *MemoryStore) AppendLongTermToScope(content, category string, scope mem
 		Body: trimmed,
 	}
 
-	return memrooms.WriteMemoryFile(room.MemoriesDir, mf)
+	// Write the .md file first (FR-7.2 / FR-7.3).
+	if err := memrooms.WriteMemoryFile(room.MemoriesDir, mf); err != nil {
+		return err
+	}
+
+	// MinHash dedup check (FR-7.5 / M-5): non-destructive — links written to
+	// minhash.jsonl even if near-dup detected; the .md file is already written.
+	// Acquire indexMu to serialise sig cache + bleve index updates.
+	ms.indexMu.Lock()
+	isDup := ms.checkAndRegisterSigLocked(room, id, trimmed)
+	// Wire into bleve index (FR-7.4): index unconditionally — even near-dups
+	// are indexed (we keep all .md files).
+	ri := ms.roomIndexLocked(room)
+	ms.indexMu.Unlock()
+
+	if isDup {
+		logger.WarnCF("agent.memory", "near-duplicate memory written (dedup link in minhash.jsonl)",
+			map[string]any{"id": id, "room_root": room.Root})
+	}
+
+	// Index in bleve after releasing indexMu. ri.Index() is internally serialised.
+	if ri != nil {
+		if idxErr := ri.Index(mf); idxErr != nil {
+			// Non-fatal: .md file is already written; bleve index will be rebuilt on next open.
+			logger.WarnCF("agent.memory", "AppendLongTermToScope: bleve index failed (will rebuild on next open)",
+				map[string]any{"id": id, "room_root": room.Root, "error": idxErr.Error()})
+		}
+	}
+
+	return nil
 }
 
 // SearchEntries performs a case-insensitive literal substring search across
@@ -248,7 +399,9 @@ func (ms *MemoryStore) SearchEntries(query string, limit int) ([]LongTermEntry, 
 	return ms.SearchEntriesInScope(query, limit, memrooms.RoomScopeBoth)
 }
 
-// SearchEntriesInScope searches the specified room scope for query.
+// SearchEntriesInScope searches the specified room scope for query using bleve BM25 (FR-7.4).
+// Falls back to substring scan when the bleve index is unavailable.
+// On each successful recall, appends a CounterRecord (op=access) to counters.jsonl (FR-7.5).
 func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memrooms.RoomScope) ([]LongTermEntry, error) {
 	if limit <= 0 {
 		limit = 20
@@ -257,54 +410,133 @@ func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memro
 		limit = 50
 	}
 
-	var dirs []string
+	// Resolve which rooms to search.
+	type roomAndIndex struct {
+		room memrooms.Room
+		ri   *memindex.RoomIndex // nil if unavailable
+	}
+	var targets []roomAndIndex
+
+	ms.indexMu.Lock()
 	switch scope {
 	case memrooms.RoomScopePrivate:
-		dirs = []string{ms.privateRoom.MemoriesDir}
+		targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
 	case memrooms.RoomScopeShared:
 		if ms.sharedRoom != nil {
-			dirs = []string{ms.sharedRoom.MemoriesDir}
+			targets = []roomAndIndex{{room: *ms.sharedRoom, ri: ms.roomIndexLocked(*ms.sharedRoom)}}
 		} else {
-			// Fallback to private.
-			dirs = []string{ms.privateRoom.MemoriesDir}
+			targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
 		}
-	case memrooms.RoomScopeBoth:
-		dirs = []string{ms.privateRoom.MemoriesDir}
+	default: // RoomScopeBoth
+		targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
 		if ms.sharedRoom != nil {
-			dirs = append(dirs, ms.sharedRoom.MemoriesDir)
+			targets = append(targets, roomAndIndex{room: *ms.sharedRoom, ri: ms.roomIndexLocked(*ms.sharedRoom)})
 		}
-	default:
-		dirs = []string{ms.privateRoom.MemoriesDir}
 	}
+	ms.indexMu.Unlock()
 
-	var all []memrooms.MemoryFile
+	// Collect results: bleve hits when index available, else substring scan.
+	type scoredMemory struct {
+		mf    memrooms.MemoryFile
+		score float64
+	}
+	var scored []scoredMemory
 	seenIDs := make(map[string]bool)
-	for _, dir := range dirs {
-		found, err := memrooms.SearchMemories(dir, query)
-		if err != nil {
+
+	for _, t := range targets {
+		if t.ri != nil {
+			// BM25 path (FR-7.4).
+			hits, err := t.ri.Search(query, limit)
+			if err != nil {
+				logger.WarnCF("agent.memory", "SearchEntriesInScope: bleve search failed; falling back to scan",
+					map[string]any{"room_root": t.room.Root, "query": query, "error": err.Error()})
+				// Fall through to scan.
+			} else {
+				for _, hit := range hits {
+					if seenIDs[hit.ID] {
+						continue
+					}
+					mf, readErr := memrooms.ReadMemoryFile(t.room.MemoriesDir, hit.ID)
+					if readErr != nil {
+						// File may have been deleted externally; skip.
+						logger.WarnCF("agent.memory", "SearchEntriesInScope: read memory file failed",
+							map[string]any{"id": hit.ID, "error": readErr.Error()})
+						continue
+					}
+					seenIDs[hit.ID] = true
+					scored = append(scored, scoredMemory{mf: mf, score: hit.Score})
+				}
+				// Append counters.jsonl access events (FR-7.5).
+				agentID := ms.resolveAuthor()
+				for _, hit := range hits {
+					rec := memrooms.CounterRecord{
+						TS:       time.Now().UTC(),
+						MemoryID: hit.ID,
+						Op:       memrooms.CounterOpAccess,
+						By:       agentID,
+					}
+					if appendErr := memrooms.AppendCounterRecord(t.room.CountersPath, rec); appendErr != nil {
+						logger.WarnCF("agent.memory", "SearchEntriesInScope: counter append failed",
+							map[string]any{"memory_id": hit.ID, "error": appendErr.Error()})
+					}
+				}
+				continue
+			}
+		}
+
+		// Substring-scan fallback (when bleve index is nil or errored).
+		found, scanErr := memrooms.SearchMemories(t.room.MemoriesDir, query)
+		if scanErr != nil {
 			logger.WarnCF("agent.memory", "SearchEntriesInScope: scan failed",
-				map[string]any{"dir": dir, "error": err.Error()})
+				map[string]any{"dir": t.room.MemoriesDir, "error": scanErr.Error()})
 			continue
 		}
 		for _, mf := range found {
 			if !seenIDs[mf.Frontmatter.ID] {
 				seenIDs[mf.Frontmatter.ID] = true
-				all = append(all, mf)
+				scored = append(scored, scoredMemory{mf: mf, score: 0})
 			}
 		}
 	}
 
-	// Sort newest-first. For now we use ID lexicographic order (UUIDs are not
-	// time-ordered). When bleve is added (separate unit), ranking supersedes this.
-	// We derive an approximate recency from the file mtime when available.
-	sortMemoriesNewestFirst(dirs, all)
+	// Sort by BM25 score descending (ties: newest-first by mtime).
+	dirs := make([]string, 0, len(targets))
+	for _, t := range targets {
+		dirs = append(dirs, t.room.MemoriesDir)
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		return true // stable sort preserves insertion order (mtime-sorted scan)
+	})
 
+	// When all scores are 0 (scan fallback), sort by mtime.
+	allZero := true
+	for _, s := range scored {
+		if s.score != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		all := make([]memrooms.MemoryFile, len(scored))
+		for i, s := range scored {
+			all[i] = s.mf
+		}
+		sortMemoriesNewestFirst(dirs, all)
+		for i, mf := range all {
+			scored[i].mf = mf
+		}
+	}
+
+	// Build the result list up to limit.
 	var results []LongTermEntry
-	for i, mf := range all {
+	for i, s := range scored {
 		if i >= limit {
 			break
 		}
-		results = append(results, memoryFileToEntry(mf))
+		results = append(results, memoryFileToEntry(s.mf))
 	}
 	return results, nil
 }
