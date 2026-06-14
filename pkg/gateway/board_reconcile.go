@@ -62,3 +62,26 @@ func (a *restAPI) reconcileStuckBoardTasks() {
 			"count", reset)
 	}
 }
+
+// reconcileOrphanBlockedByEdges is called once at gateway startup to drop any
+// blocked_by edges that point at task files that no longer exist on disk.
+//
+// Orphan edges arise when a task is deleted by a path that did not cascade (e.g.
+// a manual file removal, or a crash between the file delete and the cascade), or
+// when a blocked_by target is hand-edited away. A waiting task whose only blocker
+// is an orphan would otherwise never advance, because AdvanceBlockedDependents is
+// keyed on the completion of a real task that will never complete. DropOrphanEdges
+// removes those stale references so the dependency graph self-heals on boot.
+//
+// It is idempotent and safe when the tasks directory is absent or empty. It runs
+// before any request handler is reachable, so no concurrent mutation can race it.
+func (a *restAPI) reconcileOrphanBlockedByEdges() {
+	removed, err := boardtask.DropOrphanEdges(a.boardTasksDir())
+	if err != nil {
+		slog.Error("board_reconcile: orphan blocked_by edge cleanup failed", "error", err)
+		return
+	}
+	if removed > 0 {
+		slog.Info("board_reconcile: dropped orphan blocked_by edges on boot", "count", removed)
+	}
+}

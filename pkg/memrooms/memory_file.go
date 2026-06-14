@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
 
 // MemoryType is the closed 8-member enum for memory kind (FR-7.2).
@@ -293,24 +294,30 @@ func parseMemoryFile(raw string) (MemoryFile, error) {
 	if !strings.HasPrefix(raw, "---\n") && !strings.HasPrefix(raw, "---\r\n") {
 		return MemoryFile{}, fmt.Errorf("memrooms: missing opening --- delimiter")
 	}
-	// Find the closing --- delimiter.
+	// Find the closing --- delimiter. The normal form ends with "\n---\n"; a file
+	// with no trailing newline after the closing fence ends with "\n---". We must
+	// remember WHICH delimiter matched so we skip exactly its length — a hardcoded
+	// +5 would drop the first body byte in the 4-char EOF case.
 	rest := raw[4:] // skip opening "---\n"
-	closeIdx := strings.Index(rest, "\n---\n")
+	const delimFull = "\n---\n"
+	const delimEOF = "\n---"
+	closeIdx := strings.Index(rest, delimFull)
+	delimLen := len(delimFull)
 	if closeIdx < 0 {
-		// Try with trailing EOF (no trailing newline after last ---)
-		closeIdx = strings.Index(rest, "\n---")
+		// Try with trailing EOF (no trailing newline after last ---).
+		closeIdx = strings.Index(rest, delimEOF)
 		if closeIdx < 0 {
 			return MemoryFile{}, fmt.Errorf("memrooms: missing closing --- delimiter")
 		}
+		delimLen = len(delimEOF)
 	}
 
 	frontmatterText := rest[:closeIdx]
-	body := ""
-	afterClose := rest[closeIdx+5:] // skip "\n---\n"
+	afterClose := rest[closeIdx+delimLen:] // skip the matched closing delimiter
 	if strings.HasPrefix(afterClose, "\n") {
 		afterClose = afterClose[1:] // skip blank separator line
 	}
-	body = afterClose
+	body := afterClose
 
 	fm, err := parseFrontmatter(frontmatterText)
 	if err != nil {
@@ -361,7 +368,13 @@ func parseFrontmatter(text string) (MemoryFrontmatter, error) {
 			fm.Type = MemoryType(unquoteYAML(val))
 		case "confidence":
 			var f float64
-			fmt.Sscanf(val, "%f", &f)
+			if _, scanErr := fmt.Sscanf(val, "%f", &f); scanErr != nil {
+				// Malformed confidence: keep the zero default (counters.jsonl is
+				// authoritative anyway) but don't silently swallow the signal.
+				logger.WarnCF("memrooms", "parseFrontmatter: invalid confidence value; defaulting to 0",
+					map[string]any{"value": val, "error": scanErr.Error()})
+				f = 0
+			}
 			fm.Confidence = f
 		case "status":
 			fm.Status = MemoryStatus(unquoteYAML(val))

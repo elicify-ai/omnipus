@@ -23,6 +23,7 @@ import (
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 )
 
@@ -176,30 +177,68 @@ func milestoneProgress(total, done int) float64 {
 
 // clearMilestoneOnTasks clears milestone_id on all tasks referencing the given milestoneID.
 // Best-effort: individual file errors are logged as WARN, not returned (FR-L2-011).
+//
+// The scan is only used to identify candidate task IDs; the actual read→mutate→write
+// for each candidate is performed under the process-wide boardtask.TaskFileLock striped
+// mutex (with a re-read inside the lock), so a concurrent PUT/start/advance on the same
+// task cannot be clobbered. Taking only the advisory flock (as before) was insufficient:
+// it serialised writers against each other but the in-process board-task handlers RMW
+// under TaskFileLock, not WithFlock, so the two paths could interleave and lose updates.
 func clearMilestoneOnTasks(home, milestoneID string) {
 	tasksDir := filepath.Join(home, "tasks")
+
+	// Phase 1: collect candidate IDs (the lock-free scan may see slightly stale
+	// state, which is fine — the authoritative check happens under the lock below).
+	var candidates []string
 	if err := scanGTDTasks(home, func(id string, t boardTask) {
-		if t.MilestoneID != milestoneID {
-			return
-		}
-		t.MilestoneID = ""
-		t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		taskPath := filepath.Join(tasksDir, id+".json")
-		data, err := json.MarshalIndent(t, "", "  ")
-		if err != nil {
-			slog.Warn("rest: milestones: cascade clear: marshal task failed",
-				"task_id", id, "milestone_id", milestoneID, "error", err)
-			return
-		}
-		if err := fileutil.WithFlock(taskPath, func() error {
-			return fileutil.WriteFileAtomic(taskPath, data, 0o600)
-		}); err != nil {
-			slog.Warn("rest: milestones: cascade clear: write task failed",
-				"task_id", id, "milestone_id", milestoneID, "error", err)
+		if t.MilestoneID == milestoneID {
+			candidates = append(candidates, id)
 		}
 	}); err != nil {
 		slog.Warn("rest: milestones: cascade clear: scan failed",
 			"milestone_id", milestoneID, "error", err)
+		return
+	}
+
+	// Phase 2: RMW each candidate under the striped lock, re-reading inside the
+	// lock to avoid clobbering a concurrent mutation.
+	for _, id := range candidates {
+		taskPath := filepath.Join(tasksDir, id+".json")
+		mu := boardtask.TaskFileLock.Get(id)
+		mu.Lock()
+		func() {
+			defer mu.Unlock()
+			freshData, readErr := os.ReadFile(taskPath)
+			if readErr != nil {
+				if !errors.Is(readErr, os.ErrNotExist) {
+					slog.Warn("rest: milestones: cascade clear: re-read task failed",
+						"task_id", id, "milestone_id", milestoneID, "error", readErr)
+				}
+				return
+			}
+			var fresh boardTask
+			if jsonErr := json.Unmarshal(freshData, &fresh); jsonErr != nil {
+				slog.Warn("rest: milestones: cascade clear: re-read task corrupt",
+					"task_id", id, "milestone_id", milestoneID, "error", jsonErr)
+				return
+			}
+			// Idempotency / race guard: only clear if it still references this milestone.
+			if fresh.MilestoneID != milestoneID {
+				return
+			}
+			fresh.MilestoneID = ""
+			fresh.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			data, marshalErr := json.MarshalIndent(fresh, "", "  ")
+			if marshalErr != nil {
+				slog.Warn("rest: milestones: cascade clear: marshal task failed",
+					"task_id", id, "milestone_id", milestoneID, "error", marshalErr)
+				return
+			}
+			if writeErr := fileutil.WriteFileAtomic(taskPath, data, 0o600); writeErr != nil {
+				slog.Warn("rest: milestones: cascade clear: write task failed",
+					"task_id", id, "milestone_id", milestoneID, "error", writeErr)
+			}
+		}()
 	}
 }
 

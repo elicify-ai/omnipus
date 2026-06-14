@@ -760,6 +760,10 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		}
 		existing.SessionID = ""
 	}
+	// workspaceChanged records that this PUT moved the task to a different workspace;
+	// if so and a milestone stays attached, the milestone-workspace FK must be
+	// re-validated below (a milestone belongs to exactly one workspace).
+	workspaceChanged := false
 	if req.WorkspaceId != nil {
 		if len(*req.WorkspaceId) > 50 {
 			jsonErr(w, http.StatusBadRequest, "workspace_id must be 50 characters or fewer")
@@ -779,6 +783,7 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 				return
 			}
 		}
+		workspaceChanged = *req.WorkspaceId != existing.WorkspaceID
 		existing.WorkspaceID = *req.WorkspaceId
 	}
 	if req.MilestoneId != nil {
@@ -792,6 +797,16 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 			}
 		}
 		existing.MilestoneID = milestoneID
+	} else if workspaceChanged && existing.MilestoneID != "" {
+		// Workspace moved but milestone_id was not part of this request: the
+		// still-attached milestone may now belong to a different workspace, so
+		// re-validate the FK. If it no longer holds, clear it rather than 400 —
+		// the move is the operator's primary intent and the stale FK is collateral.
+		if err := validateMilestoneFK(a.homePath, existing.MilestoneID, existing.WorkspaceID); err != nil {
+			slog.Info("rest: board task: clearing milestone after workspace change broke FK",
+				"id", id, "milestone_id", existing.MilestoneID, "workspace_id", existing.WorkspaceID, "reason", err.Error())
+			existing.MilestoneID = ""
+		}
 	}
 	if req.AgentId != nil {
 		agentID := *req.AgentId
@@ -1126,34 +1141,57 @@ func (a *restAPI) handleBoardTaskStart(w http.ResponseWriter, r *http.Request, i
 	sessionID := params.sessionID
 	prompt := params.prompt
 	a.agentLoop.ExecuteBoardTask(agentID, taskID, sessionID, prompt, func(result string, execErr error) {
-		// Hold the task lock for the completion RMW as well (B8).
-		cMu := a.boardTaskLock().Get(taskID)
-		cMu.Lock()
-		defer cMu.Unlock()
+		// becameDone records that this completion transitioned the task to terminal
+		// "done"; advanceDeps is armed only after the write succeeds. The callback
+		// must un-gate any waiting dependents whose blocked_by deps are now all done
+		// (FR-6.5) — mirroring the PUT/tool paths — otherwise board tasks blocked on
+		// an autonomously-completed task are stranded forever. We do this AFTER the
+		// per-task lock is released (AdvanceBlockedDependents takes the striped lock
+		// of each dependent itself, and could deadlock if we held this task's lock
+		// while a dependent also depended back, so keep dispatch outside the section).
+		advanceDeps := false
+		func() {
+			// Hold the task lock for the completion RMW (B8).
+			cMu := a.boardTaskLock().Get(taskID)
+			cMu.Lock()
+			defer cMu.Unlock()
 
-		t, readErr := a.readBoardTask(taskID)
-		if readErr != nil {
-			slog.Error("rest: board task: completion read failed", "id", taskID, "error", readErr)
-			return
-		}
-		if t.Status != boardtask.StatusActive {
-			// Task was modified externally (e.g. user retried) — don't overwrite.
-			return
-		}
-		if execErr != nil {
-			t.Status = boardtask.StatusFailed
-			t.Result = execErr.Error()
-		} else {
-			t.Status = boardtask.StatusDone
-			// #404: capture the agent's output string (truncated to 50000 chars).
-			if len(result) > 50000 {
-				result = result[:50000]
+			t, readErr := a.readBoardTask(taskID)
+			if readErr != nil {
+				slog.Error("rest: board task: completion read failed", "id", taskID, "error", readErr)
+				return
 			}
-			t.Result = result
-		}
-		t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		if writeErr := a.writeBoardTask(t); writeErr != nil {
-			slog.Error("rest: board task: completion update failed", "id", taskID, "error", writeErr)
+			if t.Status != boardtask.StatusActive {
+				// Task was modified externally (e.g. user retried) — don't overwrite.
+				return
+			}
+			if execErr != nil {
+				t.Status = boardtask.StatusFailed
+				t.Result = execErr.Error()
+			} else {
+				t.Status = boardtask.StatusDone
+				// #404: capture the agent's output string (truncated to 50000 chars).
+				if len(result) > 50000 {
+					result = result[:50000]
+				}
+				t.Result = result
+			}
+			t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			if writeErr := a.writeBoardTask(t); writeErr != nil {
+				slog.Error("rest: board task: completion update failed", "id", taskID, "error", writeErr)
+				return
+			}
+			// Only un-gate dependents once the terminal "done" write actually persisted.
+			advanceDeps = execErr == nil
+		}()
+
+		if advanceDeps {
+			if advanced, advErr := boardtask.AdvanceBlockedDependents(a.boardTasksDir(), taskID); advErr != nil {
+				slog.Warn("rest: board task: advance dependents failed", "id", taskID, "error", advErr)
+			} else if len(advanced) > 0 {
+				slog.Info("rest: board task: completed task advanced dependents",
+					"completed_id", taskID, "advanced_ids", advanced)
+			}
 		}
 	})
 
