@@ -4,9 +4,9 @@
  * Covers:
  * - No auth_mode:none option in the UI (FR-107 / US-4 AC1).
  * - No hot-reload toggle in the UI (US-4 AC2).
- * - Persistent unauth banner when auth_mode=none (FR-107b).
+ * - No false banner when auth_mode=none but dev_mode_bypass=false (regression).
  * - Persistent unauth banner when dev_mode_bypass=true (FR-107b).
- * - No banner when auth_mode=token and dev_mode_bypass=false (clean state).
+ * - Banner only when dev_mode_bypass=true (auth_mode is vestigial).
  * - US-B2: bind_address risky control (standing badge for 0.0.0.0).
  */
 
@@ -137,13 +137,19 @@ describe('GatewaySection — US-4 AC2: no hot-reload toggle', () => {
 // ── FR-107b: unauth banner ─────────────────────────────────────────────────────
 
 describe('GatewaySection — FR-107b: unauthenticated access banner', () => {
-  it('shows persistent banner when auth_mode=none', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ auth_mode: 'none' }) as never)
+  // Regression: auth_mode is legacy/vestigial — token auth is enforced regardless
+  // of it, so an unset auth_mode (serialized "none") must NOT trigger the banner.
+  // Previously this produced a false "unauthenticated access" alarm on every normal
+  // install (real backend default-serializes auth_mode:"none" while auth is on).
+  it('does NOT show banner when auth_mode=none but dev_mode_bypass=false', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(
+      makeConfig({ auth_mode: 'none', dev_mode_bypass: false }) as never
+    )
     renderSection()
     await waitFor(() => {
-      expect(screen.getByTestId('unauth-banner')).toBeInTheDocument()
+      expect(screen.getByText(/log level/i)).toBeInTheDocument()
     })
-    expect(screen.getByText(/unauthenticated access is enabled/i)).toBeInTheDocument()
+    expect(screen.queryByTestId('unauth-banner')).not.toBeInTheDocument()
   })
 
   it('shows persistent banner when dev_mode_bypass=true', async () => {
@@ -157,7 +163,7 @@ describe('GatewaySection — FR-107b: unauthenticated access banner', () => {
     expect(screen.getByText(/unauthenticated access is enabled/i)).toBeInTheDocument()
   })
 
-  it('shows banner when BOTH auth_mode=none and dev_mode_bypass=true', async () => {
+  it('shows banner on dev_mode_bypass=true even when auth_mode=none', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(
       makeConfig({ auth_mode: 'none', dev_mode_bypass: true }) as never
     )

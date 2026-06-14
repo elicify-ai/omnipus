@@ -39,15 +39,17 @@ const BIND_ADDRESS_COPY = {
 // ── UnauthenticatedBanner (FR-107b) ───────────────────────────────────────────
 
 interface UnauthBannerProps {
-  authModeNone: boolean
   devModeBypass: boolean
 }
 
-function UnauthenticatedBanner({ authModeNone, devModeBypass }: UnauthBannerProps) {
-  if (!authModeNone && !devModeBypass) return null
-  const reason = authModeNone
-    ? 'auth_mode is set to "none" in config.json'
-    : 'dev_mode_bypass is enabled in config.json'
+// The banner warns ONLY about the genuinely-insecure state: dev_mode_bypass=true,
+// which makes the gateway accept any request as admin. The legacy `auth_mode`
+// field is NOT consulted — token auth is the only mode (FR-107), so an unset
+// auth_mode (serialized as "none") does NOT disable auth; access is still gated
+// by the configured user + bearer token. Keying the banner off auth_mode==="none"
+// produced a false "unauthenticated access" alarm on every normal install.
+function UnauthenticatedBanner({ devModeBypass }: UnauthBannerProps) {
+  if (!devModeBypass) return null
   return (
     <div
       role="alert"
@@ -60,11 +62,8 @@ function UnauthenticatedBanner({ authModeNone, devModeBypass }: UnauthBannerProp
           Unauthenticated access is enabled
         </p>
         <p className="text-xs text-[var(--color-error)]/80">
-          Anyone who can reach this server has admin access ({reason}). To fix this, set
-          <code className="mx-1 font-mono text-[10px] bg-[var(--color-error)]/10 px-1 rounded">
-            gateway.auth_mode: token
-          </code>
-          and
+          Anyone who can reach this server has admin access (dev_mode_bypass is enabled in
+          config.json). To fix this, set
           <code className="mx-1 font-mono text-[10px] bg-[var(--color-error)]/10 px-1 rounded">
             gateway.dev_mode_bypass: false
           </code>
@@ -186,14 +185,14 @@ export function GatewaySection() {
   // US-B2: badges derive from the PERSISTED config values (not local draft state).
   const persistedBindAddress = config?.gateway.bind_address ?? '127.0.0.1'
 
-  // FR-107b: unauth conditions from persisted config
-  const authModeNone = config?.gateway.auth_mode === 'none'
+  // FR-107b: the only genuinely-unauthenticated state is dev_mode_bypass=true.
+  // (auth_mode is legacy/vestigial — token auth is enforced regardless of it.)
   const devModeBypass = config?.gateway.dev_mode_bypass === true
 
   return (
     <div className="space-y-6">
-      {/* FR-107b: persistent unauthenticated-access banner */}
-      <UnauthenticatedBanner authModeNone={authModeNone} devModeBypass={devModeBypass} />
+      {/* FR-107b: persistent unauthenticated-access banner (dev_mode_bypass only) */}
+      <UnauthenticatedBanner devModeBypass={devModeBypass} />
 
       <div className="flex items-center justify-between">
         <div>
