@@ -38,8 +38,15 @@ func (a *restAPI) HandlePerformance(w http.ResponseWriter, r *http.Request) {
 
 func (a *restAPI) getPerformance(w http.ResponseWriter, _ *http.Request) {
 	cfg := a.agentLoop.GetConfig()
-	configured := cfg.Performance.MaxParallelAgents
 	effective := cfg.Performance.EffectiveMaxParallelAgents()
+	// max_parallel_agents in the response must satisfy the contract minimum (2).
+	// A value of 0 means "unconfigured / auto" on disk; surface the effective
+	// clamped value (always >= 2) so the wire payload is schema-valid and the UI
+	// shows the concurrency actually in use.
+	configured := cfg.Performance.MaxParallelAgents
+	if configured < 2 {
+		configured = effective
+	}
 	jsonOK(w, gen.PerformanceSettings{
 		MaxParallelAgents:          &configured,
 		EffectiveMaxParallelAgents: &effective,
