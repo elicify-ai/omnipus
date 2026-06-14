@@ -491,10 +491,22 @@ func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memro
 				map[string]any{"dir": t.room.MemoriesDir, "error": scanErr.Error()})
 			continue
 		}
+		agentIDScan := ms.resolveAuthor()
 		for _, mf := range found {
 			if !seenIDs[mf.Frontmatter.ID] {
 				seenIDs[mf.Frontmatter.ID] = true
 				scored = append(scored, scoredMemory{mf: mf, score: 0})
+				// Append access counter record for scan-fallback results (FR-7.5).
+				rec := memrooms.CounterRecord{
+					TS:       time.Now().UTC(),
+					MemoryID: mf.Frontmatter.ID,
+					Op:       memrooms.CounterOpAccess,
+					By:       agentIDScan,
+				}
+				if appendErr := memrooms.AppendCounterRecord(t.room.CountersPath, rec); appendErr != nil {
+					logger.WarnCF("agent.memory", "SearchEntriesInScope: counter append failed (scan fallback)",
+						map[string]any{"memory_id": mf.Frontmatter.ID, "error": appendErr.Error()})
+				}
 			}
 		}
 	}

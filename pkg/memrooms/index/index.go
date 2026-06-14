@@ -36,6 +36,7 @@ import (
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/index/scorch"
 	bleveMapping "github.com/blevesearch/bleve/v2/mapping"
+	bleveQuery "github.com/blevesearch/bleve/v2/search/query"
 
 	"github.com/dapicom-ai/omnipus/pkg/memrooms"
 )
@@ -121,7 +122,7 @@ func openOrCreateAt(idxPath string) (bleve.Index, error) {
 		if mkErr := os.MkdirAll(filepath.Dir(idxPath), 0o700); mkErr != nil {
 			return nil, fmt.Errorf("create parent dir: %w", mkErr)
 		}
-		return bleve.NewUsing(idxPath, buildMapping(), scorch.Name, "", nil)
+		return bleve.NewUsing(idxPath, buildMapping(), scorch.Name, scorch.Name, nil)
 	}
 	// Exists — open it.
 	idx, err := bleve.Open(idxPath)
@@ -218,10 +219,20 @@ func (ri *RoomIndex) Search(query string, limit int) ([]SearchHit, error) {
 		mq := bleve.NewMatchAllQuery()
 		req = bleve.NewSearchRequestOptions(mq, limit, 0, false)
 	} else {
-		// BM25 over all indexed fields.
-		// Default operator is OR (MatchQueryOperatorOr = 0) — any term hit ranks the doc.
-		mq := bleve.NewMatchQuery(query)
-		req = bleve.NewSearchRequestOptions(mq, limit, 0, false)
+		// BM25 over the text fields explicitly (title, body, tags).
+		// We build a disjunction of per-field match queries so that the
+		// "en" analyzer mapping is honoured for each field.  A plain
+		// bleve.NewMatchQuery targets the _all composite field whose
+		// analyzer does not match the field-level "en" mapping, producing
+		// zero hits even when terms are present.
+		mqs := make([]bleveQuery.Query, 0, 3)
+		for _, field := range []string{fieldTitle, fieldBody, fieldTags} {
+			mq := bleveQuery.NewMatchQuery(query)
+			mq.SetField(field)
+			mqs = append(mqs, mq)
+		}
+		dq := bleve.NewDisjunctionQuery(mqs...)
+		req = bleve.NewSearchRequestOptions(dq, limit, 0, false)
 	}
 	req.Fields = []string{} // scores only — we fetch full content from .md
 
