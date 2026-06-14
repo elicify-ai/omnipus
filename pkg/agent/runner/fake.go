@@ -119,7 +119,7 @@ func (f *FakeRunner) ReceivedInputs() []string {
 	return out
 }
 
-// RunOptions returns all RunOptions passed to Run (snapshot).
+// RecordedRunOpts returns all RunOptions passed to Run (snapshot).
 func (f *FakeRunner) RecordedRunOpts() []RunOptions {
 	f.mu.Lock()
 	defer f.mu.Unlock()

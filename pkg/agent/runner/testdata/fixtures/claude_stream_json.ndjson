@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"sess-abc123","tools":["bash","read_file"],"model":"claude-opus-4-5","cwd":"/tmp/work"}
+{"type":"assistant","message":{"id":"msg-1","role":"assistant","content":[{"type":"text","text":"I'll help you with that task."}]}}
+{"type":"assistant","message":{"id":"msg-2","role":"assistant","content":[{"type":"tool_use","id":"tool-req-1","name":"bash","input":{"command":"ls /tmp"}}]}}
+{"type":"result","subtype":"success","result":"Done.","session_id":"sess-abc123","usage":{"input_tokens":100,"output_tokens":50},"total_cost_usd":0.001}
