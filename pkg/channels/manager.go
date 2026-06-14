@@ -658,9 +658,10 @@ func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig)
 				continue
 			}
 		case "matrix":
-			// Read the full matrix config from the live config (not the diff slice).
-			matrixInst, ok := m.config.Channels["matrix"]
-			if !ok || matrixInst.Homeserver == "" || matrixInst.UserID == "" || matrixInst.AccessTokenRef == "" {
+			// Validate THIS instance's matrix config (instanceID may differ from the
+			// "matrix" type key — a hardcoded m.config.Channels["matrix"] lookup would
+			// validate the wrong/absent instance and mis-gate a correctly-named one).
+			if inst.Homeserver == "" || inst.UserID == "" || inst.AccessTokenRef == "" {
 				warnMisconfigured("Matrix", "homeserver, user_id, access_token")
 				continue
 			}

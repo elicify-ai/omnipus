@@ -47,6 +47,13 @@ const (
 
 	// maxAuthRetries — auth errors are permanent; after this many we give up.
 	maxAuthRetries = 1
+
+	// healthySessionThreshold — when a runLoop session stays connected at least
+	// this long before erroring, we treat the connection/auth as having been
+	// healthy and reset the backoff + auth-retry counters. Without this, a single
+	// long-lived session that eventually drops would inherit a maxed-out backoff
+	// (or a near-exhausted auth-retry budget) from transient blips hours earlier.
+	healthySessionThreshold = 60 * time.Second
 )
 
 // ErrAuthFailure is returned when the IMAP server rejects our credentials.
@@ -125,10 +132,20 @@ func (c *EmailChannel) Start(ctx context.Context) error {
 		default:
 		}
 
+		sessionStart := time.Now()
 		err := c.runLoop(c.ctx)
 		if err == nil {
 			// Normal shutdown via ctx cancellation.
 			return nil
+		}
+
+		// A session that stayed up long enough indicates the connection and auth
+		// were healthy; reset the transient backoff and auth-retry counters so an
+		// eventual drop after a long healthy run does not inherit a stale, maxed-out
+		// backoff or a near-exhausted auth budget from earlier blips.
+		if time.Since(sessionStart) >= healthySessionThreshold {
+			backoff = backoffMin
+			authAttempts = 0
 		}
 
 		// Classify: permanent vs. transient.
@@ -292,19 +309,31 @@ func (c *EmailChannel) fetchUnseen(ctx context.Context, client *imapclient.Clien
 		return fmt.Errorf("fetch unseen messages: %w", err)
 	}
 
+	// Only mark messages \Seen once they were successfully dispatched to the bus.
+	// Marking the whole seqSet seen unconditionally would silently drop any message
+	// whose dispatch failed (it would never be re-fetched on the next UNSEEN scan).
+	dispatched := make([]uint32, 0, len(messages))
 	for _, msg := range messages {
 		if err := c.dispatchBufferedMessage(ctx, msg); err != nil {
-			slog.Warn("email channel: dispatch message error", "error", err)
+			slog.Warn("email channel: dispatch message error; leaving message UNSEEN for retry",
+				"seq_num", msg.SeqNum, "error", err)
+			continue
 		}
+		dispatched = append(dispatched, msg.SeqNum)
 	}
 
-	// Mark all fetched messages as seen.
+	if len(dispatched) == 0 {
+		return nil
+	}
+
+	// Mark only the successfully-dispatched messages as seen.
+	seenSet := imap.SeqSetNum(dispatched...)
 	storeFlags := imap.StoreFlags{
 		Op:     imap.StoreFlagsAdd,
 		Flags:  []imap.Flag{imap.FlagSeen},
 		Silent: true,
 	}
-	if err := client.Store(seqSet, &storeFlags, nil).Close(); err != nil {
+	if err := client.Store(seenSet, &storeFlags, nil).Close(); err != nil {
 		slog.Warn("email channel: mark seen failed", "error", err)
 	}
 

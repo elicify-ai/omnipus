@@ -7,6 +7,8 @@ package agent
 import (
 	"context"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -77,126 +79,223 @@ func createTask(t *testing.T, store *taskstore.TaskStore, status string, blocked
 	return e
 }
 
-// TestOrchestratorAdvance_UnblocksQueuedTask verifies that advanceBlockedTasks
-// does NOT attempt to dispatch when the agentLoop is nil, but it correctly
-// identifies that the task is eligible (all deps satisfied).
-// Since ExecuteTask would fail without a real agent loop, we verify the
-// advance logic reaches the dispatch attempt.
+// sortedSet returns ids as a set for order-independent comparison.
+func idSet(ids []string) map[string]bool {
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
+}
+
+// TestOrchestratorAdvance_UnblockedTaskFoundAfterDep drives the REAL
+// readyBlockedCandidates decision: when the sole dependency is completed, the
+// downstream task must be reported as ready to advance.
 func TestOrchestratorAdvance_UnblockedTaskFoundAfterDep(t *testing.T) {
-	_, store := newTestTaskExecutor(t)
+	te, store := newTestTaskExecutor(t)
 
-	// Create a completed dependency.
 	dep := createTask(t, store, "completed", nil)
-
-	// Create a downstream task blocked by dep.
 	downstream := createTask(t, store, "queued", []string{dep.ID})
 
-	// Verify the downstream task is found via BlockedByID filter.
-	candidates, err := store.List(taskstore.TaskFilter{Status: "queued", BlockedByID: dep.ID})
-	if err != nil {
-		t.Fatalf("list blocked tasks: %v", err)
-	}
-	if len(candidates) != 1 {
-		t.Fatalf("want 1 candidate, got %d", len(candidates))
-	}
-	if candidates[0].ID != downstream.ID {
-		t.Fatalf("wrong candidate: want %q, got %q", downstream.ID, candidates[0].ID)
+	ready := te.readyBlockedCandidates(dep.ID)
+	if len(ready) != 1 || ready[0] != downstream.ID {
+		t.Fatalf("readyBlockedCandidates(%q) = %v, want [%q]", dep.ID, ready, downstream.ID)
 	}
 }
 
-// TestOrchestratorAdvance_StillBlockedWhenDepNotComplete verifies that a task
-// with multiple blocked_by deps is NOT advanced when some deps are still queued.
+// TestOrchestratorAdvance_StillBlockedWhenDepNotComplete drives the REAL
+// readyBlockedCandidates: a task gated on two deps where one is still queued
+// must NOT be reported ready, even though the OTHER dep just completed.
 func TestOrchestratorAdvance_StillBlockedWhenDepNotComplete(t *testing.T) {
-	_, store := newTestTaskExecutor(t)
+	te, store := newTestTaskExecutor(t)
 
 	depA := createTask(t, store, "completed", nil)
 	depB := createTask(t, store, "queued", nil) // not yet completed
 
-	// Create downstream blocked by both depA and depB.
 	_ = createTask(t, store, "queued", []string{depA.ID, depB.ID})
 
-	// advanceBlockedTasks for depA: depB is still queued, so the downstream
-	// task must NOT be advanced.  We verify the dependency-satisfaction check
-	// by inspecting store state (agentLoop=nil means ExecuteTask would panic
-	// if actually called).
-	//
-	// Re-implement the satisfaction check directly:
-	candidates, err := store.List(taskstore.TaskFilter{Status: "queued", BlockedByID: depA.ID})
-	if err != nil {
-		t.Fatalf("list: %v", err)
+	// depA completed → advance check keyed on depA. depB is still queued, so the
+	// downstream task's FULL dependency set is not satisfied: nothing is ready.
+	ready := te.readyBlockedCandidates(depA.ID)
+	if len(ready) != 0 {
+		t.Fatalf("readyBlockedCandidates(%q) = %v, want [] (depB still queued)", depA.ID, ready)
 	}
-	if len(candidates) != 1 {
-		t.Fatalf("want 1 candidate, got %d", len(candidates))
-	}
-	t.Logf("candidate: %s, blocked_by: %v", candidates[0].ID, candidates[0].BlockedBy)
 
-	// Check that depB is NOT completed — so allSatisfied should be false.
-	for _, depID := range candidates[0].BlockedBy {
-		dep, err := store.Get(depID)
-		if err != nil {
-			t.Fatalf("get dep %q: %v", depID, err)
-		}
-		if dep.ID == depB.ID && dep.Status == "completed" {
-			t.Error("depB should not be completed yet")
-		}
+	// Now complete depB and re-check keyed on depB — the downstream task is ready.
+	now := time.Now().UTC()
+	if _, err := store.Update(depB.ID, taskstore.TaskPatch{Status: ptrStr("running"), StartedAt: &now}); err != nil {
+		t.Fatalf("update depB→running: %v", err)
+	}
+	if _, err := store.Update(depB.ID, taskstore.TaskPatch{Status: ptrStr("completed"), CompletedAt: &now}); err != nil {
+		t.Fatalf("update depB→completed: %v", err)
+	}
+	ready = te.readyBlockedCandidates(depB.ID)
+	if len(ready) != 1 {
+		t.Fatalf("readyBlockedCandidates(%q) after depB completes = %v, want 1 ready", depB.ID, ready)
 	}
 }
 
-// TestOrchestratorAdvance_FailedDepDoesNotUnblock verifies that a failed dep
-// does NOT satisfy the blocked_by gate (only "completed" unblocks).
+// TestOrchestratorAdvance_FailedDepDoesNotUnblock drives the REAL
+// readyBlockedCandidates: a FAILED dependency must NOT satisfy the gate — only
+// "completed" unblocks.
 func TestOrchestratorAdvance_FailedDepDoesNotUnblock(t *testing.T) {
-	_, store := newTestTaskExecutor(t)
+	te, store := newTestTaskExecutor(t)
 
 	dep := createTask(t, store, "failed", nil)
-	downstream := createTask(t, store, "queued", []string{dep.ID})
+	_ = createTask(t, store, "queued", []string{dep.ID})
 
-	// The dependency failed, not completed. Verify that our satisfaction check
-	// would correctly determine this is NOT ready to advance.
-	dep2, err := store.Get(dep.ID)
-	if err != nil {
-		t.Fatalf("get dep: %v", err)
-	}
-	if dep2.Status != "failed" {
-		t.Fatalf("want dep status=failed, got %q", dep2.Status)
-	}
-
-	// The downstream task should still be queued (not dispatched).
-	ds2, err := store.Get(downstream.ID)
-	if err != nil {
-		t.Fatalf("get downstream: %v", err)
-	}
-	if ds2.Status != "queued" {
-		t.Fatalf("downstream should still be queued, got %q", ds2.Status)
+	ready := te.readyBlockedCandidates(dep.ID)
+	if len(ready) != 0 {
+		t.Fatalf("readyBlockedCandidates(%q) = %v, want [] (dep failed, not completed)", dep.ID, ready)
 	}
 }
 
-// TestOrchestratorAdvance_MultipleDownstreamTasks verifies that all tasks
-// blocked by a just-completed dep are found, not just the first one.
+// TestOrchestratorAdvance_MultipleDownstreamTasks drives the REAL
+// readyBlockedCandidates: every task gated solely on a just-completed dep must be
+// reported ready, not just the first one.
 func TestOrchestratorAdvance_MultipleDownstreamTasks(t *testing.T) {
-	_, store := newTestTaskExecutor(t)
+	te, store := newTestTaskExecutor(t)
 
 	dep := createTask(t, store, "completed", nil)
 
-	// Three downstream tasks all blocked by the same dep.
 	d1 := createTask(t, store, "queued", []string{dep.ID})
 	d2 := createTask(t, store, "queued", []string{dep.ID})
 	d3 := createTask(t, store, "queued", []string{dep.ID})
 
-	candidates, err := store.List(taskstore.TaskFilter{Status: "queued", BlockedByID: dep.ID})
-	if err != nil {
-		t.Fatalf("list: %v", err)
+	ready := te.readyBlockedCandidates(dep.ID)
+	if len(ready) != 3 {
+		t.Fatalf("readyBlockedCandidates(%q) = %v, want 3 ready", dep.ID, ready)
 	}
-	if len(candidates) != 3 {
-		t.Fatalf("want 3 candidates, got %d", len(candidates))
-	}
-	ids := map[string]bool{}
-	for _, c := range candidates {
-		ids[c.ID] = true
-	}
+	got := idSet(ready)
 	for _, want := range []string{d1.ID, d2.ID, d3.ID} {
-		if !ids[want] {
-			t.Errorf("expected candidate %q not found", want)
+		if !got[want] {
+			t.Errorf("expected ready candidate %q not found in %v", want, ready)
 		}
+	}
+}
+
+// createChild creates a child task with the given parent and status.
+func createChild(t *testing.T, store *taskstore.TaskStore, parentID, status string) *taskstore.TaskEntity {
+	t.Helper()
+	e := &taskstore.TaskEntity{
+		Title:        "child",
+		Prompt:       "do thing",
+		AgentID:      "jim",
+		Priority:     3,
+		TriggerType:  "manual",
+		Status:       "queued",
+		ParentTaskID: parentID,
+	}
+	if err := store.Create(e); err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := store.Update(e.ID, taskstore.TaskPatch{Status: ptrStr("running"), StartedAt: &now}); err != nil {
+		t.Fatalf("child→running: %v", err)
+	}
+	final := status
+	if final == "queued" || final == "running" {
+		got, err := store.Get(e.ID)
+		if err != nil {
+			t.Fatalf("get child: %v", err)
+		}
+		return got
+	}
+	updated, err := store.Update(e.ID, taskstore.TaskPatch{Status: ptrStr(final), CompletedAt: &now})
+	if err != nil {
+		t.Fatalf("child→%s: %v", final, err)
+	}
+	return updated
+}
+
+// TestParentFollowUp_ConcurrentSiblings_ExactlyOne is the duplicate-parent-
+// follow-up race regression test. N sibling-completion callbacks fire
+// concurrently for the same running parent with all children already done; the
+// atomic ClaimParentFollowUp must ensure the parent follow-up fires exactly once.
+func TestParentFollowUp_ConcurrentSiblings_ExactlyOne(t *testing.T) {
+	te, store := newTestTaskExecutor(t)
+
+	// Parent in "running" state.
+	parent := &taskstore.TaskEntity{
+		Title: "parent", Prompt: "p", AgentID: "jim", Priority: 3,
+		TriggerType: "manual", Status: "queued",
+	}
+	if err := store.Create(parent); err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := store.Update(parent.ID, taskstore.TaskPatch{Status: ptrStr("running"), StartedAt: &now}); err != nil {
+		t.Fatalf("parent→running: %v", err)
+	}
+
+	// All children already completed (so every concurrent caller observes allDone).
+	const numChildren = 8
+	for i := 0; i < numChildren; i++ {
+		createChild(t, store, parent.ID, "completed")
+	}
+
+	// Wire the test seam to count follow-up fires.
+	var fires int64
+	te.parentFollowUp = func(parentID string) {
+		atomic.AddInt64(&fires, 1)
+	}
+
+	// Fire N concurrent sibling-completion notifications for the same parent.
+	const N = 16
+	var wg sync.WaitGroup
+	wg.Add(N)
+	start := make(chan struct{})
+	for i := 0; i < N; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			te.notifyParentIfAllSiblingsDone(parent.ID)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if got := atomic.LoadInt64(&fires); got != 1 {
+		t.Fatalf("parent follow-up fired %d times, want exactly 1", got)
+	}
+
+	// The parent must be flagged FollowedUp on disk.
+	reloaded, err := store.Get(parent.ID)
+	if err != nil {
+		t.Fatalf("get parent: %v", err)
+	}
+	if !reloaded.FollowedUp {
+		t.Fatal("parent FollowedUp must be true after the follow-up fired")
+	}
+}
+
+// TestParentFollowUp_NotAllSiblingsDone verifies no follow-up fires while a
+// sibling is still running.
+func TestParentFollowUp_NotAllSiblingsDone(t *testing.T) {
+	te, store := newTestTaskExecutor(t)
+
+	parent := &taskstore.TaskEntity{
+		Title: "parent", Prompt: "p", AgentID: "jim", Priority: 3,
+		TriggerType: "manual", Status: "queued",
+	}
+	if err := store.Create(parent); err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := store.Update(parent.ID, taskstore.TaskPatch{Status: ptrStr("running"), StartedAt: &now}); err != nil {
+		t.Fatalf("parent→running: %v", err)
+	}
+
+	createChild(t, store, parent.ID, "completed")
+	createChild(t, store, parent.ID, "running") // still running → not all done
+
+	var fires int64
+	te.parentFollowUp = func(string) { atomic.AddInt64(&fires, 1) }
+
+	te.notifyParentIfAllSiblingsDone(parent.ID)
+
+	if got := atomic.LoadInt64(&fires); got != 0 {
+		t.Fatalf("follow-up fired %d times while a sibling is still running, want 0", got)
 	}
 }
 

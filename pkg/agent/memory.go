@@ -123,8 +123,11 @@ type MemoryStore struct {
 	// omnipusHome is the resolved $OMNIPUS_HOME used to build workspace room paths.
 	omnipusHome string
 
-	// sharedRoom is the active workspace shared room for the current turn.
-	// Nil when no workspace_id is set. Set by SetWorkspaceID before each turn.
+	// sharedMu guards sharedRoom. SetWorkspaceID (writer, called per turn) races
+	// concurrent readers (rooms / resolveWriteRoom / SearchEntriesInScope /
+	// SharedRoom); an unsynchronised write here could leak one workspace's shared
+	// room into another's reads. All access to sharedRoom MUST hold sharedMu.
+	sharedMu   sync.RWMutex
 	sharedRoom *memrooms.Room
 
 	// indexMu protects indexCache and sigCache maps.
@@ -262,28 +265,45 @@ func (ms *MemoryStore) checkAndRegisterSigLocked(room memrooms.Room, id, content
 // Passing "" clears the shared room (reverts to private-only).
 func (ms *MemoryStore) SetWorkspaceID(workspaceID string) {
 	if workspaceID == "" {
+		ms.sharedMu.Lock()
 		ms.sharedRoom = nil
+		ms.sharedMu.Unlock()
 		return
 	}
 	// Guard against path-traversal via crafted workspace IDs.
 	if err := validation.EntityID(workspaceID); err != nil {
 		logger.WarnCF("agent.memory", "SetWorkspaceID: invalid workspace ID; ignoring",
 			map[string]any{"workspace_id": workspaceID, "error": err.Error()})
+		ms.sharedMu.Lock()
 		ms.sharedRoom = nil
+		ms.sharedMu.Unlock()
 		return
 	}
+	// MustEnsureRoom touches the filesystem; do it before taking the lock to keep
+	// the critical section to the pointer swap only.
 	room := memrooms.MustEnsureRoom(
 		memrooms.ResolveWorkspaceSharedRoom(ms.omnipusHome, workspaceID),
 		"workspace:"+workspaceID,
 	)
+	ms.sharedMu.Lock()
 	ms.sharedRoom = &room
+	ms.sharedMu.Unlock()
+}
+
+// currentSharedRoom returns a snapshot of the active shared room pointer under
+// the read lock. The returned pointer is stable (SetWorkspaceID swaps the
+// pointer rather than mutating the pointee), so callers may use it lock-free.
+func (ms *MemoryStore) currentSharedRoom() *memrooms.Room {
+	ms.sharedMu.RLock()
+	defer ms.sharedMu.RUnlock()
+	return ms.sharedRoom
 }
 
 // rooms returns the Rooms value for the current state.
 func (ms *MemoryStore) rooms() memrooms.Rooms {
 	return memrooms.Rooms{
 		Private: ms.privateRoom,
-		Shared:  ms.sharedRoom,
+		Shared:  ms.currentSharedRoom(),
 	}
 }
 
@@ -292,8 +312,8 @@ func (ms *MemoryStore) rooms() memrooms.Rooms {
 func (ms *MemoryStore) resolveWriteRoom(scope memrooms.RoomScope) memrooms.Room {
 	switch scope {
 	case memrooms.RoomScopeShared:
-		if ms.sharedRoom != nil {
-			return *ms.sharedRoom
+		if shared := ms.currentSharedRoom(); shared != nil {
+			return *shared
 		}
 		logger.WarnCF("agent.memory", "write requested shared room but no workspace_id set; falling back to private",
 			map[string]any{"private_root": ms.privateRoom.Root})
@@ -361,26 +381,26 @@ func (ms *MemoryStore) AppendLongTermToScope(content, category string, scope mem
 
 	// MinHash dedup check (FR-7.5 / M-5): non-destructive — links written to
 	// minhash.jsonl even if near-dup detected; the .md file is already written.
-	// Acquire indexMu to serialise sig cache + bleve index updates.
+	// Acquire indexMu to serialise sig cache + bleve index updates AND to guard
+	// the bleve index against a concurrent Close(): if we released indexMu before
+	// ri.Index(), Close() could close ri underneath us (use-after-close). Holding
+	// the lock across the index call keeps ri valid for its whole lifetime here.
 	ms.indexMu.Lock()
 	isDup := ms.checkAndRegisterSigLocked(room, id, trimmed)
 	// Wire into bleve index (FR-7.4): index unconditionally — even near-dups
 	// are indexed (we keep all .md files).
-	ri := ms.roomIndexLocked(room)
-	ms.indexMu.Unlock()
-
-	if isDup {
-		logger.WarnCF("agent.memory", "near-duplicate memory written (dedup link in minhash.jsonl)",
-			map[string]any{"id": id, "room_root": room.Root})
-	}
-
-	// Index in bleve after releasing indexMu. ri.Index() is internally serialised.
-	if ri != nil {
+	if ri := ms.roomIndexLocked(room); ri != nil {
 		if idxErr := ri.Index(mf); idxErr != nil {
 			// Non-fatal: .md file is already written; bleve index will be rebuilt on next open.
 			logger.WarnCF("agent.memory", "AppendLongTermToScope: bleve index failed (will rebuild on next open)",
 				map[string]any{"id": id, "room_root": room.Root, "error": idxErr.Error()})
 		}
+	}
+	ms.indexMu.Unlock()
+
+	if isDup {
+		logger.WarnCF("agent.memory", "near-duplicate memory written (dedup link in minhash.jsonl)",
+			map[string]any{"id": id, "room_root": room.Root})
 	}
 
 	return nil
@@ -417,20 +437,24 @@ func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memro
 	}
 	var targets []roomAndIndex
 
+	// Snapshot the shared room once under its read lock so the scope branches below
+	// observe a consistent value (a concurrent SetWorkspaceID must not swap it mid-read).
+	shared := ms.currentSharedRoom()
+
 	ms.indexMu.Lock()
 	switch scope {
 	case memrooms.RoomScopePrivate:
 		targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
 	case memrooms.RoomScopeShared:
-		if ms.sharedRoom != nil {
-			targets = []roomAndIndex{{room: *ms.sharedRoom, ri: ms.roomIndexLocked(*ms.sharedRoom)}}
+		if shared != nil {
+			targets = []roomAndIndex{{room: *shared, ri: ms.roomIndexLocked(*shared)}}
 		} else {
 			targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
 		}
 	default: // RoomScopeBoth
 		targets = []roomAndIndex{{room: ms.privateRoom, ri: ms.roomIndexLocked(ms.privateRoom)}}
-		if ms.sharedRoom != nil {
-			targets = append(targets, roomAndIndex{room: *ms.sharedRoom, ri: ms.roomIndexLocked(*ms.sharedRoom)})
+		if shared != nil {
+			targets = append(targets, roomAndIndex{room: *shared, ri: ms.roomIndexLocked(*shared)})
 		}
 	}
 	ms.indexMu.Unlock()
@@ -452,6 +476,7 @@ func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memro
 					map[string]any{"room_root": t.room.Root, "query": query, "error": err.Error()})
 				// Fall through to scan.
 			} else {
+				agentID := ms.resolveAuthor()
 				for _, hit := range hits {
 					if seenIDs[hit.ID] {
 						continue
@@ -465,10 +490,9 @@ func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memro
 					}
 					seenIDs[hit.ID] = true
 					scored = append(scored, scoredMemory{mf: mf, score: hit.Score})
-				}
-				// Append counters.jsonl access events (FR-7.5).
-				agentID := ms.resolveAuthor()
-				for _, hit := range hits {
+					// Append counters.jsonl access event (FR-7.5) only for memories
+					// actually surfaced — not for deduped or unreadable hits, which
+					// would over-count access frequency.
 					rec := memrooms.CounterRecord{
 						TS:       time.Now().UTC(),
 						MemoryID: hit.ID,
@@ -658,7 +682,7 @@ func (ms *MemoryStore) PrivateRoom() memrooms.Room {
 
 // SharedRoom returns the shared room, or nil if no workspace_id is set.
 func (ms *MemoryStore) SharedRoom() *memrooms.Room {
-	return ms.sharedRoom
+	return ms.currentSharedRoom()
 }
 
 // --- helpers ---------------------------------------------------------------

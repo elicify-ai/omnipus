@@ -47,6 +47,12 @@ type TaskEntity struct {
 	CreatedAt     time.Time  `json:"created_at"`
 	StartedAt     *time.Time `json:"started_at,omitempty"`
 	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	// FollowedUp is set true (via ClaimParentFollowUp) once the parent follow-up
+	// notification has been launched for this task. It exists solely to make the
+	// "all siblings done → resume parent" follow-up fire exactly once: concurrent
+	// sibling completions both observe allDone and would otherwise both spawn the
+	// parent follow-up goroutine. The flag is on the PARENT task, claimed atomically.
+	FollowedUp bool `json:"followed_up,omitempty"`
 }
 
 // workflowRaw is a superset of TaskEntity used to parse files from the
@@ -72,6 +78,7 @@ type workflowRaw struct {
 	CreatedAt     time.Time  `json:"created_at"`
 	StartedAt     *time.Time `json:"started_at,omitempty"`
 	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	FollowedUp    bool       `json:"followed_up,omitempty"`
 }
 
 // TaskFilter filters the result of List.  All fields are optional (zero = skip filter).
@@ -184,6 +191,7 @@ func (s *TaskStore) load(id string) (*TaskEntity, error) {
 		CreatedAt:     raw.CreatedAt,
 		StartedAt:     raw.StartedAt,
 		CompletedAt:   raw.CompletedAt,
+		FollowedUp:    raw.FollowedUp,
 	}
 	if t.Priority == 0 {
 		t.Priority = 3
@@ -456,6 +464,40 @@ func (s *TaskStore) ClaimForRun(id string, startedAt time.Time) (*TaskEntity, er
 		return nil, err
 	}
 	return t, nil
+}
+
+// ClaimParentFollowUp atomically claims the right to launch the "all children
+// done → resume parent" follow-up for the parent task id, returning true to
+// exactly one caller.
+//
+// Concurrent sibling completions can each observe that every sibling is done and
+// would otherwise each spawn the parent follow-up goroutine, producing duplicate
+// resume messages to the parent agent. This CAS-style claim (mirroring
+// ClaimForRun) closes that race: it sets FollowedUp=true under the store mutex
+// and persists it, so only the first caller sees the flag flip from false→true.
+//
+// Returns (true, nil) when this caller won the claim (and must run the follow-up).
+// Returns (false, nil) when the follow-up was already claimed (caller must skip).
+// Returns (false, ErrNotFound) if the task does not exist, or (false, err) on I/O.
+func (s *TaskStore) ClaimParentFollowUp(id string) (bool, error) {
+	if err := validateID(id); err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, err := s.load(id)
+	if err != nil {
+		return false, err
+	}
+	if t.FollowedUp {
+		return false, nil
+	}
+	t.FollowedUp = true
+	if err := s.write(t); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Delete removes the task file for id.

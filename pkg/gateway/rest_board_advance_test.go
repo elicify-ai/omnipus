@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/providers"
 )
 
 // putBoardTask is a small helper that PUTs a JSON body to the board task and
@@ -90,3 +91,40 @@ func TestHandleBoardTasks_CompleteWithUnsatisfiedDepStaysWaiting(t *testing.T) {
 	require.Equal(t, gen.BoardTaskStatus("next"), getBoardTaskStatus(t, api, c.Id),
 		"C should advance waiting→next once both A and X are done")
 }
+
+// TestHandleBoardTaskStart_AutonomousCompletionAdvancesDependent verifies the
+// fix for the /start completion-callback gap: when task A is run autonomously via
+// POST /start and its onComplete callback writes status=done, any task waiting on
+// A (waiting, blocked_by [A]) must be un-gated to next — exactly as the PUT path
+// does. Before the fix the callback never called AdvanceBlockedDependents, so
+// dependents of an autonomously-completed task were stranded in "waiting" forever.
+func TestHandleBoardTaskStart_AutonomousCompletionAdvancesDependent(t *testing.T) {
+	api := newTestRestAPIWithProvider(t, &restMockProvider{})
+
+	// A is a startable task with a prompt; B waits on A.
+	a := createBoardTaskWithPromptViaAPI(t, api, "Autostart Blocker A", "inbox", "Do the blocking work")
+	b := createBoardTaskViaAPI(t, api, "Dependent B", "inbox")
+
+	// Gate B: blocked_by [A], status waiting.
+	wGate := putBoardTask(t, api, b.Id, fmt.Sprintf(`{"status":"waiting","blocked_by":[%q]}`, a.Id))
+	require.Equal(t, http.StatusOK, wGate.Code, "gate B; body=%s", wGate.Body.String())
+	require.Equal(t, gen.BoardTaskStatus("waiting"), getBoardTaskStatus(t, api, b.Id),
+		"precondition: B must be waiting before A starts")
+
+	// Start A via the real agent path.
+	wStart := postBoardTaskStart(t, api, a.Id)
+	require.Equal(t, http.StatusAccepted, wStart.Code, "/start A must return 202; body=%s", wStart.Body.String())
+
+	// Drain the dispatched goroutine so the onComplete callback runs.
+	api.agentLoop.WaitForActiveRequests()
+
+	// A must be terminal (done) and B must have advanced waiting→next.
+	require.Equal(t, gen.BoardTaskStatus("done"), getBoardTaskStatus(t, api, a.Id),
+		"A must be done after the autonomous run drains")
+	require.Equal(t, gen.BoardTaskStatus("next"), getBoardTaskStatus(t, api, b.Id),
+		"B must be advanced waiting→next after A completes autonomously via /start")
+}
+
+// _ keeps the providers import referenced even if the mock provider type lives in
+// another test file; restMockProvider satisfies providers.LLMProvider.
+var _ providers.LLMProvider = (*restMockProvider)(nil)

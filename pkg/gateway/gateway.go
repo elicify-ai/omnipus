@@ -1510,6 +1510,11 @@ func setupAndStartServices(
 	// /start handler can race reconciliation.
 	api.reconcileStuckBoardTasks()
 
+	// Drop blocked_by edges pointing at task files that no longer exist, so the
+	// dependency graph self-heals on boot (a waiting task gated only on an orphan
+	// would otherwise never advance). Same pre-listener safety window as above.
+	api.reconcileOrphanBlockedByEdges()
+
 	// Register additional endpoints for frontend features.
 	// These return proper JSON responses instead of letting the SPA catch-all
 	// serve HTML (which causes "Unexpected token '<'" JSON parse errors).

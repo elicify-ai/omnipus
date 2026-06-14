@@ -32,6 +32,13 @@ type TaskExecutor struct {
 	// and is independent from AdmissionController (which only gates inbound
 	// user-message session workers).
 	dispatchSema *DispatchSemaphore
+
+	// parentFollowUp, when non-nil, is invoked (synchronously) in place of the
+	// real "resume the parent agent" goroutine after a follow-up is successfully
+	// claimed. It is a test seam ONLY — production leaves it nil and uses
+	// processTaskDirect. It lets tests observe exactly how many parent follow-ups
+	// fire under concurrent sibling completion without standing up a full AgentLoop.
+	parentFollowUp func(parentID string)
 }
 
 // newTaskExecutor creates a TaskExecutor.
@@ -377,49 +384,79 @@ func (te *TaskExecutor) buildPrompt(task *taskstore.TaskEntity) string {
 // called by TaskUpdateTool.SetOnComplete (loop.go:1487) and by the
 // auto-complete path at the bottom of runTask. There is no separate
 // task_status_changed WS subscription because no such emitter exists.
+// notifyParentIfAllSiblingsDone resumes the parent agent once every child task
+// of parentID has reached a terminal state. It is safe under concurrent sibling
+// completions: the parent follow-up is launched at most once, guarded by an
+// atomic FollowedUp claim (ClaimParentFollowUp) — without it two siblings could
+// each see allDone and each spawn a duplicate resume goroutine.
+func (te *TaskExecutor) notifyParentIfAllSiblingsDone(parentID string) {
+	siblings, err := te.store.List(taskstore.TaskFilter{ParentTaskID: parentID})
+	if err != nil {
+		logger.WarnCF("task_executor", "Could not list siblings",
+			map[string]any{"parent_id": parentID, "error": err.Error()})
+		return
+	}
+	for _, s := range siblings {
+		if s.Status == "queued" || s.Status == "running" {
+			return // not all siblings terminal yet
+		}
+	}
+
+	parent, err := te.store.Get(parentID)
+	if err != nil {
+		logger.WarnCF("task_executor", "Could not load parent task",
+			map[string]any{"parent_id": parentID, "error": err.Error()})
+		return
+	}
+	if parent.Status != "running" {
+		return
+	}
+
+	// Race guard: concurrent sibling completions can both observe allDone and both
+	// reach here. Atomically claim the follow-up so exactly one caller launches the
+	// parent resume goroutine; losers (and any later re-entry) skip silently.
+	claimed, claimErr := te.store.ClaimParentFollowUp(parent.ID)
+	if claimErr != nil {
+		logger.WarnCF("task_executor", "Could not claim parent follow-up",
+			map[string]any{"parent_id": parent.ID, "error": claimErr.Error()})
+		return
+	}
+	if !claimed {
+		return
+	}
+
+	// Test seam: when wired, observe the (single) claimed follow-up without the
+	// real agent dispatch. Production leaves this nil.
+	if te.parentFollowUp != nil {
+		te.parentFollowUp(parent.ID)
+		return
+	}
+
+	summary := te.buildChildSummary(siblings)
+	sessionKey := fmt.Sprintf("agent:%s:task:%s", parent.AgentID, parent.ID)
+	followUp := fmt.Sprintf("All child tasks of task %q have completed.\n\n%s", parent.ID, summary)
+	parentChatID := "task:" + parent.ID
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.ErrorCF("task_executor", "Panic in parent follow-up",
+					map[string]any{"parent_id": parent.ID, "panic": r})
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		_, ferr := te.agentLoop.processTaskDirect(ctx, parent.AgentID, followUp, sessionKey, parentChatID)
+		if ferr != nil {
+			logger.WarnCF("task_executor", "Parent follow-up failed",
+				map[string]any{"parent_id": parent.ID, "error": ferr.Error()})
+		}
+	}()
+}
+
 func (te *TaskExecutor) onTaskComplete(task *taskstore.TaskEntity) {
 	// ── 1. Parent notification ──────────────────────────────────────────────
 	if task.ParentTaskID != "" {
-		siblings, err := te.store.List(taskstore.TaskFilter{ParentTaskID: task.ParentTaskID})
-		if err != nil {
-			logger.WarnCF("task_executor", "Could not list siblings",
-				map[string]any{"parent_id": task.ParentTaskID, "error": err.Error()})
-		} else {
-			allDone := true
-			for _, s := range siblings {
-				if s.Status == "queued" || s.Status == "running" {
-					allDone = false
-					break
-				}
-			}
-			if allDone {
-				parent, err := te.store.Get(task.ParentTaskID)
-				if err != nil {
-					logger.WarnCF("task_executor", "Could not load parent task",
-						map[string]any{"parent_id": task.ParentTaskID, "error": err.Error()})
-				} else if parent.Status == "running" {
-					summary := te.buildChildSummary(siblings)
-					sessionKey := fmt.Sprintf("agent:%s:task:%s", parent.AgentID, parent.ID)
-					followUp := fmt.Sprintf("All child tasks of task %q have completed.\n\n%s", parent.ID, summary)
-					parentChatID := "task:" + parent.ID
-					go func() {
-						defer func() {
-							if r := recover(); r != nil {
-								logger.ErrorCF("task_executor", "Panic in parent follow-up",
-									map[string]any{"parent_id": parent.ID, "panic": r})
-							}
-						}()
-						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-						defer cancel()
-						_, ferr := te.agentLoop.processTaskDirect(ctx, parent.AgentID, followUp, sessionKey, parentChatID)
-						if ferr != nil {
-							logger.WarnCF("task_executor", "Parent follow-up failed",
-								map[string]any{"parent_id": parent.ID, "error": ferr.Error()})
-						}
-					}()
-				}
-			}
-		}
+		te.notifyParentIfAllSiblingsDone(task.ParentTaskID)
 	}
 
 	// ── 2. Orchestrator advance — only when the completed task is "completed"
@@ -430,11 +467,16 @@ func (te *TaskExecutor) onTaskComplete(task *taskstore.TaskEntity) {
 	te.advanceBlockedTasks(context.Background(), task.ID)
 }
 
-// advanceBlockedTasks finds all queued tasks that list completedTaskID in their
-// blocked_by field and attempts to dispatch those whose full dependency set is
-// now satisfied. This implements the Orchestrator coordinator seam.
-func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID string) {
-	// Find all tasks that explicitly list completedTaskID as a blocker.
+// readyBlockedCandidates returns the IDs of all queued tasks that list
+// completedTaskID as a blocker AND whose ENTIRE blocked_by dependency set is now
+// in "completed" status. These are the tasks the Orchestrator should dispatch.
+//
+// This is the pure decision half of advanceBlockedTasks (no dispatch, no agent
+// loop) so the gating logic — "only advance when every dep, not just the one that
+// just completed, is done; a failed/queued dep does NOT satisfy" — is directly
+// unit-testable. Returns a nil slice (not an error) when the scan fails so the
+// caller degrades gracefully; the underlying error is logged here.
+func (te *TaskExecutor) readyBlockedCandidates(completedTaskID string) []string {
 	candidates, err := te.store.List(taskstore.TaskFilter{
 		Status:      "queued",
 		BlockedByID: completedTaskID,
@@ -442,15 +484,14 @@ func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID
 	if err != nil {
 		logger.WarnCF("task_executor", "Orchestrator: could not scan blocked tasks",
 			map[string]any{"completed_task_id": completedTaskID, "error": err.Error()})
-		return
-	}
-	if len(candidates) == 0 {
-		return
+		return nil
 	}
 
+	var ready []string
 	for i := range candidates {
 		t := &candidates[i]
-		// Verify all dependencies of this candidate are now completed.
+		// Verify ALL dependencies of this candidate are now completed (not just
+		// the one that triggered this call). A failed or still-queued dep blocks.
 		allSatisfied := true
 		for _, depID := range t.BlockedBy {
 			dep, depErr := te.store.Get(depID)
@@ -459,16 +500,25 @@ func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID
 				break
 			}
 		}
-		if !allSatisfied {
-			continue
+		if allSatisfied {
+			ready = append(ready, t.ID)
 		}
+	}
+	return ready
+}
+
+// advanceBlockedTasks finds all queued tasks that list completedTaskID in their
+// blocked_by field and attempts to dispatch those whose full dependency set is
+// now satisfied. This implements the Orchestrator coordinator seam.
+func (te *TaskExecutor) advanceBlockedTasks(ctx context.Context, completedTaskID string) {
+	for _, taskID := range te.readyBlockedCandidates(completedTaskID) {
 		// All deps satisfied — attempt to dispatch.
-		if err := te.ExecuteTask(ctx, t.ID); err != nil {
+		if err := te.ExecuteTask(ctx, taskID); err != nil {
 			logger.WarnCF("task_executor", "Orchestrator: advance dispatch failed",
-				map[string]any{"task_id": t.ID, "error": err.Error()})
+				map[string]any{"task_id": taskID, "error": err.Error()})
 		} else {
 			logger.InfoCF("task_executor", "Orchestrator: advanced blocked task",
-				map[string]any{"task_id": t.ID, "unblocked_by": completedTaskID})
+				map[string]any{"task_id": taskID, "unblocked_by": completedTaskID})
 		}
 	}
 }

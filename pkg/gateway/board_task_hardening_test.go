@@ -221,102 +221,11 @@ func TestBoardTaskStart_ConcurrentRace(t *testing.T) {
 		"on-disk status must be active/done/failed after /start, got %q", diskTask.Status)
 }
 
-// TestBoardTaskStart_CompletionVsRequeueRace verifies the onComplete guard:
-// if the task's status is not "active" when the callback fires (e.g. user PUT-to-next),
-// the callback must not overwrite the task.
-//
-// This is a pure unit test of the completion guard (no goroutine involved). It:
-//  1. Writes a task with status=active directly to disk.
-//  2. Changes the status to status=next (simulating a user retry/requeue).
-//  3. Invokes the production guard logic inline (the same check as in onComplete).
-//  4. Asserts the guard fired (no write to disk).
-//
-// BDD:
-//
-//	Given a board task whose on-disk status is "next" (requeued by the user),
-//	When the completion callback attempts to write done/result,
-//	Then the guard detects t.Status != "active" and skips the write.
-//	And the task status remains "next" on disk.
-//
-// Traces to: project-task-management-level1-spec.md — B8 (completion guard)
-func TestBoardTaskStart_CompletionVsRequeueRace(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	tasksDir := filepath.Join(api.homePath, "tasks")
-	require.NoError(t, os.MkdirAll(tasksDir, 0o700))
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	// Write a task with status=next directly to disk (simulating: task started →
-	// goroutine dispatched → user requeueed → callback fires after the requeue).
-	const taskID = "01JXCB1_REQUEUERACE00001"
-	taskData := fmt.Sprintf(
-		`{"id":%q,"name":"CompletionRaceTask","status":"next","created_at":%q,"updated_at":%q}`,
-		taskID, now, now,
-	)
-	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, taskID+".json"), []byte(taskData), 0o600))
-
-	// Simulate the completion callback. The production guard in onComplete:
-	//   mu.Lock(); t = readBoardTask(); if t.Status != "active" { return }
-	// Here we reproduce the exact same logic.
-	callbackWroteResult := false
-	func() {
-		mu := api.taskLock.Get(taskID)
-		mu.Lock()
-		defer mu.Unlock()
-		diskTask, readErr := api.readBoardTask(taskID)
-		require.NoError(t, readErr)
-		if diskTask.Status != boardtask.StatusActive {
-			return // guard fires — skip write (this is the production path)
-		}
-		// Reaching here means the guard failed (production bug).
-		diskTask.Status = boardtask.StatusDone
-		diskTask.Result = "callback overwrote task — guard failed"
-		diskTask.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		callbackWroteResult = true
-		_ = api.writeBoardTask(diskTask)
-	}()
-
-	assert.False(t, callbackWroteResult,
-		"completion callback must NOT write done/result when t.Status == 'next' (not 'active')")
-
-	// Verify task still reads as "next" on disk.
-	final, readErr := api.readBoardTask(taskID)
-	require.NoError(t, readErr)
-	assert.Equal(t, boardtask.StatusNext, final.Status,
-		"task must remain 'next' — the B8 guard must have prevented any write")
-	assert.Empty(t, final.Result,
-		"result must be empty because the callback guard fired before writing")
-
-	// Differentiation: same guard with status=active allows the write.
-	const activeTaskID = "01JXCB1_ACTIVERACE00001"
-	activeData := fmt.Sprintf(
-		`{"id":%q,"name":"ActiveRaceTask","status":"active","created_at":%q,"updated_at":%q}`,
-		activeTaskID, now, now,
-	)
-	require.NoError(t, os.WriteFile(filepath.Join(tasksDir, activeTaskID+".json"), []byte(activeData), 0o600))
-
-	activeCallbackWrote := false
-	func() {
-		mu := api.taskLock.Get(activeTaskID)
-		mu.Lock()
-		defer mu.Unlock()
-		diskTask, readErr := api.readBoardTask(activeTaskID)
-		require.NoError(t, readErr)
-		if diskTask.Status != boardtask.StatusActive {
-			return
-		}
-		diskTask.Status = boardtask.StatusDone
-		diskTask.Result = "callback wrote result correctly"
-		diskTask.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		activeCallbackWrote = true
-		_ = api.writeBoardTask(diskTask)
-	}()
-
-	assert.True(t, activeCallbackWrote,
-		"callback MUST write done/result when t.Status == 'active' — proves guard allows active tasks through")
-	finalActive, _ := api.readBoardTask(activeTaskID)
-	assert.Equal(t, boardtask.StatusDone, finalActive.Status, "active task must be updated to done by callback")
-}
+// NOTE: The former TestBoardTaskStart_CompletionVsRequeueRace was removed — it
+// reproduced the onComplete guard logic inline (an inline-closure replay that
+// asserts against its own copy of the production check, not the real handler).
+// TestRegression_CompletionCallback_SetsResult_RealPath below drives the REAL
+// /start → ExecuteBoardTask → onComplete path and covers the same behaviour.
 
 // ── C2: real agent-path completion ───────────────────────────────────────────
 

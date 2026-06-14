@@ -140,6 +140,86 @@ func TestClaimForRun_InvalidID(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ClaimParentFollowUp: atomic single-fire claim for parent follow-up
+// ─────────────────────────────────────────────────────────────────────────────
+
+// TestClaimParentFollowUp_FirstWinsSecondLoses verifies the basic CAS semantics:
+// the first claim succeeds (true) and persists FollowedUp; the second returns false.
+func TestClaimParentFollowUp_FirstWinsSecondLoses(t *testing.T) {
+	s := newTestStore(t)
+	id := seedTask(t, s, "parent", "agent-1", 3, nil)
+
+	won, err := s.ClaimParentFollowUp(id)
+	if err != nil {
+		t.Fatalf("first ClaimParentFollowUp: %v", err)
+	}
+	if !won {
+		t.Fatal("first ClaimParentFollowUp: want true, got false")
+	}
+
+	// The flag must be persisted on disk.
+	reloaded, err := s.Get(id)
+	if err != nil {
+		t.Fatalf("Get after claim: %v", err)
+	}
+	if !reloaded.FollowedUp {
+		t.Fatal("FollowedUp must be true after a successful claim")
+	}
+
+	won2, err := s.ClaimParentFollowUp(id)
+	if err != nil {
+		t.Fatalf("second ClaimParentFollowUp: %v", err)
+	}
+	if won2 {
+		t.Fatal("second ClaimParentFollowUp: want false, got true (double-claim)")
+	}
+}
+
+// TestClaimParentFollowUp_ConcurrentCallers_OnlyOneWins verifies that when N
+// goroutines concurrently claim the same parent follow-up, exactly one wins.
+// This is the duplicate-parent-follow-up double-fire proof.
+func TestClaimParentFollowUp_ConcurrentCallers_OnlyOneWins(t *testing.T) {
+	s := newTestStore(t)
+	id := seedTask(t, s, "parent-race", "agent-1", 3, nil)
+
+	const N = 20
+	wins := make([]int, N)
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for i := 0; i < N; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			won, err := s.ClaimParentFollowUp(id)
+			if err == nil && won {
+				wins[i] = 1
+			}
+		}()
+	}
+	wg.Wait()
+
+	total := 0
+	for _, v := range wins {
+		total += v
+	}
+	if total != 1 {
+		t.Fatalf("ConcurrentCallers: expected exactly 1 winning claim, got %d", total)
+	}
+}
+
+// TestClaimParentFollowUp_NotFound verifies ErrNotFound for a missing task ID.
+func TestClaimParentFollowUp_NotFound(t *testing.T) {
+	s := newTestStore(t)
+	won, err := s.ClaimParentFollowUp("does-not-exist")
+	if won {
+		t.Fatal("ClaimParentFollowUp on missing task must not win")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAJOR 1 — Starvation: dep-checking logic used by CheckQueuedTasks
 // ─────────────────────────────────────────────────────────────────────────────
 // CheckQueuedTasks iterates queued tasks per agent in priority order and calls
