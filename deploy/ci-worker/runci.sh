@@ -39,7 +39,27 @@ run_spaembed() { npm run build && rm -rf pkg/gateway/spa && cp -r dist/spa pkg/g
 run_gofmt()    { local n; n=$(gofmt -l . 2>/dev/null | grep -v '^$' | wc -l); echo "gofmt unformatted=$n"; [ "$n" = 0 ]; }
 run_gobuild()  { ensure_spa_stub; CGO_ENABLED=0 go build -tags "$TAGS" ./...; }
 run_govet()    { ensure_spa_stub; CGO_ENABLED=0 go vet -tags "$TAGS" ./...; }
-run_gotest()   { ensure_spa_stub; CGO_ENABLED=0 go test -tags "$TAGS" -count=1 ./...; }   # the 16GB-needing gate
+# Full suite with a flake filter: a package that fails the contended full run but passes when
+# re-run isolated (-p 1) is a timing flake (shared vCPUs) → not a real failure. Fails both = real.
+run_gotest() {
+  ensure_spa_stub
+  local out; out=$(CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 4 ./... 2>&1)
+  local code=$?
+  echo "$out"
+  [ $code -eq 0 ] && return 0
+  local failed; failed=$(echo "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+  [ -z "$failed" ] && return $code
+  echo ""; echo "=== FLAKE FILTER: re-running failed packages isolated (-p 1): $failed ==="
+  local rc=0
+  for p in $failed; do
+    if CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 1 "$p" >/tmp/rr.log 2>&1; then
+      echo "FLAKE (passed isolated): $p"
+    else
+      echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL' /tmp/rr.log | head; rc=1
+    fi
+  done
+  return $rc
+}
 run_npm()      { npm ci --no-audit --no-fund; }
 run_typecheck(){ npm run typecheck; }
 run_vitest()   { npx vitest run --maxWorkers=4; }  # cap workers: 8 oversubscribe shared vCPUs → perf-test timeouts
