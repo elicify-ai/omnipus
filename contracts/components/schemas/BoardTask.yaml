@@ -65,3 +65,35 @@ properties:
     type: string
     description: "Username of the user who owns this resource. Set server-side at creation; read-only."
     example: "alice"
+  start:
+    type: string
+    format: date-time
+    description: >
+      Optional start date/time (RFC 3339 UTC). When set, the task is
+      scheduled to begin at this instant. Stored verbatim; no scheduling
+      engine runs in v0.1.0 (shell only — engine is v0.2.0).
+    example: "2026-07-01T09:00:00Z"
+  due:
+    type: string
+    format: date-time
+    description: >
+      Optional due date/time (RFC 3339 UTC). Mirrors Milestone.due_date
+      semantics — deadline for task completion.
+    example: "2026-07-31T17:00:00Z"
+  recurrence:
+    type: string
+    description: >
+      Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g.
+      "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim in v0.1.0; the recurrence
+      execution engine is v0.2.0 (stored-not-run).
+    example: "FREQ=WEEKLY;BYDAY=MO"
+  blocked_by:
+    type: array
+    description: >
+      Optional ordered list of GTD board task IDs that must complete before
+      this task may be started. A write-time DAG validator rejects
+      self-edges, 2-node cycles, and N-node cycles. Orphan edges (target
+      task deleted) are dropped on load. Max depth 50.
+    items:
+      type: string
+    example: ["01J1A2B3C4D5E6F7G8H9I0J1K2", "01J1A2B3C4D5E6F7G8H9I0J1K3"]

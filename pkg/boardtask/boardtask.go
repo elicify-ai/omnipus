@@ -59,6 +59,23 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	Owner     string `json:"owner,omitempty"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
+
+	// --- Spec-5 fields (FR-8.1) ---
+
+	// Start is an optional RFC 3339 UTC start date/time. Stored verbatim;
+	// the scheduling engine is v0.2.0 (shell only in v0.1.0).
+	Start string `json:"start,omitempty"`
+	// Due is an optional RFC 3339 UTC due date/time. Mirrors Milestone.due_date
+	// semantics — deadline for task completion.
+	Due string `json:"due,omitempty"`
+	// Recurrence is an optional RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO").
+	// Stored verbatim in v0.1.0; the recurrence execution engine is v0.2.0 (stored-not-run).
+	Recurrence string `json:"recurrence,omitempty"`
+	// BlockedBy is the ordered list of GTD board task IDs that must complete
+	// before this task may be started. A write-time DAG validator (pkg/boardtask/blocked_by.go)
+	// rejects self-edges, 2-node cycles, and N-node cycles. Max depth 50.
+	// Orphan edges (target task deleted) are dropped at load/cascade-clean time.
+	BlockedBy []string `json:"blocked_by,omitempty"`
 }
 
 // GTDStatuses is the set of valid GTD task status values.

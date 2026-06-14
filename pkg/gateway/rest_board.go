@@ -236,6 +236,35 @@ func toWireBoardTask(t boardTask) gen.BoardTask {
 		owner = &o
 	}
 
+	// Spec-5 fields: parse start/due from RFC3339 strings; pass recurrence and blocked_by as-is.
+	var startTime *time.Time
+	if t.Start != "" {
+		if ts, parseErr := time.Parse(time.RFC3339, t.Start); parseErr == nil {
+			startTime = &ts
+		} else {
+			slog.Warn("rest: board task: invalid start timestamp", "id", t.ID, "raw", t.Start)
+		}
+	}
+	var dueTime *time.Time
+	if t.Due != "" {
+		if ts, parseErr := time.Parse(time.RFC3339, t.Due); parseErr == nil {
+			dueTime = &ts
+		} else {
+			slog.Warn("rest: board task: invalid due timestamp", "id", t.ID, "raw", t.Due)
+		}
+	}
+	var recurrence *string
+	if t.Recurrence != "" {
+		r := t.Recurrence
+		recurrence = &r
+	}
+	var blockedBy *[]string
+	if len(t.BlockedBy) > 0 {
+		bb := make([]string, len(t.BlockedBy))
+		copy(bb, t.BlockedBy)
+		blockedBy = &bb
+	}
+
 	return gen.BoardTask{
 		Id:          t.ID,
 		Name:        t.Name,
@@ -251,6 +280,19 @@ func toWireBoardTask(t boardTask) gen.BoardTask {
 		Owner:       owner,
 		CreatedAt:   createdAt,
 		UpdatedAt:   updatedAt,
+		Start:       startTime,
+		Due:         dueTime,
+		Recurrence:  recurrence,
+		BlockedBy:   blockedBy,
+	}
+}
+
+// makeBoardTaskLoader returns a TaskLoader function for use by the blocked_by DAG
+// validator. It reads a single GTD task by ID from the tasks directory.
+// Returns os.ErrNotExist when the task is absent or is not a GTD task.
+func (a *restAPI) makeBoardTaskLoader() boardtask.TaskLoader {
+	return func(id string) (boardtask.Task, error) {
+		return a.readBoardTask(id)
 	}
 }
 
@@ -350,8 +392,12 @@ func (a *restAPI) handleBoardTaskList(w http.ResponseWriter, r *http.Request) {
 			SessionId:   wt.SessionId,
 			// t.Status is a validated GTD status; convert boardtask.Status → gen.BoardTaskListItemStatus
 			// (both are named string types — no runtime cost).
-			Status:    gen.BoardTaskListItemStatus(t.Status),
-			UpdatedAt: wt.UpdatedAt,
+			Status:     gen.BoardTaskListItemStatus(t.Status),
+			UpdatedAt:  wt.UpdatedAt,
+			Start:      wt.Start,
+			Due:        wt.Due,
+			Recurrence: wt.Recurrence,
+			BlockedBy:  wt.BlockedBy,
 		})
 	}
 
@@ -496,9 +542,38 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Spec-5 fields: start, due, recurrence, blocked_by.
+	startStr := ""
+	if req.Start != nil {
+		startStr = req.Start.UTC().Format(time.RFC3339)
+	}
+	dueStr := ""
+	if req.Due != nil {
+		dueStr = req.Due.UTC().Format(time.RFC3339)
+	}
+	recurrenceStr := ""
+	if req.Recurrence != nil {
+		recurrenceStr = *req.Recurrence
+	}
+	var newBlockedBy []string
+	if req.BlockedBy != nil {
+		newBlockedBy = *req.BlockedBy
+	}
+
+	// The newly created task has no ID yet, but we need it for the self-edge check.
+	// Generate the ID here so ValidateBlockedBy can use it.
+	newTaskID := ulid.Make().String()
+	if len(newBlockedBy) > 0 {
+		loader := a.makeBoardTaskLoader()
+		if err := boardtask.ValidateBlockedBy(newTaskID, newBlockedBy, loader); err != nil {
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("blocked_by: %v", err))
+			return
+		}
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	t := boardTask{
-		ID:          ulid.Make().String(),
+		ID:          newTaskID,
 		Name:        req.Name,
 		Description: description,
 		Prompt:      prompt,
@@ -508,9 +583,13 @@ func (a *restAPI) handleBoardTaskPost(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: workspaceID,
 		AgentID:     agentID,
 		// Stamp the creating user's username as owner (attribution only).
-		Owner:     c.Username,
-		CreatedAt: now,
-		UpdatedAt: now,
+		Owner:      c.Username,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Start:      startStr,
+		Due:        dueStr,
+		Recurrence: recurrenceStr,
+		BlockedBy:  newBlockedBy,
 	}
 
 	if err := a.writeBoardTask(t); err != nil {
@@ -710,6 +789,31 @@ func (a *restAPI) handleBoardTaskPut(w http.ResponseWriter, r *http.Request, id 
 		existing.AgentID = agentID
 	}
 
+	// Spec-5 fields: start, due, recurrence, blocked_by.
+	if req.Start != nil {
+		existing.Start = req.Start.UTC().Format(time.RFC3339)
+	}
+	if req.Due != nil {
+		existing.Due = req.Due.UTC().Format(time.RFC3339)
+	}
+	if req.Recurrence != nil {
+		existing.Recurrence = *req.Recurrence
+	}
+	if req.BlockedBy != nil {
+		updatedBlockedBy := *req.BlockedBy
+		if len(updatedBlockedBy) > 0 {
+			loader := a.makeBoardTaskLoader()
+			if err := boardtask.ValidateBlockedBy(existing.ID, updatedBlockedBy, loader); err != nil {
+				jsonErr(w, http.StatusBadRequest, fmt.Sprintf("blocked_by: %v", err))
+				return
+			}
+		}
+		existing.BlockedBy = updatedBlockedBy
+		if len(existing.BlockedBy) == 0 {
+			existing.BlockedBy = nil
+		}
+	}
+
 	existing.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
 	if err := a.writeBoardTask(existing); err != nil {
@@ -763,6 +867,16 @@ func (a *restAPI) handleBoardTaskDelete(w http.ResponseWriter, r *http.Request, 
 		slog.Error("rest: board task: delete failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not delete board task")
 		return
+	}
+
+	// Spec-5 (FR-8.2): cascade-clean inbound blocked_by edges after delete.
+	// Any task that was solely blocked by the deleted task is now unblocked.
+	// Log the unblocked IDs so the Orchestrator (Spec-3) can act on them.
+	if unblocked, cascadeErr := boardtask.CascadeDeleteEdges(a.boardTasksDir(), id); cascadeErr != nil {
+		slog.Warn("rest: board task: cascade edge cleanup failed", "id", id, "error", cascadeErr)
+	} else if len(unblocked) > 0 {
+		slog.Info("rest: board task: deleted task unblocked dependents",
+			"deleted_id", id, "unblocked_ids", unblocked)
 	}
 
 	if a.auditor != nil {
