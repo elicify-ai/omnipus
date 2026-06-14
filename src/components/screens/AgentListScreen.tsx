@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Robot } from '@phosphor-icons/react'
+import { Link } from '@tanstack/react-router'
+import { Plus, Robot, ShareNetwork } from '@phosphor-icons/react'
 import { AgentCard } from '@/components/agents/AgentCard'
 import { CreateAgentModal } from '@/components/agents/CreateAgentModal'
 import { Button } from '@/components/ui/button'
@@ -39,9 +40,17 @@ export function AgentListScreen() {
             Browse, configure, and create your AI agents.
           </p>
         </div>
-        <Button onClick={openCreateAgentModal} className="gap-2">
-          <Plus size={14} weight="bold" /> New Agent
-        </Button>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/agents/trust"
+            className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs font-medium text-[var(--color-secondary)] transition-colors hover:border-[var(--color-accent)]/40 hover:text-[var(--color-accent)]"
+          >
+            <ShareNetwork size={14} weight="bold" /> Trust Graph
+          </Link>
+          <Button onClick={openCreateAgentModal} className="gap-2">
+            <Plus size={14} weight="bold" /> New Agent
+          </Button>
+        </div>
       </div>
 
       {/* Content */}
