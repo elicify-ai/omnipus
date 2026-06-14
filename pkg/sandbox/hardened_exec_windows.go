@@ -1,9 +1,9 @@
 //go:build windows
 
-// Windows platform hardening for hardened_exec children. Per we
-// use Job Objects with JOB_OBJECT_LIMIT_PROCESS_MEMORY (memory cap) and
+// Windows platform hardening for hardened_exec children. We use Job Objects
+// with JOB_OBJECT_LIMIT_PROCESS_MEMORY (memory cap) and
 // JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (parent-death cleanup). DACL,
-// Restricted Token, and AppContainer are out of scope for v4.
+// Restricted Token, and AppContainer are out of scope (not implemented).
 
 package sandbox
 

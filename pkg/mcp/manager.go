@@ -17,6 +17,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
+	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 )
 
 // headerTransport is an http.RoundTripper that adds custom headers to requests
@@ -319,8 +320,29 @@ func (m *Manager) ConnectServer(
 		// Use a map to ensure config variables override file variables
 		envMap := make(map[string]string)
 
-		// Start with parent process environment
-		for _, e := range cmd.Environ() {
+		// C7: Start from the SCRUBBED gateway environment, not the raw parent
+		// environment. The previous code seeded envMap from cmd.Environ()
+		// (which, since cmd.Env was still nil at this point, returns the full
+		// os.Environ()). That leaked gateway secrets — OMNIPUS_MASTER_KEY,
+		// OMNIPUS_KEY_FILE, OMNIPUS_BEARER_TOKEN, and any future sensitive var —
+		// into every spawned MCP server subprocess. An MCP server is
+		// third-party code; a malicious or compromised one could read the
+		// master key (a total credential-store compromise) straight out of its
+		// own environment via os.Getenv.
+		//
+		// sandbox.ScrubGatewayEnv() applies the same closed allowlist the
+		// hardened-exec child path uses (allowedChildEnvKeys + the
+		// LC_*/XDG_*/OMNIPUS_CHILD_* prefixes): PATH, HOME, USER, LOGNAME,
+		// SHELL, LANG, TZ, TMPDIR, TERM, and the proxy vars all pass through —
+		// everything a generic stdio child legitimately needs to locate
+		// binaries and write per-user caches — while unknown / secret-bearing
+		// keys are stripped by default (fail-closed).
+		//
+		// Any value an MCP server genuinely needs beyond that allowlist must be
+		// declared explicitly via the server's `env` / `envFile` config below,
+		// which override these base values (and an operator may use the
+		// OMNIPUS_CHILD_* rename escape hatch the allowlist documents).
+		for _, e := range sandbox.ScrubGatewayEnv() {
 			if idx := strings.Index(e, "="); idx > 0 {
 				envMap[e[:idx]] = e[idx+1:]
 			}

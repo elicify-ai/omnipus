@@ -1,26 +1,50 @@
 // Package sandbox — hardened-exec child wrapper for Tier 2 (build_static)
 // and Tier 3 (web_serve dev mode + workspace.shell_bg) tools.
 //
-// Cross-platform contract:
+// Cross-platform contract — what each platform's applyPlatformHardening /
+// applyPostStartHardening actually does:
 //
-// - Linux: Setpgid + Pdeathsig=SIGTERM for clean parent-death cleanup,
-// plus prlimit on RLIMIT_AS (memory) and RLIMIT_CPU (cpu seconds).
-// Children inherit gateway Landlock + seccomp unchanged (,
-// no narrowing in v4).
-// - macOS: prlimit-equivalent via Setrlimit (RLIMIT_AS unsupported on
-// darwin; uses RLIMIT_DATA which approximates heap+stack). No isolation
-// primitive beyond OS perms.
-// - Windows: Job Object with JOBOBJECT_EXTENDED_LIMIT_INFORMATION
-// (process-memory limit + KILL_ON_JOB_CLOSE so the child dies if the
-// gateway exits). No DACL/Restricted Token/AppContainer in v4.
+//   - Linux: Setpgid (so the whole subtree can be signalled) + Pdeathsig=
+//     SIGTERM (so an orphaned child dies if the gateway exits). Post-start,
+//     prlimit sets RLIMIT_NPROC unconditionally (fork-bomb cap) and RLIMIT_AS
+//     when Limits.MemoryLimitBytes is non-zero. NOTE: RLIMIT_CPU is
+//     deliberately NOT used — cpu-time != wall-clock, so the timeout is
+//     enforced via context cancellation instead (see Limits.TimeoutSeconds).
+//   - macOS: Setpgid only. There is NO Pdeathsig (XNU has no equivalent) and
+//     NO memory limit (RLIMIT_AS is unimplemented on XNU; RLIMIT_DATA does not
+//     cover the mmap regions where Node/V8 live and prlimit does not exist, so
+//     MemoryLimitBytes is ignored — applyPostStartHardening only logs a WARN
+//     and Run reports Result.MemoryLimitUnsupported=true). No isolation
+//     primitive beyond normal OS user permissions.
+//   - Windows: Job Object with JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+//     (process-memory limit + KILL_ON_JOB_CLOSE so the child dies if the
+//     gateway exits). No DACL / Restricted Token / AppContainer.
 //
-// All platforms inject HTTP_PROXY/HTTPS_PROXY when EgressProxyAddr is non-
-// empty and npm_config_cache when WorkspaceDir is non-empty ( — per-
-// agent npm cache so concurrent builds don't fight over a shared cache).
+// Landlock + seccomp are NOT applied by this package's per-child hardening.
+// They are process-wide state established once by the gateway at boot (Linux
+// >= 5.13, enforce/permissive mode only) and are inherited by fork()ed
+// children of any thread that carries the Landlock domain. Because Go's M:N
+// scheduler may run the spawning goroutine on a worker thread that never had
+// restrict_self applied, the Run and StartLocked entry points lock a fresh OS
+// thread and call restrictCurrentThreadIfNeeded BEFORE forking so the child
+// reliably inherits the kernel sandbox. Callers that build their own *exec.Cmd
+// and use ApplyChildHardening directly (instead of Run/StartLocked) do NOT get
+// that per-thread re-apply and must perform the spawn on an already-restricted
+// thread themselves (the workspace.shell_bg path routes through StartLocked for
+// exactly this reason). On older kernels, non-Linux platforms, and sandbox
+// mode "off", there is no Landlock/seccomp domain to inherit at all.
 //
-// Threat note: Tier 2 and Tier 3 are documented as trusted-prompt features
-//. The child has the gateway's full filesystem reach;
-// raw TCP egress is unblocked. Operator awareness is the primary control.
+// All platforms inject HTTP_PROXY/HTTPS_PROXY (lower- and upper-case) when
+// Limits.EgressProxyAddr is non-empty, and npm_config_cache when
+// Limits.WorkspaceDir is non-empty (per-agent npm cache so concurrent builds
+// don't fight over a shared cache). See mergeEnv. Egress-proxy coverage is
+// HTTP/HTTPS only — raw TCP connect() is not routed through the proxy.
+//
+// Threat note: Tier 2 and Tier 3 are documented as trusted-prompt features.
+// On the sandbox-off path the child has the gateway user's full filesystem
+// reach and raw TCP egress is unblocked; on the sandbox-on path the gateway's
+// Landlock FS rules and bind/connect port allow-list constrain it. Operator
+// awareness remains a primary control.
 
 package sandbox
 
