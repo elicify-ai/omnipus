@@ -274,15 +274,38 @@ func writeEntity(dir, id string, v any) error {
 
 // deleteEntity removes dir/<id>.json.
 // A missing file is treated as success (idempotent delete).
+//
+// M5: the removal is performed under the SAME per-path advisory flock that
+// writeEntity holds (fileutil.WithFlock). Without it the delete — and any
+// cascade that calls deleteEntity (project/workspace delete sweeping its
+// tasks and pins) — races a concurrent writeEntity on the same file: the
+// writer's temp-file + rename could land after os.Remove and silently
+// resurrect a just-deleted entity, or the reader observes a half-written
+// file. Sharing the lock domain serializes delete against write per entity.
 func deleteEntity(dir, id string) error {
 	if err := validateID(id); err != nil {
 		return fmt.Errorf("delete entity: %w", err)
 	}
 	path := entityPath(dir, id)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("delete entity %s: %w", id, err)
+	// Fast idempotent path: if the file (or its directory) does not exist there
+	// is nothing to delete and nothing to race. Skipping the flock here also
+	// avoids fileutil.WithFlock's O_CREATE re-creating a lock file inside a
+	// missing/just-removed directory (which would both fail to open AND
+	// resurrect an empty entity).
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil
 	}
-	return nil
+	// The file exists: acquire the SAME per-path advisory flock writeEntity
+	// holds, then remove under it. This serializes delete against concurrent
+	// writeEntity so a writer's temp-file + rename cannot land after os.Remove
+	// and resurrect the entity. The os.IsNotExist re-check inside the lock keeps
+	// the delete idempotent if another locked deleter removed the file first.
+	return fileutil.WithFlock(path, func() error {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("delete entity %s: %w", id, err)
+		}
+		return nil
+	})
 }
 
 // listEntities reads all JSON files in dir and unmarshals them into a slice of T.

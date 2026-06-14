@@ -432,6 +432,84 @@ func TestSessionWorker_RecoverPanic(t *testing.T) {
 	}
 }
 
+// panickyMockProvider panics on every Chat call. It reproduces the C8
+// chat-stream-hang precondition: a provider/tool nil-deref that escapes the
+// turn's inner recovers and unwinds through runTurn → processMessage →
+// processTurn. The session worker's panic-recover MUST still publish a
+// terminal outbound message so the SPA receives a done/error frame instead of
+// hanging forever in the "thinking" state.
+type panickyMockProvider struct{}
+
+func (p *panickyMockProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	panic("simulated provider crash (C8 hang reproduction)")
+}
+
+func (p *panickyMockProvider) GetDefaultModel() string { return "panicky-model" }
+
+// TestSessionWorker_PanicStillPublishesTerminalFrame is the C8 regression test.
+// When the turn panics with no streamer set and finalResponse still empty, the
+// only thing that can release the client is the session worker's panic-recover
+// publishing an error outbound (→ webchatChannel.Send → done frame). Without
+// the fix, the panic unwinds past processTurn with no outbound published and
+// the SPA stays stuck "thinking". This test asserts a terminal outbound IS
+// published within a short deadline.
+func TestSessionWorker_PanicStillPublishesTerminalFrame(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, &panickyMockProvider{})
+	defer al.Close()
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	runErrCh := make(chan error, 1)
+	go func() { runErrCh <- al.Run(runCtx) }()
+	t.Cleanup(func() {
+		cancelRun()
+		select {
+		case <-runErrCh:
+		case <-time.After(3 * time.Second):
+			t.Error("Run() did not stop within 3 s")
+		}
+	})
+
+	msg := makeSessionMsg("sess-panic-terminal", "trigger crash")
+	pubCtx, pubCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer pubCancel()
+	if err := msgBus.PublishInbound(pubCtx, msg); err != nil {
+		t.Fatalf("PublishInbound: %v", err)
+	}
+
+	// The worker panics mid-turn; the panic-recover must still emit a terminal
+	// outbound so the client is released. If the recover did not publish, this
+	// select times out — exactly the hang C8 fixes.
+	replyCtx, replyCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer replyCancel()
+	select {
+	case out := <-msgBus.OutboundChan():
+		if out.Content == "" {
+			t.Fatal("terminal outbound after panic has empty content")
+		}
+		t.Logf("terminal outbound after panic: %q", out.Content)
+	case <-replyCtx.Done():
+		t.Fatal("C8 regression: no terminal frame published after turn panic — client would hang")
+	}
+}
+
 // blockingMockProvider blocks each Chat call until releaseAll is closed.
 // This simulates a long-running LLM turn so admission-cap tests can verify
 // that slots are held while the provider is thinking.
