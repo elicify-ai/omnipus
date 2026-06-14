@@ -60,7 +60,7 @@ export function PerformanceSection(): React.ReactElement {
     onError: (err) => {
       setSaveStatus('error')
       const msg = isApiError(err) ? err.message : 'Failed to save performance settings.'
-      addToast({ type: 'error', message: msg })
+      addToast({ variant: 'error', message: msg })
     },
   })
 
@@ -68,7 +68,7 @@ export function PerformanceSection(): React.ReactElement {
     const raw = inputValue.trim()
     const parsed = raw === '' ? 0 : parseInt(raw, 10)
     if (raw !== '' && (isNaN(parsed) || parsed < 2 || parsed > 16)) {
-      addToast({ type: 'error', message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).' })
+      addToast({ variant: 'error', message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).' })
       return
     }
     setSaveStatus('saving')
