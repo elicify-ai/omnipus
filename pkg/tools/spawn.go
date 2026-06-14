@@ -14,6 +14,14 @@ type SpawnTool struct {
 	maxTokens      int
 	temperature    float64
 	allowlistCheck func(targetAgentID string) bool
+	// delegationDeny, when non-nil, gates the spawn (background-mode) delegation
+	// against the full delegation policy (trust set + modes + depth — FR-6.2). It
+	// receives the call ctx (for current delegation depth) and the resolved
+	// target agent id ("" when no explicit target was given), and returns a
+	// non-empty human-readable reason string to DENY, or "" to ALLOW. Takes
+	// precedence over allowlistCheck so the LLM sees *why* a delegation was
+	// rejected (mode forbidden / depth exceeded / target untrusted).
+	delegationDeny func(ctx context.Context, targetAgentID string) string
 }
 
 // Compile-time check: SpawnTool implements AsyncExecutor.
@@ -70,6 +78,15 @@ func (t *SpawnTool) SetAllowlistChecker(check func(targetAgentID string) bool) {
 	t.allowlistCheck = check
 }
 
+// SetDelegationDenyChecker installs the full delegation-policy gate (FR-6.2):
+// trust set + modes + depth. The checker returns a non-empty reason to DENY or
+// "" to ALLOW. When set, it takes precedence over the allowlist checker so the
+// rejected delegation surfaces a clear reason to the LLM instead of a generic
+// "not allowed" message.
+func (t *SpawnTool) SetDelegationDenyChecker(check func(ctx context.Context, targetAgentID string) string) {
+	t.delegationDeny = check
+}
+
 func (t *SpawnTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	return t.execute(ctx, args, nil)
 }
@@ -97,8 +114,17 @@ func (t *SpawnTool) execute(
 	label, _ := args["label"].(string)
 	agentID, _ := args["agent_id"].(string)
 
-	// Check allowlist if targeting a specific agent
-	if agentID != "" && t.allowlistCheck != nil {
+	// Delegation policy gate (FR-6.2): trust set + modes + depth. The
+	// full-policy checker takes precedence and is consulted on every spawn
+	// (including untargeted ones, where mode/depth still apply) so the reason
+	// for any denial is surfaced to the LLM.
+	if t.delegationDeny != nil {
+		if reason := t.delegationDeny(ctx, agentID); reason != "" {
+			return ErrorResult("delegation denied: " + reason).
+				WithError(fmt.Errorf("delegation policy denied (spawn): %s", reason))
+		}
+	} else if agentID != "" && t.allowlistCheck != nil {
+		// Backward-compat: legacy trust-only allowlist check.
 		if !t.allowlistCheck(agentID) {
 			return ErrorResult(fmt.Sprintf("not allowed to spawn agent '%s'", agentID))
 		}

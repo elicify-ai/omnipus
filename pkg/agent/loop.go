@@ -1520,6 +1520,12 @@ func registerSharedTools(
 				// SubagentsConfig.AllowAgents (legacy path, deny-by-default preserved).
 				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
 			})
+			// FR-6.2: full-policy gate — trust set + mode("background") + depth.
+			// Takes precedence over the allowlist checker and surfaces a reason.
+			spawnTool.SetDelegationDenyChecker(buildDelegationDenyChecker(
+				currentAgentID, spawnAgentCfg, cfg.Agents.Defaults,
+				config.DelegationModeBackground, registry,
+			))
 
 			agent.Tools.Register(spawnTool)
 
@@ -1544,6 +1550,12 @@ func registerSharedTools(
 				}
 				return false
 			})
+			// FR-6.2: full-policy gate for the synchronous "await" mode. The sync
+			// subagent tool has no explicit target, so the trust check is "can
+			// delegate at all"; mode + depth still apply.
+			subagentTool.SetDelegationDenyChecker(buildSubagentDelegationDenyChecker(
+				subagentAgentCfg, cfg.Agents.Defaults,
+			))
 			agent.Tools.Register(subagentTool)
 
 			agent.Tools.Register(tools.NewSpawnStatusTool(subagentManager))
@@ -1558,6 +1570,12 @@ func registerSharedTools(
 
 			taskCreate := tools.NewTaskCreateTool(al.taskStore)
 			taskCreate.SetDelegateChecker(buildDelegateChecker(agentCfg, cfg.Agents.Defaults))
+			// FR-6.2: full-policy gate — trust set + mode("task") + depth.
+			// Takes precedence over the boolean delegate checker.
+			taskCreate.SetDelegationDenyChecker(buildDelegationDenyChecker(
+				currentAgentID, agentCfg, cfg.Agents.Defaults,
+				config.DelegationModeTask, registry,
+			))
 			agent.Tools.Register(taskCreate)
 
 			taskUpdate := tools.NewTaskUpdateTool(al.taskStore)
@@ -1659,6 +1677,137 @@ func buildDelegateChecker(agentCfg *config.AgentConfig, defaults config.AgentDef
 	toList := config.ResolveDelegationTo(agentCfg, defaults)
 	return func(targetAgentID string) bool {
 		return config.IsDelegationAllowed(toList, targetAgentID)
+	}
+}
+
+// currentDelegationDepth reports the delegation-chain depth of the turn that is
+// about to delegate, read from the turnState carried on ctx. The root user turn
+// has depth 0; each nested sub-turn increments it. Returns 0 when no turnState is
+// present (e.g. ad-hoc/raw invocations or tests) — a conservative default that
+// never spuriously trips the depth cap.
+func currentDelegationDepth(ctx context.Context) int {
+	if ts := turnStateFromContext(ctx); ts != nil {
+		return ts.depth
+	}
+	return 0
+}
+
+// buildDelegationDenyChecker returns the full FR-6.2 delegation gate for a
+// targeted delegation tool (spawn = "background", task_create = "task"). It
+// enforces, in order, and returns the first violation as a human-readable reason
+// (empty string = allowed):
+//
+//  1. trust set — the target must be permitted by the unified DelegationPolicy.To
+//     (with the legacy CanDelegateTo / SubagentsConfig.AllowAgents fallbacks).
+//  2. mode      — the tool's delegation mode must be permitted by the policy's
+//     Modes list (empty Modes = all allowed; nil policy = unconstrained).
+//  3. depth     — the current delegation-chain depth must be below the policy's
+//     per-agent Depth cap (0 = uncapped; the global SubTurn.MaxDepth ceiling
+//     still applies independently at sub-turn dispatch).
+//
+// An empty targetAgentID means "no explicit target" (the LLM omitted agent_id);
+// the trust check is then skipped here — untargeted spawns resolve to the default
+// agent and are gated by the existing allowlist semantics — while mode and depth
+// still apply.
+func buildDelegationDenyChecker(
+	currentAgentID string,
+	agentCfg *config.AgentConfig,
+	defaults config.AgentDefaults,
+	mode config.DelegationMode,
+	registry *AgentRegistry,
+) func(ctx context.Context, targetAgentID string) string {
+	policy := config.ResolveDelegationPolicy(agentCfg, defaults)
+	toList := config.ResolveDelegationTo(agentCfg, defaults)
+	policyDepth := config.ResolveDelegationDepth(policy)
+
+	return func(ctx context.Context, targetAgentID string) string {
+		// 1. Trust set (only when an explicit target is named).
+		if targetAgentID != "" {
+			allowed := false
+			if toList != nil {
+				allowed = config.IsDelegationAllowed(toList, targetAgentID)
+			} else {
+				// No canonical/legacy To — fall back to the registry allowlist.
+				allowed = registry.CanSpawnSubagent(currentAgentID, targetAgentID)
+			}
+			if !allowed {
+				logger.WarnCF("agent", "delegation denied: target not in trust set", map[string]any{
+					"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
+				})
+				return fmt.Sprintf("agent %q is not in this agent's delegation trust set ('to' allowlist)", targetAgentID)
+			}
+		}
+
+		// 2. Mode.
+		if !config.IsDelegationModeAllowed(policy, mode) {
+			logger.WarnCF("agent", "delegation denied: mode not permitted", map[string]any{
+				"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
+			})
+			return fmt.Sprintf("delegation mode %q is not permitted by this agent's delegation policy", string(mode))
+		}
+
+		// 3. Depth.
+		if policyDepth > 0 {
+			if d := currentDelegationDepth(ctx); d >= policyDepth {
+				logger.WarnCF("agent", "delegation denied: max delegation depth exceeded", map[string]any{
+					"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
+					"current_depth": d, "max_depth": policyDepth,
+				})
+				return fmt.Sprintf("maximum delegation depth (%d) reached — cannot delegate further", policyDepth)
+			}
+		}
+
+		return ""
+	}
+}
+
+// buildSubagentDelegationDenyChecker returns the FR-6.2 gate for the synchronous
+// subagent tool (mode = "await"). The sync subagent tool has no explicit target,
+// so the trust check is "can this agent delegate at all" (at least one permitted
+// target), then mode and depth apply identically to the targeted path.
+func buildSubagentDelegationDenyChecker(
+	agentCfg *config.AgentConfig,
+	defaults config.AgentDefaults,
+) func(ctx context.Context) string {
+	policy := config.ResolveDelegationPolicy(agentCfg, defaults)
+	toList := config.ResolveDelegationTo(agentCfg, defaults)
+	policyDepth := config.ResolveDelegationDepth(policy)
+
+	return func(ctx context.Context) string {
+		// 1. Trust: must be able to delegate at all.
+		canDelegate := false
+		if toList != nil {
+			canDelegate = config.IsDelegationAllowedAny(toList)
+		} else if agentCfg != nil && agentCfg.Subagents != nil {
+			// Legacy: a non-nil AllowAgents means the operator opted in.
+			canDelegate = agentCfg.Subagents.AllowAgents != nil
+		}
+		if !canDelegate {
+			logger.WarnCF("agent", "delegation denied: no permitted targets", map[string]any{
+				"mode": string(config.DelegationModeAwait),
+			})
+			return "no target agent is permitted by this agent's delegation policy ('to' allowlist is empty)"
+		}
+
+		// 2. Mode.
+		if !config.IsDelegationModeAllowed(policy, config.DelegationModeAwait) {
+			logger.WarnCF("agent", "delegation denied: mode not permitted", map[string]any{
+				"mode": string(config.DelegationModeAwait),
+			})
+			return fmt.Sprintf("delegation mode %q is not permitted by this agent's delegation policy", string(config.DelegationModeAwait))
+		}
+
+		// 3. Depth.
+		if policyDepth > 0 {
+			if d := currentDelegationDepth(ctx); d >= policyDepth {
+				logger.WarnCF("agent", "delegation denied: max delegation depth exceeded", map[string]any{
+					"mode": string(config.DelegationModeAwait), "current_depth": d, "max_depth": policyDepth,
+				})
+				return fmt.Sprintf("maximum delegation depth (%d) reached — cannot delegate further", policyDepth)
+			}
+		}
+
+		return ""
 	}
 }
 

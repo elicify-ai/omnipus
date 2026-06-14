@@ -317,6 +317,12 @@ type SubagentTool struct {
 	// empty string because the sync subagent tool has no explicit target agent.
 	// Returns false → tool returns a policy-deny error.
 	delegateChecker func() bool
+	// delegationDeny, when non-nil, applies the full delegation policy (trust
+	// set + modes + depth — FR-6.2) for the synchronous "await" mode. It receives
+	// the call ctx (for current delegation depth) and returns a non-empty reason
+	// to DENY or "" to ALLOW. Takes precedence over delegateChecker so the LLM
+	// sees *why* the delegation was rejected.
+	delegationDeny func(ctx context.Context) string
 }
 
 func NewSubagentTool(manager *SubagentManager) *SubagentTool {
@@ -341,6 +347,14 @@ func (t *SubagentTool) SetSpawner(spawner SubTurnSpawner) {
 // When nil, the tool is ungated (legacy behaviour — not recommended).
 func (t *SubagentTool) SetDelegateChecker(check func() bool) {
 	t.delegateChecker = check
+}
+
+// SetDelegationDenyChecker installs the full delegation-policy gate (FR-6.2):
+// trust set + modes ("await") + depth. Returns a non-empty reason to DENY or ""
+// to ALLOW. When set, it takes precedence over the boolean delegateChecker so a
+// rejected sync delegation surfaces a clear reason to the LLM.
+func (t *SubagentTool) SetDelegationDenyChecker(check func(ctx context.Context) string) {
+	t.delegationDeny = check
 }
 
 func (t *SubagentTool) Name() string {
@@ -371,10 +385,15 @@ func (t *SubagentTool) Parameters() map[string]any {
 }
 
 func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	// Delegation policy gate: deny if the checker is set and returns false.
-	// The sync subagent tool has no explicit target agent; the checker evaluates
-	// whether this agent is allowed to spawn any subagent at all.
-	if t.delegateChecker != nil && !t.delegateChecker() {
+	// Delegation policy gate (FR-6.2): trust set + modes ("await") + depth.
+	// The full-policy checker takes precedence and surfaces a specific reason.
+	if t.delegationDeny != nil {
+		if reason := t.delegationDeny(ctx); reason != "" {
+			return ErrorResult("delegation denied: " + reason).
+				WithError(fmt.Errorf("delegation policy denied (subagent): %s", reason))
+		}
+	} else if t.delegateChecker != nil && !t.delegateChecker() {
+		// Backward-compat: legacy boolean trust-only gate.
 		return ErrorResult("delegation not allowed: no target agent is permitted by this agent's delegation policy").
 			WithError(fmt.Errorf("delegation policy denied: agent has no delegation targets in its 'to' allowlist"))
 	}

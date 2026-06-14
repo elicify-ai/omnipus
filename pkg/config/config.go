@@ -826,6 +826,59 @@ func IsDelegationAllowedAny(toList []AgentRef) bool {
 	return len(toList) > 0
 }
 
+// ResolveDelegationPolicy returns the effective DelegationPolicy for an agent,
+// applying the same agent>defaults precedence used by ResolveDelegationTo. It is
+// used by the dispatch layer to enforce the policy's Modes and Depth fields
+// (FR-6.2) — which ResolveDelegationTo (which only resolves the To allowlist)
+// does not surface.
+//
+// Precedence (first non-nil wins):
+//  1. agentCfg.DelegationPolicy  (canonical per-agent policy)
+//  2. defaults.DelegationPolicy  (global default canonical policy)
+//
+// Returns nil when neither level sets a canonical DelegationPolicy. A nil result
+// means "no canonical Modes/Depth constraints" — callers treat that as
+// "all modes allowed / depth uncapped" so the legacy To-only paths are unaffected
+// (no silent behavior change for configs that never adopted DelegationPolicy).
+func ResolveDelegationPolicy(agentCfg *AgentConfig, defaults AgentDefaults) *DelegationPolicy {
+	if agentCfg != nil && agentCfg.DelegationPolicy != nil {
+		return agentCfg.DelegationPolicy
+	}
+	if defaults.DelegationPolicy != nil {
+		return defaults.DelegationPolicy
+	}
+	return nil
+}
+
+// IsDelegationModeAllowed reports whether the given delegation mode is permitted
+// by a DelegationPolicy (FR-6.2). The contract:
+//   - nil policy            → allowed (no canonical policy ⇒ no mode constraint).
+//   - non-nil, empty Modes  → allowed (empty/nil Modes means "all modes allowed").
+//   - non-nil, Modes set    → allowed only if mode is present in the list.
+func IsDelegationModeAllowed(dp *DelegationPolicy, mode DelegationMode) bool {
+	if dp == nil || len(dp.Modes) == 0 {
+		return true
+	}
+	for _, m := range dp.Modes {
+		if m == mode {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolveDelegationDepth returns the effective max delegation-chain depth cap
+// from a DelegationPolicy (FR-6.2). The contract:
+//   - nil policy or nil/<=0 Depth → 0, meaning "uncapped by policy" (the global
+//     SubTurn.MaxDepth safety ceiling still applies independently).
+//   - positive Depth              → that value, an additional per-agent cap.
+func ResolveDelegationDepth(dp *DelegationPolicy) int {
+	if dp == nil || dp.Depth == nil || *dp.Depth <= 0 {
+		return 0
+	}
+	return *dp.Depth
+}
+
 // ExecutorKind enumerates the runtime used to execute a sub-agent task.
 // "native" runs the task inside the existing Omnipus agent loop (default, existing behaviour).
 //
