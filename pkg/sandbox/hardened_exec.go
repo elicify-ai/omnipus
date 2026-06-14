@@ -33,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -204,6 +205,118 @@ func isAllowedChildEnvKey(name string) bool {
 // Closes pentest item 3 (#155).
 func ScrubGatewayEnv() []string {
 	return filterChildEnv()
+}
+
+// runnerCredentialEnvKeys is the SEPARATE, security-sensitive allowlist of
+// credential / config-home environment variable names that an EXTERNAL-AGENT
+// CLI RUNNER child (Claude Code, Codex, opencode — Spec-4 FR-5.3) is permitted
+// to inherit, ON TOP OF the generic allowedChildEnvKeys set.
+//
+// Threat model (Spec-4 FR-5.3, security-sensitive):
+//
+//	These keys CARRY SECRETS (API keys, OAuth bearer tokens). They are
+//	DELIBERATELY ABSENT from the generic allowedChildEnvKeys allowlist because
+//	the generic allowlist feeds EVERY hardened-exec child — every
+//	`workspace.shell`, `web_serve`, and `build_static` subprocess. Leaking an
+//	Anthropic / OpenAI key into an arbitrary build script is exactly the
+//	fail-open class the v0.2 #155 allowlist rework closed.
+//
+//	The external-CLI runner is the ONE caller that legitimately needs these:
+//	the CLI authenticates to its upstream model provider on the operator's
+//	behalf. The runner spawns its child via ScrubGatewayEnvForRunner (below),
+//	which unions THIS narrow set with the generic allowlist. No other spawn
+//	path sees these keys.
+//
+// Each key is grounded in the respective CLI's documented auth contract:
+//
+//	ANTHROPIC_API_KEY    — Claude Code + opencode (Anthropic mode): the
+//	                       sk-ant-api03 model key. Without it the CLI 403s.
+//	ANTHROPIC_AUTH_TOKEN — Claude Code: OAuth / corporate-proxy bearer token.
+//	ANTHROPIC_BASE_URL   — Claude Code + opencode: provider endpoint override
+//	                       (not itself a secret, but auth is meaningless if the
+//	                       child can't reach the configured endpoint).
+//	CLAUDE_CONFIG_DIR    — Claude Code: config-dir override; the OAuth creds
+//	                       live as files under it (default ~/.claude, reached
+//	                       via HOME, already allowlisted). Passed through so an
+//	                       operator-isolated config dir resolves in the child.
+//	OPENAI_API_KEY       — Codex + opencode: the OpenAI model key.
+//	OPENAI_BASE_URL      — Codex + opencode: provider endpoint override.
+//	CODEX_HOME           — Codex: override for ~/.codex (holds auth.json).
+//	                       Default ~/.codex is reached via HOME; this honours a
+//	                       custom location. See providers.CodexHomeEnvVar.
+//
+// DO NOT add a key here unless an external-CLI runner provably needs it to
+// authenticate. Anything added is a secret that reaches every external-CLI
+// child for the life of the gateway. This set is intentionally exact — not a
+// prefix family — so a future audit can enumerate every leak path by reading
+// this map.
+var runnerCredentialEnvKeys = map[string]struct{}{
+	"ANTHROPIC_API_KEY":    {},
+	"ANTHROPIC_AUTH_TOKEN": {},
+	"ANTHROPIC_BASE_URL":   {},
+	"CLAUDE_CONFIG_DIR":    {},
+	"OPENAI_API_KEY":       {},
+	"OPENAI_BASE_URL":      {},
+	"CODEX_HOME":           {},
+}
+
+// RunnerCredentialEnvKeys returns a sorted snapshot of the external-CLI runner
+// credential-env allowlist (see runnerCredentialEnvKeys). Exported for the
+// runner package's tests and for audit tooling that needs to enumerate the
+// exact secret-bearing keys that may reach a runner child. The returned slice
+// is a copy; mutating it does not affect the allowlist.
+func RunnerCredentialEnvKeys() []string {
+	out := make([]string, 0, len(runnerCredentialEnvKeys))
+	for k := range runnerCredentialEnvKeys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// isRunnerCredentialEnvKey reports whether name is in the external-CLI runner
+// credential allowlist. It is NOT consulted by the generic isAllowedChildEnvKey
+// path — only by filterChildEnvForRunner — so these secret-bearing keys never
+// leak into a generic workspace.shell / build child.
+func isRunnerCredentialEnvKey(name string) bool {
+	_, ok := runnerCredentialEnvKeys[name]
+	return ok
+}
+
+// ScrubGatewayEnvForRunner returns os.Environ() filtered through the UNION of
+// the generic child allowlist (allowedChildEnvKeys + prefixes) AND the
+// external-CLI runner credential allowlist (runnerCredentialEnvKeys).
+//
+// This is the ONLY function that lets credential-bearing env vars through. It
+// is reserved for the Spec-4 external-agent CLI runner spawn path (FR-5.3 —
+// "the CLI's credentials are passed via the env-allowlist"). Generic children
+// (workspace.shell, web_serve, build_static) MUST keep using ScrubGatewayEnv,
+// which excludes these keys.
+//
+// The runner still spawns inside a git-worktree FS boundary and under the
+// external CLI's own kernel sandbox; the credential env is what lets the CLI
+// authenticate to its model provider from inside that confinement.
+func ScrubGatewayEnvForRunner() []string {
+	return filterChildEnvForRunner()
+}
+
+// filterChildEnvForRunner is filterChildEnv with the runner credential keys
+// additionally permitted. Same drop rules for malformed entries.
+func filterChildEnvForRunner() []string {
+	parent := os.Environ()
+	out := make([]string, 0, len(parent))
+	for _, kv := range parent {
+		eq := strings.IndexByte(kv, '=')
+		if eq <= 0 {
+			continue
+		}
+		key := kv[:eq]
+		if !isAllowedChildEnvKey(key) && !isRunnerCredentialEnvKey(key) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // filterChildEnv returns os.Environ() filtered through the child process
