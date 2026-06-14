@@ -7,6 +7,7 @@ package systools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"time"
 
@@ -36,7 +37,7 @@ func NewTaskCreateTool(d *Deps) *TaskCreateTool  { return &TaskCreateTool{deps: 
 func (t *TaskCreateTool) Name() string           { return "system.task.create" }
 func (t *TaskCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskCreateTool) Description() string {
-	return "Create a task on the GTD board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call system.workspace.list first to get the workspace_id.\nParameters: name (required, the task title), description (optional), workspace_id (optional, from system.workspace.list), agent_id (optional, agent to assign), status (optional: inbox=new/unscheduled, next=prioritized for soon, active=in-progress, waiting=blocked/waiting, done=complete — defaults to inbox)."
+	return "Create a task on the GTD board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call system.workspace.list first to get the workspace_id.\nParameters: name (required, the task title), description (optional), workspace_id (optional, from system.workspace.list), agent_id (optional, agent to assign), status (optional: inbox=new/unscheduled, next=prioritized for soon, active=in-progress, waiting=blocked/waiting, done=complete — defaults to inbox), start (optional, RFC 3339 start date/time), due (optional, RFC 3339 due date/time), recurrence (optional, RRULE string e.g. 'FREQ=WEEKLY;BYDAY=MO'), blocked_by (optional, array of task IDs this task is blocked by)."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -48,6 +49,10 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 			"workspace_id": map[string]any{"type": "string"},
 			"agent_id":     map[string]any{"type": "string"},
 			"status":       map[string]any{"type": "string"},
+			"start":        map[string]any{"type": "string", "description": "RFC 3339 start date/time"},
+			"due":          map[string]any{"type": "string", "description": "RFC 3339 due date/time"},
+			"recurrence":   map[string]any{"type": "string", "description": "RRULE string (RFC 5545)"},
+			"blocked_by":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Task IDs this task is blocked by"},
 		},
 		"required": []string{"name"},
 	}
@@ -98,6 +103,38 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	if v, ok := args["agent_id"].(string); ok {
 		tk.AgentID = v
 	}
+	// Spec-5 fields: start, due, recurrence, blocked_by.
+	if v, ok := args["start"].(string); ok && v != "" {
+		tk.Start = v
+	}
+	if v, ok := args["due"].(string); ok && v != "" {
+		tk.Due = v
+	}
+	if v, ok := args["recurrence"].(string); ok && v != "" {
+		tk.Recurrence = v
+	}
+	if rawDeps, ok := args["blocked_by"].([]any); ok && len(rawDeps) > 0 {
+		deps := make([]string, 0, len(rawDeps))
+		for _, d := range rawDeps {
+			if s, ok := d.(string); ok && s != "" {
+				deps = append(deps, s)
+			}
+		}
+		if len(deps) > 0 {
+			loader := func(depID string) (boardtask.Task, error) {
+				var dep gtdTask
+				if err := readEntity(tasksDir(t.deps.Home), depID, &dep); err != nil {
+					return boardtask.Task{}, err
+				}
+				return dep, nil
+			}
+			if err := boardtask.ValidateBlockedBy(id, deps, loader); err != nil {
+				return tools.ErrorResult(errorJSON("INVALID_INPUT",
+					fmt.Sprintf("blocked_by: %v", err), "blocked_by"))
+			}
+			tk.BlockedBy = deps
+		}
+	}
 	if err := writeEntity(tasksDir(t.deps.Home), id, tk); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 	}
@@ -115,7 +152,7 @@ func NewTaskUpdateTool(d *Deps) *TaskUpdateTool  { return &TaskUpdateTool{deps: 
 func (t *TaskUpdateTool) Name() string           { return "system.task.update" }
 func (t *TaskUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskUpdateTool) Description() string {
-	return "Update an existing GTD board task. Call this to change status, reassign, rename, or link to a workspace. Use system.task.list first to find the task id. If linking to a workspace by name, call system.workspace.list first to get the workspace_id.\nParameters: id (required, from system.task.list), name, description, workspace_id (from system.workspace.list), agent_id, status (inbox=new/unscheduled, next=prioritized, active=in-progress, waiting=blocked, done=complete). Only provided fields are updated."
+	return "Update an existing GTD board task. Call this to change status, reassign, rename, or link to a workspace. Use system.task.list first to find the task id. If linking to a workspace by name, call system.workspace.list first to get the workspace_id.\nParameters: id (required, from system.task.list), name, description, workspace_id (from system.workspace.list), agent_id, status (inbox=new/unscheduled, next=prioritized, active=in-progress, waiting=blocked, done=complete), start (RFC 3339 start date/time), due (RFC 3339 due date/time), recurrence (RRULE string), blocked_by (array of task IDs). Only provided fields are updated."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -128,6 +165,10 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 			"status":       map[string]any{"type": "string"},
 			"agent_id":     map[string]any{"type": "string"},
 			"workspace_id": map[string]any{"type": "string"},
+			"start":        map[string]any{"type": "string", "description": "RFC 3339 start date/time"},
+			"due":          map[string]any{"type": "string", "description": "RFC 3339 due date/time"},
+			"recurrence":   map[string]any{"type": "string", "description": "RRULE string (RFC 5545)"},
+			"blocked_by":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Task IDs this task is blocked by (replaces existing list)"},
 		},
 		"required": []string{"id"},
 	}
@@ -192,6 +233,46 @@ func (t *TaskUpdateTool) Execute(_ context.Context, args map[string]any) *tools.
 		tk.WorkspaceID = v
 		updated = append(updated, "workspace_id")
 	}
+	// Spec-5 fields: start, due, recurrence, blocked_by.
+	if v, ok := args["start"].(string); ok {
+		tk.Start = v
+		updated = append(updated, "start")
+	}
+	if v, ok := args["due"].(string); ok {
+		tk.Due = v
+		updated = append(updated, "due")
+	}
+	if v, ok := args["recurrence"].(string); ok {
+		tk.Recurrence = v
+		updated = append(updated, "recurrence")
+	}
+	if rawDeps, ok := args["blocked_by"].([]any); ok {
+		deps := make([]string, 0, len(rawDeps))
+		for _, d := range rawDeps {
+			if s, ok := d.(string); ok && s != "" {
+				deps = append(deps, s)
+			}
+		}
+		if len(deps) > 0 {
+			loader := func(depID string) (boardtask.Task, error) {
+				var dep gtdTask
+				if err := readEntity(tasksDir(t.deps.Home), depID, &dep); err != nil {
+					return boardtask.Task{}, err
+				}
+				return dep, nil
+			}
+			if err := boardtask.ValidateBlockedBy(id, deps, loader); err != nil {
+				return tools.ErrorResult(errorJSON("INVALID_INPUT",
+					fmt.Sprintf("blocked_by: %v", err), "blocked_by"))
+			}
+		}
+		if len(deps) == 0 {
+			tk.BlockedBy = nil
+		} else {
+			tk.BlockedBy = deps
+		}
+		updated = append(updated, "blocked_by")
+	}
 	tk.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := writeEntity(tasksDir(t.deps.Home), id, tk); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
@@ -243,6 +324,13 @@ func (t *TaskDeleteTool) Execute(_ context.Context, args map[string]any) *tools.
 	if err := deleteEntity(tasksDir(t.deps.Home), id); err != nil {
 		return tools.ErrorResult(errorJSON("DELETE_FAILED", err.Error(),
 			"Use system.task.list to see available tasks"))
+	}
+	// Spec-5 (FR-8.2): cascade-clean inbound blocked_by edges after delete.
+	if unblocked, cascadeErr := boardtask.CascadeDeleteEdges(tasksDir(t.deps.Home), id); cascadeErr != nil {
+		// Non-fatal: log and continue — orphaned edges will be cleaned by DropOrphanEdges.
+		slog.Warn("sysagent: task delete: cascade edge cleanup failed", "id", id, "error", cascadeErr)
+	} else if len(unblocked) > 0 {
+		slog.Info("sysagent: task delete: unblocked dependents", "deleted_id", id, "unblocked", unblocked)
 	}
 	return tools.NewToolResult(successJSON(map[string]any{"id": id, "deleted": true}))
 }

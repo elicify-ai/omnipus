@@ -5728,6 +5728,31 @@ export interface components {
              * @example alice
              */
             owner?: string;
+            /**
+             * Format: date-time
+             * @description Optional start date/time (RFC 3339 UTC). When set, the task is scheduled to begin at this instant. Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+             * @example 2026-07-01T09:00:00Z
+             */
+            start?: string;
+            /**
+             * Format: date-time
+             * @description Optional due date/time (RFC 3339 UTC). Mirrors Milestone.due_date semantics — deadline for task completion.
+             * @example 2026-07-31T17:00:00Z
+             */
+            due?: string;
+            /**
+             * @description Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim in v0.1.0; the recurrence execution engine is v0.2.0 (stored-not-run).
+             * @example FREQ=WEEKLY;BYDAY=MO
+             */
+            recurrence?: string;
+            /**
+             * @description Optional ordered list of GTD board task IDs that must complete before this task may be started. A write-time DAG validator rejects self-edges, 2-node cycles, and N-node cycles. Orphan edges (target task deleted) are dropped on load. Max depth 50.
+             * @example [
+             *       "01J1A2B3C4D5E6F7G8H9I0J1K2",
+             *       "01J1A2B3C4D5E6F7G8H9I0J1K3"
+             *     ]
+             */
+            blocked_by?: string[];
         };
         /** @description A single item in the board task list response. Equivalent to BoardTask. Defined as a plain object (not allOf) so that oapi-codegen emits []BoardTaskListItem rather than an inline anonymous struct in BoardTaskListResponse. */
         BoardTaskListItem: {
@@ -5783,6 +5808,31 @@ export interface components {
              * @example alice
              */
             owner?: string;
+            /**
+             * Format: date-time
+             * @description Optional start date/time (RFC 3339 UTC). When set, the task is scheduled to begin at this instant. Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+             * @example 2026-07-01T09:00:00Z
+             */
+            start?: string;
+            /**
+             * Format: date-time
+             * @description Optional due date/time (RFC 3339 UTC). Mirrors Milestone.due_date semantics — deadline for task completion.
+             * @example 2026-07-31T17:00:00Z
+             */
+            due?: string;
+            /**
+             * @description Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim in v0.1.0; the recurrence execution engine is v0.2.0 (stored-not-run).
+             * @example FREQ=WEEKLY;BYDAY=MO
+             */
+            recurrence?: string;
+            /**
+             * @description Optional ordered list of GTD board task IDs that must complete before this task may be started. A write-time DAG validator rejects self-edges, 2-node cycles, and N-node cycles. Orphan edges (target task deleted) are dropped on load. Max depth 50.
+             * @example [
+             *       "01J1A2B3C4D5E6F7G8H9I0J1K2",
+             *       "01J1A2B3C4D5E6F7G8H9I0J1K3"
+             *     ]
+             */
+            blocked_by?: string[];
         };
         /** @description Paginated list response for GET /board/tasks */
         BoardTaskListResponse: {
@@ -5802,6 +5852,28 @@ export interface components {
             prompt?: string;
             priority?: number;
             milestone_id?: string;
+            /**
+             * Format: date-time
+             * @description Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+             * @example 2026-07-01T09:00:00Z
+             */
+            start?: string;
+            /**
+             * Format: date-time
+             * @description Optional due date/time (RFC 3339 UTC). Deadline for task completion.
+             * @example 2026-07-31T17:00:00Z
+             */
+            due?: string;
+            /**
+             * @description Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
+             * @example FREQ=WEEKLY;BYDAY=MO
+             */
+            recurrence?: string;
+            /**
+             * @description Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Max depth 50.
+             * @example []
+             */
+            blocked_by?: string[];
         };
         BoardTaskUpdateRequest: {
             name?: string;
@@ -5814,6 +5886,28 @@ export interface components {
             milestone_id?: string;
             session_id?: string;
             result?: string;
+            /**
+             * Format: date-time
+             * @description Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+             * @example 2026-07-01T09:00:00Z
+             */
+            start?: string;
+            /**
+             * Format: date-time
+             * @description Optional due date/time (RFC 3339 UTC). Deadline for task completion.
+             * @example 2026-07-31T17:00:00Z
+             */
+            due?: string;
+            /**
+             * @description Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
+             * @example FREQ=WEEKLY;BYDAY=MO
+             */
+            recurrence?: string;
+            /**
+             * @description Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Replaces the current blocked_by list atomically. Max depth 50.
+             * @example []
+             */
+            blocked_by?: string[];
         };
         /** @description A session that has been auto-linked to a workspace via tool use. */
         WorkspaceSessionLink: {

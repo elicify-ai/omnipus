@@ -4127,11 +4127,17 @@ type BearerToken = string
 // BoardTask A GTD board task stored in ~/.omnipus/tasks/. Distinct from workflow tasks (pkg/taskstore, /api/v1/tasks) which have different statuses and semantics.
 type BoardTask struct {
 	// AgentId Optional agent responsible for this task.
-	AgentId   *string   `json:"agent_id,omitempty"`
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// BlockedBy Optional ordered list of GTD board task IDs that must complete before this task may be started. A write-time DAG validator rejects self-edges, 2-node cycles, and N-node cycles. Orphan edges (target task deleted) are dropped on load. Max depth 50.
+	BlockedBy *[]string `json:"blocked_by,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 
 	// Description Optional task description.
 	Description *string `json:"description,omitempty"`
+
+	// Due Optional due date/time (RFC 3339 UTC). Mirrors Milestone.due_date semantics — deadline for task completion.
+	Due *time.Time `json:"due,omitempty"`
 
 	// Id UUID task identifier
 	Id string `json:"id"`
@@ -4151,11 +4157,17 @@ type BoardTask struct {
 	// Prompt Optional agent prompt attached to the task.
 	Prompt *string `json:"prompt,omitempty"`
 
+	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim in v0.1.0; the recurrence execution engine is v0.2.0 (stored-not-run).
+	Recurrence *string `json:"recurrence,omitempty"`
+
 	// Result Optional task result or output.
 	Result *string `json:"result,omitempty"`
 
 	// SessionId Optional session linked to this task.
 	SessionId *string `json:"session_id,omitempty"`
+
+	// Start Optional start date/time (RFC 3339 UTC). When set, the task is scheduled to begin at this instant. Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+	Start *time.Time `json:"start,omitempty"`
 
 	// Status GTD board task status.
 	Status    BoardTaskStatus `json:"status"`
@@ -4170,12 +4182,24 @@ type BoardTaskStatus string
 
 // BoardTaskCreateRequest defines model for BoardTaskCreateRequest.
 type BoardTaskCreateRequest struct {
-	AgentId     *string `json:"agent_id,omitempty"`
-	Description *string `json:"description,omitempty"`
-	MilestoneId *string `json:"milestone_id,omitempty"`
-	Name        string  `json:"name"`
-	Priority    *int    `json:"priority,omitempty"`
-	Prompt      *string `json:"prompt,omitempty"`
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// BlockedBy Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Max depth 50.
+	BlockedBy   *[]string `json:"blocked_by,omitempty"`
+	Description *string   `json:"description,omitempty"`
+
+	// Due Optional due date/time (RFC 3339 UTC). Deadline for task completion.
+	Due         *time.Time `json:"due,omitempty"`
+	MilestoneId *string    `json:"milestone_id,omitempty"`
+	Name        string     `json:"name"`
+	Priority    *int       `json:"priority,omitempty"`
+	Prompt      *string    `json:"prompt,omitempty"`
+
+	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
+	Recurrence *string `json:"recurrence,omitempty"`
+
+	// Start Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+	Start *time.Time `json:"start,omitempty"`
 
 	// Status GTD board task status.
 	Status      *BoardTaskCreateRequestStatus `json:"status,omitempty"`
@@ -4188,11 +4212,17 @@ type BoardTaskCreateRequestStatus string
 // BoardTaskListItem A single item in the board task list response. Equivalent to BoardTask. Defined as a plain object (not allOf) so that oapi-codegen emits []BoardTaskListItem rather than an inline anonymous struct in BoardTaskListResponse.
 type BoardTaskListItem struct {
 	// AgentId Optional agent responsible for this task.
-	AgentId   *string   `json:"agent_id,omitempty"`
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// BlockedBy Optional ordered list of GTD board task IDs that must complete before this task may be started. A write-time DAG validator rejects self-edges, 2-node cycles, and N-node cycles. Orphan edges (target task deleted) are dropped on load. Max depth 50.
+	BlockedBy *[]string `json:"blocked_by,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 
 	// Description Optional task description.
 	Description *string `json:"description,omitempty"`
+
+	// Due Optional due date/time (RFC 3339 UTC). Mirrors Milestone.due_date semantics — deadline for task completion.
+	Due *time.Time `json:"due,omitempty"`
 
 	// Id UUID task identifier
 	Id string `json:"id"`
@@ -4212,11 +4242,17 @@ type BoardTaskListItem struct {
 	// Prompt Optional agent prompt attached to the task.
 	Prompt *string `json:"prompt,omitempty"`
 
+	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim in v0.1.0; the recurrence execution engine is v0.2.0 (stored-not-run).
+	Recurrence *string `json:"recurrence,omitempty"`
+
 	// Result Optional task result or output.
 	Result *string `json:"result,omitempty"`
 
 	// SessionId Optional session linked to this task.
 	SessionId *string `json:"session_id,omitempty"`
+
+	// Start Optional start date/time (RFC 3339 UTC). When set, the task is scheduled to begin at this instant. Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+	Start *time.Time `json:"start,omitempty"`
 
 	// Status GTD board task status.
 	Status    BoardTaskListItemStatus `json:"status"`
@@ -4239,14 +4275,26 @@ type BoardTaskListResponse struct {
 
 // BoardTaskUpdateRequest defines model for BoardTaskUpdateRequest.
 type BoardTaskUpdateRequest struct {
-	AgentId     *string `json:"agent_id,omitempty"`
-	Description *string `json:"description,omitempty"`
-	MilestoneId *string `json:"milestone_id,omitempty"`
-	Name        *string `json:"name,omitempty"`
-	Priority    *int    `json:"priority,omitempty"`
-	Prompt      *string `json:"prompt,omitempty"`
-	Result      *string `json:"result,omitempty"`
-	SessionId   *string `json:"session_id,omitempty"`
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// BlockedBy Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Replaces the current blocked_by list atomically. Max depth 50.
+	BlockedBy   *[]string `json:"blocked_by,omitempty"`
+	Description *string   `json:"description,omitempty"`
+
+	// Due Optional due date/time (RFC 3339 UTC). Deadline for task completion.
+	Due         *time.Time `json:"due,omitempty"`
+	MilestoneId *string    `json:"milestone_id,omitempty"`
+	Name        *string    `json:"name,omitempty"`
+	Priority    *int       `json:"priority,omitempty"`
+	Prompt      *string    `json:"prompt,omitempty"`
+
+	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
+	Recurrence *string `json:"recurrence,omitempty"`
+	Result     *string `json:"result,omitempty"`
+	SessionId  *string `json:"session_id,omitempty"`
+
+	// Start Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+	Start *time.Time `json:"start,omitempty"`
 
 	// Status GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
 	Status      *BoardTaskUpdateRequestStatus `json:"status,omitempty"`
@@ -6778,12 +6826,24 @@ type ListBoardTasksParamsStatus string
 
 // CreateBoardTaskJSONBody defines parameters for CreateBoardTask.
 type CreateBoardTaskJSONBody struct {
-	AgentId     *string `json:"agent_id,omitempty"`
-	Description *string `json:"description,omitempty"`
-	MilestoneId *string `json:"milestone_id,omitempty"`
-	Name        string  `json:"name"`
-	Priority    *int    `json:"priority,omitempty"`
-	Prompt      *string `json:"prompt,omitempty"`
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// BlockedBy Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Max depth 50.
+	BlockedBy   *[]string `json:"blocked_by,omitempty"`
+	Description *string   `json:"description,omitempty"`
+
+	// Due Optional due date/time (RFC 3339 UTC). Deadline for task completion.
+	Due         *time.Time `json:"due,omitempty"`
+	MilestoneId *string    `json:"milestone_id,omitempty"`
+	Name        string     `json:"name"`
+	Priority    *int       `json:"priority,omitempty"`
+	Prompt      *string    `json:"prompt,omitempty"`
+
+	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
+	Recurrence *string `json:"recurrence,omitempty"`
+
+	// Start Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+	Start *time.Time `json:"start,omitempty"`
 
 	// Status GTD board task status.
 	Status      *CreateBoardTaskJSONBodyStatus `json:"status,omitempty"`
@@ -6795,14 +6855,26 @@ type CreateBoardTaskJSONBodyStatus string
 
 // UpdateBoardTaskJSONBody defines parameters for UpdateBoardTask.
 type UpdateBoardTaskJSONBody struct {
-	AgentId     *string `json:"agent_id,omitempty"`
-	Description *string `json:"description,omitempty"`
-	MilestoneId *string `json:"milestone_id,omitempty"`
-	Name        *string `json:"name,omitempty"`
-	Priority    *int    `json:"priority,omitempty"`
-	Prompt      *string `json:"prompt,omitempty"`
-	Result      *string `json:"result,omitempty"`
-	SessionId   *string `json:"session_id,omitempty"`
+	AgentId *string `json:"agent_id,omitempty"`
+
+	// BlockedBy Optional list of task IDs this task is blocked by. Write-time DAG validator rejects self-edges and cycles. Replaces the current blocked_by list atomically. Max depth 50.
+	BlockedBy   *[]string `json:"blocked_by,omitempty"`
+	Description *string   `json:"description,omitempty"`
+
+	// Due Optional due date/time (RFC 3339 UTC). Deadline for task completion.
+	Due         *time.Time `json:"due,omitempty"`
+	MilestoneId *string    `json:"milestone_id,omitempty"`
+	Name        *string    `json:"name,omitempty"`
+	Priority    *int       `json:"priority,omitempty"`
+	Prompt      *string    `json:"prompt,omitempty"`
+
+	// Recurrence Optional recurrence rule as a pinned RRULE string (RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO"). Stored verbatim; execution engine is v0.2.0.
+	Recurrence *string `json:"recurrence,omitempty"`
+	Result     *string `json:"result,omitempty"`
+	SessionId  *string `json:"session_id,omitempty"`
+
+	// Start Optional start date/time (RFC 3339 UTC). Stored verbatim; no scheduling engine runs in v0.1.0 (shell only — engine is v0.2.0).
+	Start *time.Time `json:"start,omitempty"`
 
 	// Status GTD board task status values allowed on PUT update. The "active" value is intentionally excluded — active can only be set via POST /start.
 	Status      *UpdateBoardTaskJSONBodyStatus `json:"status,omitempty"`

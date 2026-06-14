@@ -27,6 +27,7 @@ import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents.index'
 import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app/workspaces.$workspaceId'
 import { Route as AppSessionsSessionIdRouteImport } from './routes/_app/sessions.$sessionId'
 import { Route as AppAgentsAgentIdRouteImport } from './routes/_app/agents.$agentId'
+import { Route as AppWorkspacesWorkspaceIdCalendarRouteImport } from './routes/_app/workspaces.$workspaceId.calendar'
 
 const OnboardingRoute = OnboardingRouteImport.update({
   id: '/onboarding',
@@ -118,6 +119,12 @@ const AppAgentsAgentIdRoute = AppAgentsAgentIdRouteImport.update({
   path: '/$agentId',
   getParentRoute: () => AppAgentsRoute,
 } as any)
+const AppWorkspacesWorkspaceIdCalendarRoute =
+  AppWorkspacesWorkspaceIdCalendarRouteImport.update({
+    id: '/calendar',
+    path: '/calendar',
+    getParentRoute: () => AppWorkspacesWorkspaceIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -134,9 +141,10 @@ export interface FileRoutesByFullPath {
   '/tasks': typeof AppTasksRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
-  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
+  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
   '/agents/': typeof AppAgentsIndexRoute
   '/workspaces/': typeof AppWorkspacesIndexRoute
+  '/workspaces/$workspaceId/calendar': typeof AppWorkspacesWorkspaceIdCalendarRoute
 }
 export interface FileRoutesByTo {
   '/landing': typeof LandingRoute
@@ -152,9 +160,10 @@ export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
-  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
+  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
   '/agents': typeof AppAgentsIndexRoute
   '/workspaces': typeof AppWorkspacesIndexRoute
+  '/workspaces/$workspaceId/calendar': typeof AppWorkspacesWorkspaceIdCalendarRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -173,9 +182,10 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/_app/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/_app/sessions/$sessionId': typeof AppSessionsSessionIdRoute
-  '/_app/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
+  '/_app/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
   '/_app/agents/': typeof AppAgentsIndexRoute
   '/_app/workspaces/': typeof AppWorkspacesIndexRoute
+  '/_app/workspaces/$workspaceId/calendar': typeof AppWorkspacesWorkspaceIdCalendarRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -197,6 +207,7 @@ export interface FileRouteTypes {
     | '/workspaces/$workspaceId'
     | '/agents/'
     | '/workspaces/'
+    | '/workspaces/$workspaceId/calendar'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/landing'
@@ -215,6 +226,7 @@ export interface FileRouteTypes {
     | '/workspaces/$workspaceId'
     | '/agents'
     | '/workspaces'
+    | '/workspaces/$workspaceId/calendar'
   id:
     | '__root__'
     | '/_app'
@@ -235,6 +247,7 @@ export interface FileRouteTypes {
     | '/_app/workspaces/$workspaceId'
     | '/_app/agents/'
     | '/_app/workspaces/'
+    | '/_app/workspaces/$workspaceId/calendar'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -372,6 +385,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAgentsAgentIdRouteImport
       parentRoute: typeof AppAgentsRoute
     }
+    '/_app/workspaces/$workspaceId/calendar': {
+      id: '/_app/workspaces/$workspaceId/calendar'
+      path: '/calendar'
+      fullPath: '/workspaces/$workspaceId/calendar'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdCalendarRouteImport
+      parentRoute: typeof AppWorkspacesWorkspaceIdRoute
+    }
   }
 }
 
@@ -389,6 +409,21 @@ const AppAgentsRouteWithChildren = AppAgentsRoute._addFileChildren(
   AppAgentsRouteChildren,
 )
 
+interface AppWorkspacesWorkspaceIdRouteChildren {
+  AppWorkspacesWorkspaceIdCalendarRoute: typeof AppWorkspacesWorkspaceIdCalendarRoute
+}
+
+const AppWorkspacesWorkspaceIdRouteChildren: AppWorkspacesWorkspaceIdRouteChildren =
+  {
+    AppWorkspacesWorkspaceIdCalendarRoute:
+      AppWorkspacesWorkspaceIdCalendarRoute,
+  }
+
+const AppWorkspacesWorkspaceIdRouteWithChildren =
+  AppWorkspacesWorkspaceIdRoute._addFileChildren(
+    AppWorkspacesWorkspaceIdRouteChildren,
+  )
+
 interface AppRouteChildren {
   AppAgentsRoute: typeof AppAgentsRouteWithChildren
   AppChannelsRoute: typeof AppChannelsRoute
@@ -400,7 +435,7 @@ interface AppRouteChildren {
   AppTasksRoute: typeof AppTasksRoute
   AppIndexRoute: typeof AppIndexRoute
   AppSessionsSessionIdRoute: typeof AppSessionsSessionIdRoute
-  AppWorkspacesWorkspaceIdRoute: typeof AppWorkspacesWorkspaceIdRoute
+  AppWorkspacesWorkspaceIdRoute: typeof AppWorkspacesWorkspaceIdRouteWithChildren
   AppWorkspacesIndexRoute: typeof AppWorkspacesIndexRoute
 }
 
@@ -415,7 +450,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppTasksRoute: AppTasksRoute,
   AppIndexRoute: AppIndexRoute,
   AppSessionsSessionIdRoute: AppSessionsSessionIdRoute,
-  AppWorkspacesWorkspaceIdRoute: AppWorkspacesWorkspaceIdRoute,
+  AppWorkspacesWorkspaceIdRoute: AppWorkspacesWorkspaceIdRouteWithChildren,
   AppWorkspacesIndexRoute: AppWorkspacesIndexRoute,
 }
 

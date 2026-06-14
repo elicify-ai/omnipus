@@ -451,6 +451,10 @@ type BoardTask = {
   created_at: string;
   updated_at: string;
   owner?: string | undefined;
+  start?: string | undefined;
+  due?: string | undefined;
+  recurrence?: string | undefined;
+  blocked_by?: Array<string> | undefined;
 };
 type GTDBoardTaskStatus =
   | "inbox"
@@ -478,6 +482,10 @@ type BoardTaskListItem = {
   created_at: string;
   updated_at: string;
   owner?: string | undefined;
+  start?: string | undefined;
+  due?: string | undefined;
+  recurrence?: string | undefined;
+  blocked_by?: Array<string> | undefined;
 };
 type BoardTaskCreateRequest = {
   name: string;
@@ -488,6 +496,10 @@ type BoardTaskCreateRequest = {
   prompt?: string | undefined;
   priority?: number | undefined;
   milestone_id?: string | undefined;
+  start?: string | undefined;
+  due?: string | undefined;
+  recurrence?: string | undefined;
+  blocked_by?: Array<string> | undefined;
 };
 type BoardTaskUpdateRequest = Partial<{
   name: string;
@@ -500,6 +512,10 @@ type BoardTaskUpdateRequest = Partial<{
   milestone_id: string;
   session_id: string;
   result: string;
+  start: string;
+  due: string;
+  recurrence: string;
+  blocked_by: Array<string>;
 }>;
 type BoardTaskUpdateStatus = "inbox" | "next" | "waiting" | "done" | "failed";
 type MilestoneListResponse = {
@@ -1735,6 +1751,10 @@ export const BoardTaskListItem: z.ZodType<BoardTaskListItem> = z
     created_at: z.string().datetime({ offset: true }),
     updated_at: z.string().datetime({ offset: true }),
     owner: z.string().optional(),
+    start: z.string().datetime({ offset: true }).optional(),
+    due: z.string().datetime({ offset: true }).optional(),
+    recurrence: z.string().optional(),
+    blocked_by: z.array(z.string()).optional(),
   })
   .passthrough();
 export const BoardTaskListResponse: z.ZodType<BoardTaskListResponse> = z
@@ -1758,6 +1778,10 @@ export const BoardTaskCreateRequest: z.ZodType<BoardTaskCreateRequest> = z
     prompt: z.string().max(10000).optional(),
     priority: z.number().int().gte(1).lte(5).optional(),
     milestone_id: z.string().optional(),
+    start: z.string().datetime({ offset: true }).optional(),
+    due: z.string().datetime({ offset: true }).optional(),
+    recurrence: z.string().optional(),
+    blocked_by: z.array(z.string()).optional(),
   })
   .passthrough();
 export const BoardTask: z.ZodType<BoardTask> = z
@@ -1776,6 +1800,10 @@ export const BoardTask: z.ZodType<BoardTask> = z
     created_at: z.string().datetime({ offset: true }),
     updated_at: z.string().datetime({ offset: true }),
     owner: z.string().optional(),
+    start: z.string().datetime({ offset: true }).optional(),
+    due: z.string().datetime({ offset: true }).optional(),
+    recurrence: z.string().optional(),
+    blocked_by: z.array(z.string()).optional(),
   })
   .passthrough();
 export const BoardTaskUpdateStatus = z.enum([
@@ -1797,6 +1825,10 @@ export const BoardTaskUpdateRequest: z.ZodType<BoardTaskUpdateRequest> = z
     milestone_id: z.string(),
     session_id: z.string(),
     result: z.string().max(50000),
+    start: z.string().datetime({ offset: true }),
+    due: z.string().datetime({ offset: true }),
+    recurrence: z.string(),
+    blocked_by: z.array(z.string()),
   })
   .partial()
   .passthrough();
