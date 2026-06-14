@@ -465,9 +465,20 @@ func containsString(slice []string, s string) bool {
 	return false
 }
 
-// ValidateBlockedBy checks that all IDs in blockedBy exist and none are equal
-// to selfID (trivial self-cycle). It does not detect multi-hop cycles; the
-// depth limit in the orchestrator dispatch path prevents infinite loops.
+// ValidateBlockedBy checks that all IDs in blockedBy exist, none are equal to
+// selfID (trivial self-cycle), and that the proposed edges would not close a
+// cycle in the blocked_by DAG of any length (multi-hop: A→B→A, A→B→C→A, …).
+//
+// Cycle detection is a DFS from each proposed dependency back through the
+// existing blocked_by graph: if selfID is reachable from any dep, adding the
+// edge selfID→dep would create a cycle, so it is rejected. The walk is bounded
+// by maxParentDepth so a (pre-existing, corrupt) cycle in stored data cannot
+// loop forever; on-disk I/O errors fail closed rather than being silently
+// skipped.
+//
+// When selfID is empty (the Create path, where the task is not yet on disk and
+// therefore has no inbound edges) no cycle through selfID is possible, but the
+// existence/self-edge checks still run.
 func (s *TaskStore) ValidateBlockedBy(selfID string, blockedBy []string) error {
 	for _, dep := range blockedBy {
 		if dep == selfID {
@@ -481,6 +492,57 @@ func (s *TaskStore) ValidateBlockedBy(selfID string, blockedBy []string) error {
 				return fmt.Errorf("blocked_by task %q not found", dep)
 			}
 			return fmt.Errorf("blocked_by: could not verify task %q: %w", dep, err)
+		}
+	}
+
+	// Multi-hop cycle detection: if selfID is reachable from any proposed dep
+	// through the existing blocked_by edges, the new edge closes a cycle.
+	if selfID == "" {
+		return nil
+	}
+	visited := map[string]bool{}
+	for _, dep := range blockedBy {
+		if err := s.blockedByReaches(dep, selfID, visited, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// blockedByReaches performs a DFS from startID over the blocked_by graph,
+// looking for targetID. If targetID is reachable, adding an edge
+// targetID→startID would create a cycle, so it returns ErrCycle.
+//
+// visited tracks already-explored nodes across the whole walk (the graph is a
+// DAG, so a node need only be explored once). depth bounds the walk by
+// maxParentDepth to defend against a pre-existing on-disk cycle.
+//
+// A missing task (ErrNotFound) is an orphan reference and is skipped — it
+// cannot be part of a cycle. Any OTHER load error fails closed (propagated)
+// rather than being treated as an orphan, so a transient I/O error cannot let
+// a real cycle slip past validation.
+func (s *TaskStore) blockedByReaches(startID, targetID string, visited map[string]bool, depth int) error {
+	if depth >= maxParentDepth {
+		return fmt.Errorf("%w: blocked_by chain exceeds max depth %d", ErrCycle, maxParentDepth)
+	}
+	if visited[startID] {
+		return nil
+	}
+	visited[startID] = true
+
+	t, err := s.load(startID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil // orphan reference — not a cycle
+		}
+		return fmt.Errorf("blocked_by: cycle check: loading task %q: %w", startID, err)
+	}
+	for _, dep := range t.BlockedBy {
+		if dep == targetID {
+			return fmt.Errorf("%w: blocked_by edge %q → %q closes a loop via %q", ErrCycle, targetID, startID, dep)
+		}
+		if err := s.blockedByReaches(dep, targetID, visited, depth+1); err != nil {
+			return err
 		}
 	}
 	return nil

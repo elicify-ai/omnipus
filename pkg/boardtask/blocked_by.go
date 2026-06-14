@@ -136,8 +136,15 @@ func detectCycleDFS(startID, targetID string, loadTask TaskLoader, visited map[s
 
 	task, err := loadTask(startID)
 	if err != nil {
-		// Orphan reference — skip (not a cycle; DropOrphanEdges cleans these up).
-		return nil
+		// Distinguish a genuinely-missing task (orphan reference) from a
+		// transient I/O error. An orphan is skipped (not a cycle;
+		// DropOrphanEdges cleans these up), but any OTHER error MUST fail
+		// closed — silently treating an I/O error as an orphan aborts this DFS
+		// branch and could let a real cycle slip past validation.
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("blocked_by: cycle check: loading task %q: %w", startID, err)
 	}
 
 	for _, dep := range task.BlockedBy {

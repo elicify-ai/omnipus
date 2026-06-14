@@ -313,16 +313,34 @@ func (ms *MemoryStore) checkAndRegisterSigLocked(room memrooms.Room, id, title, 
 			logger.WarnCF("agent.memory", "near-duplicate memory detected (non-destructive link written)",
 				map[string]any{"new_id": id, "existing_id": existingID, "jaccard": j})
 			// Still register the new sig so we track it for future dedup.
-			ms.sigCache[room.Root] = append(sigs, newSig)
-			ms.sigIDs[room.Root] = append(ids, id)
+			ms.registerSigLocked(room, id, newSig)
 			return true
 		}
 	}
 
 	// Not a near-dup — register the signature.
-	ms.sigCache[room.Root] = append(sigs, newSig)
-	ms.sigIDs[room.Root] = append(ids, id)
+	ms.registerSigLocked(room, id, newSig)
 	return false
+}
+
+// registerSigLocked appends (sig, id) to the room's MinHash signature cache,
+// but only if id is not already cached. This prevents a double sig-append on
+// the first write to a room: AppendLongTermToScope writes the .md file BEFORE
+// the dedup check, and ensureSigCacheLocked's initial dir scan already picks up
+// the just-written file — so an unconditional append would cache the same
+// memory's signature twice (slow, unbounded cache bloat). On subsequent writes
+// the cache already exists (no rescan), the just-written file is not yet
+// cached, and the append proceeds normally.
+//
+// MUST be called with ms.indexMu held.
+func (ms *MemoryStore) registerSigLocked(room memrooms.Room, id string, sig minhash.Signature) {
+	for _, existingID := range ms.sigIDs[room.Root] {
+		if existingID == id {
+			return // already cached (scan picked up the just-written file)
+		}
+	}
+	ms.sigCache[room.Root] = append(ms.sigCache[room.Root], sig)
+	ms.sigIDs[room.Root] = append(ms.sigIDs[room.Root], id)
 }
 
 // SetWorkspaceID wires the shared workspace room for the active turn.
@@ -535,8 +553,14 @@ func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memro
 
 	for _, t := range targets {
 		if t.ri != nil {
-			// BM25 path (FR-7.4).
+			// BM25 path (FR-7.4). Hold indexMu across the Search() call to guard
+			// the bleve index against a concurrent Close(): Close() closes every
+			// RoomIndex under indexMu, so releasing the lock before t.ri.Search()
+			// would risk a use-after-close. This mirrors the append path
+			// (AppendLongTermToScope), which holds indexMu across ri.Index().
+			ms.indexMu.Lock()
 			hits, err := t.ri.Search(query, limit)
+			ms.indexMu.Unlock()
 			if err != nil {
 				logger.WarnCF("agent.memory", "SearchEntriesInScope: bleve search failed; falling back to scan",
 					map[string]any{"room_root": t.room.Root, "query": query, "error": err.Error()})
@@ -610,7 +634,9 @@ func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memro
 		if scored[i].score != scored[j].score {
 			return scored[i].score > scored[j].score
 		}
-		return true // stable sort preserves insertion order (mtime-sorted scan)
+		// Equal scores: return false to satisfy strict-weak-ordering. The stable
+		// sort then preserves insertion order (mtime-sorted scan) for ties.
+		return false
 	})
 
 	// When all scores are 0 (scan fallback), sort by mtime.
@@ -632,15 +658,50 @@ func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memro
 		}
 	}
 
+	// Resolve each memory's real stored creation time (its file mtime) so the
+	// recalled entry reports when the memory was actually written, NOT
+	// wall-clock-at-recall. memoryFileToEntry falls back to ms.now() when no
+	// mtime is available (e.g. the file was removed between search and build).
+	mtimes := memoryFileMtimes(dirs)
+
 	// Build the result list up to limit.
 	var results []LongTermEntry
 	for i, s := range scored {
 		if i >= limit {
 			break
 		}
-		results = append(results, memoryFileToEntry(s.mf))
+		ts, ok := mtimes[s.mf.Frontmatter.ID]
+		if !ok {
+			ts = ms.now()
+		}
+		results = append(results, memoryFileToEntry(s.mf, ts))
 	}
 	return results, nil
+}
+
+// memoryFileMtimes builds an ID→mtime map by scanning each memories directory.
+// The mtime of a memory's .md file is its real stored creation/modification
+// time. Per-directory and per-file errors are skipped (a missing mtime falls
+// back to the caller's clock), so this never aborts a recall.
+func memoryFileMtimes(dirs []string) map[string]time.Time {
+	mtimes := make(map[string]time.Time)
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+				continue
+			}
+			info, infoErr := e.Info()
+			if infoErr != nil {
+				continue
+			}
+			mtimes[strings.TrimSuffix(e.Name(), ".md")] = info.ModTime().UTC()
+		}
+	}
+	return mtimes
 }
 
 // AppendRetro writes a retrospective to the private room's retro directory.
@@ -776,10 +837,14 @@ func truncateTitle(content string, maxLen int) string {
 	return line
 }
 
-// memoryFileToEntry converts a MemoryFile to a LongTermEntry for the tools interface.
-func memoryFileToEntry(mf memrooms.MemoryFile) LongTermEntry {
+// memoryFileToEntry converts a MemoryFile to a LongTermEntry for the tools
+// interface. ts is the memory's real stored creation time (its file mtime);
+// callers pass their injectable clock as the fallback when no mtime is
+// available, so the recalled timestamp is deterministic and reflects when the
+// memory was actually written rather than wall-clock-at-recall.
+func memoryFileToEntry(mf memrooms.MemoryFile, ts time.Time) LongTermEntry {
 	return LongTermEntry{
-		Timestamp: time.Now().UTC(), // placeholder; bleve will provide real timestamps
+		Timestamp: ts.UTC(),
 		Category:  memoryTypeToCategory(mf.Frontmatter.Type),
 		Content:   mf.Body,
 	}
@@ -803,29 +868,7 @@ func memoryTypeToCategory(t memrooms.MemoryType) MemoryCategory {
 // sortMemoriesNewestFirst sorts MemoryFile slice by file mtime descending.
 // Falls back to ID sort when mtime is unavailable.
 func sortMemoriesNewestFirst(dirs []string, memories []memrooms.MemoryFile) {
-	// Build a dir→entries map for mtime lookups.
-	type dirEntry struct {
-		dir   string
-		mtime time.Time
-	}
-	mtimes := make(map[string]time.Time, len(memories))
-	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			info, err := e.Info()
-			if err != nil {
-				continue
-			}
-			id := strings.TrimSuffix(e.Name(), ".md")
-			mtimes[id] = info.ModTime()
-		}
-	}
+	mtimes := memoryFileMtimes(dirs)
 
 	sort.SliceStable(memories, func(i, j int) bool {
 		ti := mtimes[memories[i].Frontmatter.ID]

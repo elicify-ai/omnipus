@@ -6,6 +6,7 @@ package boardtask_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -478,5 +479,49 @@ func TestTask_Spec5FieldsPersist(t *testing.T) {
 	}
 	if len(loaded.BlockedBy) != 2 || loaded.BlockedBy[0] != "A" || loaded.BlockedBy[1] != "B" {
 		t.Errorf("blocked_by: got %v, want [A B]", loaded.BlockedBy)
+	}
+}
+
+// TestBlockedBy_TransientIOErrorFailsClosed verifies that a non-not-found load
+// error encountered during cycle-detection DFS is PROPAGATED (fail-closed),
+// not silently treated as an orphan. A transient I/O error must never let a
+// potential cycle slip past validation.
+func TestBlockedBy_TransientIOErrorFailsClosed(t *testing.T) {
+	ioErr := fmt.Errorf("simulated transient I/O error: disk read failed")
+	// Graph: B is blocked_by C, but loading C fails with an I/O error (not
+	// os.ErrNotExist). Proposing A blocked_by B walks A→B→C; the C load errors.
+	loader := func(id string) (boardtask.Task, error) {
+		switch id {
+		case "A":
+			return makeTask("A"), nil
+		case "B":
+			return makeTask("B", "C"), nil
+		case "C":
+			return boardtask.Task{}, ioErr
+		default:
+			return boardtask.Task{}, os.ErrNotExist
+		}
+	}
+	err := boardtask.ValidateBlockedBy("A", []string{"B"}, loader)
+	if err == nil {
+		t.Fatal("expected transient I/O error to be propagated (fail-closed), got nil")
+	}
+	if !errors.Is(err, ioErr) {
+		t.Fatalf("expected wrapped transient I/O error, got: %v", err)
+	}
+}
+
+// TestBlockedBy_OrphanStillSkipped reaffirms that a genuine not-found (orphan)
+// during DFS is still skipped (not treated as a cycle nor as an error), so the
+// fail-closed change for finding #2 does not break orphan handling.
+func TestBlockedBy_OrphanStillSkipped(t *testing.T) {
+	// B is blocked_by D, but D does not exist (os.ErrNotExist). A→B→D(orphan).
+	graph := taskMap{
+		"A": makeTask("A"),
+		"B": makeTask("B", "D"),
+	}
+	err := boardtask.ValidateBlockedBy("A", []string{"B"}, graph.load)
+	if err != nil {
+		t.Fatalf("orphan reference deep in chain must be skipped, got: %v", err)
 	}
 }
