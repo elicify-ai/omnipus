@@ -97,3 +97,5 @@ properties:
     description: >
       Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
     example: "alloy"
+  executor:
+    $ref: './ExecutorConfig.yaml'

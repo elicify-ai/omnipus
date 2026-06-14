@@ -203,3 +203,5 @@ properties:
       provider and API key). This field is schema-pinned but NOT used until v0.2.0
       TTS feature delivery. Absent when not configured.
     example: "alloy"
+  executor:
+    $ref: './ExecutorConfig.yaml'
