@@ -148,6 +148,13 @@ func IsValidEventName(e EventName) bool {
 		"board_task.update",
 		"board_task.delete",
 		"board_task.start",
+		// Current workspace mutation events (rest_workspaces.go emits these).
+		"workspace.create",
+		"workspace.update",
+		"workspace.delete",
+		// Legacy pre-rename project.* events, retained for back-compat with
+		// audit logs written before the project→workspace rename. No current
+		// handler emits them.
 		"project.create",
 		"project.update",
 		"project.delete",

@@ -710,8 +710,15 @@ type AgentRef struct {
 // An empty Kind is accepted for back-compat: callers (ResolveDelegationTo)
 // default an absent kind to "local". Only a present-but-unknown value (a typo)
 // is an error, so it fails loudly rather than silently downgrading routing.
+//
+// The Kind is canonicalized (lowercased + trimmed) BEFORE the membership check
+// so Validate accepts exactly what the API write path and route.go accept —
+// both normalize the kind the same way. Validating the raw value would reject a
+// mixed-case/whitespace payload (e.g. {"kind":"Local"}) that the API gate let
+// through and that routes fine, bricking the very next config load. Genuinely-
+// unknown values (e.g. "robot") are still rejected.
 func (r AgentRef) Validate() error {
-	switch r.Kind {
+	switch strings.ToLower(strings.TrimSpace(r.Kind)) {
 	case "", AgentRefKindLocal, AgentRefKindRemoteA2A:
 		return nil
 	default:
@@ -1175,8 +1182,16 @@ type ChannelIdentity struct {
 // Kind is accepted for back-compat — route.go's documented default for an
 // absent/empty identity kind is the user-routing fallback. When kind=agent the
 // id MUST be present (an agent identity with no id can never resolve).
+//
+// The Kind is canonicalized (lowercased + trimmed) BEFORE the membership check
+// so Validate accepts exactly what the API write path (validateChannelIdentity
+// in pkg/gateway/rest.go) and route.go accept — both normalize the kind the same
+// way. Validating the raw value would reject a mixed-case/whitespace payload
+// (e.g. {"kind":"Agent"}) that the API gate let through and that routes fine,
+// bricking the very next config load. Genuinely-unknown values (e.g. "robot")
+// are still rejected.
 func (i ChannelIdentity) Validate() error {
-	switch i.Kind {
+	switch strings.ToLower(strings.TrimSpace(i.Kind)) {
 	case "", ChannelIdentityKindUser:
 		return nil
 	case ChannelIdentityKindAgent:
@@ -1405,12 +1420,28 @@ func ValidateChannelsCap1(channels map[string]ChannelInstanceConfig) error {
 	return nil
 }
 
+// canonicalizeKind lowercases and trims a kind string so persisted configs are
+// stored in the single canonical form that ChannelIdentity.Validate, AgentRef.
+// Validate, the API write path (validateChannelIdentity), and route.go all agree
+// on. An empty/whitespace-only kind canonicalizes to "" (its back-compat default).
+func canonicalizeKind(kind string) string {
+	return strings.ToLower(strings.TrimSpace(kind))
+}
+
 // validateIdentityAndAgentRefKinds rejects any non-empty ChannelIdentity.Kind or
 // AgentRef.Kind that is outside its known set. This runs at config load so a typo
 // fails loudly with a clear error instead of silently downgrading routing (a
 // mis-spelled channel identity kind would otherwise fall through to user routing
 // in route.go) or mis-resolving a delegation target. Empty/absent kinds keep
 // their documented defaults and are NOT rejected (back-compat).
+//
+// On success it also normalizes the stored Kind in place (lowercase + trim) so a
+// value the API accepted in mixed case (e.g. {"kind":"Agent"}) is persisted in
+// canonical form. This keeps the on-disk config self-consistent with the
+// case-tolerant API/route paths and prevents drift between what was accepted at
+// write time and what is loaded later. Validate already normalizes before
+// comparing, so this is belt-and-suspenders: even an un-normalized stored value
+// would load, but we canonicalize it here so it does not stay mixed-case forever.
 func validateIdentityAndAgentRefKinds(cfg *Config) error {
 	// Channel instance identity overrides.
 	for key, inst := range cfg.Channels {
@@ -1419,6 +1450,12 @@ func validateIdentityAndAgentRefKinds(cfg *Config) error {
 		}
 		if err := inst.Identity.Validate(); err != nil {
 			return fmt.Errorf("channel %q identity: %w", key, err)
+		}
+		// Persist the canonical kind. inst is a copy (map value), so mutate and
+		// write the entry back into the map.
+		if canon := canonicalizeKind(inst.Identity.Kind); canon != inst.Identity.Kind {
+			inst.Identity.Kind = canon
+			cfg.Channels[key] = inst
 		}
 	}
 
@@ -1429,15 +1466,19 @@ func validateIdentityAndAgentRefKinds(cfg *Config) error {
 		if dp == nil {
 			return nil
 		}
-		for _, ref := range dp.To {
-			if err := ref.Validate(); err != nil {
+		// dp.To / dp.AcceptFrom are slices of value type AgentRef; index to mutate
+		// the stored element rather than the loop copy so normalization persists.
+		for i := range dp.To {
+			if err := dp.To[i].Validate(); err != nil {
 				return fmt.Errorf("%s delegation_policy.to: %w", scope, err)
 			}
+			dp.To[i].Kind = canonicalizeKind(dp.To[i].Kind)
 		}
-		for _, ref := range dp.AcceptFrom {
-			if err := ref.Validate(); err != nil {
+		for i := range dp.AcceptFrom {
+			if err := dp.AcceptFrom[i].Validate(); err != nil {
 				return fmt.Errorf("%s delegation_policy.accept_from: %w", scope, err)
 			}
+			dp.AcceptFrom[i].Kind = canonicalizeKind(dp.AcceptFrom[i].Kind)
 		}
 		return nil
 	}
