@@ -9,7 +9,7 @@ package gateway
 // board_reconcile.go — boot-time recovery of GTD board tasks that were left in
 // status "active" by a previous gateway process that crashed, was OOM-killed, or
 // received SIGKILL before its onComplete callback could persist the terminal status.
-// Wired into setupAndStartServices (gateway.go), after ensureInboxProject and before
+// Wired into setupAndStartServices (gateway.go), after ensureDefaultWorkspace and before
 // any request handler is reachable, so no /start call can race with reconciliation.
 
 import (

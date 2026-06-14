@@ -9,4 +9,4 @@ properties:
       $ref: './Milestone.yaml'
   total:
     type: integer
-    description: Total number of milestones for this project.
+    description: Total number of milestones for this workspace.

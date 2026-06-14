@@ -5371,6 +5371,9 @@ type Milestone struct {
 	// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
 	Owner *string `json:"owner,omitempty"`
 
+	// Progress Completion fraction (0–1) computed server-side at read time as done/total over the milestone's GTD board tasks. 0 when no tasks are associated. Read-only; never accepted on create/update.
+	Progress *float32 `json:"progress,omitempty"`
+
 	// UpdatedAt RFC3339 UTC last-update timestamp.
 	UpdatedAt time.Time `json:"updated_at"`
 
@@ -5390,35 +5393,11 @@ type MilestoneCreateRequest struct {
 	Name string `json:"name"`
 }
 
-// MilestoneListResponse defines model for MilestoneListResponse.
+// MilestoneListResponse List response for GET /workspaces/{id}/milestones
 type MilestoneListResponse struct {
-	Milestones []struct {
-		// CreatedAt RFC3339 UTC creation timestamp.
-		CreatedAt time.Time `json:"created_at"`
+	Milestones []Milestone `json:"milestones"`
 
-		// Description Optional free-text description.
-		Description *string `json:"description,omitempty"`
-
-		// DueDate Optional due date (ISO 8601 date string or null).
-		DueDate *string `json:"due_date,omitempty"`
-
-		// Id UUID milestone identifier
-		Id string `json:"id"`
-
-		// Name Human-readable milestone name.
-		Name string `json:"name"`
-
-		// Owner Username of the user who owns this resource. Set server-side at creation; read-only.
-		Owner *string `json:"owner,omitempty"`
-
-		// UpdatedAt RFC3339 UTC last-update timestamp.
-		UpdatedAt time.Time `json:"updated_at"`
-
-		// WorkspaceId Workspace this milestone belongs to.
-		WorkspaceId string `json:"workspace_id"`
-	} `json:"milestones"`
-
-	// Total Total number of milestones for this project.
+	// Total Total number of milestones for this workspace.
 	Total int `json:"total"`
 }
 

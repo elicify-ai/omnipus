@@ -40,20 +40,6 @@ type milestone struct { // not-wire-format: on-disk JSON cache; mapped to genera
 	UpdatedAt string `json:"updated_at"`
 }
 
-// milestoneWithProgress is a milestone plus computed task progress.
-// not-wire-format: local response shim that includes the computed progress field
-// (not stored on disk, computed at read time per FR-L2-010).
-type milestoneWithProgress struct { // not-wire-format: serialized directly to HTTP response; extends on-disk type with computed progress field
-	ID          string    `json:"id"`
-	WorkspaceID string    `json:"workspace_id"`
-	Name        string    `json:"name"`
-	Description *string   `json:"description,omitempty"`
-	DueDate     *string   `json:"due_date,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	Progress    float64   `json:"progress"`
-}
-
 // dueDatePattern validates YYYY-MM-DD format.
 var dueDatePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
@@ -120,29 +106,35 @@ func listMilestoneFiles(home string) ([]milestone, error) {
 	return milestones, nil
 }
 
-// milestoneToWireWithProgress converts a milestone to a milestoneWithProgress (includes progress field).
+// milestoneToWireWithProgress converts an on-disk milestone to the generated
+// wire type, attaching the computed read-time progress fraction (FR-L2-010).
 func milestoneToWireWithProgress(
 	m milestone,
 	createdAt, updatedAt time.Time,
 	progress float64,
-) milestoneWithProgress {
-	mwp := milestoneWithProgress{
-		ID:          m.ID,
-		WorkspaceID: m.WorkspaceID,
+) gen.Milestone {
+	p := float32(progress)
+	mw := gen.Milestone{
+		Id:          m.ID,
+		WorkspaceId: m.WorkspaceID,
 		Name:        m.Name,
 		CreatedAt:   createdAt,
 		UpdatedAt:   updatedAt,
-		Progress:    progress,
+		Progress:    &p,
 	}
 	if m.Description != "" {
 		d := m.Description
-		mwp.Description = &d
+		mw.Description = &d
 	}
 	if m.DueDate != "" {
 		dd := m.DueDate
-		mwp.DueDate = &dd
+		mw.DueDate = &dd
 	}
-	return mwp
+	if m.Owner != "" {
+		o := m.Owner
+		mw.Owner = &o
+	}
+	return mw
 }
 
 // computeMilestoneCounts builds a map[milestoneID]{total, done} by single-pass
@@ -261,11 +253,7 @@ func (a *restAPI) handleMilestoneList(w http.ResponseWriter, r *http.Request, wo
 		mCounts = make(map[string][2]int)
 	}
 
-	type listMilestoneShim struct { // not-wire-format: response shim including computed progress field
-		Milestones []milestoneWithProgress `json:"milestones"`
-		Total      int                     `json:"total"`
-	}
-	result := make([]milestoneWithProgress, 0, len(workspaceMilestones))
+	result := make([]gen.Milestone, 0, len(workspaceMilestones))
 	for _, m := range workspaceMilestones {
 		createdAt, err := time.Parse(time.RFC3339, m.CreatedAt)
 		if err != nil {
@@ -280,7 +268,7 @@ func (a *restAPI) handleMilestoneList(w http.ResponseWriter, r *http.Request, wo
 		result = append(result, milestoneToWireWithProgress(m, createdAt, updatedAt, progress))
 	}
 
-	jsonOK(w, listMilestoneShim{Milestones: result, Total: len(result)})
+	jsonOK(w, gen.MilestoneListResponse{Milestones: result, Total: len(result)})
 }
 
 // handleMilestonePost handles POST /api/v1/workspaces/{workspace_id}/milestones → 201 Created.

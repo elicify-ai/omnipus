@@ -28,7 +28,7 @@ import {
   milestonesQueryKeys,
   isApiError,
 } from '@/lib/api'
-import type { BoardTask, MilestoneWithProgress } from '@/lib/api'
+import type { BoardTask, Milestone } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
 import { PRIORITY_BADGE } from './TaskCard'
@@ -232,7 +232,7 @@ export function CreateTaskSlideOver({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none__">No milestone</SelectItem>
-                  {milestones.map((m: MilestoneWithProgress) => (
+                  {milestones.map((m: Milestone) => (
                     <SelectItem key={m.id} value={m.id} className="text-xs">
                       {m.name}
                     </SelectItem>

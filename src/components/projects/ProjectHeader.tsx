@@ -101,7 +101,7 @@ export function ProjectHeader({ project }: ProjectHeaderProps) {
                 setNameDraft(project.name)
                 setEditingName(true)
               }}
-              aria-label="Edit project name"
+              aria-label="Edit workspace name"
               className="p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
             >
               <PencilSimple size={14} />

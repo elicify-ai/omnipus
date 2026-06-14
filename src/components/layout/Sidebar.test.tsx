@@ -279,7 +279,7 @@ describe('Sidebar — Inline search (F7-F07)', () => {
   it('pressing "/" on the Projects section reveals a search input', async () => {
     // BDD: Given sidebar is open with two projects
     // BDD: When user presses "/" on the Projects section
-    // BDD: Then a search input (aria-label "Filter projects") appears
+    // BDD: Then a search input (aria-label "Filter workspaces") appears
     // Traces to: project-task-management-level1-spec.md line 684
 
     vi.mocked(fetchWorkspaces).mockResolvedValue([
@@ -295,15 +295,15 @@ describe('Sidebar — Inline search (F7-F07)', () => {
     await waitFor(() => { expect(screen.getByText('Alpha Project')).toBeTruthy() })
 
     // The search input must NOT be visible before "/" is pressed
-    expect(screen.queryByRole('textbox', { name: /filter projects/i })).toBeNull()
+    expect(screen.queryByRole('textbox', { name: /filter workspaces/i })).toBeNull()
 
     // Fire "/" keydown on the Projects group
-    const projectsSection = screen.getByRole('group', { name: 'Projects' })
+    const projectsSection = screen.getByRole('group', { name: 'Workspaces' })
     act(() => { fireEvent.keyDown(projectsSection, { key: '/', code: 'Slash' }) })
 
     // Search input must now appear
     await waitFor(() => {
-      expect(screen.getByRole('textbox', { name: /filter projects/i })).toBeTruthy()
+      expect(screen.getByRole('textbox', { name: /filter workspaces/i })).toBeTruthy()
     })
   })
 
@@ -330,10 +330,10 @@ describe('Sidebar — Inline search (F7-F07)', () => {
     })
 
     // Open search
-    const projectsSection = screen.getByRole('group', { name: 'Projects' })
+    const projectsSection = screen.getByRole('group', { name: 'Workspaces' })
     act(() => { fireEvent.keyDown(projectsSection, { key: '/', code: 'Slash' }) })
 
-    const searchInput = await screen.findByRole('textbox', { name: /filter projects/i })
+    const searchInput = await screen.findByRole('textbox', { name: /filter workspaces/i })
 
     // Type "alpha" — differentiation test: two different inputs produce two different outputs
     act(() => { fireEvent.change(searchInput, { target: { value: 'alpha' } }) })
@@ -360,10 +360,10 @@ describe('Sidebar — Inline search (F7-F07)', () => {
 
     await waitFor(() => { expect(screen.getByText('Alpha Project')).toBeTruthy() })
 
-    const projectsSection = screen.getByRole('group', { name: 'Projects' })
+    const projectsSection = screen.getByRole('group', { name: 'Workspaces' })
     act(() => { fireEvent.keyDown(projectsSection, { key: '/', code: 'Slash' }) })
 
-    const searchInput = await screen.findByRole('textbox', { name: /filter projects/i })
+    const searchInput = await screen.findByRole('textbox', { name: /filter workspaces/i })
     act(() => { fireEvent.change(searchInput, { target: { value: 'ALPHA' } }) })
 
     // Differentiation test: uppercase input still matches, Beta does not
@@ -392,10 +392,10 @@ describe('Sidebar — Inline search (F7-F07)', () => {
     })
 
     // Open search and type
-    const projectsSection = screen.getByRole('group', { name: 'Projects' })
+    const projectsSection = screen.getByRole('group', { name: 'Workspaces' })
     act(() => { fireEvent.keyDown(projectsSection, { key: '/', code: 'Slash' }) })
 
-    const searchInput = await screen.findByRole('textbox', { name: /filter projects/i })
+    const searchInput = await screen.findByRole('textbox', { name: /filter workspaces/i })
     act(() => { fireEvent.change(searchInput, { target: { value: 'alpha' } }) })
 
     // Beta is hidden while filtering
@@ -406,7 +406,7 @@ describe('Sidebar — Inline search (F7-F07)', () => {
 
     // Search input must be gone
     await waitFor(() => {
-      expect(screen.queryByRole('textbox', { name: /filter projects/i })).toBeNull()
+      expect(screen.queryByRole('textbox', { name: /filter workspaces/i })).toBeNull()
     })
 
     // Both projects must be visible again

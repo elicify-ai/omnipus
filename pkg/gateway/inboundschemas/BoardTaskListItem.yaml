@@ -24,9 +24,7 @@ properties:
     maxLength: 2000
     description: Optional task description.
   status:
-    type: string
-    enum: [inbox, next, active, waiting, done, failed]
-    description: GTD board task status.
+    $ref: ./GTDBoardTaskStatus.yaml
   workspace_id:
     type: string
     description: >

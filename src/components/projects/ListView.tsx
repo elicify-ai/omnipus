@@ -9,7 +9,7 @@ import {
 import { PRIORITY_BADGE } from './TaskCard'
 import { cn } from '@/lib/utils'
 import type { BoardTask } from '@/lib/api'
-import type { MilestoneWithProgress } from '@/lib/api'
+import type { Milestone } from '@/lib/api'
 
 type SortDir = 'desc' | 'asc'
 
@@ -33,7 +33,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 interface ListViewProps {
   tasks: BoardTask[]
-  milestones: MilestoneWithProgress[]
+  milestones: Milestone[]
   agents: { id: string; name: string }[]
   onTaskClick: (task: BoardTask) => void
 }
@@ -175,7 +175,7 @@ function TaskRow({
   onClick,
 }: {
   task: BoardTask
-  milestones: MilestoneWithProgress[]
+  milestones: Milestone[]
   agents: { id: string; name: string }[]
   onClick: () => void
 }) {

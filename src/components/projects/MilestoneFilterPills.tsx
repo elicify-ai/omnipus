@@ -1,5 +1,5 @@
 import { Plus } from '@phosphor-icons/react'
-import type { MilestoneWithProgress } from '@/lib/api'
+import type { Milestone } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 // Special sentinel values for non-milestone filters
@@ -7,7 +7,7 @@ export const MILESTONE_FILTER_ALL = null
 export const MILESTONE_FILTER_UNSCHEDULED = '__unscheduled__'
 
 interface MilestoneFilterPillsProps {
-  milestones: MilestoneWithProgress[]
+  milestones: Milestone[]
   /** null = All, '__unscheduled__' = unscheduled tasks, milestone.id = filtered */
   activeMilestoneId: string | null
   onSelect: (id: string | null) => void

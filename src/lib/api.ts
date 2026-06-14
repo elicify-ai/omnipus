@@ -2319,61 +2319,49 @@ export function startBoardTask(id: string): Promise<BoardTask> {
 // Milestones are scoped to a workspace. All types are re-exported from generated
 // openapi-types (contract-first #8). See contracts/components/schemas/Milestone*.yaml.
 //
-// The generated Milestone type does not include `progress` (computed field added
-// by the backend at read time). Components that display progress should treat it
-// as optional and use a passthrough schema to avoid strict validation failures.
+// `progress` (0–1 completion fraction) is a generated, read-only field on Milestone:
+// computed server-side at read time (done/total over the milestone's GTD board tasks).
+// It is optional in the schema and absent on create/update echoes when no tasks exist.
 
 export const milestonesQueryKeys = {
   list: (workspaceId: string) => ['milestones', workspaceId] as const,
   detail: (workspaceId: string, milestoneId: string) => ['milestones', workspaceId, milestoneId] as const,
 }
 
-/** Milestone with optional computed progress field (0–1, added by backend at read time). */
-export type MilestoneWithProgress = Milestone & { progress?: number } // not-wire-format: extends generated Milestone; progress added server-side, not in schema
-
-// Schema for MilestoneWithProgress: base Milestone fields + optional progress.
-// Cannot use .extend() because the generated MilestoneSchema is typed as
-// ZodType<Milestone> (not ZodObject), so we intersect with a progress-only object.
-const MilestoneWithProgressSchema: ZodType<MilestoneWithProgress> = z.intersection(
-  MilestoneSchema,
-  z.object({ progress: z.number().min(0).max(1).optional() }),
-)
-
-// Schema for MilestoneListResponse where each milestone includes the optional progress field.
-const MilestoneWithProgressListResponseSchema: ZodType<{ milestones: MilestoneWithProgress[]; total: number }> = z.object({
-  milestones: z.array(MilestoneWithProgressSchema),
+const MilestoneListResponseSchema = z.object({
+  milestones: z.array(MilestoneSchema),
   total: z.number().int(),
-}).passthrough()
+})
 
-export function fetchMilestones(workspaceId: string): Promise<MilestoneWithProgress[]> {
-  return request<{ milestones: MilestoneWithProgress[]; total: number }>(
+export function fetchMilestones(workspaceId: string): Promise<Milestone[]> {
+  return request<{ milestones: Milestone[]; total: number }>(
     `/workspaces/${encodeURIComponent(workspaceId)}/milestones`,
     undefined,
-    MilestoneWithProgressListResponseSchema,
+    MilestoneListResponseSchema,
   ).then((res) => res.milestones)
 }
 
-export function getMilestone(workspaceId: string, milestoneId: string): Promise<MilestoneWithProgress> {
-  return request<MilestoneWithProgress>(
+export function getMilestone(workspaceId: string, milestoneId: string): Promise<Milestone> {
+  return request<Milestone>(
     `/workspaces/${encodeURIComponent(workspaceId)}/milestones/${encodeURIComponent(milestoneId)}`,
     undefined,
-    MilestoneWithProgressSchema,
+    MilestoneSchema,
   )
 }
 
-export function createMilestone(workspaceId: string, body: MilestoneCreateRequest): Promise<MilestoneWithProgress> {
-  return request<MilestoneWithProgress>(
+export function createMilestone(workspaceId: string, body: MilestoneCreateRequest): Promise<Milestone> {
+  return request<Milestone>(
     `/workspaces/${encodeURIComponent(workspaceId)}/milestones`,
     { method: 'POST', body: JSON.stringify(body) },
-    MilestoneWithProgressSchema,
+    MilestoneSchema,
   )
 }
 
-export function updateMilestone(workspaceId: string, milestoneId: string, body: MilestoneUpdateRequest): Promise<MilestoneWithProgress> {
-  return request<MilestoneWithProgress>(
+export function updateMilestone(workspaceId: string, milestoneId: string, body: MilestoneUpdateRequest): Promise<Milestone> {
+  return request<Milestone>(
     `/workspaces/${encodeURIComponent(workspaceId)}/milestones/${encodeURIComponent(milestoneId)}`,
     { method: 'PUT', body: JSON.stringify(body) },
-    MilestoneWithProgressSchema,
+    MilestoneSchema,
   )
 }
 

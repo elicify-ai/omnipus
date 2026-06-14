@@ -511,15 +511,11 @@ type GTDBoardTaskStatus =
   | "waiting"
   | "done"
   | "failed";
-type BoardTaskListResponse = {
-  items: Array<BoardTaskListItem>;
-  total: number;
-};
 type BoardTaskListItem = {
   id: string;
   name: string;
   description?: string | undefined;
-  status: "inbox" | "next" | "active" | "waiting" | "done" | "failed";
+  status: GTDBoardTaskStatus;
   workspace_id?: string | undefined;
   agent_id?: string | undefined;
   prompt?: string | undefined;
@@ -534,6 +530,10 @@ type BoardTaskListItem = {
   due?: string | undefined;
   recurrence?: string | undefined;
   blocked_by?: Array<string> | undefined;
+};
+type BoardTaskListResponse = {
+  items: Array<BoardTaskListItem>;
+  total: number;
 };
 type BoardTaskCreateRequest = {
   name: string;
@@ -579,6 +579,7 @@ type Milestone = {
   created_at: string;
   updated_at: string;
   owner?: string | undefined;
+  progress?: number | undefined;
 };
 type TokenUsageSummary = {
   agents: Array<AgentTokenEntry>;
@@ -1820,6 +1821,7 @@ export const Milestone: z.ZodType<Milestone> = z
     created_at: z.string().datetime({ offset: true }),
     updated_at: z.string().datetime({ offset: true }),
     owner: z.string().optional(),
+    progress: z.number().gte(0).lte(1).optional(),
   })
   .passthrough();
 export const MilestoneListResponse: z.ZodType<MilestoneListResponse> = z
@@ -1840,12 +1842,20 @@ export const MilestoneUpdateRequest = z
   })
   .partial()
   .passthrough();
+export const GTDBoardTaskStatus = z.enum([
+  "inbox",
+  "next",
+  "active",
+  "waiting",
+  "done",
+  "failed",
+]);
 export const BoardTaskListItem: z.ZodType<BoardTaskListItem> = z
   .object({
     id: z.string(),
     name: z.string().min(1),
     description: z.string().max(2000).optional(),
-    status: z.enum(["inbox", "next", "active", "waiting", "done", "failed"]),
+    status: GTDBoardTaskStatus,
     workspace_id: z.string().optional(),
     agent_id: z.string().optional(),
     prompt: z.string().max(10000).optional(),
@@ -1865,14 +1875,6 @@ export const BoardTaskListItem: z.ZodType<BoardTaskListItem> = z
 export const BoardTaskListResponse: z.ZodType<BoardTaskListResponse> = z
   .object({ items: z.array(BoardTaskListItem), total: z.number().int() })
   .passthrough();
-export const GTDBoardTaskStatus = z.enum([
-  "inbox",
-  "next",
-  "active",
-  "waiting",
-  "done",
-  "failed",
-]);
 export const BoardTaskCreateRequest: z.ZodType<BoardTaskCreateRequest> = z
   .object({
     name: z.string().min(1).max(200),

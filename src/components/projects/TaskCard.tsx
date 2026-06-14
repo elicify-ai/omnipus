@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils'
 import type { BoardTask } from '@/lib/api'
-import type { MilestoneWithProgress } from '@/lib/api'
+import type { Milestone } from '@/lib/api'
 
 // Priority badge config: P1 red, P2 orange, P3 yellow, P4 blue, P5 muted
 export const PRIORITY_BADGE: Record<number, { label: string; className: string }> = {
@@ -13,7 +13,7 @@ export const PRIORITY_BADGE: Record<number, { label: string; className: string }
 
 interface TaskCardProps {
   task: BoardTask
-  milestones?: MilestoneWithProgress[]
+  milestones?: Milestone[]
   onClick: () => void
 }
 
