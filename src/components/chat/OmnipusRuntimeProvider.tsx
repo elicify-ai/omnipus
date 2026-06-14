@@ -153,7 +153,16 @@ function WsLifecycle() {
           }
         }
       },
-      onDisconnected: () => setConnected(false),
+      onDisconnected: () => {
+        setConnected(false);
+        // C8: a socket close mid-turn means the terminal (done/error) frame for
+        // any in-flight turn will never arrive on THIS connection. Clear the
+        // streaming/in-flight state now so the composer re-enables and the
+        // "thinking" spinner resolves instead of wedging. If the turn is still
+        // alive server-side, the reconnect + attach_session replay rebuilds the
+        // correct state (and the gateway re-emits a terminal frame).
+        useChatStore.getState().clearStreamingState();
+      },
       onError: setConnectionError,
       // Fix 2: wire reconnect phase changes into the connection store so the
       // chat header banner can show live progress (attempt N / gave_up CTA).

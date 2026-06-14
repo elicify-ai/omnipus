@@ -546,6 +546,23 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
     throw await ApiError.fromResponse(res)
   }
 
+  // Empty-body responses (HTTP 204 No Content, 205 Reset Content, or any 2xx
+  // that explicitly advertises a zero-length body) carry no JSON to parse.
+  // DELETE/PUT/POST handlers that return 204 would otherwise throw on
+  // res.json() ("Unexpected end of JSON input"), making a successful mutation
+  // appear to fail. Detect the DEFINITIVE empty-body signals and resolve with
+  // `undefined` — the correct value for the Promise<void> callers (deleteTask,
+  // deleteSkill, deleteMcpServer, deleteCredential, deleteSchedule,
+  // clearAllSessions, …). We deliberately do NOT key off Content-Type here: a
+  // non-JSON body with actual content (e.g. an HTML error page served with a
+  // misconfigured 200) is a different failure that must still flow to the
+  // schema/JSON-parse path below so it surfaces as an ApiSchemaError, not a
+  // silent success.
+  const contentLength = res.headers.get('Content-Length')
+  if (res.status === 204 || res.status === 205 || contentLength === '0') {
+    return undefined as T
+  }
+
   // Parse the response body, handling non-JSON (e.g. unexpected HTML 200)
   // gracefully — surface as ApiSchemaError with the raw text as rawBody so
   // callers can see what the server actually sent.
@@ -553,6 +570,16 @@ async function request<T>(path: string, init?: RequestInit, schema?: ZodType<T>)
   try {
     body = await res.json() as unknown
   } catch (cause) {
+    // A JSON-parse failure on a body with no Content-Length header is the
+    // common shape of an empty 2xx (some gateways omit Content-Length on a
+    // bodyless 200/202 instead of using 204). For a caller that passed NO
+    // schema — i.e. a Promise<void> mutation — that is a legitimate success,
+    // so resolve with undefined rather than throwing. When a schema WAS
+    // provided the body genuinely should have been JSON, so surface the
+    // ApiSchemaError as before.
+    if (schema === undefined && (contentLength === null || contentLength === '')) {
+      return undefined as T
+    }
     const rawText = String(cause instanceof Error ? cause.message : cause)
     if (schema !== undefined) {
       _apiSchemaErrorCount++

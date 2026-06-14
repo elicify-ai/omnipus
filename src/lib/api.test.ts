@@ -189,6 +189,17 @@ function make400Response(errText: string): Response {
   return new Response(errText, { status: 400 })
 }
 
+// make204Response builds a real HTTP 204 No Content response — no body, no
+// JSON content-type. This is what the gateway returns from DELETE/PUT handlers
+// that have nothing to send back. Calling .json() on such a Response throws
+// ("Unexpected end of JSON input"); the request() helper must short-circuit
+// before that throw so the mutation resolves successfully (C1).
+function make204Response(): Response {
+  // `new Response(null, { status: 204 })` is the spec-correct way to model a
+  // no-content response: the body is null and .json() would reject.
+  return new Response(null, { status: 204 })
+}
+
 describe('Security API helpers', () => {
   let fetchSpy: ReturnType<typeof vi.fn>
 
@@ -609,6 +620,48 @@ describe('Security API helpers', () => {
 
       const { deleteUser } = await import('./api')
       await expect(deleteUser('alice')).rejects.toThrow('400')
+    })
+  })
+
+  // ── 204 No Content handling (C1) ──────────────────────────────────────────
+  //
+  // Successful DELETE/PUT handlers that return 204 have no body. The request()
+  // helper must resolve without calling res.json() (which would throw on an
+  // empty body and make the mutation appear to fail). These tests exercise the
+  // real production code path (not a mock of request()) with a real 204 Response.
+
+  describe('204 No Content responses (C1)', () => {
+    it('deleteTask resolves successfully on a real 204 (no body)', async () => {
+      fetchSpy.mockResolvedValueOnce(make204Response())
+
+      const { deleteTask } = await import('./api')
+      // Must NOT throw "Unexpected end of JSON input" — a 204 is a success.
+      await expect(deleteTask('task-1')).resolves.toBeUndefined()
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/tasks/task-1')
+      expect((init.method ?? '').toUpperCase()).toBe('DELETE')
+    })
+
+    it('deleteSkill resolves successfully on a real 204', async () => {
+      fetchSpy.mockResolvedValueOnce(make204Response())
+
+      const { deleteSkill } = await import('./api')
+      await expect(deleteSkill('my-skill')).resolves.toBeUndefined()
+    })
+
+    it('deleteMcpServer resolves successfully on a real 204', async () => {
+      fetchSpy.mockResolvedValueOnce(make204Response())
+
+      const { deleteMcpServer } = await import('./api')
+      await expect(deleteMcpServer('srv-1')).resolves.toBeUndefined()
+    })
+
+    it('still throws a typed error when a delete returns 4xx', async () => {
+      fetchSpy.mockResolvedValueOnce(make400Response('task is running'))
+
+      const { deleteTask } = await import('./api')
+      await expect(deleteTask('task-1')).rejects.toThrow('400')
     })
   })
 
