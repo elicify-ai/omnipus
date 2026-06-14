@@ -1887,7 +1887,7 @@ func TestManager_FailedChannelsClearedOnReload(t *testing.T) {
 	}
 	m.failedChannels = kept
 	// initChannels with a fully-disabled config produces no new failures.
-	_ = m.initChannels(&config.ChannelsConfig{})
+	_ = m.initChannels(map[string]config.ChannelInstanceConfig{})
 	m.mu.Unlock()
 
 	after := m.FailedChannels()
@@ -1963,9 +1963,13 @@ func TestManager_InitChannels_ReturnsErrorOnFailure(t *testing.T) {
 	// Enable Telegram with a non-empty TokenRef so initChannels attempts to
 	// construct it.  No "telegram" factory is registered in this test binary,
 	// so initChannel will return "factory not registered for channel …".
-	cc := &config.ChannelsConfig{}
-	cc.Telegram.Enabled = true
-	cc.Telegram.TokenRef = "tg-token-ref"
+	cc := map[string]config.ChannelInstanceConfig{
+		"telegram": {
+			Type:     "telegram",
+			Enabled:  true,
+			TokenRef: "tg-token-ref",
+		},
+	}
 
 	m.mu.Lock()
 	err := m.initChannels(cc)
@@ -2036,9 +2040,13 @@ func TestManager_Reload_FailedInitRestoresPriorFailedChannels(t *testing.T) {
 	m.failedChannels = kept
 
 	// Step 3: initChannels for telegram — fails because no factory is registered.
-	cc := &config.ChannelsConfig{}
-	cc.Telegram.Enabled = true
-	cc.Telegram.TokenRef = "tg-token-ref"
+	cc := map[string]config.ChannelInstanceConfig{
+		"telegram": {
+			Type:     "telegram",
+			Enabled:  true,
+			TokenRef: "tg-token-ref",
+		},
+	}
 	err := m.initChannels(cc)
 
 	// initChannels must have failed and recorded a telegram failure.
@@ -2097,7 +2105,7 @@ func TestManager_Reload_ScopedClear_UnchangedFailedChannelRetained(t *testing.T)
 	}
 	m.failedChannels = kept
 	// Telegram re-init succeeds (fully-disabled config — no telegram entry to process).
-	_ = m.initChannels(&config.ChannelsConfig{})
+	_ = m.initChannels(map[string]config.ChannelInstanceConfig{})
 	m.mu.Unlock()
 
 	after := m.FailedChannels()
@@ -2250,7 +2258,9 @@ func TestReload_AddedChannelMissingFromMap_NoPanic(t *testing.T) {
 	}
 
 	cfg := config.DefaultConfig()
-	cfg.Channels.WhatsApp.Enabled = true
+	waInst := cfg.Channels["whatsapp"]
+	waInst.Enabled = true
+	cfg.Channels["whatsapp"] = waInst
 
 	// This Reload MUST NOT panic. recover() turns a panic into a test failure with a
 	// clear message instead of crashing the test binary (mirrors the gateway crash).
@@ -2312,7 +2322,9 @@ func TestReload_EnableWhatsApp_StartsNativeChannel(t *testing.T) {
 	}
 
 	cfg := config.DefaultConfig()
-	cfg.Channels.WhatsApp.Enabled = true
+	waInst2 := cfg.Channels["whatsapp"]
+	waInst2.Enabled = true
+	cfg.Channels["whatsapp"] = waInst2
 
 	if err := m.Reload(ctx, cfg, credentials.SecretBundle{}); err != nil {
 		t.Fatalf("Reload: %v", err)
