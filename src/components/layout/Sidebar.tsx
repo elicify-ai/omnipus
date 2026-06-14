@@ -8,6 +8,7 @@ import {
   PlugsConnected,
   PuzzlePiece,
   Gear,
+  UserCircle,
   PushPin,
   PushPinSlash,
   SignOut,
@@ -148,8 +149,27 @@ export function Sidebar() {
         })}
       </div>
 
-      {/* Bottom: Settings + Pin toggle */}
+      {/* Bottom: Profile + Settings + Pin toggle */}
       <div className="border-t border-[var(--color-border)] py-3">
+        <Link
+          to="/profile"
+          aria-label="Profile"
+          aria-current={location.pathname === '/profile' ? 'page' : undefined}
+          onClick={() => { if (!effectivelyPinned) close() }}
+          className={cn(
+            'flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors',
+            location.pathname === '/profile'
+              ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] font-medium'
+              : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
+          )}
+        >
+          <UserCircle
+            size={18}
+            weight={location.pathname === '/profile' ? 'fill' : 'regular'}
+          />
+          Profile
+        </Link>
+
         <Link
           to="/settings"
           aria-label="Settings"
