@@ -45,10 +45,20 @@ func (f *FakeRunner) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent,
 }
 
 // Decide records the decision (tests can verify it was received).
+//
+// On a DENY (!Allow) it also cancels the run, mirroring the real-driver contract:
+// external CLIs run non-interactively with only post-hoc consent, so a denial
+// cannot veto the individual call — it can only kill the whole run (the real
+// drivers call Cancel() on !Allow; see consent.go's POST-HOC CONSENT note). This
+// makes deny-cancels assertions load-bearing rather than relying on a test
+// goroutine to cancel separately.
 func (f *FakeRunner) Decide(decision PermissionDecision) {
 	f.mu.Lock()
 	f.decisions = append(f.decisions, decision)
 	f.mu.Unlock()
+	if !decision.Allow {
+		f.Cancel()
+	}
 }
 
 // Cancel marks the runner as cancelled and closes the event channel.
