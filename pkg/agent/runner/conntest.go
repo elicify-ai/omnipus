@@ -136,7 +136,8 @@ func TestConnection(ctx context.Context, cli string) ConnectionTestResult {
 	spec, ok := supportedCLIs[cli]
 	if !ok {
 		return ConnectionTestResult{
-			OK: false,
+			OK:     false,
+			Reason: ReasonUnknownCLI,
 			Message: fmt.Sprintf(
 				"[%s] unknown external CLI %q (supported: %s)",
 				ReasonUnknownCLI, cli, strings.Join(SupportedCLIs(), ", "),
@@ -148,7 +149,8 @@ func TestConnection(ctx context.Context, cli string) ConnectionTestResult {
 	binPath, err := exec.LookPath(spec.binary)
 	if err != nil {
 		return ConnectionTestResult{
-			OK: false,
+			OK:     false,
+			Reason: ReasonMissingBinary,
 			Message: fmt.Sprintf(
 				"[%s] %q CLI not found on PATH: install %s and ensure it is on PATH",
 				ReasonMissingBinary, cli, spec.binary,
@@ -161,6 +163,7 @@ func TestConnection(ctx context.Context, cli string) ConnectionTestResult {
 	if hErr != nil {
 		return ConnectionTestResult{
 			OK:      false,
+			Reason:  ReasonHandshakeFailed,
 			Message: fmt.Sprintf("[%s] %q version handshake failed: %v", ReasonHandshakeFailed, cli, hErr),
 		}
 	}
@@ -168,7 +171,8 @@ func TestConnection(ctx context.Context, cli string) ConnectionTestResult {
 	// 3. Credentials available?
 	if spec.hasCredsFunc == nil || !spec.hasCredsFunc() {
 		return ConnectionTestResult{
-			OK: false,
+			OK:     false,
+			Reason: ReasonUnauthenticated,
 			Message: fmt.Sprintf(
 				"[%s] %q is installed (v%s) but not authenticated: %s",
 				ReasonUnauthenticated, cli, version, spec.loginHint,
@@ -179,6 +183,7 @@ func TestConnection(ctx context.Context, cli string) ConnectionTestResult {
 
 	return ConnectionTestResult{
 		OK:         true,
+		Reason:     ReasonOK,
 		Message:    fmt.Sprintf("%q ready: binary %s present, v%s, authenticated", cli, binPath, version),
 		CLIVersion: version,
 	}

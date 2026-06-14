@@ -2038,6 +2038,36 @@ func (e ProviderStatus) Valid() bool {
 	}
 }
 
+// Defines values for RunnerTestResponseReason.
+const (
+	RunnerTestResponseReasonEmpty           RunnerTestResponseReason = ""
+	RunnerTestResponseReasonHandshakeFailed RunnerTestResponseReason = "handshake-failed"
+	RunnerTestResponseReasonMissingBinary   RunnerTestResponseReason = "missing-binary"
+	RunnerTestResponseReasonNotExternalCli  RunnerTestResponseReason = "not-external-cli"
+	RunnerTestResponseReasonUnauthenticated RunnerTestResponseReason = "unauthenticated"
+	RunnerTestResponseReasonUnknownCli      RunnerTestResponseReason = "unknown-cli"
+)
+
+// Valid indicates whether the value is a known member of the RunnerTestResponseReason enum.
+func (e RunnerTestResponseReason) Valid() bool {
+	switch e {
+	case RunnerTestResponseReasonEmpty:
+		return true
+	case RunnerTestResponseReasonHandshakeFailed:
+		return true
+	case RunnerTestResponseReasonMissingBinary:
+		return true
+	case RunnerTestResponseReasonNotExternalCli:
+		return true
+	case RunnerTestResponseReasonUnauthenticated:
+		return true
+	case RunnerTestResponseReasonUnknownCli:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SandboxConfigDefaultProfile.
 const (
 	SandboxConfigDefaultProfileEmpty        SandboxConfigDefaultProfile = ""
@@ -2121,19 +2151,19 @@ func (e SandboxConfigUpdateDefaultProfile) Valid() bool {
 
 // Defines values for SandboxConfigUpdateMode.
 const (
-	SandboxConfigUpdateModeEnforce    SandboxConfigUpdateMode = "enforce"
-	SandboxConfigUpdateModeOff        SandboxConfigUpdateMode = "off"
-	SandboxConfigUpdateModePermissive SandboxConfigUpdateMode = "permissive"
+	Enforce    SandboxConfigUpdateMode = "enforce"
+	Off        SandboxConfigUpdateMode = "off"
+	Permissive SandboxConfigUpdateMode = "permissive"
 )
 
 // Valid indicates whether the value is a known member of the SandboxConfigUpdateMode enum.
 func (e SandboxConfigUpdateMode) Valid() bool {
 	switch e {
-	case SandboxConfigUpdateModeEnforce:
+	case Enforce:
 		return true
-	case SandboxConfigUpdateModeOff:
+	case Off:
 		return true
-	case SandboxConfigUpdateModePermissive:
+	case Permissive:
 		return true
 	default:
 		return false
@@ -5829,6 +5859,27 @@ type RotateTokenResponse struct {
 	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
 	Token string `json:"token"`
 }
+
+// RunnerTestResponse Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the agent's configured external CLI (claude-code, codex, opencode) is present on PATH, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
+type RunnerTestResponse struct {
+	// Cli The external CLI name that was tested (the agent's executor.cli value).
+	Cli *string `json:"cli,omitempty"`
+
+	// CliVersion Detected CLI version string when the handshake succeeded; empty otherwise.
+	CliVersion *string `json:"cli_version,omitempty"`
+
+	// Message Human-readable description of the result (success detail or failure reason + remedy).
+	Message string `json:"message"`
+
+	// Ok True when the CLI is present, authenticated, and the version handshake succeeded.
+	Ok bool `json:"ok"`
+
+	// Reason Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on PATH — install it), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
+	Reason RunnerTestResponseReason `json:"reason"`
+}
+
+// RunnerTestResponseReason Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on PATH — install it), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
+type RunnerTestResponseReason string
 
 // SandboxConfig Sandbox configuration returned by GET /api/v1/security/sandbox-config and as part of PUT /api/v1/security/sandbox-config responses.
 type SandboxConfig struct {

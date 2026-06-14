@@ -333,6 +333,8 @@ components:
       $ref: ./components/schemas/RetentionUpdateResponse.yaml
     AgentToolsResponse:
       $ref: ./components/schemas/AgentToolsResponse.yaml
+    RunnerTestResponse:
+      $ref: ./components/schemas/RunnerTestResponse.yaml
     ChannelEnabledResponse:
       $ref: ./components/schemas/ChannelEnabledResponse.yaml
     ChannelTestResponse:
@@ -1613,6 +1615,40 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '403':
           $ref: '#/components/responses/403Forbidden'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /agents/{id}/runner/test:
+    post:
+      operationId: testAgentRunner
+      summary: Test an external-CLI runner connection for an agent
+      description: 'Connection/health check for the agent''s configured external-CLI runner (Spec-4 FR-4.2). Validates the CLI binary is present, runs, and is authenticated WITHOUT running real work (no tokens spent). Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason "not-external-cli" when the agent''s executor is native/remote-a2a (no runner to test).
+
+        '
+      tags:
+      - agents
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Agent ID.
+        example: jim
+      responses:
+        '200':
+          description: Connection test result (the test ran; ok indicates pass/fail).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunnerTestResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
         '500':

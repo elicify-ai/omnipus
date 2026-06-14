@@ -1,0 +1,47 @@
+title: RunnerTestResponse
+description: >
+  Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an
+  external-CLI runner (Spec-4 FR-4.2). Validates that the agent's configured external
+  CLI (claude-code, codex, opencode) is present on PATH, runs, and is authenticated —
+  WITHOUT running any real agent work (no tokens spent). The three failure reasons have
+  distinct remedies (install vs login vs config) and never collapse into one.
+type: object
+required:
+  - ok
+  - reason
+  - message
+additionalProperties: false
+properties:
+  ok:
+    type: boolean
+    description: True when the CLI is present, authenticated, and the version handshake succeeded.
+    example: true
+  reason:
+    type: string
+    description: >
+      Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on
+      PATH — install it), "handshake-failed" (binary present but did not run / report
+      a version), "unauthenticated" (present and runs but no credentials — login),
+      "unknown-cli" (the agent's executor.cli is not a supported external CLI),
+      "not-external-cli" (the agent's executor is not external-cli, so there is no
+      runner to test).
+    enum:
+      - ""
+      - missing-binary
+      - handshake-failed
+      - unauthenticated
+      - unknown-cli
+      - not-external-cli
+    example: ""
+  message:
+    type: string
+    description: Human-readable description of the result (success detail or failure reason + remedy).
+    example: '"claude-code" ready: binary /usr/local/bin/claude present, v1.2.3, authenticated'
+  cli:
+    type: string
+    description: The external CLI name that was tested (the agent's executor.cli value).
+    example: claude-code
+  cli_version:
+    type: string
+    description: Detected CLI version string when the handshake succeeded; empty otherwise.
+    example: 1.2.3

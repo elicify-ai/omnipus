@@ -1138,6 +1138,20 @@ export const AgentToolsUpdateRequest = z
       .passthrough(),
   })
   .partial();
+export const RunnerTestResponse = z.object({
+  ok: z.boolean(),
+  reason: z.enum([
+    "",
+    "missing-binary",
+    "handshake-failed",
+    "unauthenticated",
+    "unknown-cli",
+    "not-external-cli",
+  ]),
+  message: z.string(),
+  cli: z.string().optional(),
+  cli_version: z.string().optional(),
+});
 export const SessionScopeResponse = z
   .object({
     dm_scope: z.enum([
@@ -2222,6 +2236,44 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 403,
         description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/agents/:id/runner/test",
+    alias: "testAgentRunner",
+    description: `Connection/health check for the agent&#x27;s configured external-CLI runner (Spec-4 FR-4.2). Validates the CLI binary is present, runs, and is authenticated WITHOUT running real work (no tokens spent). Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason &quot;not-external-cli&quot; when the agent&#x27;s executor is native/remote-a2a (no runner to test).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: RunnerTestResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {

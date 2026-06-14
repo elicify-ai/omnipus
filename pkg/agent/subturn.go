@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/session"
@@ -591,7 +592,37 @@ func spawnSubTurn(
 		}
 	}()
 
-	// 8. Execute sub-turn via the real agent loop.
+	// 8. Execute the sub-turn. The executor on the sub-agent config decides HOW:
+	//    native → the Omnipus agent loop (default, unchanged); external-cli → an
+	//    external CLI runner driven in a worktree-isolated dir (Spec-4 FR-4/FR-5).
+	//    remote-a2a (reserved) and unknown kinds fail the sub-turn cleanly.
+	dispatchKind, dispatchErr := runner.ResolveDispatch(executorConfigOf(&agent))
+	if dispatchErr != nil {
+		err = dispatchErr
+		result = &tools.ToolResult{
+			Err:    dispatchErr,
+			ForLLM: fmt.Sprintf("SubTurn dispatch rejected: %v", dispatchErr),
+		}
+		// Release the semaphore before returning (mirrors the post-runTurn release).
+		if semAcquired {
+			<-parentTS.concurrencySem
+			semAcquired = false
+		}
+		return result, err
+	}
+
+	if dispatchKind == runner.DispatchKindExternalCLI {
+		extResult, extErr := runExternalCLISubTurn(childCtx, al, childTS, cfg.SystemPrompt, timeout)
+		if semAcquired {
+			<-parentTS.concurrencySem
+			semAcquired = false
+		}
+		result = extResult
+		err = extErr
+		return result, err
+	}
+
+	// Native path (default, existing behaviour — unchanged).
 	turnRes, turnErr := al.runTurn(childCtx, childTS)
 
 	// Release the concurrency semaphore immediately after runTurn completes,

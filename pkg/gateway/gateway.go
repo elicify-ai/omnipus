@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
+	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/boardtask"
 	"github.com/dapicom-ai/omnipus/pkg/bus"
@@ -562,6 +563,21 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 					"event", entry.Event, "error", logErr)
 			}
 		})
+	}
+
+	// Spec-4 FR-5.3 (M-4): GC orphaned external-CLI run directories left behind by
+	// a prior process (crash / SIGKILL / power loss). Runs ONCE at boot, BEFORE any
+	// new external-cli sub-agent run can be dispatched, so every run dir present is
+	// safely an orphan. Non-fatal: a reaper failure must not block boot.
+	{
+		reapCtx, reapCancel := context.WithTimeout(ctx, 60*time.Second)
+		if reapRes, reapErr := runner.ReapOrphans(reapCtx); reapErr != nil {
+			slog.Warn("gateway: external-runner orphan reaper failed (non-fatal)", "error", reapErr)
+		} else if reapRes.Removed > 0 || len(reapRes.Errors) > 0 {
+			slog.Info("gateway: external-runner orphan reaper swept",
+				"scanned", reapRes.Scanned, "removed", reapRes.Removed, "errors", len(reapRes.Errors))
+		}
+		reapCancel()
 	}
 
 	// Boot Order step 4 (FR-062 / M7): validate per-agent tool policies before
