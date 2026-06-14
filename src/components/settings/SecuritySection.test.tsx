@@ -93,7 +93,6 @@ const MINIMAL_CONFIG = {
   gateway: {
     bind_address: '127.0.0.1',
     port: 5000,
-    auth_mode: 'token' as const,
     token: 'test-token',
     hot_reload: false,
     log_level: 'info',

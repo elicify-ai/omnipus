@@ -9,7 +9,6 @@
  * Risky controls wrapped in RiskySettingControl (US-B2 / #328):
  *   - policyMode (safe = 'deny')
  *   - bind_address (in GatewaySection — not here; done there)
- *   - auth_mode (in GatewaySection — not here; done there)
  *
  * Global Tool Access via ToolPolicyEditor (US-B3 / #329):
  *   - Replaces GlobalToolPoliciesSection entirely.

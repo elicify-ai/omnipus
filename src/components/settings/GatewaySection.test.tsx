@@ -41,7 +41,6 @@ import { GatewaySection } from './GatewaySection'
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
 function makeConfig(overrides: {
-  auth_mode?: 'none' | 'token'
   bind_address?: string
   dev_mode_bypass?: boolean
 } = {}) {
@@ -49,7 +48,6 @@ function makeConfig(overrides: {
     gateway: {
       bind_address: overrides.bind_address ?? '127.0.0.1',
       port: 5000,
-      auth_mode: overrides.auth_mode ?? 'token',
       token: 'test-token',
       hot_reload: true,
       log_level: 'info',
@@ -98,7 +96,7 @@ beforeEach(() => {
 
 describe('GatewaySection — FR-107: auth_mode:none removed from UI', () => {
   it('does not render "None (no login)" option (auth_mode:none removed)', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ auth_mode: 'token' }) as never)
+    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({}) as never)
     renderSection()
     await waitFor(() => {
       expect(screen.getByText(/bind address/i)).toBeInTheDocument()
@@ -108,7 +106,7 @@ describe('GatewaySection — FR-107: auth_mode:none removed from UI', () => {
   })
 
   it('does not show auth mode selector at all (token is always on)', async () => {
-    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({ auth_mode: 'token' }) as never)
+    vi.mocked(fetchConfig).mockResolvedValue(makeConfig({}) as never)
     renderSection()
     await waitFor(() => {
       expect(screen.getByText(/log level/i)).toBeInTheDocument()
@@ -143,7 +141,7 @@ describe('GatewaySection — FR-107b: unauthenticated access banner', () => {
   // install (real backend default-serializes auth_mode:"none" while auth is on).
   it('does NOT show banner when auth_mode=none but dev_mode_bypass=false', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(
-      makeConfig({ auth_mode: 'none', dev_mode_bypass: false }) as never
+      makeConfig({ dev_mode_bypass: false }) as never
     )
     renderSection()
     await waitFor(() => {
@@ -154,7 +152,7 @@ describe('GatewaySection — FR-107b: unauthenticated access banner', () => {
 
   it('shows persistent banner when dev_mode_bypass=true', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(
-      makeConfig({ auth_mode: 'token', dev_mode_bypass: true }) as never
+      makeConfig({ dev_mode_bypass: true }) as never
     )
     renderSection()
     await waitFor(() => {
@@ -165,7 +163,7 @@ describe('GatewaySection — FR-107b: unauthenticated access banner', () => {
 
   it('shows banner on dev_mode_bypass=true even when auth_mode=none', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(
-      makeConfig({ auth_mode: 'none', dev_mode_bypass: true }) as never
+      makeConfig({ dev_mode_bypass: true }) as never
     )
     renderSection()
     await waitFor(() => {
@@ -175,7 +173,7 @@ describe('GatewaySection — FR-107b: unauthenticated access banner', () => {
 
   it('does NOT show banner when auth_mode=token and dev_mode_bypass=false', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(
-      makeConfig({ auth_mode: 'token', dev_mode_bypass: false }) as never
+      makeConfig({ dev_mode_bypass: false }) as never
     )
     renderSection()
     await waitFor(() => {
@@ -185,7 +183,7 @@ describe('GatewaySection — FR-107b: unauthenticated access banner', () => {
   })
 
   it('does NOT show banner when dev_mode_bypass is absent (undefined)', async () => {
-    const cfg = makeConfig({ auth_mode: 'token' })
+    const cfg = makeConfig({})
     // Remove dev_mode_bypass to simulate old gateway not sending it
     delete (cfg.gateway as Record<string, unknown>).dev_mode_bypass
     vi.mocked(fetchConfig).mockResolvedValue(cfg as never)

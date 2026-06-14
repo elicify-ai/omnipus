@@ -1205,7 +1205,7 @@ describe('updateConfig: sends wire shape to backend', () => {
     // Stub fetch to return a minimal valid raw config response (the server
     // echoes back the full config after applying the change).
     const rawConfigResponse = {
-      gateway: { host: '0.0.0.0', port: 8080, auth_mode: 'none' },
+      gateway: { host: '0.0.0.0', port: 8080 },
       security: { policy_mode: 'deny', exec_approval: 'ask' },
       storage: { retention: { session_days: 90 } },
     }
@@ -1218,7 +1218,7 @@ describe('updateConfig: sends wire shape to backend', () => {
     )
 
     const { updateConfig } = await import('./api')
-    await updateConfig({ gateway: { bind_address: '0.0.0.0', port: 8080, auth_mode: 'none' } })
+    await updateConfig({ gateway: { bind_address: '0.0.0.0', port: 8080 } })
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
@@ -1232,7 +1232,7 @@ describe('updateConfig: sends wire shape to backend', () => {
 
   it('translates data.session_retention_days → storage.retention.session_days', async () => {
     const rawConfigResponse = {
-      gateway: { host: '127.0.0.1', port: 8080, auth_mode: 'none' },
+      gateway: { host: '127.0.0.1', port: 8080 },
       security: { policy_mode: 'deny', exec_approval: 'ask' },
       storage: { retention: { session_days: 30 } },
     }
@@ -1259,7 +1259,7 @@ describe('updateConfig: sends wire shape to backend', () => {
 
   it('does not include dev_mode_bypass in the PUT body (blocked server-side)', async () => {
     const rawConfigResponse = {
-      gateway: { host: '127.0.0.1', port: 8080, auth_mode: 'none' },
+      gateway: { host: '127.0.0.1', port: 8080 },
       security: { policy_mode: 'deny', exec_approval: 'ask' },
       storage: { retention: { session_days: 90 } },
     }
@@ -1273,7 +1273,7 @@ describe('updateConfig: sends wire shape to backend', () => {
 
     const { updateConfig } = await import('./api')
     await updateConfig({
-      gateway: { bind_address: '127.0.0.1', port: 8080, auth_mode: 'none', dev_mode_bypass: true },
+      gateway: { bind_address: '127.0.0.1', port: 8080, dev_mode_bypass: true },
     })
 
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
@@ -1726,7 +1726,7 @@ describe('validEnum / _configCoercionCount', () => {
   it('increments counter once per invalid enum field — differentiation test', async () => {
     // Two different invalid enum values — counter should increment twice (once per field).
     const wireConfig = {
-      gateway: { host: '127.0.0.1', port: 8080, auth_mode: 'invalid_mode' },
+      gateway: { host: '127.0.0.1', port: 8080 },
       security: { policy_mode: 'invalid_policy', exec_approval: 'invalid_exec' },
     }
     fetchSpy.mockResolvedValueOnce(
@@ -1741,7 +1741,7 @@ describe('validEnum / _configCoercionCount', () => {
 
     await fetchConfig()
 
-    // Three invalid enum values should produce count ≥ 3.
-    expect(getConfigCoercionCount()).toBeGreaterThanOrEqual(3)
+    // Two invalid enum values should produce count ≥ 2 (one per field).
+    expect(getConfigCoercionCount()).toBeGreaterThanOrEqual(2)
   })
 })

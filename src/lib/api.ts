@@ -1062,7 +1062,6 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
   gateway: {
     bind_address: string
     port: number
-    auth_mode: 'none' | 'token'
     token?: string
     hot_reload?: boolean
     log_level?: string
@@ -1107,7 +1106,6 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
   }
 }
 
-const VALID_AUTH_MODES = ['none', 'token'] as const
 const VALID_POLICY_MODES = ['allow', 'deny'] as const
 const VALID_EXEC_APPROVALS = ['auto', 'ask', 'deny'] as const
 const VALID_INJECTION_LEVELS = ['off', 'low', 'medium', 'high'] as const
@@ -1140,7 +1138,6 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
     gateway: {
       bind_address: cast<string>(gateway.host, '127.0.0.1'),
       port: cast<number>(gateway.port, 8080),
-      auth_mode: validEnum(gateway.auth_mode, VALID_AUTH_MODES, 'none'),
       token: gateway.token as string | undefined,
       hot_reload: gateway.hot_reload as boolean | undefined,
       log_level: gateway.log_level as string | undefined,
@@ -1195,7 +1192,6 @@ function frontendToRawConfig(data: Partial<Config>): Record<string, unknown> {
     const gw: Record<string, unknown> = {}
     if (data.gateway.bind_address !== undefined) gw.host = data.gateway.bind_address
     if (data.gateway.port !== undefined) gw.port = data.gateway.port
-    if (data.gateway.auth_mode !== undefined) gw.auth_mode = data.gateway.auth_mode
     if (data.gateway.token !== undefined) gw.token = data.gateway.token
     if (data.gateway.hot_reload !== undefined) gw.hot_reload = data.gateway.hot_reload
     if (data.gateway.log_level !== undefined) gw.log_level = data.gateway.log_level

@@ -1,10 +1,11 @@
 /**
  * GatewaySection — Settings → Gateway tab.
  *
- * FR-107: auth_mode UI option removed (token auth is the only mode; backend
- *   capability preserved — do NOT re-add the 'none' control).
- * FR-107b: when backend reports auth_mode=none OR dev_mode_bypass=true, a
- *   loud persistent banner warns the operator.
+ * FR-107: token auth is the only mode — there is NO auth_mode control. The
+ *   legacy auth_mode field was removed entirely (backend never had it; the
+ *   frontend default-coerced it to "none"). Do NOT re-add a "none" mode.
+ * FR-107b: a loud persistent banner warns the operator when dev_mode_bypass=true
+ *   — the only setting that actually disables authentication.
  * US-B2 / #328:
  * - bind_address 0.0.0.0 wrapped in RiskySettingControl (safe = '127.0.0.1').
  * - Standing badge derives from persisted config values (fetchConfig → ['config'] query).
@@ -123,7 +124,7 @@ export function GatewaySection() {
   const { status: saveStatus, error: saveError } = useAutoSave(
     gatewayFormData,
     async () => {
-      // FR-107: auth_mode is intentionally not sent — the UI no longer controls it.
+      // FR-107: token auth is the only mode — there is no auth_mode field to send.
       // FR-106: hot_reload is intentionally not sent — always-on backend-side.
       // We cast to satisfy the Partial<Config> signature; frontendToRawConfig
       // guards each field with `!== undefined` so absent fields are skipped.
