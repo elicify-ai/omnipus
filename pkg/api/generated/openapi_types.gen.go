@@ -58,6 +58,48 @@ func (e ActivityEventsResponseEventsType) Valid() bool {
 	}
 }
 
+// Defines values for AgentExecutorCli.
+const (
+	AgentExecutorCliClaudeCode AgentExecutorCli = "claude-code"
+	AgentExecutorCliCodex      AgentExecutorCli = "codex"
+	AgentExecutorCliOpencode   AgentExecutorCli = "opencode"
+)
+
+// Valid indicates whether the value is a known member of the AgentExecutorCli enum.
+func (e AgentExecutorCli) Valid() bool {
+	switch e {
+	case AgentExecutorCliClaudeCode:
+		return true
+	case AgentExecutorCliCodex:
+		return true
+	case AgentExecutorCliOpencode:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentExecutorKind.
+const (
+	AgentExecutorKindExternalCli AgentExecutorKind = "external-cli"
+	AgentExecutorKindNative      AgentExecutorKind = "native"
+	AgentExecutorKindRemoteA2a   AgentExecutorKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentExecutorKind enum.
+func (e AgentExecutorKind) Valid() bool {
+	switch e {
+	case AgentExecutorKindExternalCli:
+		return true
+	case AgentExecutorKindNative:
+		return true
+	case AgentExecutorKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentSandboxProfile.
 const (
 	AgentSandboxProfileHost         AgentSandboxProfile = "host"
@@ -163,6 +205,48 @@ func (e AgentType) Valid() bool {
 	case AgentTypeCustom:
 		return true
 	case AgentTypeSystem:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestExecutorCli.
+const (
+	AgentCreateRequestExecutorCliClaudeCode AgentCreateRequestExecutorCli = "claude-code"
+	AgentCreateRequestExecutorCliCodex      AgentCreateRequestExecutorCli = "codex"
+	AgentCreateRequestExecutorCliOpencode   AgentCreateRequestExecutorCli = "opencode"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestExecutorCli enum.
+func (e AgentCreateRequestExecutorCli) Valid() bool {
+	switch e {
+	case AgentCreateRequestExecutorCliClaudeCode:
+		return true
+	case AgentCreateRequestExecutorCliCodex:
+		return true
+	case AgentCreateRequestExecutorCliOpencode:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestExecutorKind.
+const (
+	AgentCreateRequestExecutorKindExternalCli AgentCreateRequestExecutorKind = "external-cli"
+	AgentCreateRequestExecutorKindNative      AgentCreateRequestExecutorKind = "native"
+	AgentCreateRequestExecutorKindRemoteA2a   AgentCreateRequestExecutorKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestExecutorKind enum.
+func (e AgentCreateRequestExecutorKind) Valid() bool {
+	switch e {
+	case AgentCreateRequestExecutorKindExternalCli:
+		return true
+	case AgentCreateRequestExecutorKindNative:
+		return true
+	case AgentCreateRequestExecutorKindRemoteA2a:
 		return true
 	default:
 		return false
@@ -412,6 +496,48 @@ func (e AgentToolsUpdateRequestBuiltinPolicies) Valid() bool {
 	case AgentToolsUpdateRequestBuiltinPoliciesAsk:
 		return true
 	case AgentToolsUpdateRequestBuiltinPoliciesDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentUpdateRequestExecutorCli.
+const (
+	AgentUpdateRequestExecutorCliClaudeCode AgentUpdateRequestExecutorCli = "claude-code"
+	AgentUpdateRequestExecutorCliCodex      AgentUpdateRequestExecutorCli = "codex"
+	AgentUpdateRequestExecutorCliOpencode   AgentUpdateRequestExecutorCli = "opencode"
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestExecutorCli enum.
+func (e AgentUpdateRequestExecutorCli) Valid() bool {
+	switch e {
+	case AgentUpdateRequestExecutorCliClaudeCode:
+		return true
+	case AgentUpdateRequestExecutorCliCodex:
+		return true
+	case AgentUpdateRequestExecutorCliOpencode:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentUpdateRequestExecutorKind.
+const (
+	AgentUpdateRequestExecutorKindExternalCli AgentUpdateRequestExecutorKind = "external-cli"
+	AgentUpdateRequestExecutorKindNative      AgentUpdateRequestExecutorKind = "native"
+	AgentUpdateRequestExecutorKindRemoteA2a   AgentUpdateRequestExecutorKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestExecutorKind enum.
+func (e AgentUpdateRequestExecutorKind) Valid() bool {
+	switch e {
+	case AgentUpdateRequestExecutorKindExternalCli:
+		return true
+	case AgentUpdateRequestExecutorKindNative:
+		return true
+	case AgentUpdateRequestExecutorKindRemoteA2a:
 		return true
 	default:
 		return false
@@ -802,6 +928,48 @@ func (e DoctorResultIssuesSeverity) Valid() bool {
 	}
 }
 
+// Defines values for ExecutorConfigCli.
+const (
+	ExecutorConfigCliClaudeCode ExecutorConfigCli = "claude-code"
+	ExecutorConfigCliCodex      ExecutorConfigCli = "codex"
+	ExecutorConfigCliOpencode   ExecutorConfigCli = "opencode"
+)
+
+// Valid indicates whether the value is a known member of the ExecutorConfigCli enum.
+func (e ExecutorConfigCli) Valid() bool {
+	switch e {
+	case ExecutorConfigCliClaudeCode:
+		return true
+	case ExecutorConfigCliCodex:
+		return true
+	case ExecutorConfigCliOpencode:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ExecutorConfigKind.
+const (
+	ExternalCli ExecutorConfigKind = "external-cli"
+	Native      ExecutorConfigKind = "native"
+	RemoteA2a   ExecutorConfigKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the ExecutorConfigKind enum.
+func (e ExecutorConfigKind) Valid() bool {
+	switch e {
+	case ExternalCli:
+		return true
+	case Native:
+		return true
+	case RemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GlobalToolPoliciesDefaultPolicy.
 const (
 	GlobalToolPoliciesDefaultPolicyAllow GlobalToolPoliciesDefaultPolicy = "allow"
@@ -921,19 +1089,19 @@ func (e McpServerTransport) Valid() bool {
 
 // Defines values for McpServerCreateTransport.
 const (
-	Http  McpServerCreateTransport = "http"
-	Sse   McpServerCreateTransport = "sse"
-	Stdio McpServerCreateTransport = "stdio"
+	McpServerCreateTransportHttp  McpServerCreateTransport = "http"
+	McpServerCreateTransportSse   McpServerCreateTransport = "sse"
+	McpServerCreateTransportStdio McpServerCreateTransport = "stdio"
 )
 
 // Valid indicates whether the value is a known member of the McpServerCreateTransport enum.
 func (e McpServerCreateTransport) Valid() bool {
 	switch e {
-	case Http:
+	case McpServerCreateTransportHttp:
 		return true
-	case Sse:
+	case McpServerCreateTransportSse:
 		return true
-	case Stdio:
+	case McpServerCreateTransportStdio:
 		return true
 	default:
 		return false
@@ -2733,6 +2901,19 @@ type Agent struct {
 	// Description Short description of the agent's purpose.
 	Description *string `json:"description,omitempty"`
 
+	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+	// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol. Requires the "cli" field.
+	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
+	// When absent the default is "native".
+	Executor *struct {
+		// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+		Cli *AgentExecutorCli `json:"cli,omitempty"`
+
+		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+		Kind AgentExecutorKind `json:"kind"`
+	} `json:"executor,omitempty"`
+
 	// FallbackModels Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
 	FallbackModels *[]string `json:"fallback_models,omitempty"`
 
@@ -2869,6 +3050,12 @@ type Agent struct {
 	Warning *string `json:"warning,omitempty"`
 }
 
+// AgentExecutorCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+type AgentExecutorCli string
+
+// AgentExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+type AgentExecutorKind string
+
 // AgentSandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. "off" = god-mode (requires --allow-god-mode at gateway boot).
 type AgentSandboxProfile string
 
@@ -2891,6 +3078,19 @@ type AgentCreateRequest struct {
 
 	// Description Short description of the agent's purpose.
 	Description *string `json:"description,omitempty"`
+
+	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+	// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol. Requires the "cli" field.
+	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
+	// When absent the default is "native".
+	Executor *struct {
+		// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+		Cli *AgentCreateRequestExecutorCli `json:"cli,omitempty"`
+
+		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+		Kind AgentCreateRequestExecutorKind `json:"kind"`
+	} `json:"executor,omitempty"`
 
 	// FallbackModels Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
 	FallbackModels *[]string `json:"fallback_models,omitempty"`
@@ -2958,6 +3158,12 @@ type AgentCreateRequest struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 }
+
+// AgentCreateRequestExecutorCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+type AgentCreateRequestExecutorCli string
+
+// AgentCreateRequestExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+type AgentCreateRequestExecutorKind string
 
 // AgentCreateRequestToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
 type AgentCreateRequestToolsCfgBuiltinDefaultPolicy string
@@ -3210,6 +3416,19 @@ type AgentUpdateRequest struct {
 	// Description New description. Rejected on locked agents. Empty string removes it.
 	Description *string `json:"description,omitempty"`
 
+	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+	// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
+	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol. Requires the "cli" field.
+	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
+	// When absent the default is "native".
+	Executor *struct {
+		// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+		Cli *AgentUpdateRequestExecutorCli `json:"cli,omitempty"`
+
+		// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+		Kind AgentUpdateRequestExecutorKind `json:"kind"`
+	} `json:"executor,omitempty"`
+
 	// FallbackModels Ordered list of fallback model IDs tried when the primary model returns an error. Each entry may be a bare model name or "provider/model" format.
 	FallbackModels *[]string `json:"fallback_models,omitempty"`
 
@@ -3313,6 +3532,12 @@ type AgentUpdateRequest struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 }
+
+// AgentUpdateRequestExecutorCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+type AgentUpdateRequestExecutorCli string
+
+// AgentUpdateRequestExecutorKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+type AgentUpdateRequestExecutorKind string
 
 // AgentUpdateRequestSandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
 type AgentUpdateRequestSandboxProfile string
@@ -3746,6 +3971,25 @@ type ExecProxyStatus struct {
 	// Running Whether the proxy listener is currently bound and running.
 	Running bool `json:"running"`
 }
+
+// ExecutorConfig Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+// "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
+// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol. Requires the "cli" field.
+// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
+// When absent the default is "native".
+type ExecutorConfig struct {
+	// Cli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+	Cli *ExecutorConfigCli `json:"cli,omitempty"`
+
+	// Kind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+	Kind ExecutorConfigKind `json:"kind"`
+}
+
+// ExecutorConfigCli The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+type ExecutorConfigCli string
+
+// ExecutorConfigKind Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+type ExecutorConfigKind string
 
 // GatewayStatus Gateway runtime status as returned by GET /status (polled by the frontend StatusBar every 15 seconds). Summarises the number of configured agents and channels plus a daily cost accumulator.
 type GatewayStatus struct {

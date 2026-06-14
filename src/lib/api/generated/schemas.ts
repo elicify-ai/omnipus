@@ -111,6 +111,7 @@ type Agent = {
   stats?: AgentStats | undefined;
   default?: boolean | undefined;
   skills?: Array<string> | undefined;
+  executor?: ExecutorConfig | undefined;
 };
 type AgentToolsCfg = Partial<{
   builtin: Partial<{
@@ -145,6 +146,10 @@ type AgentStats = {
   total_cost: number;
   last_active?: string | undefined;
 };
+type ExecutorConfig = {
+  kind: "native" | "external-cli" | "remote-a2a";
+  cli?: ("claude-code" | "codex" | "opencode") | undefined;
+};
 type AgentCreateRequest = {
   name: string;
   description?: string | undefined;
@@ -169,6 +174,7 @@ type AgentCreateRequest = {
       }>
     | undefined;
   skills?: Array<string> | undefined;
+  executor?: ExecutorConfig | undefined;
 };
 type AgentUpdateRequest = Partial<{
   name: string;
@@ -205,6 +211,7 @@ type AgentUpdateRequest = Partial<{
   tools_cfg: AgentToolsCfg;
   default: boolean;
   skills: Array<string>;
+  executor: ExecutorConfig;
 }>;
 type ChannelEntry = {
   id: ChannelId;
@@ -710,6 +717,10 @@ export const AgentStats: z.ZodType<AgentStats> = z
     last_active: z.string().datetime({ offset: true }).optional(),
   })
   .passthrough();
+export const ExecutorConfig: z.ZodType<ExecutorConfig> = z.object({
+  kind: z.enum(["native", "external-cli", "remote-a2a"]),
+  cli: z.enum(["claude-code", "codex", "opencode"]).optional(),
+});
 export const Agent: z.ZodType<Agent> = z
   .object({
     id: z.string(),
@@ -745,6 +756,7 @@ export const Agent: z.ZodType<Agent> = z
     stats: AgentStats.optional(),
     default: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
+    executor: ExecutorConfig.optional(),
   })
   .passthrough();
 export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
@@ -775,6 +787,7 @@ export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
     .passthrough()
     .optional(),
   skills: z.array(z.string()).optional(),
+  executor: ExecutorConfig.optional(),
 });
 export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
   .object({
@@ -821,6 +834,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     tools_cfg: AgentToolsCfg,
     default: z.boolean(),
     skills: z.array(z.string()),
+    executor: ExecutorConfig,
   })
   .partial();
 export const AgentOwnershipUpdateRequest = z

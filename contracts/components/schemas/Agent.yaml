@@ -192,3 +192,5 @@ properties:
       (opt-in, default none).
     example:
       - "web-research"
+  executor:
+    $ref: './ExecutorConfig.yaml'

@@ -166,3 +166,5 @@ properties:
       Send an empty array to remove all skills.
     example:
       - "web-research"
+  executor:
+    $ref: './ExecutorConfig.yaml'

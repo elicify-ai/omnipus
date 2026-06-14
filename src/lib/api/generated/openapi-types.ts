@@ -2617,6 +2617,7 @@ export interface components {
              *     ]
              */
             skills?: string[];
+            executor?: components["schemas"]["ExecutorConfig"];
         };
         /**
          * AgentModelParams
@@ -2877,6 +2878,7 @@ export interface components {
              *     ]
              */
             skills?: string[];
+            executor?: components["schemas"]["ExecutorConfig"];
         };
         /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400. */
         AgentUpdateRequest: {
@@ -3032,6 +3034,28 @@ export interface components {
              *     ]
              */
             skills?: string[];
+            executor?: components["schemas"]["ExecutorConfig"];
+        };
+        /**
+         * @description Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+         *     "native" (default) runs the task inside the Omnipus agent loop — existing behaviour, always available.
+         *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) over a JSON-streaming subprocess protocol. Requires the "cli" field.
+         *     "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
+         *     When absent the default is "native".
+         */
+        ExecutorConfig: {
+            /**
+             * @description Execution runtime selector. "native" = run inside the Omnipus agent loop (default). "external-cli" = delegate to an external CLI agent process. "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+             * @example native
+             * @enum {string}
+             */
+            kind: "native" | "external-cli" | "remote-a2a";
+            /**
+             * @description The external CLI tool to use when kind="external-cli". Ignored for other kinds. "claude-code" = Claude Code headless (claude -p --output-format stream-json). "codex" = OpenAI Codex CLI (codex exec JSON). "opencode" = opencode (opencode run --format json).
+             * @example claude-code
+             * @enum {string}
+             */
+            cli?: "claude-code" | "codex" | "opencode";
         };
         /** @description Minimal session summary as returned by GET /agents/{id}/sessions. Maps to the AgentSession interface in src/lib/api.ts. This is the same underlying session.UnifiedMeta object, but the SPA consumes it through the AgentSession interface which reads id, title, created_at, and updated_at directly. */
         AgentSession: {
@@ -9284,6 +9308,7 @@ export type AgentToolsCfg = components["schemas"]["AgentToolsCfg"];
 export type AgentToolsUpdateRequest = components["schemas"]["AgentToolsUpdateRequest"];
 export type AgentCreateRequest = components["schemas"]["AgentCreateRequest"];
 export type AgentUpdateRequest = components["schemas"]["AgentUpdateRequest"];
+export type ExecutorConfig = components["schemas"]["ExecutorConfig"];
 export type AgentSession = components["schemas"]["AgentSession"];
 export type SessionScopeRequest = components["schemas"]["SessionScopeRequest"];
 export type SessionScopeResponse = components["schemas"]["SessionScopeResponse"];

@@ -126,6 +126,8 @@ components:
       $ref: ./components/schemas/AgentCreateRequest.yaml
     AgentUpdateRequest:
       $ref: ./components/schemas/AgentUpdateRequest.yaml
+    ExecutorConfig:
+      $ref: ./components/schemas/ExecutorConfig.yaml
     AgentSession:
       $ref: ./components/schemas/AgentSession.yaml
     SessionScopeRequest:

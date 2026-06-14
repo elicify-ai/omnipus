@@ -1,0 +1,45 @@
+type: object
+description: >
+  Executor configuration for a sub-agent. Controls which runtime is used to
+  execute the sub-agent's tasks.
+
+  "native" (default) runs the task inside the Omnipus agent loop — existing
+  behaviour, always available.
+
+  "external-cli" drives an external CLI tool (claude-code, codex, or opencode)
+  over a JSON-streaming subprocess protocol. Requires the "cli" field.
+
+  "remote-a2a" is RESERVED for future A2A protocol resolution. The schema
+  accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with
+  an error ("not available in v0.1.0").
+
+  When absent the default is "native".
+required:
+  - kind
+additionalProperties: false
+properties:
+  kind:
+    type: string
+    enum:
+      - native
+      - external-cli
+      - remote-a2a
+    description: >
+      Execution runtime selector.
+      "native" = run inside the Omnipus agent loop (default).
+      "external-cli" = delegate to an external CLI agent process.
+      "remote-a2a" = RESERVED; not resolvable in v0.1.0.
+    example: "native"
+  cli:
+    type: string
+    enum:
+      - claude-code
+      - codex
+      - opencode
+    description: >
+      The external CLI tool to use when kind="external-cli".
+      Ignored for other kinds.
+      "claude-code" = Claude Code headless (claude -p --output-format stream-json).
+      "codex" = OpenAI Codex CLI (codex exec JSON).
+      "opencode" = opencode (opencode run --format json).
+    example: "claude-code"

@@ -89,3 +89,5 @@ properties:
       absent field) means no skills are granted (opt-in, default none).
     example:
       - "web-research"
+  executor:
+    $ref: './ExecutorConfig.yaml'
