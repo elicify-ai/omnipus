@@ -273,6 +273,12 @@ type processOptions struct {
 	TranscriptSessionID     string                // Session ID for transcript tool call recording (empty = disabled)
 	TranscriptStore         *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
 
+	// WorkspaceID is the Spec-1 Workspace identifier for this turn.
+	// When set, the memory store uses the shared workspace room
+	// ($OMNIPUS_HOME/workspaces/<id>/.omnipus/) for memories scoped to "shared".
+	// Empty means no workspace is associated (private room only).
+	WorkspaceID string
+
 	// AutoDenyAsk, when true, makes every `ask`-policy tool call auto-DENIED
 	// without ever requesting human approval (issue #264, FR-009). Scheduled
 	// runs are headless — there is no operator to approve, so blocking on an
@@ -3660,6 +3666,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	turnCtx = tools.WithTranscriptSessionID(turnCtx, ts.opts.TranscriptSessionID)
+	// Inject the workspace ID so memory tools can route to the shared room (FR-7.1).
+	if ts.opts.WorkspaceID != "" {
+		turnCtx = tools.WithWorkspaceID(turnCtx, ts.opts.WorkspaceID)
+	}
 
 	al.registerActiveTurn(ts)
 	// B1: Finish must run before clearActiveTurn so that IsAlive() goes false

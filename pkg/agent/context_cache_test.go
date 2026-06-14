@@ -207,13 +207,6 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 			contentV2:  "# Updated Agent",
 			checkField: "Updated Agent",
 		},
-		{
-			name:       "memory file change",
-			file:       "memory/MEMORY.md",
-			contentV1:  "# Memory\nUser likes Go.",
-			contentV2:  "# Memory\nUser likes Rust.",
-			checkField: "User likes Rust",
-		},
 	}
 
 	for _, tt := range tests {
@@ -272,6 +265,33 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 		cb.systemPromptMutex.RUnlock()
 		if !changed {
 			t.Error("sourceFilesChangedLocked() should detect skills dir mtime change")
+		}
+	})
+
+	// Spec-5: private memories directory mtime change (FR-7.1 / FR-021).
+	// sourcePaths() now tracks .omnipus/memories/ (dir mtime) instead of
+	// the old memory/MEMORY.md file. Touching the dir simulates a new .md
+	// memory file being written (which updates the directory mtime).
+	t.Run("memories dir mtime change", func(t *testing.T) {
+		tmpDir := setupWorkspace(t, nil)
+		defer os.RemoveAll(tmpDir)
+
+		cb := NewContextBuilder(tmpDir)
+		_ = cb.BuildSystemPromptWithCache() // populate cache
+
+		// Ensure .omnipus/memories/ exists first (MustEnsureRoom creates it at ContextBuilder init).
+		memoriesDir := filepath.Join(tmpDir, ".omnipus", "memories")
+		if err := os.MkdirAll(memoriesDir, 0o700); err != nil {
+			t.Fatalf("create memories dir: %v", err)
+		}
+		future := time.Now().Add(2 * time.Second)
+		os.Chtimes(memoriesDir, future, future)
+
+		cb.systemPromptMutex.RLock()
+		changed := cb.sourceFilesChangedLocked()
+		cb.systemPromptMutex.RUnlock()
+		if !changed {
+			t.Error("sourceFilesChangedLocked() should detect .omnipus/memories/ mtime change")
 		}
 	})
 }
@@ -347,11 +367,16 @@ func TestNewFileCreationInvalidatesCache(t *testing.T) {
 			content:    "# Soul\nBe kind and helpful.",
 			checkField: "Be kind and helpful",
 		},
+		// Spec-5: per-memory .md files live in .omnipus/memories/.
+		// Creating the first .md file there updates the directory mtime,
+		// which sourcePaths() tracks. The content appears in the prompt
+		// via GetMemoryContext(); tested in TestContextBuilder_GetMemoryContext_BothSections.
+		// Here we just check that a new .md in the memories dir invalidates the cache.
 		{
-			name:       "new memory file",
-			file:       "memory/MEMORY.md",
-			content:    "# Memory\nUser prefers dark mode.",
-			checkField: "User prefers dark mode",
+			name:       "new memory .md file",
+			file:       ".omnipus/memories/newentry.md",
+			content:    "---\nid: test-id\ntitle: dark mode pref\ntype: note\ntags: []\nconfidence: 0.0000\nstatus: active\nsupersedes: \"\"\nauthor: test\nborn_in: \"\"\n---\n\nUser prefers dark mode.\n",
+			checkField: "dark mode",
 		},
 	}
 
@@ -375,9 +400,12 @@ func TestNewFileCreationInvalidatesCache(t *testing.T) {
 			if err := os.WriteFile(fullPath, []byte(tt.content), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			// Set future mtime to guarantee detection
+			// Set future mtime to guarantee detection.
+			// Also touch the parent directory — for memory .md files, sourcePaths()
+			// tracks the .omnipus/memories/ directory mtime (not individual files).
 			future := time.Now().Add(2 * time.Second)
 			os.Chtimes(fullPath, future, future)
+			os.Chtimes(filepath.Dir(fullPath), future, future)
 
 			// Cache should auto-invalidate because file went from absent -> present
 			sp2 := cb.BuildSystemPromptWithCache()
@@ -609,9 +637,13 @@ func TestConcurrentBuildSystemPromptWithCache(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
 		"AGENT.md":             "# Agent\nConcurrency test agent.",
 		"SOUL.md":              "# Soul\nBe helpful.",
-		"memory/MEMORY.md":     "# Memory\nUser prefers Go.",
 		"skills/demo/SKILL.md": "---\nname: demo\ndescription: \"demo skill\"\n---\n# Demo",
 	})
+	// Spec-5: seed a memory via AppendLongTerm to exercise the memory path.
+	ms := NewMemoryStore(tmpDir, os.TempDir())
+	if err := ms.AppendLongTerm("user prefers Go", "reference"); err != nil {
+		t.Fatalf("seed memory: %v", err)
+	}
 	defer os.RemoveAll(tmpDir)
 
 	cb := NewContextBuilder(tmpDir)

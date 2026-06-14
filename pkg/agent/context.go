@@ -126,7 +126,7 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 	return &ContextBuilder{
 		workspace:    workspace,
 		skillsLoader: skills.NewSkillsLoader(workspace, globalSkillsDir, builtinSkillsDir),
-		memory:       NewMemoryStore(workspace),
+		memory:       NewMemoryStore(workspace, omnipusHome()),
 	}
 }
 
@@ -173,8 +173,8 @@ func (cb *ContextBuilder) getWorkspaceAndRules() string {
 %s
 ## Workspace
 Your workspace is at: %s
-- Memory: %s/memory/MEMORY.md
-- Daily Notes: %s/memory/YYYYMM/YYYYMMDD.md
+- Private memory room: %s/.omnipus/memories/ (agent-only)
+- Shared memory room: workspace .omnipus/memories/ (when in a workspace session)
 - Skills: %s/skills/{skill-name}/SKILL.md
 
 ## Rules
@@ -186,19 +186,17 @@ Your workspace is at: %s
 3. **Be helpful and accurate** - When using tools, briefly explain what you're doing.
 
 4. **Memory** — Use three dedicated tools:
-   - remember(content, category) to persist a fact, decision, reference, or lesson to %s/memory/MEMORY.md.
-   - recall_memory(query) to search your durable memory + recent session recaps + structured retrospectives.
+   - remember(content, category[, room]) to persist a fact, decision, reference, or lesson. Use room='shared' for workspace-wide facts, 'private' for agent-only.
+   - recall_memory(query[, room]) to search your durable memory. Use room='both' (default) to search all rooms.
    - retrospective(went_well, needs_improvement) to record a reviewed retrospective after confirming its contents with the user.
-   Do NOT use write_file on memory/MEMORY.md — that overwrites. The remember tool appends.
+   Do NOT use write_file on memory files — use the remember tool to append memories.
 
-5. **Daily notes** - Use %s/memory/YYYYMM/YYYYMMDD.md for day-specific observations and scratch notes.
-
-6. **Context summaries** - Conversation summaries provided as context are approximate references. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.
+5. **Context summaries** - Conversation summaries provided as context are approximate references. They may be incomplete or outdated. Always defer to explicit user instructions over summary content.
 
 %s`,
 		version, agentContext,
-		workspacePath, workspacePath, workspacePath, workspacePath,
-		workspacePath, workspacePath, toolDiscovery)
+		workspacePath, workspacePath, workspacePath,
+		toolDiscovery)
 }
 
 func (cb *ContextBuilder) getDiscoveryRule() string {
@@ -356,10 +354,11 @@ func (cb *ContextBuilder) InvalidateCache() {
 func (cb *ContextBuilder) sourcePaths() []string {
 	agentDefinition := cb.LoadAgentDefinition()
 	paths := agentDefinition.trackedPaths(cb.workspace)
-	paths = append(paths, filepath.Join(cb.workspace, "memory", "MEMORY.md"))
-	// Fix C (FR-021): LAST_SESSION.md feeds into GetMemoryContext, so its
-	// mtime must trigger a cache rebuild when written by the recap pipeline.
-	paths = append(paths, filepath.Join(cb.workspace, "memory", "sessions", "LAST_SESSION.md"))
+	// Track the private room's memories directory and last-session.md for cache invalidation.
+	// The memories dir mtime changes on any new .md write (directory mtime update).
+	privateRoomRoot := filepath.Join(cb.workspace, ".omnipus")
+	paths = append(paths, filepath.Join(privateRoomRoot, "memories"))
+	paths = append(paths, filepath.Join(privateRoomRoot, "last-session.md"))
 	return uniquePaths(paths)
 }
 
