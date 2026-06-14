@@ -57,7 +57,7 @@
   },
   {
     "name": "system.backup.create",
-    "description": "Create a backup of the Omnipus data directory. Parameters: encrypt (bool, default false).",
+    "description": "[NOT IMPLEMENTED] Creating a backup archive of the data directory is not yet built. This tool always returns a NOT_IMPLEMENTED error and does NOT create any file.",
     "scope": "core",
     "category": "system",
     "source": "builtin"
@@ -71,14 +71,14 @@
   },
   {
     "name": "system.channel.disable",
-    "description": "Disable a channel. Parameters: id (required).",
+    "description": "[NOT IMPLEMENTED] Disabling a channel from a tool is not yet wired to the channel manager. This tool always returns a NOT_IMPLEMENTED error. Use the Channels screen in the UI to disable a channel.",
     "scope": "core",
     "category": "system",
     "source": "builtin"
   },
   {
     "name": "system.channel.enable",
-    "description": "Enable a channel so it can be configured and connected.\nParameters: id (required).",
+    "description": "[NOT IMPLEMENTED] Enabling a channel from a tool is not yet wired to the channel manager. This tool always returns a NOT_IMPLEMENTED error. Use the Channels screen in the UI to enable a channel.",
     "scope": "core",
     "category": "system",
     "source": "builtin"
@@ -92,7 +92,7 @@
   },
   {
     "name": "system.channel.test",
-    "description": "Test a channel connection. Parameters: id (required).",
+    "description": "[NOT IMPLEMENTED] Testing a channel connection from a tool is not yet wired to the channel manager. This tool always returns a NOT_IMPLEMENTED error. Use the Test button on the Channels screen in the UI.",
     "scope": "core",
     "category": "system",
     "source": "builtin"
@@ -113,7 +113,7 @@
   },
   {
     "name": "system.cost.query",
-    "description": "Query LLM cost data by period. Parameters: period (today/week/month/custom), start_date, end_date, agent_id, group_by.",
+    "description": "[NOT IMPLEMENTED] Querying LLM cost data by period/agent is not yet built. The only cost data Omnipus persists today is a single running total for the current UTC day (no historical periods, per-agent breakdown, or grouping). This tool always returns a NOT_IMPLEMENTED error.",
     "scope": "core",
     "category": "system",
     "source": "builtin"
@@ -127,21 +127,21 @@
   },
   {
     "name": "system.mcp.add",
-    "description": "Add an MCP server.\nParameters: name (required), transport (stdio/sse/http), command, args, url, env, agent_ids.",
+    "description": "Add an MCP server to the configuration (tools.mcp.servers). The server is persisted to config.json and connects on next reload.\nParameters: name (required), transport (stdio/sse/http; default stdio), command (required for stdio), url (required for sse/http), args, env.",
     "scope": "core",
     "category": "system",
     "source": "builtin"
   },
   {
     "name": "system.mcp.list",
-    "description": "List all MCP servers with status and assigned agents. No parameters required.",
+    "description": "List all MCP servers configured in tools.mcp.servers with their transport and enabled state. No parameters required.",
     "scope": "core",
     "category": "system",
     "source": "builtin"
   },
   {
     "name": "system.mcp.remove",
-    "description": "Remove an MCP server. Parameters: name (required), confirm (bool, must be true).",
+    "description": "Remove an MCP server from the configuration (tools.mcp.servers) and persist the change.\nParameters: name (required), confirm (bool, must be true).",
     "scope": "core",
     "category": "system",
     "source": "builtin"
@@ -203,6 +203,20 @@
     "source": "builtin"
   },
   {
+    "name": "system.skill.create",
+    "description": "Author a NEW skill (procedural memory). Writes a SKILL.md to the user skills directory; the write is consent-gated and versioned. Parameters: name (required, alphanumeric+hyphens), content (required, full SKILL.md including YAML frontmatter with name and description).",
+    "scope": "core",
+    "category": "system",
+    "source": "builtin"
+  },
+  {
+    "name": "system.skill.edit",
+    "description": "Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version for rollback, then writes the new SKILL.md. Editing a built-in creates a user override; the built-in is never mutated in place. The write is consent-gated and versioned. Parameters: name (required), content (required, full new SKILL.md).",
+    "scope": "core",
+    "category": "system",
+    "source": "builtin"
+  },
+  {
     "name": "system.skill.install",
     "description": "Install a skill from ClawHub.\nParameters: name (required), agent_ids (optional), credentials (optional).",
     "scope": "core",
@@ -232,7 +246,7 @@
   },
   {
     "name": "system.task.create",
-    "description": "Create a task on the GTD board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call system.workspace.list first to get the workspace_id.\nParameters: name (required, the task title), description (optional), workspace_id (optional, from system.workspace.list), agent_id (optional, agent to assign), status (optional: inbox=new/unscheduled, next=prioritized for soon, active=in-progress, waiting=blocked/waiting, done=complete — defaults to inbox).",
+    "description": "Create a task on the GTD board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call system.workspace.list first to get the workspace_id.\nParameters: name (required, the task title), description (optional), workspace_id (optional, from system.workspace.list), agent_id (optional, agent to assign), status (optional: inbox=new/unscheduled, next=prioritized for soon, active=in-progress, waiting=blocked/waiting, done=complete — defaults to inbox), start (optional, RFC 3339 start date/time), due (optional, RFC 3339 due date/time), recurrence (optional, RRULE string e.g. 'FREQ=WEEKLY;BYDAY=MO'), blocked_by (optional, array of task IDs this task is blocked by).",
     "scope": "core",
     "category": "system",
     "source": "builtin"
@@ -253,7 +267,7 @@
   },
   {
     "name": "system.task.update",
-    "description": "Update an existing GTD board task. Call this to change status, reassign, rename, or link to a workspace. Use system.task.list first to find the task id. If linking to a workspace by name, call system.workspace.list first to get the workspace_id.\nParameters: id (required, from system.task.list), name, description, workspace_id (from system.workspace.list), agent_id, status (inbox=new/unscheduled, next=prioritized, active=in-progress, waiting=blocked, done=complete). Only provided fields are updated.",
+    "description": "Update an existing GTD board task. Call this to change status, reassign, rename, or link to a workspace. Use system.task.list first to find the task id. If linking to a workspace by name, call system.workspace.list first to get the workspace_id.\nParameters: id (required, from system.task.list), name, description, workspace_id (from system.workspace.list), agent_id, status (inbox=new/unscheduled, next=prioritized, active=in-progress, waiting=blocked, done=complete), start (RFC 3339 start date/time), due (RFC 3339 due date/time), recurrence (RRULE string), blocked_by (array of task IDs). Only provided fields are updated.",
     "scope": "core",
     "category": "system",
     "source": "builtin"
