@@ -606,9 +606,18 @@ func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig)
 		if !inst.Enabled {
 			continue
 		}
+		// Normalize: if Type is unset, treat the map key as the type. This mirrors
+		// what normalizeChannelMap does at config-load time, but initChannels is also
+		// called with a synthesized subset map (toChannelConfig) whose entries may
+		// have been created from a zero-value ChannelInstanceConfig (e.g. a map-key
+		// lookup on an empty DefaultConfig().Channels, which skips normalizeChannelMap).
+		// Without this guard, inst.Type == "" falls through every check and produces
+		// a "factory not registered for channel """ error that aborts the reload.
+		if inst.Type == "" {
+			inst.Type = instanceID
+		}
 		factoryName := factoryNameForType(inst.Type)
 		displayName := inst.Type // factories use the type as display name
-		_ = instanceID           // instance ID is the map key; reserved for cap>1
 
 		if inst.Type == "whatsapp" {
 			// WhatsApp is always native (whatsmeow). The legacy bridge channel was
