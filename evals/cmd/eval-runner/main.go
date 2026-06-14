@@ -300,7 +300,7 @@ func startGateway(ctx context.Context, omnipusBin, homeDir string) (*gatewayHand
 		"OMNIPUS_HOME="+homeDir,
 		"OMNIPUS_BEARER_TOKEN=",
 	)
-	cmd.Stdout = io.Discard
+	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start gateway: %w", err)
@@ -321,7 +321,7 @@ func startGateway(ctx context.Context, omnipusBin, homeDir string) (*gatewayHand
 	}
 	if port == "" {
 		cmd.Process.Kill() //nolint:errcheck
-		return nil, fmt.Errorf("gateway did not write port file within 30s")
+		return nil, fmt.Errorf("gateway did not write port file within 60s")
 	}
 
 	baseURL := "http://127.0.0.1:" + port

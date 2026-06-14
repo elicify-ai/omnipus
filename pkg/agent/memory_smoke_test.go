@@ -3,6 +3,8 @@
 //
 // Copyright (c) 2026 Omnipus contributors
 
+// memory_smoke_test.go — smoke tests for the room-based MemoryStore (Spec-5).
+// GREENFIELD: tests verify the new per-memory .md file format and room topology.
 package agent
 
 import (
@@ -11,64 +13,40 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dapicom-ai/omnipus/pkg/memrooms"
 )
 
-// TestMemorySmoke verifies the core round-trip for Lane M:
-//  1. Creates a temp workspace.
+// TestMemorySmoke verifies the core round-trip for the room-based store:
+//  1. Creates a temp workspace + home.
 //  2. Calls AppendLongTerm twice with distinct content.
-//  3. Calls ReadLongTermEntries and asserts two entries are returned newest-first.
-//  4. Calls SearchEntries and asserts the query matches.
+//  3. Calls SearchEntries and asserts both entries are found.
 func TestMemorySmoke(t *testing.T) {
 	dir := t.TempDir()
-	ms := NewMemoryStore(dir)
+	home := t.TempDir()
+	ms := NewMemoryStore(dir, home)
 
 	// First entry.
 	if err := ms.AppendLongTerm("prefer tabs over spaces", "key_decision"); err != nil {
 		t.Fatalf("AppendLongTerm #1 failed: %v", err)
 	}
 
-	// Brief pause to guarantee distinct mtimes and timestamps.
+	// Brief pause to ensure distinct file mtimes.
 	time.Sleep(2 * time.Millisecond)
 
-	// Second entry (appended after a small delay so timestamps differ).
+	// Second entry.
 	if err := ms.AppendLongTerm("always use flock for concurrent writes", "lesson_learned"); err != nil {
 		t.Fatalf("AppendLongTerm #2 failed: %v", err)
 	}
 
-	// Verify the raw file exists and contains both entries.
-	raw, err := os.ReadFile(filepath.Join(dir, "memory", "MEMORY.md"))
+	// Verify two .md files exist in the private room.
+	memoriesDir := filepath.Join(dir, memrooms.OmnipusRoomDir, memrooms.MemoriesSubdir)
+	entries, err := os.ReadDir(memoriesDir)
 	if err != nil {
-		t.Fatalf("reading MEMORY.md: %v", err)
-	}
-	if !strings.Contains(string(raw), "prefer tabs over spaces") {
-		t.Error("MEMORY.md missing first entry")
-	}
-	if !strings.Contains(string(raw), "always use flock for concurrent writes") {
-		t.Error("MEMORY.md missing second entry")
-	}
-	if !strings.Contains(string(raw), "<!-- next -->") {
-		t.Error("MEMORY.md missing separator between entries")
-	}
-
-	// ReadLongTermEntries must return 2 entries newest-first.
-	entries, err := ms.ReadLongTermEntries()
-	if err != nil {
-		t.Fatalf("ReadLongTermEntries: %v", err)
+		t.Fatalf("read memories dir: %v", err)
 	}
 	if len(entries) != 2 {
-		t.Fatalf("expected 2 entries, got %d", len(entries))
-	}
-	// Newest-first: second entry (lesson_learned) should come before first.
-	if entries[0].Category != "lesson_learned" {
-		t.Errorf("entries[0].Category = %q, want lesson_learned", entries[0].Category)
-	}
-	if entries[1].Category != "key_decision" {
-		t.Errorf("entries[1].Category = %q, want key_decision", entries[1].Category)
-	}
-	// Verify newest-first ordering by timestamp.
-	if !entries[0].Timestamp.After(entries[1].Timestamp) && entries[0].Timestamp != entries[1].Timestamp {
-		t.Errorf("entries not in newest-first order: [0]=%v [1]=%v",
-			entries[0].Timestamp, entries[1].Timestamp)
+		t.Fatalf("expected 2 memory files, got %d", len(entries))
 	}
 
 	// SearchEntries must find entries matching the query.
@@ -96,7 +74,8 @@ func TestMemorySmoke(t *testing.T) {
 // TestMemoryValidation exercises the validation boundaries of AppendLongTerm.
 func TestMemoryValidation(t *testing.T) {
 	dir := t.TempDir()
-	ms := NewMemoryStore(dir)
+	home := t.TempDir()
+	ms := NewMemoryStore(dir, home)
 
 	// Invalid category.
 	if err := ms.AppendLongTerm("some fact", "invalid_cat"); err == nil {
@@ -128,7 +107,8 @@ func TestMemoryValidation(t *testing.T) {
 // TestMemoryRetroRoundTrip verifies AppendRetro + ReadRetros.
 func TestMemoryRetroRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	ms := NewMemoryStore(dir)
+	home := t.TempDir()
+	ms := NewMemoryStore(dir, home)
 
 	sessionID := "testsession-smoke"
 	r := Retro{
@@ -166,7 +146,8 @@ func TestMemoryRetroRoundTrip(t *testing.T) {
 // TestMemoryLastSession verifies WriteLastSession + ReadLastSession.
 func TestMemoryLastSession(t *testing.T) {
 	dir := t.TempDir()
-	ms := NewMemoryStore(dir)
+	home := t.TempDir()
+	ms := NewMemoryStore(dir, home)
 
 	// ReadLastSession on a fresh workspace returns empty string, no error.
 	content, err := ms.ReadLastSession()
@@ -191,10 +172,11 @@ func TestMemoryLastSession(t *testing.T) {
 	}
 }
 
-// TestGetMemoryContextBudget verifies the 12000-rune budget logic in GetMemoryContext.
-func TestGetMemoryContextBudget(t *testing.T) {
+// TestGetMemoryContextIncludes verifies GetMemoryContext returns last session + memory.
+func TestGetMemoryContextIncludes(t *testing.T) {
 	dir := t.TempDir()
-	ms := NewMemoryStore(dir)
+	home := t.TempDir()
+	ms := NewMemoryStore(dir, home)
 
 	// Write LAST_SESSION.md.
 	if err := ms.WriteLastSession("Last session was productive."); err != nil {

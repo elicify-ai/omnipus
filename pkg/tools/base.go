@@ -109,6 +109,7 @@ var (
 	ctxKeyTranscriptSessionID = &toolCtxKey{"transcriptSessionID"}
 	ctxKeyProcTracker         = &toolCtxKey{"procTracker"}
 	ctxKeySessionOwner        = &toolCtxKey{"sessionOwner"}
+	ctxKeyWorkspaceID         = &toolCtxKey{"workspaceID"}
 )
 
 // ProcessTrackerFunc records a child PID spawned by a tool so a caller (e.g. the
@@ -205,6 +206,20 @@ func WithSessionOwner(ctx context.Context, owner string) context.Context {
 // ToolSessionOwner extracts the session owner username from ctx, or "" if unset.
 func ToolSessionOwner(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeySessionOwner).(string)
+	return v
+}
+
+// WithWorkspaceID returns a child context carrying the workspace ID.
+// The workspace ID identifies which per-workspace shared memory room to use (FR-7.1).
+func WithWorkspaceID(ctx context.Context, workspaceID string) context.Context {
+	return context.WithValue(ctx, ctxKeyWorkspaceID, workspaceID)
+}
+
+// ToolWorkspaceID extracts the workspace ID from ctx, or "" if unset.
+// An empty workspace ID means the agent turn is not associated with a Spec-1
+// Workspace; the memory store falls back to the private room only.
+func ToolWorkspaceID(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyWorkspaceID).(string)
 	return v
 }
 

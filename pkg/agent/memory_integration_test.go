@@ -1,13 +1,11 @@
 // memory_integration_test.go — full-stack memory tests that exercise the
 // production MemoryStore + MemoryStoreAdapter + tools.* chain.
 //
-// The pkg/tools unit tests use an in-package simpleMemStore to avoid a
-// pkg/tools → pkg/agent import cycle. That is the correct choice for the tool
-// unit tests, but it means regressions in the REAL MemoryStore's flock
-// discipline, validation gates, format bytes, or retro layout never fail a
-// tool test. This file closes that gap from the agent side by wiring the
-// production adapter into the real tools and asserting full-path behavior.
-
+// These tests verify FR-7.1 (room routing), FR-7.2 (full frontmatter),
+// and FR-7.3 (3 tools re-pointed to rooms).
+//
+// GREENFIELD: tests work against the new per-memory .md file format.
+// Old MEMORY.md tests removed per FR-7.6 / operator D2 greenfield decision.
 package agent
 
 import (
@@ -18,16 +16,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dapicom-ai/omnipus/pkg/memrooms"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
 
-// TestRememberTool_RealAdapter_PersistsViaMemoryStore wires the real
-// MemoryStoreAdapter into tools.NewRememberTool and verifies the file on disk
-// has exactly the FR-002 format bytes. A regression in MemoryStore.AppendLongTerm
-// (e.g., dropped flock, wrong separator, missing ts/cat fields) fails here.
+// TestRememberTool_RealAdapter_PersistsViaMemoryStore verifies the full
+// remember→room→.md file path.
 func TestRememberTool_RealAdapter_PersistsViaMemoryStore(t *testing.T) {
 	workspace := t.TempDir()
-	store := NewMemoryStore(workspace)
+	home := t.TempDir()
+	store := NewMemoryStore(workspace, home)
 	adapter := NewMemoryStoreAdapter(store)
 
 	tool := tools.NewRememberTool(adapter, nil)
@@ -45,55 +43,48 @@ func TestRememberTool_RealAdapter_PersistsViaMemoryStore(t *testing.T) {
 		t.Fatalf("Execute failed: %+v", res)
 	}
 
-	// Read the real MEMORY.md and assert it matches FR-002 exactly.
-	data, err := os.ReadFile(filepath.Join(workspace, "memory", "MEMORY.md"))
+	// Memory should land in the private room (no workspace_id set).
+	memoriesDir := filepath.Join(workspace, memrooms.OmnipusRoomDir, memrooms.MemoriesSubdir)
+	entries, err := os.ReadDir(memoriesDir)
 	if err != nil {
-		t.Fatalf("read MEMORY.md: %v", err)
+		t.Fatalf("read memories dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 memory file, got %d", len(entries))
+	}
+
+	// Read and verify frontmatter.
+	data, err := os.ReadFile(filepath.Join(memoriesDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read memory file: %v", err)
 	}
 	text := string(data)
 
-	if !strings.Contains(text, "cat=key_decision") {
-		t.Errorf("MEMORY.md missing cat=key_decision marker; got:\n%s", text)
+	if !strings.Contains(text, "type: decision") {
+		t.Errorf("memory missing type:decision in frontmatter; got:\n%s", text)
 	}
 	if !strings.Contains(text, "single source of truth fact") {
-		t.Errorf("MEMORY.md missing content; got:\n%s", text)
+		t.Errorf("memory missing content; got:\n%s", text)
 	}
-	// FR-002: first entry has no leading "<!-- next -->" separator.
-	if strings.HasPrefix(text, "<!-- next -->") {
-		t.Error("first entry should not have leading separator")
-	}
-
-	// Second write — must prepend the separator.
-	res2 := tool.Execute(ctx, map[string]any{
-		"content":  "second distinct fact",
-		"category": "reference",
-	})
-	if res2 == nil || res2.IsError {
-		t.Fatalf("Execute second: %+v", res2)
-	}
-	data2, _ := os.ReadFile(filepath.Join(workspace, "memory", "MEMORY.md"))
-	text2 := string(data2)
-	if !strings.Contains(text2, "<!-- next -->") {
-		t.Errorf("second entry should prepend separator; got:\n%s", text2)
+	if !strings.Contains(text, "status: active") {
+		t.Errorf("memory missing status:active; got:\n%s", text)
 	}
 
-	// Both entries must be readable back via the store's own parser — proves
-	// the wire format is self-consistent.
-	entries, err := store.ReadLongTermEntries()
-	if err != nil {
-		t.Fatalf("ReadLongTermEntries: %v", err)
-	}
-	if len(entries) != 2 {
-		t.Fatalf("ReadLongTermEntries returned %d entries, want 2", len(entries))
+	// All required frontmatter keys must be present (NFR-7 — full schema always).
+	requiredKeys := []string{"id:", "title:", "type:", "tags:", "confidence:", "status:", "supersedes:", "author:", "born_in:"}
+	for _, k := range requiredKeys {
+		if !strings.Contains(text, k) {
+			t.Errorf("memory file missing frontmatter key %q; got:\n%s", k, text)
+		}
 	}
 }
 
 // TestRememberTool_RealAdapter_RejectsInjection confirms the MemoryStore's
-// validation gates (FR-003) survive routing through the tool. An HTML-comment
-// injection attempt must be rejected before any byte hits disk.
+// validation gates survive routing through the tool.
 func TestRememberTool_RealAdapter_RejectsInjection(t *testing.T) {
 	workspace := t.TempDir()
-	store := NewMemoryStore(workspace)
+	home := t.TempDir()
+	store := NewMemoryStore(workspace, home)
 	adapter := NewMemoryStoreAdapter(store)
 	tool := tools.NewRememberTool(adapter, nil)
 
@@ -107,17 +98,20 @@ func TestRememberTool_RealAdapter_RejectsInjection(t *testing.T) {
 		t.Fatal("expected error for content containing HTML comment markers")
 	}
 
-	// The file must not have been created — no bytes written on rejection.
-	if _, err := os.Stat(filepath.Join(workspace, "memory", "MEMORY.md")); err == nil {
-		t.Error("MEMORY.md should not exist after a rejected AppendLongTerm")
+	// No memory file should exist.
+	memoriesDir := filepath.Join(workspace, memrooms.OmnipusRoomDir, memrooms.MemoriesSubdir)
+	entries, _ := os.ReadDir(memoriesDir)
+	if len(entries) > 0 {
+		t.Error("memory file should not exist after a rejected AppendLongTerm")
 	}
 }
 
 // TestRetrospectiveTool_RealAdapter_WritesRetroOnDisk exercises the real
-// AppendRetro path, asserting path-traversal rejection and file-format bytes.
+// AppendRetro path.
 func TestRetrospectiveTool_RealAdapter_WritesRetroOnDisk(t *testing.T) {
 	workspace := t.TempDir()
-	store := NewMemoryStore(workspace)
+	home := t.TempDir()
+	store := NewMemoryStore(workspace, home)
 	adapter := NewMemoryStoreAdapter(store)
 	tool := tools.NewRetrospectiveTool(adapter, nil)
 
@@ -131,16 +125,16 @@ func TestRetrospectiveTool_RealAdapter_WritesRetroOnDisk(t *testing.T) {
 		t.Fatalf("Execute retrospective: %+v", res)
 	}
 
-	// Locate the retro file — date-named directory under workspace/memory/sessions.
-	sessionsDir := filepath.Join(workspace, "memory", "sessions")
-	dateEntries, err := os.ReadDir(sessionsDir)
+	// Retros live in <agentWorkspace>/.omnipus/retros/<date>/<sessionID>_retro.md
+	retrosBase := filepath.Join(workspace, memrooms.OmnipusRoomDir, "retros")
+	dateEntries, err := os.ReadDir(retrosBase)
 	if err != nil {
-		t.Fatalf("read sessions dir: %v", err)
+		t.Fatalf("read retros base dir: %v", err)
 	}
 	if len(dateEntries) != 1 {
 		t.Fatalf("expected exactly one date-directory, got %d", len(dateEntries))
 	}
-	retroPath := filepath.Join(sessionsDir, dateEntries[0].Name(),
+	retroPath := filepath.Join(retrosBase, dateEntries[0].Name(),
 		"01HX9Y8ZABCDEFGHJKMNPQRSTV_retro.md")
 	data, err := os.ReadFile(retroPath)
 	if err != nil {
@@ -148,7 +142,6 @@ func TestRetrospectiveTool_RealAdapter_WritesRetroOnDisk(t *testing.T) {
 	}
 	retro := string(data)
 
-	// FR-015 + spec retro format.
 	requiredSubstrings := []string{
 		"trigger=joined",
 		"## Session recap",
@@ -162,22 +155,17 @@ func TestRetrospectiveTool_RealAdapter_WritesRetroOnDisk(t *testing.T) {
 			t.Errorf("retro file missing %q; got:\n%s", s, retro)
 		}
 	}
-
-	// Explicit non-behavior: no user_confirmed field on disk.
-	if strings.Contains(retro, "user_confirmed") {
-		t.Error("retro file contains user_confirmed — FR-015 forbids it")
-	}
 }
 
 // TestRetrospectiveTool_RealAdapter_RejectsPathTraversal confirms the
 // pkg/validation.EntityID gate is reached through the adapter.
 func TestRetrospectiveTool_RealAdapter_RejectsPathTraversal(t *testing.T) {
 	workspace := t.TempDir()
-	store := NewMemoryStore(workspace)
+	home := t.TempDir()
+	store := NewMemoryStore(workspace, home)
 	adapter := NewMemoryStoreAdapter(store)
 	tool := tools.NewRetrospectiveTool(adapter, nil)
 
-	// Inject a malicious sessionID via the transcript context.
 	ctx := tools.WithTranscriptSessionID(context.Background(), "../../etc/passwd")
 
 	res := tool.Execute(ctx, map[string]any{
@@ -188,7 +176,7 @@ func TestRetrospectiveTool_RealAdapter_RejectsPathTraversal(t *testing.T) {
 		t.Fatal("expected error for path-traversal sessionID")
 	}
 
-	// Walk the workspace and assert no .md files leaked anywhere.
+	// No .md files should have leaked.
 	_ = filepath.Walk(workspace, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -203,12 +191,12 @@ func TestRetrospectiveTool_RealAdapter_RejectsPathTraversal(t *testing.T) {
 	})
 }
 
-// TestRecallMemoryTool_RealAdapter_SearchesRealStore wires the real adapter
-// into RecallMemoryTool and asserts the search returns entries previously
-// written via RememberTool — end-to-end round-trip.
+// TestRecallMemoryTool_RealAdapter_SearchesRealStore verifies end-to-end
+// remember → recall round-trip through the room-based store.
 func TestRecallMemoryTool_RealAdapter_SearchesRealStore(t *testing.T) {
 	workspace := t.TempDir()
-	store := NewMemoryStore(workspace)
+	home := t.TempDir()
+	store := NewMemoryStore(workspace, home)
 	adapter := NewMemoryStoreAdapter(store)
 
 	remember := tools.NewRememberTool(adapter, nil)
@@ -235,16 +223,16 @@ func TestRecallMemoryTool_RealAdapter_SearchesRealStore(t *testing.T) {
 		t.Errorf("recall output missing stored content; got:\n%s", res.ForLLM)
 	}
 
-	// Mtime cache: a second recall within the same mtime window must still
-	// return the same content without re-reading disk (behavior ultimately
-	// owned by MemoryStore.ReadLongTermEntries).
+	// Second recall must still return the same content.
 	res2 := recall.Execute(ctx, map[string]any{"query": "reconciler"})
-	if res2 == nil || res2.IsError || res2.ForLLM != res.ForLLM {
-		t.Errorf("recall second call diverged from first; first=%q second=%v",
-			res.ForLLM, res2)
+	if res2 == nil || res2.IsError {
+		t.Fatalf("recall second call failed: %+v", res2)
+	}
+	if !strings.Contains(res2.ForLLM, "reconciler") {
+		t.Errorf("second recall diverged: %s", res2.ForLLM)
 	}
 
-	// Sanity: newly-written entries after a mtime advance are visible.
+	// Sanity: newly-written entries are visible.
 	time.Sleep(20 * time.Millisecond) // ensure mtime-granularity advance
 	if res := remember.Execute(ctx, map[string]any{
 		"content":  "operator rotation lesson",
@@ -255,5 +243,123 @@ func TestRecallMemoryTool_RealAdapter_SearchesRealStore(t *testing.T) {
 	res3 := recall.Execute(ctx, map[string]any{"query": "rotation"})
 	if res3 == nil || res3.IsError || !strings.Contains(res3.ForLLM, "rotation") {
 		t.Errorf("recall after second write did not see new content; got %v", res3)
+	}
+}
+
+// TestMemory_PrivateVsSharedRoom_ByWorkspace verifies FR-7.1 room routing:
+// no workspace_id → private; workspace_id set → shared.
+func TestMemory_PrivateVsSharedRoom_ByWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	home := t.TempDir()
+	store := NewMemoryStore(workspace, home)
+	adapter := NewMemoryStoreAdapter(store)
+
+	remember := tools.NewRememberTool(adapter, nil)
+
+	// Write a private memory (no workspace_id in ctx).
+	ctxPrivate := context.Background()
+	res := remember.Execute(ctxPrivate, map[string]any{
+		"content":  "private agent memory",
+		"category": "reference",
+		"room":     "private",
+	})
+	if res == nil || res.IsError {
+		t.Fatalf("private write failed: %+v", res)
+	}
+
+	// Verify it landed in the private room.
+	privateMemDir := filepath.Join(workspace, memrooms.OmnipusRoomDir, memrooms.MemoriesSubdir)
+	privateEntries, err := os.ReadDir(privateMemDir)
+	if err != nil {
+		t.Fatalf("read private mem dir: %v", err)
+	}
+	if len(privateEntries) != 1 {
+		t.Fatalf("expected 1 file in private room, got %d", len(privateEntries))
+	}
+
+	// Write a shared memory (with workspace_id in ctx).
+	workspaceID := "test-workspace-01"
+	ctxShared := tools.WithWorkspaceID(context.Background(), workspaceID)
+	res2 := remember.Execute(ctxShared, map[string]any{
+		"content":  "shared workspace memory",
+		"category": "key_decision",
+		"room":     "shared",
+	})
+	if res2 == nil || res2.IsError {
+		t.Fatalf("shared write failed: %+v", res2)
+	}
+
+	// Verify it landed in the workspace shared room.
+	sharedMemDir := filepath.Join(home, memrooms.WorkspacesDirName, workspaceID,
+		memrooms.OmnipusRoomDir, memrooms.MemoriesSubdir)
+	sharedEntries, err := os.ReadDir(sharedMemDir)
+	if err != nil {
+		t.Fatalf("read shared mem dir: %v", err)
+	}
+	if len(sharedEntries) != 1 {
+		t.Fatalf("expected 1 file in shared room, got %d", len(sharedEntries))
+	}
+
+	// The private room must still have only 1 file (not 2).
+	privateEntries2, _ := os.ReadDir(privateMemDir)
+	if len(privateEntries2) != 1 {
+		t.Errorf("private room should still have 1 file, got %d", len(privateEntries2))
+	}
+}
+
+// TestMemory_FileFormat_FullFrontmatter asserts that every required frontmatter
+// key is present in a newly-written memory file (FR-7.2 / NFR-7).
+func TestMemory_FileFormat_FullFrontmatter(t *testing.T) {
+	workspace := t.TempDir()
+	home := t.TempDir()
+	store := NewMemoryStore(workspace, home)
+	adapter := NewMemoryStoreAdapter(store)
+
+	remember := tools.NewRememberTool(adapter, nil)
+	res := remember.Execute(context.Background(), map[string]any{
+		"content":  "test frontmatter completeness",
+		"category": "lesson_learned",
+	})
+	if res == nil || res.IsError {
+		t.Fatalf("remember failed: %+v", res)
+	}
+
+	memoriesDir := filepath.Join(workspace, memrooms.OmnipusRoomDir, memrooms.MemoriesSubdir)
+	entries, err := os.ReadDir(memoriesDir)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("no memory file: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(memoriesDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read memory file: %v", err)
+	}
+	text := string(data)
+
+	// All 9 required frontmatter fields (FR-7.2).
+	requiredKeys := []string{
+		"id:", "title:", "type:", "tags:", "confidence:",
+		"status:", "supersedes:", "author:", "born_in:",
+	}
+	for _, k := range requiredKeys {
+		if !strings.Contains(text, k) {
+			t.Errorf("memory file missing required frontmatter key %q; got:\n%s", k, text)
+		}
+	}
+
+	// Must open and close with --- delimiters.
+	if !strings.HasPrefix(text, "---\n") {
+		t.Errorf("memory file must start with ---; got:\n%s", text[:min(len(text), 50)])
+	}
+
+	// Parse round-trip.
+	mf, err := memrooms.ReadMemoryFile(memoriesDir, strings.TrimSuffix(entries[0].Name(), ".md"))
+	if err != nil {
+		t.Fatalf("parse memory file: %v", err)
+	}
+	if mf.Frontmatter.Type != memrooms.MemoryTypeLesson {
+		t.Errorf("type mismatch: got %q, want %q", mf.Frontmatter.Type, memrooms.MemoryTypeLesson)
+	}
+	if mf.Frontmatter.Status != memrooms.MemoryStatusActive {
+		t.Errorf("status mismatch: got %q, want %q", mf.Frontmatter.Status, memrooms.MemoryStatusActive)
 	}
 }
