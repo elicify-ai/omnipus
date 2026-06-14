@@ -86,11 +86,11 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 		cmd.Dir = opts.WorkDir
 	}
 	cmd.Env = d.buildEnv(opts.Env)
-	if opts.Input != "" {
-		cmd.Stdin = bytes.NewReader([]byte(opts.Input))
-	} else {
-		cmd.Stdin = bytes.NewReader(nil)
-	}
+	// M3: the prompt is delivered exactly once, via the `--prompt` CLI argument
+	// (see buildArgs). It MUST NOT also be written to stdin — feeding it on both
+	// channels makes opencode process the prompt twice. stdin is always an empty
+	// reader so the child does not block waiting on it.
+	cmd.Stdin = bytes.NewReader(nil)
 
 	pr, pw := io.Pipe()
 	cmd.Stdout = pw
@@ -180,7 +180,9 @@ func (d *OpencodeDriver) buildArgs(opts RunOptions) []string {
 		args = append(args, "--session", opts.RunID)
 	}
 	if opts.Input != "" {
-		// Pass prompt as positional arg or via --prompt flag.
+		// M3: the prompt is delivered ONLY here (the `--prompt` flag), never also
+		// on stdin — see Run(), where cmd.Stdin is an empty reader. Passing it on
+		// both channels caused opencode to process the prompt twice.
 		args = append(args, "--prompt", opts.Input)
 	}
 	return args

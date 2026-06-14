@@ -195,6 +195,100 @@ func TestBuildChildEnv_NilFallsBackToOsEnviron(t *testing.T) {
 	}
 }
 
+// TestOpencodeDriver_PromptDeliveredExactlyOnce is the M3 regression test.
+//
+// Before the fix the opencode driver fed opts.Input on BOTH cmd.Stdin AND the
+// `--prompt` CLI arg, so opencode processed the prompt twice. The prompt must be
+// delivered through exactly one channel. buildArgs supplies `--prompt`; Run sets
+// stdin to an empty reader. This test asserts the arg side carries the prompt
+// exactly once (the stdin side is covered by Run's empty-reader contract).
+func TestOpencodeDriver_PromptDeliveredExactlyOnce(t *testing.T) {
+	d := NewOpencodeDriver(nil)
+	const prompt = "do the thing"
+	args := d.buildArgs(RunOptions{Input: prompt})
+
+	flagCount := 0
+	occurrences := 0
+	for i, a := range args {
+		if a == "--prompt" {
+			flagCount++
+		}
+		if a == prompt {
+			occurrences++
+		}
+		// the value must immediately follow its flag
+		if a == "--prompt" {
+			if i+1 >= len(args) || args[i+1] != prompt {
+				t.Fatalf("--prompt flag not followed by the prompt value; args=%v", args)
+			}
+		}
+	}
+	if flagCount != 1 {
+		t.Fatalf("expected exactly one --prompt flag, got %d; args=%v", flagCount, args)
+	}
+	if occurrences != 1 {
+		t.Fatalf("prompt value appears %d times in args (must be exactly once — no double-prompt); args=%v", occurrences, args)
+	}
+
+	// An empty input must add neither the flag nor a stray value.
+	emptyArgs := d.buildArgs(RunOptions{Input: ""})
+	for _, a := range emptyArgs {
+		if a == "--prompt" {
+			t.Fatalf("empty input must not produce a --prompt flag; args=%v", emptyArgs)
+		}
+	}
+}
+
+// TestCodexDriver_TurnCompletedDoesNotEmitEnd is the M4 regression test (unit).
+//
+// Before the fix, every `turn.completed` event produced an EventKindEnd, so a
+// multi-turn codex run emitted multiple End signals and corrupted the streamed
+// transcript. turn.completed must be consumed (ok=false) — the single End is
+// synthesized once at true completion. This asserts the parseLine contract.
+func TestCodexDriver_TurnCompletedDoesNotEmitEnd(t *testing.T) {
+	d := NewCodexDriver(nil)
+	turnCount := 0
+	line := []byte(`{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}`)
+
+	ev, ok := d.parseLine(line, "run-x", &turnCount, defaultMaxTurns)
+	if ok {
+		t.Fatalf("turn.completed must be consumed (ok=false); got ok=true, ev=%+v", ev)
+	}
+	if ev.Kind == EventKindEnd {
+		t.Fatal("turn.completed must NOT emit EventKindEnd (M4) — End fires once at true completion")
+	}
+	if turnCount != 1 {
+		t.Fatalf("turn.completed must still increment the turn counter; got %d, want 1", turnCount)
+	}
+}
+
+// TestCodexDriver_MultiTurnYieldsSingleEnd is the M4 regression test (integration
+// over the offline parse path). A codex stream with TWO turn.completed events must
+// yield exactly ONE terminal End, synthesized at completion — not one per turn.
+func TestCodexDriver_MultiTurnYieldsSingleEnd(t *testing.T) {
+	stream := "" +
+		`{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"first"}}` + "\n" +
+		`{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}` + "\n" +
+		`{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"second"}}` + "\n" +
+		`{"type":"turn.completed","usage":{"input_tokens":12,"output_tokens":6}}` + "\n"
+
+	events := ParseCodexStreamJSON([]byte(stream), "run-multi")
+
+	endCount := 0
+	for _, ev := range events {
+		if ev.Kind == EventKindEnd {
+			endCount++
+		}
+	}
+	if endCount != 1 {
+		t.Fatalf("multi-turn codex stream must yield exactly ONE End (M4); got %d. events=%+v", endCount, events)
+	}
+	// The single End must be the LAST event (true completion).
+	if events[len(events)-1].Kind != EventKindEnd {
+		t.Fatalf("the terminal End must be the final event; last=%+v", events[len(events)-1])
+	}
+}
+
 func envContainsKey(env []string, key string) bool {
 	for _, kv := range env {
 		if eq := strings.IndexByte(kv, '='); eq > 0 && kv[:eq] == key {

@@ -46,7 +46,7 @@ func ParseCodexStreamJSON(data []byte, runID string) []RunEvent {
 
 	ctx := context.Background()
 	out := make(chan RunEvent, 256)
-	streamParser(ctx, bytes.NewReader(data), runID, func(raw []byte) (RunEvent, bool) {
+	emittedFatal := streamParser(ctx, bytes.NewReader(data), runID, func(raw []byte) (RunEvent, bool) {
 		return d.parseLine(raw, runID, &turnCount, defaultMaxTurns)
 	}, out)
 	close(out)
@@ -55,6 +55,13 @@ func ParseCodexStreamJSON(data []byte, runID string) []RunEvent {
 			ev.Timestamp = time.Now().UTC()
 		}
 		events = append(events, ev)
+	}
+	// M4: turn.completed no longer emits a terminal End (it fires once per turn).
+	// The single End is synthesized when the codex stream drains cleanly — mirror
+	// the live driver's behaviour so the offline parse path produces exactly one
+	// End at true completion.
+	if !emittedFatal {
+		events = append(events, RunEvent{Kind: EventKindEnd, RunID: runID, Timestamp: time.Now().UTC()})
 	}
 	return events
 }

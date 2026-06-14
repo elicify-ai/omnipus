@@ -204,6 +204,12 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 				Timestamp: time.Now().UTC(),
 				Err:       &ErrorEvent{Message: "run exceeded timeout (FR-5.4)", Fatal: true},
 			}
+		} else if !emittedFatal && runCtx.Err() == nil {
+			// M4: emit the single terminal End once, at true completion — the
+			// codex stream drained cleanly with no fatal error. turn.completed no
+			// longer emits End (it fires once per turn), so this is the only place
+			// a successful End is produced.
+			ch <- RunEvent{Kind: EventKindEnd, RunID: runID, Timestamp: time.Now().UTC()}
 		}
 	}()
 
@@ -286,6 +292,12 @@ func (d *CodexDriver) parseLine(
 		return RunEvent{}, false
 
 	case "turn.completed":
+		// M4: `codex exec --json` emits one turn.completed PER TURN — it is NOT the
+		// terminal signal for the run. Emitting EventKindEnd here fired a spurious
+		// "end" after every turn and corrupted the streamed transcript. The single
+		// terminal End is now emitted once when the stdout stream is exhausted (see
+		// Run() and ParseCodexStreamJSON). Here we only count the turn and enforce
+		// the cap; the event itself is consumed (ok=false).
 		*turnCount++
 		if maxTurns > 0 && *turnCount > maxTurns {
 			slog.Warn("runner/codex: turn cap exceeded — terminating", "run_id", runID,
@@ -297,7 +309,7 @@ func (d *CodexDriver) parseLine(
 				Err:   &ErrorEvent{Message: fmt.Sprintf("turn cap exceeded: %d turns (max %d)", *turnCount, maxTurns), Fatal: true},
 			}, true
 		}
-		return RunEvent{Kind: EventKindEnd, RunID: runID}, true
+		return RunEvent{}, false
 
 	case "error":
 		msg := ev.Message
