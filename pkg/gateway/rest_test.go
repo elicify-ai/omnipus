@@ -30,9 +30,10 @@ import (
 )
 
 // seedTestAgents seeds Agents.List for handler tests with an `omnipus-system`
-// entry and the 5 core agents. The system entry exercises the API contract for
-// AgentType=system (locked, Type="system" surfaced in GET responses); production
-// SeedConfig only seeds the 5 core agents — it does NOT inject omnipus-system —
+// entry and the 4 base core agents (Spec-3: Mia·Assistant, Jim·Orchestrator,
+// Ray·Scout, Ava·Builder; Max retired). The system entry exercises the API
+// contract for AgentType=system (locked, Type="system" surfaced in GET responses);
+// production SeedConfig only seeds the 4 core agents — it does NOT inject omnipus-system —
 // so this seeding is a handler-shape fixture, not a mirror of production
 // startup. The synthetic system entry is here because the API contract still
 // honors AgentType=system if a config supplies one (operator-supplied or legacy).
@@ -59,7 +60,7 @@ func seedTestAgents(cfg *config.Config) {
 			},
 		}, cfg.Agents.List...)
 	}
-	// Seed core agents (jim, ava, mia, ray, max) — idempotent.
+	// Seed base core agents (mia, jim, ava, ray; Spec-3: max retired) — idempotent.
 	coreagent.SeedConfig(cfg)
 }
 
@@ -80,8 +81,8 @@ func (m *restMockProvider) GetDefaultModel() string { return "test-model" }
 
 // newTestRestAPI creates a restAPI with a minimal AgentLoop for unit testing.
 // OMNIPUS_BEARER_TOKEN is unset so auth is disabled (development mode).
-// The config is seeded with omnipus-system and all 5 core agents (jim, ava, mia, ray, max)
-// to mirror the production startup path in gateway.go.
+// The config is seeded with omnipus-system and the 4 base core agents (mia, jim, ava, ray;
+// Spec-3: max retired) to mirror the production startup path in gateway.go.
 func newTestRestAPI(t *testing.T) (*restAPI, func()) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "") // disable auth in tests
