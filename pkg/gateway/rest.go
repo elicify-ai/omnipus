@@ -4593,6 +4593,16 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	// Overlay per-instance surface (Spec-2 FR-2.5): instance_id and identity.
+	// For each list entry that maps to a configured channel instance, expose the
+	// map key (instance_id) and the persisted routing identity so the SPA can
+	// address per-instance configure/enable/routing endpoints and render the
+	// identity override without re-deriving it. In v0.1 cap-1 the instance key
+	// equals the channel type, so the entry id matches the map key by type; we
+	// look up the instance by matching Type to keep this correct if a future map
+	// key diverges from the type. webchat is built-in and has no instance entry.
+	applyInstanceOverlay(channels, cfg.Channels)
+
 	// Overlay degraded state from the runtime channel manager. Channels that
 	// failed to construct at startup are marked degraded=true with the init
 	// error as the reason. whatsapp_native failures map to the "whatsapp" entry
@@ -4653,6 +4663,68 @@ func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.Chan
 			channelList[i].Degraded = boolPtr(true)
 			channelList[i].DegradedReason = &r
 		}
+	}
+}
+
+// applyInstanceOverlay populates instance_id and identity on each list entry
+// that maps to a configured channel instance (Spec-2 FR-2.5). It is a pure
+// function extracted from HandleChannels so it can be unit-tested without a full
+// REST stack.
+//
+// Matching rule: an entry maps to an instance when the instance's Type equals
+// the entry id (the v0.1 cap-1 contract: instance key == channel type). The
+// instance_id surfaced is the actual config map key, so the SPA addresses the
+// right per-instance endpoint even if a future key diverges from the type.
+// Entries with no configured instance (e.g. the built-in webchat, or a channel
+// type the operator has never touched) are left untouched.
+func applyInstanceOverlay(channelList []gen.ChannelEntry, instances map[string]config.ChannelInstanceConfig) {
+	if len(instances) == 0 {
+		return
+	}
+	// Index instances by type → (key, identity) for an O(1) lookup per entry.
+	type instMeta struct {
+		key      string
+		identity *config.ChannelIdentity
+	}
+	byType := make(map[string]instMeta, len(instances))
+	for key, inst := range instances {
+		t := strings.ToLower(strings.TrimSpace(inst.Type))
+		if t == "" {
+			t = strings.ToLower(strings.TrimSpace(key))
+		}
+		byType[t] = instMeta{key: key, identity: inst.Identity}
+	}
+	for i := range channelList {
+		meta, ok := byType[strings.ToLower(string(channelList[i].Id))]
+		if !ok {
+			continue
+		}
+		instanceID := meta.key
+		channelList[i].InstanceId = &instanceID
+		if meta.identity == nil {
+			continue
+		}
+		kind := strings.ToLower(strings.TrimSpace(meta.identity.Kind))
+		// Only surface a well-formed identity; a malformed persisted identity is
+		// ignored rather than emitting a schema-invalid entry.
+		var entryKind gen.ChannelEntryIdentityKind
+		switch kind {
+		case "agent":
+			entryKind = gen.ChannelEntryIdentityKindAgent
+		case "user":
+			entryKind = gen.ChannelEntryIdentityKindUser
+		default:
+			continue
+		}
+		ident := struct { // not-wire-format: composite literal of the generated gen.ChannelEntry.Identity anonymous field type — not a parallel wire type
+			Id   *string                      `json:"id,omitempty"`
+			Kind gen.ChannelEntryIdentityKind `json:"kind"`
+		}{Kind: entryKind}
+		if id := strings.TrimSpace(meta.identity.ID); id != "" {
+			idCopy := id
+			ident.Id = &idCopy
+		}
+		channelList[i].Identity = &ident
 	}
 }
 
@@ -4839,9 +4911,23 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 			ch = map[string]any{}
 			channels[channelID] = ch
 		}
+		// Persist the type discriminator (Spec-2 FR-2.5). In v0.1 cap-1 the map
+		// key equals the channel type, so write it explicitly rather than relying
+		// solely on load-time normalizeChannelMap inference — this keeps the
+		// on-disk instance self-describing and makes cap-1 validation deterministic.
+		ch["type"] = channelID
 		ch["enabled"] = enabled
 		return nil
 	}); err != nil {
+		// Cap-1 (FR-2.3): a config that now holds >1 instance of a type (e.g. a
+		// pre-existing hand-edited duplicate surfaced by the load-time validator)
+		// is a client-correctable constraint violation, not a server fault —
+		// return a clean 422 "one-per-type" rather than an opaque 500.
+		if errors.Is(err, config.ErrChannelsCap1Violated) {
+			slog.Warn("rest: set channel enabled rejected by cap-1", "channel", channelID, "enabled", enabled, "error", err)
+			jsonErr(w, http.StatusUnprocessableEntity, "one-per-type in v0.1.0: "+err.Error())
+			return
+		}
 		slog.Error("rest: set channel enabled", "channel", channelID, "enabled", enabled, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
@@ -4948,6 +5034,58 @@ func redactChannelConfig(channelID string, cfg map[string]any) map[string]any {
 	return out
 }
 
+// validateChannelIdentity validates the per-instance routing identity supplied
+// in a configure request body (Spec-2 US-5 / FR-2.9). It mirrors the
+// ChannelIdentity contract: required "kind" in {agent,user}; "id" required and
+// non-empty when kind=="agent" (the target agent), forbidden/ignored otherwise;
+// no unknown fields. Returns "" when valid, or a human-readable reason.
+func validateChannelIdentity(raw any) string {
+	obj, ok := raw.(map[string]any)
+	if !ok {
+		return "must be an object with a \"kind\" field"
+	}
+	for k := range obj {
+		switch k {
+		case "kind", "id":
+		default:
+			return fmt.Sprintf("unknown field %q", k)
+		}
+	}
+	kindRaw, present := obj["kind"]
+	if !present {
+		return "\"kind\" is required"
+	}
+	kind, isStr := kindRaw.(string)
+	if !isStr {
+		return "\"kind\" must be a string"
+	}
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	switch kind {
+	case "agent":
+		idRaw, hasID := obj["id"]
+		if !hasID {
+			return "\"id\" is required when kind is \"agent\""
+		}
+		idStr, idIsStr := idRaw.(string)
+		if !idIsStr {
+			return "\"id\" must be a string"
+		}
+		if strings.TrimSpace(idStr) == "" {
+			return "\"id\" must be non-empty when kind is \"agent\""
+		}
+	case "user":
+		// id is optional and ignored for user-kind.
+		if idRaw, hasID := obj["id"]; hasID {
+			if _, idIsStr := idRaw.(string); !idIsStr {
+				return "\"id\" must be a string"
+			}
+		}
+	default:
+		return fmt.Sprintf("\"kind\" must be \"agent\" or \"user\", got %q", kind)
+	}
+	return ""
+}
+
 // getChannelConfig handles GET /api/v1/channels/{id}.
 // Returns the channel's config with credential fields redacted.
 func (a *restAPI) getChannelConfig(w http.ResponseWriter, channelID string) {
@@ -4971,6 +5109,25 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	}
 	// Remove reserved fields that must not be set here.
 	delete(updates, "enabled")
+	// instance_id is a URL/addressing hint in the request body; the {id} path
+	// segment is the authoritative instance key in v0.1 (cap-1/type). Never
+	// persist it as a config field (it is not part of ChannelInstanceConfig).
+	delete(updates, "instance_id")
+
+	// Validate the optional per-instance identity (Spec-2 US-5 / FR-2.9) before
+	// any write. A malformed identity must be rejected up front (422) rather than
+	// silently dropped, otherwise identity-based routing would be a no-op without
+	// the operator ever knowing. The field is persisted as-is and later wired
+	// into ResolveRoute for inbound messages on this instance.
+	if raw, present := updates["identity"]; present {
+		if raw == nil {
+			// Explicit null clears the identity override.
+			delete(updates, "identity")
+		} else if errMsg := validateChannelIdentity(raw); errMsg != "" {
+			jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid identity: %s", errMsg))
+			return
+		}
+	}
 
 	// SEC-23 / #289: route secret fields into the encrypted credential store and
 	// persist only their <field>_ref in config.json. Every channel constructor
@@ -5023,6 +5180,10 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		for k, v := range updates {
 			ch[k] = v
 		}
+		// Persist the type discriminator (Spec-2 FR-2.5): the map key equals the
+		// channel type in v0.1 cap-1, so record it explicitly so the on-disk
+		// instance is self-describing and cap-1 validation is deterministic.
+		ch["type"] = channelID
 		// Invariant (#289/SEC-23): a known secret field is never stored inline in
 		// config.json — it lives only in the credential store via its <field>_ref.
 		// This also scrubs any stale plaintext left by the pre-#289 blind merge.
@@ -5033,6 +5194,15 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		updatedCh = ch
 		return nil
 	}); err != nil {
+		// Cap-1 (FR-2.3): surface a >1-instance-per-type violation as a clean 422
+		// "one-per-type" rather than an opaque 500. Note the credential write above
+		// has already committed; the config write is reverted (the refresh failed),
+		// so a retry after the operator removes the duplicate succeeds.
+		if errors.Is(err, config.ErrChannelsCap1Violated) {
+			slog.Warn("rest: configure channel rejected by cap-1", "channel", channelID, "error", err)
+			jsonErr(w, http.StatusUnprocessableEntity, "one-per-type in v0.1.0: "+err.Error())
+			return
+		}
 		slog.Error("rest: configure channel", "channel", channelID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return

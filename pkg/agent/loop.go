@@ -336,6 +336,7 @@ const (
 	metadataKeyAccountID      = "account_id"
 	metadataKeyGuildID        = "guild_id"
 	metadataKeyTeamID         = "team_id"
+	metadataKeyInstanceID     = "instance_id"
 	metadataKeyParentPeerKind = "parent_peer_kind"
 	metadataKeyParentPeerID   = "parent_peer_id"
 )
@@ -3740,6 +3741,7 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		}
 	}
 
+	instanceID := inboundInstanceID(msg)
 	route := registry.ResolveRoute(routing.RouteInput{
 		Channel:    msg.Channel,
 		AccountID:  inboundMetadata(msg, metadataKeyAccountID),
@@ -3747,6 +3749,8 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		ParentPeer: extractParentPeer(msg),
 		GuildID:    inboundMetadata(msg, metadataKeyGuildID),
 		TeamID:     inboundMetadata(msg, metadataKeyTeamID),
+		InstanceID: instanceID,
+		Identity:   al.resolveInboundIdentity(instanceID),
 	})
 
 	agent, ok := registry.GetAgent(route.AgentID)
@@ -6898,6 +6902,40 @@ func inboundMetadata(msg bus.InboundMessage, key string) string {
 		return ""
 	}
 	return msg.Metadata[key]
+}
+
+// inboundInstanceID returns the channel-instance key a message arrived on
+// (Spec-2 FR-2.5). Channels MAY tag the instance explicitly via the
+// "instance_id" metadata key; in v0.1 (cap-1/type) the instance key equals the
+// channel type, so an untagged message falls back to msg.Channel. The result is
+// lower-cased to match the config map keys (which are channel-type names).
+func inboundInstanceID(msg bus.InboundMessage) string {
+	if id := strings.TrimSpace(inboundMetadata(msg, metadataKeyInstanceID)); id != "" {
+		return strings.ToLower(id)
+	}
+	return strings.ToLower(strings.TrimSpace(msg.Channel))
+}
+
+// resolveInboundIdentity returns the persisted routing identity for the channel
+// instance a message arrived on (Spec-2 US-5 / FR-2.9), or nil when the instance
+// has no identity override configured. The identity selects how an inbound
+// message is attributed/routed: kind "agent" binds the connection to a specific
+// agent; kind "user" (or no identity) leaves the normal binding cascade in
+// effect. Returns a copy so the caller never mutates the live config.
+func (al *AgentLoop) resolveInboundIdentity(instanceID string) *config.ChannelIdentity {
+	if instanceID == "" {
+		return nil
+	}
+	cfg := al.GetConfig()
+	if cfg == nil || cfg.Channels == nil {
+		return nil
+	}
+	inst, ok := cfg.Channels[instanceID]
+	if !ok || inst.Identity == nil {
+		return nil
+	}
+	id := *inst.Identity
+	return &id
 }
 
 // extractParentPeer extracts the parent peer (reply-to) from inbound message metadata.

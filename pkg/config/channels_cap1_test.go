@@ -1,0 +1,80 @@
+package config
+
+import (
+	"errors"
+	"testing"
+)
+
+// TestValidateChannelsCap1_SingleInstanceAccepted is the FR-2.3 happy path: a map
+// with one instance per type passes (no error). A valid single-instance config
+// must NOT be rejected.
+func TestValidateChannelsCap1_SingleInstanceAccepted(t *testing.T) {
+	channels := map[string]ChannelInstanceConfig{
+		"telegram": {Type: "telegram", Enabled: true},
+		"discord":  {Type: "discord", Enabled: false},
+	}
+	if err := ValidateChannelsCap1(channels); err != nil {
+		t.Fatalf("ValidateChannelsCap1 rejected a valid one-per-type map: %v", err)
+	}
+}
+
+// TestValidateChannelsCap1_EmptyAccepted confirms an empty/nil map is valid.
+func TestValidateChannelsCap1_EmptyAccepted(t *testing.T) {
+	if err := ValidateChannelsCap1(nil); err != nil {
+		t.Fatalf("nil channels map should be valid, got: %v", err)
+	}
+	if err := ValidateChannelsCap1(map[string]ChannelInstanceConfig{}); err != nil {
+		t.Fatalf("empty channels map should be valid, got: %v", err)
+	}
+}
+
+// TestValidateChannelsCap1_DuplicateTypeRejected covers FR-2.3 / US-2: two
+// instances of the same type violate the cap and the error wraps the sentinel
+// (so the gateway can map it to a 422).
+func TestValidateChannelsCap1_DuplicateTypeRejected(t *testing.T) {
+	channels := map[string]ChannelInstanceConfig{
+		"telegram":   {Type: "telegram", Enabled: true},
+		"telegram-2": {Type: "telegram", Enabled: true},
+	}
+	err := ValidateChannelsCap1(channels)
+	if err == nil {
+		t.Fatal("ValidateChannelsCap1 accepted two telegram instances; want cap-1 violation")
+	}
+	if !errors.Is(err, ErrChannelsCap1Violated) {
+		t.Fatalf("error does not wrap ErrChannelsCap1Violated: %v", err)
+	}
+}
+
+// TestNormalizeChannelMap_PopulatesTypeFromKey confirms an instance written
+// without an explicit type (e.g. by an early REST write) is normalized so its
+// Type equals the map key — which keeps cap-1 counting correct.
+func TestNormalizeChannelMap_PopulatesTypeFromKey(t *testing.T) {
+	in := map[string]ChannelInstanceConfig{
+		"telegram": {Enabled: true}, // no Type set
+	}
+	out := normalizeChannelMap(in)
+	inst, ok := out["telegram"]
+	if !ok {
+		t.Fatal("telegram instance dropped by normalizeChannelMap")
+	}
+	if inst.Type != "telegram" {
+		t.Errorf("Type = %q, want 'telegram' (inferred from map key)", inst.Type)
+	}
+	// And the normalized map passes cap-1 with one instance.
+	if err := ValidateChannelsCap1(out); err != nil {
+		t.Errorf("normalized single instance failed cap-1: %v", err)
+	}
+}
+
+// TestChannelInstanceConfig_IdentityRoundTrips confirms the identity field
+// (FR-2.5 / US-5) survives a JSON round-trip through the instance config.
+func TestChannelInstanceConfig_IdentityRoundTrips(t *testing.T) {
+	inst := ChannelInstanceConfig{
+		Type:     "telegram",
+		Enabled:  true,
+		Identity: &ChannelIdentity{Kind: "agent", ID: "concierge"},
+	}
+	if inst.Identity == nil || inst.Identity.Kind != "agent" || inst.Identity.ID != "concierge" {
+		t.Fatalf("identity not retained on the instance: %+v", inst.Identity)
+	}
+}

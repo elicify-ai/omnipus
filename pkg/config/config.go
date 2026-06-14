@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	mathrand "math/rand"
@@ -1310,14 +1311,29 @@ func normalizeChannelMap(channels map[string]ChannelInstanceConfig) map[string]C
 	return out
 }
 
+// ErrChannelsCap1Violated is the sentinel wrapped by ValidateChannelsCap1 when
+// more than one instance of a channel type is present (Spec-2 FR-2.3). Callers
+// (e.g. the gateway) detect it with errors.Is to map the failure onto a clean
+// 422 "one-per-type" response rather than an opaque 500.
+var ErrChannelsCap1Violated = errors.New("channels: cap-1/type violated (v0.1 allows one instance per type)")
+
 // ValidateChannelsCap1 checks that there is at most one instance per channel
-// type in the map. Returns an error listing all duplicate types. Called at
-// config load time so a hand-edited config.json with two telegram instances is
-// rejected early rather than silently running the second.
+// type in the map. Returns an error wrapping ErrChannelsCap1Violated and listing
+// all duplicate types. Called at config load time so a hand-edited config.json
+// with two telegram instances is rejected early rather than silently running the
+// second (FR-2.3: enforced at config LOAD, not just the API).
 func ValidateChannelsCap1(channels map[string]ChannelInstanceConfig) error {
 	typeCounts := make(map[string]int, len(channels))
-	for _, inst := range channels {
-		typeCounts[inst.Type]++
+	for key, inst := range channels {
+		// Effective type: the explicit Type field, or the map key when absent
+		// (the same inference normalizeChannelMap applies). Counting by effective
+		// type lets this run on a RAW map and still catch a duplicate hidden under
+		// a non-type key (e.g. "telegram-2" with type:telegram).
+		t := strings.TrimSpace(inst.Type)
+		if t == "" {
+			t = strings.TrimSpace(key)
+		}
+		typeCounts[t]++
 	}
 	var dups []string
 	for t, n := range typeCounts {
@@ -1327,7 +1343,7 @@ func ValidateChannelsCap1(channels map[string]ChannelInstanceConfig) error {
 	}
 	if len(dups) != 0 {
 		sort.Strings(dups)
-		return fmt.Errorf("channels: cap-1/type violated (v0.1 allows one instance per type): %s", strings.Join(dups, ", "))
+		return fmt.Errorf("%w: %s", ErrChannelsCap1Violated, strings.Join(dups, ", "))
 	}
 	return nil
 }
@@ -2617,16 +2633,20 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	// Migrate legacy channel config fields to new unified structures
 	cfg.migrateChannelConfigs()
 
-	// Normalize channel map: populate Type from map key when absent, drop unknown types.
 	if cfg.Channels == nil {
 		cfg.Channels = make(map[string]ChannelInstanceConfig)
 	}
-	cfg.Channels = normalizeChannelMap(cfg.Channels)
-
-	// Cap-1 validation: reject configs with >1 instance per channel type.
+	// Cap-1 validation (FR-2.3): reject configs with >1 instance per channel type.
+	// Run on the RAW map BEFORE normalizeChannelMap drops unknown keys — otherwise
+	// a hand-edited duplicate under a non-type key (e.g. "telegram-2" with
+	// type:telegram) would be silently dropped rather than rejected. The check
+	// counts by effective type (the Type field, or the map key when Type is empty).
 	if err := ValidateChannelsCap1(cfg.Channels); err != nil {
 		return nil, err
 	}
+
+	// Normalize channel map: populate Type from map key when absent, drop unknown types.
+	cfg.Channels = normalizeChannelMap(cfg.Channels)
 
 	// Merge Omnipus channel_policies routing rules into Bindings.
 	cfg.MergeChannelPoliciesIntoBindings()

@@ -15,6 +15,16 @@ type RouteInput struct {
 	ParentPeer *RoutePeer
 	GuildID    string
 	TeamID     string
+	// InstanceID is the channel-instance key the message arrived on. In v0.1
+	// (cap-1/type) this equals the channel type. Carried so identity-based
+	// routing can address the right instance once v0.3 lifts the cap. (FR-2.5)
+	InstanceID string
+	// Identity is the per-instance routing identity (Spec-2 US-5 / FR-2.9).
+	// When set with Kind=="agent" and a non-empty ID, the message is routed AS
+	// that agent, overriding the binding cascade. Kind=="user" (or a nil
+	// Identity) leaves the normal cascade in effect (peer→…→default). Populated
+	// by the agent loop from the inbound channel instance's persisted identity.
+	Identity *config.ChannelIdentity
 }
 
 // ResolvedRoute is the result of agent routing.
@@ -24,7 +34,7 @@ type ResolvedRoute struct {
 	AccountID      string
 	SessionKey     string
 	MainSessionKey string
-	MatchedBy      string // "binding.peer", "binding.peer.parent", "binding.guild", "binding.team", "binding.account", "binding.channel", "default"
+	MatchedBy      string // "identity.agent", "binding.peer", "binding.peer.parent", "binding.guild", "binding.team", "binding.account", "binding.channel", "default"
 }
 
 // RouteResolver determines which agent handles a message based on config bindings.
@@ -71,6 +81,21 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 			SessionKey:     sessionKey,
 			MainSessionKey: mainSessionKey,
 			MatchedBy:      matchedBy,
+		}
+	}
+
+	// Priority 0: Per-instance identity override (Spec-2 US-5 / FR-2.9).
+	// When the inbound channel instance carries identity{kind:agent,id:X}, the
+	// connection acts AS agent X — this overrides every binding. A user-kind
+	// identity (or no identity) leaves the normal cascade in effect: the message
+	// is attributed to the user and routed by the binding rules below, ending at
+	// the default agent. pickAgentID validates X against the agent list and logs
+	// a fallback to default if it is unknown, so a stale identity can never drop
+	// the message.
+	if input.Identity != nil {
+		kind := strings.ToLower(strings.TrimSpace(input.Identity.Kind))
+		if kind == "agent" && strings.TrimSpace(input.Identity.ID) != "" {
+			return choose(input.Identity.ID, "identity.agent")
 		}
 	}
 
