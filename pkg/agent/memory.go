@@ -139,6 +139,25 @@ type MemoryStore struct {
 	sigCache map[string][]minhash.Signature
 	// sigIDs maps room.Root → memory ID parallel to sigCache entries (same indices).
 	sigIDs map[string][]string
+
+	// now returns the current time used to stamp dedup links (minhash.jsonl) and
+	// access events (counters.jsonl). Defaults to time.Now().UTC(). It is an
+	// injectable clock so tests can assert exact, deterministic timestamps on
+	// persisted records instead of depending on wall-clock time at write (M6).
+	// Always returns UTC. Set via SetClock; never nil after NewMemoryStore.
+	now func() time.Time
+}
+
+// SetClock overrides the clock used to stamp persisted memory records
+// (minhash.jsonl dedup links, counters.jsonl access events) and retention
+// windows. Intended for deterministic tests. The supplied function's result is
+// normalised to UTC. Passing nil restores the default time.Now clock.
+func (ms *MemoryStore) SetClock(now func() time.Time) {
+	if now == nil {
+		ms.now = func() time.Time { return time.Now().UTC() }
+		return
+	}
+	ms.now = func() time.Time { return now().UTC() }
 }
 
 // NewMemoryStore creates a MemoryStore with the given agent workspace directory.
@@ -155,6 +174,7 @@ func NewMemoryStore(agentWorkspace, omnipusHome string) *MemoryStore {
 		indexCache:  make(map[string]*memindex.RoomIndex),
 		sigCache:    make(map[string][]minhash.Signature),
 		sigIDs:      make(map[string][]string),
+		now:         func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -208,8 +228,7 @@ func (ms *MemoryStore) ensureSigCacheLocked(room memrooms.Room) {
 	sigs := make([]minhash.Signature, 0, len(memories))
 	ids := make([]string, 0, len(memories))
 	for _, mf := range memories {
-		text := mf.Frontmatter.Title + " " + mf.Body
-		sig := minhash.Compute(text, minhash.DefaultNumPerm)
+		sig := minhash.Compute(memorySigText(mf.Frontmatter.Title, mf.Body), minhash.DefaultNumPerm)
 		sigs = append(sigs, sig)
 		ids = append(ids, mf.Frontmatter.ID)
 	}
@@ -217,23 +236,70 @@ func (ms *MemoryStore) ensureSigCacheLocked(room memrooms.Room) {
 	ms.sigIDs[room.Root] = ids
 }
 
-// checkAndRegisterSig checks if content is a near-duplicate of any known memory
-// in room. If it is, appends a NearDupRecord to minhash.jsonl and returns true.
-// If not, registers the new signature and returns false.
+// memorySigText composes the canonical text a memory's MinHash signature is
+// computed over. The SAME composition MUST be used everywhere a signature is
+// derived (cache build AND write-time check); otherwise the cached signature
+// (title+body) and the freshly computed check signature would shingle over
+// different inputs, so a re-derived signature could never match its own cache
+// entry — dedup would silently never fire (the title/body asymmetry bug, M2).
+func memorySigText(title, body string) string {
+	title = strings.TrimSpace(title)
+	body = strings.TrimSpace(body)
+	if title == "" {
+		return body
+	}
+	if body == "" {
+		return title
+	}
+	return title + " " + body
+}
+
+// checkAndRegisterSig checks if a memory (title+body) is a near-duplicate of any
+// known memory in room. If it is, appends a NearDupRecord to minhash.jsonl and
+// returns true. If not, registers the new signature and returns false.
 // MUST be called with ms.indexMu held.
-func (ms *MemoryStore) checkAndRegisterSigLocked(room memrooms.Room, id, content string) bool {
+//
+// The signature is computed over memorySigText(title, body) — the SAME
+// composition used to build the cache (ensureSigCacheLocked) so the inputs are
+// symmetric (M2: title/body asymmetry fix).
+//
+// A degenerate (all-zero) signature — produced for memories whose combined
+// title+body has fewer than 3 words — is never compared against the cache nor
+// registered for future comparison: every all-zero signature Jaccard-matches
+// every other all-zero signature at 1.0, which would falsely link unrelated
+// short memories (M2: all-zero signature fix).
+func (ms *MemoryStore) checkAndRegisterSigLocked(room memrooms.Room, id, title, body string) bool {
 	ms.ensureSigCacheLocked(room)
 
-	newSig := minhash.Compute(content, minhash.DefaultNumPerm)
+	newSig := minhash.Compute(memorySigText(title, body), minhash.DefaultNumPerm)
 	sigs := ms.sigCache[room.Root]
 	ids := ms.sigIDs[room.Root]
 
+	// Degenerate signatures (too-short text) carry no discriminating information.
+	// Skip dedup entirely and do not pollute the cache with an all-zero entry that
+	// would later false-match other short memories.
+	if newSig.IsZero() {
+		return false
+	}
+
 	for i, existing := range sigs {
+		// Never compare a memory against itself. The .md file is written to disk
+		// (AppendLongTermToScope) BEFORE this dedup check, and ensureSigCacheLocked
+		// builds the cache by scanning the memories dir — so on the first write of
+		// a room the just-written memory is already in the cache and would match
+		// itself at Jaccard 1.0, spuriously logging a self near-dup link (M2).
+		if ids[i] == id {
+			continue
+		}
+		if existing.IsZero() {
+			// A previously-registered short memory; never a meaningful match.
+			continue
+		}
 		if minhash.IsNearDup(newSig, existing, minhash.DefaultThreshold) {
 			existingID := ids[i]
 			j := minhash.Jaccard(newSig, existing)
 			rec := minhash.NearDupRecord{
-				TS:         time.Now().UTC(),
+				TS:         ms.now(),
 				NewID:      id,
 				ExistingID: existingID,
 				Jaccard:    j,
@@ -386,7 +452,7 @@ func (ms *MemoryStore) AppendLongTermToScope(content, category string, scope mem
 	// ri.Index(), Close() could close ri underneath us (use-after-close). Holding
 	// the lock across the index call keeps ri valid for its whole lifetime here.
 	ms.indexMu.Lock()
-	isDup := ms.checkAndRegisterSigLocked(room, id, trimmed)
+	isDup := ms.checkAndRegisterSigLocked(room, id, mf.Frontmatter.Title, trimmed)
 	// Wire into bleve index (FR-7.4): index unconditionally — even near-dups
 	// are indexed (we keep all .md files).
 	if ri := ms.roomIndexLocked(room); ri != nil {
@@ -494,7 +560,7 @@ func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memro
 					// actually surfaced — not for deduped or unreadable hits, which
 					// would over-count access frequency.
 					rec := memrooms.CounterRecord{
-						TS:       time.Now().UTC(),
+						TS:       ms.now(),
 						MemoryID: hit.ID,
 						Op:       memrooms.CounterOpAccess,
 						By:       agentID,
@@ -522,7 +588,7 @@ func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memro
 				scored = append(scored, scoredMemory{mf: mf, score: 0})
 				// Append access counter record for scan-fallback results (FR-7.5).
 				rec := memrooms.CounterRecord{
-					TS:       time.Now().UTC(),
+					TS:       ms.now(),
 					MemoryID: mf.Frontmatter.ID,
 					Op:       memrooms.CounterOpAccess,
 					By:       agentIDScan,
@@ -786,11 +852,12 @@ func (ms *MemoryStore) ReadRetros(daysBack int) ([]Retro, error) {
 		daysBack = 365
 	}
 	retrosBase := filepath.Join(ms.privateRoom.Root, "retros")
-	cutoff := time.Now().UTC().AddDate(0, 0, -daysBack)
+	now := ms.now()
+	cutoff := now.AddDate(0, 0, -daysBack)
 	var retros []Retro
 
 	for i := range daysBack {
-		date := time.Now().UTC().AddDate(0, 0, -i)
+		date := now.AddDate(0, 0, -i)
 		dateStr := date.Format("2006-01-02")
 		dayDir := filepath.Join(retrosBase, dateStr)
 		entries, err := os.ReadDir(dayDir)
@@ -808,6 +875,8 @@ func (ms *MemoryStore) ReadRetros(daysBack int) ([]Retro, error) {
 			retroPath := filepath.Join(dayDir, entry.Name())
 			data, err := os.ReadFile(retroPath)
 			if err != nil {
+				logger.WarnCF("agent.memory", "ReadRetros: skipping unreadable retro file",
+					map[string]any{"path": retroPath, "error": err.Error()})
 				continue
 			}
 			fileRetros := parseRetroFile(string(data))
@@ -831,7 +900,7 @@ func (ms *MemoryStore) SweepRetros(retentionDays int) (int, error) {
 		retentionDays = 0
 	}
 	retrosBase := filepath.Join(ms.privateRoom.Root, "retros")
-	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
+	cutoff := ms.now().AddDate(0, 0, -retentionDays)
 
 	entries, err := os.ReadDir(retrosBase)
 	if err != nil {

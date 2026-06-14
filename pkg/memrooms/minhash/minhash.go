@@ -49,6 +49,25 @@ const (
 // Signature is a MinHash signature: a fixed-length slice of minimum hash values.
 type Signature []uint64
 
+// IsZero reports whether the signature is degenerate: empty, or every element
+// is zero. Compute returns such a signature for text with fewer than 3 words
+// (no shingles). Two distinct short texts therefore both produce an all-zero
+// signature and would Jaccard-compare as identical (1.0) — a false positive.
+// Callers performing near-dup dedup MUST skip comparison against, or
+// registration of, a zero signature so unrelated short memories are never
+// linked as duplicates. (See pkg/agent/memory.go::checkAndRegisterSigLocked.)
+func (s Signature) IsZero() bool {
+	if len(s) == 0 {
+		return true
+	}
+	for _, v := range s {
+		if v != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // NearDupRecord is the frozen v0.1.0 schema for a minhash.jsonl near-dup link.
 // Append-only. Never delete records — v0.2 may prune, not v0.1.
 type NearDupRecord struct {
@@ -95,10 +114,15 @@ func Compute(text string, numPerm int) Signature {
 }
 
 // Jaccard estimates the Jaccard similarity between two Signatures.
-// Both must have the same length; panics if not.
+//
+// When the two signatures have different lengths (a programming error — all
+// signatures in a given store use the same DefaultNumPerm), Jaccard returns 0
+// rather than panicking. A panic here would crash the memory-write hot path on
+// a benign mismatch; treating incomparable signatures as "not similar" fails
+// safe (no false dedup) and is logged by the caller, not the library.
 func Jaccard(a, b Signature) float64 {
 	if len(a) != len(b) {
-		panic("minhash: Jaccard called with signatures of different lengths")
+		return 0
 	}
 	if len(a) == 0 {
 		return 0

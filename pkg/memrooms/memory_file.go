@@ -156,7 +156,11 @@ func ListMemoryIDs(memoriesDir string) ([]string, error) {
 	return ids, nil
 }
 
-// ScanMemories reads every MemoryFile in memoriesDir, skipping files that fail to parse.
+// ScanMemories reads every MemoryFile in memoriesDir, skipping files that fail
+// to read or parse. A directory-level read error is returned to the caller; a
+// per-file read/parse error does NOT abort the scan (one corrupt .md must not
+// hide every other memory) but is logged at WARN so the failure is observable
+// rather than silently swallowed (M7).
 func ScanMemories(memoriesDir string) ([]MemoryFile, error) {
 	entries, err := os.ReadDir(memoriesDir)
 	if err != nil {
@@ -173,10 +177,14 @@ func ScanMemories(memoriesDir string) ([]MemoryFile, error) {
 		path := filepath.Join(memoriesDir, e.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
+			logger.WarnCF("memrooms", "ScanMemories: skipping unreadable memory file",
+				map[string]any{"path": path, "error": err.Error()})
 			continue
 		}
 		mf, err := parseMemoryFile(string(data))
 		if err != nil {
+			logger.WarnCF("memrooms", "ScanMemories: skipping unparseable memory file",
+				map[string]any{"path": path, "error": err.Error()})
 			continue
 		}
 		out = append(out, mf)
