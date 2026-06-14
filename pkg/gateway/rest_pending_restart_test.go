@@ -20,6 +20,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/ctxkey"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 )
 
 // withAdminCtx returns a request with the admin role injected into context.
@@ -203,6 +204,69 @@ func TestHandlePendingRestart_GenuineChangeStillShows(t *testing.T) {
 	assert.EqualValues(t, 5000, found.AppliedValue, "applied (boot) value is the original port")
 }
 
+// TestHandlePendingRestart_HostChangeStillShows verifies that a real post-boot
+// edit to gateway.host (the bind address; "Bind address" in the UI) surfaces in
+// the diff — gateway.host is restart-gated like gateway.port because changing it
+// re-binds the listener, which can only happen safely on restart.
+func TestHandlePendingRestart_HostChangeStillShows(t *testing.T) {
+	applied := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"gateway": map[string]any{
+			"host":         "127.0.0.1",
+			"port":         float64(5000),
+			"preview_port": float64(5001),
+		},
+	}
+	// Persisted (on-disk) has gateway.host edited to 0.0.0.0 after boot.
+	persisted := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"gateway": map[string]any{
+			"host":         "0.0.0.0",
+			"port":         float64(5000),
+			"preview_port": float64(5001),
+		},
+	}
+	api := newPendingRestartAPI(t, applied, persisted)
+
+	w := callPendingRestart(t, api)
+	require.Equal(t, http.StatusOK, w.Code)
+	diffs := decodeDiffs(t, w.Body.Bytes())
+
+	var found *pendingRestartEntry
+	for i := range diffs {
+		if diffs[i].Key == string(config.GatewayHost) {
+			found = &diffs[i]
+		}
+	}
+	require.NotNil(t, found, "gateway.host change must appear in diff; got %+v", diffs)
+	assert.Equal(t, "0.0.0.0", found.PersistedValue, "persisted (disk) value is the edited host")
+	assert.Equal(t, "127.0.0.1", found.AppliedValue, "applied (boot) value is the original host")
+}
+
+// TestHandlePendingRestart_HostUnchangedNoPhantomDiff verifies that when the
+// bind host is the same on disk and at boot (the normal case — host is always
+// explicitly set), no phantom gateway.host diff is produced.
+func TestHandlePendingRestart_HostUnchangedNoPhantomDiff(t *testing.T) {
+	clean := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"gateway": map[string]any{
+			"host":         "127.0.0.1",
+			"port":         float64(5000),
+			"preview_port": float64(5001),
+		},
+	}
+	api := newPendingRestartAPI(t, clean, clean)
+
+	w := callPendingRestart(t, api)
+	require.Equal(t, http.StatusOK, w.Code)
+	diffs := decodeDiffs(t, w.Body.Bytes())
+
+	for _, d := range diffs {
+		assert.NotEqual(t, string(config.GatewayHost), d.Key,
+			"gateway.host must not appear when the bind host is unchanged; got %+v", diffs)
+	}
+}
+
 // TestHandlePendingRestart_DMScopeNeverPhantom is a focused guard: even when the
 // boot config explicitly sets dm_scope to the default value AND the disk omits
 // it, no diff appears. (Both sides normalize to "per-channel-peer".)
@@ -363,6 +427,40 @@ func TestHandlePendingRestart_MethodNotAllowed(t *testing.T) {
 			assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 		})
 	}
+}
+
+// TestRefreshConfigHotAppliesLogLevel verifies that a config save which changes
+// gateway.log_level is hot-applied immediately by refreshConfigAndRewireServices
+// (the config-reload path), rather than waiting for a manual restart. log_level
+// is intentionally NOT restart-gated — applying it live is the fix.
+//
+// newTestRestAPIWithHome wires an agentLoop with credStore == nil, so this
+// exercises the early-return (no-store) branch of refreshConfigAndRewireServices.
+func TestRefreshConfigHotAppliesLogLevel(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	// Force a known starting level distinct from the one we will load.
+	logger.SetLevel(logger.WARN)
+	require.Equal(t, logger.WARN, logger.GetLevel())
+
+	// Write a config.json (at the API's homePath) whose log_level is "debug".
+	cfgPath := api.configPath()
+	writeConfig(t, cfgPath, map[string]any{
+		"gateway": map[string]any{
+			"host":      "127.0.0.1",
+			"port":      float64(8080),
+			"log_level": "debug",
+		},
+	})
+
+	require.NoError(t, api.refreshConfigAndRewireServices(cfgPath))
+
+	assert.Equal(t, logger.DEBUG, logger.GetLevel(),
+		"refreshConfigAndRewireServices must hot-apply gateway.log_level")
+
+	// Restore the default level so the global logger state does not leak to
+	// other tests in the package.
+	t.Cleanup(func() { logger.SetLevel(logger.INFO) })
 }
 
 // TestGetAtPath_DottedPath verifies that getAtPath returns the correct value

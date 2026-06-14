@@ -46,6 +46,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/cron"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
+	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/media"
 	"github.com/dapicom-ai/omnipus/pkg/notifications"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
@@ -2402,6 +2403,10 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 			return fmt.Errorf("load config (no store): %w", err)
 		}
 		a.agentLoop.SwapConfig(newCfg)
+		// Hot-apply the log level: gateway.log_level is a hot-reload key (not
+		// restart-gated), so a Settings save must take effect immediately
+		// rather than waiting for a manual restart.
+		logger.SetLevelFromString(newCfg.Gateway.LogLevel)
 		return nil
 	}
 	newCfg, err := config.LoadConfigWithStore(configPath, a.credStore)
@@ -2427,6 +2432,10 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	// Atomically swap the config pointer so all subsequent requests see the
 	// new config with scrubbing fully re-armed.
 	a.agentLoop.SwapConfig(newCfg)
+	// Hot-apply the log level: gateway.log_level is a hot-reload key (not
+	// restart-gated), so a Settings save must take effect immediately
+	// rather than waiting for a manual restart.
+	logger.SetLevelFromString(newCfg.Gateway.LogLevel)
 	return nil
 }
 

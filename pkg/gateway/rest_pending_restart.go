@@ -38,6 +38,9 @@ var RestartGatedKeys = []config.ConfigKey{
 	config.SandboxAuditLog,
 	config.SandboxAllowedPaths,
 	config.SessionDMScope,
+	// Changing the bind host re-binds the listener (like the port), which can
+	// only happen safely on restart — so it is restart-gated like gateway.port.
+	config.GatewayHost,
 	config.GatewayPort,
 	// Preview listener fields require restart because changing a listener's bind
 	// address or port mid-process races with active connections (FR-027b, MR-02).
