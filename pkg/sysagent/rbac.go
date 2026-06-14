@@ -77,6 +77,9 @@ var toolPermissions = map[string]ToolPermission{
 	"system.skill.remove":  {MinRole: RoleAdmin},
 	"system.skill.search":  {MinRole: RoleViewer},
 	"system.skill.list":    {MinRole: RoleViewer},
+	// Skill authoring (FR-9.2): consent-gated writes that mutate the skills tree.
+	"system.skill.create": {MinRole: RoleAdmin},
+	"system.skill.edit":   {MinRole: RoleAdmin},
 
 	// MCP server management.
 	"system.mcp.add":    {MinRole: RoleOperator},

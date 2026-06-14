@@ -56,8 +56,8 @@ func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 			"system tool %q must register without error in metadata mode", tool.Name())
 	}
 	systemCount := reg.Count()
-	assert.Equal(t, 42, systemCount,
-		"systools.AllTools must produce exactly 42 system tools (see sysagent/tools/registry.go)")
+	assert.Equal(t, 44, systemCount,
+		"systools.AllTools must produce exactly 44 system tools (see sysagent/tools/registry.go)")
 
 	// Register general-builtin metadata (deps-free instances, never Execute()d).
 	generalToolList := tools.GeneralBuiltinMetadata()
@@ -74,8 +74,8 @@ func TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools(t *testing.T) {
 		"at least one general builtin must register successfully")
 
 	total := reg.Count()
-	assert.Greater(t, total, 42,
-		"central BuiltinRegistry must contain more than 42 tools after adding general builtins (SC-101)")
+	assert.Greater(t, total, 44,
+		"central BuiltinRegistry must contain more than 44 tools after adding general builtins (SC-101)")
 	assert.Equal(t, systemCount+generalRegistered, total,
 		"Count must equal systemCount + generalRegistered (no silent duplicates)")
 
@@ -117,8 +117,8 @@ func TestCentralBuiltinRegistry_NoDoubleCountSystemTools(t *testing.T) {
 			t.Logf("skipping system tool %q (err: %v)", tool.Name(), err)
 		}
 	}
-	assert.Equal(t, 42, reg.Count(),
-		"system tools registered once must produce exactly 42 entries — no double-count (Issue #350)")
+	assert.Equal(t, 44, reg.Count(),
+		"system tools registered once must produce exactly 44 entries — no double-count (Issue #350)")
 }
 
 // TestHandleToolsRegistry_WithCombinedRegistry verifies that HandleToolsRegistry

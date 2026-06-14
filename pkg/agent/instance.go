@@ -162,6 +162,11 @@ func NewAgentInstance(
 
 	if agentCfg != nil {
 		contextBuilder.WithAgentInfo(agentID, agentName)
+		// FR-9.4: install the per-agent skill allowlist so it is enforced at
+		// skill-resolution time (default-DENY). agentCfg.Skills is nil when the
+		// agent declares no allowlist → unrestricted; a non-nil list restricts
+		// resolution and progressive disclosure to exactly those skills.
+		contextBuilder.WithSkillAllowlist(agentCfg.Skills)
 	}
 
 	// Memory tools (FR-016, FR-017): register remember, recall_memory, and

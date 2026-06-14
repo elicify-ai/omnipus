@@ -78,6 +78,8 @@ func (*SkillInstallTool) Category() tools.ToolCategory { return tools.CategorySy
 func (*SkillRemoveTool) Category() tools.ToolCategory  { return tools.CategorySystem }
 func (*SkillSearchTool) Category() tools.ToolCategory  { return tools.CategorySystem }
 func (*SkillListTool) Category() tools.ToolCategory    { return tools.CategorySystem }
+func (*SkillCreateTool) Category() tools.ToolCategory  { return tools.CategorySystem }
+func (*SkillEditTool) Category() tools.ToolCategory    { return tools.CategorySystem }
 
 // System task tools
 

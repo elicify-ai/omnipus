@@ -45,11 +45,15 @@ func AllTools(d *Deps, navCb NavigateCallback) []tools.Tool {
 		NewChannelListTool(d),
 		NewChannelTestTool(d),
 
-		// Skill management (4)
+		// Skill management (6)
 		NewSkillInstallTool(d),
 		NewSkillRemoveTool(d),
 		NewSkillSearchTool(d),
 		NewSkillListTool(d),
+		// Skill authoring / self-improvement (Spec-6 U2): consent-gated +
+		// versioned writes. Editing a built-in produces a user override.
+		NewSkillCreateTool(d),
+		NewSkillEditTool(d),
 
 		// MCP server management (3)
 		NewMCPAddTool(d),

@@ -73,6 +73,12 @@ type SkillsLoader struct {
 	builtinSkills   string // builtin skills
 }
 
+// GlobalSkillsDir returns the global (user) skills directory used by this
+// loader (typically ~/.omnipus/skills). This is the directory the authoring
+// tools write to so that editing a built-in produces a user override rather
+// than mutating the shipped built-in in place.
+func (sl *SkillsLoader) GlobalSkillsDir() string { return sl.globalSkills }
+
 // SkillRoots returns all unique skill root directories used by this loader.
 // The order follows resolution priority: workspace > global > builtin.
 func (sl *SkillsLoader) SkillRoots() []string {
@@ -203,6 +209,15 @@ func (sl *SkillsLoader) LoadSkillsForContext(skillNames []string) string {
 }
 
 func (sl *SkillsLoader) BuildSkillsSummary() string {
+	return sl.BuildSkillsSummaryFunc(nil)
+}
+
+// BuildSkillsSummaryFunc renders the skills summary block, optionally filtered
+// by an allow predicate. When allow is non-nil, only skills for which
+// allow(name) is true are listed — this implements per-agent progressive
+// disclosure so an agent's system prompt advertises only its allowlisted skills
+// (FR-9.4). When allow is nil, every loaded skill is listed.
+func (sl *SkillsLoader) BuildSkillsSummaryFunc(allow func(name string) bool) string {
 	allSkills := sl.ListSkills()
 	if len(allSkills) == 0 {
 		return ""
@@ -210,20 +225,28 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 
 	var lines []string
 	lines = append(lines, "<skills>")
+	emitted := 0
 	for _, s := range allSkills {
+		if allow != nil && !allow(s.Name) {
+			continue
+		}
 		escapedName := escapeXML(s.Name)
 		escapedDesc := escapeXML(s.Description)
 		escapedPath := escapeXML(s.Path)
 
-		lines = append(lines, fmt.Sprintf("  <skill>"))
+		lines = append(lines, "  <skill>")
 		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapedName))
 		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapedDesc))
 		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapedPath))
 		lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source))
 		lines = append(lines, "  </skill>")
+		emitted++
 	}
 	lines = append(lines, "</skills>")
 
+	if emitted == 0 {
+		return ""
+	}
 	return strings.Join(lines, "\n")
 }
 
