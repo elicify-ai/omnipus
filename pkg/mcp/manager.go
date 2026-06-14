@@ -98,6 +98,72 @@ func loadEnvFile(path string) (map[string]string, error) {
 	return envVars, nil
 }
 
+// buildStdioServerEnv computes the environment slice for a spawned stdio MCP
+// server subprocess, applying the C7 secret-scrub and the documented override
+// semantics. It is extracted from ConnectServer so the scrub is unit-testable
+// at the integration level (a real spawn is not required to prove the leak is
+// closed).
+//
+// C7: Start from the SCRUBBED gateway environment, NOT the raw parent
+// environment. Seeding from os.Environ() would leak gateway secrets —
+// OMNIPUS_MASTER_KEY, OMNIPUS_KEY_FILE, OMNIPUS_BEARER_TOKEN, and any future
+// sensitive var — into every spawned MCP server subprocess. An MCP server is
+// third-party code; a malicious or compromised one could read the master key (a
+// total credential-store compromise) straight out of its own environment via
+// os.Getenv.
+//
+// sandbox.ScrubGatewayEnv() applies the same closed allowlist the hardened-exec
+// child path uses (allowedChildEnvKeys + the LC_*/XDG_*/OMNIPUS_CHILD_*
+// prefixes): PATH, HOME, USER, LOGNAME, SHELL, LANG, TZ, TMPDIR, TERM, and the
+// proxy vars all pass through — everything a generic stdio child legitimately
+// needs to locate binaries and write per-user caches — while unknown /
+// secret-bearing keys are stripped by default (fail-closed).
+//
+// Any value an MCP server genuinely needs beyond that allowlist must be declared
+// explicitly via the server's `env` / `envFile` config, which override these
+// base values (and an operator may use the OMNIPUS_CHILD_* rename escape hatch
+// the allowlist documents).
+func buildStdioServerEnv(name string, cfg config.MCPServerConfig) ([]string, error) {
+	// Build environment variables with proper override semantics.
+	// Use a map to ensure config variables override file variables.
+	envMap := make(map[string]string)
+
+	for _, e := range sandbox.ScrubGatewayEnv() {
+		if idx := strings.Index(e, "="); idx > 0 {
+			envMap[e[:idx]] = e[idx+1:]
+		}
+	}
+
+	// Load environment variables from file if specified.
+	if cfg.EnvFile != "" {
+		envVars, err := loadEnvFile(cfg.EnvFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load env file %s: %w", cfg.EnvFile, err)
+		}
+		for k, v := range envVars {
+			envMap[k] = v
+		}
+		logger.DebugCF("mcp", "Loaded environment variables from file",
+			map[string]any{
+				"server":    name,
+				"envFile":   cfg.EnvFile,
+				"var_count": len(envVars),
+			})
+	}
+
+	// Environment variables from config override those from file.
+	for k, v := range cfg.Env {
+		envMap[k] = v
+	}
+
+	// Convert map to slice.
+	env := make([]string, 0, len(envMap))
+	for k, v := range envMap {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+	return env, nil
+}
+
 // ServerConnection represents a connection to an MCP server
 type ServerConnection struct {
 	Name    string
@@ -316,64 +382,9 @@ func (m *Manager) ConnectServer(
 		// Create command with context
 		cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
 
-		// Build environment variables with proper override semantics
-		// Use a map to ensure config variables override file variables
-		envMap := make(map[string]string)
-
-		// C7: Start from the SCRUBBED gateway environment, not the raw parent
-		// environment. The previous code seeded envMap from cmd.Environ()
-		// (which, since cmd.Env was still nil at this point, returns the full
-		// os.Environ()). That leaked gateway secrets — OMNIPUS_MASTER_KEY,
-		// OMNIPUS_KEY_FILE, OMNIPUS_BEARER_TOKEN, and any future sensitive var —
-		// into every spawned MCP server subprocess. An MCP server is
-		// third-party code; a malicious or compromised one could read the
-		// master key (a total credential-store compromise) straight out of its
-		// own environment via os.Getenv.
-		//
-		// sandbox.ScrubGatewayEnv() applies the same closed allowlist the
-		// hardened-exec child path uses (allowedChildEnvKeys + the
-		// LC_*/XDG_*/OMNIPUS_CHILD_* prefixes): PATH, HOME, USER, LOGNAME,
-		// SHELL, LANG, TZ, TMPDIR, TERM, and the proxy vars all pass through —
-		// everything a generic stdio child legitimately needs to locate
-		// binaries and write per-user caches — while unknown / secret-bearing
-		// keys are stripped by default (fail-closed).
-		//
-		// Any value an MCP server genuinely needs beyond that allowlist must be
-		// declared explicitly via the server's `env` / `envFile` config below,
-		// which override these base values (and an operator may use the
-		// OMNIPUS_CHILD_* rename escape hatch the allowlist documents).
-		for _, e := range sandbox.ScrubGatewayEnv() {
-			if idx := strings.Index(e, "="); idx > 0 {
-				envMap[e[:idx]] = e[idx+1:]
-			}
-		}
-
-		// Load environment variables from file if specified
-		if cfg.EnvFile != "" {
-			envVars, err := loadEnvFile(cfg.EnvFile)
-			if err != nil {
-				return fmt.Errorf("failed to load env file %s: %w", cfg.EnvFile, err)
-			}
-			for k, v := range envVars {
-				envMap[k] = v
-			}
-			logger.DebugCF("mcp", "Loaded environment variables from file",
-				map[string]any{
-					"server":    name,
-					"envFile":   cfg.EnvFile,
-					"var_count": len(envVars),
-				})
-		}
-
-		// Environment variables from config override those from file
-		for k, v := range cfg.Env {
-			envMap[k] = v
-		}
-
-		// Convert map to slice
-		env := make([]string, 0, len(envMap))
-		for k, v := range envMap {
-			env = append(env, fmt.Sprintf("%s=%s", k, v))
+		env, err := buildStdioServerEnv(name, cfg)
+		if err != nil {
+			return err
 		}
 		cmd.Env = env
 

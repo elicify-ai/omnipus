@@ -62,7 +62,9 @@ var claudeBinName = "claude"
 // the call. A DENY therefore cannot veto the individual call — it can only
 // CANCEL the whole run (kill the process). Consent here is best-effort post-hoc
 // cancellation; the CLI's own sandbox plus the isolated worktree are the real
-// security boundary. This is one reason external-cli stays reserved in v0.1.0.
+// security boundary. external-cli is ACTIVE/wired in v0.1.0 (dispatch site:
+// pkg/agent/external_dispatch.go, driven from pkg/agent/subturn.go); only the
+// remote-a2a executor kind stays reserved (see runner/dispatch.go).
 type ClaudeDriver struct {
 	mu      sync.Mutex
 	cmd     *exec.Cmd
@@ -139,12 +141,16 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 	d.cancel = cancelFn
 	d.cmd = cmd
 
-	// Goroutine: pipe stderr lines to slog.
+	// Goroutine: pipe stderr lines to slog (Debug) AND retain a bounded tail so a
+	// non-zero exit can surface the real diagnostic at Warn/Error (see below).
+	stderrBuf := newStderrTail()
 	go func() {
 		defer func() { _ = stderrR.Close() }()
 		sc := newLineScanner(stderrR)
 		for sc.Scan() {
-			slog.Debug("runner/claude: stderr", "run_id", runID, "line", sc.Text())
+			line := sc.Text()
+			stderrBuf.add(line)
+			slog.Debug("runner/claude: stderr", "run_id", runID, "line", line)
 		}
 	}()
 
@@ -188,13 +194,28 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 		err := <-waitErr
 		// Suppress a second terminal error event when the stream parser already
 		// emitted a fatal error (avoids a duplicate error event to the caller).
-		if err != nil && runCtx.Err() == nil && !emittedFatal {
-			slog.Warn("runner/claude: process exited with error", "run_id", runID, "err", err)
-			ch <- RunEvent{
-				Kind:      EventKindError,
-				RunID:     runID,
-				Timestamp: time.Now().UTC(),
-				Err:       &ErrorEvent{Message: fmt.Sprintf("claude exited: %v", err), Fatal: true},
+		if err != nil && runCtx.Err() == nil {
+			// Surface the captured stderr tail at Warn so operators can diagnose
+			// the real cause (auth failure, CLI usage error) instead of a bare
+			// "exited: status 1". Logged even when emittedFatal, since the fatal
+			// stream event may carry a less specific message than stderr.
+			if tail := stderrBuf.String(); tail != "" {
+				slog.Warn("runner/claude: process exited with error",
+					"run_id", runID, "err", err, "stderr_tail", tail)
+			} else {
+				slog.Warn("runner/claude: process exited with error", "run_id", runID, "err", err)
+			}
+			if !emittedFatal {
+				msg := fmt.Sprintf("claude exited: %v", err)
+				if tail := stderrBuf.String(); tail != "" {
+					msg = fmt.Sprintf("claude exited: %v\nstderr:\n%s", err, tail)
+				}
+				ch <- RunEvent{
+					Kind:      EventKindError,
+					RunID:     runID,
+					Timestamp: time.Now().UTC(),
+					Err:       &ErrorEvent{Message: msg, Fatal: true},
+				}
 			}
 		} else if runCtx.Err() == context.DeadlineExceeded && !emittedFatal {
 			ch <- RunEvent{

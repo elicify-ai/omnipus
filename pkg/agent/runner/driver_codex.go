@@ -145,12 +145,16 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 	d.cancel = cancelFn
 	d.cmd = cmd
 
-	// Pipe stderr to slog.
+	// Pipe stderr to slog (Debug) AND retain a bounded tail so a non-zero exit
+	// can surface the real diagnostic at Warn/Error (see below).
+	stderrBuf := newStderrTail()
 	go func() {
 		defer func() { _ = stderrR.Close() }()
 		sc := newLineScanner(stderrR)
 		for sc.Scan() {
-			slog.Debug("runner/codex: stderr", "run_id", runID, "line", sc.Text())
+			line := sc.Text()
+			stderrBuf.add(line)
+			slog.Debug("runner/codex: stderr", "run_id", runID, "line", line)
 		}
 	}()
 
@@ -189,13 +193,26 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 		}, ch)
 
 		err := <-waitErr
-		if err != nil && runCtx.Err() == nil && !emittedFatal {
-			slog.Warn("runner/codex: process exited with error", "run_id", runID, "err", err)
-			ch <- RunEvent{
-				Kind:      EventKindError,
-				RunID:     runID,
-				Timestamp: time.Now().UTC(),
-				Err:       &ErrorEvent{Message: fmt.Sprintf("codex exited: %v", err), Fatal: true},
+		if err != nil && runCtx.Err() == nil {
+			// Surface the captured stderr tail at Warn so operators can diagnose
+			// the real cause instead of a bare "exited: status 1".
+			if tail := stderrBuf.String(); tail != "" {
+				slog.Warn("runner/codex: process exited with error",
+					"run_id", runID, "err", err, "stderr_tail", tail)
+			} else {
+				slog.Warn("runner/codex: process exited with error", "run_id", runID, "err", err)
+			}
+			if !emittedFatal {
+				msg := fmt.Sprintf("codex exited: %v", err)
+				if tail := stderrBuf.String(); tail != "" {
+					msg = fmt.Sprintf("codex exited: %v\nstderr:\n%s", err, tail)
+				}
+				ch <- RunEvent{
+					Kind:      EventKindError,
+					RunID:     runID,
+					Timestamp: time.Now().UTC(),
+					Err:       &ErrorEvent{Message: msg, Fatal: true},
+				}
 			}
 		} else if runCtx.Err() == context.DeadlineExceeded && !emittedFatal {
 			ch <- RunEvent{
@@ -278,12 +295,17 @@ func (d *CodexDriver) parseLine(
 			// characters or quotes produce valid JSON (a %q-built string can be
 			// invalid JSON for control chars).
 			rawInput := safeMarshal(map[string]string{"command": ev.Item.Command})
+			// ToolName MUST be a stable, short identifier so audit logs stay
+			// compact and policy-by-tool-name matching is meaningful. Codex only
+			// surfaces a raw shell command for tool_call items, so we derive the
+			// invoked binary (first token) as the tool name and keep the FULL
+			// command in RawInput + Description.
 			return RunEvent{
 				Kind:  EventKindPermissionRequest,
 				RunID: runID,
 				PermissionRequest: &PermissionRequestEvent{
 					RequestID:   reqID,
-					ToolName:    ev.Item.Command,
+					ToolName:    codexCommandToolName(ev.Item.Command),
 					Description: fmt.Sprintf("Codex wants to run command %q", ev.Item.Command),
 					RawInput:    rawInput,
 				},
@@ -337,6 +359,33 @@ func (d *CodexDriver) parseLine(
 		slog.Debug("runner/codex: unknown event type", "run_id", runID, "type", ev.Type)
 		return RunEvent{}, false
 	}
+}
+
+// codexCommandToolName derives a stable, short tool identifier from a codex
+// shell command string. It returns the invoked binary (the first whitespace-
+// separated token, basename only) so audit logs stay compact and policy
+// matching by tool name is meaningful. Falls back to "shell" when the command
+// is empty or unparseable. The full command is preserved by the caller in the
+// permission event's RawInput and Description.
+func codexCommandToolName(command string) string {
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return "shell"
+	}
+	tok := fields[0]
+	// Strip any leading env-assignments like FOO=bar that precede the binary.
+	for strings.Contains(tok, "=") && len(fields) > 1 {
+		fields = fields[1:]
+		tok = fields[0]
+	}
+	// Basename only — drop any directory component (e.g. /usr/bin/python → python).
+	if idx := strings.LastIndexAny(tok, "/\\"); idx >= 0 && idx < len(tok)-1 {
+		tok = tok[idx+1:]
+	}
+	if tok == "" {
+		return "shell"
+	}
+	return tok
 }
 
 // Decide routes a permission decision (FR-5.1).

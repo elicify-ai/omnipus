@@ -137,8 +137,13 @@ func IsValidEventName(e EventName) bool {
 		"memory.remember",
 		"memory.retrospective",
 		"memory.rate_limited",
-		// Board tasks, projects, and milestones (pkg/gateway/rest_board.go,
-		// rest_projects.go, rest_milestones.go).
+		// Board tasks (pkg/gateway/rest_board.go), workspaces
+		// (pkg/gateway/rest_workspaces.go: workspace.create/update/delete),
+		// and milestones (pkg/gateway/rest_milestones.go). The legacy
+		// "project.*" names are retained here for back-compat with audit
+		// logs written before the project→workspace rename; no current
+		// handler emits them (rest_projects.go was renamed to
+		// rest_workspaces.go).
 		"board_task.create",
 		"board_task.update",
 		"board_task.delete",

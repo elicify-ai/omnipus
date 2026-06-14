@@ -24,8 +24,50 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
+
+// stderrTail is a bounded, concurrency-safe ring buffer that retains the most
+// recent stderr lines from an external-CLI child process. It exists so that a
+// NON-ZERO exit can surface the real diagnostic (auth failure, CLI usage error,
+// stack trace) at Warn/Error level — otherwise the lines are only logged at
+// Debug and the operator sees nothing but a bare "exited: status 1".
+//
+// The ring keeps at most maxStderrTailLines lines; older lines are evicted.
+type stderrTail struct {
+	mu    sync.Mutex
+	lines []string
+	max   int
+}
+
+// maxStderrTailLines bounds the retained stderr so a chatty CLI cannot grow the
+// buffer without limit. 40 lines is enough to carry a typical CLI error +
+// usage/help block while staying small.
+const maxStderrTailLines = 40
+
+func newStderrTail() *stderrTail {
+	return &stderrTail{max: maxStderrTailLines}
+}
+
+// add appends a line, evicting the oldest when the cap is reached.
+func (t *stderrTail) add(line string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.lines = append(t.lines, line)
+	if len(t.lines) > t.max {
+		// Drop the oldest overflow lines.
+		t.lines = t.lines[len(t.lines)-t.max:]
+	}
+}
+
+// String returns the retained lines joined by newlines (oldest first). Empty
+// when no stderr was captured.
+func (t *stderrTail) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.Join(t.lines, "\n")
+}
 
 // buildChildEnv computes the environment for an external-CLI child process,
 // shared by all three drivers (Claude Code, Codex, opencode).

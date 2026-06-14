@@ -108,12 +108,16 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 	d.cancel = cancelFn
 	d.cmd = cmd
 
-	// Pipe stderr to slog.
+	// Pipe stderr to slog (Debug) AND retain a bounded tail so a non-zero exit
+	// can surface the real diagnostic at Warn/Error (see below).
+	stderrBuf := newStderrTail()
 	go func() {
 		defer func() { _ = stderrR.Close() }()
 		sc := newLineScanner(stderrR)
 		for sc.Scan() {
-			slog.Debug("runner/opencode: stderr", "run_id", runID, "line", sc.Text())
+			line := sc.Text()
+			stderrBuf.add(line)
+			slog.Debug("runner/opencode: stderr", "run_id", runID, "line", line)
 		}
 	}()
 
@@ -152,13 +156,26 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 		}, ch)
 
 		err := <-waitErr
-		if err != nil && runCtx.Err() == nil && !emittedFatal {
-			slog.Warn("runner/opencode: process exited with error", "run_id", runID, "err", err)
-			ch <- RunEvent{
-				Kind:      EventKindError,
-				RunID:     runID,
-				Timestamp: time.Now().UTC(),
-				Err:       &ErrorEvent{Message: fmt.Sprintf("opencode exited: %v", err), Fatal: true},
+		if err != nil && runCtx.Err() == nil {
+			// Surface the captured stderr tail at Warn so operators can diagnose
+			// the real cause instead of a bare "exited: status 1".
+			if tail := stderrBuf.String(); tail != "" {
+				slog.Warn("runner/opencode: process exited with error",
+					"run_id", runID, "err", err, "stderr_tail", tail)
+			} else {
+				slog.Warn("runner/opencode: process exited with error", "run_id", runID, "err", err)
+			}
+			if !emittedFatal {
+				msg := fmt.Sprintf("opencode exited: %v", err)
+				if tail := stderrBuf.String(); tail != "" {
+					msg = fmt.Sprintf("opencode exited: %v\nstderr:\n%s", err, tail)
+				}
+				ch <- RunEvent{
+					Kind:      EventKindError,
+					RunID:     runID,
+					Timestamp: time.Now().UTC(),
+					Err:       &ErrorEvent{Message: msg, Fatal: true},
+				}
 			}
 		} else if runCtx.Err() == context.DeadlineExceeded && !emittedFatal {
 			ch <- RunEvent{

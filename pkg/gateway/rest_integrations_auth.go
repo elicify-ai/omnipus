@@ -611,7 +611,14 @@ func (a *restAPI) resolveTranscriber() voice.Transcriber {
 	if a.credStore == nil {
 		return voice.DetectTranscriber(cfg, credentials.SecretBundle{})
 	}
-	bundle, _ := credentials.ResolveBundle(cfg, a.credStore)
+	bundle, err := credentials.ResolveBundle(cfg, a.credStore)
+	if err != nil {
+		// A locked or failing credential store yields an empty bundle here, which
+		// silently disables voice transcription. Surface it at Error so operators
+		// can diagnose (mirrors the credential-ref check log path above).
+		slog.Error("integrations: resolve credential bundle for transcriber failed",
+			"error", err)
+	}
 	return voice.DetectTranscriber(cfg, bundle)
 }
 

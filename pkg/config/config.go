@@ -686,6 +686,17 @@ const (
 	DelegationModeTask       DelegationMode = "task"
 )
 
+// AgentRefKind enumerates the legal values for AgentRef.Kind. A non-empty value
+// outside this set is REJECTED at config-load time (see AgentRef.Validate) so a
+// typo fails loudly instead of silently mis-resolving a delegation target.
+const (
+	// AgentRefKindLocal resolves the ref by id within the running instance.
+	AgentRefKindLocal = "local"
+	// AgentRefKindRemoteA2A is reserved for the future A2A protocol; the kind is
+	// accepted by validation but not enforced/dispatched in v0.1.0.
+	AgentRefKindRemoteA2A = "remote-a2a"
+)
+
 // AgentRef is an agent reference used in delegation policy targets.
 // Kind is currently "local" (resolved by id within the instance) or
 // "remote-a2a" (reserved for future A2A protocol; not enforced in v0.1.0).
@@ -693,6 +704,20 @@ const (
 type AgentRef struct {
 	Kind string `json:"kind"` // "local" or "remote-a2a"
 	ID   string `json:"id"`
+}
+
+// Validate rejects a non-empty AgentRef.Kind that is outside the known set.
+// An empty Kind is accepted for back-compat: callers (ResolveDelegationTo)
+// default an absent kind to "local". Only a present-but-unknown value (a typo)
+// is an error, so it fails loudly rather than silently downgrading routing.
+func (r AgentRef) Validate() error {
+	switch r.Kind {
+	case "", AgentRefKindLocal, AgentRefKindRemoteA2A:
+		return nil
+	default:
+		return fmt.Errorf("invalid agent ref kind %q (want %q or %q)",
+			r.Kind, AgentRefKindLocal, AgentRefKindRemoteA2A)
+	}
 }
 
 // DelegationPolicy is the unified delegation policy for an agent.
@@ -1124,12 +1149,45 @@ func (d *AgentDefaults) GetModelName() string {
 	return d.ModelName
 }
 
+// ChannelIdentityKind enumerates the legal values for ChannelIdentity.Kind.
+// route.go treats ONLY "agent" as the agent-routing path and everything else as
+// the user fallback; without validation a typo (e.g. "agnet") would silently
+// downgrade to user routing. A non-empty value outside this set is therefore
+// REJECTED at config-load time (see ChannelIdentity.Validate).
+const (
+	// ChannelIdentityKindAgent routes the inbound connection AS the given agent ID.
+	ChannelIdentityKindAgent = "agent"
+	// ChannelIdentityKindUser attributes the inbound connection to the user and
+	// routes via the normal binding cascade to the default agent.
+	ChannelIdentityKindUser = "user"
+)
+
 // ChannelIdentity identifies whether an inbound connection acts on behalf of an
 // agent ("agent" kind) or routes as the default user ("user" kind). Persisted per
 // instance; wired into ResolveRoute input (Spec-2 FR-2.9 / US-5).
 type ChannelIdentity struct {
 	Kind string `json:"kind"`         // "agent" or "user"
 	ID   string `json:"id,omitempty"` // agent ID when kind=agent; empty when kind=user
+}
+
+// Validate rejects a non-empty ChannelIdentity.Kind outside the known set so a
+// typo fails loudly at load instead of silently routing as the user. An empty
+// Kind is accepted for back-compat — route.go's documented default for an
+// absent/empty identity kind is the user-routing fallback. When kind=agent the
+// id MUST be present (an agent identity with no id can never resolve).
+func (i ChannelIdentity) Validate() error {
+	switch i.Kind {
+	case "", ChannelIdentityKindUser:
+		return nil
+	case ChannelIdentityKindAgent:
+		if strings.TrimSpace(i.ID) == "" {
+			return fmt.Errorf("channel identity kind %q requires a non-empty id", i.Kind)
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid channel identity kind %q (want %q or %q)",
+			i.Kind, ChannelIdentityKindAgent, ChannelIdentityKindUser)
+	}
 }
 
 // maxInstancesPerType is the cap-1 limit on instances per channel type.
@@ -1343,6 +1401,54 @@ func ValidateChannelsCap1(channels map[string]ChannelInstanceConfig) error {
 	if len(dups) != 0 {
 		sort.Strings(dups)
 		return fmt.Errorf("%w: %s", ErrChannelsCap1Violated, strings.Join(dups, ", "))
+	}
+	return nil
+}
+
+// validateIdentityAndAgentRefKinds rejects any non-empty ChannelIdentity.Kind or
+// AgentRef.Kind that is outside its known set. This runs at config load so a typo
+// fails loudly with a clear error instead of silently downgrading routing (a
+// mis-spelled channel identity kind would otherwise fall through to user routing
+// in route.go) or mis-resolving a delegation target. Empty/absent kinds keep
+// their documented defaults and are NOT rejected (back-compat).
+func validateIdentityAndAgentRefKinds(cfg *Config) error {
+	// Channel instance identity overrides.
+	for key, inst := range cfg.Channels {
+		if inst.Identity == nil {
+			continue
+		}
+		if err := inst.Identity.Validate(); err != nil {
+			return fmt.Errorf("channel %q identity: %w", key, err)
+		}
+	}
+
+	// Agent delegation-policy refs (per-agent and global defaults). Both the
+	// active To list and the inert AcceptFrom list are validated so a typo'd kind
+	// is caught regardless of where it sits.
+	validatePolicy := func(scope string, dp *DelegationPolicy) error {
+		if dp == nil {
+			return nil
+		}
+		for _, ref := range dp.To {
+			if err := ref.Validate(); err != nil {
+				return fmt.Errorf("%s delegation_policy.to: %w", scope, err)
+			}
+		}
+		for _, ref := range dp.AcceptFrom {
+			if err := ref.Validate(); err != nil {
+				return fmt.Errorf("%s delegation_policy.accept_from: %w", scope, err)
+			}
+		}
+		return nil
+	}
+	if err := validatePolicy("agents.defaults", cfg.Agents.Defaults.DelegationPolicy); err != nil {
+		return err
+	}
+	for _, ag := range cfg.Agents.List {
+		scope := fmt.Sprintf("agent %q", ag.ID)
+		if err := validatePolicy(scope, ag.DelegationPolicy); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -2646,6 +2752,14 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 
 	// Normalize channel map: populate Type from map key when absent, drop unknown types.
 	cfg.Channels = normalizeChannelMap(cfg.Channels)
+
+	// Reject typo'd identity / agent-ref Kind values so a mis-spelled kind fails
+	// loudly here instead of silently downgrading routing (route.go treats any
+	// non-"agent" identity kind as the user fallback) or mis-resolving a
+	// delegation target. Empty/absent kinds keep their documented defaults.
+	if err := validateIdentityAndAgentRefKinds(cfg); err != nil {
+		return nil, err
+	}
 
 	// Merge Omnipus channel_policies routing rules into Bindings.
 	cfg.MergeChannelPoliciesIntoBindings()
