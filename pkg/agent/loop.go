@@ -1355,6 +1355,24 @@ func registerSharedTools(
 		// time with clear errors.
 		{
 			clawHubConfig := cfg.Tools.Skills.Registries.ClawHub
+			githubConfig := cfg.Tools.Skills.Github
+
+			// GitHub registry: enabled when a token ref is configured.
+			// The token is resolved via the credential store (SEC-23): credentials.InjectFromConfig
+			// writes the secret into the env-var named by TokenRef before this point.
+			var githubRegistries []skills.GitHubRegistryConfig
+			if githubConfig.TokenRef != "" {
+				githubRegistries = []skills.GitHubRegistryConfig{
+					{
+						Enabled:   true,
+						Name:      "github",
+						Token:     os.Getenv(githubConfig.TokenRef),
+						Proxy:     githubConfig.Proxy,
+						Workspace: agent.Workspace,
+					},
+				}
+			}
+
 			registryMgr := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{
 				MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
 				ClawHub: skills.ClawHubConfig{
@@ -1368,6 +1386,7 @@ func registerSharedTools(
 					MaxZipSize:      clawHubConfig.MaxZipSize,
 					MaxResponseSize: clawHubConfig.MaxResponseSize,
 				},
+				GitHubRegistries: githubRegistries,
 			})
 
 			searchCache := skills.NewSearchCache(
