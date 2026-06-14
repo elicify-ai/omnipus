@@ -139,6 +139,17 @@ type MemoryStore struct {
 	sigCache map[string][]minhash.Signature
 	// sigIDs maps room.Root → memory ID parallel to sigCache entries (same indices).
 	sigIDs map[string][]string
+	// indexedDirMtime maps room.MemoriesDir → the directory mtime observed the
+	// last time the bleve index and sigCache for that room were known to be in
+	// sync with the on-disk .md files. When the directory mtime advances (a new
+	// or removed .md file — including memories written directly to disk, e.g. by
+	// a peer agent process or a test, NOT via AppendLongTermToScope), the cached
+	// bleve index is stale: a Search() would miss the new file and the substring
+	// scan fallback never fires (it only runs when the cached index is nil). We
+	// then rebuild the bleve index and drop this room's sigCache so the next
+	// access rescans the .md sources. A missing key means "never synced" → force
+	// a refresh on first access.
+	indexedDirMtime map[string]time.Time
 
 	// now returns the current time used to stamp dedup links (minhash.jsonl) and
 	// access events (counters.jsonl). Defaults to time.Now().UTC(). It is an
@@ -169,12 +180,13 @@ func NewMemoryStore(agentWorkspace, omnipusHome string) *MemoryStore {
 		"agent:"+filepath.Base(agentWorkspace),
 	)
 	return &MemoryStore{
-		privateRoom: private,
-		omnipusHome: omnipusHome,
-		indexCache:  make(map[string]*memindex.RoomIndex),
-		sigCache:    make(map[string][]minhash.Signature),
-		sigIDs:      make(map[string][]string),
-		now:         func() time.Time { return time.Now().UTC() },
+		privateRoom:     private,
+		omnipusHome:     omnipusHome,
+		indexCache:      make(map[string]*memindex.RoomIndex),
+		sigCache:        make(map[string][]minhash.Signature),
+		sigIDs:          make(map[string][]string),
+		indexedDirMtime: make(map[string]time.Time),
+		now:             func() time.Time { return time.Now().UTC() },
 	}
 }
 
@@ -192,11 +204,73 @@ func (ms *MemoryStore) Close() {
 	ms.indexCache = make(map[string]*memindex.RoomIndex)
 }
 
+// memoriesDirMtime returns the mtime of a room's memories directory, or the
+// zero time when it cannot be stat'd (e.g. not yet created). The directory
+// mtime advances when a .md file is added to or removed from it, which is how a
+// memory written directly to disk — bypassing AppendLongTermToScope, and thus
+// never handed to ri.Index() — becomes observable to a long-lived process whose
+// bleve index and sigCache were built while the directory was in an older state.
+func memoriesDirMtime(memoriesDir string) time.Time {
+	info, err := os.Stat(memoriesDir)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
+}
+
+// syncRoomToDiskLocked detects whether the room's memories directory has changed
+// on disk since the bleve index / sigCache were last synced, and if so:
+//   - rebuilds the bleve index from the .md sources (so Search() sees new files;
+//     otherwise it returns zero hits and the substring-scan fallback never runs
+//     because that fallback only fires when the cached index is nil), and
+//   - drops this room's sigCache so the next dedup check rescans the .md sources.
+//
+// It then records the observed directory mtime as the new sync baseline.
+//
+// Crucially, when nothing changed (mtime equals the recorded baseline) it is a
+// no-op and does NOT touch the sigCache — so the append path, which records the
+// baseline while (re)building the sigCache *before* it reaches the bleve index
+// call, never has its freshly built sigCache dropped. This preserves the
+// round-2 single-append invariant (no double sig-append on first write) while
+// still picking up externally written memory files.
+//
+// MUST be called with ms.indexMu held. ri may be nil (index unavailable); the
+// sigCache drop still happens so dedup stays correct.
+func (ms *MemoryStore) syncRoomToDiskLocked(room memrooms.Room, ri *memindex.RoomIndex) {
+	current := memoriesDirMtime(room.MemoriesDir)
+	baseline, seen := ms.indexedDirMtime[room.MemoriesDir]
+	if seen && current.Equal(baseline) {
+		return // in sync; nothing to do
+	}
+
+	// Directory changed (or first sync). Rebuild the bleve index from the .md
+	// sources so externally written memories become searchable.
+	if ri != nil {
+		if err := ri.Rebuild(); err != nil {
+			logger.WarnCF("agent.memory", "syncRoomToDisk: bleve rebuild failed; recall may miss new files until next open",
+				map[string]any{"room_root": room.Root, "error": err.Error()})
+		}
+	}
+
+	// Drop the sigCache so the next dedup check rescans the .md sources and picks
+	// up any externally written memories. ensureSigCacheLocked then rebuilds it.
+	delete(ms.sigCache, room.Root)
+	delete(ms.sigIDs, room.Root)
+
+	ms.indexedDirMtime[room.MemoriesDir] = current
+}
+
 // roomIndex returns the bleve RoomIndex for room, lazily opening it.
 // MUST be called with ms.indexMu held.
+//
+// Before returning, it reconciles the index with the on-disk memories directory
+// via syncRoomToDiskLocked: if a .md file was added or removed since the index
+// was last synced (including memories written directly to disk by a peer process
+// or a test), the index is rebuilt so a subsequent Search() observes the change.
 func (ms *MemoryStore) roomIndexLocked(room memrooms.Room) *memindex.RoomIndex {
 	ri, ok := ms.indexCache[room.Root]
 	if ok {
+		ms.syncRoomToDiskLocked(room, ri)
 		return ri
 	}
 	var openErr error
@@ -207,13 +281,23 @@ func (ms *MemoryStore) roomIndexLocked(room memrooms.Room) *memindex.RoomIndex {
 		return nil
 	}
 	ms.indexCache[room.Root] = ri
+	// OpenOrCreate already built the index from the current .md sources, so seed
+	// the sync baseline to the current directory mtime to avoid an immediate
+	// redundant rebuild on the very next access.
+	ms.indexedDirMtime[room.MemoriesDir] = memoriesDirMtime(room.MemoriesDir)
 	return ri
 }
 
 // ensureSigCache lazily loads the MinHash signature cache for room.
 // Scans all .md files the first time; afterwards incremental via addSigLocked.
+// A directory-mtime change (a new/removed .md file) drops the cache via
+// syncRoomToDiskLocked so the scan below re-runs against the current sources.
 // MUST be called with ms.indexMu held.
 func (ms *MemoryStore) ensureSigCacheLocked(room memrooms.Room) {
+	// Reconcile with disk first: if the memories dir changed since the last
+	// sync, this drops a stale sigCache so we rescan below. Pass the cached
+	// bleve index (if any) so it is rebuilt in the same pass. nil is fine.
+	ms.syncRoomToDiskLocked(room, ms.indexCache[room.Root])
 	if _, ok := ms.sigCache[room.Root]; ok {
 		return
 	}
@@ -571,7 +655,7 @@ func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memro
 					if seenIDs[hit.ID] {
 						continue
 					}
-					mf, readErr := memrooms.ReadMemoryFile(t.room.MemoriesDir, hit.ID)
+					mf, readErr := readMemoryByID(t.room.MemoriesDir, hit.ID)
 					if readErr != nil {
 						// File may have been deleted externally; skip.
 						logger.WarnCF("agent.memory", "SearchEntriesInScope: read memory file failed",
@@ -677,6 +761,33 @@ func (ms *MemoryStore) SearchEntriesInScope(query string, limit int, scope memro
 		results = append(results, memoryFileToEntry(s.mf, ts))
 	}
 	return results, nil
+}
+
+// readMemoryByID resolves a bleve hit ID to its MemoryFile. The fast path is the
+// canonical <memoriesDir>/<id>.md layout. When that file is absent — e.g. a
+// memory file whose name does NOT equal its frontmatter ID (an externally
+// authored .md, where the bleve index keys on the frontmatter ID but the file on
+// disk has a different name) — it falls back to scanning the directory for the
+// memory whose frontmatter ID matches. Without this fallback such a hit would be
+// silently dropped and its content would never surface in recall, even though
+// the index correctly found it.
+func readMemoryByID(memoriesDir, id string) (memrooms.MemoryFile, error) {
+	mf, err := memrooms.ReadMemoryFile(memoriesDir, id)
+	if err == nil {
+		return mf, nil
+	}
+	// Filename ≠ frontmatter ID: locate by scanning. ScanMemories tolerates
+	// individual unreadable files, so one bad .md does not abort the lookup.
+	memories, scanErr := memrooms.ScanMemories(memoriesDir)
+	if scanErr != nil {
+		return memrooms.MemoryFile{}, err // surface the original read error
+	}
+	for _, candidate := range memories {
+		if candidate.Frontmatter.ID == id {
+			return candidate, nil
+		}
+	}
+	return memrooms.MemoryFile{}, err
 }
 
 // memoryFileMtimes builds an ID→mtime map by scanning each memories directory.
