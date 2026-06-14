@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -53,14 +54,24 @@ func newTaskExecutor(al *AgentLoop, store *taskstore.TaskStore) *TaskExecutor {
 }
 
 // ExecuteTask starts executing the task identified by taskID.
-// It updates the task's status to "running" and dispatches it to the agent in a goroutine.
+// It atomically claims the task (queued→running via ClaimForRun) and dispatches
+// it to the agent in a goroutine.
 //
 // The dispatch is gated by two concurrency controls:
 //  1. Per-agent cap (maxConcurrent) — prevents a single agent from being flooded.
 //  2. Global DispatchSemaphore (dispatchSema) — enforces the MaxParallelAgents
 //     fan-out ceiling across ALL agents. TryAcquire is used so the call never
 //     blocks; a failed acquire returns an error and the heartbeat will retry.
+//
+// The queued→running transition is performed via ClaimForRun, which holds the
+// store mutex across the read+write, eliminating the TOCTOU race between the
+// heartbeat and advanceBlockedTasks. If the task has already been claimed by a
+// concurrent caller, ClaimForRun returns ErrAlreadyClaimed and ExecuteTask
+// returns without dispatching a duplicate goroutine.
 func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
+	// Peek at the task before acquiring resources, so we can check deps and the
+	// agent cap without holding any lock. The actual status transition is done
+	// atomically by ClaimForRun below.
 	task, err := te.store.Get(taskID)
 	if err != nil {
 		return fmt.Errorf("task_executor: get task %q: %w", taskID, err)
@@ -116,18 +127,22 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string) error {
 		)
 	}
 
-	// Transition to running.
+	// Atomically claim the task (queued→running) under the store mutex.
+	// This is the single critical section that eliminates the TOCTOU race:
+	// if a concurrent caller (heartbeat or advanceBlockedTasks) already claimed
+	// this task, ClaimForRun returns ErrAlreadyClaimed and we abort without
+	// spawning a duplicate goroutine.
 	now := time.Now().UTC()
-	updated, err := te.store.Update(taskID, taskstore.TaskPatch{
-		Status:    ptrStr("running"),
-		StartedAt: &now,
-	})
+	claimed, err := te.store.ClaimForRun(taskID, now)
 	if err != nil {
-		// Release the semaphore slot — we never actually started.
 		release()
-		return fmt.Errorf("task_executor: update task %q to running: %w", taskID, err)
+		if errors.Is(err, taskstore.ErrAlreadyClaimed) {
+			// Another goroutine won the race — not an error worth logging at Warn.
+			return fmt.Errorf("task_executor: task %q already claimed by concurrent dispatch", taskID)
+		}
+		return fmt.Errorf("task_executor: claim task %q for run: %w", taskID, err)
 	}
-	task = updated
+	task = claimed
 
 	taskCtx, cancel := context.WithCancel(ctx)
 	te.mu.Lock()
@@ -509,8 +524,13 @@ func (te *TaskExecutor) Stop() {
 	te.running = make(map[string]context.CancelFunc)
 }
 
-// CheckQueuedTasks picks up the highest-priority queued task per agent and starts it.
-// Called by the heartbeat service.
+// CheckQueuedTasks picks the highest-priority *dispatchable* queued task per
+// agent and starts it. Called by the heartbeat service.
+//
+// "Dispatchable" means all tasks in the task's blocked_by list are in
+// "completed" status. Tasks that are still blocked by incomplete dependencies
+// are skipped in priority order until a ready task is found, preventing a
+// high-priority blocked task from starving lower-priority ready tasks.
 func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 	queued, err := te.store.List(taskstore.TaskFilter{Status: "queued"})
 	if err != nil {
@@ -522,20 +542,46 @@ func (te *TaskExecutor) CheckQueuedTasks(ctx context.Context) {
 		return
 	}
 
-	// Group by agent_id; pick the first (lowest priority number = highest priority) per agent.
-	byAgent := make(map[string]*taskstore.TaskEntity)
+	// List is already sorted by priority ASC then created_at ASC (see store.List).
+	// Group by agent_id in that order; for each agent pick the first task whose
+	// blocked_by dependencies are all satisfied (skip blocked heads).
+	type agentState struct {
+		picked bool
+	}
+	agentDone := make(map[string]agentState)
+
 	for i := range queued {
 		t := &queued[i]
-		if _, exists := byAgent[t.AgentID]; !exists {
-			byAgent[t.AgentID] = t
+		if agentDone[t.AgentID].picked {
+			// Already dispatched one task for this agent this tick.
+			continue
 		}
-	}
 
-	for _, t := range byAgent {
+		// Check whether all deps of this task are completed.
+		depsSatisfied := true
+		for _, depID := range t.BlockedBy {
+			dep, depErr := te.store.Get(depID)
+			if depErr != nil || dep.Status != "completed" {
+				depsSatisfied = false
+				break
+			}
+		}
+		if !depsSatisfied {
+			// This task is blocked — skip it and try the next queued task for
+			// the same agent (which has lower priority but may be dispatchable).
+			logger.WarnCF("task_executor", "Heartbeat: skipping blocked task, trying next",
+				map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
+			continue
+		}
+
 		if err := te.ExecuteTask(ctx, t.ID); err != nil {
 			logger.WarnCF("task_executor", "Heartbeat: could not start task",
 				map[string]any{"task_id": t.ID, "error": err.Error()})
+			// Even if dispatch failed (e.g. cap reached), mark this agent as
+			// done for this tick so we don't attempt more tasks for it and
+			// amplify load.
 		}
+		agentDone[t.AgentID] = agentState{picked: true}
 	}
 }
 

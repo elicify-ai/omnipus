@@ -421,6 +421,43 @@ func (s *TaskStore) ValidateBlockedBy(selfID string, blockedBy []string) error {
 	return nil
 }
 
+// ErrAlreadyClaimed is returned by ClaimForRun when the task is not in queued
+// status (either already running, completed, failed, or claimed by a concurrent caller).
+var ErrAlreadyClaimed = errors.New("task already claimed")
+
+// ClaimForRun atomically transitions a task from "queued" to "running" under
+// the store mutex, making the transition a single critical section.
+//
+// This prevents the TOCTOU race where two concurrent callers (e.g. the
+// heartbeat and advanceBlockedTasks) both pass a "status==queued" guard and
+// both reach Update, resulting in two runTask goroutines for one task.
+//
+// Returns (updated entity, nil) on success.
+// Returns (nil, ErrAlreadyClaimed) if the task is not "queued" when the lock is held.
+// Returns (nil, ErrNotFound) if the task does not exist.
+// Returns (nil, err) for I/O or validation errors.
+func (s *TaskStore) ClaimForRun(id string, startedAt time.Time) (*TaskEntity, error) {
+	if err := validateID(id); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, err := s.load(id)
+	if err != nil {
+		return nil, err
+	}
+	if t.Status != "queued" {
+		return nil, fmt.Errorf("taskstore: %w: task %q is %q, not queued", ErrAlreadyClaimed, id, t.Status)
+	}
+	t.Status = "running"
+	t.StartedAt = &startedAt
+	if err := s.write(t); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
 // Delete removes the task file for id.
 func (s *TaskStore) Delete(id string) error {
 	if err := validateID(id); err != nil {

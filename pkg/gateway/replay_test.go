@@ -639,6 +639,10 @@ func TestReplay_CtxCancelled_StopsCleanly(t *testing.T) {
 	defer goleak.VerifyNone(t,
 		goleak.IgnoreTopFunction("github.com/dapicom-ai/omnipus/pkg/tools.NewSessionManager.func1"),
 		goleak.IgnoreTopFunction("github.com/dapicom-ai/omnipus/pkg/agent.(*HookManager).dispatchEvents"),
+		// bleve analysis workers are started at package-init time by the memory/bleve
+		// subsystem initialised via newTestWSHandler in other tests in this package.
+		// They are persistent infrastructure goroutines — not started by streamReplay.
+		goleak.IgnoreTopFunction("github.com/blevesearch/bleve_index_api.AnalysisWorker"),
 	)
 
 	// Build a 10-entry transcript so there are frames to cancel mid-stream.

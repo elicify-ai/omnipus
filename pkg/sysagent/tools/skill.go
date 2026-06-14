@@ -64,10 +64,13 @@ func (t *SkillInstallTool) Execute(ctx context.Context, args map[string]any) *to
 			fmt.Sprintf("could not install skill %q: %v", name, err), "check the skill name or GitHub URL"))
 	}
 
+	// agent_ids is accepted as input for future assignment wiring but is not
+	// acted on yet — the installer only fetches and registers the skill.
+	// Do NOT echo agents_assigned back; returning a field that implies
+	// assignment happened when it did not is misleading.
 	return tools.NewToolResult(successJSON(map[string]any{
-		"success":         true,
-		"name":            name,
-		"agents_assigned": agentIDs,
+		"success": true,
+		"name":    name,
 	}))
 }
 
