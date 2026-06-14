@@ -11,9 +11,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Cpu, Info } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { fetchPerformanceSettings, updatePerformanceSettings, isApiError } from '@/lib/api'
+import {
+  fetchPerformanceSettings,
+  updatePerformanceSettings,
+  isApiError,
+  type PerformanceSettingsUpdate,
+} from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
+import { ReAuthDialog } from './ReAuthDialog'
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 
@@ -36,6 +42,12 @@ export function PerformanceSection(): React.ReactElement {
   const [inputValue, setInputValue] = useState<string>('')
   const [dirty, setDirty] = useState(false)
 
+  // The change waiting on a re-auth consent token, and whether the dialog is
+  // open. PUT /api/v1/performance is re-auth gated (Spec-6 FR-12.2 / Spec-3
+  // FR-6.6); the token is replayed via updatePerformanceSettings's header arg.
+  const [pending, setPending] = useState<PerformanceSettingsUpdate | null>(null)
+  const [reauthOpen, setReauthOpen] = useState(false)
+
   const { data, isLoading, error } = useQuery({
     queryKey: ['performance-settings'],
     queryFn: fetchPerformanceSettings,
@@ -51,19 +63,25 @@ export function PerformanceSection(): React.ReactElement {
   }, [data, dirty])
 
   const mutation = useMutation({
-    mutationFn: updatePerformanceSettings,
+    mutationFn: ({ body, token }: { body: PerformanceSettingsUpdate; token: string }) =>
+      updatePerformanceSettings(body, token),
     onSuccess: () => {
       setSaveStatus('saved')
       setDirty(false)
+      setPending(null)
       void queryClient.invalidateQueries({ queryKey: ['performance-settings'] })
     },
     onError: (err) => {
       setSaveStatus('error')
+      setPending(null)
       const msg = isApiError(err) ? err.message : 'Failed to save performance settings.'
       addToast({ variant: 'error', message: msg })
     },
   })
 
+  // handleSave validates then stages the change and opens the re-auth dialog.
+  // The actual PUT fires from onReAuthConfirmed once the consent token is minted
+  // — mirroring IntegrationsSection's gated-save flow.
   function handleSave() {
     const raw = inputValue.trim()
     const parsed = raw === '' ? 0 : parseInt(raw, 10)
@@ -71,8 +89,14 @@ export function PerformanceSection(): React.ReactElement {
       addToast({ variant: 'error', message: 'max_parallel_agents must be between 2 and 16 (or leave blank for auto-detect).' })
       return
     }
+    setPending({ max_parallel_agents: parsed })
+    setReauthOpen(true)
+  }
+
+  function onReAuthConfirmed(token: string) {
+    if (!pending) return
     setSaveStatus('saving')
-    mutation.mutate({ max_parallel_agents: parsed })
+    mutation.mutate({ body: pending, token })
   }
 
   if (isLoading) return <Skeleton />
@@ -129,7 +153,7 @@ export function PerformanceSection(): React.ReactElement {
           <Button
             size="sm"
             onClick={handleSave}
-            disabled={mutation.isPending || !dirty}
+            disabled={mutation.isPending || reauthOpen || !dirty}
             className="h-7 px-3 text-xs"
           >
             Save
@@ -137,6 +161,20 @@ export function PerformanceSection(): React.ReactElement {
           <SaveStatus state={saveStatus} />
         </div>
       </div>
+
+      <ReAuthDialog
+        open={reauthOpen}
+        onOpenChange={(o) => {
+          setReauthOpen(o)
+          if (!o) {
+            setPending(null)
+            if (saveStatus === 'saving') setSaveStatus('idle')
+          }
+        }}
+        title="Confirm to change concurrency"
+        description="Re-type your password to change the max parallel agents setting."
+        onConfirmed={onReAuthConfirmed}
+      />
     </div>
   )
 }

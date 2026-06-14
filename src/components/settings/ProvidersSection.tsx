@@ -14,6 +14,14 @@ import { Badge } from '@/components/ui/badge'
 import { fetchProviders, configureProvider, testProvider, isApiError } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { PROVIDER_HINTS } from '@/lib/constants'
+import { ReAuthDialog } from './ReAuthDialog'
+
+// A pending provider-key edit captured before the re-auth prompt; replayed once
+// the consent token is minted.
+type PendingProviderChange = {
+  id: string
+  key: string
+}
 
 export function ProvidersSection() {
   const { addToast } = useUiStore()
@@ -23,21 +31,46 @@ export function ProvidersSection() {
   const [showKey, setShowKey] = useState<Record<string, boolean>>({})
   const [testing, setTesting] = useState<Record<string, boolean>>({})
 
+  // The provider-key change waiting on a re-auth token, and whether the dialog
+  // is open. PUT /api/v1/providers/{id} is re-auth gated post-onboarding
+  // (Spec-6 FR-12.2 / FR-6.6); the token is replayed via configureProvider's
+  // header arg.
+  const [pending, setPending] = useState<PendingProviderChange | null>(null)
+  const [reauthOpen, setReauthOpen] = useState(false)
+
   const { data: providers = [], isLoading, isError: providersError } = useQuery({
     queryKey: ['providers'],
     queryFn: fetchProviders,
   })
 
-  const { mutate: doConfigure } = useMutation({
-    mutationFn: ({ id, key }: { id: string; key: string }) => configureProvider(id, key),
+  const { mutate: applyChange, isPending: isSaving } = useMutation({
+    mutationFn: ({ id, key, token }: { id: string; key: string; token: string }) =>
+      configureProvider(id, key, undefined, undefined, token),
     onSuccess: (_, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['providers'] })
       addToast({ message: 'Provider saved', variant: 'success' })
       setExpandedProvider(null)
+      setPending(null)
       setApiKeys((prev) => ({ ...prev, [id]: '' }))
     },
-    onError: (err: Error) => addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' }),
+    onError: (err: Error) => {
+      addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' })
+      setPending(null)
+    },
   })
+
+  // requestChange stages the edit then opens the re-auth dialog. The actual PUT
+  // fires from onReAuthConfirmed once the consent token is minted — mirroring
+  // IntegrationsSection's gated-save flow.
+  const requestChange = (id: string, key: string) => {
+    setPending({ id, key })
+    setReauthOpen(true)
+  }
+
+  const onReAuthConfirmed = (token: string) => {
+    if (!pending) return
+    applyChange({ id: pending.id, key: pending.key, token })
+  }
 
   const handleTest = async (id: string) => {
     setTesting((prev) => ({ ...prev, [id]: true }))
@@ -184,9 +217,10 @@ export function ProvidersSection() {
                       <Button
                         size="sm"
                         onClick={() =>
-                          doConfigure({ id: provider.id, key: apiKeys[provider.id] ?? '' })
+                          requestChange(provider.id, (apiKeys[provider.id] ?? '').trim())
                         }
-                        disabled={!apiKeys[provider.id]?.trim()}
+                        disabled={!apiKeys[provider.id]?.trim() || isSaving}
+                        data-testid={`save-provider-${provider.id}`}
                       >
                         Save & Connect
                       </Button>
@@ -198,6 +232,17 @@ export function ProvidersSection() {
           })}
         </div>
       )}
+
+      <ReAuthDialog
+        open={reauthOpen}
+        onOpenChange={(o) => {
+          setReauthOpen(o)
+          if (!o) setPending(null)
+        }}
+        title="Confirm to update provider"
+        description="Re-type your password to change this provider's API key."
+        onConfirmed={onReAuthConfirmed}
+      />
     </div>
   )
 }

@@ -1270,13 +1270,26 @@ export function fetchProviders(): Promise<Provider[]> {
   return request<Provider[]>('/providers', undefined, z.array(ProviderSchema) as ZodType<Provider[]>)
 }
 
-export function configureProvider(id: string, apiKey?: string, endpoint?: string, model?: string): Promise<Provider> {
+// configureProvider sets a model/provider's API key, endpoint, and/or model.
+// Post-onboarding this PUT is re-auth gated (Spec-6 FR-12.2 / FR-6.6): the server
+// rejects it with 403 unless a single-use consent token (from reAuth) is replayed
+// in the X-Reauth-Token header. The token is OPTIONAL here because the same route
+// is used during onboarding, where no authenticated user exists yet and the gate
+// is skipped (see pkg/gateway/rest.go provider PUT handler).
+export function configureProvider(
+  id: string,
+  apiKey?: string,
+  endpoint?: string,
+  model?: string,
+  reAuthToken?: string,
+): Promise<Provider> {
   const body: Record<string, string> = {}
   if (apiKey !== undefined) body.api_key = apiKey
   if (endpoint !== undefined) body.endpoint = endpoint
   if (model !== undefined) body.model = model
   return request<Provider>(`/providers/${id}`, {
     method: 'PUT',
+    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify(body),
   }, ProviderSchema as ZodType<Provider>)
 }
@@ -2042,9 +2055,16 @@ export function fetchSandboxConfig(): Promise<SandboxConfigResponse> {
   return request<SandboxConfigResponse>('/security/sandbox-config', undefined, SandboxConfigSchema)
 }
 
-export function updateSandboxConfig(body: SandboxConfigUpdate): Promise<SandboxConfigResponse> {
+// updateSandboxConfig persists a sandbox-config mutation. It is re-auth gated
+// (Spec-6 FR-12.2): the server rejects the PUT with 403 unless a single-use
+// consent token (from reAuth) is replayed in the X-Reauth-Token header.
+export function updateSandboxConfig(
+  body: SandboxConfigUpdate,
+  reAuthToken?: string,
+): Promise<SandboxConfigResponse> {
   return request<SandboxConfigResponse>('/security/sandbox-config', {
     method: 'PUT',
+    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify(body),
   }, SandboxConfigSchema)
 }
@@ -2122,11 +2142,17 @@ export function fetchPerformanceSettings(): Promise<PerformanceSettings> {
   return request<PerformanceSettings>('/performance', undefined, PerformanceSettingsSchema)
 }
 
+// updatePerformanceSettings persists the max-parallel-agents concurrency setting.
+// It is re-auth gated (Spec-6 FR-12.2 / Spec-3 FR-6.6): the server rejects the PUT
+// with 403 unless a single-use consent token (from reAuth) is replayed in the
+// X-Reauth-Token header.
 export function updatePerformanceSettings(
   body: PerformanceSettingsUpdate,
+  reAuthToken?: string,
 ): Promise<PerformanceSettings> {
   return request<PerformanceSettings>('/performance', {
     method: 'PUT',
+    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify(body),
   }, PerformanceSettingsSchema)
 }
@@ -2238,9 +2264,17 @@ export function fetchGlobalToolPolicies(): Promise<GlobalToolPolicies> {
   return request<GlobalToolPolicies>('/security/tool-policies', undefined, GlobalToolPoliciesSchema)
 }
 
-export function updateGlobalToolPolicies(cfg: GlobalToolPolicies): Promise<GlobalToolPolicies> {
+// updateGlobalToolPolicies persists the global tool-policy grant. It is re-auth
+// gated (Spec-3 FR-3.3 / Spec-6 FR-12.2): the server rejects the PUT with 403
+// unless a single-use consent token (from reAuth) is replayed in the
+// X-Reauth-Token header.
+export function updateGlobalToolPolicies(
+  cfg: GlobalToolPolicies,
+  reAuthToken?: string,
+): Promise<GlobalToolPolicies> {
   return request<GlobalToolPolicies>('/security/tool-policies', {
     method: 'PUT',
+    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify(cfg),
   }, GlobalToolPoliciesSchema)
 }
