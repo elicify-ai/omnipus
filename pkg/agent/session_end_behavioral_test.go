@@ -171,6 +171,13 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	// poll above can see the first write before the goroutine completes
 	// the second one under heavy CI load. Poll the retro the same way.
 	// Spec-5: retros are now in <workspace>/.omnipus/retros/<date>/.
+	//
+	// os.IsNotExist is treated as a transient condition here: AppendRetro
+	// creates the retros/<date>/ directory atomically, so the directory may
+	// not yet exist when the goroutine is between WriteLastSession and
+	// AppendRetro. Calling t.Fatalf on ENOENT causes a spurious failure under
+	// parallel-sibling load (the goroutine has less CPU time between the two
+	// sequential writes). Only non-"not found" errors are fatal.
 	sessionsDir := filepath.Join(ag.Workspace, ".omnipus", "retros")
 	var foundRetro bool
 	var retroBytes []byte
@@ -178,7 +185,12 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	for time.Now().Before(retroDeadline) && !foundRetro {
 		dateDirs, err := os.ReadDir(sessionsDir)
 		if err != nil {
-			t.Fatalf("read sessions dir: %v", err)
+			if !os.IsNotExist(err) {
+				t.Fatalf("read sessions dir (unexpected error): %v", err)
+			}
+			// Directory not yet created by AppendRetro — retry.
+			time.Sleep(20 * time.Millisecond)
+			continue
 		}
 		for _, d := range dateDirs {
 			if !d.IsDir() {
