@@ -3368,7 +3368,24 @@ export interface components {
          * @description Stable identifier for a built-in channel.
          * @enum {string}
          */
-        ChannelId: "webchat" | "telegram" | "discord" | "slack" | "whatsapp" | "feishu" | "dingtalk" | "wecom" | "weixin" | "line" | "qq" | "irc" | "matrix" | "google-chat";
+        ChannelId: "webchat" | "telegram" | "discord" | "slack" | "whatsapp" | "feishu" | "dingtalk" | "wecom" | "weixin" | "line" | "qq" | "irc" | "matrix" | "google-chat" | "email";
+        /**
+         * ChannelIdentity
+         * @description Identifies whether an inbound channel connection acts on behalf of a specific agent ("agent" kind) or routes as the default user ("user" kind). Persisted per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
+         */
+        ChannelIdentity: {
+            /**
+             * @description Routing kind for this channel instance.
+             * @example agent
+             * @enum {string}
+             */
+            kind: "agent" | "user";
+            /**
+             * @description The agent ID when kind is "agent". Empty or omitted when kind is "user".
+             * @example mia
+             */
+            id?: string;
+        };
         /**
          * ChannelEntry
          * @description A communication channel entry returned by GET /api/v1/channels.
@@ -3380,6 +3397,11 @@ export interface components {
              */
             id: components["schemas"]["ChannelId"];
             /**
+             * @description The map key under which this instance is stored in config.json (currently equals the channel type in v0.1 cap-1). Included in responses so the SPA can address per-instance configure/enable/routing endpoints without hardcoding the key.
+             * @example telegram
+             */
+            instance_id?: string;
+            /**
              * @description Human-readable channel name.
              * @example Telegram
              */
@@ -3389,7 +3411,7 @@ export interface components {
              * @example webhook
              * @enum {string}
              */
-            transport: "websocket" | "webhook" | "bridge" | "native" | "tcp" | "http" | "serial";
+            transport: "websocket" | "webhook" | "bridge" | "native" | "tcp" | "http" | "serial" | "email";
             /**
              * @description Whether this channel is currently enabled.
              * @example false
@@ -3400,6 +3422,8 @@ export interface components {
              * @example Telegram Bot API
              */
             description: string;
+            /** @description Optional routing identity override for this channel instance. When set, messages from this channel are routed as the specified agent or as the default user, overriding the normal per-sender routing rules. */
+            identity?: components["schemas"]["ChannelIdentity"];
             /**
              * @description WhatsApp only: whether the native (whatsmeow) transport is compiled into this binary. False on a lite build or an architecture where it is excluded. Omitted for channels to which it does not apply. When false, clients MUST NOT offer native mode (the QR pairing flow cannot work).
              * @example true
@@ -5271,6 +5295,10 @@ export interface components {
          * @description Request body for PUT /api/v1/channels/{id}/configure. Merges the supplied fields into the channel's config section. The "enabled" field is reserved and silently removed — use the separate enable/disable endpoints instead. Field names and value types are channel-specific; unknown fields are stored as-is and passed through to the channel implementation.
          */
         ChannelConfigureRequest: {
+            /** @description Optional: the instance map key to configure. In v0.1 (cap-1/type) this equals the channel type and can be omitted. Reserved for v0.3 multi-instance support — the backend ignores this field today (the URL {id} is the key). */
+            instance_id?: string;
+            /** @description Optional routing identity override for this channel instance. Persisted per instance; wired into ResolveRoute for inbound messages on this channel. */
+            identity?: components["schemas"]["ChannelIdentity"];
             /** @description Channel authentication token (e.g. Telegram bot token, Discord bot token). */
             token?: string;
             /** @description Alias for token used by some channels. */
@@ -5281,6 +5309,33 @@ export interface components {
             app_secret?: string;
             /** @description HMAC secret for verifying incoming webhook payloads. */
             webhook_secret?: string;
+            /**
+             * @description IMAP server hostname (email channel). TLS required.
+             * @example imap.gmail.com
+             */
+            imap_host?: string;
+            /**
+             * @description IMAP server port (email channel). Defaults to 993 (IMAPS).
+             * @example 993
+             */
+            imap_port?: number;
+            /**
+             * @description SMTP server hostname for outbound email (email channel). TLS required.
+             * @example smtp.gmail.com
+             */
+            smtp_host?: string;
+            /**
+             * @description SMTP server port (email channel). Defaults to 587 (STARTTLS) or 465 (SMTPS).
+             * @example 587
+             */
+            smtp_port?: number;
+            /**
+             * @description Login username for IMAP and SMTP authentication (email channel).
+             * @example bot@example.com
+             */
+            username?: string;
+            /** @description Login password for IMAP and SMTP authentication (email channel). Stored encrypted in the credential store — never returned in GET responses. */
+            password?: string;
         } & {
             [key: string]: unknown;
         };
@@ -10473,6 +10528,7 @@ export type AgentToolEntry = components["schemas"]["AgentToolEntry"];
 export type ToolPolicy = components["schemas"]["ToolPolicy"];
 export type GlobalToolPolicies = components["schemas"]["GlobalToolPolicies"];
 export type ChannelId = components["schemas"]["ChannelId"];
+export type ChannelIdentity = components["schemas"]["ChannelIdentity"];
 export type ChannelEntry = components["schemas"]["ChannelEntry"];
 export type RetentionConfig = components["schemas"]["RetentionConfig"];
 export type RetentionSweepResult = components["schemas"]["RetentionSweepResult"];

@@ -14,6 +14,14 @@ properties:
     $ref: './ChannelId.yaml'
     description: Canonical channel identifier.
     example: telegram
+  instance_id:
+    type: string
+    description: >
+      The map key under which this instance is stored in config.json
+      (currently equals the channel type in v0.1 cap-1). Included in responses
+      so the SPA can address per-instance configure/enable/routing endpoints
+      without hardcoding the key.
+    example: telegram
   name:
     type: string
     description: Human-readable channel name.
@@ -29,6 +37,7 @@ properties:
       - tcp
       - http
       - serial
+      - email
     example: webhook
   enabled:
     type: boolean
@@ -38,6 +47,12 @@ properties:
     type: string
     description: Short description of the channel.
     example: Telegram Bot API
+  identity:
+    $ref: './ChannelIdentity.yaml'
+    description: >
+      Optional routing identity override for this channel instance. When set,
+      messages from this channel are routed as the specified agent or as the
+      default user, overriding the normal per-sender routing rules.
   native_available:
     type: boolean
     description: >

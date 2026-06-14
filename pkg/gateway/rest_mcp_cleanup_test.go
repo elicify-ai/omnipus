@@ -35,7 +35,7 @@ import (
 func TestAddMCPServer_SSE_ValidHTTPS(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	transport := gen.Sse
+	transport := gen.McpServerCreateTransportSse
 	mcpURL := "https://mcp.example.com/sse"
 	body := gen.McpServerCreate{
 		Name:      "my-sse-server",
@@ -90,7 +90,7 @@ func TestAddMCPServer_SSE_ValidHTTPS(t *testing.T) {
 func TestAddMCPServer_SSE_NoURL(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	transport := gen.Sse
+	transport := gen.McpServerCreateTransportSse
 	body := gen.McpServerCreate{
 		Name:      "no-url-server",
 		Transport: transport,
@@ -121,7 +121,7 @@ func TestAddMCPServer_SSE_NoURL(t *testing.T) {
 func TestAddMCPServer_SSE_NonHTTPS_NonLoopback(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	transport := gen.Sse
+	transport := gen.McpServerCreateTransportSse
 	mcpURL := "http://evil.example.com/sse"
 	body := gen.McpServerCreate{
 		Name:      "plain-http-server",
@@ -151,7 +151,7 @@ func TestAddMCPServer_SSE_NonHTTPS_NonLoopback(t *testing.T) {
 func TestAddMCPServer_SSE_HTTP_Loopback(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	transport := gen.Sse
+	transport := gen.McpServerCreateTransportSse
 	mcpURL := "http://localhost:3000/sse"
 	body := gen.McpServerCreate{
 		Name:      "loopback-server",
@@ -181,7 +181,7 @@ func TestAddMCPServer_SSE_HTTP_Loopback(t *testing.T) {
 func TestAddMCPServer_Stdio_NoCommand(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	transport := gen.Stdio
+	transport := gen.McpServerCreateTransportStdio
 	body := gen.McpServerCreate{
 		Name:      "no-cmd-server",
 		Transport: transport,

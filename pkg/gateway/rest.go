@@ -4420,6 +4420,13 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 			Enabled:     channelEnabledByType("google-chat"),
 			Description: "Google Chat (webhook or service account)",
 		},
+		{
+			Id:          "email",
+			Name:        "Email",
+			Transport:   "email",
+			Enabled:     channelEnabledByType("email"),
+			Description: "Email (IMAP inbound + SMTP outbound, TLS only)",
+		},
 	}
 
 	// Overlay degraded state from the runtime channel manager. Channels that
@@ -4492,10 +4499,11 @@ func applyDegradedOverlay(channelList []gen.ChannelEntry, failed []channels.Chan
 // named enum constants (not string literals), so removing or renaming a ChannelId
 // value breaks this build until the list is brought back in sync with the contract.
 var validChannelIDs = map[gen.ChannelId]bool{
-	gen.Telegram: true, gen.Discord: true, gen.Slack: true, gen.Whatsapp: true,
-	gen.Feishu: true, gen.Dingtalk: true, gen.Wecom: true, gen.Weixin: true,
-	gen.Line: true, gen.Qq: true, gen.Irc: true,
-	gen.Matrix: true, gen.GoogleChat: true,
+	gen.ChannelIdTelegram: true, gen.ChannelIdDiscord: true, gen.ChannelIdSlack: true, gen.ChannelIdWhatsapp: true,
+	gen.ChannelIdFeishu: true, gen.ChannelIdDingtalk: true, gen.ChannelIdWecom: true, gen.ChannelIdWeixin: true,
+	gen.ChannelIdLine: true, gen.ChannelIdQq: true, gen.ChannelIdIrc: true,
+	gen.ChannelIdMatrix: true, gen.ChannelIdGoogleChat: true,
+	gen.ChannelIdEmail: true,
 }
 
 // channelWildcardIdx returns the index of the channel-wildcard AgentBinding
@@ -4699,45 +4707,53 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 	jsonOK(w, gen.ChannelEnabledResponse{Id: gen.ChannelEnabledResponseId(channelID), Enabled: enabled})
 }
 
-// channelSensitiveFields maps channel IDs to their secret/credential field names.
+// channelSensitiveFields maps channel TYPE to their secret/credential field names.
 // These are redacted in GET responses (replaced with "[configured]" if set).
+// Keyed by TYPE (not instance ID) because field sensitivity is type-level knowledge
+// shared across all instances of that type (SEC-23 type-vs-instance boundary).
 //
 // drift-guard: keyed by the generated gen.ChannelId enum with named enum
 // constants, so removing/renaming a ChannelId value breaks this build.
 var channelSensitiveFields = map[gen.ChannelId][]string{
-	gen.Telegram:   {"token"},
-	gen.Discord:    {"token"},
-	gen.Slack:      {"bot_token", "app_token"},
-	gen.Feishu:     {"app_secret", "encrypt_key", "verification_token"},
-	gen.Matrix:     {"access_token", "crypto_passphrase"},
-	gen.Line:       {"channel_secret", "channel_access_token"},
-	gen.Dingtalk:   {"client_secret"},
-	gen.Qq:         {"app_secret"},
-	gen.Wecom:      {"secret"},
-	gen.Irc:        {"password", "nickserv_password", "sasl_password"},
-	gen.Weixin:     {"token"},
-	gen.Whatsapp:   {},
-	gen.GoogleChat: {"webhook_url", "service_account_json"},
+	gen.ChannelIdTelegram:   {"token"},
+	gen.ChannelIdDiscord:    {"token"},
+	gen.ChannelIdSlack:      {"bot_token", "app_token"},
+	gen.ChannelIdFeishu:     {"app_secret", "encrypt_key", "verification_token"},
+	gen.ChannelIdMatrix:     {"access_token", "crypto_passphrase"},
+	gen.ChannelIdLine:       {"channel_secret", "channel_access_token"},
+	gen.ChannelIdDingtalk:   {"client_secret"},
+	gen.ChannelIdQq:         {"app_secret"},
+	gen.ChannelIdWecom:      {"secret"},
+	gen.ChannelIdIrc:        {"password", "nickserv_password", "sasl_password"},
+	gen.ChannelIdWeixin:     {"token"},
+	gen.ChannelIdWhatsapp:   {},
+	gen.ChannelIdGoogleChat: {"webhook_url", "service_account_json"},
+	// email: password is the only secret field (username is public config, not a secret).
+	gen.ChannelIdEmail: {"password"},
 }
 
-// channelRequiredFields maps channel IDs to fields that must be non-empty for the channel to work.
+// channelRequiredFields maps channel TYPE to fields that must be non-empty for the
+// channel to work. Keyed by TYPE for the same reason as channelSensitiveFields —
+// required fields are type-level knowledge, not instance-specific.
 //
 // drift-guard: keyed by the generated gen.ChannelId enum with named enum
 // constants, so removing/renaming a ChannelId value breaks this build.
 var channelRequiredFields = map[gen.ChannelId][]string{
-	gen.Telegram:   {"token"},
-	gen.Discord:    {"token"},
-	gen.Slack:      {"bot_token"},
-	gen.Feishu:     {"app_id", "app_secret"},
-	gen.Matrix:     {"homeserver", "user_id", "access_token"},
-	gen.Line:       {"channel_secret", "channel_access_token"},
-	gen.Dingtalk:   {"client_id", "client_secret"},
-	gen.Qq:         {"app_id", "app_secret"},
-	gen.Wecom:      {"bot_id", "secret"},
-	gen.Irc:        {"server", "nick"},
-	gen.Weixin:     {"token"},
-	gen.Whatsapp:   {},
-	gen.GoogleChat: {},
+	gen.ChannelIdTelegram:   {"token"},
+	gen.ChannelIdDiscord:    {"token"},
+	gen.ChannelIdSlack:      {"bot_token"},
+	gen.ChannelIdFeishu:     {"app_id", "app_secret"},
+	gen.ChannelIdMatrix:     {"homeserver", "user_id", "access_token"},
+	gen.ChannelIdLine:       {"channel_secret", "channel_access_token"},
+	gen.ChannelIdDingtalk:   {"client_id", "client_secret"},
+	gen.ChannelIdQq:         {"app_id", "app_secret"},
+	gen.ChannelIdWecom:      {"bot_id", "secret"},
+	gen.ChannelIdIrc:        {"server", "nick"},
+	gen.ChannelIdWeixin:     {"token"},
+	gen.ChannelIdWhatsapp:   {},
+	gen.ChannelIdGoogleChat: {},
+	// email: imap_host, smtp_host, username, and password (credential) are all required.
+	gen.ChannelIdEmail: {"imap_host", "smtp_host", "username", "password"},
 }
 
 // redactChannelConfig returns a copy of cfg with sensitive fields replaced by a
