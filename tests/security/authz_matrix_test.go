@@ -378,6 +378,17 @@ func TestAuthorizationMatrix(t *testing.T) {
 					req.AddCookie(&http.Cookie{Name: "__Host-csrf", Value: csrfToken})
 					req.Header.Set("X-Csrf-Token", csrfToken)
 				}
+				// Re-auth gate (Spec-6 FR-12.2): several sensitive admin PUT routes
+				// (e.g. /security/tool-policies) require a single-use consent token
+				// AFTER the admin-role check (RequireAdmin → requireReAuth). User/anon
+				// rows fail earlier (admin-required 403 / CSRF), so only the admin row
+				// reaches — and must clear — the re-auth gate. Mint a token for the
+				// onboarded admin and replay it so the row exercises its intended
+				// authz outcome (200) rather than stalling at the orthogonal gate.
+				if tc.req.role == roleAdmin && isReAuthGatedPUT(tc.req.method, tc.req.path) {
+					rt := mintReAuthToken(t, gw.HTTPClient, gw.URL, gw.URL, token, rbacAdminPassword)
+					req.Header.Set(reAuthHeader, rt)
+				}
 			}
 			resp, err := gw.HTTPClient.Do(req)
 			if err != nil {
