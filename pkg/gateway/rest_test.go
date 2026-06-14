@@ -848,6 +848,7 @@ func TestUpdateAgentTools_InvalidMode(t *testing.T) {
 	body := `{"builtin":{"default_policy":"bogus"}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent/tools", strings.NewReader(body))
+	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant
 	api.HandleAgents(w, r)
 
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
@@ -1395,6 +1396,7 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	body := `{"builtin":{"mode":"explicit","visible":["read_file","web_search"]}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/update-agent/tools", strings.NewReader(body))
+	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant
 	api.HandleAgents(w, r)
 
 	// Then: HTTP 200
@@ -1486,6 +1488,7 @@ func TestUpdateAgentTools_ReloadFailure_Returns503(t *testing.T) {
 	body := `{"builtin":{"mode":"inherit"}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/reload-test-agent/tools", strings.NewReader(body))
+	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant
 	api.HandleAgents(w, r)
 
 	// Then: HTTP 503 (reload failed).

@@ -583,6 +583,11 @@ func TestProviderPUT_StoresAPIKeyRef(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.URL.Path = "/api/v1/providers/anthropic"
 	req = injectUser(req, "admin", config.UserRoleAdmin)
+	// FR-12.2/FR-6.6: a post-onboarding provider-key PUT requires the re-auth
+	// consent token (mint one for the injected "admin" user).
+	provTok, provTokErr := api.reauthStoreOrInit().mint("admin")
+	require.NoError(t, provTokErr)
+	req.Header.Set(reAuthHeader, provTok)
 	w := httptest.NewRecorder()
 
 	api.HandleProviders(w, req)
@@ -659,6 +664,11 @@ func TestProviderPUT_RefusesWhenNoMasterKey(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.URL.Path = "/api/v1/providers/openai"
 	req = injectUser(req, "admin", config.UserRoleAdmin)
+	// FR-12.2/FR-6.6: a post-onboarding provider-key PUT requires the re-auth
+	// consent token (mint one for the injected "admin" user).
+	provTok, provTokErr := api.reauthStoreOrInit().mint("admin")
+	require.NoError(t, provTokErr)
+	req.Header.Set(reAuthHeader, provTok)
 	w := httptest.NewRecorder()
 
 	api.HandleProviders(w, req)

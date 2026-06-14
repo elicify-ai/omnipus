@@ -247,7 +247,7 @@ func TestPutSandboxConfig_ValidateInbound_InvalidBody(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config", strings.NewReader(""))
 	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
+	r = withReAuthAdmin(t, api, r)
 
 	api.putSandboxConfig(w, r)
 
@@ -261,7 +261,7 @@ func TestPutSandboxConfig_ValidateInbound_NullBody(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config", strings.NewReader("null"))
 	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
+	r = withReAuthAdmin(t, api, r)
 
 	api.putSandboxConfig(w, r)
 

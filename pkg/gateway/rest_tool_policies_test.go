@@ -56,7 +56,8 @@ func TestHandleToolPolicies_PUT_ReturnsPersistedValues(t *testing.T) {
 	body := `{"default_policy":"ask","policies":{"exec":"deny","web_search":"allow"}}`
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r) // RequireAdmin requires admin role in context
+	// withReAuthAdmin supplies the admin user/role AND the FR-3.3 re-auth token.
+	r = withReAuthAdmin(t, api, r)
 	w := httptest.NewRecorder()
 	api.HandleToolPolicies(w, r)
 
@@ -80,7 +81,7 @@ func TestHandleToolPolicies_PUT_ReadBack(t *testing.T) {
 	putBody := `{"default_policy":"deny","policies":{"browser.evaluate":"ask"}}`
 	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(putBody))
 	putReq.Header.Set("Content-Type", "application/json")
-	putReq = withAdminRole(putReq) // RequireAdmin requires admin role in context
+	putReq = withReAuthAdmin(t, api, putReq) // admin user/role + FR-3.3 re-auth token
 	putW := httptest.NewRecorder()
 	api.HandleToolPolicies(putW, putReq)
 	require.Equal(t, http.StatusOK, putW.Code, "PUT must succeed: %s", putW.Body)
@@ -105,7 +106,7 @@ func TestHandleToolPolicies_PUT_InvalidDefaultPolicy(t *testing.T) {
 	body := `{"default_policy":"invalid"}`
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r) // RequireAdmin requires admin role in context
+	r = withReAuthAdmin(t, api, r) // admin user/role + FR-3.3 re-auth token
 	w := httptest.NewRecorder()
 	api.HandleToolPolicies(w, r)
 
@@ -119,7 +120,7 @@ func TestHandleToolPolicies_PUT_InvalidPerToolPolicy(t *testing.T) {
 	body := `{"default_policy":"allow","policies":{"exec":"maybe"}}`
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r) // RequireAdmin requires admin role in context
+	r = withReAuthAdmin(t, api, r) // admin user/role + FR-3.3 re-auth token
 	w := httptest.NewRecorder()
 	api.HandleToolPolicies(w, r)
 
@@ -131,7 +132,7 @@ func TestHandleToolPolicies_PUT_BadJSON(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/tool-policies",
 		strings.NewReader(`not-json`))
-	r = withAdminRole(r) // RequireAdmin requires admin role in context
+	r = withReAuthAdmin(t, api, r) // admin user/role + FR-3.3 re-auth token
 	w := httptest.NewRecorder()
 	api.HandleToolPolicies(w, r)
 

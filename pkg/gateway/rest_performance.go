@@ -10,6 +10,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/config"
 )
 
 // HandlePerformance handles GET and PUT /api/v1/performance.
@@ -44,6 +45,21 @@ func (a *restAPI) getPerformance(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
+	// Re-auth gate (Spec-6 FR-12.2 / Spec-3 FR-6.6): the Max-parallel-agents
+	// performance setting is a sensitive HTTP-layer change and requires the
+	// single-use re-auth consent token — the same gate the Integrations PUT
+	// enforces. RequireNotBypass (already in adminWrap) is a 503 dev-mode guard,
+	// NOT this consent check. The user is guaranteed in context here because the
+	// route is admin-wrapped.
+	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
+	if !ok || user == nil {
+		jsonErr(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	if !a.requireReAuth(w, r, user.Username) {
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound

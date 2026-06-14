@@ -3730,6 +3730,17 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
+		// Re-auth gate (Spec-6 FR-12.2 / FR-6.6): a model/provider API-key mutation
+		// is a sensitive HTTP-layer settings change and requires the single-use
+		// re-auth consent token — the same gate the Integrations PUT enforces.
+		// Skipped only during onboarding (no authenticated user yet), where the
+		// provider is configured before any password exists. When a user IS in
+		// context (post-onboarding edits), the token is mandatory.
+		if reauthUser, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && reauthUser != nil {
+			if !a.requireReAuth(w, r, reauthUser.Username) {
+				return
+			}
+		}
 		providerID := sub
 		var req gen.ProviderUpdateRequest
 		validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
@@ -4268,6 +4279,18 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// Use coreagent.IsCoreAgent or check the Locked flag.
 	if foundAgent.Locked {
 		jsonErr(w, http.StatusForbidden, fmt.Sprintf("agent %q is locked and cannot be modified", agentID))
+		return
+	}
+
+	// Re-auth gate (Spec-3 FR-3.3 / Spec-6 FR-12.2): changing which tools an
+	// agent may call is a sensitive capability grant and requires the single-use
+	// re-auth consent token — the same gate the Integrations PUT enforces.
+	if user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); ok && user != nil {
+		if !a.requireReAuth(w, r, user.Username) {
+			return
+		}
+	} else {
+		jsonErr(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
 

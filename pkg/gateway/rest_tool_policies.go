@@ -12,6 +12,7 @@ import (
 
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/gateway/middleware"
 )
 
@@ -68,6 +69,19 @@ func (a *restAPI) HandleToolPolicies(w http.ResponseWriter, r *http.Request) {
 // putToolPolicies is the admin-only body of PUT /api/v1/security/tool-policies.
 // It is called only after RequireAdmin has confirmed the caller holds admin role.
 func (a *restAPI) putToolPolicies(w http.ResponseWriter, r *http.Request) {
+	// Re-auth gate (Spec-3 FR-3.3 / Spec-6 FR-12.2): changing the global tool
+	// policy is a sensitive capability grant and requires the single-use re-auth
+	// consent token — the same gate the Integrations PUT enforces. RequireAdmin
+	// (already applied above) checks role; this re-verifies the one password.
+	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
+	if !ok || user == nil {
+		jsonErr(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	if !a.requireReAuth(w, r, user.Username) {
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
 	var body gen.GlobalToolPolicies
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
