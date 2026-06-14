@@ -58,6 +58,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/policy"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/sandbox"
+	"github.com/dapicom-ai/omnipus/pkg/skills"
 	"github.com/dapicom-ai/omnipus/pkg/state"
 	systools "github.com/dapicom-ai/omnipus/pkg/sysagent/tools"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
@@ -686,6 +687,61 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// tools that trigger hot-reload (e.g., system.agent.create).
 	// WireSysagentDeps immediately registers all 41 system.* tools on every agent
 	// in the current registry and stashes deps for re-application on hot-reload.
+
+	// Build skill engine components for the sysagent tool deps (Spec-6 U1).
+	//
+	// SkillsLoader: workspace > global (~/.omnipus/skills) > builtin (CWD/skills
+	// or OMNIPUS_BUILTIN_SKILLS). Priority order follows context.go::NewContextBuilder.
+	skillsBuiltinDir := strings.TrimSpace(os.Getenv(config.EnvBuiltinSkills))
+	if skillsBuiltinDir == "" {
+		wd, wdErr := os.Getwd()
+		if wdErr != nil {
+			slog.Warn("gateway: os.Getwd failed; builtin skills dir unavailable", "error", wdErr)
+			wd = homePath
+		}
+		skillsBuiltinDir = filepath.Join(wd, "skills")
+	}
+	skillsWorkspace := cfg.WorkspacePath()
+	skillsGlobalDir := filepath.Join(homePath, "skills")
+	sysSkillsLoader := skills.NewSkillsLoader(skillsWorkspace, skillsGlobalDir, skillsBuiltinDir)
+
+	// RegistryManager: fans out search/install to all configured registries.
+	// The SSRF checker (nil when SSRF is disabled) is injected into the ClawHub
+	// HTTP client so outbound registry traffic honors the SSRF policy (SEC-24).
+	clawHubCfg := cfg.Tools.Skills.Registries.ClawHub
+	regCfg := skills.RegistryConfig{
+		ClawHub: skills.ClawHubConfig{
+			Enabled:         clawHubCfg.Enabled,
+			BaseURL:         clawHubCfg.BaseURL,
+			AuthToken:       bundle.GetString(clawHubCfg.AuthTokenRef),
+			SearchPath:      clawHubCfg.SearchPath,
+			SkillsPath:      clawHubCfg.SkillsPath,
+			DownloadPath:    clawHubCfg.DownloadPath,
+			Timeout:         clawHubCfg.Timeout,
+			MaxZipSize:      clawHubCfg.MaxZipSize,
+			MaxResponseSize: clawHubCfg.MaxResponseSize,
+		},
+		MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
+	}
+	ssrfChecker := agent.GetSSRFChecker(agentLoop)
+	if ssrfChecker != nil {
+		regCfg.ClawHub.HTTPClient = ssrfChecker.SafeClient()
+	}
+	sysRegistryManager := skills.NewRegistryManagerFromConfig(regCfg)
+
+	// SkillInstaller: downloads and installs skills into the operator workspace.
+	// GitHub token from credentials (optional; nil → unauthenticated API calls).
+	githubToken := bundle.GetString(cfg.Tools.Skills.Github.TokenRef)
+	githubProxy := cfg.Tools.Skills.Github.Proxy
+	sysSkillInstaller, err := skills.NewSkillInstallerWithSSRF(
+		skillsWorkspace, githubToken, githubProxy, ssrfChecker,
+	)
+	if err != nil {
+		slog.Warn("gateway: could not create skill installer; system.skill.install unavailable",
+			"error", err)
+		sysSkillInstaller = nil
+	}
+
 	sysAgentDeps := &systools.Deps{
 		Home:         homePath,
 		ConfigPath:   configPath,
@@ -694,8 +750,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		SaveConfigLocked: func(c *config.Config) error {
 			return config.SaveConfig(configPath, c)
 		},
-		CredStore:  credStore,
-		ReloadFunc: reloadTrigger,
+		CredStore:       credStore,
+		ReloadFunc:      reloadTrigger,
+		SkillsLoader:    sysSkillsLoader,
+		RegistryManager: sysRegistryManager,
+		SkillInstaller:  sysSkillInstaller,
 	}
 	agentLoop.WireSysagentDeps(sysAgentDeps)
 

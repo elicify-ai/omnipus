@@ -20,6 +20,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/credentials"
 	"github.com/dapicom-ai/omnipus/pkg/fileutil"
+	"github.com/dapicom-ai/omnipus/pkg/skills"
 )
 
 // Deps bundles all shared dependencies for system tools.
@@ -103,6 +104,18 @@ type Deps struct {
 	// ReloadFunc triggers a hot-reload of the agent loop so newly created agents
 	// become available immediately. Nil in tests or when not wired.
 	ReloadFunc func() error
+	// SkillsLoader provides access to the locally installed skills tree
+	// (workspace, global, and builtin skill directories). Nil in tests or when
+	// not wired — callers must nil-check before use.
+	SkillsLoader *skills.SkillsLoader
+	// RegistryManager coordinates remote skill registries (ClawHub, etc.) for
+	// search and install-by-slug operations. Nil when no registries are
+	// configured or when not wired — callers must nil-check before use.
+	RegistryManager *skills.RegistryManager
+	// SkillInstaller downloads and installs skills from GitHub or a registry
+	// into the operator workspace. Nil in tests or when not wired — callers
+	// must nil-check before use.
+	SkillInstaller *skills.SkillInstaller
 }
 
 // clearMaps recursively walks v and zeros every map field it finds. Called
