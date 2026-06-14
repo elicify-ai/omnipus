@@ -17,23 +17,9 @@ func NewClaudeProvider(token string) *ClaudeProvider {
 	}
 }
 
-func NewClaudeProviderWithBaseURL(token, apiBase string) *ClaudeProvider {
-	return &ClaudeProvider{
-		delegate: anthropicprovider.NewProviderWithBaseURL(token, apiBase),
-	}
-}
-
 func NewClaudeProviderWithTokenSource(token string, tokenSource func() (string, error)) *ClaudeProvider {
 	return &ClaudeProvider{
 		delegate: anthropicprovider.NewProviderWithTokenSource(token, tokenSource),
-	}
-}
-
-func NewClaudeProviderWithTokenSourceAndBaseURL(
-	token string, tokenSource func() (string, error), apiBase string,
-) *ClaudeProvider {
-	return &ClaudeProvider{
-		delegate: anthropicprovider.NewProviderWithTokenSourceAndBaseURL(token, tokenSource, apiBase),
 	}
 }
 

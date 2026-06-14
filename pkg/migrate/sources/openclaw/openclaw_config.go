@@ -374,43 +374,6 @@ func (c *OpenClawConfig) IsChannelEnabled(name string) bool {
 	}
 }
 
-func GetChannelAllowFrom(ch any) []string {
-	switch c := ch.(type) {
-	case *OpenClawTelegramConfig:
-		if c == nil {
-			return nil
-		}
-		return c.AllowFrom
-	case *OpenClawDiscordConfig:
-		if c == nil {
-			return nil
-		}
-		return c.AllowFrom
-	case *OpenClawSlackConfig:
-		if c == nil {
-			return nil
-		}
-		return c.AllowFrom
-	case *OpenClawMatrixConfig:
-		if c == nil {
-			return nil
-		}
-		return c.AllowFrom
-	case *OpenClawWhatsAppConfig:
-		if c == nil {
-			return nil
-		}
-		return c.AllowFrom
-	case *OpenClawFeishuConfig:
-		if c == nil {
-			return nil
-		}
-		return c.AllowFrom
-	default:
-		return nil
-	}
-}
-
 func (c *OpenClawConfig) GetDefaultModel() (provider, model string) {
 	if c.Agents == nil || c.Agents.Defaults == nil || c.Agents.Defaults.Model == nil {
 		return "anthropic", "claude-sonnet-4-20250514"

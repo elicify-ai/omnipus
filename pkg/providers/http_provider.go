@@ -17,18 +17,6 @@ type HTTPProvider struct {
 	delegate *openai_compat.Provider
 }
 
-func NewHTTPProvider(apiKey, apiBase, proxy string) (*HTTPProvider, error) {
-	p, err := openai_compat.NewProvider(apiKey, apiBase, proxy)
-	if err != nil {
-		return nil, err
-	}
-	return &HTTPProvider{delegate: p}, nil
-}
-
-func NewHTTPProviderWithMaxTokensField(apiKey, apiBase, proxy, maxTokensField string) (*HTTPProvider, error) {
-	return NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(apiKey, apiBase, proxy, maxTokensField, 0, nil)
-}
-
 func NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
 	apiKey, apiBase, proxy, maxTokensField string,
 	requestTimeoutSeconds int,

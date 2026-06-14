@@ -1186,10 +1186,9 @@ type ChannelInstanceConfig struct {
 
 	// --- QQ-specific fields ---
 	// AppID (see Feishu above) is also used by QQ.
-	AppSecretRef2        string `json:"app_secret_ref2,omitempty"` // unused; QQ reuses AppSecretRef
-	MaxMessageLength     int    `json:"max_message_length,omitempty"`
-	MaxBase64FileSizeMiB int64  `json:"max_base64_file_size_mib,omitempty"`
-	SendMarkdown         bool   `json:"send_markdown,omitempty"`
+	MaxMessageLength     int   `json:"max_message_length,omitempty"`
+	MaxBase64FileSizeMiB int64 `json:"max_base64_file_size_mib,omitempty"`
+	SendMarkdown         bool  `json:"send_markdown,omitempty"`
 
 	// --- DingTalk-specific fields ---
 	ClientID        string `json:"client_id,omitempty"`

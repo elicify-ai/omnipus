@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -622,7 +623,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	}
 	if req.CoreTeam != nil {
 		deduped := deduplicateStrings(*req.CoreTeam)
-		if !stringSlicesEqual(deduped, ws.CoreTeam) {
+		if !slices.Equal(deduped, ws.CoreTeam) {
 			ws.CoreTeam = deduped
 			changed = true
 		}
@@ -786,18 +787,4 @@ func deduplicateStrings(in []string) []string {
 		}
 	}
 	return out
-}
-
-// stringSlicesEqual returns true if a and b contain the same elements in the
-// same order.
-func stringSlicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
