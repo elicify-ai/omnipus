@@ -58,6 +58,63 @@ func (e ActivityEventsResponseEventsType) Valid() bool {
 	}
 }
 
+// Defines values for AgentDelegationPolicyAcceptFromKind.
+const (
+	AgentDelegationPolicyAcceptFromKindLocal     AgentDelegationPolicyAcceptFromKind = "local"
+	AgentDelegationPolicyAcceptFromKindRemoteA2a AgentDelegationPolicyAcceptFromKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentDelegationPolicyAcceptFromKind enum.
+func (e AgentDelegationPolicyAcceptFromKind) Valid() bool {
+	switch e {
+	case AgentDelegationPolicyAcceptFromKindLocal:
+		return true
+	case AgentDelegationPolicyAcceptFromKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDelegationPolicyModes.
+const (
+	AgentDelegationPolicyModesAwait      AgentDelegationPolicyModes = "await"
+	AgentDelegationPolicyModesBackground AgentDelegationPolicyModes = "background"
+	AgentDelegationPolicyModesTask       AgentDelegationPolicyModes = "task"
+)
+
+// Valid indicates whether the value is a known member of the AgentDelegationPolicyModes enum.
+func (e AgentDelegationPolicyModes) Valid() bool {
+	switch e {
+	case AgentDelegationPolicyModesAwait:
+		return true
+	case AgentDelegationPolicyModesBackground:
+		return true
+	case AgentDelegationPolicyModesTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDelegationPolicyToKind.
+const (
+	AgentDelegationPolicyToKindLocal     AgentDelegationPolicyToKind = "local"
+	AgentDelegationPolicyToKindRemoteA2a AgentDelegationPolicyToKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentDelegationPolicyToKind enum.
+func (e AgentDelegationPolicyToKind) Valid() bool {
+	switch e {
+	case AgentDelegationPolicyToKindLocal:
+		return true
+	case AgentDelegationPolicyToKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentSandboxProfile.
 const (
 	AgentSandboxProfileHost         AgentSandboxProfile = "host"
@@ -163,6 +220,63 @@ func (e AgentType) Valid() bool {
 	case AgentTypeCustom:
 		return true
 	case AgentTypeSystem:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestDelegationPolicyAcceptFromKind.
+const (
+	AgentCreateRequestDelegationPolicyAcceptFromKindLocal     AgentCreateRequestDelegationPolicyAcceptFromKind = "local"
+	AgentCreateRequestDelegationPolicyAcceptFromKindRemoteA2a AgentCreateRequestDelegationPolicyAcceptFromKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestDelegationPolicyAcceptFromKind enum.
+func (e AgentCreateRequestDelegationPolicyAcceptFromKind) Valid() bool {
+	switch e {
+	case AgentCreateRequestDelegationPolicyAcceptFromKindLocal:
+		return true
+	case AgentCreateRequestDelegationPolicyAcceptFromKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestDelegationPolicyModes.
+const (
+	AgentCreateRequestDelegationPolicyModesAwait      AgentCreateRequestDelegationPolicyModes = "await"
+	AgentCreateRequestDelegationPolicyModesBackground AgentCreateRequestDelegationPolicyModes = "background"
+	AgentCreateRequestDelegationPolicyModesTask       AgentCreateRequestDelegationPolicyModes = "task"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestDelegationPolicyModes enum.
+func (e AgentCreateRequestDelegationPolicyModes) Valid() bool {
+	switch e {
+	case AgentCreateRequestDelegationPolicyModesAwait:
+		return true
+	case AgentCreateRequestDelegationPolicyModesBackground:
+		return true
+	case AgentCreateRequestDelegationPolicyModesTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestDelegationPolicyToKind.
+const (
+	AgentCreateRequestDelegationPolicyToKindLocal     AgentCreateRequestDelegationPolicyToKind = "local"
+	AgentCreateRequestDelegationPolicyToKindRemoteA2a AgentCreateRequestDelegationPolicyToKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestDelegationPolicyToKind enum.
+func (e AgentCreateRequestDelegationPolicyToKind) Valid() bool {
+	switch e {
+	case AgentCreateRequestDelegationPolicyToKindLocal:
+		return true
+	case AgentCreateRequestDelegationPolicyToKindRemoteA2a:
 		return true
 	default:
 		return false
@@ -412,6 +526,63 @@ func (e AgentToolsUpdateRequestBuiltinPolicies) Valid() bool {
 	case AgentToolsUpdateRequestBuiltinPoliciesAsk:
 		return true
 	case AgentToolsUpdateRequestBuiltinPoliciesDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentUpdateRequestDelegationPolicyAcceptFromKind.
+const (
+	AgentUpdateRequestDelegationPolicyAcceptFromKindLocal     AgentUpdateRequestDelegationPolicyAcceptFromKind = "local"
+	AgentUpdateRequestDelegationPolicyAcceptFromKindRemoteA2a AgentUpdateRequestDelegationPolicyAcceptFromKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestDelegationPolicyAcceptFromKind enum.
+func (e AgentUpdateRequestDelegationPolicyAcceptFromKind) Valid() bool {
+	switch e {
+	case AgentUpdateRequestDelegationPolicyAcceptFromKindLocal:
+		return true
+	case AgentUpdateRequestDelegationPolicyAcceptFromKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentUpdateRequestDelegationPolicyModes.
+const (
+	AgentUpdateRequestDelegationPolicyModesAwait      AgentUpdateRequestDelegationPolicyModes = "await"
+	AgentUpdateRequestDelegationPolicyModesBackground AgentUpdateRequestDelegationPolicyModes = "background"
+	AgentUpdateRequestDelegationPolicyModesTask       AgentUpdateRequestDelegationPolicyModes = "task"
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestDelegationPolicyModes enum.
+func (e AgentUpdateRequestDelegationPolicyModes) Valid() bool {
+	switch e {
+	case AgentUpdateRequestDelegationPolicyModesAwait:
+		return true
+	case AgentUpdateRequestDelegationPolicyModesBackground:
+		return true
+	case AgentUpdateRequestDelegationPolicyModesTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentUpdateRequestDelegationPolicyToKind.
+const (
+	AgentUpdateRequestDelegationPolicyToKindLocal     AgentUpdateRequestDelegationPolicyToKind = "local"
+	AgentUpdateRequestDelegationPolicyToKindRemoteA2a AgentUpdateRequestDelegationPolicyToKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestDelegationPolicyToKind enum.
+func (e AgentUpdateRequestDelegationPolicyToKind) Valid() bool {
+	switch e {
+	case AgentUpdateRequestDelegationPolicyToKindLocal:
+		return true
+	case AgentUpdateRequestDelegationPolicyToKindRemoteA2a:
 		return true
 	default:
 		return false
@@ -3063,6 +3234,46 @@ type Agent struct {
 	// Default Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default.
 	Default *bool `json:"default,omitempty"`
 
+	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
+	// The canonical "to" field unifies the three legacy allowlists:
+	//   - AgentConfig.CanDelegateTo (per-agent, task delegation)
+	//   - AgentDefaults.CanDelegateTo (global fallback, task delegation)
+	//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
+	//
+	// Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
+	// "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
+	DelegationPolicy *struct {
+		// AcceptFrom PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped.
+		AcceptFrom *[]struct {
+			Id   string                              `json:"id"`
+			Kind AgentDelegationPolicyAcceptFromKind `json:"kind"`
+		} `json:"accept_from,omitempty"`
+
+		// Budget PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary.
+		Budget *struct {
+			// MaxCostUsd Maximum USD spend allowed for delegated work.
+			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
+
+			// MaxTokens Maximum token count allowed for delegated work.
+			MaxTokens *int `json:"max_tokens,omitempty"`
+		} `json:"budget,omitempty"`
+
+		// Depth Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
+		Depth *int `json:"depth,omitempty"`
+
+		// Modes Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
+		Modes *[]AgentDelegationPolicyModes `json:"modes,omitempty"`
+
+		// To List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
+		To *[]struct {
+			// Id Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
+			Id string `json:"id"`
+
+			// Kind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+			Kind AgentDelegationPolicyToKind `json:"kind"`
+		} `json:"to,omitempty"`
+	} `json:"delegation_policy,omitempty"`
+
 	// Description Short description of the agent's purpose.
 	Description *string `json:"description,omitempty"`
 
@@ -3198,9 +3409,21 @@ type Agent struct {
 	// Type Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one).
 	Type AgentType `json:"type"`
 
+	// Voice Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured.
+	Voice *string `json:"voice,omitempty"`
+
 	// Warning Non-fatal advisory (e.g. config reload failed after create/update).
 	Warning *string `json:"warning,omitempty"`
 }
+
+// AgentDelegationPolicyAcceptFromKind defines model for Agent.DelegationPolicy.AcceptFrom.Kind.
+type AgentDelegationPolicyAcceptFromKind string
+
+// AgentDelegationPolicyModes defines model for Agent.DelegationPolicy.Modes.
+type AgentDelegationPolicyModes string
+
+// AgentDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+type AgentDelegationPolicyToKind string
 
 // AgentSandboxProfile Kernel sandbox profile applied to this agent's tool calls. "workspace" = Landlock to workspace dir only. "workspace+net" = Landlock + network access. "host" = read-only host filesystem access. "off" = god-mode (requires --allow-god-mode at gateway boot).
 type AgentSandboxProfile string
@@ -3221,6 +3444,46 @@ type AgentType string
 type AgentCreateRequest struct {
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
+
+	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
+	// The canonical "to" field unifies the three legacy allowlists:
+	//   - AgentConfig.CanDelegateTo (per-agent, task delegation)
+	//   - AgentDefaults.CanDelegateTo (global fallback, task delegation)
+	//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
+	//
+	// Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
+	// "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
+	DelegationPolicy *struct {
+		// AcceptFrom PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped.
+		AcceptFrom *[]struct {
+			Id   string                                           `json:"id"`
+			Kind AgentCreateRequestDelegationPolicyAcceptFromKind `json:"kind"`
+		} `json:"accept_from,omitempty"`
+
+		// Budget PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary.
+		Budget *struct {
+			// MaxCostUsd Maximum USD spend allowed for delegated work.
+			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
+
+			// MaxTokens Maximum token count allowed for delegated work.
+			MaxTokens *int `json:"max_tokens,omitempty"`
+		} `json:"budget,omitempty"`
+
+		// Depth Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
+		Depth *int `json:"depth,omitempty"`
+
+		// Modes Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
+		Modes *[]AgentCreateRequestDelegationPolicyModes `json:"modes,omitempty"`
+
+		// To List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
+		To *[]struct {
+			// Id Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
+			Id string `json:"id"`
+
+			// Kind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+			Kind AgentCreateRequestDelegationPolicyToKind `json:"kind"`
+		} `json:"to,omitempty"`
+	} `json:"delegation_policy,omitempty"`
 
 	// Description Short description of the agent's purpose.
 	Description *string `json:"description,omitempty"`
@@ -3290,7 +3553,19 @@ type AgentCreateRequest struct {
 			} `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
+
+	// Voice Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
+	Voice *string `json:"voice,omitempty"`
 }
+
+// AgentCreateRequestDelegationPolicyAcceptFromKind defines model for AgentCreateRequest.DelegationPolicy.AcceptFrom.Kind.
+type AgentCreateRequestDelegationPolicyAcceptFromKind string
+
+// AgentCreateRequestDelegationPolicyModes defines model for AgentCreateRequest.DelegationPolicy.Modes.
+type AgentCreateRequestDelegationPolicyModes string
+
+// AgentCreateRequestDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+type AgentCreateRequestDelegationPolicyToKind string
 
 // AgentCreateRequestToolsCfgBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.
 type AgentCreateRequestToolsCfgBuiltinDefaultPolicy string
@@ -3549,6 +3824,46 @@ type AgentUpdateRequest struct {
 	// Default Whether this agent is the global default that handles inbound messages with no more-specific routing rule. At most one agent is default. Omitting this field leaves the flag unchanged.
 	Default *bool `json:"default,omitempty"`
 
+	// DelegationPolicy Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
+	// The canonical "to" field unifies the three legacy allowlists:
+	//   - AgentConfig.CanDelegateTo (per-agent, task delegation)
+	//   - AgentDefaults.CanDelegateTo (global fallback, task delegation)
+	//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
+	//
+	// Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
+	// "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
+	DelegationPolicy *struct {
+		// AcceptFrom PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped.
+		AcceptFrom *[]struct {
+			Id   string                                           `json:"id"`
+			Kind AgentUpdateRequestDelegationPolicyAcceptFromKind `json:"kind"`
+		} `json:"accept_from,omitempty"`
+
+		// Budget PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary.
+		Budget *struct {
+			// MaxCostUsd Maximum USD spend allowed for delegated work.
+			MaxCostUsd *float64 `json:"max_cost_usd,omitempty"`
+
+			// MaxTokens Maximum token count allowed for delegated work.
+			MaxTokens *int `json:"max_tokens,omitempty"`
+		} `json:"budget,omitempty"`
+
+		// Depth Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
+		Depth *int `json:"depth,omitempty"`
+
+		// Modes Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
+		Modes *[]AgentUpdateRequestDelegationPolicyModes `json:"modes,omitempty"`
+
+		// To List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent.
+		To *[]struct {
+			// Id Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
+			Id string `json:"id"`
+
+			// Kind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+			Kind AgentUpdateRequestDelegationPolicyToKind `json:"kind"`
+		} `json:"to,omitempty"`
+	} `json:"delegation_policy,omitempty"`
+
 	// Description New description. Rejected on locked agents. Empty string removes it.
 	Description *string `json:"description,omitempty"`
 
@@ -3654,7 +3969,19 @@ type AgentUpdateRequest struct {
 			} `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
+
+	// Voice Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear.
+	Voice *string `json:"voice,omitempty"`
 }
+
+// AgentUpdateRequestDelegationPolicyAcceptFromKind defines model for AgentUpdateRequest.DelegationPolicy.AcceptFrom.Kind.
+type AgentUpdateRequestDelegationPolicyAcceptFromKind string
+
+// AgentUpdateRequestDelegationPolicyModes defines model for AgentUpdateRequest.DelegationPolicy.Modes.
+type AgentUpdateRequestDelegationPolicyModes string
+
+// AgentUpdateRequestDelegationPolicyToKind The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+type AgentUpdateRequestDelegationPolicyToKind string
 
 // AgentUpdateRequestSandboxProfile New sandbox profile. "off" requires --allow-god-mode at gateway boot (403 otherwise).
 type AgentUpdateRequestSandboxProfile string

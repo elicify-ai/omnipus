@@ -312,6 +312,11 @@ type SubagentTool struct {
 	defaultModel string
 	maxTokens    int
 	temperature  float64
+	// delegateChecker, when non-nil, gates whether the calling agent is
+	// permitted to spawn any synchronous subagent at all. Called with an
+	// empty string because the sync subagent tool has no explicit target agent.
+	// Returns false → tool returns a policy-deny error.
+	delegateChecker func() bool
 }
 
 func NewSubagentTool(manager *SubagentManager) *SubagentTool {
@@ -328,6 +333,14 @@ func NewSubagentTool(manager *SubagentManager) *SubagentTool {
 // SetSpawner sets the SubTurnSpawner for direct sub-turn execution.
 func (t *SubagentTool) SetSpawner(spawner SubTurnSpawner) {
 	t.spawner = spawner
+}
+
+// SetDelegateChecker sets the delegation gate for the sync subagent tool.
+// The checker returns true if the calling agent is permitted to spawn any
+// synchronous subagent (the tool has no explicit target agent).
+// When nil, the tool is ungated (legacy behaviour — not recommended).
+func (t *SubagentTool) SetDelegateChecker(check func() bool) {
+	t.delegateChecker = check
 }
 
 func (t *SubagentTool) Name() string {
@@ -358,6 +371,14 @@ func (t *SubagentTool) Parameters() map[string]any {
 }
 
 func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	// Delegation policy gate: deny if the checker is set and returns false.
+	// The sync subagent tool has no explicit target agent; the checker evaluates
+	// whether this agent is allowed to spawn any subagent at all.
+	if t.delegateChecker != nil && !t.delegateChecker() {
+		return ErrorResult("delegation not allowed: no target agent is permitted by this agent's delegation policy").
+			WithError(fmt.Errorf("delegation policy denied: agent has no delegation targets in its 'to' allowlist"))
+	}
+
 	task, ok := args["task"].(string)
 	if !ok {
 		return ErrorResult("task is required").WithError(fmt.Errorf("task parameter is required"))

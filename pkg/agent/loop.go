@@ -1483,15 +1483,44 @@ func registerSharedTools(
 			spawnTool := tools.NewSpawnTool(subagentManager)
 			spawnTool.SetSpawner(NewSubTurnSpawner(al))
 			currentAgentID := agentID
+			// spawnTool: repointed to unified DelegationPolicy.To (FR-6.3).
+			// Falls back to SubagentsConfig.AllowAgents via CanSpawnSubagent
+			// when DelegationPolicy is nil (backward compat, no silent widening).
+			spawnAgentCfg := findAgentConfig(cfg, currentAgentID)
 			spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
+				toList := config.ResolveDelegationTo(spawnAgentCfg, cfg.Agents.Defaults)
+				if toList != nil {
+					// Canonical unified policy is set — use it.
+					return config.IsDelegationAllowed(toList, targetAgentID)
+				}
+				// Unified policy not set for this agent — fall back to
+				// SubagentsConfig.AllowAgents (legacy path, deny-by-default preserved).
 				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
 			})
 
 			agent.Tools.Register(spawnTool)
 
-			// Also register the synchronous subagent tool
+			// Also register the synchronous subagent tool.
+			// Gate: uses the unified DelegationPolicy.To via IsDelegationAllowedAny
+			// (sync subagent has no explicit target; the check is "can delegate at all").
 			subagentTool := tools.NewSubagentTool(subagentManager)
 			subagentTool.SetSpawner(NewSubTurnSpawner(al))
+			// FR-6.3: gate the previously-ungated sync subagent tool.
+			subagentAgentCfg := spawnAgentCfg // same agent, captured once
+			subagentTool.SetDelegateChecker(func() bool {
+				toList := config.ResolveDelegationTo(subagentAgentCfg, cfg.Agents.Defaults)
+				if toList != nil {
+					// Canonical policy present — allowed only if at least one target is permitted.
+					return config.IsDelegationAllowedAny(toList)
+				}
+				// No canonical policy — fall back to SubagentsConfig.AllowAgents existence.
+				// If AllowAgents is non-nil (even empty), the operator set a spawn policy;
+				// treat non-nil as opt-in allowed (AllowAgents nil → deny, per legacy semantics).
+				if subagentAgentCfg != nil && subagentAgentCfg.Subagents != nil {
+					return subagentAgentCfg.Subagents.AllowAgents != nil
+				}
+				return false
+			})
 			agent.Tools.Register(subagentTool)
 
 			agent.Tools.Register(tools.NewSpawnStatusTool(subagentManager))
@@ -1596,22 +1625,17 @@ func findAgentConfig(cfg *config.Config, agentID string) *config.AgentConfig {
 }
 
 // buildDelegateChecker returns a function that checks whether delegation from agentCfg
-// to a target agent is allowed.  Supports the "*" wildcard.
+// to a target agent is allowed.
+//
+// FR-6.3 (Spec-3 keystone): repointed to the unified DelegationPolicy.To via
+// config.ResolveDelegationTo + config.IsDelegationAllowed. The legacy
+// CanDelegateTo fields remain as a backward-compat fallback when
+// DelegationPolicy is nil (handled inside ResolveDelegationTo).
+// No silent authz widening: deny-by-default is preserved when toList is nil.
 func buildDelegateChecker(agentCfg *config.AgentConfig, defaults config.AgentDefaults) func(string) bool {
-	var allowList []string
-	if agentCfg != nil && len(agentCfg.CanDelegateTo) > 0 {
-		allowList = agentCfg.CanDelegateTo
-	} else {
-		allowList = defaults.CanDelegateTo
-	}
-
+	toList := config.ResolveDelegationTo(agentCfg, defaults)
 	return func(targetAgentID string) bool {
-		for _, allowed := range allowList {
-			if allowed == "*" || allowed == targetAgentID {
-				return true
-			}
-		}
-		return false
+		return config.IsDelegationAllowed(toList, targetAgentID)
 	}
 }
 

@@ -111,6 +111,25 @@ type Agent = {
   stats?: AgentStats | undefined;
   default?: boolean | undefined;
   skills?: Array<string> | undefined;
+  delegation_policy?:
+    | Partial<{
+        to: Array<{
+          kind: "local" | "remote-a2a";
+          id: string;
+        }>;
+        accept_from: Array<{
+          kind: "local" | "remote-a2a";
+          id: string;
+        }>;
+        modes: Array<"await" | "background" | "task">;
+        depth: number;
+        budget: Partial<{
+          max_cost_usd: number;
+          max_tokens: number;
+        }>;
+      }>
+    | undefined;
+  voice?: (string | null) | undefined;
 };
 type AgentToolsCfg = Partial<{
   builtin: Partial<{
@@ -169,7 +188,25 @@ type AgentCreateRequest = {
       }>
     | undefined;
   skills?: Array<string> | undefined;
+  delegation_policy?: delegation_policy | undefined;
+  voice?: (string | null) | undefined;
 };
+type delegation_policy = Partial<{
+  to: Array<{
+    kind: "local" | "remote-a2a";
+    id: string;
+  }>;
+  accept_from: Array<{
+    kind: "local" | "remote-a2a";
+    id: string;
+  }>;
+  modes: Array<"await" | "background" | "task">;
+  depth: number;
+  budget: Partial<{
+    max_cost_usd: number;
+    max_tokens: number;
+  }>;
+}>;
 type AgentUpdateRequest = Partial<{
   name: string;
   description: string;
@@ -205,6 +242,8 @@ type AgentUpdateRequest = Partial<{
   tools_cfg: AgentToolsCfg;
   default: boolean;
   skills: Array<string>;
+  delegation_policy: delegation_policy;
+  voice: string | null;
 }>;
 type ChannelEntry = {
   id: ChannelId;
@@ -837,8 +876,40 @@ export const Agent: z.ZodType<Agent> = z
     stats: AgentStats.optional(),
     default: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
+    delegation_policy: z
+      .object({
+        to: z.array(
+          z.object({ kind: z.enum(["local", "remote-a2a"]), id: z.string() })
+        ),
+        accept_from: z.array(
+          z.object({ kind: z.enum(["local", "remote-a2a"]), id: z.string() })
+        ),
+        modes: z.array(z.enum(["await", "background", "task"])),
+        depth: z.number().int().gte(0),
+        budget: z
+          .object({ max_cost_usd: z.number(), max_tokens: z.number().int() })
+          .partial(),
+      })
+      .partial()
+      .optional(),
+    voice: z.string().nullish(),
   })
   .passthrough();
+export const delegation_policy: z.ZodType<delegation_policy> = z
+  .object({
+    to: z.array(
+      z.object({ kind: z.enum(["local", "remote-a2a"]), id: z.string() })
+    ),
+    accept_from: z.array(
+      z.object({ kind: z.enum(["local", "remote-a2a"]), id: z.string() })
+    ),
+    modes: z.array(z.enum(["await", "background", "task"])),
+    depth: z.number().int().gte(0),
+    budget: z
+      .object({ max_cost_usd: z.number(), max_tokens: z.number().int() })
+      .partial(),
+  })
+  .partial();
 export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
@@ -867,6 +938,8 @@ export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
     .passthrough()
     .optional(),
   skills: z.array(z.string()).optional(),
+  delegation_policy: delegation_policy.optional(),
+  voice: z.string().nullish(),
 });
 export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
   .object({
@@ -913,6 +986,8 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
     tools_cfg: AgentToolsCfg,
     default: z.boolean(),
     skills: z.array(z.string()),
+    delegation_policy: delegation_policy,
+    voice: z.string().nullable(),
   })
   .partial();
 export const AgentOwnershipUpdateRequest = z
