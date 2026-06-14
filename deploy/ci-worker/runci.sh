@@ -22,8 +22,15 @@ fi
 cd "$REPO_DIR" || exit 2
 log "fetch + checkout $REF"
 git fetch --all --prune --quiet || exit 2
-git checkout -f "$REF" 2>/dev/null || git checkout -f "origin/$REF" || exit 2
-git reset --hard "$REF" --quiet 2>/dev/null || git reset --hard "origin/$REF" --quiet 2>/dev/null || true
+# Resolve REF to a concrete commit, ALWAYS preferring the freshly-fetched remote
+# branch over any stale local branch of the same name. (A bare `git checkout -f
+# <branch>` switches to the local branch and `reset --hard <branch>` resets to it,
+# which silently tests a stale commit when the local branch isn't fast-forwarded.)
+# Fall back to REF-as-given so an explicit SHA or tag still works.
+TARGET="$(git rev-parse --verify --quiet "origin/$REF^{commit}" || git rev-parse --verify --quiet "$REF^{commit}")"
+[ -z "$TARGET" ] && { echo "cannot resolve ref $REF"; exit 2; }
+git checkout -f "$TARGET" || exit 2
+git reset --hard "$TARGET" --quiet || true
 echo "HEAD: $(git rev-parse --short HEAD) $(git log -1 --format='%s')"
 
 # Go's //go:embed all:spa needs pkg/gateway/spa/ non-empty. For compile/unit gates a stub is enough
