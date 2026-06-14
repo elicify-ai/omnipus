@@ -1077,6 +1077,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
         clearTimeout(rateLimitClearTimers[sid])
         delete rateLimitClearTimers[sid]
       }
+      // Cancel any pending deferred replay-clear timer for this session, or it
+      // later fires withBucket(sid, {isReplaying:false}) on the freshly-reset
+      // bucket. Mirror the sibling timer maps above.
+      if (replayingClearTimers[sid] != null) {
+        clearTimeout(replayingClearTimers[sid])
+        delete replayingClearTimers[sid]
+      }
       sawReplayMessageThisTurn[sid] = false
       withBucket(sid, () => emptySessionState())
     },
@@ -1775,6 +1782,29 @@ export const useChatStore = create<ChatStore>((set, get) => {
               get().clearStreamingState()
               break
             }
+            // An error frame arriving during replay must also clear isReplaying —
+            // otherwise the session is permanently wedged behind the "Loading
+            // session history…" overlay with a disabled composer, and (unlike the
+            // done path) nothing else ever clears it. Mirror the done-frame logic:
+            // clear immediately once MIN_REPLAY_DISPLAY_MS has elapsed, otherwise
+            // defer to a timer (cancelling any stale one first).
+            const sid = targetSid
+            const wasReplaying = (get().sessionsById[sid] ?? EMPTY_BUCKET).isReplaying
+            const replayElapsed = wasReplaying ? Date.now() - (replayingStartedAt[sid] ?? 0) : 0
+            const MIN_REPLAY_DISPLAY_MS = 750
+            const clearReplayingNow = wasReplaying && replayElapsed >= MIN_REPLAY_DISPLAY_MS
+            if (wasReplaying) {
+              sawReplayMessageThisTurn[sid] = false
+              if (!clearReplayingNow) {
+                if (replayingClearTimers[sid]) {
+                  clearTimeout(replayingClearTimers[sid])
+                }
+                replayingClearTimers[sid] = setTimeout(() => {
+                  delete replayingClearTimers[sid]
+                  withBucket(sid, () => ({ isReplaying: false }))
+                }, MIN_REPLAY_DISPLAY_MS - replayElapsed)
+              }
+            }
             withBucket(targetSid, (b) => {
               const order = b.messageOrder
               let lastMsgId: string | null = null
@@ -1797,6 +1827,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   msg.isStreaming = false
                   msg.status = resolvedStatus
                   draft.isStreaming = false
+                  if (clearReplayingNow) {
+                    draft.isReplaying = false
+                  }
                 }) as Partial<SessionChatState>
               }
               // No assistant message — push one. Only show an error toast for non-cancel errors.
@@ -1813,7 +1846,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 isStreaming: false,
               }
               const msgs = [...getMessages(b), errMsg]
-              return { ...applyMessageArray(msgs, b), isStreaming: false }
+              return {
+                ...applyMessageArray(msgs, b),
+                isStreaming: false,
+                ...(clearReplayingNow ? { isReplaying: false } : {}),
+              }
             })
           }
           break

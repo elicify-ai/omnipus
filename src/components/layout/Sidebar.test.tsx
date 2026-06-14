@@ -103,8 +103,9 @@ describe('Sidebar — overlay rendering when open', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // All nav item labels must be present (5 items + Settings at bottom): Chat, Monitor, Agents, Channels, Skills & Tools.
-    // Tasks nav item was removed in Wave 1b — Projects is the entry point now.
+    // Sidebar renders 6 primary nav items (Chat, Tasks, Monitor, Agents, Channels,
+    // Skills & Tools) plus Settings at the bottom. This test asserts a subset of
+    // those labels (Tasks is omitted here, not removed from the sidebar).
     expect(screen.getByText('Chat')).toBeTruthy()
     expect(screen.getByText('Monitor')).toBeTruthy()
     expect(screen.getByText('Agents')).toBeTruthy()
@@ -227,7 +228,7 @@ describe('Sidebar — Archive section (F7-F06)', () => {
     // Traces to: project-task-management-level1-spec.md line 1033 (FR-029 — archived projects shown in sidebar section)
 
     // Active-projects query returns empty; archived-projects query returns one project.
-    // fetchProjects is called with { status: 'active' } for the main list and
+    // fetchWorkspaces is called with { status: 'active' } for the main list and
     // { status: 'archived' } for the archive section (enabled only after archiveOpen=true).
     vi.mocked(fetchWorkspaces).mockImplementation((params?: { status?: string }) => {
       if (params?.status === 'archived') {

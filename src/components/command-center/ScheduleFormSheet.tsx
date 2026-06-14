@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { FloppyDisk } from '@phosphor-icons/react'
+import { FloppyDisk, WarningCircle } from '@phosphor-icons/react'
 import {
   Sheet,
   SheetContent,
@@ -325,7 +325,7 @@ export function ScheduleFormSheet({
     }
   }
 
-  const { data: agents = [] } = useQuery({
+  const { data: agents = [], isError: agentsLoadFailed, error: agentsError } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
     enabled: open,
@@ -450,9 +450,29 @@ export function ScheduleFormSheet({
             <SmartSelect
               value={form.ownerAgentId}
               onValueChange={(v) => setValue('ownerAgentId', v)}
-              placeholder="Select an agent"
+              placeholder={agentsLoadFailed ? 'Could not load agents' : 'Select an agent'}
               items={agents.map((a) => ({ value: a.id, label: a.name }))}
             />
+            {agentsLoadFailed && (
+              <div
+                role="alert"
+                className="mt-1.5 flex items-start gap-1.5 text-[11px] text-destructive"
+              >
+                <WarningCircle size={13} weight="fill" className="mt-px shrink-0" />
+                <span>
+                  Couldn&apos;t load agents
+                  {(() => {
+                    const detail = isApiError(agentsError)
+                      ? agentsError.userMessage
+                      : agentsError instanceof Error
+                        ? agentsError.message
+                        : ''
+                    return detail ? `: ${detail}` : '.'
+                  })()}{' '}
+                  The owner dropdown is empty and Save is disabled until agents load. Close and reopen to retry.
+                </span>
+              </div>
+            )}
           </Field>
 
           {/* Name */}
