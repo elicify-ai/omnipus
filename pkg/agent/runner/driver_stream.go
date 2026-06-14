@@ -1,0 +1,128 @@
+// Package runner — shared streaming helpers for external CLI drivers.
+//
+// driver_stream.go provides the line-framed JSON event parser used by all three
+// CLI drivers (Claude Code, Codex, opencode). It maps CLI-specific JSON events
+// to the canonical RunEvent kinds defined in runner.go.
+//
+// Design (FR-5.2, FR-5.6):
+//   - Each CLI emits newline-delimited JSON (NDJSON) on stdout.
+//   - The parser reads lines, unmarshals each as a raw map[string]any, then
+//     dispatches by the "type" field to produce a RunEvent.
+//   - Unknown event types are silently skipped (graceful degradation per FR-5.6).
+//   - Malformed JSON lines are recorded as non-fatal ErrorEvents (FR-5.2 edge case).
+//   - Version detect: each driver checks the CLI version before streaming and logs
+//     a warning on unknown versions (FR-5.6).
+package runner
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+// streamParser is a callback-based NDJSON parser.
+// It reads lines from r, calls parseLine for each non-empty line,
+// and sends the resulting RunEvents to out. It exits when ctx is
+// cancelled or r returns EOF.
+//
+// parseLine must be non-nil. It receives the raw JSON bytes for a single
+// NDJSON line and returns (event, ok). When ok=false the event is skipped.
+func streamParser(
+	ctx context.Context,
+	r io.Reader,
+	runID string,
+	parseLine func(raw []byte) (RunEvent, bool),
+	out chan<- RunEvent,
+) {
+	scanner := bufio.NewScanner(r)
+	// Increase the default buffer: some CLIs emit large single lines.
+	scanner.Buffer(make([]byte, 512*1024), 1024*1024)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		if !scanner.Scan() {
+			break
+		}
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		ev, ok := parseLine([]byte(line))
+		if !ok {
+			continue
+		}
+		if ev.Timestamp.IsZero() {
+			ev.Timestamp = time.Now().UTC()
+		}
+		if ev.RunID == "" {
+			ev.RunID = runID
+		}
+		select {
+		case out <- ev:
+		case <-ctx.Done():
+			return
+		}
+	}
+	if err := scanner.Err(); err != nil && ctx.Err() == nil {
+		slog.Warn("runner: stream scanner error", "run_id", runID, "err", err)
+		select {
+		case out <- RunEvent{
+			Kind:      EventKindError,
+			RunID:     runID,
+			Timestamp: time.Now().UTC(),
+			Err:       &ErrorEvent{Message: fmt.Sprintf("stream read error: %v", err), Fatal: true},
+		}:
+		default:
+		}
+	}
+}
+
+// detectCLIVersion runs `<binary> --version` and returns the version string.
+// On failure it returns ("", err). The caller SHOULD log a warning on unknown
+// versions and degrade gracefully (FR-5.6).
+func detectCLIVersion(ctx context.Context, binary string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, binary, "--version").Output()
+	if err != nil {
+		return "", fmt.Errorf("version check for %q: %w", binary, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// rawJSONField extracts a string field from raw JSON bytes without full
+// unmarshalling (used in hot paths where only a single discriminator field
+// is needed). Returns ("", false) if the field is absent or not a string.
+func rawJSONField(data []byte, field string) (string, bool) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		return "", false
+	}
+	raw, ok := m[field]
+	if !ok {
+		return "", false
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return "", false
+	}
+	return s, true
+}
+
+// safeMarshal encodes v to JSON bytes; returns nil on error.
+func safeMarshal(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return b
+}

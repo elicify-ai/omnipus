@@ -581,9 +581,46 @@ func (a AgentConfig) ResolveType(isCoreAgent func(string) bool) AgentType {
 	return AgentTypeCustom
 }
 
+// ExecutorKind enumerates the runtime used to execute a sub-agent task.
+// "native" runs the task inside the existing Omnipus agent loop (default, existing behaviour).
+// "external-cli" drives an external CLI tool over JSON streaming (Claude Code, Codex, opencode).
+// "remote-a2a" is reserved for future A2A protocol resolution; NOT resolvable in v0.1.0 —
+// the schema accepts it so configs can be written forward-compatibly, but dispatch rejects it.
+type ExecutorKind string
+
+const (
+	// ExecutorKindNative is the default: sub-agent runs inside the Omnipus agent loop.
+	ExecutorKindNative ExecutorKind = "native"
+	// ExecutorKindExternalCLI drives an external CLI agent (claude-code, codex, opencode)
+	// over a JSON-streaming subprocess protocol.
+	ExecutorKindExternalCLI ExecutorKind = "external-cli"
+	// ExecutorKindRemoteA2A is reserved. Accepted in schema; rejected at dispatch in v0.1.0.
+	ExecutorKindRemoteA2A ExecutorKind = "remote-a2a"
+)
+
+// ExecutorConfig specifies how a sub-agent's tasks are executed.
+// When nil (the default), behaviour is identical to Kind="native".
+type ExecutorConfig struct { // not-wire-format
+	// Kind selects the execution runtime. Defaults to "native" when absent.
+	Kind ExecutorKind `json:"kind"`
+	// CLI names the external CLI tool for Kind="external-cli".
+	// Valid values: "claude-code", "codex", "opencode".
+	// Required when Kind="external-cli"; ignored otherwise.
+	CLI string `json:"cli,omitempty"`
+}
+
+// EffectiveKind returns the ExecutorKind with nil-safe defaulting to native.
+func (ec *ExecutorConfig) EffectiveKind() ExecutorKind {
+	if ec == nil || ec.Kind == "" {
+		return ExecutorKindNative
+	}
+	return ec.Kind
+}
+
 type SubagentsConfig struct {
 	AllowAgents []string          `json:"allow_agents,omitempty"`
 	Model       *AgentModelConfig `json:"model,omitempty"`
+	Executor    *ExecutorConfig   `json:"executor,omitempty"`
 }
 
 type PeerMatch struct {
