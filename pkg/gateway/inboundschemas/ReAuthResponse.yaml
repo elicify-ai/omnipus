@@ -1,0 +1,27 @@
+type: object
+description: >
+  Response from POST /auth/reauth. verified=true when the re-typed password
+  matched; the token is a short-lived consent token (TTL seconds in expires_in)
+  the SPA replays in the X-Reauth-Token header on the immediately-following
+  sensitive request. On a password mismatch the endpoint responds 401, not a
+  verified=false body.
+required:
+  - verified
+  - token
+  - expires_in
+additionalProperties: false
+properties:
+  verified:
+    type: boolean
+    description: Whether the re-typed password matched.
+    example: true
+  token:
+    type: string
+    description: >
+      Short-lived consent token to replay in the X-Reauth-Token header on the
+      next sensitive settings request. Opaque; single-use within its TTL.
+    example: "reauth_2f1a9c0b8d7e6f5a"
+  expires_in:
+    type: integer
+    description: Time-to-live of the consent token in seconds.
+    example: 300

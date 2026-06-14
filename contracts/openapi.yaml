@@ -176,6 +176,18 @@ components:
       $ref: ./components/schemas/GatewayStatus.yaml
     Provider:
       $ref: ./components/schemas/Provider.yaml
+    ReAuthRequest:
+      $ref: ./components/schemas/ReAuthRequest.yaml
+    ReAuthResponse:
+      $ref: ./components/schemas/ReAuthResponse.yaml
+    IntegrationProvider:
+      $ref: ./components/schemas/IntegrationProvider.yaml
+    IntegrationProvidersResponse:
+      $ref: ./components/schemas/IntegrationProvidersResponse.yaml
+    IntegrationProviderUpdateRequest:
+      $ref: ./components/schemas/IntegrationProviderUpdateRequest.yaml
+    TranscribeResponse:
+      $ref: ./components/schemas/TranscribeResponse.yaml
     Skill:
       $ref: ./components/schemas/Skill.yaml
     ActivityEvent:
@@ -560,6 +572,138 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /auth/reauth:
+    post:
+      operationId: reAuth
+      summary: Re-verify the user's password to consent to a sensitive setting change
+      description: 'Single-user consent primitive (FR-12.2). Re-verifies the authenticated user''s one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited.
+
+        '
+      tags:
+      - auth
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReAuthRequest'
+      responses:
+        '200':
+          description: Password re-verified; a consent token is returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReAuthResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /integrations/providers:
+    get:
+      operationId: getIntegrationProviders
+      summary: List configurable search and voice-input integration providers
+      description: 'Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. Requires authentication.
+
+        '
+      tags:
+      - integrations
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: The integration provider catalogue.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationProvidersResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /integrations/providers/{id}:
+    put:
+      operationId: updateIntegrationProvider
+      summary: Configure a search or voice-input integration provider
+      description: 'Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403. Requires authentication.
+
+        '
+      tags:
+      - integrations
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Provider identifier (e.g. "brave", "elevenlabs").
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IntegrationProviderUpdateRequest'
+      responses:
+        '200':
+          description: Provider configured; the updated catalogue is returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationProvidersResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          $ref: '#/components/responses/403Forbidden'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /voice/transcribe:
+    post:
+      operationId: transcribeAudio
+      summary: Transcribe an uploaded audio clip with the active transcriber
+      description: 'Accepts a multipart/form-data audio file (field "audio") captured by the chat composer mic and returns the transcribed text via the active Transcriber (FR-12.1). Responds 503 when no transcriber is configured. Requires authentication.
+
+        '
+      tags:
+      - voice
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+              - audio
+              properties:
+                audio:
+                  type: string
+                  format: binary
+                  description: The recorded audio clip (webm/ogg/wav/mp3).
+      responses:
+        '200':
+          description: Transcription succeeded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscribeResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '503':
+          $ref: '#/components/responses/503ServiceUnavailable'
         '500':
           $ref: '#/components/responses/500InternalServerError'
   /onboarding/complete:

@@ -859,6 +859,78 @@ func (e HealthResponseStatus) Valid() bool {
 	}
 }
 
+// Defines values for IntegrationProviderKind.
+const (
+	IntegrationProviderKindSearch IntegrationProviderKind = "search"
+	IntegrationProviderKindVoice  IntegrationProviderKind = "voice"
+)
+
+// Valid indicates whether the value is a known member of the IntegrationProviderKind enum.
+func (e IntegrationProviderKind) Valid() bool {
+	switch e {
+	case IntegrationProviderKindSearch:
+		return true
+	case IntegrationProviderKindVoice:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for IntegrationProviderUpdateRequestKind.
+const (
+	IntegrationProviderUpdateRequestKindSearch IntegrationProviderUpdateRequestKind = "search"
+	IntegrationProviderUpdateRequestKindVoice  IntegrationProviderUpdateRequestKind = "voice"
+)
+
+// Valid indicates whether the value is a known member of the IntegrationProviderUpdateRequestKind enum.
+func (e IntegrationProviderUpdateRequestKind) Valid() bool {
+	switch e {
+	case IntegrationProviderUpdateRequestKindSearch:
+		return true
+	case IntegrationProviderUpdateRequestKindVoice:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for IntegrationProvidersResponseSearchKind.
+const (
+	IntegrationProvidersResponseSearchKindSearch IntegrationProvidersResponseSearchKind = "search"
+	IntegrationProvidersResponseSearchKindVoice  IntegrationProvidersResponseSearchKind = "voice"
+)
+
+// Valid indicates whether the value is a known member of the IntegrationProvidersResponseSearchKind enum.
+func (e IntegrationProvidersResponseSearchKind) Valid() bool {
+	switch e {
+	case IntegrationProvidersResponseSearchKindSearch:
+		return true
+	case IntegrationProvidersResponseSearchKindVoice:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for IntegrationProvidersResponseVoiceKind.
+const (
+	IntegrationProvidersResponseVoiceKindSearch IntegrationProvidersResponseVoiceKind = "search"
+	IntegrationProvidersResponseVoiceKindVoice  IntegrationProvidersResponseVoiceKind = "voice"
+)
+
+// Valid indicates whether the value is a known member of the IntegrationProvidersResponseVoiceKind enum.
+func (e IntegrationProvidersResponseVoiceKind) Valid() bool {
+	switch e {
+	case IntegrationProvidersResponseVoiceKindSearch:
+		return true
+	case IntegrationProvidersResponseVoiceKindVoice:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LoginResponseRole.
 const (
 	LoginResponseRoleAdmin LoginResponseRole = "admin"
@@ -3789,6 +3861,102 @@ type HealthResponse struct {
 // HealthResponseStatus Always "ok" when the gateway is healthy.
 type HealthResponseStatus string
 
+// IntegrationProvider A single configurable non-LLM integration provider as surfaced in Settings → Integrations (FR-12.1). Covers web-search providers (SearchProvider) and voice-input transcription providers (Transcriber). API keys are stored encrypted in credentials.json (via api_key_ref) — never returned in plaintext; configured is true when a key (or, for keyless providers like DuckDuckGo, the provider itself) is available.
+type IntegrationProvider struct {
+	// Active True when this provider is the one currently selected for its kind (the active search engine or the active transcriber).
+	Active *bool `json:"active,omitempty"`
+
+	// Configured True when this provider is usable — an API key is present (or, for keyless providers such as DuckDuckGo, always true).
+	Configured bool `json:"configured"`
+
+	// DisplayName Human-readable provider name for UI presentation.
+	DisplayName string `json:"display_name"`
+
+	// Id Provider identifier (e.g. "brave", "tavily", "duckduckgo", "elevenlabs").
+	Id string `json:"id"`
+
+	// Kind Whether this provider supplies web search or voice-input transcription.
+	Kind IntegrationProviderKind `json:"kind"`
+
+	// RequiresKey Whether this provider needs an API key to function.
+	RequiresKey bool `json:"requires_key"`
+}
+
+// IntegrationProviderKind Whether this provider supplies web search or voice-input transcription.
+type IntegrationProviderKind string
+
+// IntegrationProviderUpdateRequest Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). Setting an api_key stores it encrypted (AES-256-GCM) in credentials.json and writes only the credential reference to config.json. Setting active=true selects this provider as the active one for its kind. Because integration edits are sensitive, the SPA must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid token are rejected 403.
+type IntegrationProviderUpdateRequest struct {
+	// Active When true, select this provider as the active one for its kind.
+	Active *bool `json:"active,omitempty"`
+
+	// ApiKey API key for the provider. Stored encrypted; omit to leave the current key unchanged. Required when first configuring a key-requiring provider.
+	ApiKey *string `json:"api_key,omitempty"`
+
+	// Kind Whether this provider is a search engine or a voice transcriber.
+	Kind IntegrationProviderUpdateRequestKind `json:"kind"`
+}
+
+// IntegrationProviderUpdateRequestKind Whether this provider is a search engine or a voice transcriber.
+type IntegrationProviderUpdateRequestKind string
+
+// IntegrationProvidersResponse Response from GET /api/v1/integrations/providers. Lists every configurable search and voice-input integration provider (FR-12.1), plus which provider is currently active for each kind.
+type IntegrationProvidersResponse struct {
+	// ActiveSearch id of the currently active search provider, when one is selected.
+	ActiveSearch *string `json:"active_search,omitempty"`
+
+	// ActiveVoice id of the currently active voice transcriber, when one is configured.
+	ActiveVoice *string `json:"active_voice,omitempty"`
+
+	// Search Configurable web-search providers.
+	Search []struct {
+		// Active True when this provider is the one currently selected for its kind (the active search engine or the active transcriber).
+		Active *bool `json:"active,omitempty"`
+
+		// Configured True when this provider is usable — an API key is present (or, for keyless providers such as DuckDuckGo, always true).
+		Configured bool `json:"configured"`
+
+		// DisplayName Human-readable provider name for UI presentation.
+		DisplayName string `json:"display_name"`
+
+		// Id Provider identifier (e.g. "brave", "tavily", "duckduckgo", "elevenlabs").
+		Id string `json:"id"`
+
+		// Kind Whether this provider supplies web search or voice-input transcription.
+		Kind IntegrationProvidersResponseSearchKind `json:"kind"`
+
+		// RequiresKey Whether this provider needs an API key to function.
+		RequiresKey bool `json:"requires_key"`
+	} `json:"search"`
+
+	// Voice Configurable voice-input transcription providers.
+	Voice []struct {
+		// Active True when this provider is the one currently selected for its kind (the active search engine or the active transcriber).
+		Active *bool `json:"active,omitempty"`
+
+		// Configured True when this provider is usable — an API key is present (or, for keyless providers such as DuckDuckGo, always true).
+		Configured bool `json:"configured"`
+
+		// DisplayName Human-readable provider name for UI presentation.
+		DisplayName string `json:"display_name"`
+
+		// Id Provider identifier (e.g. "brave", "tavily", "duckduckgo", "elevenlabs").
+		Id string `json:"id"`
+
+		// Kind Whether this provider supplies web search or voice-input transcription.
+		Kind IntegrationProvidersResponseVoiceKind `json:"kind"`
+
+		// RequiresKey Whether this provider needs an API key to function.
+		RequiresKey bool `json:"requires_key"`
+	} `json:"voice"`
+}
+
+// IntegrationProvidersResponseSearchKind Whether this provider supplies web search or voice-input transcription.
+type IntegrationProvidersResponseSearchKind string
+
+// IntegrationProvidersResponseVoiceKind Whether this provider supplies web search or voice-input transcription.
+type IntegrationProvidersResponseVoiceKind string
+
 // LoginRequest Credentials for authenticating an existing user.
 type LoginRequest struct {
 	// Password The user's password. Maximum 72 characters (bcrypt limit).
@@ -4355,6 +4523,24 @@ type RateLimitsUpdateResponse struct {
 
 	// Warning Present when hot-reload failed — config is saved but restart is required.
 	Warning *string `json:"warning,omitempty"`
+}
+
+// ReAuthRequest Body for POST /auth/reauth. Re-verifies the single user's one password before a sensitive settings change is permitted (FR-12.2). This is a consent primitive, NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). A successful re-auth mints a short-lived re-auth token the SPA attaches to the subsequent sensitive request.
+type ReAuthRequest struct {
+	// Password The authenticated user's current password, re-typed for consent. Maximum 72 characters (bcrypt limit).
+	Password string `json:"password"`
+}
+
+// ReAuthResponse Response from POST /auth/reauth. verified=true when the re-typed password matched; the token is a short-lived consent token (TTL seconds in expires_in) the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request. On a password mismatch the endpoint responds 401, not a verified=false body.
+type ReAuthResponse struct {
+	// ExpiresIn Time-to-live of the consent token in seconds.
+	ExpiresIn int `json:"expires_in"`
+
+	// Token Short-lived consent token to replay in the X-Reauth-Token header on the next sensitive settings request. Opaque; single-use within its TTL.
+	Token string `json:"token"`
+
+	// Verified Whether the re-typed password matched.
+	Verified bool `json:"verified"`
 }
 
 // RegisterAdminRequest Body for POST /auth/register-admin. Creates the first admin user (fails 409 if one already exists).
@@ -5559,6 +5745,18 @@ type ToolRegistryEntryScope string
 // ToolRegistryEntrySource Origin of the tool registration. "builtin" = compiled-in Go tool; "mcp" = MCP server tool.
 type ToolRegistryEntrySource string
 
+// TranscribeResponse Response from POST /api/v1/voice/transcribe. Returns the text transcribed from an uploaded audio clip by the active Transcriber (FR-12.1, composer mic). 503 when no transcriber is configured.
+type TranscribeResponse struct {
+	// Duration Audio duration in seconds, when reported.
+	Duration *float32 `json:"duration,omitempty"`
+
+	// Language Detected language code, when the transcriber reports one.
+	Language *string `json:"language,omitempty"`
+
+	// Text The transcribed text.
+	Text string `json:"text"`
+}
+
 // UploadFilesResponse Response from POST /api/v1/upload (HTTP 201). Returns the list of uploaded files with their metadata.
 type UploadFilesResponse struct {
 	// Files Uploaded file metadata entries.
@@ -5829,6 +6027,12 @@ type UploadFilesParams struct {
 	SessionId *string `form:"session_id,omitempty" json:"session_id,omitempty"`
 }
 
+// TranscribeAudioMultipartBody defines parameters for TranscribeAudio.
+type TranscribeAudioMultipartBody struct {
+	// Audio The recorded audio clip (webm/ogg/wav/mp3).
+	Audio openapi_types.File `json:"audio"`
+}
+
 // CreateAgentJSONRequestBody defines body for CreateAgent for application/json ContentType.
 type CreateAgentJSONRequestBody = AgentCreateRequest
 
@@ -5847,6 +6051,9 @@ type ChangePasswordJSONRequestBody = ChangePasswordRequest
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
 
+// ReAuthJSONRequestBody defines body for ReAuth for application/json ContentType.
+type ReAuthJSONRequestBody = ReAuthRequest
+
 // RegisterAdminJSONRequestBody defines body for RegisterAdmin for application/json ContentType.
 type RegisterAdminJSONRequestBody = RegisterAdminRequest
 
@@ -5861,6 +6068,9 @@ type PostChatJSONRequestBody = SseChatRequest
 
 // SetCredentialJSONRequestBody defines body for SetCredential for application/json ContentType.
 type SetCredentialJSONRequestBody = CredentialSetRequest
+
+// UpdateIntegrationProviderJSONRequestBody defines body for UpdateIntegrationProvider for application/json ContentType.
+type UpdateIntegrationProviderJSONRequestBody = IntegrationProviderUpdateRequest
 
 // AddMcpServerJSONRequestBody defines body for AddMcpServer for application/json ContentType.
 type AddMcpServerJSONRequestBody = McpServerCreate
@@ -5948,6 +6158,9 @@ type ResetUserPasswordJSONRequestBody = UserResetPasswordRequest
 
 // ChangeUserRoleJSONRequestBody defines body for ChangeUserRole for application/json ContentType.
 type ChangeUserRoleJSONRequestBody = UserRoleChangeRequest
+
+// TranscribeAudioMultipartRequestBody defines body for TranscribeAudio for multipart/form-data ContentType.
+type TranscribeAudioMultipartRequestBody TranscribeAudioMultipartBody
 
 // Getter for additional properties for ChannelConfigureRequest. Returns the specified
 // element and whether it was found

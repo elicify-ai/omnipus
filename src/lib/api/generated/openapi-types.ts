@@ -104,6 +104,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/auth/reauth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-verify the user's password to consent to a sensitive setting change
+         * @description Single-user consent primitive (FR-12.2). Re-verifies the authenticated user's one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited.
+         */
+        post: operations["reAuth"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List configurable search and voice-input integration providers
+         * @description Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. Requires authentication.
+         */
+        get: operations["getIntegrationProviders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/providers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Configure a search or voice-input integration provider
+         * @description Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403. Requires authentication.
+         */
+        put: operations["updateIntegrationProvider"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/voice/transcribe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcribe an uploaded audio clip with the active transcriber
+         * @description Accepts a multipart/form-data audio file (field "audio") captured by the chat composer mic and returns the transcribed text via the active Transcriber (FR-12.1). Responds 503 when no transcriber is configured. Requires authentication.
+         */
+        post: operations["transcribeAudio"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/onboarding/complete": {
         parameters: {
             query?: never;
@@ -3743,6 +3823,120 @@ export interface components {
              */
             error?: string;
         };
+        /** @description Body for POST /auth/reauth. Re-verifies the single user's one password before a sensitive settings change is permitted (FR-12.2). This is a consent primitive, NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). A successful re-auth mints a short-lived re-auth token the SPA attaches to the subsequent sensitive request. */
+        ReAuthRequest: {
+            /**
+             * @description The authenticated user's current password, re-typed for consent. Maximum 72 characters (bcrypt limit).
+             * @example mypassword
+             */
+            password: string;
+        };
+        /** @description Response from POST /auth/reauth. verified=true when the re-typed password matched; the token is a short-lived consent token (TTL seconds in expires_in) the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request. On a password mismatch the endpoint responds 401, not a verified=false body. */
+        ReAuthResponse: {
+            /**
+             * @description Whether the re-typed password matched.
+             * @example true
+             */
+            verified: boolean;
+            /**
+             * @description Short-lived consent token to replay in the X-Reauth-Token header on the next sensitive settings request. Opaque; single-use within its TTL.
+             * @example reauth_2f1a9c0b8d7e6f5a
+             */
+            token: string;
+            /**
+             * @description Time-to-live of the consent token in seconds.
+             * @example 300
+             */
+            expires_in: number;
+        };
+        /** @description A single configurable non-LLM integration provider as surfaced in Settings → Integrations (FR-12.1). Covers web-search providers (SearchProvider) and voice-input transcription providers (Transcriber). API keys are stored encrypted in credentials.json (via api_key_ref) — never returned in plaintext; configured is true when a key (or, for keyless providers like DuckDuckGo, the provider itself) is available. */
+        IntegrationProvider: {
+            /**
+             * @description Provider identifier (e.g. "brave", "tavily", "duckduckgo", "elevenlabs").
+             * @example brave
+             */
+            id: string;
+            /**
+             * @description Whether this provider supplies web search or voice-input transcription.
+             * @example search
+             * @enum {string}
+             */
+            kind: "search" | "voice";
+            /**
+             * @description Human-readable provider name for UI presentation.
+             * @example Brave Search
+             */
+            display_name: string;
+            /**
+             * @description True when this provider is usable — an API key is present (or, for keyless providers such as DuckDuckGo, always true).
+             * @example true
+             */
+            configured: boolean;
+            /**
+             * @description Whether this provider needs an API key to function.
+             * @example true
+             */
+            requires_key: boolean;
+            /**
+             * @description True when this provider is the one currently selected for its kind (the active search engine or the active transcriber).
+             * @example true
+             */
+            active?: boolean;
+        };
+        /** @description Response from GET /api/v1/integrations/providers. Lists every configurable search and voice-input integration provider (FR-12.1), plus which provider is currently active for each kind. */
+        IntegrationProvidersResponse: {
+            /** @description Configurable web-search providers. */
+            search: components["schemas"]["IntegrationProvider"][];
+            /** @description Configurable voice-input transcription providers. */
+            voice: components["schemas"]["IntegrationProvider"][];
+            /**
+             * @description id of the currently active search provider, when one is selected.
+             * @example brave
+             */
+            active_search?: string;
+            /**
+             * @description id of the currently active voice transcriber, when one is configured.
+             * @example elevenlabs
+             */
+            active_voice?: string;
+        };
+        /** @description Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). Setting an api_key stores it encrypted (AES-256-GCM) in credentials.json and writes only the credential reference to config.json. Setting active=true selects this provider as the active one for its kind. Because integration edits are sensitive, the SPA must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid token are rejected 403. */
+        IntegrationProviderUpdateRequest: {
+            /**
+             * @description Whether this provider is a search engine or a voice transcriber.
+             * @example search
+             * @enum {string}
+             */
+            kind: "search" | "voice";
+            /**
+             * @description API key for the provider. Stored encrypted; omit to leave the current key unchanged. Required when first configuring a key-requiring provider.
+             * @example BSA-abc123
+             */
+            api_key?: string;
+            /**
+             * @description When true, select this provider as the active one for its kind.
+             * @example true
+             */
+            active?: boolean;
+        };
+        /** @description Response from POST /api/v1/voice/transcribe. Returns the text transcribed from an uploaded audio clip by the active Transcriber (FR-12.1, composer mic). 503 when no transcriber is configured. */
+        TranscribeResponse: {
+            /**
+             * @description The transcribed text.
+             * @example schedule a meeting for tomorrow at noon
+             */
+            text: string;
+            /**
+             * @description Detected language code, when the transcriber reports one.
+             * @example en
+             */
+            language?: string;
+            /**
+             * @description Audio duration in seconds, when reported.
+             * @example 3.2
+             */
+            duration?: number;
+        };
         /** @description A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata. */
         Skill: {
             /**
@@ -5594,6 +5788,121 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             500: components["responses"]["500InternalServerError"];
+        };
+    };
+    reAuth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReAuthRequest"];
+            };
+        };
+        responses: {
+            /** @description Password re-verified; a consent token is returned. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReAuthResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getIntegrationProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The integration provider catalogue. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationProvidersResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    updateIntegrationProvider: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Provider identifier (e.g. "brave", "elevenlabs"). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationProviderUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Provider configured; the updated catalogue is returned. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationProvidersResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    transcribeAudio: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    /**
+                     * Format: binary
+                     * @description The recorded audio clip (webm/ogg/wav/mp3).
+                     */
+                    audio: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Transcription succeeded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranscribeResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     completeOnboarding: {
@@ -9309,6 +9618,12 @@ export type AboutResponse = components["schemas"]["AboutResponse"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
 export type GatewayStatus = components["schemas"]["GatewayStatus"];
 export type Provider = components["schemas"]["Provider"];
+export type ReAuthRequest = components["schemas"]["ReAuthRequest"];
+export type ReAuthResponse = components["schemas"]["ReAuthResponse"];
+export type IntegrationProvider = components["schemas"]["IntegrationProvider"];
+export type IntegrationProvidersResponse = components["schemas"]["IntegrationProvidersResponse"];
+export type IntegrationProviderUpdateRequest = components["schemas"]["IntegrationProviderUpdateRequest"];
+export type TranscribeResponse = components["schemas"]["TranscribeResponse"];
 export type Skill = components["schemas"]["Skill"];
 export type ActivityEvent = components["schemas"]["ActivityEvent"];
 export type UploadedFile = components["schemas"]["UploadedFile"];
