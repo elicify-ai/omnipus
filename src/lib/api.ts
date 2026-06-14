@@ -120,6 +120,8 @@ import {
   ReAuthResponse as ReAuthResponseSchema,
   IntegrationProvidersResponse as IntegrationProvidersResponseSchema,
   TranscribeResponse as TranscribeResponseSchema,
+  // Spec-4 — external-CLI runner connection test (contract-first #8):
+  RunnerTestResponse as RunnerTestResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -308,6 +310,9 @@ import type {
   IntegrationProvidersResponse,
   IntegrationProviderUpdateRequest,
   TranscribeResponse,
+  // Spec-4 — sub-agent executor + external-CLI runner test (contract-first #8):
+  ExecutorConfig,
+  RunnerTestResponse,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -410,6 +415,9 @@ export type {
   IntegrationProvidersResponse,
   IntegrationProviderUpdateRequest,
   TranscribeResponse,
+  // Spec-4 — sub-agent executor + external-CLI runner test:
+  ExecutorConfig,
+  RunnerTestResponse,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -618,6 +626,21 @@ export function createAgent(data: AgentCreateRequest): Promise<Agent> {
 
 export function updateAgent(id: string, data: AgentUpdateRequest): Promise<Agent> {
   return request<Agent>(`/agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
+}
+
+// Spec-4 FR-4.2 — external-CLI runner connection test.
+// POST /api/v1/agents/{id}/runner/test validates the agent's configured external
+// CLI (claude-code / codex / opencode) without running any real agent work:
+// binary present + version handshake + authenticated. The response carries a
+// distinct `reason` (missing-binary | unauthenticated | handshake-failed |
+// unknown-cli | not-external-cli) so the UI can show a precise remedy. The
+// generated RunnerTestResponse type + Zod schema are the source of truth.
+export function testAgentRunner(id: string): Promise<RunnerTestResponse> {
+  return request<RunnerTestResponse>(
+    `/agents/${encodeURIComponent(id)}/runner/test`,
+    { method: 'POST' },
+    RunnerTestResponseSchema as ZodType<RunnerTestResponse>,
+  )
 }
 
 // AgentSession — re-exported from generated openapi-types (no local body needed).
