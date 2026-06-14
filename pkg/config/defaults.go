@@ -75,89 +75,9 @@ func DefaultConfig() *Config {
 		Session: SessionConfig{
 			DMScope: "per-channel-peer",
 		},
-		Channels: ChannelsConfig{
-			WhatsApp: WhatsAppConfig{
-				Enabled:          false,
-				SessionStorePath: "",
-				AllowFrom:        FlexibleStringSlice{},
-			},
-			Telegram: TelegramConfig{
-				Enabled:   false,
-				AllowFrom: FlexibleStringSlice{},
-				Typing:    TypingConfig{Enabled: true},
-				Placeholder: PlaceholderConfig{
-					Enabled: true,
-					Text:    FlexibleStringSlice{"Thinking..."},
-				},
-				Streaming:     StreamingConfig{Enabled: true, ThrottleSeconds: 3, MinGrowthChars: 200},
-				UseMarkdownV2: false,
-			},
-			Feishu: FeishuConfig{
-				Enabled:   false,
-				AppID:     "",
-				AllowFrom: FlexibleStringSlice{},
-			},
-			Discord: DiscordConfig{
-				Enabled:     false,
-				AllowFrom:   FlexibleStringSlice{},
-				MentionOnly: false,
-			},
-
-			QQ: QQConfig{
-				Enabled:              false,
-				AppID:                "",
-				AllowFrom:            FlexibleStringSlice{},
-				MaxMessageLength:     2000,
-				MaxBase64FileSizeMiB: 0,
-			},
-			DingTalk: DingTalkConfig{
-				Enabled:   false,
-				ClientID:  "",
-				AllowFrom: FlexibleStringSlice{},
-			},
-			Slack: SlackConfig{
-				Enabled:   false,
-				AllowFrom: FlexibleStringSlice{},
-			},
-			Matrix: MatrixConfig{
-				Enabled:      false,
-				Homeserver:   "https://matrix.org",
-				UserID:       "",
-				DeviceID:     "",
-				JoinOnInvite: true,
-				AllowFrom:    FlexibleStringSlice{},
-				GroupTrigger: GroupTriggerConfig{
-					MentionOnly: true,
-				},
-				Placeholder: PlaceholderConfig{
-					Enabled: true,
-					Text:    FlexibleStringSlice{"Thinking..."},
-				},
-				CryptoDatabasePath: "",
-			},
-			LINE: LINEConfig{
-				Enabled:      false,
-				WebhookHost:  "0.0.0.0",
-				WebhookPort:  18791,
-				WebhookPath:  "/webhook/line",
-				AllowFrom:    FlexibleStringSlice{},
-				GroupTrigger: GroupTriggerConfig{MentionOnly: true},
-			},
-			WeCom: WeComConfig{
-				Enabled:             false,
-				BotID:               "",
-				WebSocketURL:        "wss://openws.work.weixin.qq.com",
-				SendThinkingMessage: true,
-				AllowFrom:           FlexibleStringSlice{},
-			},
-			Weixin: WeixinConfig{
-				Enabled:    false,
-				BaseURL:    "https://ilinkai.weixin.qq.com/",
-				CDNBaseURL: "https://novac2c.cdn.weixin.qq.com/c2c",
-				AllowFrom:  FlexibleStringSlice{},
-				Proxy:      "",
-			},
-		},
+		// Channels starts as an empty map; no default instances are pre-seeded
+		// (greenfield — FR-2.9). Channels are added via REST PUT /api/v1/channels/{id}/configure.
+		Channels: map[string]ChannelInstanceConfig{},
 		Hooks: HooksConfig{
 			Enabled: true,
 			Defaults: HookDefaultsConfig{

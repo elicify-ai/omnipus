@@ -63,7 +63,7 @@ func NewTelegramChannel(
 	bus *bus.MessageBus,
 ) (*TelegramChannel, error) {
 	var opts []telego.BotOption
-	telegramCfg := cfg.Channels.Telegram
+	telegramCfg := config.InstanceToTelegram(cfg.Channels["telegram"])
 
 	if telegramCfg.Proxy != "" {
 		proxyURL, parseErr := url.Parse(telegramCfg.Proxy)
@@ -186,7 +186,7 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 		return channels.ErrNotRunning
 	}
 
-	useMarkdownV2 := c.config.Channels.Telegram.UseMarkdownV2
+	useMarkdownV2 := config.InstanceToTelegram(c.config.Channels["telegram"]).UseMarkdownV2
 
 	chatID, threadID, err := parseTelegramChatID(msg.ChatID)
 	if err != nil {
@@ -367,7 +367,7 @@ func (c *TelegramChannel) StartTyping(ctx context.Context, chatID string) (func(
 
 // EditMessage implements channels.MessageEditor.
 func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messageID string, content string) error {
-	useMarkdownV2 := c.config.Channels.Telegram.UseMarkdownV2
+	useMarkdownV2 := config.InstanceToTelegram(c.config.Channels["telegram"]).UseMarkdownV2
 	cid, _, err := parseTelegramChatID(chatID)
 	if err != nil {
 		return err
@@ -412,7 +412,7 @@ func (c *TelegramChannel) DeleteMessage(ctx context.Context, chatID string, mess
 // It sends a placeholder message (e.g. "Thinking... 💭") that will later be
 // edited to the actual response via EditMessage (channels.MessageEditor).
 func (c *TelegramChannel) SendPlaceholder(ctx context.Context, chatID string) (string, error) {
-	phCfg := c.config.Channels.Telegram.Placeholder
+	phCfg := config.InstanceToTelegram(c.config.Channels["telegram"]).Placeholder
 	if !phCfg.Enabled {
 		return "", nil
 	}
@@ -904,7 +904,7 @@ func (c *TelegramChannel) stripBotMention(content string) string {
 
 // BeginStream implements channels.StreamingCapable.
 func (c *TelegramChannel) BeginStream(ctx context.Context, chatID string) (channels.Streamer, error) {
-	if !c.config.Channels.Telegram.Streaming.Enabled {
+	if !config.InstanceToTelegram(c.config.Channels["telegram"]).Streaming.Enabled {
 		return nil, fmt.Errorf("streaming disabled in config")
 	}
 
@@ -913,7 +913,7 @@ func (c *TelegramChannel) BeginStream(ctx context.Context, chatID string) (chann
 		return nil, err
 	}
 
-	streamCfg := c.config.Channels.Telegram.Streaming
+	streamCfg := config.InstanceToTelegram(c.config.Channels["telegram"]).Streaming
 	return &telegramStreamer{
 		bot:              c.bot,
 		chatID:           cid,

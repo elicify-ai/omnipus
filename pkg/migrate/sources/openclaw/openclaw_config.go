@@ -986,58 +986,71 @@ func (c *OmnipusConfig) ToStandardConfig() *config.Config {
 	return cfg
 }
 
-func (c ChannelsConfig) ToStandardChannels() config.ChannelsConfig {
-	return config.ChannelsConfig{
-		WhatsApp: config.WhatsAppConfig{
-			Enabled: c.WhatsApp.Enabled,
-			// BridgeURL dropped: WhatsApp is always native; the bridge was removed.
-		},
-		Telegram: config.TelegramConfig{
-			Enabled: c.Telegram.Enabled,
-			Proxy:   c.Telegram.Proxy,
-			// Token not migrated: re-enter via `omnipus credentials set TELEGRAM_TOKEN`
-		},
-		Feishu: config.FeishuConfig{
-			Enabled: c.Feishu.Enabled,
-			AppID:   c.Feishu.AppID,
-			// AppSecret, EncryptKey, VerificationToken not migrated: re-enter via credentials set
-		},
-		Discord: config.DiscordConfig{
-			Enabled:     c.Discord.Enabled,
-			MentionOnly: c.Discord.MentionOnly,
-			// Token not migrated: re-enter via `omnipus credentials set DISCORD_TOKEN`
-		},
+// ToStandardChannels converts an OpenClaw ChannelsConfig into the new
+// map[string]ChannelInstanceConfig format. Secrets are NOT migrated — the
+// operator must re-enter them via `omnipus credentials set <REF> <value>`.
+func (c ChannelsConfig) ToStandardChannels() map[string]config.ChannelInstanceConfig {
+	m := make(map[string]config.ChannelInstanceConfig)
 
-		QQ: config.QQConfig{
-			Enabled: c.QQ.Enabled,
-			AppID:   c.QQ.AppID,
-			// AppSecret not migrated: re-enter via `omnipus credentials set QQ_APP_SECRET`
-		},
-		DingTalk: config.DingTalkConfig{
-			Enabled:  c.DingTalk.Enabled,
-			ClientID: c.DingTalk.ClientID,
-			// ClientSecret not migrated: re-enter via `omnipus credentials set DINGTALK_CLIENT_SECRET`
-		},
-		Slack: config.SlackConfig{
-			Enabled: c.Slack.Enabled,
-			// BotToken, AppToken not migrated: re-enter via `omnipus credentials set SLACK_BOT_TOKEN`
-		},
-		Matrix: config.MatrixConfig{
-			Enabled:      c.Matrix.Enabled,
-			Homeserver:   c.Matrix.Homeserver,
-			UserID:       c.Matrix.UserID,
-			AllowFrom:    c.Matrix.AllowFrom,
-			JoinOnInvite: true,
-			// AccessToken not migrated: re-enter via `omnipus credentials set MATRIX_ACCESS_TOKEN`
-		},
-		LINE: config.LINEConfig{
-			Enabled:     c.LINE.Enabled,
-			WebhookHost: c.LINE.WebhookHost,
-			WebhookPort: c.LINE.WebhookPort,
-			WebhookPath: c.LINE.WebhookPath,
-			// ChannelSecret, ChannelAccessToken not migrated: re-enter via credentials set
-		},
+	m["whatsapp"] = config.ChannelInstanceConfig{
+		Type:    "whatsapp",
+		Enabled: c.WhatsApp.Enabled,
+		// BridgeURL dropped: WhatsApp is always native; the bridge was removed.
 	}
+	m["telegram"] = config.ChannelInstanceConfig{
+		Type:    "telegram",
+		Enabled: c.Telegram.Enabled,
+		Proxy:   c.Telegram.Proxy,
+		// Token not migrated: re-enter via `omnipus credentials set TELEGRAM_TOKEN`
+	}
+	m["feishu"] = config.ChannelInstanceConfig{
+		Type:    "feishu",
+		Enabled: c.Feishu.Enabled,
+		AppID:   c.Feishu.AppID,
+		// AppSecret, EncryptKey, VerificationToken not migrated: re-enter via credentials set
+	}
+	m["discord"] = config.ChannelInstanceConfig{
+		Type:        "discord",
+		Enabled:     c.Discord.Enabled,
+		MentionOnly: c.Discord.MentionOnly,
+		// Token not migrated: re-enter via `omnipus credentials set DISCORD_TOKEN`
+	}
+	m["qq"] = config.ChannelInstanceConfig{
+		Type:    "qq",
+		Enabled: c.QQ.Enabled,
+		AppID:   c.QQ.AppID,
+		// AppSecret not migrated: re-enter via `omnipus credentials set QQ_APP_SECRET`
+	}
+	m["dingtalk"] = config.ChannelInstanceConfig{
+		Type:     "dingtalk",
+		Enabled:  c.DingTalk.Enabled,
+		ClientID: c.DingTalk.ClientID,
+		// ClientSecret not migrated: re-enter via `omnipus credentials set DINGTALK_CLIENT_SECRET`
+	}
+	m["slack"] = config.ChannelInstanceConfig{
+		Type:    "slack",
+		Enabled: c.Slack.Enabled,
+		// BotToken, AppToken not migrated: re-enter via `omnipus credentials set SLACK_BOT_TOKEN`
+	}
+	m["matrix"] = config.ChannelInstanceConfig{
+		Type:         "matrix",
+		Enabled:      c.Matrix.Enabled,
+		Homeserver:   c.Matrix.Homeserver,
+		UserID:       c.Matrix.UserID,
+		AllowFrom:    c.Matrix.AllowFrom,
+		JoinOnInvite: true,
+		// AccessToken not migrated: re-enter via `omnipus credentials set MATRIX_ACCESS_TOKEN`
+	}
+	m["line"] = config.ChannelInstanceConfig{
+		Type:        "line",
+		Enabled:     c.LINE.Enabled,
+		WebhookHost: c.LINE.WebhookHost,
+		WebhookPort: c.LINE.WebhookPort,
+		WebhookPath: c.LINE.WebhookPath,
+		// ChannelSecret, ChannelAccessToken not migrated: re-enter via credentials set
+	}
+
+	return m
 }
 
 func (c GatewayConfig) ToStandardGateway() config.GatewayConfig {

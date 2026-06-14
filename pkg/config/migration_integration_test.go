@@ -110,15 +110,15 @@ func TestMigration_Integration_LegacyConfigWithoutWorkspace(t *testing.T) {
 	}
 
 	// Verify other config sections are preserved
-	if !cfg.Channels.Telegram.Enabled {
+	if !cfg.Channels["telegram"].Enabled {
 		t.Error("Telegram.Enabled should be true")
 	}
 	// Telegram token was migrated from plaintext to the credential store.
 	// TokenRef should be set to the canonical ref name.
-	if cfg.Channels.Telegram.TokenRef != "TELEGRAM_TOKEN" {
+	if cfg.Channels["telegram"].TokenRef != "TELEGRAM_TOKEN" {
 		t.Errorf(
 			"Telegram.TokenRef = %q, want %q (legacy token should be migrated to store)",
-			cfg.Channels.Telegram.TokenRef,
+			cfg.Channels["telegram"].TokenRef,
 			"TELEGRAM_TOKEN",
 		)
 	}
@@ -370,7 +370,7 @@ func TestMigration_Integration_ChannelsConfigMigrated(t *testing.T) {
 	}
 
 	// Discord: mention_only should be migrated to group_trigger.mention_only
-	if cfg.Channels.Discord.GroupTrigger.MentionOnly != true {
+	if cfg.Channels["discord"].GroupTrigger.MentionOnly != true {
 		t.Error("Discord.GroupTrigger.MentionOnly should be true after migration")
 	}
 }

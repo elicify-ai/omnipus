@@ -4257,35 +4257,44 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := a.agentLoop.GetConfig()
-	ch := cfg.Channels
+	// channelEnabledByType returns true when any instance of the given channel type
+	// is enabled in the map. In v0.1 cap-1 guarantees at most one instance per type.
+	channelEnabledByType := func(channelType string) bool {
+		for _, inst := range cfg.Channels {
+			if inst.Type == channelType && inst.Enabled {
+				return true
+			}
+		}
+		return false
+	}
 	channels := []gen.ChannelEntry{
 		{Id: "webchat", Name: "Web Chat", Transport: "websocket", Enabled: true, Description: "Built-in browser chat"},
 		{
 			Id:          "telegram",
 			Name:        "Telegram",
 			Transport:   "webhook",
-			Enabled:     ch.Telegram.Enabled,
+			Enabled:     channelEnabledByType("telegram"),
 			Description: "Telegram Bot API",
 		},
 		{
 			Id:          "discord",
 			Name:        "Discord",
 			Transport:   "websocket",
-			Enabled:     ch.Discord.Enabled,
+			Enabled:     channelEnabledByType("discord"),
 			Description: "Discord Gateway",
 		},
 		{
 			Id:          "slack",
 			Name:        "Slack",
 			Transport:   "websocket",
-			Enabled:     ch.Slack.Enabled,
+			Enabled:     channelEnabledByType("slack"),
 			Description: "Slack Socket Mode",
 		},
 		{
 			Id:              "whatsapp",
 			Name:            "WhatsApp",
 			Transport:       "native",
-			Enabled:         ch.WhatsApp.Enabled,
+			Enabled:         channelEnabledByType("whatsapp"),
 			Description:     "WhatsApp (native, whatsmeow)",
 			NativeAvailable: boolPtr(whatsappnative.NativeAvailable),
 		},
@@ -4293,39 +4302,39 @@ func (a *restAPI) HandleChannels(w http.ResponseWriter, r *http.Request) {
 			Id:          "feishu",
 			Name:        "Feishu / Lark",
 			Transport:   "webhook",
-			Enabled:     ch.Feishu.Enabled,
+			Enabled:     channelEnabledByType("feishu"),
 			Description: "Feishu (Lark) Bot",
 		},
 		{
 			Id:          "dingtalk",
 			Name:        "DingTalk",
 			Transport:   "webhook",
-			Enabled:     ch.DingTalk.Enabled,
+			Enabled:     channelEnabledByType("dingtalk"),
 			Description: "DingTalk Bot",
 		},
 		{
 			Id:          "wecom",
 			Name:        "WeCom",
 			Transport:   "webhook",
-			Enabled:     ch.WeCom.Enabled,
+			Enabled:     channelEnabledByType("wecom"),
 			Description: "WeCom (WeChat Work) Bot",
 		},
 		{
 			Id:          "weixin",
 			Name:        "Weixin",
 			Transport:   "webhook",
-			Enabled:     ch.Weixin.Enabled,
+			Enabled:     channelEnabledByType("weixin"),
 			Description: "Weixin (WeChat) Official Account",
 		},
-		{Id: "line", Name: "LINE", Transport: "webhook", Enabled: ch.LINE.Enabled, Description: "LINE Messaging API"},
-		{Id: "qq", Name: "QQ", Transport: "websocket", Enabled: ch.QQ.Enabled, Description: "QQ via napcat"},
-		{Id: "irc", Name: "IRC", Transport: "tcp", Enabled: ch.IRC.Enabled, Description: "Internet Relay Chat"},
-		{Id: "matrix", Name: "Matrix", Transport: "http", Enabled: ch.Matrix.Enabled, Description: "Matrix protocol"},
+		{Id: "line", Name: "LINE", Transport: "webhook", Enabled: channelEnabledByType("line"), Description: "LINE Messaging API"},
+		{Id: "qq", Name: "QQ", Transport: "websocket", Enabled: channelEnabledByType("qq"), Description: "QQ via napcat"},
+		{Id: "irc", Name: "IRC", Transport: "tcp", Enabled: channelEnabledByType("irc"), Description: "Internet Relay Chat"},
+		{Id: "matrix", Name: "Matrix", Transport: "http", Enabled: channelEnabledByType("matrix"), Description: "Matrix protocol"},
 		{
 			Id:          "google-chat",
 			Name:        "Google Chat",
 			Transport:   "webhook",
-			Enabled:     ch.GoogleChat.Enabled,
+			Enabled:     channelEnabledByType("google-chat"),
 			Description: "Google Chat (webhook or service account)",
 		},
 	}
@@ -4838,24 +4847,9 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 
 // countEnabledChannels returns the number of non-webchat channels currently enabled in cfg.
 func countEnabledChannels(cfg *config.Config) int {
-	ch := cfg.Channels
 	count := 0
-	for _, enabled := range []bool{
-		ch.Telegram.Enabled,
-		ch.Discord.Enabled,
-		ch.Slack.Enabled,
-		ch.WhatsApp.Enabled,
-		ch.Feishu.Enabled,
-		ch.DingTalk.Enabled,
-		ch.WeCom.Enabled,
-		ch.Weixin.Enabled,
-		ch.LINE.Enabled,
-		ch.QQ.Enabled,
-		ch.IRC.Enabled,
-		ch.Matrix.Enabled,
-		ch.GoogleChat.Enabled,
-	} {
-		if enabled {
+	for _, inst := range cfg.Channels {
+		if inst.Enabled {
 			count++
 		}
 	}

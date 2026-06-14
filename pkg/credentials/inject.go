@@ -94,29 +94,31 @@ func ResolveAll(cfg *config.Config, store *Store) (map[string]string, []error) {
 		addRef(m.APIKeyRef)
 	}
 
-	// Channel credential refs.
-	ch := cfg.Channels
+	// Channel credential refs — walk all instances in the map and collect every
+	// *_ref field. The union struct carries only the relevant refs per type; empty
+	// strings are skipped by addRef.
+	for _, inst := range cfg.Channels {
+		addRef(inst.TokenRef)
+		addRef(inst.BotTokenRef)
+		addRef(inst.AppTokenRef)
+		addRef(inst.AppSecretRef)
+		addRef(inst.EncryptKeyRef)
+		addRef(inst.VerificationTokenRef)
+		addRef(inst.ClientSecretRef)
+		addRef(inst.AccessTokenRef)
+		addRef(inst.CryptoPassphraseRef)
+		addRef(inst.ChannelSecretRef)
+		addRef(inst.ChannelAccessTokenRef)
+		addRef(inst.SecretRef)
+		addRef(inst.WebhookURLRef)
+		addRef(inst.ServiceAccountJSONRef)
+		addRef(inst.PasswordRef)
+		addRef(inst.NickServPasswordRef)
+		addRef(inst.SASLPasswordRef)
+	}
+
+	// Non-channel credential refs.
 	for _, ref := range []string{
-		ch.Telegram.TokenRef,
-		ch.Discord.TokenRef,
-		ch.Slack.BotTokenRef,
-		ch.Slack.AppTokenRef,
-		ch.Feishu.AppSecretRef,
-		ch.Feishu.EncryptKeyRef,
-		ch.Feishu.VerificationTokenRef,
-		ch.QQ.AppSecretRef,
-		ch.DingTalk.ClientSecretRef,
-		ch.Matrix.AccessTokenRef,
-		ch.Matrix.CryptoPassphraseRef,
-		ch.LINE.ChannelSecretRef,
-		ch.LINE.ChannelAccessTokenRef,
-		ch.WeCom.SecretRef,
-		ch.Weixin.TokenRef,
-		ch.GoogleChat.WebhookURLRef,
-		ch.GoogleChat.ServiceAccountJSONRef,
-		ch.IRC.PasswordRef,
-		ch.IRC.NickServPasswordRef,
-		ch.IRC.SASLPasswordRef,
 		cfg.Voice.ElevenLabsAPIKeyRef,
 		cfg.Tools.Skills.Github.TokenRef,
 		cfg.Tools.Skills.Registries.ClawHub.AuthTokenRef,

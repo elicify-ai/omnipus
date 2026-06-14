@@ -11,10 +11,11 @@ func init() {
 	channels.RegisterFactory(
 		"irc",
 		func(cfg *config.Config, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			if !cfg.Channels.IRC.Enabled {
+			inst := cfg.Channels["irc"]
+			if !inst.Enabled {
 				return nil, nil
 			}
-			return NewIRCChannel(cfg.Channels.IRC, secrets, b)
+			return NewIRCChannel(config.InstanceToIRC(inst), secrets, b)
 		},
 	)
 }
