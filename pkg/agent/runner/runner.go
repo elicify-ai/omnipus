@@ -152,6 +152,10 @@ type ConnectionTestResult struct {
 	Message string
 	// CLIVersion is the detected CLI version string, if the handshake succeeded.
 	CLIVersion string
+	// Reason classifies a failure (missing-binary / handshake-failed /
+	// unauthenticated / unknown-cli). Empty (ReasonOK) when OK is true. Lets callers
+	// branch on the failure category without parsing Message. Set by TestConnection.
+	Reason FailureReason
 }
 
 // ExternalAgentRunner is the bidirectional, consent-routed, resumable interface

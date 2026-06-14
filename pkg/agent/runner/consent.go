@@ -19,11 +19,13 @@
 // │                                                                          │
 // │ The REAL security boundary for external-cli is the CLI's own sandbox     │
 // │ plus the isolated git worktree the run executes in (RunOptions.WorkDir   │
-// │ — FR-5.3), NOT this consent layer. Because consent cannot gate a call    │
-// │ before it runs, external-cli is RESERVED/experimental in v0.1.0 and is   │
-// │ NOT wired into production sub-agent dispatch (ResolveDispatch returns     │
-// │ ErrExternalCLINotWired). Do not present external-cli as a safe, working  │
-// │ feature until a genuinely pre-emptive consent path exists.               │
+// │ — FR-5.3), NOT this consent layer. external-cli IS wired into production  │
+// │ sub-agent dispatch in v0.1.0 (ResolveDispatch → DispatchKindExternalCLI; │
+// │ pkg/agent/subturn.go runs the driver in a worktree under the CLI's own   │
+// │ sandbox). This consent path is routed BEST-EFFORT post-hoc: a DENY kills │
+// │ the run, an ALLOW lets it continue. It is observability + a kill switch, │
+// │ NOT a pre-emptive call-level gate. The operator decision is that the     │
+// │ CLI's own sandbox + the worktree are the authoritative confinement.      │
 // └─────────────────────────────────────────────────────────────────────────┘
 //
 // Spec-4 FR-5.1 contract:

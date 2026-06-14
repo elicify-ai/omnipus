@@ -34,6 +34,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent"
+	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
 	"github.com/dapicom-ai/omnipus/pkg/audit"
 	"github.com/dapicom-ai/omnipus/pkg/boardtask"
@@ -824,6 +825,16 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// POST /api/v1/agents/{id}/runner/test — external-CLI runner connection test (Spec-4 FR-4.2)
+	if agentID != "" && subPath == "runner/test" {
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.testAgentRunner(w, r, agentID)
+		return
+	}
+
 	// GET/PUT /api/v1/agents/{id}/tools — per-agent tool registry view (FR-028, FR-086)
 	if agentID != "" && subPath == "tools" {
 		switch r.Method {
@@ -871,6 +882,63 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// testAgentRunner handles POST /api/v1/agents/{id}/runner/test (Spec-4 FR-4.2).
+// It validates the agent's configured external-CLI runner WITHOUT running real work:
+// binary present + version handshake + authenticated. Returns distinct reasons for
+// missing-binary vs unauthenticated. When the agent's executor is not external-cli
+// (native / remote-a2a / unset), there is no runner to test → reason "not-external-cli".
+func (a *restAPI) testAgentRunner(w http.ResponseWriter, r *http.Request, agentID string) {
+	cfg := a.agentLoop.GetConfig()
+
+	var found bool
+	var executor *config.ExecutorConfig
+	for _, ac := range cfg.Agents.List {
+		if ac.ID == agentID {
+			found = true
+			if ac.Subagents != nil {
+				executor = ac.Subagents.Executor
+			}
+			break
+		}
+	}
+	if !found {
+		jsonErr(w, http.StatusNotFound, "agent not found")
+		return
+	}
+
+	// The agent must be configured for external-cli to have a runner to test.
+	if executor == nil || executor.EffectiveKind() != config.ExecutorKindExternalCLI {
+		jsonOK(w, gen.RunnerTestResponse{
+			Ok:      false,
+			Reason:  gen.RunnerTestResponseReasonNotExternalCli,
+			Message: "agent executor is not external-cli; no external runner to test",
+		})
+		return
+	}
+	cli := executor.CLI
+	if cli == "" {
+		jsonOK(w, gen.RunnerTestResponse{
+			Ok:      false,
+			Reason:  gen.RunnerTestResponseReasonUnknownCli,
+			Message: "agent executor.cli is empty; set claude-code, codex, or opencode",
+			Cli:     strPtr(""),
+		})
+		return
+	}
+
+	res := runner.TestConnection(r.Context(), cli)
+	resp := gen.RunnerTestResponse{
+		Ok:      res.OK,
+		Reason:  gen.RunnerTestResponseReason(res.Reason),
+		Message: res.Message,
+		Cli:     strPtr(cli),
+	}
+	if res.CLIVersion != "" {
+		resp.CliVersion = strPtr(res.CLIVersion)
+	}
+	jsonOK(w, resp)
 }
 
 func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {

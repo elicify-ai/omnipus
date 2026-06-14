@@ -496,6 +496,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/agents/{id}/runner/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test an external-CLI runner connection for an agent
+         * @description Connection/health check for the agent's configured external-CLI runner (Spec-4 FR-4.2). Validates the CLI binary is present, runs, and is authenticated WITHOUT running real work (no tokens spent). Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason "not-external-cli" when the agent's executor is native/remote-a2a (no runner to test).
+         */
+        post: operations["testAgentRunner"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/security/session-scope": {
         parameters: {
             query?: never;
@@ -5134,6 +5154,38 @@ export interface components {
             agent_type?: "core" | "system" | "custom";
         };
         /**
+         * RunnerTestResponse
+         * @description Result of POST /api/v1/agents/{id}/runner/test — a connection/health check for an external-CLI runner (Spec-4 FR-4.2). Validates that the agent's configured external CLI (claude-code, codex, opencode) is present on PATH, runs, and is authenticated — WITHOUT running any real agent work (no tokens spent). The three failure reasons have distinct remedies (install vs login vs config) and never collapse into one.
+         */
+        RunnerTestResponse: {
+            /**
+             * @description True when the CLI is present, authenticated, and the version handshake succeeded.
+             * @example true
+             */
+            ok: boolean;
+            /**
+             * @description Failure classifier. Empty when ok=true. One of: "missing-binary" (CLI not on PATH — install it), "handshake-failed" (binary present but did not run / report a version), "unauthenticated" (present and runs but no credentials — login), "unknown-cli" (the agent's executor.cli is not a supported external CLI), "not-external-cli" (the agent's executor is not external-cli, so there is no runner to test).
+             * @example
+             * @enum {string}
+             */
+            reason: "" | "missing-binary" | "handshake-failed" | "unauthenticated" | "unknown-cli" | "not-external-cli";
+            /**
+             * @description Human-readable description of the result (success detail or failure reason + remedy).
+             * @example "claude-code" ready: binary /usr/local/bin/claude present, v1.2.3, authenticated
+             */
+            message: string;
+            /**
+             * @description The external CLI name that was tested (the agent's executor.cli value).
+             * @example claude-code
+             */
+            cli?: string;
+            /**
+             * @description Detected CLI version string when the handshake succeeded; empty otherwise.
+             * @example 1.2.3
+             */
+            cli_version?: string;
+        };
+        /**
          * ChannelEnabledResponse
          * @description Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
          */
@@ -7416,6 +7468,36 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    testAgentRunner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Agent ID.
+                 * @example jim
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Connection test result (the test ran; ok indicates pass/fail). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunnerTestResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             500: components["responses"]["500InternalServerError"];
         };
@@ -11056,6 +11138,7 @@ export type RateLimitsUpdateResponse = components["schemas"]["RateLimitsUpdateRe
 export type SessionScopeUpdateResponse = components["schemas"]["SessionScopeUpdateResponse"];
 export type RetentionUpdateResponse = components["schemas"]["RetentionUpdateResponse"];
 export type AgentToolsResponse = components["schemas"]["AgentToolsResponse"];
+export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];
