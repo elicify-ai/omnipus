@@ -2,9 +2,13 @@
 // and SMTP-outbound (TLS). Inbound mail is fetched via IDLE; outbound replies
 // go to the From address of the originating message.
 //
-// Failure classification (SEC-23 / Spec-2 FR-2.8):
-//   - Auth failure (AUTHENTICATE/LOGIN error) → permanent failure; the channel
-//     is stopped and a degraded entry recorded via recordChannelFailure at boot.
+// Start is non-blocking: it spawns the IMAP receive loop in a background
+// goroutine and returns immediately (mirroring telegram/irc/weixin), so the
+// channel Manager — which calls Start while holding its mutex — never deadlocks.
+//
+// Failure classification (SEC-23 / Spec-2 FR-2.8), evaluated inside the loop:
+//   - Auth failure (AUTHENTICATE/LOGIN error) → permanent; the background loop
+//     logs and exits, leaving the channel idle.
 //   - Unreachable server (dial error, TLS error) → transient; exponential
 //     backoff and re-dial from the run loop.
 package email
@@ -71,6 +75,10 @@ type EmailChannel struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// done is closed when the background run loop exits. Stop waits on it so the
+	// IMAP client is fully torn down (and m.client cleared) before Stop returns.
+	done chan struct{}
 }
 
 // NewEmailChannel creates a new EmailChannel. Returns an error (wrapping
@@ -113,30 +121,47 @@ func NewEmailChannel(
 	}, nil
 }
 
-// Start connects to the IMAP server, performs login, selects INBOX and enters
-// the receive loop. Blocks until ctx is cancelled or a permanent error occurs.
+// Start spawns the IMAP receive loop in a background goroutine and returns
+// immediately. It mirrors the non-blocking contract of the telegram/irc/weixin
+// channels: the Manager calls Start synchronously while holding its channel
+// mutex, so a blocking Start would deadlock the entire channel subsystem.
+//
+// Connection and auth happen asynchronously inside run; permanent auth failures
+// are logged and stop the loop (the channel goes idle, exactly as it would for
+// any other channel whose background loop terminates).
 func (c *EmailChannel) Start(ctx context.Context) error {
 	c.ctx, c.cancel = context.WithCancel(ctx)
+	c.done = make(chan struct{})
 	c.SetRunning(true)
-	defer c.SetRunning(false)
 
 	slog.Info("email channel: starting", "imap_host", c.cfg.IMAPHost, "username", c.cfg.Username)
+
+	go c.run(c.ctx)
+	return nil
+}
+
+// run drives the IMAP receive loop until ctx is cancelled or a permanent error
+// occurs. It owns the IMAP client lifecycle: on exit it clears the running flag
+// and closes c.done so Stop can wait for a clean teardown.
+func (c *EmailChannel) run(ctx context.Context) {
+	defer close(c.done)
+	defer c.SetRunning(false)
 
 	backoff := backoffMin
 	authAttempts := 0
 
 	for {
 		select {
-		case <-c.ctx.Done():
-			return nil
+		case <-ctx.Done():
+			return
 		default:
 		}
 
 		sessionStart := time.Now()
-		err := c.runLoop(c.ctx)
+		err := c.runLoop(ctx)
 		if err == nil {
 			// Normal shutdown via ctx cancellation.
-			return nil
+			return
 		}
 
 		// A session that stayed up long enough indicates the connection and auth
@@ -154,7 +179,7 @@ func (c *EmailChannel) Start(ctx context.Context) error {
 			if authAttempts >= maxAuthRetries {
 				slog.Error("email channel: authentication failed (permanent), stopping channel",
 					"error", err)
-				return fmt.Errorf("%w: %v", ErrAuthFailure, err)
+				return
 			}
 		}
 
@@ -162,8 +187,8 @@ func (c *EmailChannel) Start(ctx context.Context) error {
 			"error", err, "backoff", backoff)
 
 		select {
-		case <-c.ctx.Done():
-			return nil
+		case <-ctx.Done():
+			return
 		case <-time.After(backoff):
 		}
 
@@ -418,22 +443,29 @@ func (c *EmailChannel) dispatchBufferedMessage(ctx context.Context, msg *imapcli
 	return nil
 }
 
-// Stop cancels the run loop and closes the IMAP connection.
-func (c *EmailChannel) Stop(_ context.Context) error {
+// Stop cancels the run loop and waits for it to tear down the IMAP connection.
+//
+// The run loop is the sole owner of the *imapclient.Client lifecycle: runLoop's
+// deferred cleanup clears c.client and calls Close on it. Stop therefore only
+// cancels the context (which unblocks idleLoop) and waits on c.done — it must
+// not close the client itself, or it would race the run loop into a double-close
+// of the same *imapclient.Client.
+func (c *EmailChannel) Stop(stopCtx context.Context) error {
 	slog.Info("email channel: stopping")
-	c.SetRunning(false)
 	if c.cancel != nil {
 		c.cancel()
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.client != nil {
-		if err := c.client.Logout().Wait(); err != nil {
-			slog.Debug("email channel: IMAP logout error on stop", "error", err)
+	// Wait for the background run loop to exit and release the IMAP client.
+	// Bound the wait by the caller's shutdown context so Stop can never hang.
+	if c.done != nil {
+		select {
+		case <-c.done:
+		case <-stopCtx.Done():
+			slog.Warn("email channel: stop timed out waiting for run loop to exit",
+				"error", stopCtx.Err())
 		}
-		c.client.Close()
-		c.client = nil
 	}
+	c.SetRunning(false)
 	slog.Info("email channel: stopped")
 	return nil
 }

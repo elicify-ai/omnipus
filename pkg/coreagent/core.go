@@ -246,14 +246,15 @@ func SeedConfig(cfg *config.Config) bool {
 		}
 
 		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
-		// Ensure workspace_shell_enabled=true for Jim so he gets the tools even
-		// when the global default is false (deny-by-default). Applied idempotently —
-		// fires when nil (unset) OR when currently false so that upgrades from
-		// validator.go's old nil→&false materialization are also fixed.
-		// Jim always has workspace.shell enabled; setting WorkspaceShellEnabled=false
-		// for Jim in config.json is not supported while the gateway is running.
+		// Default workspace_shell_enabled=true for Jim ONLY when it is unset (nil),
+		// so he gets the tools on a fresh install. An operator's EXPLICIT false MUST
+		// survive — SeedConfig runs on every boot, so re-enabling an explicit false
+		// here would silently re-enable shell exec for ALL agents on the next restart
+		// (Hard-Constraint #6: explicit security opt-outs are never overridden).
+		// validator.go no longer materializes nil→&false, so a nil-only check is
+		// sufficient and correct.
 		wse := cfg.Sandbox.Experimental.WorkspaceShellEnabled
-		if ca.ID == IDJim && (wse == nil || !*wse) {
+		if ca.ID == IDJim && wse == nil {
 			t := true
 			cfg.Sandbox.Experimental.WorkspaceShellEnabled = &t
 			modified = true
@@ -294,11 +295,12 @@ func SeedConfig(cfg *config.Config) bool {
 			},
 		})
 		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
-		// Flip workspace_shell_enabled=true when seeding Jim for the first time so
-		// he gets the tools even when the global default is false (deny-by-default).
-		// Fires when nil OR false (covers upgrades from old validator.go materialization).
+		// Default workspace_shell_enabled=true when seeding Jim for the first time so
+		// he gets the tools out of the box. Fires ONLY when unset (nil): an operator's
+		// explicit false must survive (Hard-Constraint #6 — see the re-enforcement
+		// loop above for the full rationale).
 		wse2 := cfg.Sandbox.Experimental.WorkspaceShellEnabled
-		if ca.ID == IDJim && (wse2 == nil || !*wse2) {
+		if ca.ID == IDJim && wse2 == nil {
 			t := true
 			cfg.Sandbox.Experimental.WorkspaceShellEnabled = &t
 		}

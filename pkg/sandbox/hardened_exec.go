@@ -223,9 +223,13 @@ func ScrubGatewayEnv() []string {
 //
 //	The external-CLI runner is the ONE caller that legitimately needs these:
 //	the CLI authenticates to its upstream model provider on the operator's
-//	behalf. The runner spawns its child via ScrubGatewayEnvForRunner (below),
-//	which unions THIS narrow set with the generic allowlist. No other spawn
-//	path sees these keys.
+//	behalf. The runner's dispatch site
+//	(pkg/agent/external_dispatch.go::runExternalCLISubTurn) sets
+//	RunOptions.Env = ScrubGatewayEnvForRunner() (below), which unions THIS
+//	narrow set with the generic allowlist; the driver then uses that slice as
+//	the COMPLETE child env (runner.buildChildEnv) with NO os.Environ() fallback.
+//	No other spawn path sees these keys, and the gateway secrets (e.g.
+//	OMNIPUS_MASTER_KEY) never reach the child.
 //
 // Each key is grounded in the respective CLI's documented auth contract:
 //

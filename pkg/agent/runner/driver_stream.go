@@ -21,10 +21,42 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
 )
+
+// buildChildEnv computes the environment for an external-CLI child process,
+// shared by all three drivers (Claude Code, Codex, opencode).
+//
+// SECURITY (Spec-4 FR-5.3 / SEC-23): when callerEnv is non-nil it is used as the
+// COMPLETE base — it is already the scrubbed runner-credential allowlist produced
+// by sandbox.ScrubGatewayEnvForRunner (see pkg/agent/external_dispatch.go). The
+// drivers MUST NOT fall back to os.Environ() in that case, or the spawned CLI
+// would inherit the entire gateway environment — including OMNIPUS_MASTER_KEY and
+// every other gateway secret. That is exactly the leak this helper prevents.
+//
+// callerEnv == nil means "no explicit env was supplied" (direct/test callers and
+// the connection-test path). Only then do we fall back to os.Environ() so those
+// paths keep working. The production dispatch path (external_dispatch.go) always
+// supplies a non-nil scrubbed RunOptions.Env, so the gateway secrets never leak.
+//
+// A non-nil but empty callerEnv yields an empty child env (an explicit, auditable
+// "inherit nothing" request) — it is NOT treated as "unset".
+func buildChildEnv(callerEnv []string) []string {
+	if callerEnv == nil {
+		// No explicit env supplied — inherit the parent process env. Reserved for
+		// direct/test callers and the version/connection-test path that do not go
+		// through the scrubbed dispatch flow.
+		return os.Environ()
+	}
+	// callerEnv is the authoritative, already-scrubbed allowlist. Return a defensive
+	// copy so a driver mutating cmd.Env cannot corrupt the caller's slice.
+	out := make([]string, len(callerEnv))
+	copy(out, callerEnv)
+	return out
+}
 
 // streamParser is a callback-based NDJSON parser.
 // It reads lines from r, calls parseLine for each non-empty line,
