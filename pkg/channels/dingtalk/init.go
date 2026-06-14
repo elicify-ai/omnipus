@@ -11,7 +11,8 @@ func init() {
 	channels.RegisterFactory(
 		"dingtalk",
 		func(cfg *config.Config, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			return NewDingTalkChannel(cfg.Channels.DingTalk, secrets, b)
+			inst := cfg.Channels["dingtalk"]
+			return NewDingTalkChannel(config.InstanceToDingTalk(inst), secrets, b)
 		},
 	)
 }

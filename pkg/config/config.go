@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -112,19 +113,19 @@ const CurrentVersion = 1
 
 // Config is the current config structure with version support
 type Config struct {
-	Version   int             `json:"version"             yaml:"-"` // Config schema version for migration
-	Agents    AgentsConfig    `json:"agents"              yaml:"-"`
-	Bindings  []AgentBinding  `json:"bindings,omitempty"  yaml:"-"`
-	Session   SessionConfig   `json:"session,omitempty"   yaml:"-"`
-	Channels  ChannelsConfig  `json:"channels"            yaml:"channels"`
-	Providers []*ModelConfig  `json:"providers"           yaml:"providers"` // Configured providers with credentials
-	Gateway   GatewayConfig   `json:"gateway"             yaml:"-"`
-	Hooks     HooksConfig     `json:"hooks,omitempty"     yaml:"-"`
-	Tools     ToolsConfig     `json:"tools"               yaml:",inline"`
-	Heartbeat HeartbeatConfig `json:"heartbeat"           yaml:"-"`
-	Schedules SchedulesConfig `json:"schedules,omitempty" yaml:"-"`
-	Devices   DevicesConfig   `json:"devices"             yaml:"-"`
-	Voice     VoiceConfig     `json:"voice"               yaml:"-"`
+	Version   int                              `json:"version"             yaml:"-"` // Config schema version for migration
+	Agents    AgentsConfig                     `json:"agents"              yaml:"-"`
+	Bindings  []AgentBinding                   `json:"bindings,omitempty"  yaml:"-"`
+	Session   SessionConfig                    `json:"session,omitempty"   yaml:"-"`
+	Channels  map[string]ChannelInstanceConfig `json:"channels"            yaml:"channels"`
+	Providers []*ModelConfig                   `json:"providers"           yaml:"providers"` // Configured providers with credentials
+	Gateway   GatewayConfig                    `json:"gateway"             yaml:"-"`
+	Hooks     HooksConfig                      `json:"hooks,omitempty"     yaml:"-"`
+	Tools     ToolsConfig                      `json:"tools"               yaml:",inline"`
+	Heartbeat HeartbeatConfig                  `json:"heartbeat"           yaml:"-"`
+	Schedules SchedulesConfig                  `json:"schedules,omitempty" yaml:"-"`
+	Devices   DevicesConfig                    `json:"devices"             yaml:"-"`
+	Voice     VoiceConfig                      `json:"voice"               yaml:"-"`
 	// BuildInfo contains build-time version information
 	BuildInfo BuildInfo `json:"build_info,omitempty" yaml:"-"`
 
@@ -936,21 +937,418 @@ func (d *AgentDefaults) GetModelName() string {
 	return d.ModelName
 }
 
-type ChannelsConfig struct {
-	WhatsApp WhatsAppConfig `json:"whatsapp" yaml:"-"`
-	Telegram TelegramConfig `json:"telegram" yaml:"telegram,omitempty"`
-	Feishu   FeishuConfig   `json:"feishu"   yaml:"feishu,omitempty"`
-	Discord  DiscordConfig  `json:"discord"  yaml:"discord,omitempty"`
+// ChannelIdentity identifies whether an inbound connection acts on behalf of an
+// agent ("agent" kind) or routes as the default user ("user" kind). Persisted per
+// instance; wired into ResolveRoute input (Spec-2 FR-2.9 / US-5).
+type ChannelIdentity struct {
+	Kind string `json:"kind"`         // "agent" or "user"
+	ID   string `json:"id,omitempty"` // agent ID when kind=agent; empty when kind=user
+}
 
-	QQ         QQConfig         `json:"qq"          yaml:"qq,omitempty"`
-	DingTalk   DingTalkConfig   `json:"dingtalk"    yaml:"dingtalk,omitempty"`
-	Slack      SlackConfig      `json:"slack"       yaml:"slack,omitempty"`
-	Matrix     MatrixConfig     `json:"matrix"      yaml:"matrix,omitempty"`
-	LINE       LINEConfig       `json:"line"        yaml:"line,omitempty"`
-	WeCom      WeComConfig      `json:"wecom"       yaml:"wecom,omitempty"       envPrefix:"OMNIPUS_CHANNELS_WECOM_"`
-	Weixin     WeixinConfig     `json:"weixin"      yaml:"weixin,omitempty"`
-	IRC        IRCConfig        `json:"irc"         yaml:"irc,omitempty"`
-	GoogleChat GoogleChatConfig `json:"google-chat" yaml:"google-chat,omitempty"`
+// maxInstancesPerType is the cap-1 limit on instances per channel type.
+// v0.3 will lift this to allow multiple instances per type.
+const maxInstancesPerType = 1
+
+// ChannelInstanceConfig is the map value for Config.Channels.
+// The map is keyed by instance ID (currently equal to the channel type name in
+// v0.1 since the cap is 1/type). Each instance carries its type discriminator,
+// the common enabled flag, an optional identity override, and the full union of
+// all per-channel-type configuration fields — only the fields relevant to the
+// instance type are non-zero.
+//
+// Wire-format note: this struct is NOT a gateway wire type — it lives in config.json,
+// not in REST request/response bodies. The not-wire-format opt-out is not needed here
+// because config structs are exempt from the gateway wire-format lint rule.
+type ChannelInstanceConfig struct {
+	// Common fields.
+	Type     string           `json:"type"`
+	Enabled  bool             `json:"enabled"`
+	Identity *ChannelIdentity `json:"identity,omitempty"`
+
+	// --- Common per-channel fields shared across multiple channel types ---
+	AllowFrom          FlexibleStringSlice `json:"allow_from,omitempty"`
+	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
+	Typing             TypingConfig        `json:"typing,omitempty"`
+	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
+	ReasoningChannelID string              `json:"reasoning_channel_id,omitempty"`
+	Proxy              string              `json:"proxy,omitempty"`
+	// token_ref is used by Telegram (bot token ref) and Weixin (account token ref).
+	TokenRef string `json:"token_ref,omitempty"`
+	// base_url is used by Telegram (API base URL) and Weixin (WeChat base URL).
+	BaseURL string `json:"base_url,omitempty"`
+
+	// --- WhatsApp-specific fields ---
+	SessionStorePath string `json:"session_store_path,omitempty"`
+
+	// --- Telegram-specific fields ---
+	Streaming     StreamingConfig `json:"streaming,omitempty"`
+	UseMarkdownV2 bool            `json:"use_markdown_v2,omitempty"`
+
+	// --- Feishu / Lark-specific fields ---
+	AppID                string              `json:"app_id,omitempty"`
+	AppSecretRef         string              `json:"app_secret_ref,omitempty"`
+	EncryptKeyRef        string              `json:"encrypt_key_ref,omitempty"`
+	VerificationTokenRef string              `json:"verification_token_ref,omitempty"`
+	RandomReactionEmoji  FlexibleStringSlice `json:"random_reaction_emoji,omitempty"`
+	IsLark               bool                `json:"is_lark,omitempty"`
+
+	// --- Discord-specific fields ---
+	// TokenRef (see common above) is also used by Discord.
+	// Proxy (see common above) is also used by Discord.
+	MentionOnly bool `json:"mention_only,omitempty"`
+
+	// --- QQ-specific fields ---
+	// AppID (see Feishu above) is also used by QQ.
+	AppSecretRef2        string `json:"app_secret_ref2,omitempty"` // unused; QQ reuses AppSecretRef
+	MaxMessageLength     int    `json:"max_message_length,omitempty"`
+	MaxBase64FileSizeMiB int64  `json:"max_base64_file_size_mib,omitempty"`
+	SendMarkdown         bool   `json:"send_markdown,omitempty"`
+
+	// --- DingTalk-specific fields ---
+	ClientID        string `json:"client_id,omitempty"`
+	ClientSecretRef string `json:"client_secret_ref,omitempty"`
+
+	// --- Slack-specific fields ---
+	BotTokenRef string `json:"bot_token_ref,omitempty"`
+	AppTokenRef string `json:"app_token_ref,omitempty"`
+
+	// --- Matrix-specific fields ---
+	Homeserver          string `json:"homeserver,omitempty"`
+	UserID              string `json:"user_id,omitempty"`
+	AccessTokenRef      string `json:"access_token_ref,omitempty"`
+	DeviceID            string `json:"device_id,omitempty"`
+	JoinOnInvite        bool   `json:"join_on_invite,omitempty"`
+	MessageFormat       string `json:"message_format,omitempty"`
+	CryptoDatabasePath  string `json:"crypto_database_path,omitempty"`
+	CryptoPassphraseRef string `json:"crypto_passphrase_ref,omitempty"`
+
+	// --- LINE-specific fields ---
+	ChannelSecretRef      string `json:"channel_secret_ref,omitempty"`
+	ChannelAccessTokenRef string `json:"channel_access_token_ref,omitempty"`
+	WebhookHost           string `json:"webhook_host,omitempty"`
+	WebhookPort           int    `json:"webhook_port,omitempty"`
+	WebhookPath           string `json:"webhook_path,omitempty"`
+
+	// --- WeCom-specific fields ---
+	BotID               string                      `json:"bot_id,omitempty"`
+	SecretRef           string                      `json:"secret_ref,omitempty"`
+	WebSocketURL        string                      `json:"websocket_url,omitempty"`
+	SendThinkingMessage bool                        `json:"send_thinking_message,omitempty"`
+	DMPolicy            string                      `json:"dm_policy,omitempty"`
+	GroupPolicy         string                      `json:"group_policy,omitempty"`
+	GroupAllowFrom      FlexibleStringSlice         `json:"group_allow_from,omitempty"`
+	Groups              map[string]WeComGroupConfig `json:"groups,omitempty"`
+
+	// --- Weixin-specific fields ---
+	// TokenRef (see common above) is also used by Weixin.
+	// BaseURL (see common above) is also used by Weixin.
+	// Proxy (see common above) is also used by Weixin.
+	AccountID  string `json:"account_id,omitempty"`
+	CDNBaseURL string `json:"cdn_base_url,omitempty"`
+
+	// --- IRC-specific fields ---
+	Server              string              `json:"server,omitempty"`
+	TLS                 bool                `json:"tls,omitempty"`
+	Nick                string              `json:"nick,omitempty"`
+	IRCUser             string              `json:"user,omitempty"`
+	RealName            string              `json:"real_name,omitempty"`
+	PasswordRef         string              `json:"password_ref,omitempty"`
+	NickServPasswordRef string              `json:"nickserv_password_ref,omitempty"`
+	SASLUser            string              `json:"sasl_user,omitempty"`
+	SASLPasswordRef     string              `json:"sasl_password_ref,omitempty"`
+	IRCChannels         FlexibleStringSlice `json:"channels,omitempty"`
+	RequestCaps         FlexibleStringSlice `json:"request_caps,omitempty"`
+
+	// --- Google Chat-specific fields ---
+	Mode                  string       `json:"mode,omitempty"`
+	WebhookURL            SecureString `json:"webhook_url,omitzero"`
+	WebhookURLRef         string       `json:"webhook_url_ref,omitempty"`
+	ServiceAccountFile    string       `json:"service_account_file,omitempty"`
+	ServiceAccountJSON    SecureString `json:"service_account_json,omitzero"`
+	ServiceAccountJSONRef string       `json:"service_account_json_ref,omitempty"`
+	Space                 string       `json:"space,omitempty"`
+	BotUser               string       `json:"bot_user,omitempty"`
+}
+
+// knownChannelTypes is the set of supported channel type identifiers.
+// Any map entry whose key is not in this set is logged as WARN and dropped.
+var knownChannelTypes = map[string]struct{}{
+	"telegram":    {},
+	"discord":     {},
+	"slack":       {},
+	"whatsapp":    {},
+	"feishu":      {},
+	"qq":          {},
+	"dingtalk":    {},
+	"matrix":      {},
+	"line":        {},
+	"wecom":       {},
+	"weixin":      {},
+	"irc":         {},
+	"google-chat": {},
+}
+
+// normalizeChannelMap fills in the Type field from the map key when absent
+// (so JSON-loaded entries without an explicit "type" field get a default),
+// and drops entries whose keys are not in knownChannelTypes, emitting a
+// structured Warn for each unknown entry.
+func normalizeChannelMap(channels map[string]ChannelInstanceConfig) map[string]ChannelInstanceConfig {
+	out := make(map[string]ChannelInstanceConfig, len(channels))
+	for key, inst := range channels {
+		if _, ok := knownChannelTypes[key]; !ok {
+			slog.Warn("config: unknown channel type in channels map — ignoring legacy or unsupported section",
+				"key", key)
+			continue
+		}
+		if inst.Type == "" {
+			inst.Type = key
+		}
+		out[key] = inst
+	}
+	return out
+}
+
+// ValidateChannelsCap1 checks that there is at most one instance per channel
+// type in the map. Returns an error listing all duplicate types. Called at
+// config load time so a hand-edited config.json with two telegram instances is
+// rejected early rather than silently running the second.
+func ValidateChannelsCap1(channels map[string]ChannelInstanceConfig) error {
+	typeCounts := make(map[string]int, len(channels))
+	for _, inst := range channels {
+		typeCounts[inst.Type]++
+	}
+	var dups []string
+	for t, n := range typeCounts {
+		if n > maxInstancesPerType {
+			dups = append(dups, fmt.Sprintf("%s (count=%d)", t, n))
+		}
+	}
+	if len(dups) != 0 {
+		sort.Strings(dups)
+		return fmt.Errorf("channels: cap-1/type violated (v0.1 allows one instance per type): %s", strings.Join(dups, ", "))
+	}
+	return nil
+}
+
+// --- Extraction helpers — convert ChannelInstanceConfig to the typed sub-config
+// that each channel constructor expects. ---
+
+// InstanceToTelegram returns the TelegramConfig for a ChannelInstanceConfig of
+// type "telegram".
+func InstanceToTelegram(inst ChannelInstanceConfig) TelegramConfig {
+	return TelegramConfig{
+		Enabled:            inst.Enabled,
+		TokenRef:           inst.TokenRef,
+		BaseURL:            inst.BaseURL,
+		Proxy:              inst.Proxy,
+		AllowFrom:          inst.AllowFrom,
+		GroupTrigger:       inst.GroupTrigger,
+		Typing:             inst.Typing,
+		Placeholder:        inst.Placeholder,
+		Streaming:          inst.Streaming,
+		ReasoningChannelID: inst.ReasoningChannelID,
+		UseMarkdownV2:      inst.UseMarkdownV2,
+	}
+}
+
+// InstanceToWhatsApp returns the WhatsAppConfig for a ChannelInstanceConfig of
+// type "whatsapp".
+func InstanceToWhatsApp(inst ChannelInstanceConfig) WhatsAppConfig {
+	return WhatsAppConfig{
+		Enabled:            inst.Enabled,
+		SessionStorePath:   inst.SessionStorePath,
+		AllowFrom:          inst.AllowFrom,
+		ReasoningChannelID: inst.ReasoningChannelID,
+		GroupTrigger:       inst.GroupTrigger,
+	}
+}
+
+// InstanceToFeishu returns the FeishuConfig for a ChannelInstanceConfig of
+// type "feishu".
+func InstanceToFeishu(inst ChannelInstanceConfig) FeishuConfig {
+	return FeishuConfig{
+		Enabled:              inst.Enabled,
+		AppID:                inst.AppID,
+		AppSecretRef:         inst.AppSecretRef,
+		EncryptKeyRef:        inst.EncryptKeyRef,
+		VerificationTokenRef: inst.VerificationTokenRef,
+		AllowFrom:            inst.AllowFrom,
+		GroupTrigger:         inst.GroupTrigger,
+		Placeholder:          inst.Placeholder,
+		ReasoningChannelID:   inst.ReasoningChannelID,
+		RandomReactionEmoji:  inst.RandomReactionEmoji,
+		IsLark:               inst.IsLark,
+	}
+}
+
+// InstanceToDiscord returns the DiscordConfig for a ChannelInstanceConfig of
+// type "discord".
+func InstanceToDiscord(inst ChannelInstanceConfig) DiscordConfig {
+	return DiscordConfig{
+		Enabled:            inst.Enabled,
+		TokenRef:           inst.TokenRef,
+		Proxy:              inst.Proxy,
+		AllowFrom:          inst.AllowFrom,
+		MentionOnly:        inst.MentionOnly,
+		GroupTrigger:       inst.GroupTrigger,
+		Typing:             inst.Typing,
+		Placeholder:        inst.Placeholder,
+		ReasoningChannelID: inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToQQ returns the QQConfig for a ChannelInstanceConfig of type "qq".
+func InstanceToQQ(inst ChannelInstanceConfig) QQConfig {
+	return QQConfig{
+		Enabled:              inst.Enabled,
+		AppID:                inst.AppID,
+		AppSecretRef:         inst.AppSecretRef,
+		AllowFrom:            inst.AllowFrom,
+		GroupTrigger:         inst.GroupTrigger,
+		MaxMessageLength:     inst.MaxMessageLength,
+		MaxBase64FileSizeMiB: inst.MaxBase64FileSizeMiB,
+		SendMarkdown:         inst.SendMarkdown,
+		ReasoningChannelID:   inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToDingTalk returns the DingTalkConfig for a ChannelInstanceConfig of
+// type "dingtalk".
+func InstanceToDingTalk(inst ChannelInstanceConfig) DingTalkConfig {
+	return DingTalkConfig{
+		Enabled:            inst.Enabled,
+		ClientID:           inst.ClientID,
+		ClientSecretRef:    inst.ClientSecretRef,
+		AllowFrom:          inst.AllowFrom,
+		GroupTrigger:       inst.GroupTrigger,
+		ReasoningChannelID: inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToSlack returns the SlackConfig for a ChannelInstanceConfig of type
+// "slack".
+func InstanceToSlack(inst ChannelInstanceConfig) SlackConfig {
+	return SlackConfig{
+		Enabled:            inst.Enabled,
+		BotTokenRef:        inst.BotTokenRef,
+		AppTokenRef:        inst.AppTokenRef,
+		AllowFrom:          inst.AllowFrom,
+		GroupTrigger:       inst.GroupTrigger,
+		Typing:             inst.Typing,
+		Placeholder:        inst.Placeholder,
+		ReasoningChannelID: inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToMatrix returns the MatrixConfig for a ChannelInstanceConfig of
+// type "matrix".
+func InstanceToMatrix(inst ChannelInstanceConfig) MatrixConfig {
+	return MatrixConfig{
+		Enabled:             inst.Enabled,
+		Homeserver:          inst.Homeserver,
+		UserID:              inst.UserID,
+		AccessTokenRef:      inst.AccessTokenRef,
+		DeviceID:            inst.DeviceID,
+		JoinOnInvite:        inst.JoinOnInvite,
+		MessageFormat:       inst.MessageFormat,
+		AllowFrom:           inst.AllowFrom,
+		GroupTrigger:        inst.GroupTrigger,
+		Placeholder:         inst.Placeholder,
+		ReasoningChannelID:  inst.ReasoningChannelID,
+		CryptoDatabasePath:  inst.CryptoDatabasePath,
+		CryptoPassphraseRef: inst.CryptoPassphraseRef,
+	}
+}
+
+// InstanceToLINE returns the LINEConfig for a ChannelInstanceConfig of type
+// "line".
+func InstanceToLINE(inst ChannelInstanceConfig) LINEConfig {
+	return LINEConfig{
+		Enabled:               inst.Enabled,
+		ChannelSecretRef:      inst.ChannelSecretRef,
+		ChannelAccessTokenRef: inst.ChannelAccessTokenRef,
+		WebhookHost:           inst.WebhookHost,
+		WebhookPort:           inst.WebhookPort,
+		WebhookPath:           inst.WebhookPath,
+		AllowFrom:             inst.AllowFrom,
+		GroupTrigger:          inst.GroupTrigger,
+		Typing:                inst.Typing,
+		Placeholder:           inst.Placeholder,
+		ReasoningChannelID:    inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToWeCom returns the WeComConfig for a ChannelInstanceConfig of type
+// "wecom".
+func InstanceToWeCom(inst ChannelInstanceConfig) WeComConfig {
+	return WeComConfig{
+		Enabled:             inst.Enabled,
+		BotID:               inst.BotID,
+		SecretRef:           inst.SecretRef,
+		WebSocketURL:        inst.WebSocketURL,
+		SendThinkingMessage: inst.SendThinkingMessage,
+		AllowFrom:           inst.AllowFrom,
+		ReasoningChannelID:  inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToWeixin returns the WeixinConfig for a ChannelInstanceConfig of
+// type "weixin".
+func InstanceToWeixin(inst ChannelInstanceConfig) WeixinConfig {
+	return WeixinConfig{
+		Enabled:            inst.Enabled,
+		TokenRef:           inst.TokenRef,
+		AccountID:          inst.AccountID,
+		BaseURL:            inst.BaseURL,
+		CDNBaseURL:         inst.CDNBaseURL,
+		Proxy:              inst.Proxy,
+		AllowFrom:          inst.AllowFrom,
+		ReasoningChannelID: inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToIRC returns the IRCConfig for a ChannelInstanceConfig of type
+// "irc".
+func InstanceToIRC(inst ChannelInstanceConfig) IRCConfig {
+	return IRCConfig{
+		Enabled:             inst.Enabled,
+		Server:              inst.Server,
+		TLS:                 inst.TLS,
+		Nick:                inst.Nick,
+		User:                inst.IRCUser,
+		RealName:            inst.RealName,
+		PasswordRef:         inst.PasswordRef,
+		NickServPasswordRef: inst.NickServPasswordRef,
+		SASLUser:            inst.SASLUser,
+		SASLPasswordRef:     inst.SASLPasswordRef,
+		Channels:            inst.IRCChannels,
+		RequestCaps:         inst.RequestCaps,
+		AllowFrom:           inst.AllowFrom,
+		GroupTrigger:        inst.GroupTrigger,
+		Typing:              inst.Typing,
+		ReasoningChannelID:  inst.ReasoningChannelID,
+	}
+}
+
+// InstanceToGoogleChat returns the GoogleChatConfig for a ChannelInstanceConfig
+// of type "google-chat".
+func InstanceToGoogleChat(inst ChannelInstanceConfig) GoogleChatConfig {
+	return GoogleChatConfig{
+		Enabled:               inst.Enabled,
+		Mode:                  inst.Mode,
+		WebhookURL:            inst.WebhookURL,
+		WebhookURLRef:         inst.WebhookURLRef,
+		ServiceAccountFile:    inst.ServiceAccountFile,
+		ServiceAccountJSON:    inst.ServiceAccountJSON,
+		ServiceAccountJSONRef: inst.ServiceAccountJSONRef,
+		Space:                 inst.Space,
+		BotUser:               inst.BotUser,
+		AllowFrom:             inst.AllowFrom,
+		GroupTrigger:          inst.GroupTrigger,
+		Typing:                inst.Typing,
+		Placeholder:           inst.Placeholder,
+		ReasoningChannelID:    inst.ReasoningChannelID,
+	}
 }
 
 // GroupTriggerConfig controls when the bot responds in group chats.
@@ -1988,6 +2386,17 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	// Migrate legacy channel config fields to new unified structures
 	cfg.migrateChannelConfigs()
 
+	// Normalize channel map: populate Type from map key when absent, drop unknown types.
+	if cfg.Channels == nil {
+		cfg.Channels = make(map[string]ChannelInstanceConfig)
+	}
+	cfg.Channels = normalizeChannelMap(cfg.Channels)
+
+	// Cap-1 validation: reject configs with >1 instance per channel type.
+	if err := ValidateChannelsCap1(cfg.Channels); err != nil {
+		return nil, err
+	}
+
 	// Merge Omnipus channel_policies routing rules into Bindings.
 	cfg.MergeChannelPoliciesIntoBindings()
 
@@ -2077,9 +2486,15 @@ func makeBackup(path string) error {
 }
 
 func (c *Config) migrateChannelConfigs() {
-	// Discord: mention_only -> group_trigger.mention_only
-	if c.Channels.Discord.MentionOnly && !c.Channels.Discord.GroupTrigger.MentionOnly {
-		c.Channels.Discord.GroupTrigger.MentionOnly = true
+	// Discord: mention_only -> group_trigger.mention_only (preserved from the typed singleton era).
+	// The map may have zero, one, or (after v0.3) more discord instances. Walk the
+	// map and normalise any instance of type "discord" that has the legacy flag set
+	// without the group_trigger equivalent.
+	for id, inst := range c.Channels {
+		if inst.Type == "discord" && inst.MentionOnly && !inst.GroupTrigger.MentionOnly {
+			inst.GroupTrigger.MentionOnly = true
+			c.Channels[id] = inst
+		}
 	}
 }
 

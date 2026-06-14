@@ -13,7 +13,8 @@ func init() {
 	channels.RegisterFactory(
 		"whatsapp_native",
 		func(cfg *config.Config, _ credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			waCfg := cfg.Channels.WhatsApp
+			inst := cfg.Channels["whatsapp"]
+			waCfg := config.InstanceToWhatsApp(inst)
 			storePath := waCfg.SessionStorePath
 			if storePath == "" {
 				storePath = filepath.Join(cfg.WorkspacePath(), "whatsapp")

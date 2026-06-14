@@ -202,30 +202,30 @@ func (p *startupBlockedProvider) GetDefaultModel() string {
 // APIKeyRef misses are already fatal via InjectFromConfig.
 func buildEnabledRefMap(cfg *config.Config) map[string]bool {
 	m := make(map[string]bool)
-	ch := cfg.Channels
-
-	type channelRef struct {
-		enabled bool
-		refs    []string
-	}
-	entries := []channelRef{
-		{ch.Telegram.Enabled, []string{ch.Telegram.TokenRef}},
-		{ch.Discord.Enabled, []string{ch.Discord.TokenRef}},
-		{ch.Slack.Enabled, []string{ch.Slack.BotTokenRef, ch.Slack.AppTokenRef}},
-		{ch.Feishu.Enabled, []string{ch.Feishu.AppSecretRef, ch.Feishu.EncryptKeyRef, ch.Feishu.VerificationTokenRef}},
-		{ch.QQ.Enabled, []string{ch.QQ.AppSecretRef}},
-		{ch.DingTalk.Enabled, []string{ch.DingTalk.ClientSecretRef}},
-		{ch.Matrix.Enabled, []string{ch.Matrix.AccessTokenRef, ch.Matrix.CryptoPassphraseRef}},
-		{ch.LINE.Enabled, []string{ch.LINE.ChannelSecretRef, ch.LINE.ChannelAccessTokenRef}},
-		{ch.WeCom.Enabled, []string{ch.WeCom.SecretRef}},
-		{ch.Weixin.Enabled, []string{ch.Weixin.TokenRef}},
-		{ch.IRC.Enabled, []string{ch.IRC.PasswordRef, ch.IRC.NickServPasswordRef, ch.IRC.SASLPasswordRef}},
-	}
-	for _, e := range entries {
-		if !e.enabled {
+	for _, inst := range cfg.Channels {
+		if !inst.Enabled {
 			continue
 		}
-		for _, ref := range e.refs {
+		// Collect all *_ref fields that are non-empty for this enabled instance.
+		for _, ref := range []string{
+			inst.TokenRef,
+			inst.BotTokenRef,
+			inst.AppTokenRef,
+			inst.AppSecretRef,
+			inst.EncryptKeyRef,
+			inst.VerificationTokenRef,
+			inst.ClientSecretRef,
+			inst.AccessTokenRef,
+			inst.CryptoPassphraseRef,
+			inst.ChannelSecretRef,
+			inst.ChannelAccessTokenRef,
+			inst.SecretRef,
+			inst.WebhookURLRef,
+			inst.ServiceAccountJSONRef,
+			inst.PasswordRef,
+			inst.NickServPasswordRef,
+			inst.SASLPasswordRef,
+		} {
 			if ref != "" {
 				m[ref] = true
 			}
@@ -2084,28 +2084,21 @@ func createHeartbeatHandler(agentLoop *agent.AgentLoop) func(prompt, channel, ch
 // per-agent ToolPolicyCfg. This single-shot boot warning prompts operators to
 // review agent policies.
 func emitGHSARemovalWarn(cfg *config.Config) {
-	// Gather enabled remote channel IDs from config.
+	// Gather enabled remote channel types from the instance map.
+	remoteChannelTypes := map[string]bool{
+		"telegram":    true,
+		"discord":     true,
+		"slack":       true,
+		"matrix":      true,
+		"irc":         true,
+		"google-chat": true,
+		"whatsapp":    true,
+	}
 	enabledRemoteChannels := make(map[string]bool)
-	if cfg.Channels.Telegram.Enabled {
-		enabledRemoteChannels["telegram"] = true
-	}
-	if cfg.Channels.Discord.Enabled {
-		enabledRemoteChannels["discord"] = true
-	}
-	if cfg.Channels.Slack.Enabled {
-		enabledRemoteChannels["slack"] = true
-	}
-	if cfg.Channels.Matrix.Enabled {
-		enabledRemoteChannels["matrix"] = true
-	}
-	if cfg.Channels.IRC.Enabled {
-		enabledRemoteChannels["irc"] = true
-	}
-	if cfg.Channels.GoogleChat.Enabled {
-		enabledRemoteChannels["google-chat"] = true
-	}
-	if cfg.Channels.WhatsApp.Enabled {
-		enabledRemoteChannels["whatsapp"] = true
+	for _, inst := range cfg.Channels {
+		if inst.Enabled && remoteChannelTypes[inst.Type] {
+			enabledRemoteChannels[inst.Type] = true
+		}
 	}
 	if len(enabledRemoteChannels) == 0 {
 		return

@@ -11,7 +11,8 @@ func init() {
 	channels.RegisterFactory(
 		"slack",
 		func(cfg *config.Config, secrets credentials.SecretBundle, b *bus.MessageBus) (channels.Channel, error) {
-			return NewSlackChannel(cfg.Channels.Slack, secrets, b)
+			inst := cfg.Channels["slack"]
+			return NewSlackChannel(config.InstanceToSlack(inst), secrets, b)
 		},
 	)
 }
