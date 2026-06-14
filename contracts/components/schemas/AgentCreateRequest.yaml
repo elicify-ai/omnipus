@@ -89,3 +89,11 @@ properties:
       absent field) means no skills are granted (opt-in, default none).
     example:
       - "web-research"
+  delegation_policy:
+    $ref: './DelegationPolicy.yaml'
+  voice:
+    type: string
+    nullable: true
+    description: >
+      Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
+    example: "alloy"

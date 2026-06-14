@@ -166,3 +166,12 @@ properties:
       Send an empty array to remove all skills.
     example:
       - "web-research"
+  delegation_policy:
+    $ref: './DelegationPolicy.yaml'
+  voice:
+    type: string
+    nullable: true
+    description: >
+      Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
+      Send null to clear.
+    example: "alloy"

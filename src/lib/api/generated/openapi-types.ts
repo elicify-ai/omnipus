@@ -2617,6 +2617,12 @@ export interface components {
              *     ]
              */
             skills?: string[];
+            delegation_policy?: components["schemas"]["DelegationPolicy"];
+            /**
+             * @description Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured.
+             * @example alloy
+             */
+            voice?: string | null;
         };
         /**
          * AgentModelParams
@@ -2877,6 +2883,12 @@ export interface components {
              *     ]
              */
             skills?: string[];
+            delegation_policy?: components["schemas"]["DelegationPolicy"];
+            /**
+             * @description Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
+             * @example alloy
+             */
+            voice?: string | null;
         };
         /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, soul, heartbeat, instructions. model, timeout_seconds, max_tool_iterations, steering_mode, tool_feedback, heartbeat_enabled, and heartbeat_interval may be updated on locked agents. At least one field must be present (minProperties: 1) — empty patches are rejected 400. */
         AgentUpdateRequest: {
@@ -3032,6 +3044,12 @@ export interface components {
              *     ]
              */
             skills?: string[];
+            delegation_policy?: components["schemas"]["DelegationPolicy"];
+            /**
+             * @description Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear.
+             * @example alloy
+             */
+            voice?: string | null;
         };
         /** @description Minimal session summary as returned by GET /agents/{id}/sessions. Maps to the AgentSession interface in src/lib/api.ts. This is the same underlying session.UnifiedMeta object, but the SPA consumes it through the AgentSession interface which reads id, title, created_at, and updated_at directly. */
         AgentSession: {
@@ -5376,6 +5394,70 @@ export interface components {
             notifications: components["schemas"]["Notification"][];
             /** @description Number of unread notifications for the badge. */
             unread_count: number;
+        };
+        /**
+         * @description Delegation policy for an agent. Controls which other agents this agent may delegate work to, and how delegation modes are gated.
+         *     The canonical "to" field unifies the three legacy allowlists:
+         *       - AgentConfig.CanDelegateTo (per-agent, task delegation)
+         *       - AgentDefaults.CanDelegateTo (global fallback, task delegation)
+         *       - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
+         *
+         *     Precedence: agent-level "to" > defaults-level "to"; subagent allowlist merges into agent-level "to" when both are set.
+         *     "accept_from" and "budget" are present in the schema but NOT enforced in v0.1.0. A startup WARN is emitted if either field is non-empty, to avoid presenting them as an active authorization boundary.
+         */
+        DelegationPolicy: {
+            /** @description List of agent references this agent is allowed to delegate work to. An empty array means NO delegation is allowed (deny-by-default). Use [{"kind": "local", "id": "*"}] to allow delegation to any local agent. */
+            to?: {
+                /**
+                 * @description The kind of agent reference. "local" = a locally-registered agent resolved by id. "remote-a2a" = reserved for future A2A protocol external agent resolution; not enforced in v0.1.0.
+                 * @example local
+                 * @enum {string}
+                 */
+                kind: "local" | "remote-a2a";
+                /**
+                 * @description Agent identifier. For kind=local, this is the agent's ID (UUID or well-known string). The value "*" is a wildcard allowing delegation to any agent of the given kind.
+                 * @example ray
+                 */
+                id: string;
+            }[];
+            /** @description PRESENT BUT NOT ENFORCED in v0.1.0. List of agent references from which this agent accepts delegated work. A startup WARN is emitted if non-empty. Do not rely on this field as an authorization boundary until enforcement is shipped. */
+            accept_from?: {
+                /**
+                 * @example local
+                 * @enum {string}
+                 */
+                kind: "local" | "remote-a2a";
+                /** @example jim */
+                id: string;
+            }[];
+            /**
+             * @description Allowed delegation modes. Enforced in v0.1.0. "await" = synchronous subagent (blocks caller until result). "background" = async spawn (caller continues; result posted when done). "task" = task_create delegation (creates a persistent task for another agent).
+             * @example [
+             *       "await",
+             *       "background",
+             *       "task"
+             *     ]
+             */
+            modes?: ("await" | "background" | "task")[];
+            /**
+             * @description Maximum delegation chain depth (number of hops). 0 = no delegation allowed. Enforced in v0.1.0 as a safety cap. Default is uncapped when absent. Counts the number of nested delegation levels, not total agents involved.
+             * @example 3
+             */
+            depth?: number;
+            /** @description PRESENT BUT NOT ENFORCED in v0.1.0. Delegation spend budget. A startup WARN is emitted if non-empty. Do not rely on this as an authorization boundary. */
+            budget?: {
+                /**
+                 * Format: double
+                 * @description Maximum USD spend allowed for delegated work.
+                 * @example 1
+                 */
+                max_cost_usd?: number;
+                /**
+                 * @description Maximum token count allowed for delegated work.
+                 * @example 100000
+                 */
+                max_tokens?: number;
+            };
         };
     };
     responses: {

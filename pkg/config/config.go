@@ -449,6 +449,14 @@ type AgentConfig struct {
 	Skills        []string          `json:"skills,omitempty"`
 	Subagents     *SubagentsConfig  `json:"subagents,omitempty"`
 	CanDelegateTo []string          `json:"can_delegate_to,omitempty"`
+	// DelegationPolicy is the canonical unified delegation policy.
+	// When set, it takes precedence over CanDelegateTo and Subagents.AllowAgents.
+	// Nil means "unset — fall back to legacy fields for backward compatibility".
+	DelegationPolicy *DelegationPolicy `json:"delegation_policy,omitempty"`
+	// Voice is the per-agent persona voice identifier (e.g. TTS voice name).
+	// Distinct from the global VoiceConfig engine settings.
+	// Schema-pinned; not active until v0.2.0 TTS delivery.
+	Voice string `json:"voice,omitempty"`
 	// Enabled controls whether the agent is active. A nil pointer means
 	// "treat as active" for backward compatibility with configs that predate
 	// this field. Agents with Enabled=false are inactive; Enabled=true are
@@ -581,6 +589,159 @@ func (a AgentConfig) ResolveType(isCoreAgent func(string) bool) AgentType {
 	return AgentTypeCustom
 }
 
+// DelegationMode is the mode in which delegation is allowed.
+// "await" = synchronous subagent (blocks caller).
+// "background" = async spawn (caller continues).
+// "task" = task_create delegation.
+type DelegationMode string
+
+const (
+	DelegationModeAwait      DelegationMode = "await"
+	DelegationModeBackground DelegationMode = "background"
+	DelegationModeTask       DelegationMode = "task"
+)
+
+// AgentRef is an agent reference used in delegation policy targets.
+// Kind is currently "local" (resolved by id within the instance) or
+// "remote-a2a" (reserved for future A2A protocol; not enforced in v0.1.0).
+// The id "*" is a wildcard matching any agent of the given kind.
+type AgentRef struct {
+	Kind string `json:"kind"` // "local" or "remote-a2a"
+	ID   string `json:"id"`
+}
+
+// DelegationPolicy is the unified delegation policy for an agent.
+// It unifies the three legacy allowlists:
+//   - AgentConfig.CanDelegateTo   (per-agent task delegation)
+//   - AgentDefaults.CanDelegateTo (global-default task delegation)
+//   - SubagentsConfig.AllowAgents (spawn/subagent tool allowlist)
+//
+// Precedence: agent-level To > defaults-level To; SubagentsConfig.AllowAgents
+// serves as a backward-compat fallback when To is nil.
+//
+// AcceptFrom and Budget are present but NOT enforced in v0.1.0. A startup WARN
+// is emitted when either is non-empty to prevent them being mistaken for an
+// active authorization boundary.
+type DelegationPolicy struct {
+	// To is the list of agent references this agent may delegate work to.
+	// Nil means "unset — fall back to legacy fields".
+	// An explicitly empty slice means "no delegation allowed".
+	To []AgentRef `json:"to,omitempty"`
+
+	// AcceptFrom is INERT in v0.1.0. Listed here so configs that set it
+	// trigger a startup WARN rather than being silently ignored.
+	AcceptFrom []AgentRef `json:"accept_from,omitempty"`
+
+	// Modes lists allowed delegation modes. Enforced in v0.1.0.
+	// An empty/nil Modes list means all modes are allowed (when To permits).
+	Modes []DelegationMode `json:"modes,omitempty"`
+
+	// Depth is the maximum delegation chain depth. Enforced as a safety cap.
+	// Zero means uncapped (nil pointer = uncapped).
+	Depth *int `json:"depth,omitempty"`
+
+	// Budget is INERT in v0.1.0. Present to trigger a startup WARN when set.
+	Budget *DelegationBudget `json:"budget,omitempty"`
+}
+
+// DelegationBudget is present in the schema but not enforced until a later release.
+type DelegationBudget struct {
+	MaxCostUSD float64 `json:"max_cost_usd,omitempty"`
+	MaxTokens  int     `json:"max_tokens,omitempty"`
+}
+
+// WarnIfInertFieldsSet logs a startup WARN if accept_from or budget are non-empty.
+// This prevents operators from mistaking them for active authorization boundaries.
+func (dp *DelegationPolicy) WarnIfInertFieldsSet(agentID string) {
+	if dp == nil {
+		return
+	}
+	if len(dp.AcceptFrom) > 0 {
+		slog.Warn("delegation policy: accept_from is present but NOT enforced in v0.1.0 — do not rely on it as an authorization boundary",
+			"agent_id", agentID)
+	}
+	if dp.Budget != nil {
+		slog.Warn("delegation policy: budget is present but NOT enforced in v0.1.0 — do not rely on it as an authorization boundary",
+			"agent_id", agentID)
+	}
+}
+
+// ResolveDelegationTo returns the canonical unified "to" allowlist for an agent,
+// implementing the three-path precedence rules without silent authz widening.
+//
+// Precedence (first non-nil wins):
+//  1. agentCfg.DelegationPolicy.To  (canonical; set by Spec-3 code paths)
+//  2. agentCfg.CanDelegateTo        (legacy task delegation allowlist)
+//  3. defaults.DelegationPolicy.To  (global default canonical policy)
+//  4. defaults.CanDelegateTo        (global default legacy allowlist)
+//
+// Unset behavior per path:
+//   - If the agent has DelegationPolicy set (non-nil), its To list is used even
+//     if that list is empty — an empty explicit To means "deny all delegation".
+//   - If the agent has no DelegationPolicy and has CanDelegateTo, those string IDs
+//     are used as {kind:local, id:X} references (backward compat).
+//   - If neither agent field is set, the defaults chain is consulted the same way.
+//   - If nothing is set at any level, nil is returned (deny-by-default).
+//
+// SubagentsConfig.AllowAgents is NOT consulted here; it is used only as a
+// backward-compat fallback in CanSpawnSubagent when DelegationPolicy.To is nil.
+func ResolveDelegationTo(agentCfg *AgentConfig, defaults AgentDefaults) []AgentRef {
+	// 1. Agent-level canonical policy (DelegationPolicy.To takes precedence;
+	//    even an empty slice is authoritative — it means deny all).
+	if agentCfg != nil && agentCfg.DelegationPolicy != nil {
+		return agentCfg.DelegationPolicy.To
+	}
+
+	// 2. Agent-level legacy CanDelegateTo (backward compat: treat as local refs).
+	if agentCfg != nil && len(agentCfg.CanDelegateTo) > 0 {
+		refs := make([]AgentRef, len(agentCfg.CanDelegateTo))
+		for i, id := range agentCfg.CanDelegateTo {
+			refs[i] = AgentRef{Kind: "local", ID: id}
+		}
+		return refs
+	}
+
+	// 3. Global default canonical policy.
+	if defaults.DelegationPolicy != nil {
+		return defaults.DelegationPolicy.To
+	}
+
+	// 4. Global default legacy CanDelegateTo.
+	if len(defaults.CanDelegateTo) > 0 {
+		refs := make([]AgentRef, len(defaults.CanDelegateTo))
+		for i, id := range defaults.CanDelegateTo {
+			refs[i] = AgentRef{Kind: "local", ID: id}
+		}
+		return refs
+	}
+
+	// Nothing set at any level — deny-by-default.
+	return nil
+}
+
+// IsDelegationAllowed checks whether delegation from an agent to targetAgentID
+// is permitted by the unified to-allowlist. Returns false when toList is nil
+// (deny-by-default). Wildcards ("*") match any target.
+func IsDelegationAllowed(toList []AgentRef, targetAgentID string) bool {
+	for _, ref := range toList {
+		if ref.Kind != "local" && ref.Kind != "" {
+			// remote-a2a and unknown kinds are not enforced locally in v0.1.0.
+			continue
+		}
+		if ref.ID == "*" || ref.ID == targetAgentID {
+			return true
+		}
+	}
+	return false
+}
+
+// IsDelegationAllowedAny checks whether any delegation is permitted (used when
+// no specific target is known, e.g. the sync subagent tool that has no agent_id).
+// Returns true only if the toList contains at least one entry.
+func IsDelegationAllowedAny(toList []AgentRef) bool {
+	return len(toList) > 0
+}
+
 type SubagentsConfig struct {
 	AllowAgents []string          `json:"allow_agents,omitempty"`
 	Model       *AgentModelConfig `json:"model,omitempty"`
@@ -661,7 +822,11 @@ type AgentDefaults struct {
 	SplitOnMarker             bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
 	TimeoutSeconds            int                `json:"timeout_seconds"                 env:"OMNIPUS_AGENTS_DEFAULTS_TIMEOUT_SECONDS"` // per-turn timeout in seconds; 0 = disabled
 	CanDelegateTo             []string           `json:"can_delegate_to,omitempty"`
-	DefaultAgentID            string             `json:"default_agent_id,omitempty"      env:"OMNIPUS_DEFAULT_AGENT_ID"`
+	// DelegationPolicy is the canonical unified delegation policy for the global
+	// default. When set, it takes precedence over CanDelegateTo.
+	// Nil means "unset — fall back to CanDelegateTo for backward compatibility".
+	DelegationPolicy *DelegationPolicy `json:"delegation_policy,omitempty"`
+	DefaultAgentID   string            `json:"default_agent_id,omitempty"      env:"OMNIPUS_DEFAULT_AGENT_ID"`
 
 	// AutoRecapEnabled gates the session-end recap pipeline (FR-033).
 	// When false, CloseSession is a no-op and no background LLM calls are made.
