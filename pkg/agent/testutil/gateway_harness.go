@@ -167,6 +167,25 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 	homeDir := t.TempDir()
 	configPath := filepath.Join(homeDir, "config.json")
 
+	// Pin OMNIPUS_HOME to this gateway's private temp home.
+	//
+	// The gateway is given homeDir as its HomePath argument, but the agent layer
+	// resolves its data root (memory rooms, sessions, agents dir) independently
+	// via omnipusHome() / getGlobalConfigDir(), which read the OMNIPUS_HOME env
+	// var (falling back to ~/.omnipus when unset). In PRODUCTION the gateway's
+	// HomePath and OMNIPUS_HOME are the same value, so the two agree. In tests
+	// the harness previously set HomePath but left OMNIPUS_HOME unset, so EVERY
+	// test gateway's MemoryStore resolved to the SHARED ~/.omnipus workspace-room
+	// path. When multiple gateways boot in one process (the integration suite),
+	// the first gateway's MemoryStore opens the bleve/bbolt index there and holds
+	// its exclusive (timeout-less) file lock; the SECOND gateway's first turn then
+	// blocks forever inside roomIndexLocked → bleve.Open while building the system
+	// prompt — its turn worker never makes an LLM call. Setting OMNIPUS_HOME here
+	// gives each test gateway its own isolated data root, exactly as production
+	// has it, so the lock contention disappears. t.Setenv is safe because these
+	// integration tests do not run in parallel (no t.Parallel()).
+	t.Setenv("OMNIPUS_HOME", homeDir)
+
 	// Pick an ephemeral port by opening a listener, reading the port, then closing it.
 	// The OS will not reuse the port immediately, giving RunContext time to bind.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

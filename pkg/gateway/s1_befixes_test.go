@@ -467,11 +467,15 @@ func TestPendingRestart_FreshOnboardingNoBanner(t *testing.T) {
 //
 // Traces to: FR-106, US-3/AC3.
 func TestPendingRestart_GatewayPortStillGated(t *testing.T) {
+	// Pin preview_port explicitly on both sides so it does NOT auto-derive from
+	// the (differing) port — otherwise changing port→8080 would also shift the
+	// derived preview_port (5001→8081) and surface as a second, legitimate diff.
+	// Pinning isolates the assertion to gateway.port.
 	applied := map[string]any{
-		"gateway": map[string]any{"port": float64(5000)},
+		"gateway": map[string]any{"port": float64(5000), "preview_port": float64(5001)},
 	}
 	persisted := map[string]any{
-		"gateway": map[string]any{"port": float64(8080)}, // changed
+		"gateway": map[string]any{"port": float64(8080), "preview_port": float64(5001)}, // port changed
 	}
 	api := newPendingRestartAPI(t, applied, persisted)
 

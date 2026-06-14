@@ -36,26 +36,74 @@ func withUserCtx(r *http.Request) *http.Request {
 	return r.WithContext(ctx)
 }
 
-// newPendingRestartAPI builds a restAPI wired for pending-restart tests.
-// applied is the boot-time snapshot; persisted is written to the temp config.json.
+// bootSnapshot loads the config at configPath the SAME way boot does
+// (LoadConfig + ValidateAndApplyPreviewDefaults + ApplyWarmupTimeoutDefault),
+// returning the resulting *config.Config to use as appliedConfig. This mirrors
+// production: appliedConfig is the boot config WITH computed defaults applied,
+// not the raw on-disk bytes. Centralising it here guarantees the test's applied
+// side is normalised identically to the handler's persisted side, so a
+// clean-install (applied == persisted) yields an empty diff even for keys that
+// only get a value via boot-time defaults (session.dm_scope, gateway.preview_*).
+func bootSnapshot(t *testing.T, configPath string) *config.Config {
+	t.Helper()
+	cfg, err := config.LoadConfig(configPath)
+	require.NoError(t, err)
+	require.NoError(t, cfg.Gateway.ValidateAndApplyPreviewDefaults())
+	cfg.Tools.ApplyWarmupTimeoutDefault()
+	return cfg
+}
+
+// writeConfig marshals m and writes it to configPath. It injects
+// version=CurrentVersion when absent so LoadConfig takes the side-effect-free
+// `case CurrentVersion` branch (no v0 migration / makeBackup / deferred
+// SaveConfig), matching how a post-boot on-disk config.json is shaped.
+func writeConfig(t *testing.T, configPath string, m map[string]any) {
+	t.Helper()
+	if _, ok := m["version"]; !ok {
+		withVersion := make(map[string]any, len(m)+1)
+		for k, v := range m {
+			withVersion[k] = v
+		}
+		withVersion["version"] = float64(config.CurrentVersion)
+		m = withVersion
+	}
+	raw, err := json.Marshal(m)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configPath, raw, 0o600))
+}
+
+// newPendingRestartAPI builds a restAPI for pending-restart tests.
+//
+//   - persisted is written to the real config.json the handler reads.
+//   - applied is the boot-time config map; it is normalised through the SAME
+//     boot pipeline (bootSnapshot) to produce appliedConfig, exactly as
+//     production does. A nil applied yields a nil appliedConfig (legacy callers
+//     that pass nil to exercise method/role guards).
+//
+// Because both the applied and persisted sides now flow through bootSnapshot /
+// the handler's identical normalisation, a clean install (applied == persisted)
+// produces an empty diff, while a genuine post-boot edit on the persisted side
+// still surfaces.
 func newPendingRestartAPI(t *testing.T, applied, persisted map[string]any) *restAPI {
 	t.Helper()
 	tmpDir := t.TempDir()
+	configPath := tmpDir + "/config.json"
 
-	raw, err := json.Marshal(persisted)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(tmpDir+"/config.json", raw, 0o600))
-
-	var appliedCfg config.Config
+	// Normalise the applied side through the boot pipeline (when provided).
+	var appliedCfg *config.Config
 	if applied != nil {
-		appliedRaw, marshalErr := json.Marshal(applied)
-		require.NoError(t, marshalErr)
-		require.NoError(t, json.Unmarshal(appliedRaw, &appliedCfg))
+		appliedDir := t.TempDir()
+		appliedPath := appliedDir + "/config.json"
+		writeConfig(t, appliedPath, applied)
+		appliedCfg = bootSnapshot(t, appliedPath)
 	}
+
+	// The persisted map is what the handler reads from disk.
+	writeConfig(t, configPath, persisted)
 
 	api := newTestRestAPIWithHome(t)
 	api.homePath = tmpDir
-	api.appliedConfig = &appliedCfg
+	api.appliedConfig = appliedCfg
 	return api
 }
 
@@ -67,95 +115,191 @@ func decodeDiffs(t *testing.T, body []byte) []pendingRestartEntry {
 	return diffs
 }
 
-// TestHandlePendingRestart_ListsQueuedChanges verifies that a mismatch on a
-// restart-gated key surfaces as a diff entry. The applied config is built from
-// a struct so all zero-value fields are present in both maps; sandbox.mode is
-// the only gated key that differs.
-func TestHandlePendingRestart_ListsQueuedChanges(t *testing.T) {
-	// Build applied config with sandbox.mode="off".
-	appliedCfg := &config.Config{}
-	appliedCfg.Sandbox.Mode = "off"
-
-	// Build a persisted map that matches the applied struct exactly, then
-	// override sandbox.mode to "enforce" so exactly one key differs.
-	appliedRaw, err := json.Marshal(appliedCfg)
-	require.NoError(t, err)
-	var persistedMap map[string]any
-	require.NoError(t, json.Unmarshal(appliedRaw, &persistedMap))
-	sandboxMap, _ := persistedMap["sandbox"].(map[string]any)
-	if sandboxMap == nil {
-		sandboxMap = map[string]any{}
-		persistedMap["sandbox"] = sandboxMap
-	}
-	sandboxMap["mode"] = "enforce"
-
-	tmpDir := t.TempDir()
-	persistedRaw, err := json.Marshal(persistedMap)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(tmpDir+"/config.json", persistedRaw, 0o600))
-
-	api := newTestRestAPIWithHome(t)
-	api.homePath = tmpDir
-	api.appliedConfig = appliedCfg
-
+// callPendingRestart drives the handler with an admin context and returns the
+// recorder.
+func callPendingRestart(t *testing.T, api *restAPI) *httptest.ResponseRecorder {
+	t.Helper()
 	w := httptest.NewRecorder()
 	r := withAdminCtx(httptest.NewRequest(http.MethodGet, "/api/v1/config/pending-restart", nil))
 	api.HandlePendingRestart(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	diffs := decodeDiffs(t, w.Body.Bytes())
-	require.Len(t, diffs, 1, "exactly one gated key changed")
-	assert.Equal(t, "sandbox.mode", diffs[0].Key)
-	assert.Equal(t, "enforce", diffs[0].PersistedValue)
-	assert.Equal(t, "off", diffs[0].AppliedValue)
+	return w
 }
 
-// TestHandlePendingRestart_EmptyAfterApply verifies that when persisted and
-// applied configs are equal for all gated keys, the response is an empty array
-// (not null).
+// TestHandlePendingRestart_CleanInstallNoPhantomDiff is the core regression
+// guard (FIX A): a fresh-install config.json that contains ONLY the gateway
+// host/port/preview_port and omits session.dm_scope and gateway.preview_host
+// must produce an EMPTY diff. Before the fix, the persisted side was the raw
+// on-disk JSON (no defaults) while appliedConfig had dm_scope and preview_host
+// defaulted, so those fields surfaced as phantom "value → null" changes.
+func TestHandlePendingRestart_CleanInstallNoPhantomDiff(t *testing.T) {
+	// Both applied (boot) and persisted (on-disk) are the SAME clean-install
+	// config: only gateway host/port/preview_port, with NO session.dm_scope and
+	// NO gateway.preview_host (these get computed defaults at boot but are absent
+	// on disk). The handler must normalise the persisted side identically, so the
+	// diff is empty.
+	clean := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"gateway": map[string]any{
+			"host":         "127.0.0.1",
+			"port":         float64(5000),
+			"preview_port": float64(5001),
+		},
+	}
+	api := newPendingRestartAPI(t, clean, clean)
+
+	w := callPendingRestart(t, api)
+	require.Equal(t, http.StatusOK, w.Code)
+	diffs := decodeDiffs(t, w.Body.Bytes())
+
+	// The whole point: empty diff on a clean install.
+	assert.Empty(t, diffs, "clean install must yield no pending-restart diff; got %+v", diffs)
+
+	// Belt-and-suspenders: the two defaulted keys must specifically NOT appear.
+	for _, d := range diffs {
+		assert.NotEqual(t, string(config.SessionDMScope), d.Key,
+			"session.dm_scope must not appear as a phantom diff")
+		assert.NotEqual(t, string(config.GatewayPreviewHost), d.Key,
+			"gateway.preview_host must not appear as a phantom diff")
+		assert.NotEqual(t, string(config.GatewayPreviewPort), d.Key,
+			"gateway.preview_port must not appear as a phantom diff")
+	}
+}
+
+// TestHandlePendingRestart_GenuineChangeStillShows verifies that a real
+// post-boot edit to a restart-gated key (gateway.port 5000 → 8080 written to
+// disk) STILL surfaces in the diff after the clean-install normalization fix.
+func TestHandlePendingRestart_GenuineChangeStillShows(t *testing.T) {
+	applied := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"gateway": map[string]any{
+			"host":         "127.0.0.1",
+			"port":         float64(5000),
+			"preview_port": float64(5001),
+		},
+	}
+	// Persisted (on-disk) has gateway.port edited to 8080 after boot.
+	persisted := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"gateway": map[string]any{
+			"host":         "127.0.0.1",
+			"port":         float64(8080),
+			"preview_port": float64(5001),
+		},
+	}
+	api := newPendingRestartAPI(t, applied, persisted)
+
+	w := callPendingRestart(t, api)
+	require.Equal(t, http.StatusOK, w.Code)
+	diffs := decodeDiffs(t, w.Body.Bytes())
+
+	var found *pendingRestartEntry
+	for i := range diffs {
+		if diffs[i].Key == string(config.GatewayPort) {
+			found = &diffs[i]
+		}
+	}
+	require.NotNil(t, found, "gateway.port change must appear in diff; got %+v", diffs)
+	assert.EqualValues(t, 8080, found.PersistedValue, "persisted (disk) value is the edited port")
+	assert.EqualValues(t, 5000, found.AppliedValue, "applied (boot) value is the original port")
+}
+
+// TestHandlePendingRestart_DMScopeNeverPhantom is a focused guard: even when the
+// boot config explicitly sets dm_scope to the default value AND the disk omits
+// it, no diff appears. (Both sides normalize to "per-channel-peer".)
+func TestHandlePendingRestart_DMScopeAndPreviewHostStableAcrossExplicitDefault(t *testing.T) {
+	// Applied (boot) config explicitly carries the defaulted values.
+	applied := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"session": map[string]any{"dm_scope": "per-channel-peer"},
+		"gateway": map[string]any{
+			"host":         "127.0.0.1",
+			"port":         float64(5000),
+			"preview_host": "127.0.0.1",
+			"preview_port": float64(5001),
+		},
+	}
+	// Persisted (on-disk) drops dm_scope and preview_host — both should
+	// re-default to the same values, producing no diff.
+	persisted := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"gateway": map[string]any{
+			"host":         "127.0.0.1",
+			"port":         float64(5000),
+			"preview_port": float64(5001),
+		},
+	}
+	api := newPendingRestartAPI(t, applied, persisted)
+
+	w := callPendingRestart(t, api)
+	require.Equal(t, http.StatusOK, w.Code)
+	diffs := decodeDiffs(t, w.Body.Bytes())
+	assert.Empty(t, diffs, "default-valued dm_scope/preview_host must not diff; got %+v", diffs)
+}
+
+// TestHandlePendingRestart_ListsQueuedChanges verifies that a post-boot change
+// to a restart-gated key (sandbox.mode off → enforce on disk) surfaces as a diff.
+func TestHandlePendingRestart_ListsQueuedChanges(t *testing.T) {
+	applied := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"sandbox": map[string]any{"mode": "off"},
+		"gateway": map[string]any{"host": "127.0.0.1", "port": float64(5000)},
+	}
+	persisted := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"sandbox": map[string]any{"mode": "enforce"},
+		"gateway": map[string]any{"host": "127.0.0.1", "port": float64(5000)},
+	}
+	api := newPendingRestartAPI(t, applied, persisted)
+
+	w := callPendingRestart(t, api)
+	require.Equal(t, http.StatusOK, w.Code)
+	diffs := decodeDiffs(t, w.Body.Bytes())
+
+	var found *pendingRestartEntry
+	for i := range diffs {
+		if diffs[i].Key == "sandbox.mode" {
+			found = &diffs[i]
+		}
+	}
+	require.NotNil(t, found, "sandbox.mode change must appear; got %+v", diffs)
+	assert.Equal(t, "enforce", found.PersistedValue)
+	assert.Equal(t, "off", found.AppliedValue)
+}
+
+// TestHandlePendingRestart_EmptyAfterApply verifies that when the on-disk config
+// is unchanged since boot, the response is an empty array (not null).
 func TestHandlePendingRestart_EmptyAfterApply(t *testing.T) {
 	same := map[string]any{
+		"version": float64(config.CurrentVersion),
 		"sandbox": map[string]any{"mode": "enforce", "enabled": true},
-		"gateway": map[string]any{"port": float64(8080)},
+		"gateway": map[string]any{"host": "127.0.0.1", "port": float64(8080)},
 	}
 	api := newPendingRestartAPI(t, same, same)
 
-	w := httptest.NewRecorder()
-	r := withAdminCtx(httptest.NewRequest(http.MethodGet, "/api/v1/config/pending-restart", nil))
-	api.HandlePendingRestart(w, r)
-
+	w := callPendingRestart(t, api)
 	require.Equal(t, http.StatusOK, w.Code)
 	// Must be "[]" (empty array), not "null".
 	body := w.Body.String()
 	assert.Contains(t, body, "[", "body must be a JSON array, not null")
 	diffs := decodeDiffs(t, w.Body.Bytes())
-	assert.Empty(t, diffs, "no diff when configs are equal")
+	assert.Empty(t, diffs, "no diff when on-disk config is unchanged since boot")
 }
 
 // TestHandlePendingRestart_SetThenRevertClearsDiff verifies the diff-based
 // semantics: if a key was changed to Y and then changed back to X (the applied
-// value) before restart, the diff returns [] and no banner shows.
+// value) before restart, the diff returns []. Modelled by leaving the on-disk
+// config identical to boot (net-zero edit).
 func TestHandlePendingRestart_SetThenRevertClearsDiff(t *testing.T) {
-	// Applied had mode="off"; persisted was changed to "enforce" then reverted
-	// to "off" — so persisted and applied are now equal. Derive both sides from
-	// the same struct to guarantee all gated keys are structurally identical.
-	appliedCfg := &config.Config{}
-	appliedCfg.Sandbox.Mode = "off"
+	// Applied had mode="off"; persisted was changed to "enforce" then reverted to
+	// "off" before restart — so persisted == applied now.
+	cfg := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"sandbox": map[string]any{"mode": "off"},
+		"gateway": map[string]any{"host": "127.0.0.1", "port": float64(5000)},
+	}
+	api := newPendingRestartAPI(t, cfg, cfg)
 
-	appliedRaw, err := json.Marshal(appliedCfg)
-	require.NoError(t, err)
-
-	tmpDir := t.TempDir()
-	require.NoError(t, os.WriteFile(tmpDir+"/config.json", appliedRaw, 0o600))
-
-	api := newTestRestAPIWithHome(t)
-	api.homePath = tmpDir
-	api.appliedConfig = appliedCfg
-
-	w := httptest.NewRecorder()
-	r := withAdminCtx(httptest.NewRequest(http.MethodGet, "/api/v1/config/pending-restart", nil))
-	api.HandlePendingRestart(w, r)
-
+	w := callPendingRestart(t, api)
 	require.Equal(t, http.StatusOK, w.Code)
 	diffs := decodeDiffs(t, w.Body.Bytes())
 	assert.Empty(t, diffs, "reverted change must not appear in diff")
@@ -165,7 +309,7 @@ func TestHandlePendingRestart_SetThenRevertClearsDiff(t *testing.T) {
 // receives 403. The check is enforced by RequireAdmin middleware, which is
 // part of the production adminWrap chain.
 func TestHandlePendingRestart_NonAdmin403(t *testing.T) {
-	api := newPendingRestartAPI(t, nil, map[string]any{})
+	api := newPendingRestartAPI(t, nil, map[string]any{"version": float64(config.CurrentVersion)})
 
 	w := httptest.NewRecorder()
 	r := withUserCtx(httptest.NewRequest(http.MethodGet, "/api/v1/config/pending-restart", nil))
@@ -178,39 +322,26 @@ func TestHandlePendingRestart_NonAdmin403(t *testing.T) {
 // (e.g. sandbox.prompt_injection_level) are excluded from the diff even when
 // their values differ between applied and persisted.
 func TestHandlePendingRestart_HotReloadKeyNotInDiff(t *testing.T) {
-	// Build an applied config where all restart-gated keys match the persisted
-	// file. Only prompt_injection_level (a hot-reload key) differs — it must
-	// not appear in the diff output.
-	appliedCfg := &config.Config{}
-	appliedCfg.Sandbox.Mode = "enforce"
-	appliedCfg.Sandbox.PromptInjectionLevel = "medium"
-
-	// Derive persisted from appliedCfg (guarantees structural parity for all
-	// gated keys), then flip only the hot-reload key.
-	appliedRaw, err := json.Marshal(appliedCfg)
-	require.NoError(t, err)
-	var persistedMap map[string]any
-	require.NoError(t, json.Unmarshal(appliedRaw, &persistedMap))
-	sandboxMap, _ := persistedMap["sandbox"].(map[string]any)
-	if sandboxMap == nil {
-		sandboxMap = map[string]any{}
-		persistedMap["sandbox"] = sandboxMap
+	applied := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"sandbox": map[string]any{
+			"mode":                   "enforce",
+			"prompt_injection_level": "medium",
+		},
+		"gateway": map[string]any{"host": "127.0.0.1", "port": float64(5000)},
 	}
-	sandboxMap["prompt_injection_level"] = "high"
+	// Persisted flips only the hot-reload key.
+	persisted := map[string]any{
+		"version": float64(config.CurrentVersion),
+		"sandbox": map[string]any{
+			"mode":                   "enforce",
+			"prompt_injection_level": "high",
+		},
+		"gateway": map[string]any{"host": "127.0.0.1", "port": float64(5000)},
+	}
+	api := newPendingRestartAPI(t, applied, persisted)
 
-	tmpDir := t.TempDir()
-	persistedRaw, err := json.Marshal(persistedMap)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(tmpDir+"/config.json", persistedRaw, 0o600))
-
-	api := newTestRestAPIWithHome(t)
-	api.homePath = tmpDir
-	api.appliedConfig = appliedCfg
-
-	w := httptest.NewRecorder()
-	r := withAdminCtx(httptest.NewRequest(http.MethodGet, "/api/v1/config/pending-restart", nil))
-	api.HandlePendingRestart(w, r)
-
+	w := callPendingRestart(t, api)
 	require.Equal(t, http.StatusOK, w.Code)
 	diffs := decodeDiffs(t, w.Body.Bytes())
 	for _, d := range diffs {
@@ -222,7 +353,7 @@ func TestHandlePendingRestart_HotReloadKeyNotInDiff(t *testing.T) {
 
 // TestHandlePendingRestart_MethodNotAllowed verifies that POST and PUT return 405.
 func TestHandlePendingRestart_MethodNotAllowed(t *testing.T) {
-	api := newPendingRestartAPI(t, nil, map[string]any{})
+	api := newPendingRestartAPI(t, nil, map[string]any{"version": float64(config.CurrentVersion)})
 
 	for _, method := range []string{http.MethodPost, http.MethodPut} {
 		t.Run(method, func(t *testing.T) {
