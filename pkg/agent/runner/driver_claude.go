@@ -34,7 +34,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -225,32 +224,12 @@ func (d *ClaudeDriver) buildArgs(opts RunOptions) []string {
 	return args
 }
 
-// buildEnv builds the environment for the child process.
-// Starts from the current process env and merges caller-provided vars.
-func (d *ClaudeDriver) buildEnv(extra []string) []string {
-	base := os.Environ()
-	if len(extra) == 0 {
-		return base
-	}
-	// Caller-provided vars override base vars.
-	overrides := make(map[string]string, len(extra))
-	for _, kv := range extra {
-		if idx := strings.IndexByte(kv, '='); idx > 0 {
-			overrides[kv[:idx]] = kv[idx+1:]
-		}
-	}
-	result := make([]string, 0, len(base)+len(extra))
-	for _, kv := range base {
-		idx := strings.IndexByte(kv, '=')
-		if idx > 0 {
-			if _, overridden := overrides[kv[:idx]]; overridden {
-				continue
-			}
-		}
-		result = append(result, kv)
-	}
-	result = append(result, extra...)
-	return result
+// buildEnv builds the environment for the child process. See buildChildEnv:
+// a non-nil opts.Env is the COMPLETE, already-scrubbed allowlist (the gateway
+// secrets, incl. OMNIPUS_MASTER_KEY, are NOT inherited); nil falls back to
+// os.Environ() for direct/test callers.
+func (d *ClaudeDriver) buildEnv(callerEnv []string) []string {
+	return buildChildEnv(callerEnv)
 }
 
 // parseLine maps a single NDJSON line from `claude --output-format stream-json`

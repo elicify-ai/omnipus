@@ -296,6 +296,117 @@ func TestSend_WhenNotRunning(t *testing.T) {
 	assert.ErrorIs(t, err, channels.ErrNotRunning)
 }
 
+// --- Blocker 1 regression: Start must be non-blocking ---
+
+// TestStart_ReturnsPromptly_RunLoopRunsInBackground verifies the CRITICAL
+// release-blocker fix: Start spawns the IMAP receive loop in a background
+// goroutine and returns immediately, instead of blocking until ctx-cancel or a
+// permanent error.
+//
+// The channel Manager calls channel.Start(ctx) SYNCHRONOUSLY while holding its
+// channel mutex (m.mu). A blocking Start therefore deadlocks the entire channel
+// subsystem the moment an email channel is enabled. This test points the channel
+// at an unreachable IMAP host so runLoop fails to dial and enters its backoff
+// loop — exactly the steady state a real (mis)configured channel reaches.
+//
+// BDD:
+//
+//	Given a configured email channel with an unreachable IMAP host,
+//	When Start(ctx) is called,
+//	Then it returns nil promptly (it does NOT block on the receive loop),
+//	And the channel reports running with the loop executing in the background,
+//	And Stop returns promptly after cancelling the loop.
+func TestStart_ReturnsPromptly_RunLoopRunsInBackground(t *testing.T) {
+	cfg := config.EmailConfig{
+		// 127.0.0.1:1 is not a listening IMAPS server, so DialTLS fails fast and
+		// the run loop enters transient backoff — it never blocks Start.
+		IMAPHost:    "127.0.0.1",
+		IMAPPort:    1,
+		SMTPHost:    "127.0.0.1",
+		SMTPPort:    1,
+		Username:    "bot@example.com",
+		PasswordRef: "cred:pw",
+	}
+	b := bus.NewMessageBus()
+	secrets := credentials.SecretBundle{"cred:pw": "hunter2"}
+
+	ch, err := NewEmailChannel(cfg, secrets, b)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start MUST return promptly. Run it on a watchdog so a regression (blocking
+	// Start) fails loudly instead of hanging the whole test binary.
+	startReturned := make(chan error, 1)
+	go func() { startReturned <- ch.Start(ctx) }()
+
+	select {
+	case err := <-startReturned:
+		require.NoError(t, err, "Start must return nil immediately (non-blocking)")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start did not return within 2s — it is blocking (the original deadlock bug)")
+	}
+
+	// The background run loop must be live: SetRunning(true) is set by Start, and
+	// the loop only clears it on exit. Poll briefly to confirm it is running.
+	assert.True(t, ch.IsRunning(), "channel must report running after Start")
+
+	// Confirm the loop is genuinely in the background and reacts to cancellation:
+	// Stop cancels the ctx and waits for run() to close c.done. This must return
+	// promptly (the loop is parked in its backoff select, which honors ctx.Done).
+	stopReturned := make(chan error, 1)
+	go func() { stopReturned <- ch.Stop(context.Background()) }()
+	select {
+	case err := <-stopReturned:
+		require.NoError(t, err, "Stop must return nil")
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop did not return within 3s — run loop failed to exit on cancel")
+	}
+
+	assert.False(t, ch.IsRunning(), "channel must not report running after Stop")
+}
+
+// TestStop_BoundedByContext verifies that Stop never hangs indefinitely waiting
+// for the run loop: if the caller's shutdown context expires first, Stop returns.
+//
+// This guards the Stop teardown path (cancel + wait on c.done, bounded by the
+// caller ctx) against a run loop that is slow to release the IMAP client.
+func TestStop_BoundedByContext(t *testing.T) {
+	cfg := config.EmailConfig{
+		IMAPHost:    "127.0.0.1",
+		IMAPPort:    1,
+		SMTPHost:    "127.0.0.1",
+		SMTPPort:    1,
+		Username:    "bot@example.com",
+		PasswordRef: "cred:pw",
+	}
+	b := bus.NewMessageBus()
+	secrets := credentials.SecretBundle{"cred:pw": "hunter2"}
+
+	ch, err := NewEmailChannel(cfg, secrets, b)
+	require.NoError(t, err)
+
+	// Simulate a started channel whose run loop is wedged and never releases
+	// c.done. We DO NOT call Start here (no real run loop), so nothing else will
+	// ever close c.done — Stop must fall back to its context deadline. cancel is a
+	// no-op so the wait-on-done branch is exercised, not the cancel path.
+	ch.cancel = func() {}
+	ch.done = make(chan struct{}) // never closed
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- ch.Stop(stopCtx) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err, "Stop must return nil even when bounded by an expiring ctx")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not honor its shutdown context deadline")
+	}
+}
+
 // TestEmailChannel_ImplementsChannelInterface verifies at compile time that
 // EmailChannel satisfies the channels.Channel interface.
 var _ channels.Channel = (*EmailChannel)(nil)

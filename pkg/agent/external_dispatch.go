@@ -33,6 +33,7 @@ import (
 
 	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
 	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/sandbox"
 	"github.com/dapicom-ai/omnipus/pkg/session"
 	"github.com/dapicom-ai/omnipus/pkg/tools"
 )
@@ -118,10 +119,21 @@ func runExternalCLISubTurn(
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// SECURITY (Spec-4 FR-5.3 / SEC-23): the spawned external CLI must NOT inherit
+	// the full gateway environment — that would leak OMNIPUS_MASTER_KEY (and every
+	// other gateway secret) into a third-party binary. ScrubGatewayEnvForRunner
+	// returns os.Environ() filtered through the generic child allowlist UNIONED with
+	// the narrow runner-credential allowlist (the model-provider API keys the CLI
+	// legitimately needs to authenticate). Passing it as RunOptions.Env makes the
+	// driver use it as the COMPLETE child env (buildChildEnv) — no os.Environ()
+	// fallback, so the master key never reaches the child.
+	childEnv := sandbox.ScrubGatewayEnvForRunner()
+
 	evCh, err := driver.Run(runCtx, runner.RunOptions{
 		RunID:          runID,
 		WorkDir:        ws.Dir,
 		Input:          task,
+		Env:            childEnv,
 		TimeoutSeconds: timeoutSecs,
 		MaxTurns:       maxTurns,
 	})

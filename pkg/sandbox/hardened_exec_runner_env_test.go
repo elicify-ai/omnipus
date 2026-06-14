@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -60,7 +61,13 @@ func TestRunnerCredentialEnv_DoesNotBroadenGeneric(t *testing.T) {
 // TestRunnerCredentialEnv_GenericKeysStillPresent confirms the runner path is a
 // SUPERSET of the generic path: ordinary keys (PATH, HOME) still pass through.
 func TestRunnerCredentialEnv_GenericKeysStillPresent(t *testing.T) {
-	t.Setenv("PATH", "/usr/bin")
+	// PATH passes through regardless of value, but t.Setenv mutates the
+	// PROCESS-GLOBAL env for the duration of this test. Clobbering PATH to a bare
+	// "/usr/bin" breaks any parallel sibling test that spawns `sh`/`env` from a
+	// different location (e.g. /bin), which surfaced as a flaky "sh -c env: exit 2"
+	// in TestSpawnBackgroundChild_EnvMerging. Preserve resolvability by prepending
+	// to the real PATH instead of replacing it.
+	t.Setenv("PATH", "/usr/bin:"+os.Getenv("PATH"))
 	t.Setenv("HOME", "/home/x")
 
 	runner := ScrubGatewayEnvForRunner()

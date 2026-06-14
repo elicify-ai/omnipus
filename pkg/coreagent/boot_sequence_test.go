@@ -4,10 +4,14 @@
 
 package coreagent_test
 
-// boot_sequence_test.go covers the Wave 4 hotfix/v0.1.1 ordering fix:
-// validateBootConfig must NOT materialize nil → &false for WorkspaceShellEnabled
-// (tested separately in pkg/config/sandbox_test.go::TestWorkspaceShellEnabled_NilPassthrough),
-// AND SeedConfig must flip both nil AND &false to &true for Jim.
+// boot_sequence_test.go covers the WorkspaceShellEnabled seeding contract:
+//   - validateBootConfig must NOT materialize nil → &false for WorkspaceShellEnabled
+//     (tested separately in pkg/config/sandbox_test.go::TestWorkspaceShellEnabled_NilPassthrough),
+//   - SeedConfig must default nil → &true for Jim (fresh install),
+//   - SeedConfig must PRESERVE an operator's explicit &false (security blocker fix):
+//     SeedConfig runs on every boot, so re-enabling an explicit false would silently
+//     re-enable workspace shell exec for ALL agents on the next restart, violating
+//     Hard-Constraint #6 (explicit security opt-outs are never overridden).
 //
 // Placing these tests in the coreagent_test package avoids the import cycle
 // between pkg/config (which imports nothing from coreagent) and pkg/coreagent
@@ -20,19 +24,17 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 )
 
-// TestSeedConfig_JimGetsWorkspaceShell verifies the
-// boot ordering fix end-to-end from the SeedConfig side.
+// TestSeedConfig_JimGetsWorkspaceShell verifies the WorkspaceShellEnabled
+// seeding contract end-to-end from the SeedConfig side, for both the
+// re-enforcement branch (Jim already in the list) and the implicit default.
 //
 // Scenario A — nil initial state (fresh install / fixed validator):
 // SeedConfig must set WorkspaceShellEnabled = &true for Jim when the field is nil.
 //
-// Scenario B — &false initial state (old-validator materialization):
-// SeedConfig must flip &false → &true for Jim so upgrades from the broken
-// validator.go (which wrote &false) are also healed.
-//
-// These tests FAIL on SeedConfig code that only checked for nil and did not
-// also handle the false case, and PASS on the fixed code that checks
-// "nil || !*value".
+// Scenario B — &false initial state (operator's explicit security opt-out):
+// SeedConfig MUST PRESERVE &false. SeedConfig runs on every boot; flipping an
+// explicit false back to true would silently re-enable workspace shell exec for
+// ALL agents on the next restart (CRITICAL security blocker; Hard-Constraint #6).
 func TestSeedConfig_JimGetsWorkspaceShell(t *testing.T) {
 	t.Run("nil_initial_state_jim_gets_true", func(t *testing.T) {
 		cfg := config.DefaultConfig()
@@ -65,10 +67,11 @@ func TestSeedConfig_JimGetsWorkspaceShell(t *testing.T) {
 		}
 	})
 
-	t.Run("false_initial_state_jim_gets_true", func(t *testing.T) {
+	t.Run("explicit_false_is_preserved_not_overridden", func(t *testing.T) {
 		cfg := config.DefaultConfig()
-		// Precondition: &false — this is what the old validateBootConfig wrote
-		// before the ordering fix. SeedConfig must still heal it to &true for Jim.
+		// Precondition: an operator has EXPLICITLY set WorkspaceShellEnabled=false
+		// in config.json to deny workspace shell exec. This is a deliberate security
+		// opt-out and MUST survive every boot's SeedConfig pass.
 		f := false
 		cfg.Sandbox.Experimental.WorkspaceShellEnabled = &f
 
@@ -82,16 +85,36 @@ func TestSeedConfig_JimGetsWorkspaceShell(t *testing.T) {
 			},
 		}
 
-		modified := coreagent.SeedConfig(cfg)
+		coreagent.SeedConfig(cfg)
 
-		if !modified {
-			t.Fatal("SeedConfig must report modified=true when WorkspaceShellEnabled is &false for Jim")
-		}
 		if cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil {
-			t.Fatal("SeedConfig must set WorkspaceShellEnabled to &true for Jim when &false; got nil")
+			t.Fatal("SeedConfig must not nil-out an explicit WorkspaceShellEnabled=false")
 		}
-		if !*cfg.Sandbox.Experimental.WorkspaceShellEnabled {
-			t.Fatalf("SeedConfig must flip WorkspaceShellEnabled from &false to &true for Jim; got false")
+		if *cfg.Sandbox.Experimental.WorkspaceShellEnabled {
+			t.Fatal("SECURITY: SeedConfig must PRESERVE an operator's explicit " +
+				"WorkspaceShellEnabled=false; flipping it back to true re-enables " +
+				"workspace shell exec for ALL agents on every boot (Hard-Constraint #6)")
+		}
+	})
+
+	t.Run("explicit_false_survives_repeated_seeding", func(t *testing.T) {
+		// SeedConfig is idempotent and runs on EVERY boot. Simulate three boots and
+		// assert the explicit false is never clobbered — the exact failure mode the
+		// blocker describes ("reset to true on next boot").
+		cfg := config.DefaultConfig()
+		f := false
+		cfg.Sandbox.Experimental.WorkspaceShellEnabled = &f
+		enabled := true
+		cfg.Agents.List = []config.AgentConfig{
+			{ID: "jim", Name: "Jim — General Purpose", Enabled: &enabled, Locked: true},
+		}
+
+		for boot := 1; boot <= 3; boot++ {
+			coreagent.SeedConfig(cfg)
+			if cfg.Sandbox.Experimental.WorkspaceShellEnabled == nil ||
+				*cfg.Sandbox.Experimental.WorkspaceShellEnabled {
+				t.Fatalf("boot %d: explicit WorkspaceShellEnabled=false was overridden to true", boot)
+			}
 		}
 	})
 }
