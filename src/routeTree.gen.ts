@@ -17,6 +17,7 @@ import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppTasksRouteImport } from './routes/_app/tasks'
 import { Route as AppSkillsRouteImport } from './routes/_app/skills'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
+import { Route as AppProfileRouteImport } from './routes/_app/profile'
 import { Route as AppPoliciesRouteImport } from './routes/_app/policies'
 import { Route as AppMonitorRouteImport } from './routes/_app/monitor'
 import { Route as AppCommandCenterRouteImport } from './routes/_app/command-center'
@@ -66,6 +67,11 @@ const AppSkillsRoute = AppSkillsRouteImport.update({
 const AppSettingsRoute = AppSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppProfileRoute = AppProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
   getParentRoute: () => AppRoute,
 } as any)
 const AppPoliciesRoute = AppPoliciesRouteImport.update({
@@ -136,6 +142,7 @@ export interface FileRoutesByFullPath {
   '/command-center': typeof AppCommandCenterRoute
   '/monitor': typeof AppMonitorRoute
   '/policies': typeof AppPoliciesRoute
+  '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
   '/skills': typeof AppSkillsRoute
   '/tasks': typeof AppTasksRoute
@@ -154,6 +161,7 @@ export interface FileRoutesByTo {
   '/command-center': typeof AppCommandCenterRoute
   '/monitor': typeof AppMonitorRoute
   '/policies': typeof AppPoliciesRoute
+  '/profile': typeof AppProfileRoute
   '/settings': typeof AppSettingsRoute
   '/skills': typeof AppSkillsRoute
   '/tasks': typeof AppTasksRoute
@@ -176,6 +184,7 @@ export interface FileRoutesById {
   '/_app/command-center': typeof AppCommandCenterRoute
   '/_app/monitor': typeof AppMonitorRoute
   '/_app/policies': typeof AppPoliciesRoute
+  '/_app/profile': typeof AppProfileRoute
   '/_app/settings': typeof AppSettingsRoute
   '/_app/skills': typeof AppSkillsRoute
   '/_app/tasks': typeof AppTasksRoute
@@ -199,6 +208,7 @@ export interface FileRouteTypes {
     | '/command-center'
     | '/monitor'
     | '/policies'
+    | '/profile'
     | '/settings'
     | '/skills'
     | '/tasks'
@@ -217,6 +227,7 @@ export interface FileRouteTypes {
     | '/command-center'
     | '/monitor'
     | '/policies'
+    | '/profile'
     | '/settings'
     | '/skills'
     | '/tasks'
@@ -238,6 +249,7 @@ export interface FileRouteTypes {
     | '/_app/command-center'
     | '/_app/monitor'
     | '/_app/policies'
+    | '/_app/profile'
     | '/_app/settings'
     | '/_app/skills'
     | '/_app/tasks'
@@ -313,6 +325,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/profile': {
+      id: '/_app/profile'
+      path: '/profile'
+      fullPath: '/profile'
+      preLoaderRoute: typeof AppProfileRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/policies': {
@@ -430,6 +449,7 @@ interface AppRouteChildren {
   AppCommandCenterRoute: typeof AppCommandCenterRoute
   AppMonitorRoute: typeof AppMonitorRoute
   AppPoliciesRoute: typeof AppPoliciesRoute
+  AppProfileRoute: typeof AppProfileRoute
   AppSettingsRoute: typeof AppSettingsRoute
   AppSkillsRoute: typeof AppSkillsRoute
   AppTasksRoute: typeof AppTasksRoute
@@ -445,6 +465,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppCommandCenterRoute: AppCommandCenterRoute,
   AppMonitorRoute: AppMonitorRoute,
   AppPoliciesRoute: AppPoliciesRoute,
+  AppProfileRoute: AppProfileRoute,
   AppSettingsRoute: AppSettingsRoute,
   AppSkillsRoute: AppSkillsRoute,
   AppTasksRoute: AppTasksRoute,

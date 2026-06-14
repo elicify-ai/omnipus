@@ -1,0 +1,643 @@
+//go:build !cgo
+
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+package gateway
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/crypto/bcrypt"
+
+	gen "github.com/dapicom-ai/omnipus/pkg/api/generated"
+	"github.com/dapicom-ai/omnipus/pkg/audit"
+	"github.com/dapicom-ai/omnipus/pkg/config"
+	"github.com/dapicom-ai/omnipus/pkg/credentials"
+	"github.com/dapicom-ai/omnipus/pkg/voice"
+)
+
+// ---------------------------------------------------------------------------
+// Re-auth consent primitive (FR-12.2)
+//
+// This is the NEW HTTP-layer consent check required before a sensitive settings
+// change. It is DISTINCT from RequireNotBypass: RequireNotBypass returns 503
+// when dev_mode_bypass is on (a dev-only guard that has nothing to do with the
+// user re-typing their password). Re-auth re-verifies the single user's one
+// password and mints a short-lived, single-use token the SPA replays in the
+// X-Reauth-Token header on the immediately-following sensitive request.
+// ---------------------------------------------------------------------------
+
+// reAuthTokenTTL is how long a minted consent token stays valid. Short by
+// design — it gates a single follow-up request, not a session.
+const reAuthTokenTTL = 5 * time.Minute
+
+// reAuthHeader is the header the SPA replays the consent token in.
+const reAuthHeader = "X-Reauth-Token"
+
+// reauthEntry is a minted consent token bound to a username with an expiry.
+type reauthEntry struct {
+	username  string
+	expiresAt time.Time
+}
+
+// reauthStore is an in-memory, single-use store of re-auth consent tokens.
+// Tokens are minted by HandleReAuth and consumed by consumeReAuthToken. It is
+// process-local (single-user, single-binary) — no persistence is required or
+// desirable for a 5-minute consent token.
+type reauthStore struct {
+	mu     sync.Mutex
+	tokens map[string]reauthEntry
+}
+
+func newReAuthStore() *reauthStore {
+	return &reauthStore{tokens: make(map[string]reauthEntry)}
+}
+
+// mint creates a new consent token for username and records it with a TTL.
+func (s *reauthStore) mint(username string) (string, error) {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("rand read failed: %w", err)
+	}
+	token := "reauth_" + hex.EncodeToString(raw)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked()
+	s.tokens[token] = reauthEntry{username: username, expiresAt: time.Now().Add(reAuthTokenTTL)}
+	return token, nil
+}
+
+// consume validates and removes a token (single-use). It returns true only when
+// the token exists, is unexpired, and belongs to username. A constant-time
+// comparison is unnecessary because tokens are 192-bit random map keys (no
+// secret-dependent branch leaks the key), but expiry and ownership are checked.
+func (s *reauthStore) consume(token, username string) bool {
+	if token == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked()
+	entry, ok := s.tokens[token]
+	if !ok {
+		return false
+	}
+	// Always delete on lookup — single-use, even on a username mismatch, so a
+	// guessed/stale token cannot be retried.
+	delete(s.tokens, token)
+	if time.Now().After(entry.expiresAt) {
+		return false
+	}
+	return entry.username == username
+}
+
+// pruneLocked drops expired entries. Caller must hold s.mu.
+func (s *reauthStore) pruneLocked() {
+	now := time.Now()
+	for t, e := range s.tokens {
+		if now.After(e.expiresAt) {
+			delete(s.tokens, t)
+		}
+	}
+}
+
+// verifyUserPassword re-verifies the supplied plaintext password against the
+// stored bcrypt hash for user. Reuses the exact comparison HandleChangePassword
+// performs (rest_auth.go) so there is one password-verify code path. Returns
+// ErrInvalidCredentials on mismatch and ErrUserNotFound when the user has no
+// stored hash.
+func verifyUserPassword(user *config.UserConfig, password string) error {
+	if user == nil {
+		return ErrUserNotFound
+	}
+	if strings.TrimSpace(user.PasswordHash) == "" {
+		return ErrUserNotFound
+	}
+	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
+		return ErrInvalidCredentials
+	}
+	return nil
+}
+
+// HandleReAuth handles POST /api/v1/auth/reauth — the consent primitive
+// (FR-12.2). It re-verifies the authenticated user's one password and, on
+// success, mints a short-lived consent token returned in the body for the SPA
+// to replay in the X-Reauth-Token header on the next sensitive request.
+func (a *restAPI) HandleReAuth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
+	if !ok || user == nil {
+		jsonErr(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	var body gen.ReAuthRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "ReAuthRequest", &body, validateEnabled) {
+		return
+	}
+	if body.Password == "" {
+		jsonErr(w, http.StatusBadRequest, "password is required")
+		return
+	}
+	if err := verifyUserPassword(user, body.Password); err != nil {
+		// Audit the failed consent attempt — repeated failures are an attack signal.
+		a.auditReAuth(r, user.Username, false)
+		// Both mismatch and missing-hash present as 401 to avoid leaking which
+		// failed; the user experience ("wrong password") is identical.
+		jsonErr(w, http.StatusUnauthorized, "password is incorrect")
+		return
+	}
+	token, err := a.reauthStoreOrInit().mint(user.Username)
+	if err != nil {
+		slog.Error("auth: reauth token mint failed", "error", err, "username", user.Username)
+		jsonErr(w, http.StatusInternalServerError, "re-authentication failed")
+		return
+	}
+	a.auditReAuth(r, user.Username, true)
+	jsonOK(w, gen.ReAuthResponse{
+		Verified:  true,
+		Token:     token,
+		ExpiresIn: int(reAuthTokenTTL.Seconds()),
+	})
+}
+
+// auditReAuth records a re-auth consent attempt. Best-effort: a nil logger or a
+// write failure is logged, never fatal.
+func (a *restAPI) auditReAuth(r *http.Request, username string, verified bool) {
+	logger := a.agentLoop.AuditLogger()
+	if logger == nil {
+		return
+	}
+	if err := audit.EmitSecuritySettingChange(
+		r.Context(), logger, "auth.reauth",
+		map[string]any{"username": username},
+		map[string]any{"username": username, "verified": verified},
+	); err != nil {
+		slog.Error("rest: audit emit reauth failed", "error", err)
+	}
+}
+
+// requireReAuth enforces the consent primitive on a sensitive request. It reads
+// the X-Reauth-Token header, validates+consumes it (single-use), and returns
+// true when the caller may proceed. On failure it writes a 403 and returns
+// false. This is the HTTP-layer counterpart to the tool-layer ws_approval used
+// for skill writes — and explicitly NOT RequireNotBypass (a 503 dev guard).
+func (a *restAPI) requireReAuth(w http.ResponseWriter, r *http.Request, username string) bool {
+	token := strings.TrimSpace(r.Header.Get(reAuthHeader))
+	if a.reauthStoreOrInit().consume(token, username) {
+		return true
+	}
+	jsonErr(w, http.StatusForbidden,
+		"this change requires re-typing your password — call POST /api/v1/auth/reauth first")
+	return false
+}
+
+// ---------------------------------------------------------------------------
+// Integrations provider-picker (FR-12.1)
+//
+// Surfaces the existing non-LLM integrations — web-search providers
+// (pkg/tools/web SearchProvider) and voice-input transcribers (pkg/voice
+// Transcriber) — for configuration in Settings → Integrations. API keys are
+// stored encrypted; only credential refs land in config.json. Provider edits
+// are sensitive and require a valid re-auth token (requireReAuth).
+// ---------------------------------------------------------------------------
+
+// integrationDef is the static catalogue of a configurable integration provider:
+// its id, kind, display name, whether it needs a key, and the credential-ref env
+// var name used when a key is stored.
+type integrationDef struct {
+	id          string
+	kind        string // "search" | "voice"
+	displayName string
+	requiresKey bool
+	credRef     string // env-var ref name in the credential store ("" for keyless)
+}
+
+// integrationCatalogue is the fixed set of providers surfaced in the UI. It
+// mirrors the providers wired in pkg/tools/web.go and pkg/voice. Keyless
+// providers (DuckDuckGo) have requiresKey=false and an empty credRef.
+var integrationCatalogue = []integrationDef{
+	{id: "brave", kind: "search", displayName: "Brave Search", requiresKey: true, credRef: "BRAVE_API_KEY"},
+	{id: "tavily", kind: "search", displayName: "Tavily", requiresKey: true, credRef: "TAVILY_API_KEY"},
+	{id: "perplexity", kind: "search", displayName: "Perplexity", requiresKey: true, credRef: "PERPLEXITY_API_KEY"},
+	{id: "duckduckgo", kind: "search", displayName: "DuckDuckGo", requiresKey: false, credRef: ""},
+	{id: "elevenlabs", kind: "voice", displayName: "ElevenLabs Scribe", requiresKey: true, credRef: "ELEVENLABS_API_KEY"},
+}
+
+// integrationDefByID returns the catalogue entry for id, or false.
+func integrationDefByID(id string) (integrationDef, bool) {
+	for _, d := range integrationCatalogue {
+		if d.id == id {
+			return d, true
+		}
+	}
+	return integrationDef{}, false
+}
+
+// HandleIntegrationProviders dispatches GET (list) and PUT (configure) for
+// /api/v1/integrations/providers[/{id}].
+func (a *restAPI) HandleIntegrationProviders(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		a.handleIntegrationProvidersList(w, r)
+	case http.MethodPut:
+		a.handleIntegrationProviderUpdate(w, r)
+	default:
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+// buildIntegrationResponse computes the live provider catalogue from the active
+// config: configured (a key is present), active (the selected provider for its
+// kind), and the active_search / active_voice selectors.
+func (a *restAPI) buildIntegrationResponse(cfg *config.Config) gen.IntegrationProvidersResponse {
+	activeSearch := a.activeSearchProviderID(cfg)
+	activeVoice := a.activeVoiceProviderID(cfg)
+
+	var resp gen.IntegrationProvidersResponse
+	resp.Search = []gen.IntegrationProvider{}
+	resp.Voice = []gen.IntegrationProvider{}
+
+	for _, d := range integrationCatalogue {
+		configured := !d.requiresKey
+		if d.requiresKey {
+			ok, err := a.credentialRefResolves(d.credRef)
+			if err != nil {
+				// Store fault — treat as not-configured but log so the operator
+				// can diagnose a locked store rather than silently swallowing it.
+				slog.Warn("integrations: credential ref check failed",
+					"provider", d.id, "ref", d.credRef, "error", err)
+			}
+			configured = ok
+		}
+		active := (d.kind == "search" && d.id == activeSearch) ||
+			(d.kind == "voice" && d.id == activeVoice)
+		activeCopy := active
+		entry := gen.IntegrationProvider{
+			Id:          d.id,
+			Kind:        gen.IntegrationProviderKind(d.kind),
+			DisplayName: d.displayName,
+			Configured:  configured,
+			RequiresKey: d.requiresKey,
+			Active:      &activeCopy,
+		}
+		if d.kind == "search" {
+			resp.Search = append(resp.Search, entry)
+		} else {
+			resp.Voice = append(resp.Voice, entry)
+		}
+	}
+	if activeSearch != "" {
+		resp.ActiveSearch = &activeSearch
+	}
+	if activeVoice != "" {
+		resp.ActiveVoice = &activeVoice
+	}
+	return resp
+}
+
+// activeSearchProviderID derives the currently-selected search provider from the
+// web tools config. The selection is encoded as a configured key on exactly one
+// provider; DuckDuckGo (keyless) is the fallback when no keyed provider is set.
+func (a *restAPI) activeSearchProviderID(cfg *config.Config) string {
+	web := cfg.Tools.Web
+	switch {
+	case strings.TrimSpace(web.Brave.APIKeyRef) != "":
+		return "brave"
+	case strings.TrimSpace(web.Tavily.APIKeyRef) != "":
+		return "tavily"
+	case strings.TrimSpace(web.Perplexity.APIKeyRef) != "":
+		return "perplexity"
+	default:
+		return "duckduckgo"
+	}
+}
+
+// activeVoiceProviderID derives the active transcriber. ElevenLabs is the only
+// key-configurable voice integration surfaced here; model-based transcription is
+// configured under Providers, not Integrations.
+func (a *restAPI) activeVoiceProviderID(cfg *config.Config) string {
+	if strings.TrimSpace(cfg.Voice.ElevenLabsAPIKeyRef) != "" {
+		return "elevenlabs"
+	}
+	return ""
+}
+
+func (a *restAPI) handleIntegrationProvidersList(w http.ResponseWriter, r *http.Request) {
+	cfg := a.agentLoop.GetConfig()
+	jsonOK(w, a.buildIntegrationResponse(cfg))
+}
+
+func (a *restAPI) handleIntegrationProviderUpdate(w http.ResponseWriter, r *http.Request) {
+	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
+	if !ok || user == nil {
+		jsonErr(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+
+	// Extract {id} from the path: /api/v1/integrations/providers/{id}.
+	const prefix = "/api/v1/integrations/providers/"
+	id := strings.TrimPrefix(r.URL.Path, prefix)
+	id = strings.Trim(id, "/")
+	if id == "" || strings.Contains(id, "/") {
+		jsonErr(w, http.StatusBadRequest, "provider id is required in the path")
+		return
+	}
+	def, known := integrationDefByID(id)
+	if !known {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("unknown integration provider %q", id))
+		return
+	}
+
+	var body gen.IntegrationProviderUpdateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "IntegrationProviderUpdateRequest", &body, validateEnabled) {
+		return
+	}
+	if string(body.Kind) != def.kind {
+		jsonErr(w, http.StatusBadRequest,
+			fmt.Sprintf("provider %q is a %q integration, not %q", id, def.kind, body.Kind))
+		return
+	}
+
+	// Sensitive change → require the re-auth consent token (FR-12.2).
+	if !a.requireReAuth(w, r, user.Username) {
+		return
+	}
+
+	apiKey := ""
+	if body.ApiKey != nil {
+		apiKey = strings.TrimSpace(*body.ApiKey)
+	}
+	if def.requiresKey && apiKey == "" && body.Active != nil && *body.Active {
+		// Selecting a key-requiring provider as active is only valid when a key
+		// already exists (or is supplied in this request).
+		hasKey, err := a.credentialRefResolves(def.credRef)
+		if err != nil {
+			jsonErr(w, http.StatusServiceUnavailable, "credential store locked")
+			return
+		}
+		if !hasKey {
+			jsonErr(w, http.StatusBadRequest,
+				fmt.Sprintf("%s requires an API key before it can be activated", def.displayName))
+			return
+		}
+	}
+
+	// Store the key (if supplied) in the encrypted credential store BEFORE
+	// writing the ref to config.json (SEC-23: no plaintext fallback).
+	if apiKey != "" {
+		if def.credRef == "" {
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("%s does not accept an API key", def.displayName))
+			return
+		}
+		if _, err := a.storeCredential(def.credRef, apiKey); err != nil {
+			slog.Error("integrations: credential store failed", "provider", id, "error", err)
+			jsonErr(w, http.StatusServiceUnavailable,
+				"credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets")
+			return
+		}
+	}
+
+	makeActive := body.Active != nil && *body.Active
+
+	// safeUpdateConfigJSON writes config.json atomically AND refreshes the live
+	// in-memory config + rewires services, so no separate reload is needed.
+	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+		return applyIntegrationConfig(m, def, apiKey != "", makeActive)
+	}); err != nil {
+		slog.Error("integrations: config update failed", "provider", id, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "failed to save integration config")
+		return
+	}
+
+	// Audit the change (resource names the integration; values omit the secret).
+	if logger := a.agentLoop.AuditLogger(); logger != nil {
+		if err := audit.EmitSecuritySettingChange(
+			r.Context(), logger, "integrations.provider",
+			map[string]any{"provider": id},
+			map[string]any{"provider": id, "kind": def.kind, "key_set": apiKey != "", "active": makeActive},
+		); err != nil {
+			slog.Error("rest: audit emit integration change failed", "error", err)
+		}
+	}
+
+	jsonOK(w, a.buildIntegrationResponse(a.agentLoop.GetConfig()))
+}
+
+// applyIntegrationConfig mutates the raw config map to (a) set the credential
+// ref on the provider when a key was stored and (b) select the provider as
+// active for its kind. For search, "active" means: set this provider's
+// api_key_ref and clear the OTHER keyed search providers' refs so exactly one is
+// active (DuckDuckGo, keyless, is the implicit fallback when none is keyed). For
+// voice, "active" sets cfg.voice.elevenlabs_api_key_ref.
+func applyIntegrationConfig(m map[string]any, def integrationDef, keySet, makeActive bool) error {
+	switch def.kind {
+	case "search":
+		return applySearchIntegration(m, def, keySet, makeActive)
+	case "voice":
+		return applyVoiceIntegration(m, def, keySet, makeActive)
+	default:
+		return fmt.Errorf("unknown integration kind %q", def.kind)
+	}
+}
+
+// searchRefKeyByID maps a search provider id to its config sub-object key and
+// the ref field within it.
+var searchRefKeyByID = map[string]struct{ section string }{
+	"brave":      {"brave"},
+	"tavily":     {"tavily"},
+	"perplexity": {"perplexity"},
+}
+
+func applySearchIntegration(m map[string]any, def integrationDef, keySet, makeActive bool) error {
+	tools := mapChild(m, "tools")
+	web := mapChild(tools, "web")
+
+	// Set this provider's ref when a key was stored.
+	if keySet && def.credRef != "" {
+		sec, ok := searchRefKeyByID[def.id]
+		if ok {
+			section := mapChild(web, sec.section)
+			section["api_key_ref"] = def.credRef
+		}
+	}
+
+	// Activation: ensure exactly one keyed search provider is active by clearing
+	// the others' refs. DuckDuckGo activation clears all keyed refs (falls back).
+	if makeActive {
+		for pid, sec := range searchRefKeyByID {
+			section := mapChild(web, sec.section)
+			if pid == def.id {
+				if def.credRef != "" {
+					section["api_key_ref"] = def.credRef
+				}
+			} else {
+				delete(section, "api_key_ref")
+			}
+		}
+	}
+	return nil
+}
+
+func applyVoiceIntegration(m map[string]any, def integrationDef, keySet, makeActive bool) error {
+	voiceCfg := mapChild(m, "voice")
+	if def.id == "elevenlabs" {
+		if keySet && def.credRef != "" {
+			voiceCfg["elevenlabs_api_key_ref"] = def.credRef
+		}
+		if makeActive {
+			// Activation with no stored key is rejected upstream; here a key is
+			// guaranteed present, so point the ref at it.
+			if def.credRef != "" {
+				voiceCfg["elevenlabs_api_key_ref"] = def.credRef
+			}
+		}
+	}
+	return nil
+}
+
+// mapChild returns m[key] as a map[string]any, creating it when absent or when
+// the existing value is not an object. Used to safely descend into the raw
+// config JSON during read-modify-write.
+func mapChild(m map[string]any, key string) map[string]any {
+	if existing, ok := m[key].(map[string]any); ok {
+		return existing
+	}
+	child := map[string]any{}
+	m[key] = child
+	return child
+}
+
+// ---------------------------------------------------------------------------
+// Composer mic — voice transcription (FR-12.1)
+// ---------------------------------------------------------------------------
+
+// maxTranscribeBytes caps the uploaded audio size (25 MiB — comfortably above a
+// minute of compressed speech, well under provider limits).
+const maxTranscribeBytes = 25 << 20
+
+// HandleTranscribe handles POST /api/v1/voice/transcribe. It accepts a
+// multipart audio file ("audio"), writes it to a temp file, and runs it through
+// the active Transcriber, returning the text. 503 when no transcriber is
+// configured.
+func (a *restAPI) HandleTranscribe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	transcriber := a.resolveTranscriber()
+	if transcriber == nil {
+		jsonErr(w, http.StatusServiceUnavailable,
+			"no voice transcriber configured — configure one in Settings → Integrations")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxTranscribeBytes+(1<<20))
+	if err := r.ParseMultipartForm(maxTranscribeBytes); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid or oversized multipart upload")
+		return
+	}
+	defer func() {
+		if r.MultipartForm != nil {
+			_ = r.MultipartForm.RemoveAll()
+		}
+	}()
+
+	file, header, err := r.FormFile("audio")
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "missing audio file field \"audio\"")
+		return
+	}
+	defer file.Close()
+
+	tmpPath, cleanup, err := a.spoolUpload(file, header.Filename)
+	if err != nil {
+		slog.Error("transcribe: spool upload failed", "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read uploaded audio")
+		return
+	}
+	defer cleanup()
+
+	res, err := transcriber.Transcribe(r.Context(), tmpPath)
+	if err != nil {
+		slog.Error("transcribe: transcription failed", "provider", transcriber.Name(), "error", err)
+		jsonErr(w, http.StatusBadGateway, "transcription failed: "+err.Error())
+		return
+	}
+
+	resp := gen.TranscribeResponse{Text: res.Text}
+	if res.Language != "" {
+		lang := res.Language
+		resp.Language = &lang
+	}
+	if res.Duration > 0 {
+		dur := float32(res.Duration)
+		resp.Duration = &dur
+	}
+	jsonOK(w, resp)
+}
+
+// resolveTranscriber returns the agent loop's active transcriber, or, when the
+// loop has none cached, attempts a fresh detection from the live config + bundle.
+func (a *restAPI) resolveTranscriber() voice.Transcriber {
+	if t := a.agentLoop.GetTranscriber(); t != nil {
+		return t
+	}
+	cfg := a.agentLoop.GetConfig()
+	if cfg == nil {
+		return nil
+	}
+	// ResolveBundle dereferences the store (IsLocked) — a nil credStore (test
+	// setups, or a pre-unlock boot) would panic. When there is no store, fall
+	// back to an empty bundle: model-based transcription may still be detected
+	// from cfg, and ElevenLabs/Groq simply resolve to no key.
+	if a.credStore == nil {
+		return voice.DetectTranscriber(cfg, credentials.SecretBundle{})
+	}
+	bundle, _ := credentials.ResolveBundle(cfg, a.credStore)
+	return voice.DetectTranscriber(cfg, bundle)
+}
+
+// spoolUpload writes an uploaded file to a temp file under the OS temp dir,
+// preserving the original extension so the transcriber can content-sniff. It
+// returns the temp path and a cleanup func that removes it.
+func (a *restAPI) spoolUpload(src io.Reader, filename string) (string, func(), error) {
+	ext := filepath.Ext(filename)
+	if len(ext) > 8 { // guard against absurd extensions
+		ext = ""
+	}
+	tmp, err := os.CreateTemp("", "omnipus-voice-*"+ext)
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}
+	if _, err := io.Copy(tmp, io.LimitReader(src, maxTranscribeBytes)); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmp.Name())
+		return "", func() {}, err
+	}
+	return tmp.Name(), func() { _ = os.Remove(tmp.Name()) }, nil
+}

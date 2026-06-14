@@ -292,6 +292,20 @@ type ChannelIdentity = {
   kind: "agent" | "user";
   id?: string | undefined;
 };
+type IntegrationProvidersResponse = {
+  search: Array<IntegrationProvider>;
+  voice: Array<IntegrationProvider>;
+  active_search?: string | undefined;
+  active_voice?: string | undefined;
+};
+type IntegrationProvider = {
+  id: string;
+  kind: "search" | "voice";
+  display_name: string;
+  configured: boolean;
+  requires_key: boolean;
+  active?: boolean | undefined;
+};
 type DoctorResult = {
   score: number;
   issues: Array<DoctorIssue>;
@@ -617,6 +631,37 @@ export const ChangePasswordRequest = z.object({
 export const OperationResult = z.object({
   success: z.boolean(),
   error: z.string().optional(),
+});
+export const ReAuthRequest = z.object({ password: z.string().min(1).max(72) });
+export const ReAuthResponse = z.object({
+  verified: z.boolean(),
+  token: z.string(),
+  expires_in: z.number().int(),
+});
+export const IntegrationProvider: z.ZodType<IntegrationProvider> = z.object({
+  id: z.string(),
+  kind: z.enum(["search", "voice"]),
+  display_name: z.string(),
+  configured: z.boolean(),
+  requires_key: z.boolean(),
+  active: z.boolean().optional(),
+});
+export const IntegrationProvidersResponse: z.ZodType<IntegrationProvidersResponse> =
+  z.object({
+    search: z.array(IntegrationProvider),
+    voice: z.array(IntegrationProvider),
+    active_search: z.string().optional(),
+    active_voice: z.string().optional(),
+  });
+export const IntegrationProviderUpdateRequest = z.object({
+  kind: z.enum(["search", "voice"]),
+  api_key: z.string().optional(),
+  active: z.boolean().optional(),
+});
+export const TranscribeResponse = z.object({
+  text: z.string(),
+  language: z.string().optional(),
+  duration: z.number().optional(),
 });
 export const OnboardingCompleteRequest = z.object({
   provider: z
@@ -2423,6 +2468,44 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "post",
+    path: "/auth/reauth",
+    alias: "reAuth",
+    description: `Single-user consent primitive (FR-12.2). Re-verifies the authenticated user&#x27;s one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ password: z.string().min(1).max(72) }),
+      },
+    ],
+    response: ReAuthResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
     path: "/auth/register-admin",
     alias: "registerAdmin",
     description: `Creates the first admin user. Returns 409 if any admin already exists. The check-create sequence is atomic (TOCTOU-safe via safeUpdateConfigJSON). Issues bearer token, session cookie, and CSRF cookie on success. CSRF-exempt. Rate-limited: 3 requests per IP per minute.
@@ -3169,6 +3252,70 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Not used — gateway is always healthy or not reachable.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/integrations/providers",
+    alias: "getIntegrationProviders",
+    description: `Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. Requires authentication.
+`,
+    requestFormat: "json",
+    response: IntegrationProvidersResponse,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/integrations/providers/:id",
+    alias: "updateIntegrationProvider",
+    description: `Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403. Requires authentication.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: IntegrationProviderUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: IntegrationProvidersResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -5527,6 +5674,44 @@ Returns HTTP 201 on success.
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/voice/transcribe",
+    alias: "transcribeAudio",
+    description: `Accepts a multipart/form-data audio file (field &quot;audio&quot;) captured by the chat composer mic and returns the transcribed text via the active Transcriber (FR-12.1). Responds 503 when no transcriber is configured. Requires authentication.
+`,
+    requestFormat: "form-data",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ audio: z.instanceof(File) }).passthrough(),
+      },
+    ],
+    response: TranscribeResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],

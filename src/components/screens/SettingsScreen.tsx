@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { ProvidersSection } from '@/components/settings/ProvidersSection'
+import { IntegrationsSection } from '@/components/settings/IntegrationsSection'
 import { SecuritySection } from '@/components/settings/SecuritySection'
 import { GatewaySection } from '@/components/settings/GatewaySection'
 import { DataSection } from '@/components/settings/DataSection'
-import { ProfileSection } from '@/components/settings/ProfileSection'
 import { AboutSection } from '@/components/settings/AboutSection'
 import { UsersSection } from '@/components/settings/UsersSection'
 import { useAuthStore } from '@/store/auth'
@@ -35,7 +35,8 @@ export function SettingsScreen() {
         <div className="mb-6">
           <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Settings</h1>
           <p className="text-sm text-[var(--color-muted)] mt-0.5">
-            Configure gateway, credentials, security, and data management.
+            Configure providers, integrations, gateway, security, and data management.
+            Personal preferences live under Profile.
           </p>
         </div>
 
@@ -45,10 +46,10 @@ export function SettingsScreen() {
           {/* Sticky tab bar — stays visible while scrolling tab content */}
           <TabsList className="mb-6 flex-wrap h-auto gap-1 sticky top-0 z-10 bg-[var(--color-primary)] py-2 -mx-1 px-1">
             <TabsTrigger data-testid="settings-tab-providers" value="providers">Providers</TabsTrigger>
+            <TabsTrigger data-testid="settings-tab-integrations" value="integrations">Integrations</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-security" value="security">Security</TabsTrigger>
             <TabsTrigger value="gateway">Gateway</TabsTrigger>
             <TabsTrigger value="data">Data</TabsTrigger>
-            <TabsTrigger value="profile">Profile</TabsTrigger>
             {isAdmin && <TabsTrigger value="devices">Devices</TabsTrigger>}
             {isAdmin && <TabsTrigger value="performance">Performance</TabsTrigger>}
             {showAccessTab && <TabsTrigger value="access">Access</TabsTrigger>}
@@ -57,6 +58,10 @@ export function SettingsScreen() {
 
           <TabsContent value="providers">
             <ProvidersSection />
+          </TabsContent>
+
+          <TabsContent value="integrations">
+            <IntegrationsSection />
           </TabsContent>
 
           <TabsContent value="security">
@@ -69,10 +74,6 @@ export function SettingsScreen() {
 
           <TabsContent value="data">
             <DataSection />
-          </TabsContent>
-
-          <TabsContent value="profile">
-            <ProfileSection />
           </TabsContent>
 
           {isAdmin && (

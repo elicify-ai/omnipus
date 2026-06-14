@@ -1,0 +1,30 @@
+type: object
+description: >
+  Body for PUT /api/v1/integrations/providers/{id}. Configures a search or
+  voice-input integration provider (FR-12.1). Setting an api_key stores it
+  encrypted (AES-256-GCM) in credentials.json and writes only the credential
+  reference to config.json. Setting active=true selects this provider as the
+  active one for its kind. Because integration edits are sensitive, the SPA must
+  first obtain a re-auth token (POST /auth/reauth) and replay it in the
+  X-Reauth-Token header — requests without a valid token are rejected 403.
+required:
+  - kind
+additionalProperties: false
+properties:
+  kind:
+    type: string
+    enum:
+      - search
+      - voice
+    description: Whether this provider is a search engine or a voice transcriber.
+    example: "search"
+  api_key:
+    type: string
+    description: >
+      API key for the provider. Stored encrypted; omit to leave the current key
+      unchanged. Required when first configuring a key-requiring provider.
+    example: "BSA-abc123"
+  active:
+    type: boolean
+    description: When true, select this provider as the active one for its kind.
+    example: true

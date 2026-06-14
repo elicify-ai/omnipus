@@ -116,6 +116,10 @@ import {
   Milestone as MilestoneSchema,
   // Spec-3 max-parallel + orchestrator (contract-first #8):
   PerformanceSettings as PerformanceSettingsSchema,
+  // Spec-6 U5 — re-auth + Integrations + transcribe (contract-first #8):
+  ReAuthResponse as ReAuthResponseSchema,
+  IntegrationProvidersResponse as IntegrationProvidersResponseSchema,
+  TranscribeResponse as TranscribeResponseSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Schema validation error ────────────────────────────────────────────────────
@@ -298,6 +302,12 @@ import type {
   // Spec-3 max-parallel + orchestrator (contract-first #8):
   PerformanceSettings,
   PerformanceSettingsUpdate,
+  // Spec-6 U5 — re-auth + Integrations + transcribe (contract-first #8):
+  ReAuthResponse,
+  IntegrationProvider,
+  IntegrationProvidersResponse,
+  IntegrationProviderUpdateRequest,
+  TranscribeResponse,
 } from '@/lib/api/generated/openapi-types'
 
 export type {
@@ -394,6 +404,12 @@ export type {
   MilestoneCreateRequest,
   MilestoneUpdateRequest,
   MilestoneListResponse,
+  // Spec-6 U5:
+  ReAuthResponse,
+  IntegrationProvider,
+  IntegrationProvidersResponse,
+  IntegrationProviderUpdateRequest,
+  TranscribeResponse,
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
@@ -1760,6 +1776,100 @@ export function changePassword(currentPassword: string, newPassword: string): Pr
     method: 'POST',
     body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
   }, OperationResultSchema as ZodType<OperationResult>)
+}
+
+// ── Re-auth consent primitive (Spec-6 FR-12.2) ─────────────────────────────────
+//
+// reAuth re-verifies the single user's one password before a sensitive settings
+// change. On success it returns a short-lived, single-use consent token the
+// caller replays in the X-Reauth-Token header on the very next sensitive request
+// (e.g. configureIntegrationProvider). This is the NEW consent primitive — it is
+// NOT RequireNotBypass (a 503 dev-mode guard, unrelated). A wrong password
+// rejects with a 401 ApiError.
+export const REAUTH_HEADER = 'X-Reauth-Token'
+
+export function reAuth(password: string): Promise<ReAuthResponse> {
+  return request<ReAuthResponse>('/auth/reauth', {
+    method: 'POST',
+    body: JSON.stringify({ password }),
+  }, ReAuthResponseSchema as ZodType<ReAuthResponse>)
+}
+
+// ── Integrations (Spec-6 FR-12.1) ──────────────────────────────────────────────
+
+export function fetchIntegrationProviders(): Promise<IntegrationProvidersResponse> {
+  return request<IntegrationProvidersResponse>(
+    '/integrations/providers',
+    undefined,
+    IntegrationProvidersResponseSchema as ZodType<IntegrationProvidersResponse>,
+  )
+}
+
+// configureIntegrationProvider sets a provider's API key and/or selects it as
+// active. It REQUIRES a re-auth consent token (from reAuth) — the server rejects
+// the PUT with 403 without a valid token. The token is replayed in the
+// X-Reauth-Token header.
+export function configureIntegrationProvider(
+  id: string,
+  body: IntegrationProviderUpdateRequest,
+  reAuthToken: string,
+): Promise<IntegrationProvidersResponse> {
+  return request<IntegrationProvidersResponse>(
+    `/integrations/providers/${encodeURIComponent(id)}`,
+    {
+      method: 'PUT',
+      headers: { [REAUTH_HEADER]: reAuthToken },
+      body: JSON.stringify(body),
+    },
+    IntegrationProvidersResponseSchema as ZodType<IntegrationProvidersResponse>,
+  )
+}
+
+// ── Voice transcription (composer mic, Spec-6 FR-12.1) ─────────────────────────
+//
+// transcribeAudio uploads a recorded audio Blob to the active transcriber and
+// returns the recognised text. Multipart form-data; the request() helper is
+// JSON-only, so this uses fetch directly with the auth + CSRF headers.
+export async function transcribeAudio(audio: Blob): Promise<TranscribeResponse> {
+  const form = new FormData()
+  // Preserve the recorded mime type's extension hint where possible.
+  const ext = audio.type.includes('webm') ? 'webm'
+    : audio.type.includes('ogg') ? 'ogg'
+    : audio.type.includes('wav') ? 'wav'
+    : audio.type.includes('mp4') || audio.type.includes('mpeg') ? 'm4a'
+    : 'webm'
+  form.append('audio', audio, `recording.${ext}`)
+
+  const csrf = readCSRFCookie()
+  let res: Response
+  try {
+    res = await fetch(`${BASE_URL}/api/v1/voice/transcribe`, {
+      method: 'POST',
+      // NOTE: do NOT set Content-Type — the browser sets the multipart boundary.
+      headers: {
+        ...getAuthHeaders(),
+        ...(csrf ? { [CSRF_HEADER_NAME]: csrf } : {}),
+      },
+      body: form,
+    })
+  } catch (cause) {
+    throw new ApiError(0, 'Network unavailable. Check your connection.', { cause })
+  }
+  if (!res.ok) {
+    throw await ApiError.fromResponse(res)
+  }
+  const raw = (await res.json()) as unknown
+  const parsed = TranscribeResponseSchema.safeParse(raw)
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+    _apiSchemaErrorCount++
+    void maybeDevToast(
+      `[api] transcribe response schema mismatch: ${issues[0]?.message ?? 'unknown'}`,
+      'POST:/voice/transcribe:schema',
+    )
+    throw new ApiSchemaError('/voice/transcribe', issues, raw)
+  }
+  return parsed.data as TranscribeResponse
 }
 
 // ── Exec Allowlist ────────────────────────────────────────────────────────────
