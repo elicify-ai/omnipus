@@ -31,6 +31,15 @@ type ContextBuilder struct {
 	toolDiscoveryRegex bool
 	splitOnMarker      bool
 
+	// skillAllowlist enforces the per-agent skill allowlist at skill resolution
+	// time (FR-9.4, default-DENY). When non-nil, only skills whose name appears
+	// in this set can be resolved/invoked by this agent — a skill not on the
+	// allowlist cannot be loaded into context or armed via /use, even though it
+	// exists on disk. When nil, no allowlist is enforced (unrestricted): this is
+	// the back-compatible default for agents that do not declare an allowlist.
+	// Keys are lower-cased skill names.
+	skillAllowlist map[string]struct{}
+
 	// Cache for system prompt to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
 	// The cache auto-invalidates when workspace source files change (mtime check).
@@ -82,6 +91,44 @@ func (cb *ContextBuilder) WithAgentInfo(id, name string) *ContextBuilder {
 	cb.agentID = id
 	cb.agentName = name
 	return cb
+}
+
+// WithSkillAllowlist installs a per-agent skill allowlist that is enforced at
+// skill-resolution time (FR-9.4, default-DENY). When allowlist is non-nil, only
+// the named skills can be resolved or invoked by this agent; any other skill —
+// even one present on disk — is denied. When allowlist is nil, no allowlist is
+// enforced (unrestricted), preserving the behaviour of agents that declare no
+// allowlist. Names are matched case-insensitively.
+//
+// Passing a non-nil but empty slice installs a deny-all allowlist (the agent
+// can resolve no skills), which is the correct default-DENY behaviour for an
+// agent that explicitly opts into allowlisting with an empty set.
+func (cb *ContextBuilder) WithSkillAllowlist(allowlist []string) *ContextBuilder {
+	if allowlist == nil {
+		cb.skillAllowlist = nil
+		return cb
+	}
+	set := make(map[string]struct{}, len(allowlist))
+	for _, name := range allowlist {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		set[strings.ToLower(trimmed)] = struct{}{}
+	}
+	cb.skillAllowlist = set
+	return cb
+}
+
+// skillAllowed reports whether the named skill may be resolved/invoked by this
+// agent under its allowlist (FR-9.4). When no allowlist is configured (nil) all
+// skills are allowed. Otherwise only names present in the allowlist are allowed.
+func (cb *ContextBuilder) skillAllowed(name string) bool {
+	if cb.skillAllowlist == nil {
+		return true
+	}
+	_, ok := cb.skillAllowlist[strings.ToLower(strings.TrimSpace(name))]
+	return ok
 }
 
 // Memory returns the MemoryStore backing this ContextBuilder.
@@ -262,8 +309,10 @@ func (cb *ContextBuilder) BuildSystemPrompt() string {
 		}
 	}
 
-	// Skills - show summary, AI can read full content with read_file tool
-	skillsSummary := cb.skillsLoader.BuildSkillsSummary()
+	// Skills - show summary, AI can read full content with read_file tool.
+	// Filtered by the per-agent allowlist for progressive disclosure (FR-9.4):
+	// the prompt advertises only the skills this agent is permitted to use.
+	skillsSummary := cb.skillsLoader.BuildSkillsSummaryFunc(cb.skillAllowed)
 	if skillsSummary != "" {
 		parts = append(parts, fmt.Sprintf(`# Skills
 
@@ -968,6 +1017,10 @@ func (cb *ContextBuilder) ListSkillNames() []string {
 	allSkills := cb.skillsLoader.ListSkills()
 	names := make([]string, 0, len(allSkills))
 	for _, skill := range allSkills {
+		// Progressive disclosure: only list skills this agent may use (FR-9.4).
+		if !cb.skillAllowed(skill.Name) {
+			continue
+		}
 		names = append(names, skill.Name)
 	}
 	return names
@@ -981,6 +1034,19 @@ func (cb *ContextBuilder) ResolveSkillName(name string) (string, bool) {
 
 	for _, skill := range cb.skillsLoader.ListSkills() {
 		if strings.EqualFold(skill.Name, name) {
+			// FR-9.4: tool-resolution default-DENY enforcement. A skill that
+			// exists on disk but is not in this agent's allowlist cannot be
+			// resolved — so it can be neither armed via /use nor loaded into
+			// context. This is the invocation gate, distinct from the prompt-time
+			// context filter (activeSkillNames).
+			if !cb.skillAllowed(skill.Name) {
+				logger.WarnCF("agent", "skill resolution denied by per-agent allowlist",
+					map[string]any{
+						"agent_id": cb.agentID,
+						"skill":    skill.Name,
+					})
+				return "", false
+			}
 			return skill.Name, true
 		}
 	}

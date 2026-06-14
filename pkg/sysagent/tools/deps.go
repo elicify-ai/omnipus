@@ -116,6 +116,11 @@ type Deps struct {
 	// into the operator workspace. Nil in tests or when not wired — callers
 	// must nil-check before use.
 	SkillInstaller *skills.SkillInstaller
+	// SkillWriter authors and versions skills (system.skill.create / edit). It
+	// is rooted at the global (user) skills directory so editing a built-in
+	// produces a user override rather than mutating the shipped built-in in
+	// place. Nil in tests or when not wired — callers must nil-check before use.
+	SkillWriter *skills.SkillWriter
 }
 
 // clearMaps recursively walks v and zeros every map field it finds. Called

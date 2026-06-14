@@ -751,7 +751,23 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	}
 	skillsWorkspace := cfg.WorkspacePath()
 	skillsGlobalDir := filepath.Join(homePath, "skills")
+
+	// First-boot seed of the embedded default skill set (Spec-6 U3, FR-9.3).
+	// SeedDefaults is idempotent: it only fills in skills that are missing from
+	// the global skills dir and never overwrites existing (possibly user-edited)
+	// skills. A fresh install therefore ships with summarize, skill-authoring,
+	// plan, and daily-briefing without any external files.
+	if seedRes, seedErr := skills.SeedDefaults(skillsGlobalDir); seedErr != nil {
+		slog.Warn("gateway: failed to seed default skills from embed", "error", seedErr)
+	} else if len(seedRes.Seeded) > 0 {
+		slog.Info("gateway: seeded default skills from embed",
+			"seeded", seedRes.Seeded, "skipped", seedRes.Skipped)
+	}
+
 	sysSkillsLoader := skills.NewSkillsLoader(skillsWorkspace, skillsGlobalDir, skillsBuiltinDir)
+	// SkillWriter authors/versions skills into the global skills dir so editing a
+	// built-in produces a user override rather than mutating the shipped built-in.
+	sysSkillWriter := skills.NewSkillWriter(skillsGlobalDir)
 
 	// RegistryManager: fans out search/install to all configured registries.
 	// The SSRF checker (nil when SSRF is disabled) is injected into the ClawHub
@@ -803,6 +819,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		SkillsLoader:    sysSkillsLoader,
 		RegistryManager: sysRegistryManager,
 		SkillInstaller:  sysSkillInstaller,
+		SkillWriter:     sysSkillWriter,
 	}
 	agentLoop.WireSysagentDeps(sysAgentDeps)
 

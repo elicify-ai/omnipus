@@ -684,9 +684,10 @@ func TestToolPermissionsMapCoversAll41Tools(t *testing.T) {
 		// Channel management (5)
 		"system.channel.enable", "system.channel.configure",
 		"system.channel.disable", "system.channel.list", "system.channel.test",
-		// Skill management (4)
+		// Skill management (6: 4 + create/edit authoring)
 		"system.skill.install", "system.skill.remove",
 		"system.skill.search", "system.skill.list",
+		"system.skill.create", "system.skill.edit",
 		// MCP management (3)
 		"system.mcp.add", "system.mcp.remove", "system.mcp.list",
 		// Provider management (4: configure + list + test + models.list)
@@ -700,8 +701,8 @@ func TestToolPermissionsMapCoversAll41Tools(t *testing.T) {
 		"system.doctor.run", "system.backup.create", "system.cost.query", "system.navigate",
 	}
 
-	assert.Len(t, expected41Tools, 41,
-		"AllTools() returns exactly 41 system tools — test dataset must reflect this")
+	assert.Len(t, expected41Tools, 43,
+		"AllTools() returns 43 RBAC-mapped system tools — test dataset must reflect this")
 
 	// Every expected tool must have an RBAC permission entry.
 	for _, tool := range expected41Tools {
@@ -727,7 +728,7 @@ func TestToolPermissionsMapCoversAll41Tools(t *testing.T) {
 			prev = s
 		}
 	}
-	assert.Len(t, unique, 41, "tool list must not contain duplicates")
+	assert.Len(t, unique, 43, "tool list must not contain duplicates")
 }
 
 // =====================================================================

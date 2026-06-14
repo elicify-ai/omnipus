@@ -127,6 +127,11 @@ func coreAgentSeed(
 		base["system.agent.update"] = config.ToolPolicyAllow
 		base["system.agent.delete"] = config.ToolPolicyAllow
 		base["system.models.list"] = config.ToolPolicyAllow
+		// Ava is the skill-authoring agent (FR-9.2). Her create/edit skill tools
+		// are seeded as "ask" so every skill write routes through the tool-layer
+		// approval (ws_approval) consent gate before the SKILL.md is written.
+		base["system.skill.create"] = config.ToolPolicyAsk
+		base["system.skill.edit"] = config.ToolPolicyAsk
 	case IDJim:
 		// Jim additionally uses workspace.shell and workspace.shell_bg (all
 		// explicitly allowed so the policy passes through even when
@@ -137,6 +142,31 @@ func coreAgentSeed(
 		return config.ToolPolicyAllow, base, config.SandboxProfileWorkspaceNet
 	}
 	return config.ToolPolicyAllow, base, ""
+}
+
+// coreAgentSkills returns the seeded per-agent skill allowlist (FR-9.4). The
+// allowlist is enforced at skill-resolution time (default-DENY): a core agent
+// can only resolve/invoke the skills returned here. The matrix:
+//
+//	summarize       → Mia, Ray
+//	plan            → Jim
+//	skill-authoring → Ava
+//	daily-briefing  → Mia
+//
+// Returns nil for an agent that has no seeded skills (no restriction seeded).
+func coreAgentSkills(id CoreAgentID) []string {
+	switch id {
+	case IDMia:
+		return []string{"summarize", "daily-briefing"}
+	case IDRay:
+		return []string{"summarize"}
+	case IDJim:
+		return []string{"plan"}
+	case IDAva:
+		return []string{"skill-authoring"}
+	default:
+		return nil
+	}
 }
 
 // HasSystemAllowsInConstructorSeed returns true if the named core agent's
@@ -204,6 +234,17 @@ func SeedConfig(cfg *config.Config) bool {
 			modified = true
 		}
 
+		// Idempotent skill-allowlist migration (FR-9.4). Apply the seeded
+		// allowlist only when the existing entry declares none — an operator who
+		// has customised the agent's skills keeps their choice. Upgrades from a
+		// release that predated allowlists therefore gain the default matrix.
+		if len(a.Skills) == 0 {
+			if seedSkills := coreAgentSkills(ca.ID); len(seedSkills) > 0 {
+				a.Skills = seedSkills
+				modified = true
+			}
+		}
+
 		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
 		// Ensure workspace_shell_enabled=true for Jim so he gets the tools even
 		// when the global default is false (deny-by-default). Applied idempotently —
@@ -242,6 +283,9 @@ func SeedConfig(cfg *config.Config) bool {
 			Enabled:        &enabled,
 			Default:        isDefault,
 			SandboxProfile: seedProfile,
+			// Per-agent skill allowlist (FR-9.4): default-DENY enforced at skill
+			// resolution. Nil for agents with no seeded skills (unrestricted).
+			Skills: coreAgentSkills(ca.ID),
 			Tools: &config.AgentToolsCfg{
 				Builtin: config.AgentBuiltinToolsCfg{
 					DefaultPolicy: dp,

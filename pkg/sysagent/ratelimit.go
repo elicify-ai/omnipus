@@ -29,6 +29,7 @@ var toolCategory = map[string]rateLimitCategory{
 	"system.workspace.create": rateCategoryCreate,
 	"system.task.create":      rateCategoryCreate,
 	"system.skill.install":    rateCategoryCreate,
+	"system.skill.create":     rateCategoryCreate,
 	"system.mcp.add":          rateCategoryCreate,
 	"system.pin.create":       rateCategoryCreate,
 
@@ -44,6 +45,7 @@ var toolCategory = map[string]rateLimitCategory{
 	"system.agent.update":       rateCategoryConfig,
 	"system.workspace.update":   rateCategoryConfig,
 	"system.task.update":        rateCategoryConfig,
+	"system.skill.edit":         rateCategoryConfig,
 
 	"system.agent.list":       rateCategoryList,
 	"system.agent.activate":   rateCategoryList,
