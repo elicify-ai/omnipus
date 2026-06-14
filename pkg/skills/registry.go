@@ -61,10 +61,43 @@ type SkillRegistry interface {
 	DownloadAndInstall(ctx context.Context, slug, version, targetDir string) (*InstallResult, error)
 }
 
+// GitHubRegistryConfig configures a single GitHub-hosted skill registry.
+// A GitHub registry enables direct installation from a GitHub repository
+// via owner/repo references. Search and metadata lookups return
+// ErrGitHubSearchNotSupported because GitHub is not a searchable catalog;
+// DownloadAndInstall is the primary operation.
+//
+// Auth tokens are resolved via the credential store (SEC-23): set TokenRef
+// to the env-var name injected by credentials.InjectFromConfig and pass the
+// resolved token in Token at runtime.
+type GitHubRegistryConfig struct {
+	// Enabled controls whether this GitHub registry is active.
+	Enabled bool
+	// Name is the unique display name for this registry (e.g., "github").
+	// Defaults to "github" when empty.
+	Name string
+	// Token is the resolved GitHub personal access token.
+	// Populate from os.Getenv(TokenRef) after credentials are injected.
+	Token string
+	// Proxy is an optional HTTP/HTTPS/SOCKS5 proxy URL.
+	Proxy string
+	// Workspace is the base directory for skill installation.
+	// Required: DownloadAndInstall writes skills under <Workspace>/skills/<slug>/.
+	Workspace string
+}
+
 // RegistryConfig holds configuration for all skill registries.
 // This is the input to NewRegistryManagerFromConfig.
+//
+// ClawHub is the primary searchable marketplace registry.
+// GitHubRegistries is a list of GitHub-hosted skill sources; each item
+// corresponds to one configured GitHub registry (e.g., a corporate or
+// personal skills repository). The RegistryManager fans out Search across
+// all enabled registries; GitHub registries participate in fan-out but
+// return ErrGitHubSearchNotSupported (partial-result semantics apply).
 type RegistryConfig struct {
 	ClawHub               ClawHubConfig
+	GitHubRegistries      []GitHubRegistryConfig
 	MaxConcurrentSearches int
 }
 
@@ -105,6 +138,12 @@ func NewRegistryManager() *RegistryManager {
 
 // NewRegistryManagerFromConfig builds a RegistryManager from config,
 // instantiating only the enabled registries.
+//
+// ClawHub is instantiated first when enabled. Then each GitHub registry in
+// GitHubRegistries is instantiated in order when enabled. If a GitHub
+// registry fails to initialise (e.g., bad workspace path or proxy URL), it
+// is logged at Warn level and skipped — the manager still starts with the
+// remaining registries.
 func NewRegistryManagerFromConfig(cfg RegistryConfig) *RegistryManager {
 	rm := NewRegistryManager()
 	if cfg.MaxConcurrentSearches > 0 {
@@ -112,6 +151,20 @@ func NewRegistryManagerFromConfig(cfg RegistryConfig) *RegistryManager {
 	}
 	if cfg.ClawHub.Enabled {
 		rm.AddRegistry(NewClawHubRegistry(cfg.ClawHub))
+	}
+	for _, ghCfg := range cfg.GitHubRegistries {
+		if !ghCfg.Enabled {
+			continue
+		}
+		reg, err := NewGitHubRegistry(ghCfg)
+		if err != nil {
+			slog.Warn("skills: failed to initialise GitHub registry — skipping",
+				"name", ghCfg.Name,
+				"error", err,
+			)
+			continue
+		}
+		rm.AddRegistry(reg)
 	}
 	return rm
 }
