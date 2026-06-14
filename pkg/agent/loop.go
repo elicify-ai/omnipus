@@ -2743,6 +2743,14 @@ func (al *AgentLoop) SetTranscriber(t voice.Transcriber) {
 	al.transcriber = t
 }
 
+// GetTranscriber returns the currently configured voice transcriber, or nil
+// when none is configured. The gateway's POST /voice/transcribe handler uses
+// this to serve the composer-mic flow with the same transcriber the agent loop
+// uses for inbound audio messages (Spec-6 FR-12.1).
+func (al *AgentLoop) GetTranscriber() voice.Transcriber {
+	return al.transcriber
+}
+
 // SetReloadFunc sets the callback function for triggering config reload.
 func (al *AgentLoop) SetReloadFunc(fn func() error) {
 	al.reloadFunc = fn

@@ -183,7 +183,36 @@ components:
     IntegrationProvider:
       $ref: ./components/schemas/IntegrationProvider.yaml
     IntegrationProvidersResponse:
-      $ref: ./components/schemas/IntegrationProvidersResponse.yaml
+      type: object
+      description: >
+        Response from GET /api/v1/integrations/providers. Lists every
+        configurable search and voice-input integration provider (FR-12.1),
+        plus which provider is currently active for each kind. Defined inline so
+        the search/voice arrays reference the shared IntegrationProvider
+        component (a relative file $ref would inline as anonymous structs).
+      required:
+        - search
+        - voice
+      additionalProperties: false
+      properties:
+        search:
+          type: array
+          description: Configurable web-search providers.
+          items:
+            $ref: '#/components/schemas/IntegrationProvider'
+        voice:
+          type: array
+          description: Configurable voice-input transcription providers.
+          items:
+            $ref: '#/components/schemas/IntegrationProvider'
+        active_search:
+          type: string
+          description: id of the currently active search provider, when one is selected.
+          example: "brave"
+        active_voice:
+          type: string
+          description: id of the currently active voice transcriber, when one is configured.
+          example: "elevenlabs"
     IntegrationProviderUpdateRequest:
       $ref: ./components/schemas/IntegrationProviderUpdateRequest.yaml
     TranscribeResponse:

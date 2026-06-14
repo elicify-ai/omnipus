@@ -185,6 +185,10 @@ var (
 	configLimiter = newAPIRateLimiter(30, 1*time.Minute)
 	// /api/v1/auth/register-admin — 3 requests/minute per IP (highly sensitive).
 	registerAdminLimiter = newAPIRateLimiter(3, 1*time.Minute)
+	// /api/v1/auth/reauth — 10 requests/minute per IP. A password re-verification
+	// (sensitive), but a legitimate user may mistype a few times; tighter than
+	// login, not punitive (Spec-6 FR-12.2).
+	reauthLimiter = newAPIRateLimiter(10, 1*time.Minute)
 )
 
 // clientIP extracts the client IP from the request, checking X-Forwarded-For first.

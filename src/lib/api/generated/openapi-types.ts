@@ -3883,7 +3883,7 @@ export interface components {
              */
             active?: boolean;
         };
-        /** @description Response from GET /api/v1/integrations/providers. Lists every configurable search and voice-input integration provider (FR-12.1), plus which provider is currently active for each kind. */
+        /** @description Response from GET /api/v1/integrations/providers. Lists every configurable search and voice-input integration provider (FR-12.1), plus which provider is currently active for each kind. Defined inline so the search/voice arrays reference the shared IntegrationProvider component (a relative file $ref would inline as anonymous structs). */
         IntegrationProvidersResponse: {
             /** @description Configurable web-search providers. */
             search: components["schemas"]["IntegrationProvider"][];

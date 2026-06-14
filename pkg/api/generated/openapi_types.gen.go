@@ -895,42 +895,6 @@ func (e IntegrationProviderUpdateRequestKind) Valid() bool {
 	}
 }
 
-// Defines values for IntegrationProvidersResponseSearchKind.
-const (
-	IntegrationProvidersResponseSearchKindSearch IntegrationProvidersResponseSearchKind = "search"
-	IntegrationProvidersResponseSearchKindVoice  IntegrationProvidersResponseSearchKind = "voice"
-)
-
-// Valid indicates whether the value is a known member of the IntegrationProvidersResponseSearchKind enum.
-func (e IntegrationProvidersResponseSearchKind) Valid() bool {
-	switch e {
-	case IntegrationProvidersResponseSearchKindSearch:
-		return true
-	case IntegrationProvidersResponseSearchKindVoice:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for IntegrationProvidersResponseVoiceKind.
-const (
-	IntegrationProvidersResponseVoiceKindSearch IntegrationProvidersResponseVoiceKind = "search"
-	IntegrationProvidersResponseVoiceKindVoice  IntegrationProvidersResponseVoiceKind = "voice"
-)
-
-// Valid indicates whether the value is a known member of the IntegrationProvidersResponseVoiceKind enum.
-func (e IntegrationProvidersResponseVoiceKind) Valid() bool {
-	switch e {
-	case IntegrationProvidersResponseVoiceKindSearch:
-		return true
-	case IntegrationProvidersResponseVoiceKindVoice:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for LoginResponseRole.
 const (
 	LoginResponseRoleAdmin LoginResponseRole = "admin"
@@ -3900,7 +3864,7 @@ type IntegrationProviderUpdateRequest struct {
 // IntegrationProviderUpdateRequestKind Whether this provider is a search engine or a voice transcriber.
 type IntegrationProviderUpdateRequestKind string
 
-// IntegrationProvidersResponse Response from GET /api/v1/integrations/providers. Lists every configurable search and voice-input integration provider (FR-12.1), plus which provider is currently active for each kind.
+// IntegrationProvidersResponse Response from GET /api/v1/integrations/providers. Lists every configurable search and voice-input integration provider (FR-12.1), plus which provider is currently active for each kind. Defined inline so the search/voice arrays reference the shared IntegrationProvider component (a relative file $ref would inline as anonymous structs).
 type IntegrationProvidersResponse struct {
 	// ActiveSearch id of the currently active search provider, when one is selected.
 	ActiveSearch *string `json:"active_search,omitempty"`
@@ -3909,53 +3873,11 @@ type IntegrationProvidersResponse struct {
 	ActiveVoice *string `json:"active_voice,omitempty"`
 
 	// Search Configurable web-search providers.
-	Search []struct {
-		// Active True when this provider is the one currently selected for its kind (the active search engine or the active transcriber).
-		Active *bool `json:"active,omitempty"`
-
-		// Configured True when this provider is usable — an API key is present (or, for keyless providers such as DuckDuckGo, always true).
-		Configured bool `json:"configured"`
-
-		// DisplayName Human-readable provider name for UI presentation.
-		DisplayName string `json:"display_name"`
-
-		// Id Provider identifier (e.g. "brave", "tavily", "duckduckgo", "elevenlabs").
-		Id string `json:"id"`
-
-		// Kind Whether this provider supplies web search or voice-input transcription.
-		Kind IntegrationProvidersResponseSearchKind `json:"kind"`
-
-		// RequiresKey Whether this provider needs an API key to function.
-		RequiresKey bool `json:"requires_key"`
-	} `json:"search"`
+	Search []IntegrationProvider `json:"search"`
 
 	// Voice Configurable voice-input transcription providers.
-	Voice []struct {
-		// Active True when this provider is the one currently selected for its kind (the active search engine or the active transcriber).
-		Active *bool `json:"active,omitempty"`
-
-		// Configured True when this provider is usable — an API key is present (or, for keyless providers such as DuckDuckGo, always true).
-		Configured bool `json:"configured"`
-
-		// DisplayName Human-readable provider name for UI presentation.
-		DisplayName string `json:"display_name"`
-
-		// Id Provider identifier (e.g. "brave", "tavily", "duckduckgo", "elevenlabs").
-		Id string `json:"id"`
-
-		// Kind Whether this provider supplies web search or voice-input transcription.
-		Kind IntegrationProvidersResponseVoiceKind `json:"kind"`
-
-		// RequiresKey Whether this provider needs an API key to function.
-		RequiresKey bool `json:"requires_key"`
-	} `json:"voice"`
+	Voice []IntegrationProvider `json:"voice"`
 }
-
-// IntegrationProvidersResponseSearchKind Whether this provider supplies web search or voice-input transcription.
-type IntegrationProvidersResponseSearchKind string
-
-// IntegrationProvidersResponseVoiceKind Whether this provider supplies web search or voice-input transcription.
-type IntegrationProvidersResponseVoiceKind string
 
 // LoginRequest Credentials for authenticating an existing user.
 type LoginRequest struct {

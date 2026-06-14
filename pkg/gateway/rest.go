@@ -139,6 +139,26 @@ type restAPI struct {
 	// notifStore backs /api/v1/notifications (#264). Per-user, file-based.
 	// Nil in test setups that do not exercise notifications.
 	notifStore *notifications.Store
+
+	// reauth is the in-memory store of short-lived password re-auth consent
+	// tokens (Spec-6 FR-12.2). Minted by HandleReAuth, consumed (single-use) by
+	// requireReAuth before a sensitive settings change. Distinct from
+	// RequireNotBypass (a 503 dev-mode guard). Lazily initialized via
+	// reauthStoreOrInit so test setups that construct restAPI literals without
+	// this field still function.
+	reauthOnce sync.Once
+	reauth     *reauthStore
+}
+
+// reauthStoreOrInit returns the lazily-initialized re-auth token store, creating
+// it on first use. Safe for concurrent callers.
+func (a *restAPI) reauthStoreOrInit() *reauthStore {
+	a.reauthOnce.Do(func() {
+		if a.reauth == nil {
+			a.reauth = newReAuthStore()
+		}
+	})
+	return a.reauth
 }
 
 // --- CORS / JSON helpers ---
@@ -172,7 +192,7 @@ func (a *restAPI) setCORSHeaders(w http.ResponseWriter, r ...*http.Request) {
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Csrf-Token")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Csrf-Token, X-Reauth-Token")
 	// Access-Control-Allow-Credentials must only be sent when the origin is
 	// explicitly configured — never when falling back to wildcard or localhost
 	// reflection. Per CORS spec, "true" + wildcard is illegal; restricting to
@@ -2712,6 +2732,17 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/auth/validate", a.withAuth(withRateLimit(validateLimiter, a.HandleValidateToken)))
 	cm.RegisterHTTPHandler("/api/v1/auth/logout", a.withAuth(a.HandleLogout))
 	cm.RegisterHTTPHandler("/api/v1/auth/change-password", a.withAuth(a.HandleChangePassword))
+	// Password re-auth consent primitive (Spec-6 FR-12.2). Distinct from
+	// RequireNotBypass (a 503 dev-mode guard) — this re-verifies the user's one
+	// password before a sensitive settings change.
+	cm.RegisterHTTPHandler("/api/v1/auth/reauth", a.withAuth(withRateLimit(reauthLimiter, a.HandleReAuth)))
+
+	// Integrations provider-picker — search + voice-input providers (Spec-6
+	// FR-12.1). GET lists; PUT (gated by the re-auth consent token) configures.
+	cm.RegisterHTTPHandler("/api/v1/integrations/providers", a.withAuth(a.HandleIntegrationProviders))
+	cm.RegisterHTTPHandler("/api/v1/integrations/providers/", a.withAuth(a.HandleIntegrationProviders))
+	// Composer mic — voice transcription (Spec-6 FR-12.1).
+	cm.RegisterHTTPHandler("/api/v1/voice/transcribe", a.withAuth(a.HandleTranscribe))
 
 	// File upload endpoints (Milestone 3).
 	cm.RegisterHTTPHandler("/api/v1/upload", a.withUploadAuth(a.HandleUpload))
