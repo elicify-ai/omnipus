@@ -844,10 +844,29 @@ func (e BoardTaskUpdateStatus) Valid() bool {
 	}
 }
 
+// Defines values for ChannelConfigureRequestIdentityKind.
+const (
+	ChannelConfigureRequestIdentityKindAgent ChannelConfigureRequestIdentityKind = "agent"
+	ChannelConfigureRequestIdentityKindUser  ChannelConfigureRequestIdentityKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the ChannelConfigureRequestIdentityKind enum.
+func (e ChannelConfigureRequestIdentityKind) Valid() bool {
+	switch e {
+	case ChannelConfigureRequestIdentityKindAgent:
+		return true
+	case ChannelConfigureRequestIdentityKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelEnabledResponseId.
 const (
 	ChannelEnabledResponseIdDingtalk   ChannelEnabledResponseId = "dingtalk"
 	ChannelEnabledResponseIdDiscord    ChannelEnabledResponseId = "discord"
+	ChannelEnabledResponseIdEmail      ChannelEnabledResponseId = "email"
 	ChannelEnabledResponseIdFeishu     ChannelEnabledResponseId = "feishu"
 	ChannelEnabledResponseIdGoogleChat ChannelEnabledResponseId = "google-chat"
 	ChannelEnabledResponseIdIrc        ChannelEnabledResponseId = "irc"
@@ -868,6 +887,8 @@ func (e ChannelEnabledResponseId) Valid() bool {
 	case ChannelEnabledResponseIdDingtalk:
 		return true
 	case ChannelEnabledResponseIdDiscord:
+		return true
+	case ChannelEnabledResponseIdEmail:
 		return true
 	case ChannelEnabledResponseIdFeishu:
 		return true
@@ -902,6 +923,7 @@ func (e ChannelEnabledResponseId) Valid() bool {
 const (
 	ChannelEntryIdDingtalk   ChannelEntryId = "dingtalk"
 	ChannelEntryIdDiscord    ChannelEntryId = "discord"
+	ChannelEntryIdEmail      ChannelEntryId = "email"
 	ChannelEntryIdFeishu     ChannelEntryId = "feishu"
 	ChannelEntryIdGoogleChat ChannelEntryId = "google-chat"
 	ChannelEntryIdIrc        ChannelEntryId = "irc"
@@ -922,6 +944,8 @@ func (e ChannelEntryId) Valid() bool {
 	case ChannelEntryIdDingtalk:
 		return true
 	case ChannelEntryIdDiscord:
+		return true
+	case ChannelEntryIdEmail:
 		return true
 	case ChannelEntryIdFeishu:
 		return true
@@ -952,9 +976,28 @@ func (e ChannelEntryId) Valid() bool {
 	}
 }
 
+// Defines values for ChannelEntryIdentityKind.
+const (
+	ChannelEntryIdentityKindAgent ChannelEntryIdentityKind = "agent"
+	ChannelEntryIdentityKindUser  ChannelEntryIdentityKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the ChannelEntryIdentityKind enum.
+func (e ChannelEntryIdentityKind) Valid() bool {
+	switch e {
+	case ChannelEntryIdentityKindAgent:
+		return true
+	case ChannelEntryIdentityKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelEntryTransport.
 const (
 	ChannelEntryTransportBridge    ChannelEntryTransport = "bridge"
+	ChannelEntryTransportEmail     ChannelEntryTransport = "email"
 	ChannelEntryTransportHttp      ChannelEntryTransport = "http"
 	ChannelEntryTransportNative    ChannelEntryTransport = "native"
 	ChannelEntryTransportSerial    ChannelEntryTransport = "serial"
@@ -967,6 +1010,8 @@ const (
 func (e ChannelEntryTransport) Valid() bool {
 	switch e {
 	case ChannelEntryTransportBridge:
+		return true
+	case ChannelEntryTransportEmail:
 		return true
 	case ChannelEntryTransportHttp:
 		return true
@@ -987,52 +1032,73 @@ func (e ChannelEntryTransport) Valid() bool {
 
 // Defines values for ChannelId.
 const (
-	Dingtalk   ChannelId = "dingtalk"
-	Discord    ChannelId = "discord"
-	Feishu     ChannelId = "feishu"
-	GoogleChat ChannelId = "google-chat"
-	Irc        ChannelId = "irc"
-	Line       ChannelId = "line"
-	Matrix     ChannelId = "matrix"
-	Qq         ChannelId = "qq"
-	Slack      ChannelId = "slack"
-	Telegram   ChannelId = "telegram"
-	Webchat    ChannelId = "webchat"
-	Wecom      ChannelId = "wecom"
-	Weixin     ChannelId = "weixin"
-	Whatsapp   ChannelId = "whatsapp"
+	ChannelIdDingtalk   ChannelId = "dingtalk"
+	ChannelIdDiscord    ChannelId = "discord"
+	ChannelIdEmail      ChannelId = "email"
+	ChannelIdFeishu     ChannelId = "feishu"
+	ChannelIdGoogleChat ChannelId = "google-chat"
+	ChannelIdIrc        ChannelId = "irc"
+	ChannelIdLine       ChannelId = "line"
+	ChannelIdMatrix     ChannelId = "matrix"
+	ChannelIdQq         ChannelId = "qq"
+	ChannelIdSlack      ChannelId = "slack"
+	ChannelIdTelegram   ChannelId = "telegram"
+	ChannelIdWebchat    ChannelId = "webchat"
+	ChannelIdWecom      ChannelId = "wecom"
+	ChannelIdWeixin     ChannelId = "weixin"
+	ChannelIdWhatsapp   ChannelId = "whatsapp"
 )
 
 // Valid indicates whether the value is a known member of the ChannelId enum.
 func (e ChannelId) Valid() bool {
 	switch e {
-	case Dingtalk:
+	case ChannelIdDingtalk:
 		return true
-	case Discord:
+	case ChannelIdDiscord:
 		return true
-	case Feishu:
+	case ChannelIdEmail:
 		return true
-	case GoogleChat:
+	case ChannelIdFeishu:
 		return true
-	case Irc:
+	case ChannelIdGoogleChat:
 		return true
-	case Line:
+	case ChannelIdIrc:
 		return true
-	case Matrix:
+	case ChannelIdLine:
 		return true
-	case Qq:
+	case ChannelIdMatrix:
 		return true
-	case Slack:
+	case ChannelIdQq:
 		return true
-	case Telegram:
+	case ChannelIdSlack:
 		return true
-	case Webchat:
+	case ChannelIdTelegram:
 		return true
-	case Wecom:
+	case ChannelIdWebchat:
 		return true
-	case Weixin:
+	case ChannelIdWecom:
 		return true
-	case Whatsapp:
+	case ChannelIdWeixin:
+		return true
+	case ChannelIdWhatsapp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelIdentityKind.
+const (
+	ChannelIdentityKindAgent ChannelIdentityKind = "agent"
+	ChannelIdentityKindUser  ChannelIdentityKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the ChannelIdentityKind enum.
+func (e ChannelIdentityKind) Valid() bool {
+	switch e {
+	case ChannelIdentityKindAgent:
+		return true
+	case ChannelIdentityKindUser:
 		return true
 	default:
 		return false
@@ -1266,19 +1332,19 @@ func (e McpServerTransport) Valid() bool {
 
 // Defines values for McpServerCreateTransport.
 const (
-	Http  McpServerCreateTransport = "http"
-	Sse   McpServerCreateTransport = "sse"
-	Stdio McpServerCreateTransport = "stdio"
+	McpServerCreateTransportHttp  McpServerCreateTransport = "http"
+	McpServerCreateTransportSse   McpServerCreateTransport = "sse"
+	McpServerCreateTransportStdio McpServerCreateTransport = "stdio"
 )
 
 // Valid indicates whether the value is a known member of the McpServerCreateTransport enum.
 func (e McpServerCreateTransport) Valid() bool {
 	switch e {
-	case Http:
+	case McpServerCreateTransportHttp:
 		return true
-	case Sse:
+	case McpServerCreateTransportSse:
 		return true
-	case Stdio:
+	case McpServerCreateTransportStdio:
 		return true
 	default:
 		return false
@@ -4279,13 +4345,46 @@ type ChannelConfigureRequest struct {
 	// BotToken Alias for token used by some channels.
 	BotToken *string `json:"bot_token,omitempty"`
 
+	// Identity Identifies whether an inbound channel connection acts on behalf of a specific agent ("agent" kind) or routes as the default user ("user" kind). Persisted per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
+	Identity *struct {
+		// Id The agent ID when kind is "agent". Empty or omitted when kind is "user".
+		Id *string `json:"id,omitempty"`
+
+		// Kind Routing kind for this channel instance.
+		Kind ChannelConfigureRequestIdentityKind `json:"kind"`
+	} `json:"identity,omitempty"`
+
+	// ImapHost IMAP server hostname (email channel). TLS required.
+	ImapHost *string `json:"imap_host,omitempty"`
+
+	// ImapPort IMAP server port (email channel). Defaults to 993 (IMAPS).
+	ImapPort *int `json:"imap_port,omitempty"`
+
+	// InstanceId Optional: the instance map key to configure. In v0.1 (cap-1/type) this equals the channel type and can be omitted. Reserved for v0.3 multi-instance support — the backend ignores this field today (the URL {id} is the key).
+	InstanceId *string `json:"instance_id,omitempty"`
+
+	// Password Login password for IMAP and SMTP authentication (email channel). Stored encrypted in the credential store — never returned in GET responses.
+	Password *string `json:"password,omitempty"`
+
+	// SmtpHost SMTP server hostname for outbound email (email channel). TLS required.
+	SmtpHost *string `json:"smtp_host,omitempty"`
+
+	// SmtpPort SMTP server port (email channel). Defaults to 587 (STARTTLS) or 465 (SMTPS).
+	SmtpPort *int `json:"smtp_port,omitempty"`
+
 	// Token Channel authentication token (e.g. Telegram bot token, Discord bot token).
 	Token *string `json:"token,omitempty"`
+
+	// Username Login username for IMAP and SMTP authentication (email channel).
+	Username *string `json:"username,omitempty"`
 
 	// WebhookSecret HMAC secret for verifying incoming webhook payloads.
 	WebhookSecret        *string                `json:"webhook_secret,omitempty"`
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
+
+// ChannelConfigureRequestIdentityKind Routing kind for this channel instance.
+type ChannelConfigureRequestIdentityKind string
 
 // ChannelEnabledResponse Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
 type ChannelEnabledResponse struct {
@@ -4316,6 +4415,18 @@ type ChannelEntry struct {
 	// Id Stable identifier for a built-in channel.
 	Id ChannelEntryId `json:"id"`
 
+	// Identity Identifies whether an inbound channel connection acts on behalf of a specific agent ("agent" kind) or routes as the default user ("user" kind). Persisted per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
+	Identity *struct {
+		// Id The agent ID when kind is "agent". Empty or omitted when kind is "user".
+		Id *string `json:"id,omitempty"`
+
+		// Kind Routing kind for this channel instance.
+		Kind ChannelEntryIdentityKind `json:"kind"`
+	} `json:"identity,omitempty"`
+
+	// InstanceId The map key under which this instance is stored in config.json (currently equals the channel type in v0.1 cap-1). Included in responses so the SPA can address per-instance configure/enable/routing endpoints without hardcoding the key.
+	InstanceId *string `json:"instance_id,omitempty"`
+
 	// Name Human-readable channel name.
 	Name string `json:"name"`
 
@@ -4329,11 +4440,26 @@ type ChannelEntry struct {
 // ChannelEntryId Stable identifier for a built-in channel.
 type ChannelEntryId string
 
+// ChannelEntryIdentityKind Routing kind for this channel instance.
+type ChannelEntryIdentityKind string
+
 // ChannelEntryTransport Transport mechanism used by this channel.
 type ChannelEntryTransport string
 
 // ChannelId Stable identifier for a built-in channel.
 type ChannelId string
+
+// ChannelIdentity Identifies whether an inbound channel connection acts on behalf of a specific agent ("agent" kind) or routes as the default user ("user" kind). Persisted per channel instance; wired into ResolveRoute at routing time (Spec-2 FR-2.9).
+type ChannelIdentity struct {
+	// Id The agent ID when kind is "agent". Empty or omitted when kind is "user".
+	Id *string `json:"id,omitempty"`
+
+	// Kind Routing kind for this channel instance.
+	Kind ChannelIdentityKind `json:"kind"`
+}
+
+// ChannelIdentityKind Routing kind for this channel instance.
+type ChannelIdentityKind string
 
 // ChannelRouting Routing configuration for a single communication channel. Controls which agent handles inbound messages arriving on this channel.
 type ChannelRouting struct {
@@ -7086,12 +7212,76 @@ func (a *ChannelConfigureRequest) UnmarshalJSON(b []byte) error {
 		delete(object, "bot_token")
 	}
 
+	if raw, found := object["identity"]; found {
+		err = json.Unmarshal(raw, &a.Identity)
+		if err != nil {
+			return fmt.Errorf("error reading 'identity': %w", err)
+		}
+		delete(object, "identity")
+	}
+
+	if raw, found := object["imap_host"]; found {
+		err = json.Unmarshal(raw, &a.ImapHost)
+		if err != nil {
+			return fmt.Errorf("error reading 'imap_host': %w", err)
+		}
+		delete(object, "imap_host")
+	}
+
+	if raw, found := object["imap_port"]; found {
+		err = json.Unmarshal(raw, &a.ImapPort)
+		if err != nil {
+			return fmt.Errorf("error reading 'imap_port': %w", err)
+		}
+		delete(object, "imap_port")
+	}
+
+	if raw, found := object["instance_id"]; found {
+		err = json.Unmarshal(raw, &a.InstanceId)
+		if err != nil {
+			return fmt.Errorf("error reading 'instance_id': %w", err)
+		}
+		delete(object, "instance_id")
+	}
+
+	if raw, found := object["password"]; found {
+		err = json.Unmarshal(raw, &a.Password)
+		if err != nil {
+			return fmt.Errorf("error reading 'password': %w", err)
+		}
+		delete(object, "password")
+	}
+
+	if raw, found := object["smtp_host"]; found {
+		err = json.Unmarshal(raw, &a.SmtpHost)
+		if err != nil {
+			return fmt.Errorf("error reading 'smtp_host': %w", err)
+		}
+		delete(object, "smtp_host")
+	}
+
+	if raw, found := object["smtp_port"]; found {
+		err = json.Unmarshal(raw, &a.SmtpPort)
+		if err != nil {
+			return fmt.Errorf("error reading 'smtp_port': %w", err)
+		}
+		delete(object, "smtp_port")
+	}
+
 	if raw, found := object["token"]; found {
 		err = json.Unmarshal(raw, &a.Token)
 		if err != nil {
 			return fmt.Errorf("error reading 'token': %w", err)
 		}
 		delete(object, "token")
+	}
+
+	if raw, found := object["username"]; found {
+		err = json.Unmarshal(raw, &a.Username)
+		if err != nil {
+			return fmt.Errorf("error reading 'username': %w", err)
+		}
+		delete(object, "username")
 	}
 
 	if raw, found := object["webhook_secret"]; found {
@@ -7142,10 +7332,66 @@ func (a ChannelConfigureRequest) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if a.Identity != nil {
+		object["identity"], err = json.Marshal(a.Identity)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'identity': %w", err)
+		}
+	}
+
+	if a.ImapHost != nil {
+		object["imap_host"], err = json.Marshal(a.ImapHost)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'imap_host': %w", err)
+		}
+	}
+
+	if a.ImapPort != nil {
+		object["imap_port"], err = json.Marshal(a.ImapPort)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'imap_port': %w", err)
+		}
+	}
+
+	if a.InstanceId != nil {
+		object["instance_id"], err = json.Marshal(a.InstanceId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'instance_id': %w", err)
+		}
+	}
+
+	if a.Password != nil {
+		object["password"], err = json.Marshal(a.Password)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'password': %w", err)
+		}
+	}
+
+	if a.SmtpHost != nil {
+		object["smtp_host"], err = json.Marshal(a.SmtpHost)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'smtp_host': %w", err)
+		}
+	}
+
+	if a.SmtpPort != nil {
+		object["smtp_port"], err = json.Marshal(a.SmtpPort)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'smtp_port': %w", err)
+		}
+	}
+
 	if a.Token != nil {
 		object["token"], err = json.Marshal(a.Token)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'token': %w", err)
+		}
+	}
+
+	if a.Username != nil {
+		object["username"], err = json.Marshal(a.Username)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'username': %w", err)
 		}
 	}
 

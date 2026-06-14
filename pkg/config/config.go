@@ -1068,6 +1068,21 @@ type ChannelInstanceConfig struct {
 	ServiceAccountJSONRef string       `json:"service_account_json_ref,omitempty"`
 	Space                 string       `json:"space,omitempty"`
 	BotUser               string       `json:"bot_user,omitempty"`
+
+	// --- Email-specific fields ---
+	// IMAPHost is the IMAP server hostname. TLS-only (port 993).
+	IMAPHost string `json:"imap_host,omitempty"`
+	// IMAPPort is the IMAP server port. Defaults to 993.
+	IMAPPort int `json:"imap_port,omitempty"`
+	// SMTPHost is the SMTP server hostname for outbound email. TLS-only.
+	SMTPHost string `json:"smtp_host,omitempty"`
+	// SMTPPort is the SMTP server port. Defaults to 587 (STARTTLS).
+	SMTPPort int `json:"smtp_port,omitempty"`
+	// EmailUsername is the login username for IMAP and SMTP authentication.
+	// Note: "password_ref" is reused from the IRC-specific PasswordRef field above.
+	// Both IRC and email use the same password_ref JSON key for their connection
+	// password, which is stored encrypted in the credential store.
+	EmailUsername string `json:"username,omitempty"`
 }
 
 // knownChannelTypes is the set of supported channel type identifiers.
@@ -1086,6 +1101,7 @@ var knownChannelTypes = map[string]struct{}{
 	"weixin":      {},
 	"irc":         {},
 	"google-chat": {},
+	"email":       {},
 }
 
 // normalizeChannelMap fills in the Type field from the map key when absent
@@ -1351,6 +1367,22 @@ func InstanceToGoogleChat(inst ChannelInstanceConfig) GoogleChatConfig {
 	}
 }
 
+// InstanceToEmail returns the EmailConfig for a ChannelInstanceConfig of type "email".
+// The password credential is stored encrypted via PasswordRef; only non-secret fields
+// are copied directly from the instance. The PasswordRef field in ChannelInstanceConfig
+// (shared with IRC) carries the email credential-store key.
+func InstanceToEmail(inst ChannelInstanceConfig) EmailConfig {
+	return EmailConfig{
+		Enabled:     inst.Enabled,
+		IMAPHost:    inst.IMAPHost,
+		IMAPPort:    inst.IMAPPort,
+		SMTPHost:    inst.SMTPHost,
+		SMTPPort:    inst.SMTPPort,
+		Username:    inst.EmailUsername,
+		PasswordRef: inst.PasswordRef,
+	}
+}
+
 // GroupTriggerConfig controls when the bot responds in group chats.
 type GroupTriggerConfig struct {
 	MentionOnly bool     `json:"mention_only,omitempty"`
@@ -1555,6 +1587,19 @@ type IRCConfig struct {
 	GroupTrigger        GroupTriggerConfig  `json:"group_trigger,omitempty"         yaml:"-"`
 	Typing              TypingConfig        `json:"typing,omitempty"                yaml:"-"`
 	ReasoningChannelID  string              `json:"reasoning_channel_id"            yaml:"-"`
+}
+
+// EmailConfig holds configuration for the email channel (IMAP inbound + SMTP outbound).
+// Credentials (password) are stored in the encrypted credential store via PasswordRef;
+// only public config (hosts, ports, username) is stored in config.json.
+type EmailConfig struct {
+	Enabled     bool   `json:"enabled"`
+	IMAPHost    string `json:"imap_host,omitempty"`
+	IMAPPort    int    `json:"imap_port,omitempty"`
+	SMTPHost    string `json:"smtp_host,omitempty"`
+	SMTPPort    int    `json:"smtp_port,omitempty"`
+	Username    string `json:"username,omitempty"`
+	PasswordRef string `json:"password_ref,omitempty"`
 }
 
 type HeartbeatConfig struct {

@@ -34,6 +34,7 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/channels"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/dingtalk"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/discord"
+	_ "github.com/dapicom-ai/omnipus/pkg/channels/email"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/feishu"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/googlechat"
 	_ "github.com/dapicom-ai/omnipus/pkg/channels/irc"

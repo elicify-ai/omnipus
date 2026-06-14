@@ -694,6 +694,23 @@ func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig)
 				warnMisconfigured("Google Chat", "webhook_url, service_account_json, or service_account_file")
 				continue
 			}
+		case "email":
+			if inst.IMAPHost == "" {
+				warnMisconfigured("Email", "imap_host")
+				continue
+			}
+			if inst.SMTPHost == "" {
+				warnMisconfigured("Email", "smtp_host")
+				continue
+			}
+			if inst.EmailUsername == "" {
+				warnMisconfigured("Email", "username")
+				continue
+			}
+			if inst.PasswordRef == "" {
+				warnMisconfigured("Email", "password")
+				continue
+			}
 		}
 
 		if err := m.initChannel(factoryName, displayName); err != nil {

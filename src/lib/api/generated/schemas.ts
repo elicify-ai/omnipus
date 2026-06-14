@@ -247,6 +247,7 @@ type AgentUpdateRequest = Partial<{
 }>;
 type ChannelEntry = {
   id: ChannelId;
+  instance_id?: string | undefined;
   name: string;
   transport:
     | "websocket"
@@ -255,9 +256,11 @@ type ChannelEntry = {
     | "native"
     | "tcp"
     | "http"
-    | "serial";
+    | "serial"
+    | "email";
   enabled: boolean;
   description: string;
+  identity?: ChannelIdentity | undefined;
   native_available?: boolean | undefined;
   degraded?: boolean | undefined;
   degraded_reason?: string | undefined;
@@ -276,7 +279,12 @@ type ChannelId =
   | "qq"
   | "irc"
   | "matrix"
-  | "google-chat";
+  | "google-chat"
+  | "email";
+type ChannelIdentity = {
+  kind: "agent" | "user";
+  id?: string | undefined;
+};
 type DoctorResult = {
   score: number;
   issues: Array<DoctorIssue>;
@@ -352,6 +360,25 @@ type ActivityEvent = {
 type RotateTokenResponse = {
   token: BearerToken;
 };
+type ChannelConfigureRequest = Partial<
+  {
+    instance_id: string;
+    identity: ChannelIdentity;
+    token: string;
+    bot_token: string;
+    app_id: string;
+    app_secret: string;
+    webhook_secret: string;
+    imap_host: string;
+    imap_port: number;
+    smtp_host: string;
+    smtp_port: number;
+    username: string;
+    password: string;
+  } & {
+    [key: string]: any;
+  }
+>;
 type Schedule = {
   id: string;
   name: string;
@@ -1298,9 +1325,15 @@ export const ChannelId = z.enum([
   "irc",
   "matrix",
   "google-chat",
+  "email",
 ]);
+export const ChannelIdentity: z.ZodType<ChannelIdentity> = z.object({
+  kind: z.enum(["agent", "user"]),
+  id: z.string().optional(),
+});
 export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   id: ChannelId,
+  instance_id: z.string().optional(),
   name: z.string(),
   transport: z.enum([
     "websocket",
@@ -1310,9 +1343,11 @@ export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
     "tcp",
     "http",
     "serial",
+    "email",
   ]),
   enabled: z.boolean(),
   description: z.string(),
+  identity: ChannelIdentity.optional(),
   native_available: z.boolean().optional(),
   degraded: z.boolean().optional(),
   degraded_reason: z.string().optional(),
@@ -1848,13 +1883,21 @@ export const OnboardingStatusResponse = z
   .passthrough();
 export const ActivityEventsResponse: z.ZodType<ActivityEventsResponse> =
   z.object({ events: z.array(ActivityEvent), warning: z.string().optional() });
-export const ChannelConfigureRequest = z
+export const ChannelConfigureRequest: z.ZodType<ChannelConfigureRequest> = z
   .object({
+    instance_id: z.string(),
+    identity: ChannelIdentity,
     token: z.string(),
     bot_token: z.string(),
     app_id: z.string(),
     app_secret: z.string(),
     webhook_secret: z.string(),
+    imap_host: z.string(),
+    imap_port: z.number().int(),
+    smtp_host: z.string(),
+    smtp_port: z.number().int(),
+    username: z.string(),
+    password: z.string(),
   })
   .partial()
   .passthrough();

@@ -150,6 +150,8 @@ components:
       $ref: ./components/schemas/GlobalToolPolicies.yaml
     ChannelId:
       $ref: ./components/schemas/ChannelId.yaml
+    ChannelIdentity:
+      $ref: ./components/schemas/ChannelIdentity.yaml
     ChannelEntry:
       $ref: ./components/schemas/ChannelEntry.yaml
     RetentionConfig:

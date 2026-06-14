@@ -16,3 +16,4 @@ enum:
   - irc
   - matrix
   - google-chat
+  - email

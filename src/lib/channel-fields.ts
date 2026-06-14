@@ -503,6 +503,67 @@ export const CHANNEL_FIELDS: Partial<Record<ChannelId, ChannelField[]>> = {
     },
   ],
 
+  email: [
+    {
+      key: 'username',
+      label: 'Email Address',
+      type: 'text',
+      required: true,
+      placeholder: 'bot@example.com',
+      helpText: 'The email address the bot uses to send and receive messages',
+    },
+    {
+      key: 'password',
+      label: 'Password',
+      type: 'password',
+      required: true,
+      helpText: 'IMAP/SMTP login password or app-specific password (stored encrypted)',
+    },
+    {
+      key: 'imap_host',
+      label: 'IMAP Host',
+      type: 'text',
+      required: true,
+      placeholder: 'imap.example.com',
+      helpText: 'IMAP server hostname for receiving email (TLS-only, port 993)',
+    },
+    {
+      key: 'imap_port',
+      label: 'IMAP Port',
+      type: 'number',
+      required: false,
+      placeholder: '993',
+      helpText: 'IMAP port (default 993 for IMAPS)',
+      advanced: true,
+    },
+    {
+      key: 'smtp_host',
+      label: 'SMTP Host',
+      type: 'text',
+      required: true,
+      placeholder: 'smtp.example.com',
+      helpText: 'SMTP server hostname for sending email (STARTTLS port 587 or SMTPS port 465)',
+    },
+    {
+      key: 'smtp_port',
+      label: 'SMTP Port',
+      type: 'number',
+      required: false,
+      placeholder: '587',
+      helpText: 'SMTP port (587 for STARTTLS, 465 for SMTPS; default 587)',
+      advanced: true,
+    },
+    {
+      key: 'allow_from',
+      label: 'Allow From',
+      type: 'text',
+      required: false,
+      placeholder: 'user@example.com, @example.org',
+      helpText: 'Comma-separated email addresses or @domain patterns (empty = allow all)',
+      advanced: true,
+    },
+  ],
+
   irc: [
     {
       key: 'server',
