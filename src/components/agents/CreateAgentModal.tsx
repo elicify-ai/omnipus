@@ -22,11 +22,12 @@ import { ModelSelector } from '@/components/ui/model-selector'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useUiStore } from '@/store/ui'
 import { createAgent, fetchProviders, fetchRegistryTools, fetchSkills, isApiError } from '@/lib/api'
-import type { Agent, AgentCreateRequest, AgentToolsCfg, Skill } from '@/lib/api'
+import type { Agent, AgentCreateRequest, AgentToolsCfg, ExecutorConfig, Skill } from '@/lib/api'
 import { AVATAR_COLORS } from '@/lib/constants'
 import { ToolPolicyEditor } from '@/components/shared/ToolPolicyEditor'
 import type { ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { applyRolePreset } from '@/lib/toolPolicyPresets'
+import { ExecutorSelector } from './ExecutorSelector'
 
 const ICON_OPTIONS = [
   { name: 'Robot', component: Robot },
@@ -138,6 +139,8 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
   const [nameError, setNameError] = useState('')
   // US-E6: per-agent skill assignment; new agent defaults to none (opt-in).
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
+  // Spec-4 FR-4.1: sub-agent executor; new agent defaults to native (undefined).
+  const [executor, setExecutor] = useState<ExecutorConfig | undefined>(undefined)
 
   // #334 (US-D1): new agent defaults to Balanced (not default_policy:'allow').
   const BALANCED_DEFAULT: ToolPolicyValue = applyRolePreset('balanced')
@@ -153,6 +156,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
     setAdvancedOpen(false)
     setNameError('')
     setSelectedSkills([])
+    setExecutor(undefined)
     setToolsPolicyValue(applyRolePreset('balanced'))
   }
 
@@ -207,6 +211,8 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
       tools_cfg: toolsCfg,
       // US-E6: only include skills when at least one is selected (opt-in, default none).
       skills: selectedSkills.length > 0 ? selectedSkills : undefined,
+      // Spec-4 FR-4.1: only send executor when the user chose a non-native runtime.
+      executor: executor && executor.kind !== 'native' ? executor : undefined,
     })
   }
 
@@ -369,6 +375,13 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                             background: `linear-gradient(to right, var(--color-accent) 0%, var(--color-accent) ${(temperature / 2) * 100}%, var(--color-border) ${(temperature / 2) * 100}%, var(--color-border) 100%)`,
                           }}
                         />
+                      </div>
+
+                      {/* Spec-4 FR-4.1: Executor runtime selector. No agentId yet,
+                          so the connection test button is intentionally hidden. */}
+                      <div className="space-y-1.5 pt-1 border-t border-[var(--color-border)]">
+                        <p className="text-xs font-medium text-[var(--color-secondary)] pt-1">Executor</p>
+                        <ExecutorSelector value={executor} onChange={setExecutor} />
                       </div>
 
                       {/* US-E6: Skills picker — opt-in, default none */}

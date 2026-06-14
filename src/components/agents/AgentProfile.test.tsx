@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
 import type { Agent, Skill } from '@/lib/api'
@@ -21,7 +21,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return { ...actual, fetchAgent: vi.fn(), updateAgent: vi.fn(), fetchSkills: vi.fn() }
 })
 
-import { fetchAgent, fetchSkills } from '@/lib/api'
+import { fetchAgent, fetchSkills, updateAgent } from '@/lib/api'
 
 const mockCoreAgent: Agent = {
   id: 'general-assistant',
@@ -256,5 +256,67 @@ describe('AgentProfile — B-2: Skills picker read-only for locked agents', () =
     // Wait for skill to appear
     const checkbox = await screen.findByTestId('skill-checkbox-web-research')
     expect((checkbox as HTMLInputElement).disabled).toBe(true)
+  })
+})
+
+// Spec-4 FR-4.1 — Executor section wired into the agent profile.
+describe('AgentProfile — Executor section (Spec-4)', () => {
+  it('renders the Executor accordion with the runtime selector', async () => {
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    fireEvent.click(screen.getByText(/^Executor$/))
+    const kind = (await screen.findByTestId('executor-kind-select')) as HTMLSelectElement
+    // Absent executor → native default.
+    expect(kind.value).toBe('native')
+  })
+
+  it('hydrates an existing external-cli executor and its cli', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({
+      ...mockCoreAgent,
+      executor: { kind: 'external-cli', cli: 'codex' },
+    })
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    fireEvent.click(screen.getByText(/^Executor$/))
+    const kind = (await screen.findByTestId('executor-kind-select')) as HTMLSelectElement
+    expect(kind.value).toBe('external-cli')
+    const cli = (await screen.findByTestId('executor-cli-select')) as HTMLSelectElement
+    expect(cli.value).toBe('codex')
+  })
+
+  it('persists a runtime change through updateAgent (auto-save)', async () => {
+    vi.mocked(updateAgent).mockResolvedValue(mockCoreAgent)
+    renderProfile('general-assistant')
+    await screen.findByText('General Assistant')
+    fireEvent.click(screen.getByText(/^Executor$/))
+    const kind = await screen.findByTestId('executor-kind-select')
+    fireEvent.change(kind, { target: { value: 'external-cli' } })
+    // The cli select now appears with the claude-code default.
+    const cli = (await screen.findByTestId('executor-cli-select')) as HTMLSelectElement
+    expect(cli.value).toBe('claude-code')
+    // Auto-save debounces, then PUTs the executor.
+    await waitFor(
+      () => {
+        expect(updateAgent).toHaveBeenCalled()
+        const lastCall = vi.mocked(updateAgent).mock.calls.at(-1)!
+        expect(lastCall[0]).toBe('general-assistant')
+        expect(lastCall[1].executor).toEqual({ kind: 'external-cli', cli: 'claude-code' })
+      },
+      { timeout: 3000 },
+    )
+  })
+
+  it('renders the runtime selector disabled for locked core agents', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({
+      ...mockLockedCoreAgent,
+      executor: { kind: 'external-cli', cli: 'claude-code' },
+    })
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    fireEvent.click(screen.getByText(/^Executor$/))
+    const kind = (await screen.findByTestId('executor-kind-select')) as HTMLSelectElement
+    expect(kind.disabled).toBe(true)
+    // The test button is hidden for locked agents.
+    expect(screen.queryByTestId('runner-test-button')).toBeNull()
   })
 })

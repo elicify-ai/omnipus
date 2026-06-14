@@ -37,6 +37,7 @@ import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { SandboxProfileSelector } from './SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
+import { ExecutorSelector } from './ExecutorSelector'
 import { SchedulesList } from '@/components/command-center/SchedulesList'
 import { ScheduleFormSheet } from '@/components/command-center/ScheduleFormSheet'
 import {
@@ -52,6 +53,7 @@ import {
   type AgentToolsCfg,
   type SandboxProfile,
   type Skill,
+  type ExecutorConfig,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { AVATAR_COLORS } from '@/lib/constants'
@@ -178,6 +180,8 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
   const [sandboxProfile, setSandboxProfile] = useState<SandboxProfile | undefined>(undefined)
   const [shellDenyPatterns, setShellDenyPatterns] = useState<string[]>([])
   const [shellAdvancedOpen, setShellAdvancedOpen] = useState(false)
+  // Spec-4 FR-4.1: sub-agent executor (native default / external-cli / remote-a2a).
+  const [executor, setExecutor] = useState<ExecutorConfig | undefined>(undefined)
 
   useEffect(() => {
     if (!agent) return
@@ -209,6 +213,8 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
     setHeartbeatInterval(agent.heartbeat_interval ?? 30)
     setSandboxProfile(agent.sandbox_profile)
     setShellDenyPatterns(agent.shell_policy?.custom_deny_patterns ?? [])
+    // Spec-4: hydrate executor (absent → native default, modelled as undefined).
+    setExecutor(agent.executor)
     if (agent.tools_cfg) setToolsCfg((prev) => ({
       builtin: agent.tools_cfg?.builtin ?? prev.builtin,
       mcp: agent.tools_cfg?.mcp as AgentToolsCfg['mcp'],
@@ -255,13 +261,17 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
     // array as "remove all skills" — we always send the current value so
     // a deliberate clear (removing the last skill) is persisted correctly.
     skills: agentSkills,
+    // Spec-4 FR-4.1: persist the executor only when explicitly configured.
+    // Omitting it (undefined) leaves the backend on its "native" default
+    // rather than forcing an empty value over the wire.
+    executor,
   }), [
     name, description, model, selectedColor, selectedIcon, fallbackModels,
     temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
     maxToolCallsPerMinute, maxCostPerDay, soul, instructions, heartbeat,
     timeoutSeconds, maxToolIterations, steeringMode, toolFeedback,
     heartbeatEnabled, heartbeatInterval, sandboxProfile, shellDenyPatterns,
-    toolsCfg, agentSkills,
+    toolsCfg, agentSkills, executor,
   ])
 
   const { status: saveStatus, error: saveError } = useAutoSave(
@@ -282,7 +292,7 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
         ? (({
             name: _n, description: _d, soul: _s, color: _c, icon: _i,
             heartbeat: _h, instructions: _ins, sandbox_profile: _sp,
-            shell_policy: _shp, tools_cfg: _tc, skills: _sk, ...rest
+            shell_policy: _shp, tools_cfg: _tc, skills: _sk, executor: _ex, ...rest
           }) => rest)(data)
         : data
       await updateAgent(agentId, payload)
@@ -575,6 +585,31 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
             </AccordionContent>
           </AccordionItem>
         )}
+
+        {/* Executor — Spec-4 FR-4.1: sub-agent runtime selector + runner test.
+            Read-only for locked core agents (the selector is rendered disabled). */}
+        <AccordionItem value="executor" className="border-0">
+          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+            <div className="flex items-center gap-2">
+              <span>Executor</span>
+              {(executor?.kind === 'external-cli' || executor?.kind === 'remote-a2a') && (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]">
+                  {executor.kind === 'external-cli' ? (executor.cli ?? 'external') : 'A2A'}
+                </span>
+              )}
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="px-4">
+              <ExecutorSelector
+                value={executor}
+                agentId={agentId}
+                disabled={isLocked}
+                onChange={(next) => { markDirty(); setExecutor(next) }}
+              />
+            </div>
+          </AccordionContent>
+        </AccordionItem>
 
         {/* Model Configuration — default CLOSED */}
         <AccordionItem value="model" className="border-0">

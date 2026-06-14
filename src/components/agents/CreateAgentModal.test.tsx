@@ -232,3 +232,55 @@ describe('CreateAgentModal — Skills picker (US-E6)', () => {
     expect(latestCall.skills).toBeUndefined()
   })
 })
+
+// Spec-4 FR-4.1 — Executor selector wired into the create flow.
+describe('CreateAgentModal — Executor (Spec-4)', () => {
+  it('omits executor when left on the native default', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'Native Agent' } })
+    fireEvent.click(screen.getByRole('button', { name: /create agent/i }))
+
+    await vi.waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ name: 'Native Agent' }))
+    })
+    const call = onCreate.mock.calls.at(-1)![0]
+    expect(call.executor).toBeUndefined()
+  })
+
+  it('includes an external-cli executor in the create payload', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined)
+    renderModal({ open: true, onClose: vi.fn(), onCreate })
+
+    // Open Advanced to reveal the executor selector.
+    fireEvent.click(await screen.findByRole('button', { name: /advanced/i }))
+    const kind = await screen.findByTestId('executor-kind-select')
+    fireEvent.change(kind, { target: { value: 'external-cli' } })
+    fireEvent.change(await screen.findByTestId('executor-cli-select'), {
+      target: { value: 'opencode' },
+    })
+
+    fireEvent.change(screen.getByLabelText(/name/i), { target: { value: 'CLI Agent' } })
+    fireEvent.click(screen.getByRole('button', { name: /create agent/i }))
+
+    await vi.waitFor(() => {
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'CLI Agent',
+          executor: { kind: 'external-cli', cli: 'opencode' },
+        }),
+      )
+    })
+  })
+
+  it('does not render the connection test button in the create flow (no agentId)', async () => {
+    renderModal({ open: true, onClose: vi.fn() })
+    fireEvent.click(await screen.findByRole('button', { name: /advanced/i }))
+    const kind = await screen.findByTestId('executor-kind-select')
+    fireEvent.change(kind, { target: { value: 'external-cli' } })
+    // CLI select shows, but no runner test button (no persisted agent yet).
+    expect(await screen.findByTestId('executor-cli-select')).toBeInTheDocument()
+    expect(screen.queryByTestId('runner-test-button')).toBeNull()
+  })
+})
