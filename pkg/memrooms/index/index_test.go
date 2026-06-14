@@ -8,8 +8,10 @@
 package index_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -218,3 +220,81 @@ func TestBleveIndex_EmptyQueryReturnsAll(t *testing.T) {
 		t.Errorf("expected 3 hits for empty query, got %d", len(hits))
 	}
 }
+
+// TestBleveIndex_SharedHandleNoDeadlock is the regression test for the
+// shared-workspace-room deadlock: two OpenOrCreate calls on the SAME on-disk
+// index path must each succeed without a second bbolt.Open (which holds a
+// process-exclusive, infinite-wait file lock). Before the process-global
+// refcounted registry, the second OpenOrCreate blocked FOREVER in
+// scorch.openBolt. We assert both opens return the SAME shared *RoomIndex and
+// that both can build/search concurrently, all within a hard timeout so the test
+// FAILS FAST (rather than hanging the whole suite) if the deadlock regresses.
+func TestBleveIndex_SharedHandleNoDeadlock(t *testing.T) {
+	room := makeTestRoom(t)
+	writeTestMemory(t, room, "mem-shared-001", "Shared handle", "The workspace room is shared across agents and must not deadlock.")
+
+	done := make(chan error, 1)
+	go func() {
+		// First holder opens the scorch index (real bbolt open).
+		ri1, err := memindex.OpenOrCreate(room)
+		if err != nil {
+			done <- err
+			return
+		}
+		defer ri1.Close()
+
+		// Second holder of the SAME path — pre-fix this call deadlocked forever
+		// in a second bbolt.Open. With the registry it reuses ri1's open handle.
+		ri2, err := memindex.OpenOrCreate(room)
+		if err != nil {
+			done <- err
+			return
+		}
+		defer ri2.Close()
+
+		if ri1 != ri2 {
+			done <- errDifferentHandles
+			return
+		}
+
+		// Both holders build + search concurrently; scorch is goroutine-safe for
+		// concurrent reads + a single serialised writer (RoomIndex.mu).
+		var wg sync.WaitGroup
+		errs := make(chan error, 2)
+		for _, ri := range []*memindex.RoomIndex{ri1, ri2} {
+			wg.Add(1)
+			go func(r *memindex.RoomIndex) {
+				defer wg.Done()
+				if rbErr := r.Rebuild(); rbErr != nil {
+					errs <- rbErr
+					return
+				}
+				if _, sErr := r.Search("workspace", 10); sErr != nil {
+					errs <- sErr
+				}
+			}(ri)
+		}
+		wg.Wait()
+		close(errs)
+		for e := range errs {
+			if e != nil {
+				done <- e
+				return
+			}
+		}
+		done <- nil
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("shared-handle open/build/search failed: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("DEADLOCK REGRESSION: two OpenOrCreate calls on the same room path did not complete within 30s")
+	}
+}
+
+// errDifferentHandles signals the registry returned distinct handles for the
+// same path (the registry must return one shared *RoomIndex per path).
+var errDifferentHandles = errors.New("two OpenOrCreate calls on the same path returned different *RoomIndex handles (not shared)")
