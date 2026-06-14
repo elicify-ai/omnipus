@@ -21,7 +21,7 @@ import { Input } from '@/components/ui/input'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
-import { fetchConfig, updateConfig, rotateGatewayToken, fetchGatewayStatus, fetchAgents, isApiError, type Config } from '@/lib/api'
+import { fetchConfig, updateConfig, rotateGatewayToken, fetchGatewayStatus, isApiError, type Config } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
@@ -98,12 +98,6 @@ export function GatewaySection() {
   const [bindAddress, setBindAddress] = useState('127.0.0.1')
   const [port, setPort] = useState('8080')
   const [logLevel, setLogLevel] = useState('info')
-  const [defaultAgentId, setDefaultAgentId] = useState('')
-
-  const { data: agents } = useQuery({
-    queryKey: ['agents'],
-    queryFn: fetchAgents,
-  })
 
   useEffect(() => {
     if (!config) return
@@ -111,15 +105,13 @@ export function GatewaySection() {
     setBindAddress(config.gateway.bind_address)
     setPort(config.gateway.port.toString())
     setLogLevel(config.gateway.log_level ?? 'info')
-    setDefaultAgentId(config.agents?.defaults?.default_agent_id ?? '')
   }, [config])
 
   const gatewayFormData = useMemo(() => ({
     bind_address: bindAddress,
     port,
     log_level: logLevel,
-    default_agent_id: defaultAgentId,
-  }), [bindAddress, port, logLevel, defaultAgentId])
+  }), [bindAddress, port, logLevel])
 
   const { status: saveStatus, error: saveError } = useAutoSave(
     gatewayFormData,
@@ -134,11 +126,6 @@ export function GatewaySection() {
           port: parseInt(port, 10),
           log_level: logLevel,
         } as unknown as Config['gateway'],
-        agents: {
-          defaults: {
-            default_agent_id: defaultAgentId || undefined,
-          },
-        },
       })
       isDirtyRef.current = false
       queryClient.invalidateQueries({ queryKey: ['config'] })
@@ -238,24 +225,6 @@ export function GatewaySection() {
             value={port}
             onChange={(e) => { markDirty(); setPort(e.target.value) }}
             className="w-24 h-8 text-xs font-mono"
-          />
-        </div>
-
-        {/* Default Agent */}
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-[var(--color-secondary)]">Default Agent</p>
-            <p className="text-xs text-[var(--color-muted)]">The agent that handles messages when no specific routing applies</p>
-          </div>
-          <SmartSelect
-            value={defaultAgentId || '__none__'}
-            onValueChange={(v) => { markDirty(); setDefaultAgentId(v === '__none__' ? '' : v) }}
-            triggerClassName="w-[180px] h-8 text-xs"
-            placeholder="(none set)"
-            items={[
-              { value: '__none__', label: '(none set)' },
-              ...(agents ?? []).map((a) => ({ value: a.id, label: a.name })),
-            ]}
           />
         </div>
 

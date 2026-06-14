@@ -23,7 +23,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchConfig: vi.fn(),
     updateConfig: vi.fn(),
     fetchGatewayStatus: vi.fn(),
-    fetchAgents: vi.fn(),
     rotateGatewayToken: vi.fn(),
   }
 })
@@ -34,7 +33,7 @@ vi.mock('@/store/ui', () => ({
 
 // ── Imports after mocks ────────────────────────────────────────────────────────
 
-import { fetchConfig, fetchGatewayStatus, fetchAgents } from '@/lib/api'
+import { fetchConfig, fetchGatewayStatus } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { GatewaySection } from './GatewaySection'
 
@@ -89,7 +88,6 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(useUiStore).mockReturnValue({ addToast: mockAddToast } as never)
   vi.mocked(fetchGatewayStatus).mockResolvedValue({ daily_cost: 0, uptime_seconds: 0 } as never)
-  vi.mocked(fetchAgents).mockResolvedValue([])
 })
 
 // ── FR-107: no auth_mode:none option ─────────────────────────────────────────
