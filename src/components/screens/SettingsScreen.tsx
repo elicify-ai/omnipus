@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { ProvidersSection } from '@/components/settings/ProvidersSection'
 import { IntegrationsSection } from '@/components/settings/IntegrationsSection'
@@ -6,27 +5,14 @@ import { SecuritySection } from '@/components/settings/SecuritySection'
 import { GatewaySection } from '@/components/settings/GatewaySection'
 import { DataSection } from '@/components/settings/DataSection'
 import { AboutSection } from '@/components/settings/AboutSection'
-import { UsersSection } from '@/components/settings/UsersSection'
 import { useAuthStore } from '@/store/auth'
 import { DevicesSection } from '@/components/settings/DevicesSection'
 import { PerformanceSection } from '@/components/settings/PerformanceSection'
 import { RestartBanner } from '@/components/settings/RestartBanner'
-import { fetchConfig } from '@/lib/api'
 
 export function SettingsScreen() {
   const role = useAuthStore((s) => s.role)
   const isAdmin = role === 'admin'
-
-  const { data: config } = useQuery({
-    queryKey: ['config'],
-    queryFn: fetchConfig,
-    enabled: isAdmin,
-    staleTime: 30_000,
-  })
-
-  const devModeBypass = Boolean(config?.gateway?.dev_mode_bypass)
-  // Access tab is only shown to admins AND when dev_mode_bypass is off.
-  const showAccessTab = isAdmin && !devModeBypass
 
   return (
     <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
@@ -52,7 +38,6 @@ export function SettingsScreen() {
             <TabsTrigger value="data">Data</TabsTrigger>
             {isAdmin && <TabsTrigger value="devices">Devices</TabsTrigger>}
             {isAdmin && <TabsTrigger value="performance">Performance</TabsTrigger>}
-            {showAccessTab && <TabsTrigger value="access">Access</TabsTrigger>}
             <TabsTrigger data-testid="settings-tab-about" value="about">About</TabsTrigger>
           </TabsList>
 
@@ -85,12 +70,6 @@ export function SettingsScreen() {
           {isAdmin && (
             <TabsContent value="performance">
               <PerformanceSection />
-            </TabsContent>
-          )}
-
-          {isAdmin && (
-            <TabsContent value="access">
-              <UsersSection devModeBypass={devModeBypass} />
             </TabsContent>
           )}
 

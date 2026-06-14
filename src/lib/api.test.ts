@@ -20,7 +20,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type {
   SkillTrustLevel,
   PromptInjectionLevel,
-  UserRole,
   DMScope,
 } from './api'
 import { ApiSchemaError, getApiSchemaErrorCount, resetApiSchemaErrorCount } from './api'
@@ -547,82 +546,6 @@ describe('Security API helpers', () => {
     })
   })
 
-  // ── fetchUsers ────────────────────────────────────────────────────────────
-
-  describe('fetchUsers', () => {
-    it('GET /api/v1/users — returns user list', async () => {
-      const payload = [{ username: 'alice', role: 'admin' as UserRole, has_password: true, has_active_token: false }]
-      fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
-
-      const { fetchUsers } = await import('./api')
-      const result = await fetchUsers()
-
-      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/users')
-      expect(result[0].username).toBe('alice')
-    })
-  })
-
-  // ── createUser ────────────────────────────────────────────────────────────
-
-  describe('createUser', () => {
-    it('POST /api/v1/users — sends CSRF and body, returns {username, role}', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ username: 'bob', role: 'user' }))
-
-      const { createUser } = await import('./api')
-      const result = await createUser({ username: 'bob', role: 'user', password: 'secret' })
-
-      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/users')
-      expect((init.method ?? '').toUpperCase()).toBe('POST')
-      const headers = new Headers(init.headers as HeadersInit)
-      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
-      expect(JSON.parse(init.body as string)).toEqual({ username: 'bob', role: 'user', password: 'secret' })
-      expect(result).toEqual({ username: 'bob', role: 'user' })
-    })
-
-    it('throws when server unexpectedly returns a token field', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ username: 'bob', role: 'user', token: 'oops' }))
-
-      const { createUser } = await import('./api')
-      await expect(createUser({ username: 'bob', role: 'user', password: 'secret' })).rejects.toThrow(
-        'unexpected token in create response',
-      )
-    })
-
-    it('throws typed error on 400', async () => {
-      fetchSpy.mockResolvedValueOnce(make400Response('username taken'))
-
-      const { createUser } = await import('./api')
-      await expect(createUser({ username: 'dup', role: 'user', password: 'x' })).rejects.toThrow('400')
-    })
-  })
-
-  // ── deleteUser ────────────────────────────────────────────────────────────
-
-  describe('deleteUser', () => {
-    it('DELETE /api/v1/users/{username} — sends CSRF', async () => {
-      // UserDeleteResponse requires {username, deleted} per contracts/openapi.yaml
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ username: 'alice', deleted: true }))
-
-      const { deleteUser } = await import('./api')
-      await deleteUser('alice')
-
-      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/users/alice')
-      expect((init.method ?? '').toUpperCase()).toBe('DELETE')
-      const headers = new Headers(init.headers as HeadersInit)
-      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
-    })
-
-    it('throws typed error on 400', async () => {
-      fetchSpy.mockResolvedValueOnce(make400Response('cannot delete last admin'))
-
-      const { deleteUser } = await import('./api')
-      await expect(deleteUser('alice')).rejects.toThrow('400')
-    })
-  })
-
   // ── 204 No Content handling (C1) ──────────────────────────────────────────
   //
   // Successful DELETE/PUT handlers that return 204 have no body. The request()
@@ -662,56 +585,6 @@ describe('Security API helpers', () => {
 
       const { deleteTask } = await import('./api')
       await expect(deleteTask('task-1')).rejects.toThrow('400')
-    })
-  })
-
-  // ── resetUserPassword ─────────────────────────────────────────────────────
-
-  describe('resetUserPassword', () => {
-    it('PUT /api/v1/users/{username}/password — sends CSRF and body', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ username: 'alice', password_reset: true }))
-
-      const { resetUserPassword } = await import('./api')
-      await resetUserPassword('alice', 'newpass')
-
-      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/users/alice/password')
-      expect((init.method ?? '').toUpperCase()).toBe('PUT')
-      const headers = new Headers(init.headers as HeadersInit)
-      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
-      expect(JSON.parse(init.body as string)).toEqual({ password: 'newpass' })
-    })
-
-    it('throws typed error on 400', async () => {
-      fetchSpy.mockResolvedValueOnce(make400Response('weak password'))
-
-      const { resetUserPassword } = await import('./api')
-      await expect(resetUserPassword('alice', 'x')).rejects.toThrow('400')
-    })
-  })
-
-  // ── updateUserRole ────────────────────────────────────────────────────────
-
-  describe('updateUserRole', () => {
-    it('PATCH /api/v1/users/{username}/role — sends CSRF and role body', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ username: 'alice', role: 'admin' }))
-
-      const { updateUserRole } = await import('./api')
-      await updateUserRole('alice', 'admin')
-
-      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(url).toContain('/api/v1/users/alice/role')
-      expect((init.method ?? '').toUpperCase()).toBe('PATCH')
-      const headers = new Headers(init.headers as HeadersInit)
-      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
-      expect(JSON.parse(init.body as string)).toEqual({ role: 'admin' })
-    })
-
-    it('throws typed error on 400', async () => {
-      fetchSpy.mockResolvedValueOnce(make400Response('invalid role'))
-
-      const { updateUserRole } = await import('./api')
-      await expect(updateUserRole('alice', 'user')).rejects.toThrow('400')
     })
   })
 

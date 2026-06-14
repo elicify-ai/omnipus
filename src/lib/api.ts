@@ -56,10 +56,6 @@ import {
   SandboxStatus as SandboxStatusSchema,
   SessionScopeResponse as SessionScopeResponseSchema,
   SkillTrustResponse as SkillTrustResponseSchema,
-  UserCreateResponse as UserCreateResponseSchema,
-  UserDeleteResponse as UserDeleteResponseSchema,
-  UserResetPasswordResponse as UserResetPasswordResponseSchema,
-  UserRoleChangeResponse as UserRoleChangeResponseSchema,
   // New generated Zod schemas (contract-first #8):
   AppState as AppStateSchema,
   ValidateTokenResponse as ValidateTokenResponseSchema,
@@ -95,7 +91,6 @@ import {
   OperationResult as OperationResultSchema,
   UploadFilesResponse as UploadFilesResponseSchema,
   BackupCreateResponse as BackupCreateResponseSchema,
-  User as UserSchema,
   RotateTokenResponse as RotateTokenResponseSchema,
   // fix-AC: promoted from hand-written inline schemas:
   UserContextResponse as UserContextResponseSchema,
@@ -203,14 +198,6 @@ import type {
   AgentToolEntry,
   SessionStats,
   Attachment,
-  User,
-  UserCreateRequest,
-  UserCreateResponse,
-  UserDeleteResponse,
-  UserRoleChangeRequest,
-  UserRoleChangeResponse,
-  UserResetPasswordRequest,
-  UserResetPasswordResponse,
   SessionScopeRequest,
   SessionScopeResponse,
   ToolRegistryEntry,
@@ -322,14 +309,6 @@ export type {
   AgentToolEntry,
   SessionStats,
   Attachment,
-  User,
-  UserCreateRequest,
-  UserCreateResponse,
-  UserDeleteResponse,
-  UserRoleChangeRequest,
-  UserRoleChangeResponse,
-  UserResetPasswordRequest,
-  UserResetPasswordResponse,
   SessionScopeRequest,
   SessionScopeResponse,
   ToolRegistryEntry,
@@ -2155,45 +2134,6 @@ export function updatePerformanceSettings(
     headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify(body),
   }, PerformanceSettingsSchema)
-}
-
-// Users — list, create, delete, reset password, change role.
-// UserEntry — type alias for the generated User schema (contract-first #8).
-// See contracts/components/schemas/User.yaml.
-export type UserEntry = User
-
-// UserEntry is the SPA-internal type; the generated User schema is compatible (passthrough).
-export function fetchUsers(): Promise<UserEntry[]> {
-  return request<UserEntry[]>('/users', undefined, z.array(UserSchema) as ZodType<UserEntry[]>)
-}
-
-export async function createUser(body: UserCreateRequest): Promise<UserCreateResponse> {
-  const response = await request<UserCreateResponse & { token?: string }>('/users', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  }, UserCreateResponseSchema)
-  if ('token' in response) {
-    throw new Error('unexpected token in create response')
-  }
-  return response
-}
-
-export function deleteUser(username: string): Promise<UserDeleteResponse> {
-  return request<UserDeleteResponse>(`/users/${encodeURIComponent(username)}`, { method: 'DELETE' }, UserDeleteResponseSchema)
-}
-
-export function resetUserPassword(username: string, password: string): Promise<UserResetPasswordResponse> {
-  return request<UserResetPasswordResponse>(`/users/${encodeURIComponent(username)}/password`, {
-    method: 'PUT',
-    body: JSON.stringify({ password } satisfies UserResetPasswordRequest),
-  }, UserResetPasswordResponseSchema)
-}
-
-export function updateUserRole(username: string, role: UserRole): Promise<UserRoleChangeResponse> {
-  return request<UserRoleChangeResponse>(`/users/${encodeURIComponent(username)}/role`, {
-    method: 'PATCH',
-    body: JSON.stringify({ role } satisfies UserRoleChangeRequest),
-  }, UserRoleChangeResponseSchema)
 }
 
 // ── Exec Proxy ────────────────────────────────────────────────────────────────

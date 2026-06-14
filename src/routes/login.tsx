@@ -97,7 +97,7 @@ function LoginScreen() {
           Sign in to Omnipus
         </h1>
         <p className="text-sm text-center mb-8" style={{ color: 'var(--color-muted)' }}>
-          Enter your admin credentials
+          Enter your username and password
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
