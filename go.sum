@@ -105,8 +105,8 @@ github.com/gdamore/encoding v1.0.1 h1:YzKZckdBL6jVt2Gc+5p82qhrGiqMdG/eNs6Wy0u3Uh
 github.com/gdamore/encoding v1.0.1/go.mod h1:0Z0cMFinngz9kS1QfMjCP8TY7em3bZYeeklsSDPivEo=
 github.com/gdamore/tcell/v2 v2.13.10 h1:Afs3JKt83HnhuUKdZ3MnxUgOqQRWftj5JyDqv1LLynA=
 github.com/gdamore/tcell/v2 v2.13.10/go.mod h1:+Wfe208WDdB7INEtCsNrAN6O2m+wsTPk1RAovjaILlo=
-github.com/github/copilot-sdk/go v1.0.0 h1:spzqYzKv8l3bpeK43jPBtDcI//TSR8rI2ZcUAO/zFN0=
-github.com/github/copilot-sdk/go v1.0.0/go.mod h1:I6YKZQzUXhHZd8a2TkSOcBa8FMVL34QiEg2yxiaXghw=
+github.com/github/copilot-sdk/go v1.0.1 h1:Do6tV22Ip3oSVCga1RaJtV/XI97IbV2vjfMLCeNN9KU=
+github.com/github/copilot-sdk/go v1.0.1/go.mod h1:I6YKZQzUXhHZd8a2TkSOcBa8FMVL34QiEg2yxiaXghw=
 github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433 h1:vymEbVwYFP/L05h5TKQxvkXoKxNvTpjxYKdF1Nlwuao=
 github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433/go.mod h1:tphK2c80bpPhMOI4v6bIc2xWywPfbqi1Z06+RcrMkDg=
 github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
