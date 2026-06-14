@@ -40,8 +40,8 @@ import (
 
 // newWave5bTestAPI creates a restAPI using the existing restMockProvider declared
 // in rest_test.go (same package). Both files compile together in the test binary.
-// Agents are seeded (omnipus-system + 5 core agents) to mirror the production
-// startup path in gateway.go after issue #45.
+// Agents are seeded (omnipus-system + 4 base core agents) to mirror the production
+// startup path in gateway.go (Spec-3: Mia·Assistant, Jim·Orchestrator, Ray·Scout, Ava·Builder).
 func newWave5bTestAPI(t *testing.T) *restAPI {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
@@ -339,18 +339,17 @@ func TestOnboardingNeverReshow(t *testing.T) {
 // Test #15 — TestCoreAgentDefaults (partial)
 // --------------------------------------------------------------------------
 
-// TestCoreAgentDefaults verifies agent defaults on fresh install after issue #45.
+// TestCoreAgentDefaults verifies agent defaults on fresh install (Spec-3 roster re-cast).
 //
-// After issue #45 (Core Agent Roster v1), the agent list is seeded via SeedConfig
-// and includes: omnipus-system + 5 core agents (mia, jim, ava, ray, max).
+// The agent list is seeded via SeedConfig and includes:
+// omnipus-system + 4 base core agents (mia, jim, ava, ray). Max was retired.
 // The old roster (general-assistant, researcher, content-creator) is removed.
 //
-// Traces to: wave5b-system-agent-spec.md line 664 (Scenario: Agent defaults on fresh install)
+// Traces to: Spec-3 (v0.1.0 roster re-cast) — 4-base roster seeded.
 // BDD: "Given default config seeded with SeedConfig, When agent list loaded,
 //
-//	Then omnipus-system present with type 'system'; 5 core agents present with type 'core'"
+//	Then omnipus-system present with type 'system'; 4 base core agents present with type 'core'"
 func TestCoreAgentDefaults(t *testing.T) {
-	// Traces to: wave5b-system-agent-spec.md line 664
 	api := newWave5bTestAPI(t)
 
 	w := httptest.NewRecorder()
@@ -381,19 +380,24 @@ func TestCoreAgentDefaults(t *testing.T) {
 	// computeAgentStatus() returns 'draft' for locked agents with no soul and no active turn.
 	// Production fix needed in pkg/gateway/rest.go. Not asserted here to keep this test passing.
 
-	// Issue #45 core agents must all be present with type "core".
-	coreAgents := []string{"mia", "jim", "ava", "ray", "max"}
+	// Spec-3 4-base core agents must all be present with type "core". Max was retired.
+	coreAgents := []string{"mia", "jim", "ava", "ray"}
 	for _, id := range coreAgents {
 		t.Run(id+" is present with type core", func(t *testing.T) {
 			agType, found := agentsByID[id]
 			assert.True(t, found,
-				"core agent %q must be present in agent list after SeedConfig (issue #45)", id)
+				"core agent %q must be present in agent list after SeedConfig (Spec-3)", id)
 			if found {
 				assert.Equal(t, "core", agType,
 					"core agent %q must have type 'core'", id)
 			}
 		})
 	}
+	// Max must NOT be present as a seeded base agent.
+	t.Run("max is not a seeded base agent (Spec-3)", func(t *testing.T) {
+		_, found := agentsByID["max"]
+		assert.False(t, found, "max must not be in the seeded roster after Spec-3 re-cast")
+	})
 
 	// Old roster agents must NOT be present.
 	for _, oldID := range []string{"general-assistant", "researcher", "content-creator"} {
@@ -414,7 +418,7 @@ func TestCoreAgentDefaults(t *testing.T) {
 func TestCoreAgentCannotDelete(t *testing.T) {
 	t.Skip("BLOCKED: Ava's system.agent.delete tool not yet wired — core agent delete protection " +
 		"will be enforced when Ava's CRUD tools are implemented. " +
-		"IDs to protect: mia, jim, ava, ray, max")
+		"IDs to protect (Spec-3 4-base roster): mia, jim, ava, ray")
 }
 
 // --------------------------------------------------------------------------

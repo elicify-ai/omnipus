@@ -9,7 +9,7 @@ import (
 // TestResolveRoute_MiaIsDefaultAfterSeed verifies that after seeding core agents
 // via coreagent.SeedConfig, the route resolver picks Mia as the default agent.
 //
-// BDD: Given a config seeded with all 5 core agents (Mia has Default=true),
+// BDD: Given a config seeded with all 4 base core agents (Mia has Default=true),
 //
 //	When ResolveRoute is called with no bindings,
 //	Then the resolved agent is "mia" (matched via Default=true).
