@@ -45,3 +45,12 @@ properties:
     type: string
     description: Backward-compat alias for prompt.
     example: "Summarize the last 7 days."
+  blocked_by:
+    type: array
+    items:
+      type: string
+    description: >
+      Task IDs that must complete before this task is dispatched.
+      Validated at creation time: each ID must exist and must not create a cycle.
+    example:
+      - "550e8400-e29b-41d4-a716-446655440001"

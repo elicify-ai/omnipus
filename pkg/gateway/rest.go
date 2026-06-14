@@ -2661,6 +2661,7 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	cm.RegisterHTTPHandler("/api/v1/security/session-scope", a.adminWrap(a.HandleSessionScope))
 	cm.RegisterHTTPHandler("/api/v1/security/retention", a.adminWrap(a.HandleRetention))
 	cm.RegisterHTTPHandler("/api/v1/security/retention/sweep", a.adminWrap(a.HandleRetentionSweep))
+	cm.RegisterHTTPHandler("/api/v1/performance", a.adminWrap(a.HandlePerformance))
 	cm.RegisterHTTPHandler("/api/v1/users", a.adminWrap(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -3124,12 +3125,23 @@ func (a *restAPI) createTask(w http.ResponseWriter, r *http.Request) {
 	if req.TriggerType != nil && *req.TriggerType != "" {
 		triggerType = string(*req.TriggerType)
 	}
+	var blockedBy []string
+	if req.BlockedBy != nil && len(*req.BlockedBy) > 0 {
+		blockedBy = *req.BlockedBy
+		// Validate that all referenced task IDs exist (empty string as selfID — not yet created).
+		if err := a.taskStore.ValidateBlockedBy("", blockedBy); err != nil {
+			jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("blocked_by validation failed: %v", err))
+			return
+		}
+	}
+
 	t := &taskstore.TaskEntity{
 		Title:        title,
 		Prompt:       prompt,
 		AgentID:      agentID,
 		Priority:     priority,
 		ParentTaskID: parentTaskID,
+		BlockedBy:    blockedBy,
 		TriggerType:  triggerType,
 		CreatedBy:    "user",
 		Status:       "queued",

@@ -832,6 +832,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/performance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get agent concurrency settings
+         * @description Returns the max-parallel-agents cap and the effective (clamped) value currently in use. Admin-only.
+         */
+        get: operations["getPerformanceSettings"];
+        /**
+         * Update agent concurrency settings (admin only)
+         * @description Updates max_parallel_agents. The effective value is clamped to [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16. Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT). Admin-only.
+         */
+        put: operations["updatePerformanceSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/channels": {
         parameters: {
             query?: never;
@@ -3696,6 +3720,33 @@ export interface components {
              */
             version?: string;
         };
+        /**
+         * PerformanceSettings
+         * @description Agent concurrency and fan-out settings returned by GET /api/v1/performance. Controls the max-parallel gate for task/subagent dispatch.
+         */
+        PerformanceSettings: {
+            /**
+             * @description Maximum number of tasks/subagents that may run concurrently on the dispatch path. The runtime clamps the configured value to [2, min(NumCPU-2, RAM_GB/1.5)] with a hard ceiling of 16. Overridden by OMNIPUS_MAX_PARALLEL_AGENTS env var.
+             * @example 4
+             */
+            max_parallel_agents?: number;
+            /**
+             * @description The clamped value actually in use (after applying CPU/RAM heuristics and env-var override). Always present in responses; absent in requests.
+             * @example 4
+             */
+            effective_max_parallel_agents?: number;
+        };
+        /**
+         * PerformanceSettingsUpdate
+         * @description Request body for PUT /api/v1/performance. Partial update — only supplied fields are modified.
+         */
+        PerformanceSettingsUpdate: {
+            /**
+             * @description New value for the maximum concurrent task/subagent dispatch cap. The runtime clamps the stored value to [2, min(NumCPU-2, RAM_GB/1.5)] with a hard ceiling of 16. Set to 0 to restore the auto-detected default.
+             * @example 6
+             */
+            max_parallel_agents?: number;
+        };
         /** @description A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue. */
         Provider: {
             /**
@@ -4000,6 +4051,13 @@ export interface components {
              * @example 2026-05-16T10:05:30Z
              */
             completed_at?: string;
+            /**
+             * @description List of task IDs that must reach "completed" status before this task is eligible for dispatch. The Orchestrator coordinator (task_executor.onTaskComplete) advances tasks whose blocked_by set is fully satisfied. Absent when empty.
+             * @example [
+             *       "550e8400-e29b-41d4-a716-446655440001"
+             *     ]
+             */
+            blocked_by?: string[];
         };
         /**
          * McpServer
@@ -4907,6 +4965,13 @@ export interface components {
              * @example Summarize the last 7 days.
              */
             description?: string;
+            /**
+             * @description Task IDs that must complete before this task is dispatched. Validated at creation time: each ID must exist and must not create a cycle.
+             * @example [
+             *       "550e8400-e29b-41d4-a716-446655440001"
+             *     ]
+             */
+            blocked_by?: string[];
         };
         /**
          * TaskUpdateRequest
@@ -7256,6 +7321,77 @@ export interface operations {
             };
         };
     };
+    getPerformanceSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current performance settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PerformanceSettings"];
+                };
+            };
+            /** @description Admin role required. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updatePerformanceSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PerformanceSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated performance settings (including effective value). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PerformanceSettings"];
+                };
+            };
+            /** @description Invalid value. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Admin role required. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     listChannels: {
         parameters: {
             query?: never;
@@ -9308,6 +9444,8 @@ export type PendingRestartEntry = components["schemas"]["PendingRestartEntry"];
 export type AboutResponse = components["schemas"]["AboutResponse"];
 export type HealthResponse = components["schemas"]["HealthResponse"];
 export type GatewayStatus = components["schemas"]["GatewayStatus"];
+export type PerformanceSettings = components["schemas"]["PerformanceSettings"];
+export type PerformanceSettingsUpdate = components["schemas"]["PerformanceSettingsUpdate"];
 export type Provider = components["schemas"]["Provider"];
 export type Skill = components["schemas"]["Skill"];
 export type ActivityEvent = components["schemas"]["ActivityEvent"];

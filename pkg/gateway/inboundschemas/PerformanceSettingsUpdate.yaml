@@ -1,0 +1,16 @@
+title: PerformanceSettingsUpdate
+description: >
+  Request body for PUT /api/v1/performance. Partial update — only supplied
+  fields are modified.
+type: object
+additionalProperties: false
+properties:
+  max_parallel_agents:
+    type: integer
+    minimum: 2
+    maximum: 16
+    description: >
+      New value for the maximum concurrent task/subagent dispatch cap.
+      The runtime clamps the stored value to [2, min(NumCPU-2, RAM_GB/1.5)]
+      with a hard ceiling of 16. Set to 0 to restore the auto-detected default.
+    example: 6

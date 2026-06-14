@@ -4179,6 +4179,21 @@ type PendingRestartEntry struct {
 	PersistedValue interface{} `json:"persisted_value"`
 }
 
+// PerformanceSettings Agent concurrency and fan-out settings returned by GET /api/v1/performance. Controls the max-parallel gate for task/subagent dispatch.
+type PerformanceSettings struct {
+	// EffectiveMaxParallelAgents The clamped value actually in use (after applying CPU/RAM heuristics and env-var override). Always present in responses; absent in requests.
+	EffectiveMaxParallelAgents *int `json:"effective_max_parallel_agents,omitempty"`
+
+	// MaxParallelAgents Maximum number of tasks/subagents that may run concurrently on the dispatch path. The runtime clamps the configured value to [2, min(NumCPU-2, RAM_GB/1.5)] with a hard ceiling of 16. Overridden by OMNIPUS_MAX_PARALLEL_AGENTS env var.
+	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`
+}
+
+// PerformanceSettingsUpdate Request body for PUT /api/v1/performance. Partial update — only supplied fields are modified.
+type PerformanceSettingsUpdate struct {
+	// MaxParallelAgents New value for the maximum concurrent task/subagent dispatch cap. The runtime clamps the stored value to [2, min(NumCPU-2, RAM_GB/1.5)] with a hard ceiling of 16. Set to 0 to restore the auto-detected default.
+	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`
+}
+
 // ProbeProviderRequest Body for POST /onboarding/probe-provider. Tests an API key against a provider and returns available models. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete.
 type ProbeProviderRequest struct {
 	// ApiKey API key to test against the provider.
@@ -5354,6 +5369,9 @@ type Task struct {
 	// Artifacts Paths to output files or artifact references produced by the task.
 	Artifacts *[]string `json:"artifacts,omitempty"`
 
+	// BlockedBy List of task IDs that must reach "completed" status before this task is eligible for dispatch. The Orchestrator coordinator (task_executor.onTaskComplete) advances tasks whose blocked_by set is fully satisfied. Absent when empty.
+	BlockedBy *[]string `json:"blocked_by,omitempty"`
+
 	// CompletedAt RFC3339 timestamp when the task completed or failed. Absent while running.
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 
@@ -5416,6 +5434,9 @@ type TaskAcceptedResponseStatus string
 type TaskCreateRequest struct {
 	// AgentId Agent to assign the task to.
 	AgentId *string `json:"agent_id,omitempty"`
+
+	// BlockedBy Task IDs that must complete before this task is dispatched. Validated at creation time: each ID must exist and must not create a cycle.
+	BlockedBy *[]string `json:"blocked_by,omitempty"`
 
 	// Description Backward-compat alias for prompt.
 	Description *string `json:"description,omitempty"`
@@ -5870,6 +5891,9 @@ type CompleteOnboardingJSONRequestBody = OnboardingCompleteRequest
 
 // ProbeProviderJSONRequestBody defines body for ProbeProvider for application/json ContentType.
 type ProbeProviderJSONRequestBody = ProbeProviderRequest
+
+// UpdatePerformanceSettingsJSONRequestBody defines body for UpdatePerformanceSettings for application/json ContentType.
+type UpdatePerformanceSettingsJSONRequestBody = PerformanceSettingsUpdate
 
 // UpdateProviderJSONRequestBody defines body for UpdateProvider for application/json ContentType.
 type UpdateProviderJSONRequestBody = ProviderUpdateRequest

@@ -93,3 +93,13 @@ properties:
     format: date-time
     description: RFC3339 timestamp when the task completed or failed. Absent while running.
     example: "2026-05-16T10:05:30Z"
+  blocked_by:
+    type: array
+    items:
+      type: string
+    description: >
+      List of task IDs that must reach "completed" status before this task is
+      eligible for dispatch. The Orchestrator coordinator (task_executor.onTaskComplete)
+      advances tasks whose blocked_by set is fully satisfied. Absent when empty.
+    example:
+      - "550e8400-e29b-41d4-a716-446655440001"

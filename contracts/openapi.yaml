@@ -174,6 +174,10 @@ components:
       $ref: ./components/schemas/HealthResponse.yaml
     GatewayStatus:
       $ref: ./components/schemas/GatewayStatus.yaml
+    PerformanceSettings:
+      $ref: ./components/schemas/PerformanceSettings.yaml
+    PerformanceSettingsUpdate:
+      $ref: ./components/schemas/PerformanceSettingsUpdate.yaml
     Provider:
       $ref: ./components/schemas/Provider.yaml
     Skill:
@@ -2138,6 +2142,63 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
           description: Sweep already in progress.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /performance:
+    get:
+      operationId: getPerformanceSettings
+      summary: Get agent concurrency settings
+      description: >
+        Returns the max-parallel-agents cap and the effective (clamped) value
+        currently in use. Admin-only.
+      tags:
+        - Settings
+      responses:
+        '200':
+          description: Current performance settings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PerformanceSettings'
+        '403':
+          description: Admin role required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      operationId: updatePerformanceSettings
+      summary: Update agent concurrency settings (admin only)
+      description: >
+        Updates max_parallel_agents. The effective value is clamped to
+        [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16. Requires a
+        gateway restart to take effect (requires_restart: false — the semaphore
+        is resized in-memory on PUT). Admin-only.
+      tags:
+        - Settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PerformanceSettingsUpdate'
+      responses:
+        '200':
+          description: Updated performance settings (including effective value).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PerformanceSettings'
+        '400':
+          description: Invalid value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Admin role required.
           content:
             application/json:
               schema:

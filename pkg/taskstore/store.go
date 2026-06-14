@@ -23,12 +23,18 @@ var ErrNotFound = errors.New("task not found")
 
 // TaskEntity is the persistent shape for one task stored at ~/.omnipus/tasks/<id>.json.
 type TaskEntity struct {
-	ID            string     `json:"id"`
-	Title         string     `json:"title"`
-	Prompt        string     `json:"prompt"`
-	AgentID       string     `json:"agent_id"`
-	CreatedBy     string     `json:"created_by"`
-	ParentTaskID  string     `json:"parent_task_id,omitempty"`
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	Prompt       string `json:"prompt"`
+	AgentID      string `json:"agent_id"`
+	CreatedBy    string `json:"created_by"`
+	ParentTaskID string `json:"parent_task_id,omitempty"`
+	// BlockedBy is a DAG-dependency list: this task will not be dispatched
+	// until every task in BlockedBy has reached "completed" status.
+	// The Orchestrator coordinator (task_executor.onTaskComplete) scans tasks
+	// with non-empty BlockedBy after each terminal state transition and dispatches
+	// those whose dependency set is now fully satisfied.
+	BlockedBy     []string   `json:"blocked_by,omitempty"`
 	Priority      int        `json:"priority"`
 	Status        string     `json:"status"`
 	Result        string     `json:"result,omitempty"`
@@ -57,6 +63,7 @@ type legacyRaw struct {
 	Prompt        string     `json:"prompt,omitempty"`
 	CreatedBy     string     `json:"created_by,omitempty"`
 	ParentTaskID  string     `json:"parent_task_id,omitempty"`
+	BlockedBy     []string   `json:"blocked_by,omitempty"`
 	Priority      int        `json:"priority,omitempty"`
 	Result        string     `json:"result,omitempty"`
 	Artifacts     []string   `json:"artifacts,omitempty"`
@@ -74,6 +81,10 @@ type TaskFilter struct {
 	AgentID      string
 	CreatedBy    string
 	ParentTaskID string
+	// BlockedByID, when non-empty, returns only tasks whose BlockedBy list
+	// contains the given task ID. Used by the Orchestrator coordinator to find
+	// tasks that are waiting on a just-completed task.
+	BlockedByID string
 }
 
 // TaskPatch is a partial update applied by Update.
@@ -81,6 +92,7 @@ type TaskPatch struct {
 	Status        *string
 	Result        *string
 	Artifacts     *[]string
+	BlockedBy     *[]string
 	SessionID     *string
 	StartedAt     *time.Time
 	CompletedAt   *time.Time
@@ -142,6 +154,7 @@ func (s *TaskStore) load(id string) (*TaskEntity, error) {
 			AgentID:       raw.AgentID,
 			CreatedBy:     raw.CreatedBy,
 			ParentTaskID:  raw.ParentTaskID,
+			BlockedBy:     raw.BlockedBy,
 			Priority:      raw.Priority,
 			Status:        raw.Status,
 			Result:        raw.Result,
@@ -246,6 +259,9 @@ func (s *TaskStore) List(filter TaskFilter) ([]TaskEntity, error) {
 			continue
 		}
 		if filter.ParentTaskID != "" && t.ParentTaskID != filter.ParentTaskID {
+			continue
+		}
+		if filter.BlockedByID != "" && !containsString(t.BlockedBy, filter.BlockedByID) {
 			continue
 		}
 		result = append(result, *t)
@@ -380,11 +396,45 @@ func (s *TaskStore) Update(id string, patch TaskPatch) (*TaskEntity, error) {
 	if patch.SourceChatID != nil {
 		t.SourceChatID = *patch.SourceChatID
 	}
+	if patch.BlockedBy != nil {
+		t.BlockedBy = *patch.BlockedBy
+	}
 
 	if err := s.write(t); err != nil {
 		return nil, err
 	}
 	return t, nil
+}
+
+// containsString reports whether slice contains s.
+func containsString(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateBlockedBy checks that all IDs in blockedBy exist and none are equal
+// to selfID (trivial self-cycle). It does not detect multi-hop cycles; the
+// depth limit in the orchestrator dispatch path prevents infinite loops.
+func (s *TaskStore) ValidateBlockedBy(selfID string, blockedBy []string) error {
+	for _, dep := range blockedBy {
+		if dep == selfID {
+			return fmt.Errorf("task cannot block itself: %q", dep)
+		}
+		if err := validateID(dep); err != nil {
+			return fmt.Errorf("blocked_by contains invalid ID %q: %w", dep, err)
+		}
+		if _, err := s.Get(dep); err != nil {
+			if errors.Is(err, ErrNotFound) {
+				return fmt.Errorf("blocked_by task %q not found", dep)
+			}
+			return fmt.Errorf("blocked_by: could not verify task %q: %w", dep, err)
+		}
+	}
+	return nil
 }
 
 // Delete removes the task file for id.

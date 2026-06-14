@@ -1116,6 +1116,15 @@ export const RetentionSweepResult = z
     skipped_reason: z.string().optional(),
   })
   .passthrough();
+export const PerformanceSettings = z
+  .object({
+    max_parallel_agents: z.number().int().gte(2).lte(16),
+    effective_max_parallel_agents: z.number().int().gte(2).lte(16),
+  })
+  .partial();
+export const PerformanceSettingsUpdate = z
+  .object({ max_parallel_agents: z.number().int().gte(2).lte(16) })
+  .partial();
 export const ChannelId = z.enum([
   "webchat",
   "telegram",
@@ -1317,6 +1326,7 @@ export const Task = z
     created_at: z.string().datetime({ offset: true }).optional(),
     started_at: z.string().datetime({ offset: true }).optional(),
     completed_at: z.string().datetime({ offset: true }).optional(),
+    blocked_by: z.array(z.string()).optional(),
   })
   .passthrough();
 export const TaskCreateRequest = z.object({
@@ -1328,6 +1338,7 @@ export const TaskCreateRequest = z.object({
   trigger_type: z.enum(["manual", "time", "event"]).optional(),
   name: z.string().optional(),
   description: z.string().optional(),
+  blocked_by: z.array(z.string()).optional(),
 });
 export const TaskUpdateRequest = z
   .object({
@@ -2806,6 +2817,52 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 409,
         description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/performance",
+    alias: "getPerformanceSettings",
+    description: `Returns the max-parallel-agents cap and the effective (clamped) value currently in use. Admin-only.
+`,
+    requestFormat: "json",
+    response: PerformanceSettings,
+    errors: [
+      {
+        status: 403,
+        description: `Admin role required.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/performance",
+    alias: "updatePerformanceSettings",
+    description: `Updates max_parallel_agents. The effective value is clamped to [2, min(NumCPU-2, RAM_GB/1.5)] with a ceiling of 16. Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT). Admin-only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z
+          .object({ max_parallel_agents: z.number().int().gte(2).lte(16) })
+          .partial(),
+      },
+    ],
+    response: PerformanceSettings,
+    errors: [
+      {
+        status: 400,
+        description: `Invalid value.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Admin role required.`,
         schema: ErrorResponse,
       },
     ],
