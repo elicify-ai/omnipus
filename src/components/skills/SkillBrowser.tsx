@@ -1,15 +1,29 @@
 /**
- * SkillBrowser — Install-from-file modal for SKILL.md packages.
+ * SkillBrowser — Search & install skills from the ClawHub registry.
  *
- * Changes from the original:
- *  - Install flow now shows a capabilities + "unverified" notice confirm step
- *    before actually installing (US-E4 / #340).
- *  - Non-hash errors are surfaced as a toast instead of being silently swallowed.
- *  - Hash-mismatch still shows the dedicated inline dialog (unchanged).
+ * Primary flow (v0.1.0): a debounced search box queries the live ClawHub
+ * marketplace via `searchSkills` (GET /api/v1/skills/search). Each result can
+ * be installed by its slug via `installSkillBySlug` (POST /api/v1/skills/install).
+ * On a successful install the `['skills']` query is invalidated so the
+ * installed-skills list refreshes, and the row is marked "Installed".
+ *
+ * Secondary flow: drag-drop / file picker install of a local SKILL.md package
+ * via `installSkillFromFile`, gated behind a capabilities + "unverified" confirm
+ * step (US-E4 / #340). Hash-mismatch (409 with {expected,got} body) shows a
+ * dedicated dialog; other errors surface as toasts.
  */
 
-import { useRef, useState } from 'react'
-import { CloudSlash, UploadSimple, Warning, ShieldWarning } from '@phosphor-icons/react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  MagnifyingGlass,
+  UploadSimple,
+  Warning,
+  ShieldWarning,
+  CircleNotch,
+  Package,
+  CheckCircle,
+} from '@phosphor-icons/react'
 import {
   Dialog,
   DialogContent,
@@ -19,7 +33,15 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { installSkillFromFile, isApiError } from '@/lib/api'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import {
+  installSkillFromFile,
+  installSkillBySlug,
+  searchSkills,
+  isApiError,
+} from '@/lib/api'
+import type { SkillSearchResult } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
 interface SkillBrowserProps {
@@ -58,14 +80,92 @@ function extractCapabilities(text: string): string[] {
     .filter(Boolean)
 }
 
+/** useDebouncedValue returns `value` after it has been stable for `delayMs`. */
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delayMs)
+    return () => clearTimeout(id)
+  }, [value, delayMs])
+  return debounced
+}
+
 export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { addToast } = useUiStore()
+  const queryClient = useQueryClient()
 
   const [hashMismatch, setHashMismatch] = useState<HashMismatchError | null>(null)
   const [isInstalling, setIsInstalling] = useState(false)
   const [pendingInstall, setPendingInstall] = useState<PendingInstall | null>(null)
 
+  // ── Search state ──────────────────────────────────────────────────────────
+  const [query, setQuery] = useState('')
+  const debouncedQuery = useDebouncedValue(query.trim(), 300)
+  // Track which slugs have been installed in this session so the row flips to
+  // "Installed" even before the search list is re-fetched.
+  const [installedSlugs, setInstalledSlugs] = useState<Set<string>>(new Set())
+
+  // Reset transient state when the dialog closes so a re-open starts clean.
+  useEffect(() => {
+    if (!open) {
+      setQuery('')
+      setInstalledSlugs(new Set())
+    }
+  }, [open])
+
+  const {
+    data: results = [],
+    isFetching: isSearching,
+    isError: isSearchError,
+    error: searchError,
+  } = useQuery<SkillSearchResult[]>({
+    queryKey: ['skill-search', debouncedQuery],
+    queryFn: () => searchSkills(debouncedQuery),
+    // Only hit the registry once there's a non-empty query — an empty `q`
+    // would 400 server-side, so we gate on it client-side.
+    enabled: open && debouncedQuery.length > 0,
+    retry: false,
+    staleTime: 30_000,
+  })
+
+  const searchErrorMessage = useMemo(() => {
+    if (!isSearchError) return null
+    if (isApiError(searchError) && searchError.status === 502) {
+      return 'Skill registry is unavailable, try again.'
+    }
+    if (isApiError(searchError)) return searchError.userMessage
+    if (searchError instanceof Error) return searchError.message
+    return 'Search failed. Try again.'
+  }, [isSearchError, searchError])
+
+  const { mutate: doInstallBySlug, variables: installingSlug, isPending: isSlugInstalling } =
+    useMutation({
+      mutationFn: ({ slug, version }: { slug: string; version?: string }) =>
+        installSkillBySlug(slug, version),
+      onSuccess: (_skill, { slug }) => {
+        setInstalledSlugs((prev) => new Set(prev).add(slug))
+        queryClient.invalidateQueries({ queryKey: ['skills'] })
+        addToast({ message: `Skill "${slug}" installed successfully.`, variant: 'success' })
+      },
+      onError: (err: unknown, { slug }) => {
+        let msg: string
+        if (isApiError(err) && err.status === 409) {
+          msg = `Skill "${slug}" is already installed.`
+        } else if (isApiError(err) && err.status === 502) {
+          msg = 'Skill registry is unavailable, try again.'
+        } else if (isApiError(err)) {
+          msg = err.userMessage
+        } else if (err instanceof Error) {
+          msg = err.message
+        } else {
+          msg = String(err)
+        }
+        addToast({ message: `Failed to install "${slug}": ${msg}`, variant: 'error' })
+      },
+    })
+
+  // ── File install ──────────────────────────────────────────────────────────
   async function handleFileSelected(file: File) {
     // Read the file content first, then show the confirm step
     let text: string
@@ -88,6 +188,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
     setIsInstalling(true)
     try {
       await installSkillFromFile(text, file.name)
+      queryClient.invalidateQueries({ queryKey: ['skills'] })
       addToast({ message: `Skill "${file.name}" installed successfully.`, variant: 'success' })
     } catch (err: unknown) {
       // Hash-mismatch: the backend returns a 409 whose body carries
@@ -134,27 +235,143 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Browse Skills</DialogTitle>
-            <DialogDescription>Install skills from the ClawHub registry</DialogDescription>
+            <DialogDescription>
+              Search and install skills from the ClawHub registry
+            </DialogDescription>
           </DialogHeader>
 
-          <div className="flex flex-col items-center justify-center py-10 gap-3 text-center">
-            <CloudSlash size={40} weight="thin" className="text-[var(--color-border)]" />
-            <p className="text-sm text-[var(--color-muted)]">ClawHub registry not yet available</p>
-            <p className="text-xs text-[var(--color-muted)]">
-              Install skills manually by placing a{' '}
-              <span className="font-mono">SKILL.md</span> file in your skills directory.
-            </p>
+          {/* Search box */}
+          <div className="relative">
+            <MagnifyingGlass
+              size={15}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-muted)] pointer-events-none"
+            />
+            <Input
+              type="search"
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search skills (e.g. web search, summarize)…"
+              className="pl-9"
+              aria-label="Search skills"
+              data-testid="skill-search-input"
+            />
+          </div>
 
-            {/* Install from file */}
+          {/* Results area */}
+          <div
+            className="min-h-[180px] max-h-[360px] overflow-y-auto -mx-1 px-1"
+            data-testid="skill-search-results"
+          >
+            {debouncedQuery.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 gap-2 text-center">
+                <MagnifyingGlass size={32} weight="thin" className="text-[var(--color-border)]" />
+                <p className="text-sm text-[var(--color-muted)]">
+                  Type to search the ClawHub registry.
+                </p>
+              </div>
+            ) : isSearchError ? (
+              <div
+                className="flex flex-col items-center justify-center py-12 gap-2 text-center"
+                data-testid="skill-search-error"
+              >
+                <Warning size={28} weight="fill" className="text-[var(--color-error)]" />
+                <p className="text-sm text-[var(--color-error)]">{searchErrorMessage}</p>
+              </div>
+            ) : isSearching ? (
+              <div
+                className="flex flex-col items-center justify-center py-12 gap-2 text-center"
+                data-testid="skill-search-loading"
+              >
+                <CircleNotch size={26} className="animate-spin text-[var(--color-accent)]" />
+                <p className="text-sm text-[var(--color-muted)]">Searching…</p>
+              </div>
+            ) : results.length === 0 ? (
+              <div
+                className="flex flex-col items-center justify-center py-12 gap-2 text-center"
+                data-testid="skill-search-empty"
+              >
+                <Package size={28} weight="thin" className="text-[var(--color-border)]" />
+                <p className="text-sm text-[var(--color-muted)]">
+                  No skills found for “{debouncedQuery}”.
+                </p>
+              </div>
+            ) : (
+              <ul className="flex flex-col gap-2 py-1">
+                {results.map((r) => {
+                  const installed = installedSlugs.has(r.slug)
+                  const rowInstalling = isSlugInstalling && installingSlug?.slug === r.slug
+                  return (
+                    <li
+                      key={r.slug}
+                      data-testid={`skill-result-${r.slug}`}
+                      className="flex items-start justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
+                    >
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium text-sm text-[var(--color-secondary)] truncate">
+                            {r.display_name || r.slug}
+                          </p>
+                          {r.version && (
+                            <Badge variant="muted" className="shrink-0 font-mono">
+                              v{r.version}
+                            </Badge>
+                          )}
+                        </div>
+                        {r.summary && (
+                          <p className="text-xs text-[var(--color-muted)] line-clamp-2">
+                            {r.summary}
+                          </p>
+                        )}
+                        {r.owner_handle && (
+                          <p className="text-[11px] text-[var(--color-muted)]/70">
+                            by {r.owner_handle}
+                          </p>
+                        )}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant={installed ? 'outline' : 'default'}
+                        disabled={installed || rowInstalling}
+                        onClick={() =>
+                          doInstallBySlug({ slug: r.slug, version: r.version })
+                        }
+                        className="shrink-0 gap-1.5"
+                        data-testid={`skill-install-${r.slug}`}
+                      >
+                        {installed ? (
+                          <>
+                            <CheckCircle size={14} weight="fill" /> Installed
+                          </>
+                        ) : rowInstalling ? (
+                          <>
+                            <CircleNotch size={14} className="animate-spin" /> Installing…
+                          </>
+                        ) : (
+                          'Install'
+                        )}
+                      </Button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
+
+          {/* Secondary: install from a local SKILL.md file */}
+          <DialogFooter className="sm:justify-between items-center border-t border-[var(--color-border)] pt-3">
+            <p className="text-xs text-[var(--color-muted)]">
+              Or install a local <span className="font-mono">SKILL.md</span> package.
+            </p>
             <Button
               size="sm"
               variant="outline"
               disabled={isInstalling}
               onClick={() => fileInputRef.current?.click()}
-              className="mt-2 gap-2"
+              className="gap-2"
             >
               <UploadSimple size={14} />
-              {isInstalling ? 'Installing...' : 'Install from file'}
+              {isInstalling ? 'Installing…' : 'Install from file'}
             </Button>
             <input
               ref={fileInputRef}
@@ -166,7 +383,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
                 if (file) void handleFileSelected(file)
               }}
             />
-          </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

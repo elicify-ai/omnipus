@@ -72,6 +72,7 @@ import {
   ChannelEntry as ChannelEntrySchema,
   ChannelEnabledResponse as ChannelEnabledResponseSchema,
   Skill as SkillSchema,
+  SkillSearchResult as SkillSearchResultSchema,
   McpServer as McpServerSchema,
   ActivityEvent as ActivityEventSchema,
   // Wire-shape schemas used for raw-to-SPA transform validation:
@@ -223,6 +224,8 @@ import type {
   Provider,
   GatewayStatus,
   Skill,
+  SkillSearchResult,
+  SkillInstallRequest,
   ActivityEvent,
   UploadedFile,
   AgentToolsCfg,
@@ -333,6 +336,8 @@ export type {
   Provider,
   GatewayStatus,
   Skill,
+  SkillSearchResult,
+  SkillInstallRequest,
   ActivityEvent,
   UploadedFile,
   AgentToolsCfg,
@@ -1022,6 +1027,41 @@ export async function installSkillFromFile(content: string, filename: string): P
     method: 'POST',
     body: JSON.stringify({ content, filename }),
   })
+}
+
+/**
+ * searchSkills queries the ClawHub marketplace registry via
+ * GET /api/v1/skills/search?q=<query>&limit=<n>. Returns an array of
+ * SkillSearchResult (marketplace hits, NOT installed skills). The backend
+ * returns 400 for an empty/blank query and 502 when the registry is
+ * unreachable — both surface as a typed ApiError to the caller.
+ */
+export async function searchSkills(q: string, limit = 20): Promise<SkillSearchResult[]> {
+  const params = new URLSearchParams({ q, limit: String(limit) })
+  return request<SkillSearchResult[]>(
+    `/skills/search?${params.toString()}`,
+    undefined,
+    z.array(SkillSearchResultSchema) as ZodType<SkillSearchResult[]>,
+  )
+}
+
+/**
+ * installSkillBySlug installs a marketplace skill by its slug via
+ * POST /api/v1/skills/install with a SkillInstallRequest body
+ * ({ slug, version? }). Returns the freshly installed Skill on success.
+ * The backend returns 409 when the skill is already installed and 502 when
+ * the registry is unreachable.
+ */
+export async function installSkillBySlug(slug: string, version?: string): Promise<Skill> {
+  const body: SkillInstallRequest = version ? { slug, version } : { slug }
+  return request<Skill>(
+    '/skills/install',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+    SkillSchema as ZodType<Skill>,
+  )
 }
 
 export interface SessionDetail { // not-wire-format: SPA-internal detail type. Uses the SPA-internal Session (stats-flattened) and SPA-internal Message (params field), not the wire-format generated SessionDetail. See fetchSessionDetail() which transforms the raw response.

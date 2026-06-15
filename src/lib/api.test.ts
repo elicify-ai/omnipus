@@ -1745,3 +1745,102 @@ describe('validEnum / _configCoercionCount', () => {
     expect(getConfigCoercionCount()).toBeGreaterThanOrEqual(2)
   })
 })
+
+// ── Skill marketplace: searchSkills / installSkillBySlug ─────────────────────
+
+describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    sessionStorage.setItem('omnipus_auth_token', 'test-bearer')
+    stubCookie('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    sessionStorage.clear()
+    restoreCookie()
+    vi.resetModules()
+  })
+
+  describe('searchSkills', () => {
+    it('GET /api/v1/skills/search — URL-encodes q and sends limit', async () => {
+      const payload = [
+        {
+          slug: 'web-search',
+          display_name: 'Web Search',
+          summary: 'Search the web.',
+          version: '1.4.0',
+          score: 0.9,
+          registry_name: 'clawhub',
+          owner_handle: 'acme',
+        },
+      ]
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
+
+      const { searchSkills } = await import('./api')
+      const result = await searchSkills('web search', 5)
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/skills/search')
+      expect(url).toContain('q=web+search')
+      expect(url).toContain('limit=5')
+      expect((init.method ?? 'GET').toUpperCase()).toBe('GET')
+      expect(result).toEqual(payload)
+    })
+
+    it('defaults limit to 20 when omitted', async () => {
+      fetchSpy.mockResolvedValueOnce(makeOkResponse([]))
+      const { searchSkills } = await import('./api')
+      await searchSkills('files')
+      const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('limit=20')
+    })
+
+    it('propagates a 502 as a typed ApiError', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('registry down', { status: 502 }))
+      const { searchSkills } = await import('./api')
+      await expect(searchSkills('web')).rejects.toThrow('502')
+    })
+  })
+
+  describe('installSkillBySlug', () => {
+    const okSkill = {
+      id: 'web-search',
+      name: 'web-search',
+      version: '1.4.0',
+      status: 'active',
+      verified: false,
+    }
+
+    it('POST /api/v1/skills/install — sends {slug} body + CSRF', async () => {
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(okSkill))
+      const { installSkillBySlug } = await import('./api')
+      const skill = await installSkillBySlug('web-search')
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/skills/install')
+      expect((init.method ?? '').toUpperCase()).toBe('POST')
+      const headers = new Headers(init.headers as HeadersInit)
+      expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
+      expect(JSON.parse(init.body as string)).toEqual({ slug: 'web-search' })
+      expect(skill.id).toBe('web-search')
+    })
+
+    it('includes version when provided', async () => {
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(okSkill))
+      const { installSkillBySlug } = await import('./api')
+      await installSkillBySlug('web-search', '1.4.0')
+      const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(JSON.parse(init.body as string)).toEqual({ slug: 'web-search', version: '1.4.0' })
+    })
+
+    it('propagates a 409 (already installed) as a typed ApiError', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('already installed', { status: 409 }))
+      const { installSkillBySlug } = await import('./api')
+      await expect(installSkillBySlug('web-search')).rejects.toThrow('409')
+    })
+  })
+})
