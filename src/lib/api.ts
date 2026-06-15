@@ -1502,8 +1502,25 @@ export function setChannelRouting(id: string, body: ChannelRouting): Promise<Cha
 // McpServerCreate — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/McpServerCreate.yaml.
 
-export function fetchSkills(): Promise<Skill[]> {
-  return request<Skill[]>('/skills', undefined, z.array(SkillSchema) as ZodType<Skill[]>)
+export async function fetchSkills(): Promise<Skill[]> {
+  // Tolerant per-item validation: a single skill whose payload fails the Skill
+  // schema must NOT hide the entire installed-skills list. (A community/ClawHub
+  // skill with an unexpected field value previously made the whole list silently
+  // vanish.) Validate each item, keep the valid ones, drop + warn on the rest.
+  const raw = await request<unknown[]>('/skills')
+  if (!Array.isArray(raw)) return []
+  const out: Skill[] = []
+  let dropped = 0
+  for (const item of raw) {
+    const parsed = SkillSchema.safeParse(item)
+    if (parsed.success) out.push(parsed.data as Skill)
+    else dropped++
+  }
+  if (dropped > 0 && import.meta.env?.DEV) {
+    // eslint-disable-next-line no-console
+    console.warn(`fetchSkills: dropped ${dropped} skill(s) that failed schema validation`)
+  }
+  return out
 }
 
 export function deleteSkill(name: string): Promise<void> {

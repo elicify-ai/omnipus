@@ -21,8 +21,11 @@ properties:
     example: "Web Research"
   version:
     type: string
-    pattern: '^\d+\.\d+\.\d+(?:[-+].*)?$'
-    description: Semantic version string (e.g. "1.2.3"). Must follow semver format.
+    description: >
+      Version string as declared by the skill's SKILL.md or its source registry.
+      Often semver ("1.2.3") but NOT required to be — community/ClawHub skills use
+      arbitrary version strings ("1.0", "v2", a date, etc.). Defaults to "0.0.0"
+      when the skill declares no version. Treated as an opaque display label.
     example: "1.2.3"
   description:
     type: string

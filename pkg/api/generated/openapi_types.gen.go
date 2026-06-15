@@ -6755,7 +6755,7 @@ type Skill struct {
 	// Verified True when the skill has been verified by the Omnipus team. Unverified skills require explicit trust grant before use.
 	Verified bool `json:"verified"`
 
-	// Version Semantic version string (e.g. "1.2.3"). Must follow semver format.
+	// Version Version string as declared by the skill's SKILL.md or its source registry. Often semver ("1.2.3") but NOT required to be — community/ClawHub skills use arbitrary version strings ("1.0", "v2", a date, etc.). Defaults to "0.0.0" when the skill declares no version. Treated as an opaque display label.
 	Version string `json:"version"`
 }
 

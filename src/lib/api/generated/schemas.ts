@@ -1513,7 +1513,7 @@ export const ProviderUpdateRequest = z
 export const Skill = z.object({
   id: z.string(),
   name: z.string(),
-  version: z.string().regex(/^\d+\.\d+\.\d+(?:[-+].*)?$/),
+  version: z.string(),
   description: z.string().optional(),
   author: z.string().optional(),
   source: z.enum(["builtin", "global", "workspace"]).optional(),
