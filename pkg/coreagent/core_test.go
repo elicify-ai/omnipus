@@ -155,6 +155,15 @@ func TestCoreAgentMetadataDifferentiation(t *testing.T) {
 func TestCoreAgentPromptsHardcoded(t *testing.T) {
 	// Traces to: wave5b-system-agent-spec.md line 152 (US-8 AC2)
 	for _, agent := range coreagent.All() {
+		// The sub-agent worker tier has an INTENTIONAL empty compiled prompt:
+		// the locked concept (`.preview-doc/agents.html`) says a worker's soul
+		// is OPTIONAL (may be left empty), and init() in core.go exempts
+		// workers from the mandatory-compiled-prompt invariant. The new
+		// TestWorkerSoulIsOptional_BootWithEmptySoul test asserts the
+		// empty-prompt design. Mirror the exemption here.
+		if coreagent.IsWorkerID(agent.ID) {
+			continue
+		}
 		t.Run(string(agent.ID)+" has non-empty compiled prompt", func(t *testing.T) {
 			prompt := coreagent.GetPrompt(string(agent.ID))
 			assert.NotEmpty(t, prompt,
