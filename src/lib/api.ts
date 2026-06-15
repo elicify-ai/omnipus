@@ -73,6 +73,7 @@ import {
   ChannelEnabledResponse as ChannelEnabledResponseSchema,
   Skill as SkillSchema,
   SkillSearchResult as SkillSearchResultSchema,
+  SkillMarketplaceStatus as SkillMarketplaceStatusSchema,
   McpServer as McpServerSchema,
   ActivityEvent as ActivityEventSchema,
   // Wire-shape schemas used for raw-to-SPA transform validation:
@@ -225,6 +226,7 @@ import type {
   GatewayStatus,
   Skill,
   SkillSearchResult,
+  SkillMarketplaceStatus,
   SkillInstallRequest,
   ActivityEvent,
   UploadedFile,
@@ -337,6 +339,7 @@ export type {
   GatewayStatus,
   Skill,
   SkillSearchResult,
+  SkillMarketplaceStatus,
   SkillInstallRequest,
   ActivityEvent,
   UploadedFile,
@@ -1061,6 +1064,20 @@ export async function installSkillBySlug(slug: string, version?: string): Promis
       body: JSON.stringify(body),
     },
     SkillSchema as ZodType<Skill>,
+  )
+}
+
+/**
+ * fetchSkillMarketplaceStatus reports whether a skill marketplace is enabled
+ * via GET /api/v1/skills/marketplace. When `enabled` is false the SPA hides
+ * the search/browse UI and offers only file-based install — the backend
+ * returns 409 for /skills/search and /skills/install in that state.
+ */
+export async function fetchSkillMarketplaceStatus(): Promise<SkillMarketplaceStatus> {
+  return request<SkillMarketplaceStatus>(
+    '/skills/marketplace',
+    undefined,
+    SkillMarketplaceStatusSchema as ZodType<SkillMarketplaceStatus>,
   )
 }
 

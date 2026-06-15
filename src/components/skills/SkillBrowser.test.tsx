@@ -35,6 +35,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     installSkillFromFile: vi.fn(),
     installSkillBySlug: vi.fn(),
     searchSkills: vi.fn(),
+    fetchSkillMarketplaceStatus: vi.fn(),
   }
 })
 
@@ -42,10 +43,21 @@ import {
   installSkillFromFile,
   installSkillBySlug,
   searchSkills,
+  fetchSkillMarketplaceStatus,
   ApiError,
 } from '@/lib/api'
-import type { SkillSearchResult } from '@/lib/api'
+import type { SkillSearchResult, SkillMarketplaceStatus } from '@/lib/api'
 import { SkillBrowser } from './SkillBrowser'
+
+const MARKETPLACE_ENABLED: SkillMarketplaceStatus = {
+  enabled: true,
+  registries: [{ name: 'clawhub', enabled: true }],
+}
+
+const MARKETPLACE_DISABLED: SkillMarketplaceStatus = {
+  enabled: false,
+  registries: [{ name: 'clawhub', enabled: false }],
+}
 
 const SKILL_MD_WITH_CAPS = `---
 name: Test Skill
@@ -123,20 +135,25 @@ beforeEach(() => {
     verified: false,
   } as never)
   vi.mocked(searchSkills).mockResolvedValue(RESULTS)
+  // Default: a marketplace is enabled so the existing search tests render the
+  // browse UI. Gating tests override this per-case.
+  vi.mocked(fetchSkillMarketplaceStatus).mockResolvedValue(MARKETPLACE_ENABLED)
 })
 
 // ── A. ClawHub search + install-by-slug ──────────────────────────────────────
 
 describe('SkillBrowser — ClawHub search', () => {
-  it('shows the empty-query hint before any search', () => {
+  it('shows the empty-query hint before any search', async () => {
     renderBrowser()
-    expect(screen.getByText(/Type to search the ClawHub registry/i)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/Type to search the ClawHub registry/i),
+    ).toBeInTheDocument()
     expect(vi.mocked(searchSkills)).not.toHaveBeenCalled()
   })
 
   it('renders results (display_name + summary) for a query', async () => {
     renderBrowser()
-    await userEvent.type(screen.getByTestId('skill-search-input'), 'web')
+    await userEvent.type(await screen.findByTestId('skill-search-input'), 'web')
     await waitFor(() => {
       expect(vi.mocked(searchSkills)).toHaveBeenCalledWith('web')
     })
@@ -151,7 +168,7 @@ describe('SkillBrowser — ClawHub search', () => {
   it('clicking Install calls installSkillBySlug(slug) and invalidates ["skills"]', async () => {
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
     renderBrowser()
-    await userEvent.type(screen.getByTestId('skill-search-input'), 'web')
+    await userEvent.type(await screen.findByTestId('skill-search-input'), 'web')
     await screen.findByText('Web Search')
 
     await userEvent.click(screen.getByTestId('skill-install-web-search'))
@@ -172,7 +189,7 @@ describe('SkillBrowser — ClawHub search', () => {
       new ApiError(502, 'Bad gateway — skill registry is unreachable.'),
     )
     renderBrowser()
-    await userEvent.type(screen.getByTestId('skill-search-input'), 'web')
+    await userEvent.type(await screen.findByTestId('skill-search-input'), 'web')
     expect(
       await screen.findByText(/Skill registry is unavailable, try again/i),
     ).toBeInTheDocument()
@@ -183,7 +200,7 @@ describe('SkillBrowser — ClawHub search', () => {
   it('shows the no-results state when the registry returns an empty array', async () => {
     vi.mocked(searchSkills).mockResolvedValue([])
     renderBrowser()
-    await userEvent.type(screen.getByTestId('skill-search-input'), 'nope')
+    await userEvent.type(await screen.findByTestId('skill-search-input'), 'nope')
     expect(await screen.findByText(/No skills found for/i)).toBeInTheDocument()
   })
 
@@ -192,7 +209,7 @@ describe('SkillBrowser — ClawHub search', () => {
       new ApiError(409, 'This conflicts with the current state.'),
     )
     renderBrowser()
-    await userEvent.type(screen.getByTestId('skill-search-input'), 'web')
+    await userEvent.type(await screen.findByTestId('skill-search-input'), 'web')
     await screen.findByText('Web Search')
     await userEvent.click(screen.getByTestId('skill-install-web-search'))
     await waitFor(() => {
@@ -209,14 +226,15 @@ describe('SkillBrowser — ClawHub search', () => {
 // ── B. Local SKILL.md file install (US-E4, #340) ─────────────────────────────
 
 describe('SkillBrowser — install confirm flow (US-E4, #340)', () => {
-  it('shows the install-from-file button', () => {
+  it('shows the install-from-file button', async () => {
     renderBrowser()
-    expect(screen.getByText(/Install from file/i)).toBeInTheDocument()
+    expect(await screen.findByText(/Install from file/i)).toBeInTheDocument()
   })
 
   it('shows the confirm dialog with unverified notice after file selection', async () => {
     renderBrowser()
     const file = makeFile('my-skill.md', SKILL_MD_WITH_CAPS)
+    await screen.findByText(/Install from file/i)
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     fireEvent.change(input, { target: { files: [file] } })
     await waitFor(() => {
@@ -228,6 +246,7 @@ describe('SkillBrowser — install confirm flow (US-E4, #340)', () => {
   it('shows declared capabilities from SKILL.md frontmatter', async () => {
     renderBrowser()
     const file = makeFile('my-skill.md', SKILL_MD_WITH_CAPS)
+    await screen.findByText(/Install from file/i)
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     fireEvent.change(input, { target: { files: [file] } })
     await waitFor(() => {
@@ -240,6 +259,7 @@ describe('SkillBrowser — install confirm flow (US-E4, #340)', () => {
   it('shows "no capabilities declared" when frontmatter has none', async () => {
     renderBrowser()
     const file = makeFile('simple.md', SKILL_MD_NO_CAPS)
+    await screen.findByText(/Install from file/i)
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     fireEvent.change(input, { target: { files: [file] } })
     await waitFor(() => {
@@ -250,6 +270,7 @@ describe('SkillBrowser — install confirm flow (US-E4, #340)', () => {
   it('cancelling the confirm dialog does not call installSkillFromFile', async () => {
     renderBrowser()
     const file = makeFile('my-skill.md', SKILL_MD_WITH_CAPS)
+    await screen.findByText(/Install from file/i)
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     fireEvent.change(input, { target: { files: [file] } })
     await waitFor(() => screen.getByTestId('skill-install-confirm-dialog'))
@@ -262,6 +283,7 @@ describe('SkillBrowser — install confirm flow (US-E4, #340)', () => {
   it('confirming the dialog calls installSkillFromFile', async () => {
     renderBrowser()
     const file = makeFile('my-skill.md', SKILL_MD_WITH_CAPS)
+    await screen.findByText(/Install from file/i)
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     fireEvent.change(input, { target: { files: [file] } })
     await waitFor(() => screen.getByTestId('skill-install-confirm-dialog'))
@@ -274,6 +296,7 @@ describe('SkillBrowser — install confirm flow (US-E4, #340)', () => {
   it('shows a success toast after successful file install', async () => {
     renderBrowser()
     const file = makeFile('my-skill.md', SKILL_MD_WITH_CAPS)
+    await screen.findByText(/Install from file/i)
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     fireEvent.change(input, { target: { files: [file] } })
     await waitFor(() => screen.getByTestId('skill-install-confirm-dialog'))
@@ -289,6 +312,7 @@ describe('SkillBrowser — file install error handling (US-E4, #340)', () => {
     vi.mocked(installSkillFromFile).mockRejectedValue(new Error('network timeout'))
     renderBrowser()
     const file = makeFile('my-skill.md', SKILL_MD_WITH_CAPS)
+    await screen.findByText(/Install from file/i)
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     fireEvent.change(input, { target: { files: [file] } })
     await waitFor(() => screen.getByTestId('skill-install-confirm-dialog'))
@@ -312,6 +336,7 @@ describe('SkillBrowser — file install error handling (US-E4, #340)', () => {
     vi.mocked(installSkillFromFile).mockRejectedValue(hashError)
     renderBrowser()
     const file = makeFile('my-skill.md', SKILL_MD_WITH_CAPS)
+    await screen.findByText(/Install from file/i)
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     fireEvent.change(input, { target: { files: [file] } })
     await waitFor(() => screen.getByTestId('skill-install-confirm-dialog'))
@@ -322,5 +347,77 @@ describe('SkillBrowser — file install error handling (US-E4, #340)', () => {
       expect(screen.getByText('def456')).toBeInTheDocument()
       expect(addToast).not.toHaveBeenCalledWith(expect.objectContaining({ variant: 'error' }))
     })
+  })
+})
+
+// ── C. Marketplace gating (search hidden when no marketplace is enabled) ──────
+
+describe('SkillBrowser — marketplace gating', () => {
+  it('renders the search input when a marketplace is enabled', async () => {
+    vi.mocked(fetchSkillMarketplaceStatus).mockResolvedValue(MARKETPLACE_ENABLED)
+    renderBrowser()
+    expect(await screen.findByTestId('skill-search-input')).toBeInTheDocument()
+    // Marketplace wording in the dialog description.
+    expect(
+      screen.getByText(/Search and install skills from the ClawHub registry/i),
+    ).toBeInTheDocument()
+  })
+
+  it('hides the search input and shows file-install only when no marketplace is enabled', async () => {
+    vi.mocked(fetchSkillMarketplaceStatus).mockResolvedValue(MARKETPLACE_DISABLED)
+    renderBrowser()
+    // The disabled explainer renders…
+    expect(await screen.findByTestId('skill-marketplace-disabled')).toBeInTheDocument()
+    expect(
+      screen.getByText(/No skill marketplace is enabled/i),
+    ).toBeInTheDocument()
+    // …the file-install UI is present…
+    expect(screen.getByText(/Install from file/i)).toBeInTheDocument()
+    expect(document.querySelector('input[type="file"]')).not.toBeNull()
+    // …and the search input + results are NOT rendered.
+    expect(screen.queryByTestId('skill-search-input')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('skill-search-results')).not.toBeInTheDocument()
+    // Search is never even attempted.
+    expect(vi.mocked(searchSkills)).not.toHaveBeenCalled()
+  })
+
+  it('shows a spinner (not the search box) while the marketplace status loads', async () => {
+    // A never-resolving status keeps the query in its loading state.
+    let resolveStatus: (s: SkillMarketplaceStatus) => void = () => {}
+    vi.mocked(fetchSkillMarketplaceStatus).mockReturnValue(
+      new Promise<SkillMarketplaceStatus>((resolve) => {
+        resolveStatus = resolve
+      }),
+    )
+    renderBrowser()
+    expect(await screen.findByTestId('skill-marketplace-loading')).toBeInTheDocument()
+    expect(screen.queryByTestId('skill-search-input')).not.toBeInTheDocument()
+    // Cleanly resolve so the pending query doesn't leak past the test.
+    resolveStatus(MARKETPLACE_ENABLED)
+    await waitFor(() => {
+      expect(screen.getByTestId('skill-search-input')).toBeInTheDocument()
+    })
+  })
+
+  it('downgrades to file-only and toasts when search returns a 409 mid-session', async () => {
+    vi.mocked(fetchSkillMarketplaceStatus).mockResolvedValue(MARKETPLACE_ENABLED)
+    vi.mocked(searchSkills).mockRejectedValue(
+      new ApiError(409, 'Conflict', { body: '{"error":"no skill marketplace is enabled"}' }),
+    )
+    renderBrowser()
+    await userEvent.type(await screen.findByTestId('skill-search-input'), 'web')
+    await waitFor(() => {
+      expect(addToast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variant: 'error',
+          message: expect.stringContaining('marketplace is not enabled'),
+        }),
+      )
+    })
+    // Flipped to file-only — search box gone, file-install present.
+    await waitFor(() => {
+      expect(screen.queryByTestId('skill-search-input')).not.toBeInTheDocument()
+    })
+    expect(screen.getByText(/Install from file/i)).toBeInTheDocument()
   })
 })

@@ -39,9 +39,10 @@ import {
   installSkillFromFile,
   installSkillBySlug,
   searchSkills,
+  fetchSkillMarketplaceStatus,
   isApiError,
 } from '@/lib/api'
-import type { SkillSearchResult } from '@/lib/api'
+import type { SkillSearchResult, SkillMarketplaceStatus } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
 interface SkillBrowserProps {
@@ -106,13 +107,38 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
   // "Installed" even before the search list is re-fetched.
   const [installedSlugs, setInstalledSlugs] = useState<Set<string>>(new Set())
 
+  // If a search/install returns 409 mid-session (the marketplace was disabled
+  // after the dialog opened), flip to file-only locally so we stop offering a
+  // dead browse experience until the status query refetches.
+  const [marketplaceDisabledLocal, setMarketplaceDisabledLocal] = useState(false)
+
   // Reset transient state when the dialog closes so a re-open starts clean.
   useEffect(() => {
     if (!open) {
       setQuery('')
       setInstalledSlugs(new Set())
+      setMarketplaceDisabledLocal(false)
     }
   }, [open])
+
+  // ── Marketplace gating ──────────────────────────────────────────────────────
+  // Fetch whether any skill marketplace is enabled. When disabled, the backend
+  // returns 409 for /skills/search and /skills/install, so we render only the
+  // file-install path.
+  const {
+    data: marketplaceStatus,
+    isLoading: isStatusLoading,
+  } = useQuery<SkillMarketplaceStatus>({
+    queryKey: ['skill-marketplace'],
+    queryFn: fetchSkillMarketplaceStatus,
+    enabled: open,
+    retry: false,
+    staleTime: 30_000,
+  })
+
+  // Marketplace is considered enabled only when the status query has resolved
+  // with enabled:true and no mid-session 409 has downgraded us to file-only.
+  const marketplaceEnabled = marketplaceStatus?.enabled === true && !marketplaceDisabledLocal
 
   const {
     data: results = [],
@@ -122,15 +148,27 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
   } = useQuery<SkillSearchResult[]>({
     queryKey: ['skill-search', debouncedQuery],
     queryFn: () => searchSkills(debouncedQuery),
-    // Only hit the registry once there's a non-empty query — an empty `q`
-    // would 400 server-side, so we gate on it client-side.
-    enabled: open && debouncedQuery.length > 0,
+    // Only hit the registry once there's a non-empty query (an empty `q` would
+    // 400 server-side) AND a marketplace is enabled.
+    enabled: open && marketplaceEnabled && debouncedQuery.length > 0,
     retry: false,
     staleTime: 30_000,
   })
 
+  // Defense: a 409 from search means the marketplace was disabled mid-session.
+  // Surface a clear toast and downgrade to file-only.
+  useEffect(() => {
+    if (isSearchError && isApiError(searchError) && searchError.status === 409) {
+      setMarketplaceDisabledLocal(true)
+      addToast({ message: 'Skill marketplace is not enabled.', variant: 'error' })
+    }
+  }, [isSearchError, searchError, addToast])
+
   const searchErrorMessage = useMemo(() => {
     if (!isSearchError) return null
+    if (isApiError(searchError) && searchError.status === 409) {
+      return 'Skill marketplace is not enabled.'
+    }
     if (isApiError(searchError) && searchError.status === 502) {
       return 'Skill registry is unavailable, try again.'
     }
@@ -149,6 +187,14 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
         addToast({ message: `Skill "${slug}" installed successfully.`, variant: 'success' })
       },
       onError: (err: unknown, { slug }) => {
+        // A 409 whose body mentions "marketplace" means the marketplace was
+        // disabled mid-session — downgrade to file-only and use a clear message
+        // distinct from the "already installed" 409.
+        if (isApiError(err) && err.status === 409 && /marketplace/i.test(err.body ?? '')) {
+          setMarketplaceDisabledLocal(true)
+          addToast({ message: 'Skill marketplace is not enabled.', variant: 'error' })
+          return
+        }
         let msg: string
         if (isApiError(err) && err.status === 409) {
           msg = `Skill "${slug}" is already installed.`
@@ -236,10 +282,26 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
           <DialogHeader>
             <DialogTitle>Browse Skills</DialogTitle>
             <DialogDescription>
-              Search and install skills from the ClawHub registry
+              {isStatusLoading
+                ? 'Checking the skill marketplace…'
+                : marketplaceEnabled
+                  ? 'Search and install skills from the ClawHub registry'
+                  : 'Install a skill from a file'}
             </DialogDescription>
           </DialogHeader>
 
+          {isStatusLoading ? (
+            /* Marketplace status loading — show a spinner, never flash the
+               search box before we know whether a marketplace is enabled. */
+            <div
+              className="flex flex-col items-center justify-center py-12 gap-2 text-center"
+              data-testid="skill-marketplace-loading"
+            >
+              <CircleNotch size={26} className="animate-spin text-[var(--color-accent)]" />
+              <p className="text-sm text-[var(--color-muted)]">Checking marketplace…</p>
+            </div>
+          ) : marketplaceEnabled ? (
+            <>
           {/* Search box */}
           <div className="relative">
             <MagnifyingGlass
@@ -357,33 +419,58 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
               </ul>
             )}
           </div>
-
-          {/* Secondary: install from a local SKILL.md file */}
-          <DialogFooter className="sm:justify-between items-center border-t border-[var(--color-border)] pt-3">
-            <p className="text-xs text-[var(--color-muted)]">
-              Or install a local <span className="font-mono">SKILL.md</span> package.
-            </p>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={isInstalling}
-              onClick={() => fileInputRef.current?.click()}
-              className="gap-2"
+            </>
+          ) : (
+            /* Marketplace disabled — file-install only. */
+            <div
+              className="flex flex-col items-center justify-center py-10 gap-2 text-center"
+              data-testid="skill-marketplace-disabled"
             >
-              <UploadSimple size={14} />
-              {isInstalling ? 'Installing…' : 'Install from file'}
-            </Button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".zip,.json,.md"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0]
-                if (file) void handleFileSelected(file)
-              }}
-            />
-          </DialogFooter>
+              <Package size={32} weight="thin" className="text-[var(--color-border)]" />
+              <p className="text-sm text-[var(--color-muted)] max-w-xs">
+                No skill marketplace is enabled — install a skill from a{' '}
+                <span className="font-mono">SKILL.md</span>/zip file.
+              </p>
+            </div>
+          )}
+
+          {/* File install — secondary option when a marketplace is enabled,
+              the only option when none is. Hidden during the status check. */}
+          {!isStatusLoading && (
+            <DialogFooter className="sm:justify-between items-center border-t border-[var(--color-border)] pt-3">
+              <p className="text-xs text-[var(--color-muted)]">
+                {marketplaceEnabled ? (
+                  <>
+                    Or install a local <span className="font-mono">SKILL.md</span> package.
+                  </>
+                ) : (
+                  <>
+                    Install a local <span className="font-mono">SKILL.md</span> package.
+                  </>
+                )}
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isInstalling}
+                onClick={() => fileInputRef.current?.click()}
+                className="gap-2"
+              >
+                <UploadSimple size={14} />
+                {isInstalling ? 'Installing…' : 'Install from file'}
+              </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".zip,.json,.md"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) void handleFileSelected(file)
+                }}
+              />
+            </DialogFooter>
+          )}
         </DialogContent>
       </Dialog>
 
