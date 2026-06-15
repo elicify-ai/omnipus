@@ -27,8 +27,7 @@ import { AVATAR_COLORS } from '@/lib/constants'
 import { ToolPolicyEditor } from '@/components/shared/ToolPolicyEditor'
 import type { ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { applyRolePreset } from '@/lib/toolPolicyPresets'
-import { ExecutorSelector } from './ExecutorSelector'
-import { getCreateAgentFormCopy } from './AgentFormFields'
+import { ExecutorSection, getCreateAgentFormCopy } from './AgentFormFields'
 
 const ICON_OPTIONS = [
   { name: 'Robot', component: Robot },
@@ -216,10 +215,10 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
     }
     // Worker-only validation: an executor is required (a worker without a
     // runtime is not a worker — it's just a missing-config row).
+    // The ExecutorSection is always visible for workers now, so the
+    // validation message renders next to the field.
     if (isWorkerModal && !executor) {
       setExecutorError('Worker requires an executor')
-      // Open the advanced section so the user can see the missing field.
-      setAdvancedOpen(true)
       return
     }
     setExecutorError('')
@@ -424,7 +423,24 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                   </div>
                 )}
 
-                {/* Advanced model params + skills */}
+                {/* Spec-4 FR-4.1: Executor runtime selector — ALWAYS visible
+                    for workers (it's a required field). For base agents
+                    the executor is optional and the row stays compact.
+                    Sourced from AgentFormFields (the shared form-shape
+                    split) so the ExecutorSelector import stays in this
+                    chunk — Vite was tree-shaking the previous direct
+                    import. */}
+                <ExecutorSection
+                  isWorker={isWorkerModal}
+                  value={executor}
+                  onChange={(next) => {
+                    setExecutor(next)
+                    if (next) setExecutorError('')
+                  }}
+                  error={executorError}
+                />
+
+                {/* Advanced model params + skills (executor moved out). */}
                 <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
                   <button
                     type="button"
@@ -454,33 +470,6 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                             background: `linear-gradient(to right, var(--color-accent) 0%, var(--color-accent) ${(temperature / 2) * 100}%, var(--color-border) ${(temperature / 2) * 100}%, var(--color-border) 100%)`,
                           }}
                         />
-                      </div>
-
-                      {/* Spec-4 FR-4.1: Executor runtime selector. No agentId yet,
-                          so the connection test button is intentionally hidden.
-                          Worker-tier: required — the worker cannot be created
-                          without a runtime. Base-tier: optional (default native). */}
-                      <div className="space-y-1.5 pt-1 border-t border-[var(--color-border)]">
-                        <p className="text-xs font-medium text-[var(--color-secondary)] pt-1">
-                          Executor {isWorkerModal && <span className="text-[var(--color-error)]">*</span>}
-                        </p>
-                        {isWorkerModal && (
-                          <p className="text-[11px] text-[var(--color-muted)]">
-                            Required for workers — pick the runtime that will execute delegated tasks.
-                          </p>
-                        )}
-                        <ExecutorSelector
-                          value={executor}
-                          onChange={(next) => {
-                            setExecutor(next)
-                            if (next) setExecutorError('')
-                          }}
-                        />
-                        {executorError && (
-                          <p className="text-xs text-[var(--color-error)]" data-testid="executor-error">
-                            {executorError}
-                          </p>
-                        )}
                       </div>
 
                       {/* US-E6: Skills picker — opt-in, default none */}

@@ -1,6 +1,8 @@
 import { Scroll, NotePencil } from '@phosphor-icons/react'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
+import { ExecutorSelector } from './ExecutorSelector'
+import type { ExecutorConfig } from '@/lib/api'
 
 // ── AgentFormFields ──────────────────────────────────────────────────────────
 //
@@ -131,6 +133,60 @@ export function BehaviorFields({
         />
         {renderUploadButton?.('instructions', (v) => handleInstructions?.(v))}
       </div>
+    </div>
+  )
+}
+
+// ── Executor runtime selector ────────────────────────────────────────────────
+
+export interface ExecutorSectionProps {
+  /** True when rendering the worker form (executor is required). */
+  isWorker: boolean
+  /** The current executor value (or `undefined` for the default). */
+  value: ExecutorConfig | undefined
+  onChange: (next: ExecutorConfig | undefined) => void
+  /** Validation error to render below the selector (worker: required). */
+  error?: string
+}
+
+/**
+ * Renders the executor/runtime selector with the tier-branched label:
+ *   - Worker: "Executor *" + the "Required for workers" helper, with a
+ *     validation error slot.
+ *   - Base: "Executor" (no helper, no error).
+ * Placed here so the create modal AND any future form reusing this
+ * component get the same chrome — and so the ExecutorSelector import
+ * stays in one chunk (the modal's chunk imports from this module, and
+ * the tree-shaker keeps the dependency).
+ */
+export function ExecutorSection({
+  isWorker,
+  value,
+  onChange,
+  error,
+}: ExecutorSectionProps) {
+  return (
+    <div className="space-y-1.5 pt-1 border-t border-[var(--color-border)]">
+      <p className="text-xs font-medium text-[var(--color-secondary)] pt-1">
+        Executor {isWorker && <span className="text-[var(--color-error)]">*</span>}
+      </p>
+      {isWorker && (
+        <p className="text-[11px] text-[var(--color-muted)]">
+          Required for workers — pick the runtime that will execute delegated tasks.
+        </p>
+      )}
+      <ExecutorSelector
+        value={value}
+        onChange={(next) => {
+          onChange(next)
+          if (next && error) onChange(next)
+        }}
+      />
+      {error && (
+        <p className="text-xs text-[var(--color-error)]" data-testid="executor-error">
+          {error}
+        </p>
+      )}
     </div>
   )
 }
