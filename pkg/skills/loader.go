@@ -30,6 +30,8 @@ const (
 type SkillMetadata struct {
 	Name         string   `json:"name"`
 	Description  string   `json:"description"`
+	Author       string   `json:"author"`        // optional frontmatter: author/publisher
+	Version      string   `json:"version"`       // optional frontmatter: semver string
 	ArgumentHint string   `json:"argument_hint"` // ClawHub: argument-hint
 	Context      string   `json:"context"`       // ClawHub: context (workspace/global/builtin)
 	AllowedTools []string `json:"allowed_tools"` // ClawHub: allowed-tools
@@ -43,6 +45,8 @@ type SkillInfo struct {
 	Path        string `json:"path"`
 	Source      string `json:"source"`
 	Description string `json:"description"`
+	Author      string `json:"author"`  // optional, from SKILL.md frontmatter
+	Version     string `json:"version"` // optional, from SKILL.md frontmatter
 }
 
 func (info SkillInfo) validate() error {
@@ -143,6 +147,8 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 			if metadata != nil {
 				info.Description = metadata.Description
 				info.Name = metadata.Name
+				info.Author = metadata.Author
+				info.Version = metadata.Version
 			}
 			if err := info.validate(); err != nil {
 				slog.Warn("invalid skill from "+source, "name", info.Name, "error", err)
@@ -281,6 +287,8 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 	var jsonMeta struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
+		Author      string `json:"author"`
+		Version     string `json:"version"`
 	}
 	if err := json.Unmarshal([]byte(frontmatter), &jsonMeta); err == nil {
 		if jsonMeta.Name != "" {
@@ -288,6 +296,12 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 		}
 		if jsonMeta.Description != "" {
 			metadata.Description = jsonMeta.Description
+		}
+		if jsonMeta.Author != "" {
+			metadata.Author = jsonMeta.Author
+		}
+		if jsonMeta.Version != "" {
+			metadata.Version = jsonMeta.Version
 		}
 		return metadata
 	}
@@ -299,6 +313,12 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 	}
 	if description := yamlMeta["description"]; description != "" {
 		metadata.Description = description
+	}
+	if author := yamlMeta["author"]; author != "" {
+		metadata.Author = author
+	}
+	if version := yamlMeta["version"]; version != "" {
+		metadata.Version = version
 	}
 	if hint := yamlMeta["argument-hint"]; hint != "" {
 		metadata.ArgumentHint = hint
@@ -396,11 +416,12 @@ func (sl *SkillsLoader) parseSimpleYAML(content string) map[string]string {
 	knownKeys := map[string]bool{
 		"name": true, "description": true, "argument-hint": true,
 		"context": true, "allowed-tools": true, "model-hint": true,
+		"author": true, "version": true,
 	}
 
 	for k, v := range raw {
 		switch k {
-		case "name", "description", "context", "model-hint":
+		case "name", "description", "context", "model-hint", "author", "version":
 			if s, ok := v.(string); ok && s != "" {
 				result[k] = s
 			}

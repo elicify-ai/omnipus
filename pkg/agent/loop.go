@@ -6281,6 +6281,24 @@ func (al *AgentLoop) GetStartupInfo() map[string]any {
 	return info
 }
 
+// ListSkillsDetailed returns the full per-skill metadata (name, source,
+// description, author, version) for every installed skill, sourced from the
+// default agent's ContextBuilder skills loader — the same loader that feeds
+// GetStartupInfo's skills summary. This is the data path GET /api/v1/skills uses
+// to enrich its response beyond bare names. Returns nil when there is no default
+// agent or its ContextBuilder is unset (e.g. an uninitialized loop).
+func (al *AgentLoop) ListSkillsDetailed() []skills.SkillInfo {
+	registry := al.GetRegistry()
+	if registry == nil {
+		return nil
+	}
+	agent := registry.GetDefaultAgent()
+	if agent == nil || agent.ContextBuilder == nil {
+		return nil
+	}
+	return agent.ContextBuilder.ListSkillsDetailed()
+}
+
 // formatMessagesForLog formats messages for logging
 func formatMessagesForLog(messages []providers.Message) string {
 	if len(messages) == 0 {

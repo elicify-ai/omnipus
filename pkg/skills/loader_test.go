@@ -147,6 +147,46 @@ func createSkillDir(t *testing.T, base, dirName, name, description string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644))
 }
 
+// TestListSkillsParsesAuthorAndVersion verifies that the optional author/version
+// YAML frontmatter keys are parsed through SkillMetadata into SkillInfo.
+func TestListSkillsParsesAuthorAndVersion(t *testing.T) {
+	tmp := t.TempDir()
+	builtin := filepath.Join(tmp, "builtin")
+	dir := filepath.Join(builtin, "fancy")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	content := "---\n" +
+		"name: fancy\n" +
+		"description: A fancy skill.\n" +
+		"author: Jane Doe\n" +
+		"version: 2.4.1\n" +
+		"---\n\n# fancy\n\nDoes fancy things.\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644))
+
+	sl := NewSkillsLoader(filepath.Join(tmp, "ws"), filepath.Join(tmp, "global"), builtin)
+	skills := sl.ListSkills()
+
+	require.Len(t, skills, 1)
+	assert.Equal(t, "fancy", skills[0].Name)
+	assert.Equal(t, "builtin", skills[0].Source)
+	assert.Equal(t, "Jane Doe", skills[0].Author)
+	assert.Equal(t, "2.4.1", skills[0].Version)
+}
+
+// TestListSkillsAuthorVersionAbsent verifies absent author/version yields empty
+// strings (no error, back-compatible).
+func TestListSkillsAuthorVersionAbsent(t *testing.T) {
+	tmp := t.TempDir()
+	builtin := filepath.Join(tmp, "builtin")
+	createSkillDir(t, builtin, "plain", "plain", "A plain skill.")
+
+	sl := NewSkillsLoader(filepath.Join(tmp, "ws"), filepath.Join(tmp, "global"), builtin)
+	skills := sl.ListSkills()
+
+	require.Len(t, skills, 1)
+	assert.Empty(t, skills[0].Author)
+	assert.Empty(t, skills[0].Version)
+}
+
 func TestListSkillsWorkspaceOverridesGlobal(t *testing.T) {
 	tmp := t.TempDir()
 	ws := filepath.Join(tmp, "workspace")

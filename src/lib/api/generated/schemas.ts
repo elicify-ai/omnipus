@@ -1516,6 +1516,7 @@ export const Skill = z.object({
   version: z.string().regex(/^\d+\.\d+\.\d+(?:[-+].*)?$/),
   description: z.string().optional(),
   author: z.string().optional(),
+  source: z.enum(["builtin", "global", "workspace"]).optional(),
   verified: z.boolean(),
   status: z.enum(["active", "disabled", "inactive", "error"]),
   agent_assignment: z.string().optional(),

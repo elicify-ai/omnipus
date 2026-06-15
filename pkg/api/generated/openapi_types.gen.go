@@ -2728,6 +2728,27 @@ func (e SessionScopeResponseDmScope) Valid() bool {
 	}
 }
 
+// Defines values for SkillSource.
+const (
+	SkillSourceBuiltin   SkillSource = "builtin"
+	SkillSourceGlobal    SkillSource = "global"
+	SkillSourceWorkspace SkillSource = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the SkillSource enum.
+func (e SkillSource) Valid() bool {
+	switch e {
+	case SkillSourceBuiltin:
+		return true
+	case SkillSourceGlobal:
+		return true
+	case SkillSourceWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SkillStatus.
 const (
 	SkillStatusActive   SkillStatus = "active"
@@ -3057,16 +3078,16 @@ func (e ToolRegistryEntryScope) Valid() bool {
 
 // Defines values for ToolRegistryEntrySource.
 const (
-	Builtin ToolRegistryEntrySource = "builtin"
-	Mcp     ToolRegistryEntrySource = "mcp"
+	ToolRegistryEntrySourceBuiltin ToolRegistryEntrySource = "builtin"
+	ToolRegistryEntrySourceMcp     ToolRegistryEntrySource = "mcp"
 )
 
 // Valid indicates whether the value is a known member of the ToolRegistryEntrySource enum.
 func (e ToolRegistryEntrySource) Valid() bool {
 	switch e {
-	case Builtin:
+	case ToolRegistryEntrySourceBuiltin:
 		return true
-	case Mcp:
+	case ToolRegistryEntrySourceMcp:
 		return true
 	default:
 		return false
@@ -6725,6 +6746,9 @@ type Skill struct {
 	// Name Human-readable skill name.
 	Name string `json:"name"`
 
+	// Source Skill origin: "builtin" = pre-installed/system skill (cannot be deleted), "global"/"workspace" = user-installed (community/3rd-party).
+	Source *SkillSource `json:"source,omitempty"`
+
 	// Status "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
 	Status SkillStatus `json:"status"`
 
@@ -6734,6 +6758,9 @@ type Skill struct {
 	// Version Semantic version string (e.g. "1.2.3"). Must follow semver format.
 	Version string `json:"version"`
 }
+
+// SkillSource Skill origin: "builtin" = pre-installed/system skill (cannot be deleted), "global"/"workspace" = user-installed (community/3rd-party).
+type SkillSource string
 
 // SkillStatus "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
 type SkillStatus string

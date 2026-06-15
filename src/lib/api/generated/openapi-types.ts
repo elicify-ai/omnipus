@@ -4276,6 +4276,12 @@ export interface components {
              */
             author?: string;
             /**
+             * @description Skill origin: "builtin" = pre-installed/system skill (cannot be deleted), "global"/"workspace" = user-installed (community/3rd-party).
+             * @example builtin
+             * @enum {string}
+             */
+            source?: "builtin" | "global" | "workspace";
+            /**
              * @description True when the skill has been verified by the Omnipus team. Unverified skills require explicit trust grant before use.
              * @example true
              */

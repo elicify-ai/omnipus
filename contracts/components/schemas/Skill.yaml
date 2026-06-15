@@ -32,6 +32,16 @@ properties:
     type: string
     description: Skill author or publisher name.
     example: "Omnipus Community"
+  source:
+    type: string
+    enum:
+      - builtin
+      - global
+      - workspace
+    description: >
+      Skill origin: "builtin" = pre-installed/system skill (cannot be deleted),
+      "global"/"workspace" = user-installed (community/3rd-party).
+    example: "builtin"
   verified:
     type: boolean
     description: >

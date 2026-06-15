@@ -1067,3 +1067,16 @@ func (cb *ContextBuilder) GetSkillsInfo() map[string]any {
 		"names":     skillNames,
 	}
 }
+
+// ListSkillsDetailed returns the full per-skill metadata for every installed
+// skill (name, path, source, description, author, version) by delegating to the
+// skills loader. Unlike ListSkillNames it is NOT filtered by the per-agent
+// allowlist: GET /api/v1/skills reports the complete installed inventory so the
+// management UI can show every skill regardless of which agent may invoke it.
+// Returns nil when no skills loader is configured.
+func (cb *ContextBuilder) ListSkillsDetailed() []skills.SkillInfo {
+	if cb.skillsLoader == nil {
+		return nil
+	}
+	return cb.skillsLoader.ListSkills()
+}

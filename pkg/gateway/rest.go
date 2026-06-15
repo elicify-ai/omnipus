@@ -2537,28 +2537,87 @@ func (a *restAPI) HandleSkills(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *restAPI) listSkills(w http.ResponseWriter) {
-	info := a.agentLoop.GetStartupInfo()
-	// GetStartupInfo returns aggregate metadata (total, available, names) — not per-skill entries.
-	skillsInfo, ok := info["skills"].(map[string]any)
-	if !ok {
+	// Per-skill metadata (name, source, description, author, version) sourced from
+	// the default agent's skills loader — the single source of truth for installed
+	// skills (same loader that feeds GetStartupInfo's aggregate summary).
+	detailed := a.agentLoop.ListSkillsDetailed()
+	if len(detailed) == 0 {
 		jsonOK(w, []gen.Skill{})
 		return
 	}
-	names, _ := skillsInfo["names"].([]string)
-	if len(names) == 0 {
-		jsonOK(w, []gen.Skill{})
-		return
-	}
-	result := make([]gen.Skill, 0, len(names))
-	for _, name := range names {
-		result = append(result, gen.Skill{
-			Id:      name,
-			Name:    name,
-			Version: "0.0.0",
-			Status:  gen.SkillStatusActive,
-		})
+	result := make([]gen.Skill, 0, len(detailed))
+	for _, s := range detailed {
+		name := s.Name
+		isBuiltin := s.Source == "builtin"
+
+		skill := gen.Skill{
+			Id:       name,
+			Name:     name,
+			Status:   gen.SkillStatusActive,
+			Verified: isBuiltin, // built-in skills are Omnipus-team-verified.
+		}
+
+		// Version: SKILL.md frontmatter when present, else a neutral default.
+		if s.Version != "" {
+			skill.Version = s.Version
+		} else {
+			skill.Version = "0.0.0"
+		}
+
+		// Description (optional wire field): omit when empty.
+		if s.Description != "" {
+			desc := s.Description
+			skill.Description = &desc
+		}
+
+		// Author (optional): built-ins are authored by Omnipus; otherwise use the
+		// frontmatter author if present, omitting the field when absent.
+		switch {
+		case isBuiltin:
+			author := "Omnipus"
+			skill.Author = &author
+		case s.Author != "":
+			author := s.Author
+			skill.Author = &author
+		}
+
+		// Source (optional): map the loader source onto the wire enum. Only the
+		// three known values are emitted; an unexpected value leaves source unset.
+		if src, ok := skillSourceToWire(s.Source); ok {
+			skill.Source = &src
+		}
+
+		result = append(result, skill)
 	}
 	jsonOK(w, result)
+}
+
+// skillSourceToWire maps a skills-loader source string onto the generated
+// SkillSource wire enum. Returns ok=false for unrecognized values so the caller
+// can leave the optional field unset rather than emit an invalid enum.
+func skillSourceToWire(source string) (gen.SkillSource, bool) {
+	switch source {
+	case "builtin":
+		return gen.SkillSourceBuiltin, true
+	case "global":
+		return gen.SkillSourceGlobal, true
+	case "workspace":
+		return gen.SkillSourceWorkspace, true
+	default:
+		return "", false
+	}
+}
+
+// skillSource returns the loader source ("builtin"/"global"/"workspace") for the
+// named installed skill, or "" when the skill is not found. Used to enforce the
+// built-in deletion guard (built-ins cannot be removed).
+func (a *restAPI) skillSource(name string) string {
+	for _, s := range a.agentLoop.ListSkillsDetailed() {
+		if s.Name == name {
+			return s.Source
+		}
+	}
+	return ""
 }
 
 // installedSkillIDs returns the set of skill IDs currently known to the agent
@@ -2623,6 +2682,13 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 func (a *restAPI) deleteSkill(w http.ResponseWriter, name string) {
 	if err := validateEntityID(name); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid skill name")
+		return
+	}
+	// Built-in (pre-installed/system) skills ship inside the binary's skills dir
+	// and must never be removable through the API — the frontend disables the
+	// button, but the backend is the enforcing gate. Reject with 403.
+	if a.skillSource(name) == "builtin" {
+		jsonErr(w, http.StatusForbidden, "built-in skills cannot be removed")
 		return
 	}
 	// Inject the SSRF checker (SEC-24) so that any outbound HTTP calls made by
