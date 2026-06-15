@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SessionBar } from '../chat/SessionBar'
+import { fetchAgents } from '@/lib/api'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
@@ -125,6 +126,51 @@ describe('SessionBar — rendering (test #11)', () => {
     } finally {
       startNewSessionSpy.mockRestore()
     }
+  })
+})
+
+describe('SessionBar — workers excluded from chat switcher', () => {
+  // A worker (type:'worker') is a delegation-only labour agent and must NEVER
+  // appear as a chat target nor be auto-selected as the active chat persona.
+  it('does not list a worker agent and does not auto-select it', async () => {
+    vi.mocked(fetchAgents).mockResolvedValueOnce([
+      { id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'claude-sonnet-4-6', description: 'Assistant' },
+      { id: 'builder', name: 'Builder Worker', type: 'worker', status: 'active', model: 'claude-sonnet-4-6', description: 'Labour agent' },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ] as any)
+    // No active agent yet → component will auto-select the first eligible one.
+    act(() => { useSessionStore.setState({ activeAgentId: null, activeSessionId: null }) })
+
+    renderBar()
+
+    // The base agent renders in the switcher button.
+    await screen.findByText('Mia')
+    // The worker is never listed (closed dropdown won't show it either).
+    expect(screen.queryByText('Builder Worker')).not.toBeInTheDocument()
+
+    // Auto-select picks the base agent, never the worker.
+    await vi.waitFor(() => {
+      expect(useSessionStore.getState().activeAgentId).toBe('mia')
+    })
+    expect(useSessionStore.getState().activeAgentId).not.toBe('builder')
+  })
+
+  it('when the only ready non-active agent is a worker, the switcher still works and never shows it', async () => {
+    // Mia (active, base) + a worker. With Mia already active, the switcher button
+    // shows Mia; the worker — the only other "ready" agent — must never render in
+    // the chat switcher (it is filtered out of chatAgents entirely). The Radix
+    // DropdownMenu portal can't be opened under JSDOM pointer events, so we assert
+    // the worker is absent from the document, which holds whether open or closed.
+    vi.mocked(fetchAgents).mockResolvedValueOnce([
+      { id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'claude-sonnet-4-6', description: 'Assistant' },
+      { id: 'builder', name: 'Builder Worker', type: 'worker', status: 'active', description: 'Labour agent' },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ] as any)
+    act(() => { useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: 'sess_1' }) })
+
+    renderBar()
+    await screen.findByText('Mia')
+    expect(screen.queryByText('Builder Worker')).not.toBeInTheDocument()
   })
 })
 

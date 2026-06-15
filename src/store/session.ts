@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Session } from '@/lib/api'
+import type { AgentKind, Session } from '@/lib/api'
 import { useConnectionStore } from '@/store/connection'
 // syncChatForeground is imported lazily to avoid the chat ↔ session circular init.
 // It is resolved at call-time via a dynamic require-style closure.
@@ -14,18 +14,18 @@ function syncForeground(): void {
 interface SessionStore {
   activeSessionId: string | null
   activeAgentId: string | null
-  /** The type of the currently active agent ('core' | 'custom' | 'system' | 'worker' | null).
+  /** The type of the currently active agent (AgentKind | null).
    *  Set by setActiveSession so all callers stay in sync without manual tracking. */
-  activeAgentType: 'core' | 'custom' | 'system' | 'worker' | null
+  activeAgentType: AgentKind | null
   setActiveSession: (
     sessionId: string | null,
     agentId?: string | null,
-    agentType?: 'core' | 'custom' | 'system' | 'worker' | null
+    agentType?: AgentKind | null
   ) => void
   /** Proper store action for updating activeAgentType.
    *  Replaces direct useSessionStore.setState({ activeAgentType }) call-sites
    *  so future side-effects can be added here without touching callers. */
-  setActiveAgentType: (type: 'core' | 'custom' | 'system' | 'worker' | null) => void
+  setActiveAgentType: (type: AgentKind | null) => void
 
   // Attached session context — tracks when viewing a task/channel session
   attachedSessionType: 'chat' | 'task' | 'channel' | null
@@ -47,7 +47,7 @@ interface SessionStore {
    *  session and ack it back via {type:"session_started", session_id}.
    *  Does NOT touch existing per-session buckets — background sessions
    *  keep streaming and remain visible in the SessionPanel. */
-  startNewSession: (agentId?: string | null, agentType?: 'core' | 'custom' | 'system' | 'worker' | null) => void
+  startNewSession: (agentId?: string | null, agentType?: AgentKind | null) => void
 }
 
 // Breaks the chat.ts ↔ session.ts circular import: chat.ts imports this module,

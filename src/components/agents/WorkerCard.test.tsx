@@ -126,6 +126,58 @@ describe('WorkerCard — Test run affordance', () => {
   })
 })
 
+describe('WorkerCard — test-result pill keys off result.ok', () => {
+  // The success/fail tone must come from the authoritative `ok` boolean, not an
+  // inference from reason === ''. We assert via the success-coloured icon class
+  // and the visible message; reason still drives the data-reason attribute.
+  it('renders a success pill when ok:true', async () => {
+    vi.mocked(testAgentRunner).mockResolvedValue({
+      ok: true,
+      reason: '',
+      message: 'ready',
+      cli: 'claude-code',
+      cli_version: '1.2.3',
+    })
+    renderCard(makeWorker({ executor: { kind: 'external-cli', cli: 'claude-code' } }))
+    fireEvent.click(screen.getByTestId('worker-test-run-worker-1'))
+    const pill = await screen.findByTestId('worker-test-result-claude-code')
+    // Success tone (emerald) lives on the pill span — not the error/warn tones.
+    expect(pill).toHaveClass('text-emerald-400')
+    expect(pill).toHaveTextContent('ready')
+    expect(pill).toHaveAttribute('data-reason', 'ok')
+  })
+
+  it('renders a failure pill when ok:false even if a reason is present', async () => {
+    vi.mocked(testAgentRunner).mockResolvedValue({
+      ok: false,
+      reason: 'missing-binary',
+      message: 'claude-code not on PATH',
+      cli: 'claude-code',
+    })
+    renderCard(makeWorker({ executor: { kind: 'external-cli', cli: 'claude-code' } }))
+    fireEvent.click(screen.getByTestId('worker-test-run-worker-1'))
+    const pill = await screen.findByTestId('worker-test-result-claude-code')
+    // Not the success tone — keyed off ok:false.
+    expect(pill).not.toHaveClass('text-emerald-400')
+    expect(pill).toHaveTextContent('claude-code not on PATH')
+    expect(pill).toHaveAttribute('data-reason', 'missing-binary')
+  })
+
+  it('renders a warning pill when ok:false and reason is unauthenticated', async () => {
+    vi.mocked(testAgentRunner).mockResolvedValue({
+      ok: false,
+      reason: 'unauthenticated',
+      message: 'present but not logged in',
+      cli: 'claude-code',
+    })
+    renderCard(makeWorker({ executor: { kind: 'external-cli', cli: 'claude-code' } }))
+    fireEvent.click(screen.getByTestId('worker-test-run-worker-1'))
+    const pill = await screen.findByTestId('worker-test-result-claude-code')
+    expect(pill).toHaveClass('text-amber-400')
+    expect(pill).toHaveTextContent('present but not logged in')
+  })
+})
+
 describe('WorkerCard — navigation', () => {
   it('navigates to the worker profile on card click', () => {
     renderCard(makeWorker({ id: 'worker-7' }))

@@ -18,6 +18,7 @@ import {
   fetchAgents,
   createSchedule,
   updateSchedule,
+  isWorker,
   isApiError,
 } from '@/lib/api'
 import type { Schedule, ScheduleCreate, ScheduleUpdate, ScheduleTrigger } from '@/lib/api/generated/openapi-types'
@@ -331,12 +332,16 @@ export function ScheduleFormSheet({
     enabled: open,
   })
 
-  // Default owner: agent with default:true, or first agent.
+  // Workers (type === 'worker') have no heartbeat and the backend rejects a
+  // scheduled run owned by a worker, so the owner picker must exclude them.
+  const ownerAgents = agents.filter((a) => !isWorker(a))
+
+  // Default owner: agent with default:true, or first eligible (non-worker) agent.
   // Applied only when the form is new (no schedule) and no defaultOwnerAgentId provided.
   useEffect(() => {
-    if (!open || isEdit || defaultOwnerAgentId || agents.length === 0) return
+    if (!open || isEdit || defaultOwnerAgentId || ownerAgents.length === 0) return
     if (form.ownerAgentId !== '') return
-    const defaultAgent = agents.find((a) => a.default) ?? agents[0]
+    const defaultAgent = ownerAgents.find((a) => a.default) ?? ownerAgents[0]
     if (defaultAgent) setValue('ownerAgentId', defaultAgent.id)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agents, open])
@@ -451,7 +456,7 @@ export function ScheduleFormSheet({
               value={form.ownerAgentId}
               onValueChange={(v) => setValue('ownerAgentId', v)}
               placeholder={agentsLoadFailed ? 'Could not load agents' : 'Select an agent'}
-              items={agents.map((a) => ({ value: a.id, label: a.name }))}
+              items={ownerAgents.map((a) => ({ value: a.id, label: a.name }))}
             />
             {agentsLoadFailed && (
               <div

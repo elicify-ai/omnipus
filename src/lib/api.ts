@@ -626,6 +626,22 @@ export interface AgentShellPolicy { // not-wire-format: SPA-internal helper type
 // Agent — re-exported from generated openapi-types (contract-first #8).
 // The generated type is the source of truth; see contracts/components/schemas/Agent.yaml.
 
+// AgentKind — the agent's "kind" axis. Derived directly from the generated
+// Agent['type'] so it is NOT a parallel wire type (Constraint #8): the generated
+// Agent remains the single source of truth. Re-used everywhere the literal union
+// 'core' | 'custom' | 'system' | 'worker' was previously repeated inline (session
+// store, ToolsAndPermissions) so the literal isn't scattered.
+export type AgentKind = NonNullable<Agent['type']>
+
+// isWorker — a worker is a delegation-only labour agent: never a chat target,
+// never a channel routing default, never a schedule owner. Used by the chat
+// switcher, channel-routing picker, and schedule-owner picker to filter workers
+// out of those selection sites. Accepts a loose shape so it works on partial
+// agent objects too.
+export function isWorker(a: { type?: string | null }): boolean {
+  return a.type === 'worker'
+}
+
 export function fetchAgents(): Promise<Agent[]> {
   return request<Agent[]>('/agents', undefined, z.array(AgentSchema) as ZodType<Agent[]>)
 }

@@ -12,7 +12,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
-import { fetchAgents } from '@/lib/api'
+import { fetchAgents, isWorker } from '@/lib/api'
 
 function formatCost(cost: number): string {
   if (cost === 0) return '$0.00'
@@ -44,8 +44,13 @@ export function SessionBar() {
     queryFn: fetchAgents,
   })
 
-  // Only show agents that are ready to chat (active or idle — not draft)
-  const chatAgents = agents.filter((a) => a.status === 'active' || a.status === 'idle')
+  // Only show agents that are ready to chat (active or idle — not draft) and
+  // exclude workers: a worker (type === 'worker') is a delegation-only labour
+  // agent, never a chat target, so it must never appear in the switcher nor be
+  // auto-selected as the active chat persona below.
+  const chatAgents = agents.filter(
+    (a) => (a.status === 'active' || a.status === 'idle') && !isWorker(a),
+  )
 
   // Auto-select the first ready agent if none is active yet.
   // Done in useEffect (not during render) to avoid calling setState mid-render,

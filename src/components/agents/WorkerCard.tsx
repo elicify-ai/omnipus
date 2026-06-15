@@ -170,8 +170,11 @@ function WorkerTestRun({ agentId, isExternalCli }: { agentId: string; isExternal
 }
 
 function WorkerTestResultPill({ result }: { result: RunnerTestResponse }) {
-  const ok = result.reason === ''
-  const warn = result.reason === 'unauthenticated'
+  // Key success off the authoritative `ok` boolean the backend returns, not an
+  // inference from reason === '' — reason carries the failure classifier and is
+  // kept for the tooltip/data-reason attribute below.
+  const ok = result.ok
+  const warn = !ok && result.reason === 'unauthenticated'
   const Icon = ok ? CheckCircle : warn ? WarningCircle : XCircle
   const tone = ok
     ? 'text-emerald-400'

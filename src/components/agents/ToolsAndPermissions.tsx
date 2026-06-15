@@ -25,6 +25,7 @@ import {
   fetchRegistryTools,
   fetchAgentTools,
   updateAgentTools,
+  type AgentKind,
   type AgentToolsCfg,
 } from '@/lib/api'
 import { useAutoSave } from '@/hooks/useAutoSave'
@@ -33,7 +34,7 @@ import { applyRolePreset } from '@/lib/toolPolicyPresets'
 
 interface ToolsAndPermissionsProps {
   agentId: string | null
-  agentType: 'core' | 'custom' | 'system' | 'worker'
+  agentType: AgentKind
   /** Whether the agent is locked (core/identity-locked). Read-only when true. */
   isLocked?: boolean
   tools: AgentToolsCfg
