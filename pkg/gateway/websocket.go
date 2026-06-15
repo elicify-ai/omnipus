@@ -911,9 +911,23 @@ func (h *WSHandler) handleChatMessage(
 		}
 		if targetAgentID == "" {
 			// Fall back to the first enabled agent (mirrors handleBoardTaskStart /
-			// resolveDefaultAgentID in pkg/routing/route.go).
+			// resolveDefaultAgentID in pkg/routing/route.go). firstEnabledAgentID
+			// already skips workers, so this fallback never lands on one.
 			targetAgentID = firstEnabledAgentID(h.agentLoop.GetConfig())
 		}
+	} else if isWorkerAgentID(h.agentLoop.GetConfig(), targetAgentID) {
+		// An explicit agent_id that resolves to a worker is illegitimate: a worker
+		// is a delegation-only labour tier, never a chat target. Refuse to mint a
+		// live chat session for it. Mirror the error-frame pattern used for an
+		// unknown/invalid session below.
+		slog.Warn("ws: rejecting chat frame addressed to a worker agent",
+			"agent_id", targetAgentID, "chat_id", chatID,
+			"reason", "worker is invoked via delegation, not as a chat target")
+		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "this agent is a worker and cannot be a chat target — workers are invoked via delegation",
+		})
+		return
 	}
 
 	sessionID := frameSessionID

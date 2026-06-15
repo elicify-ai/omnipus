@@ -64,7 +64,7 @@ func (r *RouteResolver) ResolveRoute(input RouteInput) ResolvedRoute {
 	bindings := r.filterBindings(channel, accountID)
 
 	choose := func(agentID string, matchedBy string) ResolvedRoute {
-		resolvedAgentID := r.pickAgentID(agentID)
+		resolvedAgentID := r.pickAgentID(agentID, matchedBy)
 		sessionKey := strings.ToLower(BuildAgentPeerSessionKey(SessionKeyParams{
 			AgentID:       resolvedAgentID,
 			Channel:       channel,
@@ -247,7 +247,12 @@ func (r *RouteResolver) findChannelWildcardMatch(bindings []config.AgentBinding)
 	return nil
 }
 
-func (r *RouteResolver) pickAgentID(agentID string) string {
+// pickAgentID resolves a binding/identity-supplied agent ID to a concrete,
+// route-able agent ID. matchedBy is the routing rule that produced agentID
+// (e.g. "binding.peer", "identity.agent", "default") — it is threaded purely so
+// the fallback WARN logs can tell an operator WHICH binding rule routed to a
+// worker or a non-existent agent.
+func (r *RouteResolver) pickAgentID(agentID string, matchedBy string) string {
 	trimmed := strings.TrimSpace(agentID)
 	if trimmed == "" {
 		return NormalizeAgentID(r.resolveDefaultAgentID())
@@ -267,7 +272,7 @@ func (r *RouteResolver) pickAgentID(agentID string) string {
 			if !a.IsChatTarget() {
 				defaultID := NormalizeAgentID(r.resolveDefaultAgentID())
 				logger.WarnCF("routing", "Binding/identity references a worker agent (not a chat target); falling back to default",
-					map[string]any{"requested_agent_id": normalized, "default_agent_id": defaultID})
+					map[string]any{"requested_agent_id": normalized, "default_agent_id": defaultID, "matched_by": matchedBy})
 				return defaultID
 			}
 			return normalized
@@ -277,7 +282,7 @@ func (r *RouteResolver) pickAgentID(agentID string) string {
 	// so operators can detect misconfigured bindings at runtime.
 	defaultID := NormalizeAgentID(r.resolveDefaultAgentID())
 	logger.WarnCF("routing", "Binding references non-existent agent; falling back to default",
-		map[string]any{"requested_agent_id": normalized, "default_agent_id": defaultID})
+		map[string]any{"requested_agent_id": normalized, "default_agent_id": defaultID, "matched_by": matchedBy})
 	return defaultID
 }
 

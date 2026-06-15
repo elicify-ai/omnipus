@@ -3712,25 +3712,42 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 	// explicit agent_id (e.g. channel inputs that don't track agent state).
 	if explicitID := inboundMetadata(msg, "agent_id"); explicitID != "" {
 		if agent, ok := registry.GetAgent(explicitID); ok {
-			// Clear stale handoff override only when the explicit target differs from
-			// the current override. If the user selects the same agent that the handoff
-			// already set, clearing the override would incorrectly reset routing state.
-			if cur, ok := al.sessionActiveAgent.Load(sessionScopeKey(msg)); !ok || cur.(string) != explicitID {
-				al.sessionActiveAgent.Delete(sessionScopeKey(msg))
+			// A worker is a delegation-only labour tier — never a chat target.
+			// An inbound message that explicitly addresses a worker (e.g. a stale
+			// SPA dropdown value or a crafted channel payload) must NOT let the
+			// worker answer as a live persona. Degrade to the normal routing
+			// cascade, which resolves a chat-target default. Do not delete any
+			// handoff pin here — falling through preserves an existing chat-target
+			// override if one is set.
+			if agent.IsWorker() {
+				logger.WarnCF("agent", "Explicit agent_id references a worker (not a chat target); ignoring and falling back to default route", map[string]any{
+					"agent_id":   explicitID,
+					"session_id": msg.SessionID,
+					"reason":     "worker is invoked via delegation, not as a chat target",
+				})
+				// Fall through to the handoff-override / ResolveRoute cascade below.
+			} else {
+				// Clear stale handoff override only when the explicit target differs from
+				// the current override. If the user selects the same agent that the handoff
+				// already set, clearing the override would incorrectly reset routing state.
+				if cur, ok := al.sessionActiveAgent.Load(sessionScopeKey(msg)); !ok || cur.(string) != explicitID {
+					al.sessionActiveAgent.Delete(sessionScopeKey(msg))
+				}
+				logger.InfoCF("agent", "Routed to explicit agent (dropdown)", map[string]any{
+					"agent_id":   explicitID,
+					"session_id": msg.SessionID,
+					"workspace":  agent.Workspace,
+				})
+				sk := agentSessionKey(explicitID, msg)
+				return routing.ResolvedRoute{AgentID: explicitID, SessionKey: sk}, agent, nil
 			}
-			logger.InfoCF("agent", "Routed to explicit agent (dropdown)", map[string]any{
-				"agent_id":   explicitID,
-				"session_id": msg.SessionID,
-				"workspace":  agent.Workspace,
+		} else {
+			logger.ErrorCF("agent", "explicit agent_id not found in registry", map[string]any{
+				"agent_id":       explicitID,
+				"registered_ids": registry.ListAgentIDs(),
 			})
-			sk := agentSessionKey(explicitID, msg)
-			return routing.ResolvedRoute{AgentID: explicitID, SessionKey: sk}, agent, nil
+			return routing.ResolvedRoute{}, nil, fmt.Errorf("the requested agent is not available")
 		}
-		logger.ErrorCF("agent", "explicit agent_id not found in registry", map[string]any{
-			"agent_id":       explicitID,
-			"registered_ids": registry.ListAgentIDs(),
-		})
-		return routing.ResolvedRoute{}, nil, fmt.Errorf("the requested agent is not available")
 	}
 
 	// Check session/chat-scope handoff override. Only reached when the message
@@ -3742,15 +3759,31 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 			agentID := activeAgent.(string)
 			if agentID != "" {
 				if agent, ok := registry.GetAgent(agentID); ok {
-					logger.InfoCF("agent", "Session handoff override active", map[string]any{
-						"session_id": msg.SessionID,
-						"agent_id":   agentID,
-					})
-					sk := agentSessionKey(agentID, msg)
-					return routing.ResolvedRoute{AgentID: agentID, SessionKey: sk}, agent, nil
+					// A worker must never be a live chat target. A pin that points at
+					// a worker is stale/illegitimate (handoff now rejects worker
+					// targets, but a pin created before this guard, or via another
+					// path, could still exist). Drop the stale pin and fall through
+					// to the normal ResolveRoute cascade so a chat-target default
+					// answers instead of the worker.
+					if agent.IsWorker() {
+						logger.WarnCF("agent", "Session handoff pin references a worker (not a chat target); clearing stale pin and falling back to default route", map[string]any{
+							"session_id": msg.SessionID,
+							"agent_id":   agentID,
+							"reason":     "worker is invoked via delegation, not as a chat target",
+						})
+						al.sessionActiveAgent.Delete(scopeKey)
+					} else {
+						logger.InfoCF("agent", "Session handoff override active", map[string]any{
+							"session_id": msg.SessionID,
+							"agent_id":   agentID,
+						})
+						sk := agentSessionKey(agentID, msg)
+						return routing.ResolvedRoute{AgentID: agentID, SessionKey: sk}, agent, nil
+					}
+				} else {
+					// Agent was deleted after the override was set — clean up and fall through.
+					al.sessionActiveAgent.Delete(scopeKey)
 				}
-				// Agent was deleted after the override was set — clean up and fall through.
-				al.sessionActiveAgent.Delete(scopeKey)
 			}
 		}
 	}

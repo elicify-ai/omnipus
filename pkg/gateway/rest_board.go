@@ -53,9 +53,17 @@ func isGTDTask(status boardtask.Status) bool {
 }
 
 // validateBoardTaskAgentID checks that the given agent ID exists in the registry
-// when the registry is non-nil and has at least one registered agent.
+// when the registry is non-nil and has at least one registered agent, and that it
+// is not a worker.
+//
+// This validates the agent_id supplied via the REST board API (POST/PUT board task,
+// /start) — the DIRECT human-assigned runner that processTaskDirect executes. A
+// worker is a delegation-only labour tier and must never be human-assigned here.
+// This REST path is SEPARATE from the delegation path: Jim→worker task delegation
+// goes through the task_create tool (pkg/tools/task.go → taskstore.Create), which
+// never calls this function, so this guard does not break delegation.
+//
 // Returns nil when the agent ID is valid or when the check is skipped (empty registry).
-// Returns an error when the agent ID is non-empty and not found in a populated registry.
 func (a *restAPI) validateBoardTaskAgentID(agentID string) error {
 	if agentID == "" {
 		return nil // empty agent_id is valid (start resolves default)
@@ -70,6 +78,9 @@ func (a *restAPI) validateBoardTaskAgentID(agentID string) error {
 	}
 	if _, ok := reg.GetAgent(agentID); !ok {
 		return fmt.Errorf("agent %q not found", agentID)
+	}
+	if reg.IsWorker(agentID) {
+		return fmt.Errorf("agent %q is a worker and cannot be directly assigned a task — workers are invoked via delegation", agentID)
 	}
 	return nil
 }

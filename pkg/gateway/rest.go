@@ -719,19 +719,34 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id strin
 	jsonOK(w, map[string]bool{"success": true})
 }
 
-// firstEnabledAgentID returns the ID of the first active/enabled agent in the
-// config list, or "" when no agents are configured. Used as a last-resort fallback
-// after GetDefaultAgent() — mirrors resolveDefaultAgentID in pkg/routing/route.go.
+// firstEnabledAgentID returns the ID of the first active/enabled chat-target agent
+// in the config list, or "" when no such agent is configured. Used as a last-resort
+// fallback after GetDefaultAgent() — mirrors resolveDefaultAgentID in
+// pkg/routing/route.go. Workers are active but are NOT chat targets, so they are
+// skipped here: a last-resort fallback must never land on a worker, which is invoked
+// only via delegation.
 func firstEnabledAgentID(cfg *config.Config) string {
 	if cfg == nil {
 		return ""
 	}
 	for _, ag := range cfg.Agents.List {
-		if ag.IsActive() {
+		if ag.IsActive() && ag.IsChatTarget() {
 			return ag.ID
 		}
 	}
 	return ""
+}
+
+// isWorkerAgentID reports whether agentID resolves to a worker agent in the config.
+// Returns false for an unknown agent ID (existence is validated separately by the
+// caller). Used by gateway session-binding chokepoints to reject a worker as a chat
+// target — a worker is a delegation-only labour tier, never a live chat persona.
+func isWorkerAgentID(cfg *config.Config, agentID string) bool {
+	if cfg == nil || agentID == "" {
+		return false
+	}
+	ac := findAgentConfig(cfg, agentID)
+	return ac != nil && ac.IsWorker()
 }
 
 func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
@@ -764,6 +779,14 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	// Validate the agent exists before creating the session.
 	if agentStore := a.agentLoop.GetAgentStore(agentID); agentStore == nil {
 		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("agent %q not found", agentID))
+		return
+	}
+	// A worker is a delegation-only labour tier — never a chat target. A session
+	// backs a live chat, so an explicit worker agent_id must be rejected (mirrors
+	// setChannelRouting's worker 400). Both no-agent fallbacks above already skip
+	// workers, so this only ever rejects an explicitly-supplied worker.
+	if isWorkerAgentID(a.agentLoop.GetConfig(), agentID) {
+		jsonErr(w, http.StatusBadRequest, "workers are not chat targets and cannot back a session")
 		return
 	}
 

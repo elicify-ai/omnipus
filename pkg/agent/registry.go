@@ -198,6 +198,21 @@ func (r *AgentRegistry) GetAgentName(agentID string) (string, bool) {
 	return name, true
 }
 
+// IsWorker reports whether the agent identified by agentID is a sub-agent worker
+// (the delegation-only labour tier). Returns false when the agent does not exist,
+// so callers that have already validated existence get a definitive worker/not-worker
+// answer. Satisfies the tools.AgentRegistryReader interface used by HandoffTool to
+// reject worker handoff targets without an import cycle.
+func (r *AgentRegistry) IsWorker(agentID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	agent, ok := r.agents[agentID]
+	if !ok {
+		return false
+	}
+	return agent.IsWorker()
+}
+
 // Close releases resources held by all registered agents and clears the map (M9).
 func (r *AgentRegistry) Close() {
 	r.mu.Lock()
