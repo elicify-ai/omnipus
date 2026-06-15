@@ -48,6 +48,7 @@ import {
   fetchAgentSessions,
   fetchActivity,
   fetchSkills,
+  isWorker,
   type AgentSession,
   type ActivityEvent,
   type AgentToolsCfg,
@@ -378,6 +379,15 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
 
   const isLocked = agent.locked === true
   const canEdit = !isLocked
+  // Tier-branched form. Workers are delegation-only labour agents: never a chat
+  // target, no heartbeat, never the default, and carry an executor (the worker's
+  // defining property). Base agents (core/custom/system) run native/in-process
+  // only — no third-party executor is selectable for them. The locked concept
+  // (`.preview-doc/agents.html`) makes the worker-vs-base split a property of
+  // the agent itself, so we branch once here and let the JSX ask `isWorkerAgent`
+  // to decide which accordions render. See the contract schema for the
+  // `worker` type value: contracts/components/schemas/Agent.yaml.
+  const isWorkerAgent = isWorker(agent)
 
   return (
     <div className="absolute inset-0 overflow-y-auto">
@@ -587,29 +597,33 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
         )}
 
         {/* Executor — Spec-4 FR-4.1: sub-agent runtime selector + runner test.
-            Read-only for locked core agents (the selector is rendered disabled). */}
-        <AccordionItem value="executor" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
-            <div className="flex items-center gap-2">
-              <span>Executor</span>
-              {(executor?.kind === 'external-cli' || executor?.kind === 'remote-a2a') && (
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]">
-                  {executor.kind === 'external-cli' ? (executor.cli ?? 'external') : 'A2A'}
-                </span>
-              )}
-            </div>
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4">
-              <ExecutorSelector
-                value={executor}
-                agentId={agentId}
-                disabled={isLocked}
-                onChange={(next) => { markDirty(); setExecutor(next) }}
-              />
-            </div>
-          </AccordionContent>
-        </AccordionItem>
+            Worker-only. Base agents run native/in-process only — there is no
+            third-party executor for them, so the entire accordion is omitted
+            rather than rendered disabled. Read-only for locked core workers. */}
+        {isWorkerAgent && (
+          <AccordionItem value="executor" className="border-0">
+            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+              <div className="flex items-center gap-2">
+                <span>Executor</span>
+                {(executor?.kind === 'external-cli' || executor?.kind === 'remote-a2a') && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]">
+                    {executor.kind === 'external-cli' ? (executor.cli ?? 'external') : 'A2A'}
+                  </span>
+                )}
+              </div>
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="px-4">
+                <ExecutorSelector
+                  value={executor}
+                  agentId={agentId}
+                  disabled={isLocked}
+                  onChange={(next) => { markDirty(); setExecutor(next) }}
+                />
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        )}
 
         {/* Model Configuration — default CLOSED */}
         <AccordionItem value="model" className="border-0">
@@ -776,7 +790,15 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
           </AccordionItem>
         )}
 
-        {/* Behavior — default CLOSED (SOUL + Instructions + Heartbeat + Execution) */}
+        {/* Behavior — default CLOSED.
+            Tier-branched: base agents keep the full set (SOUL persona +
+            instructions + heartbeat + execution). Workers get a slimmer
+            section — a relabeled "Task prompt (optional)" instead of the
+            "Personality & instructions" framing, and NO heartbeat. The
+            task prompt is optional (empty is valid) per the locked concept
+            (`.preview-doc/agents.html`); the backend treats worker SOUL.md
+            as optional. Both tiers still get Execution params — they're
+            per-agent engine settings, not persona or scheduling. */}
         {canEdit && (
           <AccordionItem value="behavior" className="border-0">
             <AccordionTrigger className="px-4 font-headline font-bold text-sm">
@@ -784,93 +806,154 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
             </AccordionTrigger>
             <AccordionContent>
               <div className="px-4 space-y-5">
-                {/* #335 (US-D3): relabeled SOUL.md → "Personality & instructions" */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Scroll size={13} className="text-[var(--color-accent)]" />
-                    <p className="text-xs font-medium text-[var(--color-secondary)]">Personality &amp; instructions</p>
-                  </div>
-                  <p className="text-xs text-[var(--color-muted)]">
-                    Defines this agent's character, expertise, and behavioral guidelines.
-                    Stored as <span className="font-mono text-[11px]">SOUL.md</span> in the agent workspace.
-                  </p>
-                  <Textarea
-                    value={soul}
-                    onChange={(e) => { markDirty(); setSoul(e.target.value) }}
-                    placeholder={"# Soul\n\nDefine this agent's personality, expertise, and behavioral guidelines..."}
-                    rows={6}
-                    className="text-xs font-mono resize-none"
-                  />
-                  <UploadButton onUpload={setSoul} />
-                </div>
-
-                <Separator />
-
-                {/* Additional Instructions */}
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <NotePencil size={13} className="text-[var(--color-accent)]" />
-                    <p className="text-xs font-medium text-[var(--color-secondary)]">Additional Instructions</p>
-                  </div>
-                  <p className="text-xs text-[var(--color-muted)]">
-                    Extra instructions appended to the agent's context.
-                  </p>
-                  <Textarea
-                    value={instructions}
-                    onChange={(e) => { markDirty(); setInstructions(e.target.value) }}
-                    placeholder="Add specific instructions, constraints, or domain knowledge..."
-                    rows={4}
-                    className="text-xs font-mono resize-none"
-                  />
-                  <UploadButton onUpload={setInstructions} />
-                </div>
-
-                <Separator />
-
-                {/* #335 (US-D3): relabeled HEARTBEAT.md → "Background tasks / periodic instructions" */}
-                <div className="space-y-2">
-                  <p className="text-xs font-medium text-[var(--color-secondary)]">Background tasks / periodic instructions</p>
-                  <p className="text-xs text-[var(--color-muted)]">
-                    Instructions the agent runs on a recurring schedule — check queues, summarize,
-                    or perform any background work. Stored as <span className="font-mono text-[11px]">HEARTBEAT.md</span>.
-                  </p>
-                  <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-sm text-[var(--color-secondary)]">Enable heartbeat</p>
-                        <p className="text-xs text-[var(--color-muted)]">Run on a recurring schedule</p>
+                {isWorkerAgent ? (
+                  <>
+                    {/* Worker: relabeled, optional task prompt.
+                        No "personality" framing — workers are labour agents
+                        pointed at work, not colleagues. Empty is valid. */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Scroll size={13} className="text-[var(--color-accent)]" />
+                        <p className="text-xs font-medium text-[var(--color-secondary)]">
+                          Task prompt <span className="text-[var(--color-muted)] font-normal">(optional)</span>
+                        </p>
                       </div>
-                      <Switch
-                        checked={heartbeatEnabled}
-                        onCheckedChange={(v) => { markDirty(); setHeartbeatEnabled(v) }}
+                      <p className="text-xs text-[var(--color-muted)]">
+                        Optional system prompt for the worker&apos;s runner. Composed
+                        with any caller-supplied task prompt at run time. Stored as{' '}
+                        <span className="font-mono text-[11px]">SOUL.md</span>. Leave
+                        empty to use the executor&apos;s default behaviour.
+                      </p>
+                      <Textarea
+                        data-testid="worker-task-prompt"
+                        value={soul}
+                        onChange={(e) => { markDirty(); setSoul(e.target.value) }}
+                        placeholder="# Task prompt (optional)&#10;&#10;Define how this worker should approach its delegated task..."
+                        rows={6}
+                        className="text-xs font-mono resize-none"
+                        // Workers: explicitly NOT required. Empty is valid.
+                        required={false}
+                        aria-required={false}
                       />
+                      <UploadButton onUpload={setSoul} />
                     </div>
-                    {heartbeatEnabled && (
-                      <div className="flex items-center gap-3 pt-1 border-t border-[var(--color-border)]">
-                        <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Interval (seconds)</label>
-                        <Input
-                          type="number"
-                          min={1}
-                          value={heartbeatInterval}
-                          onChange={(e) => { markDirty(); setHeartbeatInterval(Number(e.target.value)) }}
-                          className="text-xs h-8"
-                        />
+
+                    <Separator />
+
+                    {/* Additional Instructions (worker) */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <NotePencil size={13} className="text-[var(--color-accent)]" />
+                        <p className="text-xs font-medium text-[var(--color-secondary)]">Additional Instructions</p>
                       </div>
-                    )}
-                  </div>
-                  <Textarea
-                    value={heartbeat}
-                    onChange={(e) => { markDirty(); setHeartbeat(e.target.value) }}
-                    placeholder="# Heartbeat&#10;&#10;Write persistent context for this agent..."
-                    rows={4}
-                    className="text-xs font-mono resize-none"
-                  />
-                  <UploadButton onUpload={setHeartbeat} />
-                </div>
+                      <p className="text-xs text-[var(--color-muted)]">
+                        Extra instructions appended to the worker&apos;s context.
+                      </p>
+                      <Textarea
+                        value={instructions}
+                        onChange={(e) => { markDirty(); setInstructions(e.target.value) }}
+                        placeholder="Add specific instructions, constraints, or domain knowledge..."
+                        rows={4}
+                        className="text-xs font-mono resize-none"
+                      />
+                      <UploadButton onUpload={setInstructions} />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {/* #335 (US-D3): relabeled SOUL.md → "Personality & instructions" */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Scroll size={13} className="text-[var(--color-accent)]" />
+                        <p className="text-xs font-medium text-[var(--color-secondary)]">Personality &amp; instructions</p>
+                      </div>
+                      <p className="text-xs text-[var(--color-muted)]">
+                        Defines this agent's character, expertise, and behavioral guidelines.
+                        Stored as <span className="font-mono text-[11px]">SOUL.md</span> in the agent workspace.
+                      </p>
+                      <Textarea
+                        value={soul}
+                        onChange={(e) => { markDirty(); setSoul(e.target.value) }}
+                        placeholder={"# Soul\n\nDefine this agent's personality, expertise, and behavioral guidelines..."}
+                        rows={6}
+                        className="text-xs font-mono resize-none"
+                      />
+                      <UploadButton onUpload={setSoul} />
+                    </div>
+
+                    <Separator />
+
+                    {/* Additional Instructions */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <NotePencil size={13} className="text-[var(--color-accent)]" />
+                        <p className="text-xs font-medium text-[var(--color-secondary)]">Additional Instructions</p>
+                      </div>
+                      <p className="text-xs text-[var(--color-muted)]">
+                        Extra instructions appended to the agent's context.
+                      </p>
+                      <Textarea
+                        value={instructions}
+                        onChange={(e) => { markDirty(); setInstructions(e.target.value) }}
+                        placeholder="Add specific instructions, constraints, or domain knowledge..."
+                        rows={4}
+                        className="text-xs font-mono resize-none"
+                      />
+                      <UploadButton onUpload={setInstructions} />
+                    </div>
+
+                    <Separator />
+
+                    {/* #335 (US-D3): relabeled HEARTBEAT.md → "Background tasks / periodic instructions".
+                        Base-only. Workers never run on a schedule (delegation-only
+                        labour agents), so this whole sub-block is omitted. */}
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-[var(--color-secondary)]">Background tasks / periodic instructions</p>
+                      <p className="text-xs text-[var(--color-muted)]">
+                        Instructions the agent runs on a recurring schedule — check queues, summarize,
+                        or perform any background work. Stored as <span className="font-mono text-[11px]">HEARTBEAT.md</span>.
+                      </p>
+                      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm text-[var(--color-secondary)]">Enable heartbeat</p>
+                            <p className="text-xs text-[var(--color-muted)]">Run on a recurring schedule</p>
+                          </div>
+                          <Switch
+                            checked={heartbeatEnabled}
+                            onCheckedChange={(v) => { markDirty(); setHeartbeatEnabled(v) }}
+                          />
+                        </div>
+                        {heartbeatEnabled && (
+                          <div className="flex items-center gap-3 pt-1 border-t border-[var(--color-border)]">
+                            <label className="text-xs text-[var(--color-muted)] w-44 shrink-0">Interval (seconds)</label>
+                            <Input
+                              type="number"
+                              min={1}
+                              value={heartbeatInterval}
+                              onChange={(e) => { markDirty(); setHeartbeatInterval(Number(e.target.value)) }}
+                              className="text-xs h-8"
+                            />
+                          </div>
+                        )}
+                      </div>
+                      <Textarea
+                        value={heartbeat}
+                        onChange={(e) => { markDirty(); setHeartbeat(e.target.value) }}
+                        placeholder="# Heartbeat&#10;&#10;Write persistent context for this agent..."
+                        rows={4}
+                        className="text-xs font-mono resize-none"
+                      />
+                      <UploadButton onUpload={setHeartbeat} />
+                    </div>
+                  </>
+                )}
 
                 <Separator />
 
-                {/* Execution */}
+                {/* Execution — both tiers. Per-agent engine settings, not
+                    persona or scheduling. Locked core agents skip this
+                    sub-block (they run on a built-in policy). */}
                 {!isLocked && (
                   <div className="space-y-2">
                     <p className="text-xs font-medium text-[var(--color-secondary)]">Execution</p>
@@ -1075,27 +1158,32 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
           </AccordionContent>
         </AccordionItem>
 
-        {/* Schedules — default CLOSED (#264) */}
-        <AccordionItem value="schedules" className="border-0">
-          <AccordionTrigger className="px-4 font-headline font-bold text-sm">
-            Schedules
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="px-4 space-y-3">
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => setCreatingSchedule(true)}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
-                >
-                  <Plus size={13} />
-                  New schedule
-                </button>
+        {/* Schedules — default CLOSED (#264). Base-only. Workers are
+            delegation-only labour agents and never own a schedule, so the
+            whole accordion is omitted. The schedule-owner picker on the
+            create form also filters workers out (see ScheduleFormSheet). */}
+        {!isWorkerAgent && (
+          <AccordionItem value="schedules" className="border-0">
+            <AccordionTrigger className="px-4 font-headline font-bold text-sm">
+              Schedules
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="px-4 space-y-3">
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setCreatingSchedule(true)}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                  >
+                    <Plus size={13} />
+                    New schedule
+                  </button>
+                </div>
+                <SchedulesList agentId={agentId} />
               </div>
-              <SchedulesList agentId={agentId} />
-            </div>
-          </AccordionContent>
-        </AccordionItem>
+            </AccordionContent>
+          </AccordionItem>
+        )}
 
         {/* Activity — default CLOSED */}
         <AccordionItem value="activity" className="border-0">
