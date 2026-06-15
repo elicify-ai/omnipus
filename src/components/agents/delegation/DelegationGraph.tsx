@@ -6,20 +6,32 @@ import {
   Controls,
   Handle,
   Position,
+  ConnectionMode,
   MarkerType,
   BaseEdge,
   EdgeLabelRenderer,
   getBezierPath,
+  applyNodeChanges,
+  useConnection,
   type Node,
   type Edge,
   type Connection,
   type NodeProps,
+  type NodeChange,
   type EdgeProps,
   type IsValidConnection,
   type OnConnectStart,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Star, Stack, Lightning, Trash, X, Warning } from '@phosphor-icons/react'
+import {
+  Star,
+  Stack,
+  Lightning,
+  Trash,
+  X,
+  Warning,
+  DotsSixVertical,
+} from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
@@ -40,6 +52,12 @@ const MODE_CHIP_CLASS: Record<DelegationMode, string> = {
     'border-[var(--color-success)]/40 bg-[var(--color-success)]/10 text-[var(--color-success)]',
 }
 
+// CSS selector of the per-node drag grip. Setting each node's `dragHandle` to
+// this class means ONLY the grip moves the node — dragging the node BODY starts
+// a delegation connection instead (the "easy-connect" pattern below). The two
+// gestures never fight: body = connect, grip = move.
+const DRAG_GRIP_SELECTOR = '.delegation-drag-grip'
+
 // ── Node / edge data carried into React Flow ─────────────────────────────────
 export interface AgentNodeData extends Record<string, unknown> {
   model: GraphNodeModel
@@ -56,27 +74,74 @@ export interface DelegationEdgeData extends Record<string, unknown> {
 type AgentFlowNode = Node<AgentNodeData, 'agent'>
 type DelegationFlowEdge = Edge<DelegationEdgeData, 'delegation'>
 
+// Full-node-sized, invisible Handle. Absolutely fills the node body so the
+// ENTIRE shape is the connect hit-area (the React Flow "easy-connect" recipe):
+// a drag that starts anywhere on the body starts/ends a connection. `!opacity-0`
+// keeps it invisible; the node body itself supplies the visible affordance.
+const FULL_HANDLE_CLASS =
+  'delegation-full-handle !absolute !inset-0 !left-0 !top-0 !h-full !w-full !min-h-0 !min-w-0 !translate-x-0 !translate-y-0 !transform-none !rounded-none !border-0 !bg-transparent !opacity-0'
+
+// ── Drag grip: the ONLY part of a node that moves it ─────────────────────────
+// Sits above the full-node connect handle (higher z-index) so a pointer-down on
+// the grip hits the grip (→ node move via dragHandle), while a pointer-down
+// anywhere else hits the handle (→ connection). `nopan` stops a grip drag from
+// panning the canvas.
+function DragGrip() {
+  return (
+    <div
+      className={cn(
+        'delegation-drag-grip nopan absolute right-1.5 top-1.5 z-10 flex h-5 w-5 cursor-grab items-center justify-center rounded text-[var(--color-muted)] opacity-0 transition-opacity hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] active:cursor-grabbing group-hover:opacity-100',
+      )}
+      title="Drag to reposition"
+      aria-label="Drag to reposition node"
+      data-testid="delegation-drag-grip"
+    >
+      <DotsSixVertical size={13} weight="bold" />
+    </div>
+  )
+}
+
 // ── Custom node: one agent ───────────────────────────────────────────────────
-function AgentNode({ data }: NodeProps<AgentFlowNode>) {
+function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
   const { model } = data
   const initial = model.name.charAt(0).toUpperCase()
 
-  // GHOST node: an edge target with no backing agent (deleted). Render it with
-  // a warning style + "(deleted)" label so the dangling edge is visible and the
-  // user can select that edge and delete it. A ghost never delegates onward, so
-  // it gets no source handle.
+  // Easy-connect drop-target detection: while a connection is in progress and it
+  // did NOT start on this node, this node is a candidate DROP TARGET — surface a
+  // visible affordance so it's discoverable that the whole shape is droppable.
+  const connection = useConnection()
+  const isTarget = connection.inProgress && connection.fromNode?.id !== id
+
+  // Worker (leaf) and ghost (deleted placeholder) nodes are TARGET-ONLY: they
+  // may receive a delegation edge but must never START one. Only a real,
+  // non-worker node can be a connection source.
+  const canBeSource = !model.isWorker && !model.isGhost
+
+  // GHOST node: an edge target with no backing agent (deleted). Render it with a
+  // warning style + "(deleted)" label so the dangling edge is visible and the
+  // user can select that edge and delete it. A ghost is target-only: it gets the
+  // full-node TARGET handle (so the easy-connect drop works) but never a source.
   if (model.isGhost) {
     return (
       <div
         data-testid={`delegation-node-${model.id}`}
         data-ghost="true"
-        className="w-[220px] rounded-xl border border-dashed border-[var(--color-warning)]/60 bg-[var(--color-warning)]/5 px-3 py-2.5 shadow-sm"
+        className={cn(
+          'group relative w-[220px] rounded-xl border border-dashed border-[var(--color-warning)]/60 bg-[var(--color-warning)]/5 px-3 py-2.5 shadow-sm transition-colors',
+          isTarget && 'border-solid ring-2 ring-[var(--color-warning)]/70',
+        )}
         title={`${model.id} no longer exists — its delegation edge is dangling. Click the edge to delete it.`}
       >
+        {/* Full-node TARGET handle. `isConnectableStart={false}` blocks a drag
+            from STARTING here, so a ghost can never be a source. */}
         <Handle
           type="target"
           position={Position.Top}
-          className="!h-2 !w-2 !border-[var(--color-warning)] !bg-[var(--color-warning)]"
+          isConnectableStart={false}
+          className={cn(
+            FULL_HANDLE_CLASS,
+            '!border-[var(--color-warning)] !bg-[var(--color-warning)]',
+          )}
         />
         <div className="flex items-center gap-2.5">
           <div
@@ -101,23 +166,57 @@ function AgentNode({ data }: NodeProps<AgentFlowNode>) {
   return (
     <div
       data-testid={`delegation-node-${model.id}`}
+      data-can-source={canBeSource ? 'true' : 'false'}
       className={cn(
-        'w-[220px] rounded-xl border bg-[var(--color-surface-1)] px-3 py-2.5 shadow-sm transition-colors',
-        'border-[var(--color-border)] hover:border-[var(--color-accent)]/50',
+        'group relative w-[220px] rounded-xl border bg-[var(--color-surface-1)] px-3 py-2.5 shadow-sm transition-colors',
+        'border-[var(--color-border)]',
+        // Hover affordance: the whole shape is grabbable to connect. A source
+        // node shows a grab cursor + accent ring on hover so it's discoverable.
+        canBeSource && 'cursor-grab hover:border-[var(--color-accent)]/60 hover:ring-1 hover:ring-[var(--color-accent)]/40',
+        // Drop-target affordance during an in-progress connection.
+        isTarget && 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/70',
       )}
       title={
         model.isWorker
-          ? "Workers are delegation leaves — they don't delegate onward"
-          : `Drag from the bottom handle to delegate from ${model.name}`
+          ? "Workers are delegation leaves — they receive work but never delegate onward"
+          : `Drag from anywhere on ${model.name} onto another agent to delegate. Use the grip to reposition.`
       }
     >
-      {/* Target handle (top): every node can RECEIVE delegation. */}
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!h-2 !w-2 !border-[var(--color-border)] !bg-[var(--color-surface-3)]"
-      />
-      <div className="flex items-center gap-2.5">
+      {/* Move grip — the only element that repositions the node (dragHandle). */}
+      <DragGrip />
+
+      {/* Full-node TARGET handle: every node can RECEIVE delegation. Rendered
+          while a connection is in progress only when THIS node is a valid drop
+          target (not the originating node), matching the easy-connect recipe so
+          the source node doesn't immediately drop onto itself. Always present
+          when idle so the handle exists before a drag begins. */}
+      {(!connection.inProgress || isTarget) && (
+        <Handle
+          type="target"
+          position={Position.Top}
+          isConnectableStart={false}
+          className={cn(
+            FULL_HANDLE_CLASS,
+            '!border-[var(--color-border)] !bg-[var(--color-surface-3)]',
+          )}
+        />
+      )}
+
+      {/* Full-node SOURCE handle: only NON-worker nodes may delegate onward.
+          Rendered only while no connection is in progress (easy-connect) so the
+          target handle above can take over once a drag starts. */}
+      {canBeSource && !connection.inProgress && (
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          className={cn(
+            FULL_HANDLE_CLASS,
+            '!border-[var(--color-accent)] !bg-[var(--color-accent)]',
+          )}
+        />
+      )}
+
+      <div className="pointer-events-none flex items-center gap-2.5">
         <div
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold text-[var(--color-secondary)]"
           style={{ backgroundColor: model.color ?? 'var(--color-surface-3)' }}
@@ -154,14 +253,6 @@ function AgentNode({ data }: NodeProps<AgentFlowNode>) {
           </div>
         </div>
       </div>
-      {/* Source handle (bottom): only NON-worker nodes may delegate onward. */}
-      {!model.isWorker && (
-        <Handle
-          type="source"
-          position={Position.Bottom}
-          className="!h-2.5 !w-2.5 !border-[var(--color-accent)] !bg-[var(--color-accent)]"
-        />
-      )}
     </div>
   )
 }
@@ -399,19 +490,56 @@ function DelegationGraphInner({
     }
   }, [edges, selectedEdgeId])
 
-  const flowNodes = useMemo<AgentFlowNode[]>(
+  // Build the React Flow nodes from the model. `dragHandle` points at the grip
+  // so the BODY initiates a connection (easy-connect) while the grip moves the
+  // node. Worker/ghost nodes have no source handle so they can't start an edge.
+  const modelNodes = useMemo<AgentFlowNode[]>(
     () =>
       nodes.map((model) => ({
         id: model.id,
         type: 'agent' as const,
         position: model.position,
+        dragHandle: DRAG_GRIP_SELECTOR,
         data: { model },
-        // Workers (leaves) and ghosts (deleted) have no source handle, so they
-        // cannot start a connection; only real non-worker nodes can delegate.
-        connectable: !model.isWorker && !model.isGhost,
+        // With ConnectionMode.Loose a single per-node handle acts as both source
+        // and target. `connectable` stays true for every node so each can at
+        // least RECEIVE an edge; the worker/ghost source block is enforced by
+        // omitting their source handle + onConnectStart/isValidConnection.
+        connectable: true,
       })),
     [nodes],
   )
+
+  // Controlled node state so positions can be DRAGGED (via onNodesChange) while
+  // dagre still provides the initial layout. Positions are ephemeral (never
+  // persisted) — that's intentional. We seed from `modelNodes` and reconcile on
+  // every model change, PRESERVING any user-dragged position for a node that
+  // still exists so a background refetch doesn't snap dragged nodes back.
+  const [flowNodes, setFlowNodes] = useState<AgentFlowNode[]>(modelNodes)
+  const draggedPositions = useRef<Record<string, { x: number; y: number }>>({})
+
+  useEffect(() => {
+    setFlowNodes(
+      modelNodes.map((n) => {
+        const dragged = draggedPositions.current[n.id]
+        return dragged ? { ...n, position: dragged } : n
+      }),
+    )
+  }, [modelNodes])
+
+  const onNodesChange = useCallback((changes: NodeChange<AgentFlowNode>[]) => {
+    setFlowNodes((prev) => {
+      const next = applyNodeChanges(changes, prev)
+      // Remember dragged positions so a later model-driven reconcile keeps them
+      // instead of snapping back to the dagre layout.
+      for (const change of changes) {
+        if (change.type === 'position' && change.position) {
+          draggedPositions.current[change.id] = change.position
+        }
+      }
+      return next
+    })
+  }, [])
 
   const handleSelectEdge = useCallback((edgeId: string | null) => {
     setSelectedEdgeId(edgeId)
@@ -438,7 +566,8 @@ function DelegationGraphInner({
   )
 
   // Reject invalid connections live (worker source / self / duplicate) so the
-  // edge never visually attaches.
+  // edge never visually attaches. With ConnectionMode.Loose the loose handle
+  // could otherwise let a drag start on a worker; this is the live gate.
   const isValidConnection: IsValidConnection<DelegationFlowEdge> = useCallback(
     (conn) => {
       if (!conn.source || !conn.target) return false
@@ -449,6 +578,10 @@ function DelegationGraphInner({
 
   const handleConnect = useCallback(
     (conn: Connection) => {
+      // DIRECTION (verified): `conn.source` is the node the drag STARTED on,
+      // `conn.target` is the node it was DROPPED on. So source(dragged-from) →
+      // target(dropped-on) = "source may delegate to target". We hand this
+      // straight to onConnect(source, target) → addDelegationEdge(source,target).
       if (!conn.source || !conn.target) return
       const reason = validateConnection(conn.source, conn.target, validateEdits, workerIds)
       if (reason !== null) {
@@ -462,6 +595,9 @@ function DelegationGraphInner({
 
   const handleConnectStart = useCallback<OnConnectStart>(
     (_, params) => {
+      // Belt-and-braces worker-source block: a worker should have no source
+      // handle, but if a Loose drag is somehow initiated from one, surface the
+      // reject toast immediately (isValidConnection also refuses to attach it).
       if (params.nodeId && workerIds.has(params.nodeId)) {
         onRejectConnection(REJECTION_MESSAGE['worker-source'])
       }
@@ -482,10 +618,15 @@ function DelegationGraphInner({
         edges={flowEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
+        onNodesChange={onNodesChange}
         onConnect={handleConnect}
         onConnectStart={handleConnectStart}
         isValidConnection={isValidConnection}
         onPaneClick={() => setSelectedEdgeId(null)}
+        // Loose mode lets the single full-node handle act as both source and
+        // target, which is what the easy-connect (whole-node) pattern requires.
+        connectionMode={ConnectionMode.Loose}
+        nodesDraggable
         nodesConnectable
         elementsSelectable
         fitView

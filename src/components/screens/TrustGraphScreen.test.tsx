@@ -47,6 +47,9 @@ vi.mock('@/components/agents/delegation/DelegationGraph', () => ({
     <div data-testid="delegation-graph-stub">
       <button onClick={() => props.onConnect('jim', 'ray')}>connect-jim-ray</button>
       <button onClick={() => props.onConnect('ray', 'existing')}>connect-ray-existing</button>
+      {/* Direction probe: a drag FROM jim (source) dropped ON the worker
+          (target) must surface as onConnect('jim','w1') — i.e. source first. */}
+      <button onClick={() => props.onConnect('jim', 'w1')}>connect-jim-worker</button>
       <button onClick={() => props.onDeleteEdge('jim', 'existing')}>delete-jim-existing</button>
       <button onClick={() => props.onToggleMode('jim', 'background')}>toggle-jim-bg</button>
       <button onClick={() => props.onSetDepth('jim', 5)}>depth-jim-5</button>
@@ -95,6 +98,8 @@ function roster(): Agent[] {
     }),
     makeAgent({ id: 'ray', name: 'Ray' }),
     makeAgent({ id: 'existing', name: 'Existing' }),
+    // A worker (delegation leaf): a valid drop TARGET, never a source.
+    makeAgent({ id: 'w1', name: 'Worker One', type: 'worker' }),
   ]
 }
 
@@ -135,6 +140,29 @@ describe('TrustGraphScreen — save wiring', () => {
     ])
     expect(body.delegation_policy.modes).toEqual(['await'])
     expect(body.delegation_policy.depth).toBe(2)
+  })
+
+  it('dragging FROM jim TO a worker delegates jim→worker (direction: source→target, not reversed)', async () => {
+    // The easy-connect gesture reports the dragged-from node as `source` and the
+    // dropped-on node as `target`. Worker w1 is a valid TARGET (leaf), so the
+    // edge must land as jim.to += w1 — never w1.to += jim (workers never
+    // delegate onward). This locks the connection-direction invariant end to end.
+    renderScreen()
+    await screen.findByTestId('delegation-graph-stub')
+
+    fireEvent.click(screen.getByText('connect-jim-worker'))
+    fireEvent.click(await screen.findByTestId('delegation-save'))
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(1))
+    const [id, body] = updateAgentMock.mock.calls[0]
+    // Exactly ONE PUT, and it is for jim (the source) — not the worker.
+    expect(id).toBe('jim')
+    expect(body.delegation_policy.to).toEqual([
+      { kind: 'local', id: 'existing' },
+      { kind: 'local', id: 'w1' },
+    ])
+    // The worker is never written as a delegating source.
+    expect(updateAgentMock).not.toHaveBeenCalledWith('w1', expect.anything())
   })
 
   it('NEVER sends accept_from or budget in the save payload (NFR-7)', async () => {
