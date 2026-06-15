@@ -3907,6 +3907,9 @@ type AgentCreateRequest struct {
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
 
+	// Soul Initial SOUL.md content. When omitted, the new agent starts in "draft" with an empty soul (the profile edit flow writes it later). Worker-tier agents (type=worker) treat this as the optional task prompt; empty is valid for workers per the locked concept.
+	Soul *string `json:"soul,omitempty"`
+
 	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
@@ -3931,16 +3934,7 @@ type AgentCreateRequest struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Type Agent classification for the newly created agent. Optional: when omitted, defaults to "custom" (preserves pre-existing behaviour).
-	// - "custom" (default): a base / chat-target agent. Runs native, may be
-	//   the routing default, may have heartbeat and a per-agent voice.
-	// - "worker": a sub-agent worker. Invoked ONLY via delegation. NOT a chat
-	//   target, can never be the default, has no heartbeat, and may declare
-	//   an executor (native or external). Newly-created workers are unlocked
-	//   so the operator can edit them; a worker is still a delegation leaf
-	//   (its "to" list must be empty).
-	//
-	// "core" and "system" are seeded-only classifications and are NOT creatable from the API — sending any other value is rejected with 400.
+	// Type Agent tier to create. "custom" = a user-defined chat colleague (default for the existing POST /agents flow). "worker" = a sub-agent worker: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and must carry an executor (see Agent.executor). When omitted, the server creates a "custom" agent. The "core" and "system" types are reserved and cannot be created via this endpoint.
 	Type *AgentCreateRequestType `json:"type,omitempty"`
 
 	// Voice Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
@@ -3968,16 +3962,7 @@ type AgentCreateRequestToolsCfgBuiltinDefaultPolicy string
 // AgentCreateRequestToolsCfgBuiltinPolicies defines model for AgentCreateRequest.ToolsCfg.Builtin.Policies.
 type AgentCreateRequestToolsCfgBuiltinPolicies string
 
-// AgentCreateRequestType Agent classification for the newly created agent. Optional: when omitted, defaults to "custom" (preserves pre-existing behaviour).
-//   - "custom" (default): a base / chat-target agent. Runs native, may be
-//     the routing default, may have heartbeat and a per-agent voice.
-//   - "worker": a sub-agent worker. Invoked ONLY via delegation. NOT a chat
-//     target, can never be the default, has no heartbeat, and may declare
-//     an executor (native or external). Newly-created workers are unlocked
-//     so the operator can edit them; a worker is still a delegation leaf
-//     (its "to" list must be empty).
-//
-// "core" and "system" are seeded-only classifications and are NOT creatable from the API — sending any other value is rejected with 400.
+// AgentCreateRequestType Agent tier to create. "custom" = a user-defined chat colleague (default for the existing POST /agents flow). "worker" = a sub-agent worker: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and must carry an executor (see Agent.executor). When omitted, the server creates a "custom" agent. The "core" and "system" types are reserved and cannot be created via this endpoint.
 type AgentCreateRequestType string
 
 // AgentModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.

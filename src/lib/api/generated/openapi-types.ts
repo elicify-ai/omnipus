@@ -3139,21 +3139,6 @@ export interface components {
         /** @description Body for POST /agents. Creates a new agent. A UUID is assigned by the server. The agent starts in "draft" status (no SOUL.md written yet). */
         AgentCreateRequest: {
             /**
-             * @description Agent classification for the newly created agent. Optional: when omitted, defaults to "custom" (preserves pre-existing behaviour).
-             *     - "custom" (default): a base / chat-target agent. Runs native, may be
-             *       the routing default, may have heartbeat and a per-agent voice.
-             *     - "worker": a sub-agent worker. Invoked ONLY via delegation. NOT a chat
-             *       target, can never be the default, has no heartbeat, and may declare
-             *       an executor (native or external). Newly-created workers are unlocked
-             *       so the operator can edit them; a worker is still a delegation leaf
-             *       (its "to" list must be empty).
-             *
-             *     "core" and "system" are seeded-only classifications and are NOT creatable from the API — sending any other value is rejected with 400.
-             * @example custom
-             * @enum {string}
-             */
-            type?: "custom" | "worker";
-            /**
              * @description Display name for the new agent.
              * @example My Custom Agent
              */
