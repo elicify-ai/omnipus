@@ -2832,6 +2832,15 @@ func loadConfigInternal(path string, store CredentialStore) (*Config, error) {
 	// by the policy engine rather than silently ignored (issue #237).
 	migrateDeprecatedToolEnableFlags(cfg, data)
 
+	// Restore skill-discovery tool defaults (find_skills/install_skill enabled,
+	// ClawHub {enabled:true, base_url:"https://clawhub.ai"}) for configs that
+	// persisted them as disabled/empty zero values. Onboarded/legacy configs
+	// otherwise leave the agent loop's skills RegistryManager with ZERO
+	// registries, so the agent's find_skills/install_skill silently return
+	// nothing while the UI (which constructs ClawHub directly) works. Operator
+	// intent (an explicit enabled key) is preserved.
+	restoreSkillDiscoveryDefaults(cfg, data)
+
 	// Enforce at-most-one Default=true invariant across cfg.Agents.List.
 	// Hand-edited configs may contain multiple defaults; repair them now so the
 	// registry's GetDefaultAgent sees a clean canonical state (F11).

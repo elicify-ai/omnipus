@@ -1400,11 +1400,25 @@ func registerSharedTools(
 				}
 			}
 
+			// Agent↔UI parity: the UI builds its ClawHub client directly via
+			// skills.NewClawHubRegistry, which defaults BaseURL to
+			// https://clawhub.ai when empty. Mirror that here so the agent's
+			// find_skills/install_skill reach the SAME ClawHub the UI does.
+			// (config.restoreSkillDiscoveryDefaults already heals Enabled/BaseURL
+			// for configs that never explicitly disabled ClawHub; this is a
+			// belt-and-suspenders default so an empty URL never yields a broken
+			// registry.) An operator who explicitly disabled ClawHub keeps
+			// Enabled=false and ClawHub is skipped downstream.
+			clawHubBaseURL := clawHubConfig.BaseURL
+			if clawHubBaseURL == "" {
+				clawHubBaseURL = "https://clawhub.ai"
+			}
+
 			registryMgr := skills.NewRegistryManagerFromConfig(skills.RegistryConfig{
 				MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
 				ClawHub: skills.ClawHubConfig{
 					Enabled:         clawHubConfig.Enabled,
-					BaseURL:         clawHubConfig.BaseURL,
+					BaseURL:         clawHubBaseURL,
 					AuthToken:       os.Getenv(clawHubConfig.AuthTokenRef),
 					SearchPath:      clawHubConfig.SearchPath,
 					SkillsPath:      clawHubConfig.SkillsPath,
