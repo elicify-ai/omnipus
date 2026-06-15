@@ -19,7 +19,7 @@ import {
   type OnConnectStart,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Star, Stack, Lightning, Trash, X } from '@phosphor-icons/react'
+import { Star, Stack, Lightning, Trash, X, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
@@ -60,6 +60,44 @@ type DelegationFlowEdge = Edge<DelegationEdgeData, 'delegation'>
 function AgentNode({ data }: NodeProps<AgentFlowNode>) {
   const { model } = data
   const initial = model.name.charAt(0).toUpperCase()
+
+  // GHOST node: an edge target with no backing agent (deleted). Render it with
+  // a warning style + "(deleted)" label so the dangling edge is visible and the
+  // user can select that edge and delete it. A ghost never delegates onward, so
+  // it gets no source handle.
+  if (model.isGhost) {
+    return (
+      <div
+        data-testid={`delegation-node-${model.id}`}
+        data-ghost="true"
+        className="w-[220px] rounded-xl border border-dashed border-[var(--color-warning)]/60 bg-[var(--color-warning)]/5 px-3 py-2.5 shadow-sm"
+        title={`${model.id} no longer exists — its delegation edge is dangling. Click the edge to delete it.`}
+      >
+        <Handle
+          type="target"
+          position={Position.Top}
+          className="!h-2 !w-2 !border-[var(--color-warning)] !bg-[var(--color-warning)]"
+        />
+        <div className="flex items-center gap-2.5">
+          <div
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--color-warning)]/15 text-[var(--color-warning)]"
+            aria-hidden="true"
+          >
+            <Warning size={16} weight="fill" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <span className="block truncate font-headline text-sm font-bold text-[var(--color-warning)]">
+              {model.id}
+            </span>
+            <span className="mt-0.5 block text-[9px] font-medium uppercase tracking-wide text-[var(--color-warning)]/80">
+              deleted — dangling edge
+            </span>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
       data-testid={`delegation-node-${model.id}`}
@@ -211,17 +249,29 @@ function DelegationEdge({
               <div className="flex flex-wrap gap-1">
                 {ALL_MODES.map((m) => {
                   const on = model.modes.includes(m)
+                  // Refuse to remove the LAST mode: an active edge with no modes
+                  // persists "all modes allowed" on the backend (the opposite of
+                  // intent). Disable the only-remaining on-chip with a tooltip.
+                  const isLastOn = on && model.modes.length === 1
                   return (
                     <button
                       key={m}
                       type="button"
                       data-testid={`edge-mode-toggle-${m}`}
+                      disabled={isLastOn}
+                      aria-disabled={isLastOn}
+                      title={
+                        isLastOn
+                          ? 'At least one mode is required — an edge with no modes would allow ALL modes.'
+                          : undefined
+                      }
                       onClick={() => data.onEditModes(model.source, m)}
                       className={cn(
                         'rounded border px-1.5 py-0.5 font-mono text-[10px] lowercase transition-opacity',
                         on
                           ? MODE_CHIP_CLASS[m]
                           : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] opacity-60 hover:opacity-100',
+                        isLastOn && 'cursor-not-allowed',
                       )}
                     >
                       {m}
@@ -234,19 +284,26 @@ function DelegationEdge({
                 <span className="text-[10px] text-[var(--color-muted)]">depth</span>
                 <input
                   type="number"
-                  min={0}
+                  min={1}
                   inputMode="numeric"
                   data-testid="edge-depth-input"
                   value={depthDraft}
                   placeholder="∞"
+                  title="Max delegation hops. Empty or 0 = uncapped (∞); clearing it persists as uncapped."
                   onChange={(e) => {
                     const v = e.target.value
                     setDepthDraft(v)
+                    // Empty or a non-positive number means "no cap" (uncapped).
+                    // The model stores that as undefined; on save it persists as
+                    // the backend's `0` uncapped sentinel, so clearing is honest
+                    // and survives a refetch (it won't snap back to the old cap).
                     if (v === '') {
                       data.onSetDepth(model.source, undefined)
                     } else {
                       const n = Number(v)
-                      if (Number.isFinite(n) && n >= 0) data.onSetDepth(model.source, n)
+                      if (Number.isFinite(n)) {
+                        data.onSetDepth(model.source, n >= 1 ? n : undefined)
+                      }
                     }
                   }}
                   className="h-6 w-14 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 text-[11px] text-[var(--color-secondary)] focus:border-[var(--color-accent)] focus:outline-none"
@@ -349,8 +406,9 @@ function DelegationGraphInner({
         type: 'agent' as const,
         position: model.position,
         data: { model },
-        // Workers cannot be a connection source.
-        connectable: true,
+        // Workers (leaves) and ghosts (deleted) have no source handle, so they
+        // cannot start a connection; only real non-worker nodes can delegate.
+        connectable: !model.isWorker && !model.isGhost,
       })),
     [nodes],
   )
@@ -428,7 +486,6 @@ function DelegationGraphInner({
         onConnectStart={handleConnectStart}
         isValidConnection={isValidConnection}
         onPaneClick={() => setSelectedEdgeId(null)}
-        nodesDraggable
         nodesConnectable
         elementsSelectable
         fitView

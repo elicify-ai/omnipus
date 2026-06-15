@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
@@ -14,6 +14,7 @@ import {
   buildSavePayload,
   buildSourceEdits,
   changedSourceIds,
+  reconcileEdits,
   removeDelegationEdge,
   setSourceDepth,
   toggleSourceMode,
@@ -62,10 +63,20 @@ export function TrustGraphScreen() {
   const baseline = useMemo(() => buildSourceEdits(agents), [agents])
   const [edits, setEdits] = useState<Record<string, SourcePolicyEdit>>(baseline)
 
+  // Track the baseline that `edits` was last reconciled against, so a refetch
+  // can tell which agents the user had actually changed (still-dirty) from
+  // those that were untouched (safe to adopt the new server value).
+  const prevBaselineRef = useRef(baseline)
+
   // Re-seed local edits whenever the server roster changes (initial load,
-  // post-save invalidation). Keyed on the agent ids + policies via baseline.
+  // post-save invalidation, background refetch). RECONCILE rather than blind
+  // overwrite: untouched agents adopt the fresh server value; still-dirty
+  // agents keep their pending edit. After a PARTIAL save this leaves only the
+  // genuinely-failed sources dirty, and a Reset can never diverge from disk.
   useEffect(() => {
-    setEdits(baseline)
+    const prevBaseline = prevBaselineRef.current
+    prevBaselineRef.current = baseline
+    setEdits((prev) => reconcileEdits(baseline, prevBaseline, prev))
   }, [baseline])
 
   const workerIds = useMemo(() => buildWorkerIds(agents), [agents])
@@ -82,9 +93,13 @@ export function TrustGraphScreen() {
   const isDirty = dirtyIds.length > 0
 
   const saveMutation = useMutation({
+    // Returns the per-agent outcome. Run sequentially so a mid-flight failure
+    // leaves a clear, reproducible state. We do NOT throw on partial failure:
+    // the earlier PUTs ARE persisted, so the result must report exactly which
+    // sources succeeded and which failed (the toast + invalidation depend on
+    // it). Throwing would falsely imply nothing was saved.
     mutationFn: async (sourceIds: string[]) => {
-      // One PUT per changed source agent. Run sequentially so a mid-flight
-      // failure leaves a clear, reproducible state and a precise error.
+      const attempted = sourceIds.length
       const failed: { id: string; message: string }[] = []
       for (const id of sourceIds) {
         const edit = edits[id]
@@ -100,24 +115,42 @@ export function TrustGraphScreen() {
           failed.push({ id, message })
         }
       }
-      if (failed.length > 0) {
-        const names = failed
-          .map((f) => agents.find((a) => a.id === f.id)?.name ?? f.id)
-          .join(', ')
-        throw new Error(`Failed to save ${names}: ${failed[0].message}`)
-      }
+      return { attempted, failed }
     },
-    onSuccess: () => {
-      addToast({ message: 'Delegation graph saved', variant: 'success' })
-      // Invalidate so the graph reflects persisted state (re-seeds baseline).
+    onSuccess: ({ attempted, failed }) => {
+      const saved = attempted - failed.length
+      if (failed.length === 0) {
+        addToast({ message: 'Delegation graph saved', variant: 'success' })
+      } else {
+        // PARTIAL FAILURE: some PUTs landed, some didn't. Name the failed
+        // agents and their error; the succeeded ones re-seed from the refetch
+        // below and drop out of the dirty set, leaving only the real failures.
+        const failedNames = failed
+          .map((f) => {
+            const name = agents.find((a) => a.id === f.id)?.name ?? f.id
+            return `${name}: ${f.message}`
+          })
+          .join('; ')
+        addToast({
+          message: `Saved ${saved} of ${attempted}; failed: ${failedNames}`,
+          variant: 'error',
+        })
+      }
+      // Always invalidate so the graph reflects PERSISTED state. Even on partial
+      // failure this re-seeds baseline from the agents that DID save, so they
+      // drop from the dirty set and a subsequent Reset can't diverge from disk —
+      // only the genuinely-failed sources remain dirty.
       queryClient.invalidateQueries({ queryKey: ['agents'] })
     },
     onError: (err) => {
-      // Keep the edit; surface the message. No silent failure.
+      // Reached only on an unexpected throw (not a per-agent PUT failure, which
+      // is captured above). Keep the edits; surface the message. No silent fail.
+      // Still invalidate so local state can't drift from disk.
       addToast({
         message: err instanceof Error ? err.message : 'Failed to save delegation graph',
         variant: 'error',
       })
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
     },
   })
 

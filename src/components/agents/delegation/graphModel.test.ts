@@ -5,9 +5,12 @@ import {
   buildGraphModel,
   buildSavePayload,
   buildSourceEdits,
+  canToggleModeOff,
   changedSourceIds,
+  DEFAULT_EDGE_MODES,
   edgeId,
   normalizeModes,
+  reconcileEdits,
   removeDelegationEdge,
   setSourceDepth,
   toggleSourceMode,
@@ -242,10 +245,13 @@ describe('buildSavePayload — only to/modes/depth, never accept_from/budget', (
     })
   })
 
-  it('omits depth entirely when unset (no zeroing on partial PUT)', () => {
+  it('sends depth: 0 (uncapped sentinel) when unset so clearing the cap persists', () => {
+    // The backend reads depth<=0 as "uncapped" (ResolveDelegationDepth). Omitting
+    // depth would make a partial PUT PRESERVE the old cap → the UI snaps back
+    // after refetch. Sending 0 makes "no cap" honest and round-trip-stable.
     const edit: SourcePolicyEdit = { to: [{ kind: 'local', id: 'ray' }], modes: ['await'] }
     const payload = buildSavePayload(edit)
-    expect('depth' in payload).toBe(false)
+    expect(payload.depth).toBe(0)
   })
 
   it('the save payload never carries accept_from or budget keys', () => {
@@ -280,3 +286,178 @@ describe('changedSourceIds — diff drives per-agent save', () => {
     expect(changedSourceIds(before, setSourceDepth(before, 'jim', 9))).toEqual(['jim'])
   })
 })
+
+// ── Fix #1: an active edge must never carry `modes: []` ─────────────────────
+// (backend reads empty modes as "ALL allowed" — the opposite of "no modes").
+describe('empty-modes trap — a new edge defaults to a non-empty mode set', () => {
+  it('DEFAULT_EDGE_MODES is non-empty', () => {
+    expect(DEFAULT_EDGE_MODES.length).toBeGreaterThan(0)
+  })
+
+  it('drawing the FIRST edge from a source with no modes seeds default modes', () => {
+    // Ray starts with modes: [] (no policy). Drawing ray→worker must NOT leave
+    // modes empty (which would persist "all allowed").
+    const agents = roster()
+    const before = buildSourceEdits(agents)
+    expect(before.ray.modes).toEqual([])
+    const after = addDelegationEdge(before, 'ray', 'w1', new Set(['w1']))
+    expect(after.ray.to).toEqual([{ kind: 'local', id: 'w1' }])
+    expect(after.ray.modes).toEqual([...DEFAULT_EDGE_MODES])
+    expect(after.ray.modes.length).toBeGreaterThan(0)
+  })
+
+  it('drawing an edge from a source that ALREADY has modes leaves them untouched', () => {
+    const agents = roster()
+    const before = buildSourceEdits(agents) // jim: ['await','task']
+    const after = addDelegationEdge(before, 'jim', 'w1', new Set(['w1']))
+    expect(after.jim.modes).toEqual(['await', 'task'])
+  })
+
+  it('the save payload of a fresh edge never has empty modes', () => {
+    const agents = roster()
+    const after = addDelegationEdge(buildSourceEdits(agents), 'ray', 'w1', new Set(['w1']))
+    const payload = buildSavePayload(after.ray)
+    expect(payload.modes.length).toBeGreaterThan(0)
+  })
+})
+
+describe('toggleSourceMode — the last remaining mode cannot be removed', () => {
+  const agents = roster()
+
+  it('removing the last mode is a NO-OP (never reaches modes: [])', () => {
+    const before = buildSourceEdits(agents)
+    // Drive jim down to a single mode, then try to remove it.
+    const oneMode = toggleSourceMode(before, 'jim', 'await') // ['await','task'] → ['task']
+    expect(oneMode.jim.modes).toEqual(['task'])
+    const stillOne = toggleSourceMode(oneMode, 'jim', 'task') // attempt to clear last
+    expect(stillOne.jim.modes).toEqual(['task']) // unchanged
+    expect(stillOne).toBe(oneMode) // identity preserved — true no-op
+  })
+
+  it('canToggleModeOff is false for the only-remaining mode, true otherwise', () => {
+    const before = buildSourceEdits(agents)
+    const oneMode = toggleSourceMode(before, 'jim', 'await') // ['task']
+    expect(canToggleModeOff(oneMode, 'jim', 'task')).toBe(false)
+    // Turning a currently-off mode on is always allowed.
+    expect(canToggleModeOff(oneMode, 'jim', 'await')).toBe(true)
+    // With two modes, either can be turned off.
+    expect(canToggleModeOff(before, 'jim', 'await')).toBe(true)
+    expect(canToggleModeOff(before, 'jim', 'task')).toBe(true)
+  })
+})
+
+// ── Fix #2: a dangling-target edge must render a ghost node ──────────────────
+describe('ghost nodes — a dangling edge target gets a visible placeholder node', () => {
+  it('synthesises a ghost node for an edge whose target is not in the roster', () => {
+    const orphan = makeAgent({
+      id: 'orphan',
+      name: 'Orphan',
+      delegation_policy: { to: [{ kind: 'local', id: 'ghost-id' }], modes: ['await'] },
+    })
+    const agents = [orphan]
+    const { nodes, edges } = buildGraphModel(agents, buildSourceEdits(agents))
+    // The edge survives AND is flagged.
+    expect(edges).toHaveLength(1)
+    expect(edges[0].unknownTarget).toBe(true)
+    // A ghost node exists for the missing target so React Flow won't drop it.
+    const ghost = nodes.find((n) => n.id === 'ghost-id')
+    expect(ghost).toBeDefined()
+    expect(ghost?.isGhost).toBe(true)
+    expect(ghost?.name).toContain('deleted')
+    // Real nodes are NOT ghosts.
+    expect(nodes.find((n) => n.id === 'orphan')?.isGhost).toBe(false)
+  })
+
+  it('the ghost-target edge is deletable (removeDelegationEdge drops the ref)', () => {
+    const orphan = makeAgent({
+      id: 'orphan',
+      name: 'Orphan',
+      delegation_policy: { to: [{ kind: 'local', id: 'ghost-id' }], modes: ['await'] },
+    })
+    const before = buildSourceEdits([orphan])
+    const after = removeDelegationEdge(before, 'orphan', 'ghost-id')
+    expect(after.orphan.to).toEqual([])
+    const { nodes, edges } = buildGraphModel([orphan], after)
+    expect(edges).toHaveLength(0)
+    // With the edge gone, the ghost node is no longer synthesised.
+    expect(nodes.find((n) => n.id === 'ghost-id')).toBeUndefined()
+  })
+
+  it('deduplicates ghost nodes when several edges point at the same missing id', () => {
+    const a = makeAgent({
+      id: 'a',
+      name: 'A',
+      delegation_policy: { to: [{ kind: 'local', id: 'gone' }], modes: ['await'] },
+    })
+    const b = makeAgent({
+      id: 'b',
+      name: 'B',
+      delegation_policy: { to: [{ kind: 'local', id: 'gone' }], modes: ['await'] },
+    })
+    const agents = [a, b]
+    const { nodes } = buildGraphModel(agents, buildSourceEdits(agents))
+    expect(nodes.filter((n) => n.id === 'gone')).toHaveLength(1)
+  })
+})
+
+// ── Fix #4: depth — uncapped sentinel + round-trip stability ─────────────────
+describe('depth — 0/absent = uncapped, stays cleared across a round-trip', () => {
+  it('treats a wire depth of 0 as uncapped (undefined in the model)', () => {
+    const a = makeAgent({
+      id: 'a',
+      name: 'A',
+      delegation_policy: { to: [], modes: ['await'], depth: 0 },
+    })
+    expect(buildSourceEdits([a]).a.depth).toBeUndefined()
+  })
+
+  it('a positive depth survives, a cleared depth saves as 0 and reloads as uncapped', () => {
+    const edit: SourcePolicyEdit = { to: [{ kind: 'local', id: 'x' }], modes: ['await'], depth: 4 }
+    expect(buildSavePayload(edit).depth).toBe(4)
+    // Clear it → undefined → save as 0 → reload (buildSourceEdits) → undefined.
+    const cleared: SourcePolicyEdit = { ...edit, depth: undefined }
+    const saved = buildSavePayload(cleared)
+    expect(saved.depth).toBe(0)
+    const reloaded = makeAgent({
+      id: 'a',
+      name: 'A',
+      delegation_policy: { to: saved.to, modes: saved.modes, depth: saved.depth },
+    })
+    expect(buildSourceEdits([reloaded]).a.depth).toBeUndefined()
+  })
+})
+
+// ── Fix #3 (model half): reconcileEdits keeps dirty edits, adopts clean ones ──
+describe('reconcileEdits — preserve still-dirty edits, adopt clean server values', () => {
+  it('adopts the new server value for an agent the user had not touched', () => {
+    const prevBaseline = { a: mkEdit(['await']) }
+    const prevEdits = { a: mkEdit(['await']) } // clean
+    const newBaseline = { a: mkEdit(['task']) } // server changed under us
+    const out = reconcileEdits(newBaseline, prevBaseline, prevEdits)
+    expect(out.a.modes).toEqual(['task'])
+  })
+
+  it('keeps the user edit for an agent that was still dirty (e.g. a failed save)', () => {
+    const prevBaseline = { a: mkEdit(['await']) }
+    const prevEdits = { a: mkEdit(['task', 'background']) } // user changed it
+    const newBaseline = { a: mkEdit(['await']) } // save FAILED → server unchanged
+    const out = reconcileEdits(newBaseline, prevBaseline, prevEdits)
+    expect(out.a.modes).toEqual(['task', 'background']) // pending edit preserved
+  })
+
+  it('mixed: succeeded agent adopts server, failed agent stays dirty', () => {
+    const prevBaseline = { jim: mkEdit(['await']), ray: mkEdit(['await']) }
+    const prevEdits = { jim: mkEdit(['task']), ray: mkEdit(['task']) } // both dirty
+    // jim saved (server now task), ray failed (server still await).
+    const newBaseline = { jim: mkEdit(['task']), ray: mkEdit(['await']) }
+    const out = reconcileEdits(newBaseline, prevBaseline, prevEdits)
+    // jim now matches baseline (clean), ray keeps its pending edit (dirty).
+    expect(changedSourceIds(newBaseline, out)).toEqual(['ray'])
+    expect(out.jim.modes).toEqual(['task'])
+    expect(out.ray.modes).toEqual(['task'])
+  })
+})
+
+function mkEdit(modes: ('await' | 'background' | 'task')[]): SourcePolicyEdit {
+  return { to: [], modes }
+}

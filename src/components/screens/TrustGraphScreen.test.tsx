@@ -46,6 +46,7 @@ vi.mock('@/components/agents/delegation/DelegationGraph', () => ({
   }) => (
     <div data-testid="delegation-graph-stub">
       <button onClick={() => props.onConnect('jim', 'ray')}>connect-jim-ray</button>
+      <button onClick={() => props.onConnect('ray', 'existing')}>connect-ray-existing</button>
       <button onClick={() => props.onDeleteEdge('jim', 'existing')}>delete-jim-existing</button>
       <button onClick={() => props.onToggleMode('jim', 'background')}>toggle-jim-bg</button>
       <button onClick={() => props.onSetDepth('jim', 5)}>depth-jim-5</button>
@@ -187,6 +188,76 @@ describe('TrustGraphScreen — save wiring', () => {
     )
     // The edit survives — Save is still offered (still dirty).
     expect(await screen.findByTestId('delegation-save')).toHaveTextContent('Save (1)')
+  })
+
+  it('partial save: 2nd PUT fails → "Saved 1 of 2", succeeded agent drops from dirty, query invalidated', async () => {
+    // jim PUT succeeds, ray PUT fails. dirtyIds order is [jim, ray].
+    updateAgentMock.mockImplementation((id: string) => {
+      if (id === 'ray') return Promise.reject(new Error('ray exploded'))
+      return Promise.resolve(makeAgent({ id, name: id }))
+    })
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries')
+    // After invalidation the refetch should return the persisted state: jim now
+    // has ray in `to`; ray is unchanged on the server (its PUT failed).
+    fetchAgentsMock
+      .mockResolvedValueOnce(roster()) // initial load
+      .mockResolvedValue(
+        roster().map((a) =>
+          a.id === 'jim'
+            ? {
+                ...a,
+                delegation_policy: {
+                  ...a.delegation_policy,
+                  to: [
+                    { kind: 'local', id: 'existing' },
+                    { kind: 'local', id: 'ray' },
+                  ],
+                },
+              }
+            : a,
+        ),
+      )
+
+    render(
+      <QueryClientProvider client={qc}>
+        <TrustGraphScreen />
+      </QueryClientProvider>,
+    )
+    await screen.findByTestId('delegation-graph-stub')
+
+    fireEvent.click(screen.getByText('connect-jim-ray')) // jim dirty
+    fireEvent.click(screen.getByText('connect-ray-existing')) // ray dirty
+    const save = await screen.findByTestId('delegation-save')
+    expect(save).toHaveTextContent('Save (2)')
+    fireEvent.click(save)
+
+    await waitFor(() => expect(updateAgentMock).toHaveBeenCalledTimes(2))
+
+    // Partial toast names the failed agent + reason, not a total failure.
+    await waitFor(() =>
+      expect(addToastMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variant: 'error',
+          message: expect.stringContaining('Saved 1 of 2'),
+        }),
+      ),
+    )
+    const partialToast = addToastMock.mock.calls
+      .map((c) => c[0])
+      .find((t) => typeof t.message === 'string' && t.message.includes('Saved 1 of 2'))
+    expect(partialToast.message).toContain('ray exploded')
+
+    // The ['agents'] query was invalidated so succeeded agents re-seed.
+    await waitFor(() =>
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['agents'] }),
+    )
+
+    // After the refetch re-seeds baseline, only the FAILED agent (ray) stays
+    // dirty → Save shows (1), not (2).
+    await waitFor(() =>
+      expect(screen.getByTestId('delegation-save')).toHaveTextContent('Save (1)'),
+    )
   })
 
   it('Save is disabled when nothing changed', async () => {

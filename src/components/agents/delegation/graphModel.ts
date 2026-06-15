@@ -20,6 +20,17 @@ export type DelegationMode = 'await' | 'background' | 'task'
 
 export const ALL_MODES: readonly DelegationMode[] = ['await', 'background', 'task']
 
+/**
+ * The mode set a NEW edge starts with. CRITICAL (correctness / security): the
+ * backend `IsDelegationModeAllowed` treats `modes: []` as **ALL modes allowed**
+ * (pkg/config/config.go), so an active edge MUST never carry an empty `modes`
+ * array — that would persist "all allowed" while the UI shows "no modes". A new
+ * edge therefore defaults to every mode, and the editor refuses to remove the
+ * last remaining mode (keeps >= 1). The displayed modes always equal the
+ * enforced modes.
+ */
+export const DEFAULT_EDGE_MODES: readonly DelegationMode[] = ['await', 'background', 'task']
+
 /** Reference kind on a delegation edge — `local` now, `remote-a2a` reserved. */
 export type DelegationRefKind = 'local' | 'remote-a2a'
 
@@ -60,6 +71,13 @@ export interface GraphNodeModel {
   color?: string
   isDefault: boolean
   isWorker: boolean
+  /**
+   * True when this node has no backing agent in the roster — a GHOST node
+   * synthesised so that an edge pointing at a deleted target stays VISIBLE
+   * (and therefore deletable) instead of being silently dropped by React Flow,
+   * which discards edges whose endpoints have no matching node.
+   */
+  isGhost: boolean
   /** Layout position (deterministic, computed each load — never persisted). */
   position: { x: number; y: number }
 }
@@ -83,8 +101,16 @@ export function normalizeModes(raw: unknown): DelegationMode[] {
   return out
 }
 
+/**
+ * Normalise a raw depth from the wire. The backend's documented uncapped
+ * sentinel is `0` (and `<= 0` / absent) — `ResolveDelegationDepth` in
+ * pkg/config/config.go returns "uncapped" for any non-positive depth. We map
+ * that to `undefined` (= "no cap") so the model has ONE representation of
+ * uncapped, round-trips are stable (save `0` ⇒ reload ⇒ still uncapped), and a
+ * positive value is the only "capped" state. Only depth >= 1 is a real cap.
+ */
 function normalizeDepth(raw: unknown): number | undefined {
-  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : undefined
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 1 ? raw : undefined
 }
 
 /**
@@ -174,14 +200,21 @@ export function buildGraphModel(
     color: a.color,
     isDefault: a.default === true,
     isWorker: isWorker(a),
+    isGhost: false,
     position: { x: 0, y: 0 },
   }))
 
   const edges: GraphEdgeModel[] = []
+  // Targets referenced by an edge but absent from the roster (deleted agents).
+  // We synthesise a ghost node for each so the dangling edge stays visible and
+  // can be removed by the user (React Flow drops edges with no endpoint node).
+  const ghostIds = new Set<string>()
   for (const agent of agents) {
     const edit = edits[agent.id]
     if (!edit) continue
     for (const ref of edit.to) {
+      const unknown = !byId.has(ref.id)
+      if (unknown) ghostIds.add(ref.id)
       edges.push({
         id: edgeId(agent.id, ref.id),
         source: agent.id,
@@ -189,13 +222,25 @@ export function buildGraphModel(
         kind: ref.kind,
         modes: edit.modes,
         depth: edit.depth,
-        unknownTarget: !byId.has(ref.id),
+        unknownTarget: unknown,
       })
     }
   }
 
-  const positions = layoutGraph(baseNodes, edges)
-  const nodes = baseNodes.map((n) => ({ ...n, position: positions[n.id] ?? n.position }))
+  const ghostNodes: GraphNodeModel[] = [...ghostIds].map((id) => ({
+    id,
+    name: `${id} (deleted)`,
+    type: 'custom' as NonNullable<Agent['type']>,
+    color: undefined,
+    isDefault: false,
+    isWorker: false,
+    isGhost: true,
+    position: { x: 0, y: 0 },
+  }))
+
+  const allNodes = [...baseNodes, ...ghostNodes]
+  const positions = layoutGraph(allNodes, edges)
+  const nodes = allNodes.map((n) => ({ ...n, position: positions[n.id] ?? n.position }))
   return { nodes, edges }
 }
 
@@ -244,9 +289,13 @@ export function addDelegationEdge(
 ): Record<string, SourcePolicyEdit> {
   if (validateConnection(source, target, edits, workerIds) !== null) return edits
   const edit = edits[source]
+  // A source with NO modes yet would persist `modes: []` = "all allowed" on the
+  // backend (the empty-modes trap). Seed a sensible non-empty default so the
+  // first edge enforces what the UI shows. Existing modes are left untouched.
+  const modes = edit.modes.length === 0 ? [...DEFAULT_EDGE_MODES] : edit.modes
   return {
     ...edits,
-    [source]: { ...edit, to: [...edit.to, { kind: 'local', id: target }] },
+    [source]: { ...edit, modes, to: [...edit.to, { kind: 'local', id: target }] },
   }
 }
 
@@ -265,18 +314,31 @@ export function removeDelegationEdge(
   }
 }
 
-/** Immutably set a source agent's modes (policy-wide label). */
-export function setSourceModes(
+/**
+ * Whether `mode` may be toggled OFF on `source` right now. The last remaining
+ * mode can never be removed: an active edge with `modes: []` would persist
+ * "all modes allowed" on the backend (the opposite of the user's intent). Use
+ * this to disable the chip + show a tooltip in the editor.
+ */
+export function canToggleModeOff(
   edits: Record<string, SourcePolicyEdit>,
   source: string,
-  modes: DelegationMode[],
-): Record<string, SourcePolicyEdit> {
+  mode: DelegationMode,
+): boolean {
   const edit = edits[source]
-  if (!edit) return edits
-  return { ...edits, [source]: { ...edit, modes: normalizeModes(modes) } }
+  if (!edit) return false
+  // Turning a mode ON is always fine; only removing the LAST one is blocked.
+  if (!edit.modes.includes(mode)) return true
+  return edit.modes.length > 1
 }
 
-/** Immutably toggle a single mode on a source agent. */
+/**
+ * Immutably toggle a single mode on a source agent. Turning a mode on is always
+ * allowed; turning one off is a NO-OP when it is the last remaining mode, so an
+ * active edge can never reach `modes: []` (which the backend reads as "all
+ * allowed"). Callers gate the UI with {@link canToggleModeOff}; this enforces
+ * the same invariant in the model regardless.
+ */
 export function toggleSourceMode(
   edits: Record<string, SourcePolicyEdit>,
   source: string,
@@ -284,7 +346,9 @@ export function toggleSourceMode(
 ): Record<string, SourcePolicyEdit> {
   const edit = edits[source]
   if (!edit) return edits
-  const next = edit.modes.includes(mode)
+  const has = edit.modes.includes(mode)
+  if (has && edit.modes.length === 1) return edits // refuse to drop the last mode
+  const next = has
     ? edit.modes.filter((m) => m !== mode)
     : [...edit.modes, mode]
   return { ...edits, [source]: { ...edit, modes: next } }
@@ -306,23 +370,31 @@ export function setSourceDepth(
 
 /**
  * The delegation_policy slice this UI persists for one source agent. ONLY
- * `to`, `modes`, and `depth` — never `accept_from`, never `budget`. `depth` is
- * omitted entirely when unset so a partial PUT does not zero it.
+ * `to`, `modes`, and `depth` — never `accept_from`, never `budget`.
+ *
+ * `depth` is ALWAYS sent (never omitted) so that clearing the cap is honest:
+ * the backend documents `0` as the uncapped sentinel (`ResolveDelegationDepth`
+ * treats any non-positive depth as "uncapped"). Omitting `depth` would make the
+ * backend PRESERVE the old value, so the UI would snap back to the previous cap
+ * after refetch — a clear gesture that lies. Sending `0` for "no cap" makes the
+ * displayed state match what is enforced and survives a round-trip.
  */
 export interface DelegationSavePayload {
   to: Array<{ kind: DelegationRefKind; id: string }>
   modes: DelegationMode[]
-  depth?: number
+  depth: number
 }
 
-/** Build the delegation_policy save payload for one source agent's edit state. */
+/**
+ * Build the delegation_policy save payload for one source agent's edit state.
+ * `depth` is always present: a real cap when set (>= 1), else `0` = uncapped.
+ */
 export function buildSavePayload(edit: SourcePolicyEdit): DelegationSavePayload {
-  const payload: DelegationSavePayload = {
+  return {
     to: edit.to.map((ref) => ({ kind: ref.kind, id: ref.id })),
     modes: [...edit.modes],
+    depth: typeof edit.depth === 'number' ? edit.depth : 0,
   }
-  if (typeof edit.depth === 'number') payload.depth = edit.depth
-  return payload
 }
 
 /**
@@ -341,7 +413,49 @@ export function changedSourceIds(
   return changed
 }
 
-function editsEqual(a: SourcePolicyEdit | undefined, b: SourcePolicyEdit | undefined): boolean {
+/**
+ * Reconcile a freshly-loaded server baseline with the user's in-flight edits,
+ * preserving still-dirty edits. Used after a refetch (incl. post-save
+ * invalidation): an agent the user HADN'T touched (its edit equalled the old
+ * baseline) adopts the new server value; an agent the user HAD changed keeps
+ * the pending edit so a partial save leaves only the genuinely-failed agents
+ * dirty (and a background refetch never silently discards unsaved work).
+ */
+export function reconcileEdits(
+  newBaseline: Record<string, SourcePolicyEdit>,
+  prevBaseline: Record<string, SourcePolicyEdit>,
+  prevEdits: Record<string, SourcePolicyEdit>,
+): Record<string, SourcePolicyEdit> {
+  const out: Record<string, SourcePolicyEdit> = {}
+  for (const id of Object.keys(newBaseline)) {
+    const wasDirty = !editsEqual(prevEdits[id], prevBaseline[id])
+    // Keep the user's pending edit only when it was dirty AND the agent still
+    // exists; otherwise take the authoritative server value.
+    out[id] = wasDirty && prevEdits[id] ? prevEdits[id] : newBaseline[id]
+  }
+  // REFERENTIAL STABILITY (avoids a render loop): when the reconciled result is
+  // content-identical to the input `prevEdits`, return the SAME `prevEdits`
+  // reference so React's setState bails out of the re-render. Without this, the
+  // effect would set a brand-new-but-equal object every refetch, churning forever.
+  return editsMapEqual(prevEdits, out) ? prevEdits : out
+}
+
+/** Deep-equal two edit maps (same keys + each entry editsEqual). */
+export function editsMapEqual(
+  a: Record<string, SourcePolicyEdit>,
+  b: Record<string, SourcePolicyEdit>,
+): boolean {
+  const aKeys = Object.keys(a)
+  const bKeys = Object.keys(b)
+  if (aKeys.length !== bKeys.length) return false
+  for (const k of aKeys) {
+    if (!(k in b)) return false
+    if (!editsEqual(a[k], b[k])) return false
+  }
+  return true
+}
+
+export function editsEqual(a: SourcePolicyEdit | undefined, b: SourcePolicyEdit | undefined): boolean {
   if (!a || !b) return a === b
   if (a.depth !== b.depth) return false
   if (a.modes.length !== b.modes.length) return false
