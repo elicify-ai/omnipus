@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { Plus, Robot, ShareNetwork } from '@phosphor-icons/react'
 import { AgentCard } from '@/components/agents/AgentCard'
+import { WorkerCard } from '@/components/agents/WorkerCard'
 import { CreateAgentModal } from '@/components/agents/CreateAgentModal'
 import { Button } from '@/components/ui/button'
 import { useUiStore } from '@/store/ui'
@@ -15,6 +16,11 @@ export function AgentListScreen() {
     queryKey: ['agents'],
     queryFn: fetchAgents,
   })
+
+  // Two-tier roster (locked v0.3 concept): base agents are chat colleagues;
+  // sub-agent workers are delegation-only labour. Partition strictly on type.
+  const baseAgents = agents.filter((a) => a.type !== 'worker')
+  const workerAgents = agents.filter((a) => a.type === 'worker')
 
   const { mutate: doSetDefault } = useMutation({
     mutationFn: (agentId: string) => updateAgent(agentId, { default: true }),
@@ -84,20 +90,60 @@ export function AgentListScreen() {
           </Button>
         </div>
       ) : (
-        <div
-          className={`grid gap-4 ${
-            agents.length < 4
-              ? 'grid-cols-1'
-              : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
-          }`}
-        >
-          {agents.map((agent) => (
-            <AgentCard
-              key={agent.id}
-              agent={agent}
-              onSetDefault={() => doSetDefault(agent.id)}
-            />
-          ))}
+        <div className="space-y-8">
+          {/* Base agents — chat colleagues (type !== 'worker'). */}
+          {baseAgents.length > 0 && (
+          <section>
+            <div className="mb-3">
+              <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
+                Base agents
+              </h2>
+              <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                Chat colleagues — message them, set a default, and delegate work.
+              </p>
+            </div>
+            <div
+              className={`grid gap-4 ${
+                baseAgents.length < 4
+                  ? 'grid-cols-1'
+                  : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
+              }`}
+            >
+              {baseAgents.map((agent) => (
+                <AgentCard
+                  key={agent.id}
+                  agent={agent}
+                  onSetDefault={() => doSetDefault(agent.id)}
+                />
+              ))}
+            </div>
+          </section>
+          )}
+
+          {/* Sub-agent workers — delegation-only labour (type === 'worker'). */}
+          {workerAgents.length > 0 && (
+            <section>
+              <div className="mb-3">
+                <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
+                  Sub-agent workers
+                </h2>
+                <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                  Delegation-only labour agents — invoked by other agents, not chat targets.
+                </p>
+              </div>
+              <div
+                className={`grid gap-4 ${
+                  workerAgents.length < 4
+                    ? 'grid-cols-1'
+                    : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
+                }`}
+              >
+                {workerAgents.map((agent) => (
+                  <WorkerCard key={agent.id} agent={agent} />
+                ))}
+              </div>
+            </section>
+          )}
         </div>
       )}
 
