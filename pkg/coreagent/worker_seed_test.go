@@ -126,6 +126,41 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 		"the worker is a leaf — it has no seeded onward delegation (deny-by-default)")
 }
 
+// TestSeedConfig_DoesNotReseedExplicitEmptyDelegation locks the architect's
+// load-bearing safety property for the delegation editor: an operator who has
+// explicitly set an agent's delegation policy to "deny all" (a non-nil but EMPTY
+// To list) must NOT have the seed trust graph re-applied on the next boot. The
+// re-seed migration only fires when DelegationPolicy is nil; a non-nil empty
+// policy is a deliberate operator choice and is preserved.
+//
+// Without this invariant, a tightening edit (revoke all delegation) would be
+// silently undone on every restart — the exact regression class the delegation
+// editor's reload fix guards against at runtime.
+func TestSeedConfig_DoesNotReseedExplicitEmptyDelegation(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{
+				{
+					ID:   string(coreagent.IDJim),
+					Name: "Jim — Orchestrator",
+					Type: config.AgentTypeCore,
+					// Operator chose "deny all delegation": non-nil, empty To.
+					DelegationPolicy: &config.DelegationPolicy{To: []config.AgentRef{}},
+				},
+			},
+		},
+	}
+
+	coreagent.SeedConfig(cfg)
+
+	jim := findSeeded(t, cfg, string(coreagent.IDJim))
+	require.NotNil(t, jim.DelegationPolicy, "Jim's explicit policy must survive seeding")
+	assert.NotNil(t, jim.DelegationPolicy.To,
+		"explicit empty To must remain non-nil (deny-all is authoritative, not 'unset')")
+	assert.Empty(t, jim.DelegationPolicy.To,
+		"SeedConfig must NOT re-seed the trust graph over an operator's explicit deny-all policy")
+}
+
 // TestWorkerHasNoPersistentMemoryTools verifies the worker gets ephemeral memory
 // only: the persistent-memory tools are denied so it never relies on a private
 // memory room (scope: no persistent room required for workers).

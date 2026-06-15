@@ -168,6 +168,60 @@ func TestSubagentDelegationDenyChecker_DeniedWhenDepthExceeded(t *testing.T) {
 	}
 }
 
+// TestDelegationDenyChecker_FlipsWhenPolicyRebuilt is the enforcement round-trip
+// proof for the HIGH finding (test-GAP-1): each agent instance's delegation
+// deny-checker is bound to the AgentConfig captured at construction time. The
+// fix routes a delegation_policy edit through TriggerReload →
+// ReloadProviderAndConfig → registerSharedTools, which RE-CALLS
+// buildDelegationDenyChecker against the swapped config. This test proves the
+// resulting checker FLIPS allow/deny without a process restart: building the
+// checker from the OLD config enforces the OLD allowlist; building it from the
+// NEW (swapped) config enforces the NEW allowlist — exactly the rebuild a reload
+// performs in registerSharedTools (loop.go:1540-1543).
+func TestDelegationDenyChecker_FlipsWhenPolicyRebuilt(t *testing.T) {
+	// OLD policy: Jim may delegate (background) to ava only.
+	oldCfg := agentWithPolicy("jim", &config.DelegationPolicy{
+		To:    []config.AgentRef{{Kind: "local", ID: "ava"}},
+		Modes: []config.DelegationMode{config.DelegationModeBackground},
+	})
+	oldChecker := buildDelegationDenyChecker("jim", oldCfg, config.AgentDefaults{},
+		config.DelegationModeBackground, nil)
+
+	// Under the OLD policy: ava allowed, ray denied (not in trust set).
+	if reason := oldChecker(ctxAtDepth(0), "ava"); reason != "" {
+		t.Fatalf("old policy: expected ava allowed, got deny: %q", reason)
+	}
+	if reason := oldChecker(ctxAtDepth(0), "ray"); reason == "" {
+		t.Fatal("old policy: expected ray denied (not in trust set), got allow")
+	}
+
+	// Simulate the edit PUT Jim to:[ray] → SwapConfig holds the new policy →
+	// registerSharedTools rebuilds the checker from the swapped config. The OLD
+	// checker closure is NOT mutated (it captured the old toList); the running
+	// agent only enforces the new policy because a NEW checker was constructed.
+	newCfg := agentWithPolicy("jim", &config.DelegationPolicy{
+		To:    []config.AgentRef{{Kind: "local", ID: "ray"}},
+		Modes: []config.DelegationMode{config.DelegationModeBackground},
+	})
+	newChecker := buildDelegationDenyChecker("jim", newCfg, config.AgentDefaults{},
+		config.DelegationModeBackground, nil)
+
+	// Under the NEW policy: ray now allowed, ava now denied — the gate FLIPPED.
+	if reason := newChecker(ctxAtDepth(0), "ray"); reason != "" {
+		t.Fatalf("new policy: expected ray allowed after edit, got deny: %q", reason)
+	}
+	if reason := newChecker(ctxAtDepth(0), "ava"); reason == "" {
+		t.Fatal("new policy: expected ava denied after edit (revoked target), got allow")
+	}
+
+	// Defence in depth: the OLD checker (the pre-reload closure) still enforces
+	// the OLD allowlist — proving the rebuild, not in-place mutation, is what
+	// applies the new policy. This is exactly why a delegation edit MUST reload.
+	if reason := oldChecker(ctxAtDepth(0), "ray"); reason == "" {
+		t.Fatal("pre-reload checker must still deny ray (proves checker is bound to construction-time config)")
+	}
+}
+
 func TestCurrentDelegationDepth_DefaultsToZeroWithoutTurnState(t *testing.T) {
 	if d := currentDelegationDepth(context.Background()); d != 0 {
 		t.Fatalf("expected depth 0 without turnState, got %d", d)

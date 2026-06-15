@@ -1455,7 +1455,11 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// existing stored policy on create, so inert fields come solely from the request.
 	if dpIn := delegationInputFromCreateRequest(&req); dpIn != nil {
 		cfg := a.agentLoop.GetConfig()
-		dp, errMsg := buildDelegationPolicy(dpIn, nil, rosterIDSet(cfg), delegationDepthCeiling(cfg))
+		// selfID = the new agent's id (known at create time) so a self-ref A→A is
+		// rejected; selfIsWorker reflects the new agent's type so a worker created
+		// with a non-empty to[] is rejected (worker-leaf invariant). No existing
+		// stored policy on create → grandfathering is a no-op.
+		dp, errMsg := buildDelegationPolicy(dpIn, nil, rosterIDSet(cfg), delegationDepthCeiling(cfg), ac.ID, ac.IsWorker())
 		if errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
@@ -1769,6 +1773,8 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			foundAgent.DelegationPolicy, // existing stored policy (may be nil)
 			rosterIDSet(cfg),
 			delegationDepthCeiling(cfg),
+			foundAgent.ID,         // selfID: reject A→A self-delegation
+			foundAgent.IsWorker(), // worker-leaf: reject a non-empty to[] on a worker
 		)
 		if errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)
@@ -2076,7 +2082,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// agent creation/deletion). Model, rate limit, timeout, and steering mode changes are
 	// config-only and do NOT need a reload — avoiding the WebSocket drop and context loss
 	// that a full reload causes mid-conversation.
-	needsReload := req.Soul != nil || req.Heartbeat != nil || req.Instructions != nil
+	//
+	// A delegation_policy change MUST reload: each agent instance's spawn/subagent/task
+	// delegation deny-checkers are bound to the config captured at agent-instance
+	// construction (registerSharedTools → buildDelegationDenyChecker, etc.). Persisting
+	// the new policy + SwapConfig alone does NOT rebuild those closures, so the running
+	// agent would keep enforcing the OLD allowlist — a tightening edit (revoke a target /
+	// drop a mode) would silently not apply until a restart. TriggerReload →
+	// executeReload → ReloadProviderAndConfig → registerSharedTools reconstructs every
+	// agent's deny-checkers from the swapped config, applying the new policy live.
+	needsReload := req.Soul != nil || req.Heartbeat != nil || req.Instructions != nil ||
+		req.DelegationPolicy != nil
 	var reloadWarning string
 	if needsReload {
 		if err := a.agentLoop.TriggerReload(); err != nil {

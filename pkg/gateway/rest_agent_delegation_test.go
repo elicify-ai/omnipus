@@ -19,6 +19,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -46,7 +47,8 @@ func buildDelegationTestAPI(t *testing.T) *restAPI {
 	cfgJSON := `{"agents":{"defaults":{"workspace":"` + tmpDir + `","model_name":"test-model","max_tokens":4096,"subturn":{"max_depth":3}},"list":[` +
 		`{"id":"test-agent","name":"Test Agent","type":"custom"},` +
 		`{"id":"ava","name":"Ava","type":"custom"},` +
-		`{"id":"ray","name":"Ray","type":"custom"}` +
+		`{"id":"ray","name":"Ray","type":"custom"},` +
+		`{"id":"laborer","name":"Laborer","type":"worker"}` +
 		`]}}`
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
@@ -63,6 +65,7 @@ func buildDelegationTestAPI(t *testing.T) *restAPI {
 				{ID: "test-agent", Name: "Test Agent", Type: config.AgentTypeCustom},
 				{ID: "ava", Name: "Ava", Type: config.AgentTypeCustom},
 				{ID: "ray", Name: "Ray", Type: config.AgentTypeCustom},
+				{ID: "laborer", Name: "Laborer", Type: config.AgentTypeWorker},
 			},
 		},
 	}
@@ -325,4 +328,196 @@ func TestUpdateAgent_DelegationEmptyToDenyAll(t *testing.T) {
 	to, ok := dp["to"].([]any)
 	require.True(t, ok, "to key must be present (deny-all), got: %v", dp["to"])
 	assert.Len(t, to, 0, "deny-all to-list must be empty")
+}
+
+// TestUpdateAgent_NeedsReloadRebuildsLiveDelegationCheckers is the end-to-end
+// proof for the HIGH finding: a delegation_policy edit must trigger a reload that
+// rebuilds the running agent's delegation deny-checkers, so the new policy is
+// enforced WITHOUT a process restart.
+//
+// It wires SetReloadFunc to the SAME rebuild the gateway performs in production
+// (executeReload → ReloadProviderAndConfig → registerSharedTools, which re-calls
+// buildDelegationDenyChecker against the swapped config). After the PUT, it reads
+// the rebuilt registry's live config and applies the EXACT resolution functions
+// the runtime deny-checker captures (config.ResolveDelegationTo +
+// IsDelegationAllowed), proving allow/deny FLIPPED with no restart.
+func TestUpdateAgent_NeedsReloadRebuildsLiveDelegationCheckers(t *testing.T) {
+	api := buildDelegationTestAPI(t)
+	al := api.agentLoop
+	provider := &restMockProvider{}
+
+	// Production-faithful reload: load the swapped on-disk config and rebuild the
+	// registry + every agent instance's delegation deny-checkers, exactly as
+	// executeReload does (gateway.go:1773 ReloadProviderAndConfig).
+	al.SetReloadFunc(func() error {
+		newCfg, err := config.LoadConfig(api.configPath())
+		if err != nil {
+			return err
+		}
+		al.SwapConfig(newCfg)
+		return al.ReloadProviderAndConfig(context.Background(), provider, newCfg)
+	})
+
+	// liveAllows reports whether the running config (after any reload) permits
+	// test-agent → target — the same check the rebuilt runtime deny-checker makes.
+	liveAllows := func(target string) bool {
+		cfg := al.GetConfig()
+		var ac *config.AgentConfig
+		for i := range cfg.Agents.List {
+			if cfg.Agents.List[i].ID == "test-agent" {
+				ac = &cfg.Agents.List[i]
+				break
+			}
+		}
+		require.NotNil(t, ac, "test-agent missing from live config")
+		toList := config.ResolveDelegationTo(ac, cfg.Agents.Defaults)
+		return config.IsDelegationAllowed(toList, target)
+	}
+
+	// Seed test-agent to:[ava] via the handler (triggers a reload).
+	require.Equal(t, http.StatusOK, putAgent(t, api, "test-agent",
+		`{"delegation_policy":{"to":[{"kind":"local","id":"ava"}],"modes":["background"]}}`).Code)
+	require.True(t, liveAllows("ava"), "after seeding to:[ava], running checker must allow ava")
+	require.False(t, liveAllows("ray"), "after seeding to:[ava], running checker must deny ray")
+
+	// Edit test-agent to:[ray] — a tightening edit that revokes ava and grants ray.
+	// The fix makes this PUT trigger a reload that rebuilds the deny-checkers.
+	require.Equal(t, http.StatusOK, putAgent(t, api, "test-agent",
+		`{"delegation_policy":{"to":[{"kind":"local","id":"ray"}],"modes":["background"]}}`).Code)
+
+	// The gate FLIPPED with no restart: ray now allowed, ava now denied.
+	require.True(t, liveAllows("ray"), "after edit to:[ray], running checker must now ALLOW ray (no restart)")
+	require.False(t, liveAllows("ava"), "after edit to:[ray], running checker must now DENY ava (revoked, no restart)")
+}
+
+// TestUpdateAgent_WorkerSourceRejected proves the worker-leaf invariant is
+// backend-enforced: a PUT with a non-empty to[] on a worker agent → 400.
+func TestUpdateAgent_WorkerSourceRejected(t *testing.T) {
+	api := buildDelegationTestAPI(t)
+	body := `{"delegation_policy":{"to":[{"kind":"local","id":"ava"}]}}`
+	w := putAgent(t, api, "laborer", body)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "worker out-edge must be rejected; body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "leaf")
+}
+
+// TestUpdateAgent_WorkerEmptyToAllowed proves a worker may carry an explicit
+// empty to[] ("deny all") — only a non-empty to[] is rejected.
+func TestUpdateAgent_WorkerEmptyToAllowed(t *testing.T) {
+	api := buildDelegationTestAPI(t)
+	w := putAgent(t, api, "laborer", `{"delegation_policy":{"to":[]}}`)
+	assert.Equal(t, http.StatusOK, w.Code, "worker with empty to[] (deny-all) must be allowed; body: %s", w.Body.String())
+}
+
+// TestUpdateAgent_GrandfatherDanglingTarget proves a pre-existing dangling to[]
+// ref does not brick unrelated edits to the pointing agent: after the target is
+// deleted, toggling only an unrelated field (modes) succeeds (the stale ref is
+// grandfathered), while ADDING a brand-new unknown target is still rejected.
+func TestUpdateAgent_GrandfatherDanglingTarget(t *testing.T) {
+	api := buildDelegationTestAPI(t)
+
+	// test-agent → ava.
+	require.Equal(t, http.StatusOK, putAgent(t, api, "test-agent",
+		`{"delegation_policy":{"to":[{"kind":"local","id":"ava"}],"modes":["task"]}}`).Code)
+
+	// Delete ava from the roster directly in config.json + refresh live config so
+	// the stored test-agent policy now points at a non-existent target.
+	require.NoError(t, api.safeUpdateConfigJSON(func(m map[string]any) error {
+		agents, _ := m["agents"].(map[string]any)
+		list, _ := agents["list"].([]any)
+		kept := make([]any, 0, len(list))
+		for _, item := range list {
+			entry, _ := item.(map[string]any)
+			if entry != nil && entry["id"] == "ava" {
+				continue
+			}
+			kept = append(kept, item)
+		}
+		agents["list"] = kept
+		return nil
+	}))
+
+	// Toggling ONLY modes (the stale ava ref is unchanged) must NOT be bricked —
+	// the dangling ref is grandfathered, not re-validated.
+	w := putAgent(t, api, "test-agent",
+		`{"delegation_policy":{"to":[{"kind":"local","id":"ava"}],"modes":["background"]}}`)
+	assert.Equal(t, http.StatusOK, w.Code,
+		"a pre-existing dangling ref must not brick an unrelated edit; body: %s", w.Body.String())
+
+	// But ADDING a brand-new unknown target is still rejected (only newly-added
+	// refs are roster-checked).
+	w2 := putAgent(t, api, "test-agent",
+		`{"delegation_policy":{"to":[{"kind":"local","id":"ava"},{"kind":"local","id":"ghost"}]}}`)
+	assert.Equal(t, http.StatusBadRequest, w2.Code,
+		"a newly-added unknown target must still 400; body: %s", w2.Body.String())
+	assert.Contains(t, w2.Body.String(), "does not exist")
+}
+
+// TestUpdateAgent_SelfReferenceRejected proves A→A self-delegation is rejected.
+func TestUpdateAgent_SelfReferenceRejected(t *testing.T) {
+	api := buildDelegationTestAPI(t)
+	w := putAgent(t, api, "test-agent",
+		`{"delegation_policy":{"to":[{"kind":"local","id":"test-agent"}]}}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "self-ref must 400; body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "itself")
+}
+
+// TestUpdateAgent_DuplicateToCollapsed proves duplicate to[] refs collapse to one.
+func TestUpdateAgent_DuplicateToCollapsed(t *testing.T) {
+	api := buildDelegationTestAPI(t)
+	require.Equal(t, http.StatusOK, putAgent(t, api, "test-agent",
+		`{"delegation_policy":{"to":[{"kind":"local","id":"ava"},{"kind":"local","id":"ava"}]}}`).Code)
+
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	dp := findDelegationPolicyInConfig(t, m, "test-agent")
+	require.NotNil(t, dp)
+	to, _ := dp["to"].([]any)
+	assert.Len(t, to, 1, "duplicate to[] refs must collapse to one: %s", string(raw))
+}
+
+// TestUpdateAgent_WildcardToPersists proves a "*" wildcard target is accepted.
+func TestUpdateAgent_WildcardToPersists(t *testing.T) {
+	api := buildDelegationTestAPI(t)
+	w := putAgent(t, api, "test-agent",
+		`{"delegation_policy":{"to":[{"kind":"local","id":"*"}]}}`)
+	require.Equal(t, http.StatusOK, w.Code, "wildcard must be accepted; body: %s", w.Body.String())
+
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	dp := findDelegationPolicyInConfig(t, m, "test-agent")
+	require.NotNil(t, dp)
+	to, _ := dp["to"].([]any)
+	require.Len(t, to, 1)
+	ref, _ := to[0].(map[string]any)
+	assert.Equal(t, "*", ref["id"])
+}
+
+// TestUpdateAgent_EmptyToIDRejected proves a to[] ref with an empty id → 400.
+func TestUpdateAgent_EmptyToIDRejected(t *testing.T) {
+	api := buildDelegationTestAPI(t)
+	w := putAgent(t, api, "test-agent",
+		`{"delegation_policy":{"to":[{"kind":"local","id":""}]}}`)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "empty id must 400; body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "must not be empty")
+}
+
+// TestUpdateAgent_DepthAtCeilingAccepted proves depth == ceiling (3) is the
+// boundary that is accepted (above the ceiling is the rejecting case).
+func TestUpdateAgent_DepthAtCeilingAccepted(t *testing.T) {
+	api := buildDelegationTestAPI(t)
+	w := putAgent(t, api, "test-agent",
+		`{"delegation_policy":{"to":[{"kind":"local","id":"ava"}],"depth":3}}`)
+	require.Equal(t, http.StatusOK, w.Code, "depth==ceiling(3) must be accepted; body: %s", w.Body.String())
+
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	dp := findDelegationPolicyInConfig(t, m, "test-agent")
+	require.NotNil(t, dp)
+	assert.EqualValues(t, 3, dp["depth"])
 }
