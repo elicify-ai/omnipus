@@ -28,6 +28,14 @@ type SubTurnConfig struct {
 	Timeout            time.Duration // 0 = use default (5 minutes)
 	MaxContextRunes    int           // 0 = auto, -1 = no limit, >0 = explicit limit
 	ActualSystemPrompt string
+	// TargetAgentID, when non-empty, is the configured agent the sub-turn is
+	// delegating TO (e.g., a worker). When set, subturn.go resolves the
+	// delegate's soul (AgentConfig.Soul or, for seeded base agents, the
+	// compiled coreagent.GetPrompt) and uses it as the ActualSystemPrompt so
+	// the child turn runs with system=soul + user=task, uniformly across the
+	// native and external-cli executors. Empty means "delegate the parent's
+	// own agent" — the parent's own soul applies.
+	TargetAgentID      string
 	InitialMessages    []providers.Message
 	InitialTokenBudget *atomic.Int64 // Shared token budget for team members; nil if no budget
 	// TaskLabel is the optional human-readable label for the sub-turn task (FR-H-004).
@@ -405,30 +413,21 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	label, _ := args["label"].(string)
 
-	// Build system prompt for subagent
-	systemPrompt := fmt.Sprintf(
-		`You are a subagent. Complete the given task independently and provide a clear, concise result.
-
-Task: %s`,
-		task,
-	)
-
-	if label != "" {
-		systemPrompt = fmt.Sprintf(
-			`You are a subagent labeled "%s". Complete the given task independently and provide a clear, concise result.
-
-Task: %s`,
-			label,
-			task,
-		)
-	}
-
 	// Use spawner if available (direct SpawnSubTurn call)
+	//
+	// The task is the first USER message; the delegate's soul (worker / configured
+	// agent) is resolved inside spawnSubTurn and used as the system role. The
+	// legacy "You are a subagent" wrapper is REMOVED — the subagent tool does
+	// not pre-inject any persona, so a configured delegate exposes its own soul
+	// and a soul-less worker runs with an empty system role (worker souls are
+	// OPTIONAL by design). The label, when set, is preserved as the task label
+	// for the WS subTurn_start frame.
 	if t.spawner != nil {
 		result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
 			Model:        t.defaultModel,
 			Tools:        nil, // Will inherit from parent via context
-			SystemPrompt: systemPrompt,
+			SystemPrompt: task,
+			TaskLabel:    label,
 			MaxTokens:    t.maxTokens,
 			Temperature:  t.temperature,
 			Async:        false, // Synchronous execution

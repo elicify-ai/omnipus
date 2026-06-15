@@ -130,36 +130,27 @@ func (t *SpawnTool) execute(
 		}
 	}
 
-	// Build system prompt for spawned subagent
-	systemPrompt := fmt.Sprintf(
-		`You are a spawned subagent running in the background. Complete the given task independently and report back when done.
-
-Task: %s`,
-		task,
-	)
-
-	if label != "" {
-		systemPrompt = fmt.Sprintf(
-			`You are a spawned subagent labeled "%s" running in the background. Complete the given task independently and report back when done.
-
-Task: %s`,
-			label,
-			task,
-		)
-	}
-
 	// Use spawner if available (direct SpawnSubTurn call)
+	//
+	// The task is the first USER message; the delegate's soul (worker / configured
+	// agent) is resolved inside spawnSubTurn and used as the system role. The
+	// legacy "You are a spawned subagent running in the background" wrapper is
+	// REMOVED — the spawn tool does not pre-inject any persona, so a configured
+	// delegate exposes its own soul and a soul-less worker runs with an empty
+	// system role (worker souls are OPTIONAL by design). The label, when set,
+	// is preserved as the task label for the WS subTurn_start frame.
 	if t.spawner != nil {
 		// Launch async sub-turn in goroutine
 		go func() {
 			result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-				Model:        t.defaultModel,
-				Tools:        nil, // Will inherit from parent via context
-				SystemPrompt: systemPrompt,
-				MaxTokens:    t.maxTokens,
-				Temperature:  t.temperature,
-				Async:        true,  // Async execution
-				TaskLabel:    label, // FR-H-004: propagate to SubTurnSpawnPayload for WS frame
+				Model:         t.defaultModel,
+				Tools:         nil, // Will inherit from parent via context
+				SystemPrompt:  task,
+				TargetAgentID: agentID,
+				MaxTokens:     t.maxTokens,
+				Temperature:   t.temperature,
+				Async:         true,  // Async execution
+				TaskLabel:     label, // FR-H-004: propagate to SubTurnSpawnPayload for WS frame
 			})
 			if err != nil {
 				result = ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)

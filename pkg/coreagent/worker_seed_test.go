@@ -179,3 +179,46 @@ func TestWorkerHasNoPersistentMemoryTools(t *testing.T) {
 	assert.Equal(t, config.ToolPolicyDeny, pol["system.*"],
 		"worker keeps the system.* deny rail")
 }
+
+// TestWorkerSoulIsOptional_BootWithEmptySoul verifies the worker property-model
+// correction: a worker's soul/system-prompt is OPTIONAL. The init() invariant
+// exempts the worker from the mandatory-compiled-prompt check, and the seeded
+// worker's compiled prompt is intentionally empty. A worker with an empty
+// soul is a valid, bootable worker — the init() panic does NOT fire.
+func TestWorkerSoulIsOptional_BootWithEmptySoul(t *testing.T) {
+	// BDD: Given the seeded worker (ID=worker, Type=worker),
+	//      When init() has run and GetPrompt("worker") is called,
+	//      Then init() does NOT panic and GetPrompt returns "" (the soul is
+	//      empty by design — composing soul+task at delegation time yields
+	//      system=""+user=task for a soul-less worker).
+	prompt := coreagent.GetPrompt(string(coreagent.IDWorker))
+	assert.Empty(t, prompt,
+		"a worker with an empty soul is valid (soul is OPTIONAL) — GetPrompt returns the empty string")
+
+	// The init() panic exemption: the worker is in All() but the boot path
+	// skips its compiled-prompt check. SeedConfig on an empty config must
+	// still succeed and the worker must be present.
+	cfg := &config.Config{}
+	require.True(t, coreagent.SeedConfig(cfg))
+	worker := findSeeded(t, cfg, string(coreagent.IDWorker))
+	assert.True(t, worker.IsWorker(), "worker must be classified Type=worker")
+}
+
+// TestWorkerSeedConfig_EmptySoulStillValidatesExistingAgents ensures that
+// re-seeding a config whose worker has been customized to a non-locked
+// (e.g., with Type changed) state still works — the init() panic exemption
+// keeps the boot path robust against operator edits that touch the worker.
+func TestWorkerSeedConfig_EmptySoulStillValidatesExistingAgents(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{
+				// Existing operator-tweaked worker with no SOUL.md / empty soul.
+				{ID: string(coreagent.IDWorker), Name: "Worker", Type: config.AgentTypeWorker, Locked: true},
+			},
+		},
+	}
+	modified := coreagent.SeedConfig(cfg)
+	_ = modified // may be true (re-enforce) — what matters is no panic and worker present.
+	worker := findSeeded(t, cfg, string(coreagent.IDWorker))
+	assert.True(t, worker.IsWorker(), "worker with empty soul still validates after re-seed")
+}

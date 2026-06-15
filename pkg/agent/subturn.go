@@ -5,12 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/dapicom-ai/omnipus/pkg/agent/runner"
+	"github.com/dapicom-ai/omnipus/pkg/coreagent"
 	"github.com/dapicom-ai/omnipus/pkg/logger"
 	"github.com/dapicom-ai/omnipus/pkg/providers"
 	"github.com/dapicom-ai/omnipus/pkg/session"
@@ -171,6 +175,15 @@ type SubTurnConfig struct {
 	// The legacy SystemPrompt field is actually used as the first 'user' message (task description).
 	ActualSystemPrompt string
 
+	// TargetAgentID, when non-empty, is the configured agent the sub-turn is
+	// delegating TO (e.g., a worker). When set, spawnSubTurn resolves the
+	// delegate's soul (config.AgentConfig.Soul or, for seeded base/worker
+	// agents, the compiled coreagent.GetPrompt) and uses it as the true
+	// system role, so the child turn runs with system=soul + user=task,
+	// uniformly across the native and external-cli executors. Empty means
+	// "delegate the parent's own agent" — the parent's own soul applies.
+	TargetAgentID string
+
 	// InitialMessages preloads the ephemeral session history before the agent loop starts.
 	// Used by evaluator-optimizer patterns to pass the full worker context across multiple iterations.
 	InitialMessages []providers.Message
@@ -207,6 +220,87 @@ func AgentLoopFromContext(ctx context.Context) *AgentLoop {
 
 // ====================== Helper Functions ======================
 
+// resolveDelegateSoul returns the soul (system-prompt text) of the configured
+// agent identified by agentID, or "" when the agent has no soul / is unknown.
+//
+// Resolution order:
+//  1. The compiled core prompt (coreagent.GetPrompt) — for seeded base agents
+//     and the worker. The worker prompt is intentionally empty today (a
+//     worker's soul is OPTIONAL), so a worker with no SOUL.md resolves to "".
+//  2. The agent's on-disk SOUL.md content — for custom agents and operators
+//     who have placed a SOUL.md in the worker workspace.
+//
+// An unknown agentID resolves to "" so an unresolved target never falls back
+// to the legacy generic "You are a subagent" string. The sub-turn's true
+// system role is then empty for that delegate, and the task is the only
+// user-facing input.
+//
+// Used by spawnSubTurn and runExternalCLISubTurn to compose the
+// (soul, task) prompt pair uniformly across the native and external-cli
+// executors (worker property-model correction: soul is OPTIONAL and the
+// composition is identical for both).
+func resolveDelegateSoul(al *AgentLoop, agentID string) string {
+	if al == nil || agentID == "" {
+		return ""
+	}
+	// 1. Compiled base/worker prompt.
+	if compiled := coreagent.GetPrompt(agentID); compiled != "" {
+		return compiled
+	}
+	// 2. On-disk SOUL.md for the agent's workspace. We need the agent's
+	//    config to resolve the workspace, then read <workspace>/SOUL.md.
+	cfg := al.GetConfig()
+	if cfg == nil {
+		return ""
+	}
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID != agentID {
+			continue
+		}
+		ac := cfg.Agents.List[i]
+		ws := ac.Workspace
+		if ws == "" {
+			ws = cfg.Agents.Defaults.Workspace
+		}
+		if ws == "" {
+			return ""
+		}
+		// SOUL.md is the operator's optional persona text for a custom agent.
+		// Read with os; an empty/missing file is a valid worker (soul-less) state.
+		path := filepath.Join(ws, "SOUL.md")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(data))
+	}
+	return ""
+}
+
+// composeDelegateInput builds the prompt string the external-cli runner sees
+// as its input, matching the native path's (system, user) split: the soul is
+// prepended (when present) and the task follows. When the soul is empty — the
+// worker case where the soul is OPTIONAL — the input is the task alone, with
+// no persona text and no legacy "You are a subagent" wrapper.
+//
+// An explicit ActualSystemPrompt from the caller (legacy / future callers)
+// takes precedence over resolveDelegateSoul so the dispatch site is a single
+// composition point.
+func composeDelegateInput(al *AgentLoop, task, actualSystem, targetAgentID string) string {
+	// Prefer the explicitly-supplied system prompt when present.
+	soul := strings.TrimSpace(actualSystem)
+	if soul == "" && targetAgentID != "" {
+		soul = strings.TrimSpace(resolveDelegateSoul(al, targetAgentID))
+	}
+	if soul == "" {
+		return task
+	}
+	// Same shape as the native path: the soul is the system context, the
+	// task is the user input. Keep it as a single string for the external
+	// CLI; the child transcript records it as one user message.
+	return fmt.Sprintf("## System\n\n%s\n\n## Task\n\n%s", soul, task)
+}
+
 func (al *AgentLoop) generateSubTurnID() string {
 	return fmt.Sprintf("subturn-%d", al.subTurnCounter.Add(1))
 }
@@ -237,6 +331,7 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		Tools:              cfg.Tools,
 		SystemPrompt:       cfg.SystemPrompt,
 		ActualSystemPrompt: cfg.ActualSystemPrompt,
+		TargetAgentID:      cfg.TargetAgentID,
 		InitialMessages:    cfg.InitialMessages,
 		InitialTokenBudget: cfg.InitialTokenBudget,
 		MaxTokens:          cfg.MaxTokens,
@@ -443,6 +538,23 @@ func spawnSubTurn(
 	// InterruptSession can match this sub-turn via ts.transcriptSessionID == sessionID.
 	// Without this, every sub-turn has transcriptSessionID == "" and the cascade
 	// matches only the parent turn (the load-bearing bug fixed here).
+	//
+	// Soul composition: the system role is the DELEGATE's own soul
+	// (config.AgentConfig.Soul or the compiled coreagent.GetPrompt), and the
+	// task becomes the first user message. When the spawn did not name a
+	// target agent (TargetAgentID == ""), the parent's own soul applies via
+	// the empty override — the loop's standard identity builder will pick up
+	// the parent's SOUL.md / compiled prompt as before. An explicit
+	// ActualSystemPrompt from the caller (legacy / future callers) takes
+	// precedence; otherwise we resolve the delegate's soul so a worker with
+	// an EMPTY soul runs with an EMPTY system role, NOT the legacy
+	// "You are a subagent" string.
+	systemOverride := cfg.ActualSystemPrompt
+	if systemOverride == "" {
+		if cfg.TargetAgentID != "" {
+			systemOverride = resolveDelegateSoul(al, cfg.TargetAgentID)
+		}
+	}
 	opts := processOptions{
 		SessionKey:              childID,
 		Channel:                 parentTS.channel,
@@ -450,7 +562,7 @@ func spawnSubTurn(
 		SenderID:                parentTS.opts.SenderID,
 		SenderDisplayName:       parentTS.opts.SenderDisplayName,
 		UserMessage:             cfg.SystemPrompt, // Task description becomes the first user message
-		SystemPromptOverride:    cfg.ActualSystemPrompt,
+		SystemPromptOverride:    systemOverride,
 		Media:                   nil,
 		InitialSteeringMessages: cfg.InitialMessages,
 		DefaultResponse:         "",
@@ -612,7 +724,13 @@ func spawnSubTurn(
 	}
 
 	if dispatchKind == runner.DispatchKindExternalCLI {
-		extResult, extErr := runExternalCLISubTurn(childCtx, al, childTS, cfg.SystemPrompt, timeout)
+		// External-cli dispatch: compose the same (soul, task) pair the
+		// native path uses. An empty soul yields task-only input (the
+		// worker's soul is OPTIONAL — the external CLI gets no persona text
+		// if there is none). The composed string is what the external CLI
+		// sees as its prompt, mirroring the native system+user split.
+		externalInput := composeDelegateInput(al, cfg.SystemPrompt, cfg.ActualSystemPrompt, cfg.TargetAgentID)
+		extResult, extErr := runExternalCLISubTurn(childCtx, al, childTS, externalInput, timeout)
 		if semAcquired {
 			<-parentTS.concurrencySem
 			semAcquired = false

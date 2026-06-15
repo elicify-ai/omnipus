@@ -1485,13 +1485,7 @@ func registerSharedTools(
 					}
 				}
 
-				// 3. System Prompt
-				systemPrompt := "You are a subagent. Complete the given task independently and report the result.\n" +
-					"You have access to tools - use them as needed to complete your task.\n" +
-					"After completing the task, provide a clear summary of what was done.\n\n" +
-					"Task: " + task
-
-				// 4. Resolve Model
+				// 3. Resolve Model
 				modelToUse := agent.Model
 				if targetAgentID != "" {
 					if targetAgent, ok := al.GetRegistry().GetAgent(targetAgentID); ok {
@@ -1499,17 +1493,26 @@ func registerSharedTools(
 					}
 				}
 
-				// 5. Build SubTurnConfig
+				// 4. Build SubTurnConfig. The task is the first USER message; the
+				//    delegate's soul (worker / configured agent) is resolved inside
+				//    spawnSubTurn and used as the system role. The legacy
+				//    "You are a subagent" wrapper is REMOVED — workers and
+				//    configured agents now expose their own persona, and a worker
+				//    with an empty soul runs with an empty system role (soul is
+				//    OPTIONAL). The label, when set, is preserved as the task label
+				//    for the WS subTurn_start frame.
 				cfg := SubTurnConfig{
-					Model:        modelToUse,
-					Tools:        tlSlice,
-					SystemPrompt: systemPrompt,
+					Model:         modelToUse,
+					Tools:         tlSlice,
+					SystemPrompt:  task,
+					TargetAgentID: targetAgentID,
+					TaskLabel:     label,
 				}
 				if hasMaxTokens {
 					cfg.MaxTokens = maxTokens
 				}
 
-				// 6. Spawn SubTurn
+				// 5. Spawn SubTurn
 				return spawnSubTurn(ctx, al, parentTS, cfg)
 			})
 

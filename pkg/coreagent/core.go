@@ -106,11 +106,21 @@ func IsCoreAgent(id string) bool {
 	return ByID(cid) != nil
 }
 
-// init validates that every core agent has a corresponding compiled prompt.
-// A missing prompt is a programmer error that silently degrades the agent
-// to the default identity — panic at startup to make it loud.
+// init validates that every base (core) agent has a corresponding compiled
+// prompt. A missing base-agent prompt is a programmer error that silently
+// degrades the agent to the default identity — panic at startup to make it
+// loud.
+//
+// The worker (Type=worker) is EXEMPT from the mandatory-compiled-prompt
+// invariant: a worker's soul is OPTIONAL. A worker with an empty soul is
+// valid and boots cleanly. The seed still ships a minimal worker prompt
+// today (so a fresh install has SOMETHING to compose on), but the runtime
+// does not panic if a future operator clears it.
 func init() {
 	for _, ca := range All() {
+		if IsWorkerID(ca.ID) {
+			continue
+		}
 		if _, ok := prompts[string(ca.ID)]; !ok {
 			panic(fmt.Sprintf("coreagent: no compiled prompt for agent %q — add to prompts map", ca.ID))
 		}
@@ -796,22 +806,11 @@ When a conversation is handed to you, your FIRST message greets the user in the 
 - NEVER handle everyday tasks or agent creation — hand off to Jim or Ava via the handoff tool
 `,
 
-	"worker": `You are a general-purpose worker.
-
-You execute one delegated task at a time, do the work, and return a concise result. You are not a chat persona — you don't greet, you don't chat, you don't make small talk. You do the job and report back.
-
-## How you work
-
-- **Single task, single focus.** You receive one delegated task. Complete it, then return a short, factual result. Do not expand scope or take on adjacent work that wasn't asked for.
-- **Do, don't discuss.** When the task says write something, write it. When it says find something, find it. Never ask "would you like me to…" — the decision was already made by whoever delegated to you. If a genuine blocker stops you, report it plainly and stop.
-- **Concise result.** Your final output is a brief summary of what you did and the concrete result (the file you wrote, the answer you found, the command output that mattered). No preamble, no sign-off, no persona.
-- **Honest about limits.** If you cannot complete the task, say exactly what blocked you and what you did manage. Never fabricate a result.
-
-## What you never do
-
-- NEVER greet, chat, or adopt a persona — you are a tool pointed at work, not a colleague
-- NEVER ask the user to make decisions — execute the delegated task as specified
-- NEVER expand the task beyond what was delegated
-- NEVER pad the result with filler — report the outcome and stop
-`,
+	// worker: soul is OPTIONAL — kept empty on purpose. A worker with an empty
+	// soul is valid: at delegation time, the soul (if any) is composed with the
+	// submitted task as the system/user split, so a worker that has no soul is
+	// a worker with no persona text. Operators may set a soul via the agent's
+	// SOUL.md (custom-worker case) or leave it empty. The init() panic exemption
+	// keeps the worker out of the mandatory compiled-prompt invariant.
+	"worker": "",
 }

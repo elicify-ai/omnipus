@@ -109,6 +109,91 @@ func TestSchedulesAPI_AdminCanOwnAnyAgent(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 }
 
+// TestSchedulesAPI_Create400WorkerOwner verifies the write-time guard that
+// rejects creating a schedule whose owner is a worker. A worker is not a chat
+// target and never runs on a schedule cadence (workers run only via
+// delegation). The gate fires before any persistence.
+func TestSchedulesAPI_Create400WorkerOwner(t *testing.T) {
+	api, cs := newSchedulesTestAPI(t)
+
+	// Inject a worker into the config so the worker-guard predicate fires.
+	loop := api.agentLoop
+	cf := loop.GetConfig()
+	cf.Agents.List = append(cf.Agents.List, config.AgentConfig{
+		ID:            "worker-test",
+		Name:          "Worker",
+		Type:          config.AgentTypeWorker,
+		OwnerUsername: "alice",
+	})
+
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/schedules", createScheduleReq(t, "worker-test"))
+	r = withUser(r, "alice", config.UserRoleUser)
+	w := httptest.NewRecorder()
+	api.HandleSchedules(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "worker",
+		"the rejection message must reference the worker tier")
+
+	// Persisted: nothing — the schedule must not be in the cron store.
+	for _, j := range cs.ListJobs(true) {
+		if j.AgentID == "worker-test" {
+			t.Fatalf("a worker-owned schedule leaked into the cron store: %+v", j)
+		}
+	}
+}
+
+// TestSchedulesAPI_Update400WorkerOwner verifies the update-time guard that
+// rejects reassigning a schedule's owner to a worker. Same fire-before-persist
+// property as the create guard.
+func TestSchedulesAPI_Update400WorkerOwner(t *testing.T) {
+	api, cs := newSchedulesTestAPI(t)
+
+	// Seed a base-owned schedule we will try to reassign to a worker.
+	job, err := cs.AddJob(
+		"daily",
+		cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)},
+		"go",
+		false,
+		"",
+		"",
+	)
+	require.NoError(t, err)
+	job.AgentID = "mia"
+	job.CreatedBy = "alice"
+	require.NoError(t, cs.UpdateJob(job))
+
+	// Inject a worker so the update-guard predicate fires.
+	cf := api.agentLoop.GetConfig()
+	cf.Agents.List = append(cf.Agents.List, config.AgentConfig{
+		ID:            "worker-test",
+		Name:          "Worker",
+		Type:          config.AgentTypeWorker,
+		OwnerUsername: "alice",
+	})
+
+	updateBody := gen.ScheduleUpdate{OwnerAgentId: ptr("worker-test")}
+	buf, _ := json.Marshal(updateBody)
+
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/schedules/"+job.ID, bytes.NewBuffer(buf))
+	r.Header.Set("Content-Type", "application/json")
+	r = withUser(r, "alice", config.UserRoleUser)
+	w := httptest.NewRecorder()
+	api.HandleSchedules(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "worker")
+
+	// The stored job's owner must still be "mia" — the failed PUT must not
+	// have side-effected the owner field.
+	got, ok := cs.GetJob(job.ID)
+	require.True(t, ok)
+	assert.Equal(t, "mia", got.AgentID, "failed worker-owner PUT must not change stored owner")
+}
+
+// ptr is a local helper to take the address of a string literal.
+func ptr(s string) *string { return &s }
+
 func TestSchedulesAPI_InvalidTrigger400(t *testing.T) {
 	api, _ := newSchedulesTestAPI(t)
 	body := gen.ScheduleCreate{Name: "n", Message: "m", OwnerAgentId: "mia"}

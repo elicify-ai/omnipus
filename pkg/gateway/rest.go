@@ -1402,6 +1402,23 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
 		return
 	}
+	// Native-only executor on a non-worker (worker property-model correction):
+	// the REST create path always creates a CUSTOM (base) agent — workers
+	// are not creatable via REST (only via SeedConfig). Therefore a non-native
+	// executor on a freshly-created agent is automatically a base-agent
+	// configuration, and we reject it here so the dispatch path can rely on
+	// "non-worker = native" being true at the write gate. The worker tier is
+	// the only legitimate user of an external executor in v0.1.0; this keeps
+	// the dispatch path coherent and surfaces the constraint at write time
+	// rather than on the first delegated run.
+	if req.Executor != nil {
+		kind := string(req.Executor.Kind)
+		if kind == string(config.ExecutorKindExternalCLI) || kind == string(config.ExecutorKindRemoteA2A) {
+			jsonErr(w, http.StatusBadRequest,
+				"only sub-agent workers can use an external executor; base agents run native")
+			return
+		}
+	}
 	// Referential validation: reject unknown skill IDs before doing any work.
 	if req.Skills != nil && len(*req.Skills) > 0 {
 		if errMsg := a.validateSkillIDs(*req.Skills); errMsg != "" {
@@ -1721,6 +1738,43 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 	// Locked core agents: reject identity and prompt mutations.
 	// Allowed: model selection, heartbeat schedule (enabled/interval), tools (via updateAgentTools).
 	foundAgent := cfg.Agents.List[foundIdx]
+	// Worker agents can never be the routing default — they are not chat targets
+	// (invoked only via delegation). Reject an attempt to star a worker before
+	// any work is done so the single-default invariant and routing stay coherent.
+	if req.Default != nil && *req.Default && foundAgent.IsWorker() {
+		jsonErr(w, http.StatusBadRequest, "a worker agent cannot be set as the default agent (workers are not chat targets)")
+		return
+	}
+	// Worker agents have no heartbeat — they execute one delegated task at a
+	// time and never run on a schedule. Reject enabling/setting heartbeat on
+	// a worker at the write gate so a worker never gets a HEARTBEAT.md prompt
+	// or a positive enable flag. Setting heartbeat to disabled / interval
+	// unchanged is fine (the gate below only rejects the "turning it on" path).
+	// This guard runs BEFORE the locked-agent identity check so a locked
+	// worker (the seed default) is also blocked: a worker must never have
+	// heartbeat regardless of its locked status.
+	if foundAgent.IsWorker() && (req.HeartbeatEnabled != nil || req.HeartbeatInterval != nil || req.Heartbeat != nil) {
+		// Allow idempotent "off" writes (e.g., setting enabled=false or
+		// clearing the interval) so an operator's defensive reset is not
+		// blocked; reject any write that would actually enable heartbeat on
+		// a worker. A worker is also free to receive an EMPTY HEARTBEAT.md
+		// (clearing) but never a non-empty one.
+		if (req.HeartbeatEnabled != nil && *req.HeartbeatEnabled) ||
+			(req.HeartbeatInterval != nil && *req.HeartbeatInterval > 0) ||
+			(req.Heartbeat != nil && strings.TrimSpace(*req.Heartbeat) != "") {
+			jsonErr(w, http.StatusBadRequest, "a worker cannot have heartbeat enabled (workers run only via delegation)")
+			return
+		}
+	}
+	// Per-agent voice is a chat-persona attribute (TTS persona) — workers are
+	// not chat personas. Reject setting a non-empty voice on a worker at the
+	// write gate so a worker never carries a TTS persona. An explicit null
+	// (clearing) is fine, and so is omitting the field. Runs BEFORE the
+	// locked-agent identity check so a locked worker is also blocked.
+	if foundAgent.IsWorker() && req.Voice != nil && strings.TrimSpace(*req.Voice) != "" {
+		jsonErr(w, http.StatusBadRequest, "a worker cannot have a per-agent voice (workers are not chat personas)")
+		return
+	}
 	if foundAgent.Locked {
 		// Protected: name, description, soul (prompt content), heartbeat (HEARTBEAT.md content),
 		// instructions, color, icon, and skills are identity/capability fields — reject on locked agents.
@@ -1732,13 +1786,6 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			jsonErr(w, http.StatusForbidden, "cannot modify locked agent identity or prompt")
 			return
 		}
-	}
-	// Worker agents can never be the routing default — they are not chat targets
-	// (invoked only via delegation). Reject an attempt to star a worker before
-	// any work is done so the single-default invariant and routing stay coherent.
-	if req.Default != nil && *req.Default && foundAgent.IsWorker() {
-		jsonErr(w, http.StatusBadRequest, "a worker agent cannot be set as the default agent (workers are not chat targets)")
-		return
 	}
 	// Referential validation: reject unknown skill IDs before doing any work.
 	if req.Skills != nil && len(*req.Skills) > 0 {
@@ -1755,6 +1802,19 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 		if errMsg != "" {
 			jsonErr(w, http.StatusBadRequest, errMsg)
 			return
+		}
+		// Native-only executor on a non-worker (worker property-model
+		// correction): only a sub-agent worker may declare a non-native
+		// executor. A base or custom agent updated to kind="external-cli"
+		// or "remote-a2a" is rejected at the update gate. A native (or
+		// absent) executor on a non-worker stays allowed.
+		if !foundAgent.IsWorker() && execCfg != nil {
+			kind := execCfg.EffectiveKind()
+			if kind == config.ExecutorKindExternalCLI || kind == config.ExecutorKindRemoteA2A {
+				jsonErr(w, http.StatusBadRequest,
+					"only sub-agent workers can use an external executor; base agents run native")
+				return
+			}
 		}
 		updatedExecutor = execCfg
 	}

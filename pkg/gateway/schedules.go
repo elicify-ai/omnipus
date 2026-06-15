@@ -940,6 +940,18 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 
+	// Write-time guard: a worker is not a chat target and never runs on a
+	// schedule cadence — workers execute one delegated task at a time. Reject
+	// creating a schedule whose owner is a worker at the write gate so the
+	// call never lands a runnable job that the fire path would only reject
+	// at execution time. Mirrors the in-flight guard in
+	// RunScheduled and the default/chat guards elsewhere.
+	if owner := findAgentConfig(a.agentLoop.GetConfig(), req.OwnerAgentId); owner != nil && owner.IsWorker() {
+		jsonErr(w, http.StatusBadRequest,
+			"a worker cannot own a schedule (workers are not chat targets and run only via delegation)")
+		return
+	}
+
 	schedule := cron.CronSchedule{Kind: string(req.Trigger.Kind)}
 	schedule.Expr = derefStr(req.Trigger.CronExpr)
 	schedule.AtMS = req.Trigger.AtMs
@@ -1010,6 +1022,16 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 	if req.OwnerAgentId != nil && *req.OwnerAgentId != job.AgentID {
 		if code, msg := a.authorizeScheduleOwner(user, *req.OwnerAgentId); code != 0 {
 			jsonErr(w, code, msg)
+			return
+		}
+		// Write-time guard: a worker is not a chat target and never runs on
+		// a schedule cadence — block ownership reassignment to a worker the
+		// same way the create gate does. The fire path also rejects worker
+		// owners at run time; failing here keeps the API consistent and
+		// surfaces the reason to the operator before any persistence.
+		if newOwner := findAgentConfig(a.agentLoop.GetConfig(), *req.OwnerAgentId); newOwner != nil && newOwner.IsWorker() {
+			jsonErr(w, http.StatusBadRequest,
+				"a worker cannot own a schedule (workers are not chat targets and run only via delegation)")
 			return
 		}
 		job.AgentID = *req.OwnerAgentId

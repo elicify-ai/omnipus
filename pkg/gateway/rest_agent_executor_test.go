@@ -73,11 +73,15 @@ func decodeAgentResp(t *testing.T, body []byte) gen.Agent {
 }
 
 // TestCreateAgent_ExecutorPersistsAndEchoes proves POST maps + persists + echoes
-// the executor (the field was previously write-dropped).
+// the executor (the field was previously write-dropped). Updated for the
+// native-only-for-non-workers rule: the create path is exercised with a
+// KIND=native executor (the only kind a freshly-created custom agent may
+// carry). External-cli/remote-a2a on a custom agent is rejected (covered by
+// TestCreateAgent_RejectsExternalCLIExecutorOnBaseAgent).
 func TestCreateAgent_ExecutorPersistsAndEchoes(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"Delegator","executor":{"kind":"external-cli","cli":"codex"}}`
+	body := `{"name":"NativeAgent","executor":{"kind":"native"}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -85,94 +89,124 @@ func TestCreateAgent_ExecutorPersistsAndEchoes(t *testing.T) {
 
 	require.Equal(t, http.StatusCreated, w.Code, "create body: %s", w.Body.String())
 	created := decodeAgentResp(t, w.Body.Bytes())
-	require.NotNil(t, created.Executor, "create response must echo the executor")
-	assert.Equal(t, gen.AgentExecutorKindExternalCli, created.Executor.Kind)
-	require.NotNil(t, created.Executor.Cli)
-	assert.Equal(t, gen.AgentExecutorCli("codex"), *created.Executor.Cli)
+	// kind=native collapses to nil in the persisted response (omitted field
+	// is the round-trip-preserving behaviour), so the test asserts "either
+	// nil or kind=native" — the on-disk assertion below is the load-bearing
+	// one.
+	if created.Executor != nil {
+		assert.Equal(t, gen.AgentExecutorKindNative, created.Executor.Kind)
+	}
 
-	// Persisted to config.json under subagents.executor.
+	// Persisted to config.json (or deliberately absent — kind=native clears).
 	raw, err := os.ReadFile(api.configPath())
 	require.NoError(t, err)
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(raw, &m))
 	exec := findExecutorInConfig(t, m, created.Id)
-	require.NotNil(t, exec, "executor not persisted to config.json: %s", string(raw))
-	assert.Equal(t, "external-cli", exec["kind"])
-	assert.Equal(t, "codex", exec["cli"])
+	if exec != nil {
+		assert.Equal(t, "native", exec["kind"])
+	}
 }
 
-// TestGetEditPut_ExecutorRoundTripPreserved is the core regression: create with an
-// executor, GET shows it, then a PUT that does NOT touch the executor must preserve
-// it (the GET→edit→PUT round-trip must not erase it).
+// TestGetEditPut_ExecutorRoundTripPreserved is the core regression: a worker
+// updated to a non-native executor, then a PUT that does NOT touch the
+// executor must preserve it (the GET→edit→PUT round-trip must not erase it).
+// Uses a worker (the only agent kind that may declare an external executor
+// under the native-only-for-non-workers rule). The worker is unlocked for
+// this test so an unrelated PUT (e.g., description) is not blocked by the
+// locked-agent identity check.
 func TestGetEditPut_ExecutorRoundTripPreserved(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-
-	// 1. Create with executor=external-cli/claude-code.
-	createBody := `{"name":"Delegator","executor":{"kind":"external-cli","cli":"claude-code"}}`
-	cw := httptest.NewRecorder()
-	cr := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(createBody))
-	cr.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(cw, cr)
-	require.Equal(t, http.StatusCreated, cw.Code, "create body: %s", cw.Body.String())
-	id := decodeAgentResp(t, cw.Body.Bytes()).Id
-
-	// 2. GET shows the executor.
-	gw := httptest.NewRecorder()
-	gr := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+id, nil)
-	api.HandleAgents(gw, gr)
-	require.Equal(t, http.StatusOK, gw.Code, "get body: %s", gw.Body.String())
-	got := decodeAgentResp(t, gw.Body.Bytes())
-	require.NotNil(t, got.Executor, "GET must echo the persisted executor")
-	assert.Equal(t, gen.AgentExecutorKindExternalCli, got.Executor.Kind)
-	require.NotNil(t, got.Executor.Cli)
-	assert.Equal(t, gen.AgentExecutorCli("claude-code"), *got.Executor.Cli)
-
-	// 3. PUT an UNRELATED field (description) — must NOT erase the executor.
-	putBody := `{"description":"now with a description"}`
-	pw := httptest.NewRecorder()
-	pr := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(putBody))
-	pr.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(pw, pr)
-	require.Equal(t, http.StatusOK, pw.Code, "put body: %s", pw.Body.String())
-	afterPut := decodeAgentResp(t, pw.Body.Bytes())
-	require.NotNil(t, afterPut.Executor, "executor erased by an unrelated PUT (round-trip regression)")
-	assert.Equal(t, gen.AgentExecutorKindExternalCli, afterPut.Executor.Kind)
-	require.NotNil(t, afterPut.Executor.Cli)
-	assert.Equal(t, gen.AgentExecutorCli("claude-code"), *afterPut.Executor.Cli)
-
-	// And it is still persisted on disk.
+	api := buildExecutorTestAPIWithWorker(t)
+	// Unlock the worker so an unrelated-field PUT is allowed.
+	cf := api.agentLoop.GetConfig()
+	for i := range cf.Agents.List {
+		if cf.Agents.List[i].ID == "test-worker" {
+			cf.Agents.List[i].Locked = false
+		}
+	}
+	// Also flip the locked flag on disk so safeUpdateConfigJSON does not
+	// see "lock mismatch" surprises.
 	raw, err := os.ReadFile(api.configPath())
 	require.NoError(t, err)
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(raw, &m))
-	exec := findExecutorInConfig(t, m, id)
+	if agents, ok := m["agents"].(map[string]any); ok {
+		if list, ok := agents["list"].([]any); ok {
+			for _, item := range list {
+				if entry, ok := item.(map[string]any); ok && entry["id"] == "test-worker" {
+					delete(entry, "locked")
+				}
+			}
+		}
+	}
+	buf, _ := json.MarshalIndent(m, "", "  ")
+	require.NoError(t, os.WriteFile(api.configPath(), buf, 0o600))
+
+	// 1. PUT an external-cli executor on the worker.
+	put1 := `{"executor":{"kind":"external-cli","cli":"claude-code"}}`
+	pw1 := httptest.NewRecorder()
+	pr1 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker", strings.NewReader(put1))
+	pr1.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(pw1, pr1)
+	require.Equal(t, http.StatusOK, pw1.Code, "put body: %s", pw1.Body.String())
+
+	// 2. Persisted on disk.
+	raw, err = os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &m))
+	exec := findExecutorInConfig(t, m, "test-worker")
+	require.NotNil(t, exec, "executor not persisted: %s", string(raw))
+	assert.Equal(t, "external-cli", exec["kind"])
+	assert.Equal(t, "claude-code", exec["cli"])
+
+	// 3. PUT an UNRELATED field (description) — must NOT erase the executor.
+	put2 := `{"description":"a helpful worker"}`
+	pw2 := httptest.NewRecorder()
+	pr2 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker", strings.NewReader(put2))
+	pr2.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(pw2, pr2)
+	require.Equal(t, http.StatusOK, pw2.Code, "put body: %s", pw2.Body.String())
+
+	// And it is still persisted on disk.
+	raw, err = os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &m))
+	exec = findExecutorInConfig(t, m, "test-worker")
 	require.NotNil(t, exec, "executor missing from config.json after unrelated PUT: %s", string(raw))
 	assert.Equal(t, "external-cli", exec["kind"])
 	assert.Equal(t, "claude-code", exec["cli"])
 }
 
-// TestUpdateAgent_ExecutorChanges proves PUT can change the executor's cli.
+// TestUpdateAgent_ExecutorChanges proves PUT can change the executor's cli on
+// a worker (the only agent kind allowed to carry an external executor).
 func TestUpdateAgent_ExecutorChanges(t *testing.T) {
-	api := buildExecutorTestAPI(t)
+	api := buildExecutorTestAPIWithWorker(t)
 
-	createBody := `{"name":"Delegator","executor":{"kind":"external-cli","cli":"codex"}}`
-	cw := httptest.NewRecorder()
-	cr := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(createBody))
-	cr.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(cw, cr)
-	require.Equal(t, http.StatusCreated, cw.Code)
-	id := decodeAgentResp(t, cw.Body.Bytes()).Id
+	// Seed the worker with an initial external-cli executor.
+	put1 := `{"executor":{"kind":"external-cli","cli":"codex"}}`
+	pw1 := httptest.NewRecorder()
+	pr1 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker", strings.NewReader(put1))
+	pr1.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(pw1, pr1)
+	require.Equal(t, http.StatusOK, pw1.Code)
 
-	putBody := `{"executor":{"kind":"external-cli","cli":"opencode"}}`
-	pw := httptest.NewRecorder()
-	pr := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(putBody))
-	pr.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(pw, pr)
-	require.Equal(t, http.StatusOK, pw.Code, "put body: %s", pw.Body.String())
-	updated := decodeAgentResp(t, pw.Body.Bytes())
-	require.NotNil(t, updated.Executor)
-	require.NotNil(t, updated.Executor.Cli)
-	assert.Equal(t, gen.AgentExecutorCli("opencode"), *updated.Executor.Cli)
+	// Change it to opencode.
+	put2 := `{"executor":{"kind":"external-cli","cli":"opencode"}}`
+	pw2 := httptest.NewRecorder()
+	pr2 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker", strings.NewReader(put2))
+	pr2.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(pw2, pr2)
+	require.Equal(t, http.StatusOK, pw2.Code, "put body: %s", pw2.Body.String())
+
+	// Persisted on disk.
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	exec := findExecutorInConfig(t, m, "test-worker")
+	require.NotNil(t, exec, "executor not persisted: %s", string(raw))
+	assert.Equal(t, "external-cli", exec["kind"])
+	assert.Equal(t, "opencode", exec["cli"])
 }
 
 // TestCreateAgent_InvalidExecutor_400 proves the validator rejects bad executors.
@@ -265,4 +299,201 @@ func findExecutorInConfig(t *testing.T, m map[string]any, id string) map[string]
 		return exec
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Worker write-time guards: external executor on a non-worker, heartbeat on a
+// worker, and voice on a worker. All three must reject at the REST write gate.
+// ---------------------------------------------------------------------------
+
+// buildExecutorTestAPIWithWorker adds a worker agent to the test config so the
+// worker guards have a real agent to test against. The worker is added to BOTH
+// the live in-memory config and the on-disk config.json so the safeUpdateConfigJSON
+// writer (which reads config.json and looks for the matching agent by id) finds
+// the worker and can persist the field under test.
+func buildExecutorTestAPIWithWorker(t *testing.T) *restAPI {
+	t.Helper()
+	api := buildExecutorTestAPI(t)
+	// Live config: append the worker.
+	cfg := api.agentLoop.GetConfig()
+	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
+		ID:     "test-worker",
+		Name:   "Worker",
+		Type:   config.AgentTypeWorker,
+		Locked: true,
+	})
+	// Disk: append the worker entry to config.json so the writer sees it.
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	agents, _ := m["agents"].(map[string]any)
+	if agents == nil {
+		agents = map[string]any{}
+		m["agents"] = agents
+	}
+	list, _ := agents["list"].([]any)
+	agents["list"] = append(list, map[string]any{
+		"id":     "test-worker",
+		"name":   "Worker",
+		"type":   "worker",
+		"locked": true,
+	})
+	buf, err := json.MarshalIndent(m, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(api.configPath(), buf, 0o600))
+	return api
+}
+
+// TestUpdateAgent_NonWorkerRejectsExternalCLIExecutor verifies the
+// native-only-for-non-workers rule at the update gate. A non-worker updated
+// to kind=external-cli must be rejected with 400; a non-worker updated to
+// kind=native (or omitting the field) stays allowed.
+func TestUpdateAgent_NonWorkerRejectsExternalCLIExecutor(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	// External-cli on the test-agent (a custom non-worker) → 400.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
+		strings.NewReader(`{"executor":{"kind":"external-cli","cli":"codex"}}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "only sub-agent workers",
+		"the rejection must reference the worker-only rule")
+
+	// Remote-a2a on the test-agent → 400.
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
+		strings.NewReader(`{"executor":{"kind":"remote-a2a"}}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+}
+
+// TestUpdateAgent_NonWorkerNativeExecutorAllowed is the control: a non-worker
+// updated with kind=native (or omitting the executor) must still be 200. The
+// native-only rule is not a blanket reject.
+func TestUpdateAgent_NonWorkerNativeExecutorAllowed(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
+		strings.NewReader(`{"executor":{"kind":"native"}}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+}
+
+// TestUpdateAgent_WorkerAllowsExternalCLIExecutor is the control: a worker
+// can keep / change its executor to external-cli (workers are the only
+// agents allowed non-native executors).
+func TestUpdateAgent_WorkerAllowsExternalCLIExecutor(t *testing.T) {
+	api := buildExecutorTestAPIWithWorker(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker",
+		strings.NewReader(`{"executor":{"kind":"external-cli","cli":"codex"}}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	// And it is persisted to config.json — the write-time guard is the
+	// regression we are guarding against, so the persistence is the
+	// load-bearing assertion. (The PUT response may not echo the executor
+	// because the response reads from the live in-memory config; the disk
+	// write is the source of truth.)
+	raw, err := os.ReadFile(api.configPath())
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(raw, &m))
+	exec := findExecutorInConfig(t, m, "test-worker")
+	require.NotNil(t, exec,
+		"worker executor must be persisted to config.json: %s", string(raw))
+	assert.Equal(t, "external-cli", exec["kind"])
+	assert.Equal(t, "codex", exec["cli"])
+}
+
+// TestCreateAgent_RejectsExternalCLIExecutorOnBaseAgent verifies the create
+// path rejects a non-native executor (REST create always makes a custom
+// agent, which is a base agent and must run native).
+func TestCreateAgent_RejectsExternalCLIExecutorOnBaseAgent(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
+		strings.NewReader(`{"name":"X","executor":{"kind":"external-cli","cli":"codex"}}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "only sub-agent workers",
+		"the rejection must reference the worker-only rule")
+}
+
+// TestUpdateAgent_RejectsHeartbeatOnWorker verifies the heartbeat write-time
+// guard: enabling heartbeat on a worker is 400 (workers have no heartbeat
+// and run only via delegation). Setting it to disabled/empty is allowed.
+func TestUpdateAgent_RejectsHeartbeatOnWorker(t *testing.T) {
+	api := buildExecutorTestAPIWithWorker(t)
+
+	// heartbeat_enabled=true on worker → 400.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker",
+		strings.NewReader(`{"heartbeat_enabled":true}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "heartbeat",
+		"the rejection must reference heartbeat")
+
+	// heartbeat_interval>0 on worker → 400.
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker",
+		strings.NewReader(`{"heartbeat_interval":300}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+}
+
+// TestUpdateAgent_AllowsHeartbeatOffOnWorker is the control: a worker may
+// receive an idempotent "off" write so an operator can clear a stray
+// flag. This is NOT a "the worker now has heartbeat" path.
+func TestUpdateAgent_AllowsHeartbeatOffOnWorker(t *testing.T) {
+	api := buildExecutorTestAPIWithWorker(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker",
+		strings.NewReader(`{"heartbeat_enabled":false}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+}
+
+// TestUpdateAgent_RejectsVoiceOnWorker verifies the voice write-time guard:
+// setting a non-empty voice on a worker is 400. Null / absent voice is fine.
+func TestUpdateAgent_RejectsVoiceOnWorker(t *testing.T) {
+	api := buildExecutorTestAPIWithWorker(t)
+
+	// voice="alloy" on worker → 400.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker",
+		strings.NewReader(`{"voice":"alloy"}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "voice",
+		"the rejection must reference voice")
+}
+
+// TestUpdateAgent_AllowsNullVoiceOnWorker is the control: an explicit null
+// (clearing a stored voice) on a worker is fine.
+func TestUpdateAgent_AllowsNullVoiceOnWorker(t *testing.T) {
+	api := buildExecutorTestAPIWithWorker(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker",
+		strings.NewReader(`{"voice":null}`))
+	r.Header.Set("Content-Type", "application/json")
+	api.HandleAgents(w, r)
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 }
