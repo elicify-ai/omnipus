@@ -2839,11 +2839,11 @@ export interface components {
              */
             name: string;
             /**
-             * @description Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one).
+             * @description Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one). "worker" = sub-agent worker tier: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and carries an executor (see Agent.executor). The FE sections the roster by type==='worker'.
              * @example core
              * @enum {string}
              */
-            type: "core" | "custom" | "system";
+            type: "core" | "custom" | "system" | "worker";
             /**
              * @description When true, name, description, soul, heartbeat, and instructions are immutable via the PUT /agents/{id} endpoint. Core agents are always locked.
              * @example false
@@ -5193,11 +5193,11 @@ export interface components {
             /** @description Per-tool effective policy entries. */
             tools: components["schemas"]["AgentToolEntry"][];
             /**
-             * @description Agent classification: "core", "system", or "custom". Informs the UI whether policy editing is allowed.
+             * @description Agent classification: "core", "system", "custom", or "worker". Informs the UI whether policy editing is allowed.
              * @example custom
              * @enum {string}
              */
-            agent_type?: "core" | "system" | "custom";
+            agent_type?: "core" | "system" | "custom" | "worker";
         };
         /**
          * RunnerTestResponse

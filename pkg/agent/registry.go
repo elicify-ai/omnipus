@@ -255,7 +255,12 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 		return agent
 	}
 
-	// Priority 4: lexicographically first registered agent (M10).
+	// Priority 4: lexicographically first registered agent (M10) — but never a
+	// worker. Workers are not chat targets and must not be resolved as the
+	// default even in the last-resort fallback. Prefer the first non-worker; only
+	// if EVERY registered agent is a worker do we fall back to the first overall
+	// (degenerate config — better to return something than nil so callers that
+	// require a default don't panic).
 	ids := make([]string, 0, len(r.agents))
 	for id := range r.agents {
 		ids = append(ids, id)
@@ -264,5 +269,10 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 		return nil
 	}
 	sort.Strings(ids)
+	for _, id := range ids {
+		if ag := r.agents[id]; ag != nil && ag.AgentType != string(config.AgentTypeWorker) {
+			return ag
+		}
+	}
 	return r.agents[ids[0]]
 }

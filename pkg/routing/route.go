@@ -276,21 +276,24 @@ func (r *RouteResolver) resolveDefaultAgentID() string {
 		return DefaultAgentID
 	}
 	// Primary: use the agent explicitly marked as default, but only if it is
-	// active. A disabled default must not receive messages — fall through to the
-	// first-enabled-agent fallback so routing never silently drops inbound work.
+	// active AND a chat target. A disabled default must not receive messages, and
+	// a worker is never a chat target (it is invoked only via delegation) — in
+	// either case fall through to the first-enabled-agent fallback so routing
+	// never silently drops inbound work and never points it at a worker.
 	for _, a := range agents {
-		if a.Default && a.IsActive() {
+		if a.Default && a.IsActive() && a.IsChatTarget() {
 			id := strings.TrimSpace(a.ID)
 			if id != "" {
 				return NormalizeAgentID(id)
 			}
 		}
 	}
-	// Fallback: no agent is marked as default. Pick the first enabled agent so
-	// inbound messages are never silently dropped. Log a warning so operators can
+	// Fallback: no agent is marked as default. Pick the first enabled chat-target
+	// agent so inbound messages are never silently dropped. Workers are skipped —
+	// they must never be resolved as the default. Log a warning so operators can
 	// detect misconfigured setups.
 	for _, a := range agents {
-		if a.IsActive() {
+		if a.IsActive() && a.IsChatTarget() {
 			id := strings.TrimSpace(a.ID)
 			if id == "" {
 				continue

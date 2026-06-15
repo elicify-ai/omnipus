@@ -590,6 +590,13 @@ const (
 	AgentTypeSystem AgentType = "system"
 	AgentTypeCore   AgentType = "core"
 	AgentTypeCustom AgentType = "custom"
+	// AgentTypeWorker is a sub-agent worker: a depth-limited, ephemeral labour
+	// tier invoked ONLY via delegation. A worker is NOT a chat target (it never
+	// receives inbound channel messages and is never resolved as the default
+	// agent), has no heartbeat, and cannot be marked as the routing default.
+	// Workers carry an Executor (Subagents.Executor) selecting native /
+	// external-cli / remote-a2a. "A tool you point at work, not a colleague."
+	AgentTypeWorker AgentType = "worker"
 )
 
 // AgentShellPolicy configures per-agent shell command deny patterns for the
@@ -672,6 +679,25 @@ func (a AgentConfig) ResolveType(isCoreAgent func(string) bool) AgentType {
 		return AgentTypeCore
 	}
 	return AgentTypeCustom
+}
+
+// IsWorker reports whether this agent is a sub-agent worker (Type==worker).
+//
+// Worker is an EXPLICIT classification — it is only ever set via the Type field
+// (workers are not inferred from an ID list), so the check does not need the
+// isCoreAgent resolver and is safe to call without it. A worker is a
+// delegation-only labour tier: never a chat target, never the routing default,
+// no heartbeat. See AgentTypeWorker.
+func (a AgentConfig) IsWorker() bool {
+	return a.Type == AgentTypeWorker
+}
+
+// IsChatTarget reports whether this agent may receive inbound channel messages
+// and be resolved as the default/routing agent. Every agent kind is a chat
+// target EXCEPT a worker. Routing (resolveDefaultAgentID, first-enabled
+// fallback) and the default-agent setter/repair use this to exclude workers.
+func (a AgentConfig) IsChatTarget() bool {
+	return !a.IsWorker()
 }
 
 // DelegationMode is the mode in which delegation is allowed.

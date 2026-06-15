@@ -328,6 +328,18 @@ func RepairMultipleDefaults(cfg *Config) {
 	if cfg == nil {
 		return
 	}
+	// Worker agents can never be the routing default — they are not chat targets
+	// (invoked only via delegation). Clear Default on any worker UNCONDITIONALLY,
+	// even when it is the sole default, before the at-most-one repair runs. A
+	// hand-edited config that marked a worker default would otherwise survive the
+	// len<=1 short-circuit below and brick routing.
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].IsWorker() && cfg.Agents.List[i].Default {
+			slog.Warn("config: worker agent marked Default=true; clearing (workers are never the routing default)",
+				"agent_id", cfg.Agents.List[i].ID)
+			cfg.Agents.List[i].Default = false
+		}
+	}
 	// Collect indices of agents marked as default, sorted by list position
 	// for deterministic "keep first" behavior.
 	var defaultIdxs []int

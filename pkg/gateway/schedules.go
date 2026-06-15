@@ -133,6 +133,18 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 		return "", err
 	}
 
+	// Workers are not chat targets and have no heartbeat: they execute one
+	// delegated task at a time and are invoked ONLY via delegation, never on a
+	// schedule/heartbeat cadence. A scheduled/heartbeat run whose owner is a
+	// worker is rejected with no fallback so worker autonomy can never fire.
+	if cfg := r.getConfig(); cfg != nil {
+		if oc := findAgentConfig(cfg, owner); oc != nil && oc.IsWorker() {
+			err := fmt.Errorf("owner unavailable: agent %q is a worker (workers have no heartbeat and run only via delegation)", owner)
+			r.onFailure(job, "", err)
+			return "", err
+		}
+	}
+
 	channel := job.Payload.Channel
 	chatID := job.Payload.To
 

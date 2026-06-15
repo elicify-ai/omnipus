@@ -274,13 +274,17 @@ func NewAgentInstance(
 	resolvedAgentType := "custom"
 	if agentCfg != nil {
 		switch agentCfg.Type {
-		case config.AgentTypeCore, config.AgentTypeSystem:
+		case config.AgentTypeCore, config.AgentTypeSystem, config.AgentTypeWorker:
 			resolvedAgentType = string(agentCfg.Type)
 		case config.AgentTypeCustom:
 			resolvedAgentType = "custom"
 		}
 	}
-	isRoutingDefault := agentCfg != nil && agentCfg.Default
+	// A worker is never the routing default — it is not a chat target. Even if a
+	// tampered config marked a worker Default=true, refuse to carry that into the
+	// runtime so GetDefaultAgent can never select it (defense in depth; the
+	// config-load repair and the PUT handler also reject it).
+	isRoutingDefault := agentCfg != nil && agentCfg.Default && !agentCfg.IsWorker()
 	inst := &AgentInstance{
 		ID:                        agentID,
 		Name:                      agentName,

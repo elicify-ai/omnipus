@@ -14,18 +14,18 @@ function syncForeground(): void {
 interface SessionStore {
   activeSessionId: string | null
   activeAgentId: string | null
-  /** The type of the currently active agent ('core' | 'custom' | 'system' | null).
+  /** The type of the currently active agent ('core' | 'custom' | 'system' | 'worker' | null).
    *  Set by setActiveSession so all callers stay in sync without manual tracking. */
-  activeAgentType: 'core' | 'custom' | 'system' | null
+  activeAgentType: 'core' | 'custom' | 'system' | 'worker' | null
   setActiveSession: (
     sessionId: string | null,
     agentId?: string | null,
-    agentType?: 'core' | 'custom' | 'system' | null
+    agentType?: 'core' | 'custom' | 'system' | 'worker' | null
   ) => void
   /** Proper store action for updating activeAgentType.
    *  Replaces direct useSessionStore.setState({ activeAgentType }) call-sites
    *  so future side-effects can be added here without touching callers. */
-  setActiveAgentType: (type: 'core' | 'custom' | 'system' | null) => void
+  setActiveAgentType: (type: 'core' | 'custom' | 'system' | 'worker' | null) => void
 
   // Attached session context — tracks when viewing a task/channel session
   attachedSessionType: 'chat' | 'task' | 'channel' | null
@@ -47,7 +47,7 @@ interface SessionStore {
    *  session and ack it back via {type:"session_started", session_id}.
    *  Does NOT touch existing per-session buckets — background sessions
    *  keep streaming and remain visible in the SessionPanel. */
-  startNewSession: (agentId?: string | null, agentType?: 'core' | 'custom' | 'system' | null) => void
+  startNewSession: (agentId?: string | null, agentType?: 'core' | 'custom' | 'system' | 'worker' | null) => void
 }
 
 // Breaks the chat.ts ↔ session.ts circular import: chat.ts imports this module,

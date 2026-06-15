@@ -36,11 +36,15 @@ properties:
       - core
       - custom
       - system
+      - worker
     description: >
       Agent classification. "core" = compiled-in identity locked agent.
       "custom" = user-defined agent. "system" = legacy operator-supplied entry
       (config.AgentTypeSystem survives in the API contract for backwards compatibility
       but SeedConfig does NOT create these — they only appear if config.json contains one).
+      "worker" = sub-agent worker tier: a delegation-only labour agent that is NOT a
+      chat target, has no heartbeat, is never the default, and carries an executor
+      (see Agent.executor). The FE sections the roster by type==='worker'.
     example: "core"
   locked:
     type: boolean

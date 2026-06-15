@@ -83,7 +83,7 @@ type ToolCall = {
 type Agent = {
   id: string;
   name: string;
-  type: "core" | "custom" | "system";
+  type: "core" | "custom" | "system" | "worker";
   locked: boolean;
   color?: string | undefined;
   icon?: string | undefined;
@@ -343,7 +343,7 @@ type DevicePaired = {
 type AgentToolsResponse = {
   config: AgentToolsCfg;
   tools: Array<AgentToolEntry>;
-  agent_type?: ("core" | "system" | "custom") | undefined;
+  agent_type?: ("core" | "system" | "custom" | "worker") | undefined;
 };
 type AgentToolEntry = {
   name: string;
@@ -945,7 +945,7 @@ export const Agent: z.ZodType<Agent> = z
   .object({
     id: z.string(),
     name: z.string().min(1).max(100),
-    type: z.enum(["core", "custom", "system"]),
+    type: z.enum(["core", "custom", "system", "worker"]),
     locked: z.boolean(),
     color: z
       .string()
@@ -1113,7 +1113,7 @@ export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
 export const AgentToolsResponse: z.ZodType<AgentToolsResponse> = z.object({
   config: AgentToolsCfg,
   tools: z.array(AgentToolEntry),
-  agent_type: z.enum(["core", "system", "custom"]).optional(),
+  agent_type: z.enum(["core", "system", "custom", "worker"]).optional(),
 });
 export const AgentToolsUpdateRequest = z
   .object({

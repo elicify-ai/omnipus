@@ -252,6 +252,7 @@ const (
 	AgentTypeCore   AgentType = "core"
 	AgentTypeCustom AgentType = "custom"
 	AgentTypeSystem AgentType = "system"
+	AgentTypeWorker AgentType = "worker"
 )
 
 // Valid indicates whether the value is a known member of the AgentType enum.
@@ -262,6 +263,8 @@ func (e AgentType) Valid() bool {
 	case AgentTypeCustom:
 		return true
 	case AgentTypeSystem:
+		return true
+	case AgentTypeWorker:
 		return true
 	default:
 		return false
@@ -456,6 +459,7 @@ const (
 	AgentToolsResponseAgentTypeCore   AgentToolsResponseAgentType = "core"
 	AgentToolsResponseAgentTypeCustom AgentToolsResponseAgentType = "custom"
 	AgentToolsResponseAgentTypeSystem AgentToolsResponseAgentType = "system"
+	AgentToolsResponseAgentTypeWorker AgentToolsResponseAgentType = "worker"
 )
 
 // Valid indicates whether the value is a known member of the AgentToolsResponseAgentType enum.
@@ -466,6 +470,8 @@ func (e AgentToolsResponseAgentType) Valid() bool {
 	case AgentToolsResponseAgentTypeCustom:
 		return true
 	case AgentToolsResponseAgentTypeSystem:
+		return true
+	case AgentToolsResponseAgentTypeWorker:
 		return true
 	default:
 		return false
@@ -3740,7 +3746,7 @@ type Agent struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Type Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one).
+	// Type Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one). "worker" = sub-agent worker tier: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and carries an executor (see Agent.executor). The FE sections the roster by type==='worker'.
 	Type AgentType `json:"type"`
 
 	// Voice Per-agent persona voice identifier (e.g. a TTS voice name or voice model ID). Distinct from the global VoiceConfig engine settings (which hold the TTS/STT provider and API key). This field is schema-pinned but NOT used until v0.2.0 TTS feature delivery. Absent when not configured.
@@ -3777,7 +3783,7 @@ type AgentToolsCfgBuiltinDefaultPolicy string
 // AgentToolsCfgBuiltinPolicies defines model for Agent.ToolsCfg.Builtin.Policies.
 type AgentToolsCfgBuiltinPolicies string
 
-// AgentType Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one).
+// AgentType Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one). "worker" = sub-agent worker tier: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and carries an executor (see Agent.executor). The FE sections the roster by type==='worker'.
 type AgentType string
 
 // AgentCreateRequest Body for POST /agents. Creates a new custom agent. A UUID is assigned by the server. The agent starts in "draft" status (no SOUL.md written yet).
@@ -4075,7 +4081,7 @@ type AgentToolsCfg struct {
 
 // AgentToolsResponse Response from GET /api/v1/agents/{id}/tools and PUT /api/v1/agents/{id}/tools. Returns the agent's tool policy configuration plus the effective per-tool policy list.
 type AgentToolsResponse struct {
-	// AgentType Agent classification: "core", "system", or "custom". Informs the UI whether policy editing is allowed.
+	// AgentType Agent classification: "core", "system", "custom", or "worker". Informs the UI whether policy editing is allowed.
 	AgentType *AgentToolsResponseAgentType `json:"agent_type,omitempty"`
 
 	// Config Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
@@ -4121,7 +4127,7 @@ type AgentToolsResponse struct {
 	} `json:"tools"`
 }
 
-// AgentToolsResponseAgentType Agent classification: "core", "system", or "custom". Informs the UI whether policy editing is allowed.
+// AgentToolsResponseAgentType Agent classification: "core", "system", "custom", or "worker". Informs the UI whether policy editing is allowed.
 type AgentToolsResponseAgentType string
 
 // AgentToolsResponseConfigBuiltinDefaultPolicy Fallback policy applied to any builtin tool not listed in policies. Custom agents are seeded with default_policy=allow and a system.*=deny entry to enforce the privilege rail.

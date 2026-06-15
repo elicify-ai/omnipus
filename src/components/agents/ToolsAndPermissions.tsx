@@ -33,7 +33,7 @@ import { applyRolePreset } from '@/lib/toolPolicyPresets'
 
 interface ToolsAndPermissionsProps {
   agentId: string | null
-  agentType: 'core' | 'custom' | 'system'
+  agentType: 'core' | 'custom' | 'system' | 'worker'
   /** Whether the agent is locked (core/identity-locked). Read-only when true. */
   isLocked?: boolean
   tools: AgentToolsCfg

@@ -1686,6 +1686,13 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			return
 		}
 	}
+	// Worker agents can never be the routing default — they are not chat targets
+	// (invoked only via delegation). Reject an attempt to star a worker before
+	// any work is done so the single-default invariant and routing stay coherent.
+	if req.Default != nil && *req.Default && foundAgent.IsWorker() {
+		jsonErr(w, http.StatusBadRequest, "a worker agent cannot be set as the default agent (workers are not chat targets)")
+		return
+	}
 	// Referential validation: reject unknown skill IDs before doing any work.
 	if req.Skills != nil && len(*req.Skills) > 0 {
 		if errMsg := a.validateSkillIDs(*req.Skills); errMsg != "" {

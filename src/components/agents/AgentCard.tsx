@@ -15,6 +15,7 @@ const typeBadgeVariant = {
   core: 'secondary',
   custom: 'outline',
   system: 'default',
+  worker: 'secondary',
 } as const
 
 export function AgentCard({ agent, onSetDefault }: AgentCardProps) {

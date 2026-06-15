@@ -29,10 +29,22 @@ const (
 	IDAva CoreAgentID = "ava"
 	IDMia CoreAgentID = "mia"
 	IDRay CoreAgentID = "ray"
+	// IDWorker is the seeded general-purpose sub-agent worker (the worker tier).
+	// It is NOT a base/core agent: it is seeded with Type=worker, carries a native
+	// Executor, is never a chat target, has no heartbeat, and is never the
+	// default. It is invoked ONLY via delegation. See config.AgentTypeWorker.
+	IDWorker CoreAgentID = "worker"
 	// IDMax is intentionally absent: Max was retired from the 4-base roster
 	// in Spec-3 (v0.1.0 foundation). The ID constant is removed so that any
 	// remaining compile-time reference to IDMax surfaces as a build error.
 )
+
+// IsWorkerID reports whether the given agent id is the seeded general-purpose
+// worker. Used by SeedConfig to branch the worker out of the base-agent
+// (Type=core) seeding path and to keep IsCoreAgent worker-exclusive.
+func IsWorkerID(id CoreAgentID) bool {
+	return id == IDWorker
+}
 
 // CoreAgent describes a built-in agent with compiled metadata and prompt.
 type CoreAgent struct {
@@ -46,9 +58,24 @@ type CoreAgent struct {
 	DefaultTools []string
 }
 
-// All returns the 4 base core agents in display order (Mia first, as the default).
-// Max was retired from the seeded base in Spec-3 (v0.1.0 roster re-cast).
+// All returns every seeded agent in display order: the 4 base agents (Mia first,
+// as the default) followed by the general-purpose worker. The worker is a
+// distinct tier (Type=worker) — use BaseAgents() for just the 4 chat-target
+// base agents, or IsWorkerID() to distinguish. Max was retired from the seeded
+// base in Spec-3 (v0.1.0 roster re-cast).
 func All() []*CoreAgent {
+	return []*CoreAgent{
+		Mia(),
+		Jim(),
+		Ava(),
+		Ray(),
+		Worker(),
+	}
+}
+
+// BaseAgents returns only the 4 base (core, chat-target) agents, excluding the
+// worker tier. Use this where the worker must NOT be treated as a base agent.
+func BaseAgents() []*CoreAgent {
 	return []*CoreAgent{
 		Mia(),
 		Jim(),
@@ -67,9 +94,16 @@ func ByID(id CoreAgentID) *CoreAgent {
 	return nil
 }
 
-// IsCoreAgent returns true if the given agent ID is a core agent.
+// IsCoreAgent returns true if the given agent ID is a base/core agent. The
+// general-purpose worker (Type=worker) is NOT a core agent and is excluded here
+// — it is a distinct delegation-only tier, so type inference must never label it
+// "core". Use IsWorkerID for the worker.
 func IsCoreAgent(id string) bool {
-	return ByID(CoreAgentID(id)) != nil
+	cid := CoreAgentID(id)
+	if IsWorkerID(cid) {
+		return false
+	}
+	return ByID(cid) != nil
 }
 
 // init validates that every core agent has a corresponding compiled prompt.
@@ -118,6 +152,18 @@ func coreAgentSeed(
 		"recall_memory": config.ToolPolicyAllow,
 		"retrospective": config.ToolPolicyAllow,
 		"web_serve":     config.ToolPolicyAllow,
+	}
+	// Workers get EPHEMERAL/run-log memory only — no persistent agent room. Deny
+	// the persistent-memory tools so a worker never writes to or relies on a
+	// private memory room (scope: "no persistent room seeded/required for
+	// workers"; the shared memory registry is untouched). web_serve is also
+	// pointless for a delegation-only leaf, so drop it from the worker rail.
+	if IsWorkerID(id) {
+		base["remember"] = config.ToolPolicyDeny
+		base["recall_memory"] = config.ToolPolicyDeny
+		base["retrospective"] = config.ToolPolicyDeny
+		delete(base, "web_serve")
+		return config.ToolPolicyAllow, base, ""
 	}
 	switch id {
 	case IDAva:
@@ -175,6 +221,44 @@ func coreAgentSkills(id CoreAgentID) []string {
 // "critical abort on corrupt config" path.
 func HasSystemAllowsInConstructorSeed(agentID string) bool {
 	return CoreAgentID(agentID) == IDAva
+}
+
+// coreAgentDelegation returns the seeded canonical unified delegation policy for
+// a base agent so orchestration + worker fan-out work out of the box (fixes the
+// historically empty Trust-Graph gap). The matrix:
+//
+//	Jim (Orchestrator) → [ava, ray, worker]   modes: [task, background, await]
+//	Mia, Ray, Ava      → [worker]              modes: [task, background]
+//
+// Every base agent can therefore offload labour to the general-purpose worker;
+// Jim can additionally drive the specialists. Everything not listed stays
+// deny-by-default. Returns nil for an agent with no seeded delegation (incl. the
+// worker itself — a worker is a leaf, it does not delegate onward by default).
+func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
+	ref := func(agentID CoreAgentID) config.AgentRef {
+		return config.AgentRef{Kind: config.AgentRefKindLocal, ID: string(agentID)}
+	}
+	switch id {
+	case IDJim:
+		return &config.DelegationPolicy{
+			To: []config.AgentRef{ref(IDAva), ref(IDRay), ref(IDWorker)},
+			Modes: []config.DelegationMode{
+				config.DelegationModeTask,
+				config.DelegationModeBackground,
+				config.DelegationModeAwait,
+			},
+		}
+	case IDMia, IDRay, IDAva:
+		return &config.DelegationPolicy{
+			To: []config.AgentRef{ref(IDWorker)},
+			Modes: []config.DelegationMode{
+				config.DelegationModeTask,
+				config.DelegationModeBackground,
+			},
+		}
+	default:
+		return nil
+	}
 }
 
 // SeedConfig ensures all core agents exist in cfg.Agents.List with Locked=true
@@ -245,6 +329,47 @@ func SeedConfig(cfg *config.Config) bool {
 			}
 		}
 
+		// Idempotent Type re-enforcement (tamper protection). The worker tier MUST
+		// carry Type=worker and base agents Type=core — these classify routing and
+		// chat-target eligibility, so a tampered/absent Type is corrected on every
+		// boot. The worker can never be the default: clear a stray Default flag too.
+		wantType := config.AgentTypeCore
+		if IsWorkerID(ca.ID) {
+			wantType = config.AgentTypeWorker
+		}
+		if a.Type != wantType {
+			a.Type = wantType
+			modified = true
+		}
+		if IsWorkerID(ca.ID) {
+			if a.Default {
+				a.Default = false
+				modified = true
+			}
+			// Idempotent executor migration: the seeded worker runs native. Fill the
+			// executor only when the existing entry has none, so an operator who
+			// pointed the worker at an external-cli/remote runtime keeps their choice.
+			if a.Subagents == nil {
+				a.Subagents = &config.SubagentsConfig{}
+			}
+			if a.Subagents.Executor == nil {
+				a.Subagents.Executor = &config.ExecutorConfig{Kind: config.ExecutorKindNative}
+				modified = true
+			}
+		}
+
+		// Idempotent delegation-policy migration: seed the base-agent trust graph
+		// only when the existing entry declares none (DelegationPolicy nil). An
+		// operator who customised delegation keeps their choice. Upgrades from a
+		// release that predated the seeded trust graph gain the defaults so
+		// orchestration + worker fan-out work without manual setup.
+		if a.DelegationPolicy == nil {
+			if seedDP := coreAgentDelegation(ca.ID); seedDP != nil {
+				a.DelegationPolicy = seedDP
+				modified = true
+			}
+		}
+
 		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
 		// Default workspace_shell_enabled=true for Jim ONLY when it is unset (nil),
 		// so he gets the tools on a fresh install. An operator's EXPLICIT false MUST
@@ -267,19 +392,27 @@ func SeedConfig(cfg *config.Config) bool {
 		}
 		enabled := true
 		dp, policies, seedProfile := coreAgentSeed(ca.ID)
+		isWorker := IsWorkerID(ca.ID)
 		// Mia is the default agent on fresh installs: she appears first in the
-		// All() list and is the friendliest entry-point for new users.
+		// All() list and is the friendliest entry-point for new users. A worker is
+		// NEVER the default — it is not a chat target.
 		// Only set Default=true on the fresh-seed path (here). The re-enforcement
 		// loop above intentionally does NOT touch the Default field on existing
 		// entries so operator choices survive config reload.
 		isDefault := ca.ID == IDMia
-		cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
+		// Type: the worker is its own tier (Type=worker); every other seeded agent
+		// is a base/core agent.
+		agentType := config.AgentTypeCore
+		if isWorker {
+			agentType = config.AgentTypeWorker
+		}
+		newAgent := config.AgentConfig{
 			ID:             string(ca.ID),
 			Name:           ca.Name,
 			Description:    ca.Description,
 			Color:          ca.Color,
 			Icon:           ca.Icon,
-			Type:           config.AgentTypeCore,
+			Type:           agentType,
 			Locked:         true,
 			Enabled:        &enabled,
 			Default:        isDefault,
@@ -287,13 +420,26 @@ func SeedConfig(cfg *config.Config) bool {
 			// Per-agent skill allowlist (FR-9.4): default-DENY enforced at skill
 			// resolution. Nil for agents with no seeded skills (unrestricted).
 			Skills: coreAgentSkills(ca.ID),
+			// Seeded delegation policy so orchestration + worker fan-out work out
+			// of the box (deny-by-default for everything not listed). Nil for the
+			// worker (a leaf — it does not delegate onward by default).
+			DelegationPolicy: coreAgentDelegation(ca.ID),
 			Tools: &config.AgentToolsCfg{
 				Builtin: config.AgentBuiltinToolsCfg{
 					DefaultPolicy: dp,
 					Policies:      policies,
 				},
 			},
-		})
+		}
+		// Workers carry an executor (Spec-4): the seeded general-purpose worker
+		// runs native (inside the Omnipus agent loop). Stored on the EXISTING
+		// Subagents.Executor field — no parallel field.
+		if isWorker {
+			newAgent.Subagents = &config.SubagentsConfig{
+				Executor: &config.ExecutorConfig{Kind: config.ExecutorKindNative},
+			}
+		}
+		cfg.Agents.List = append(cfg.Agents.List, newAgent)
 		// Jim is the operator-blessed agent for workspace.shell / workspace.shell_bg.
 		// Default workspace_shell_enabled=true when seeding Jim for the first time so
 		// he gets the tools out of the box. Fires ONLY when unset (nil): an operator's
@@ -406,6 +552,29 @@ func Ray() *CoreAgent {
 			"web_search", "web_fetch",
 			"message", "send_file",
 			"handoff", "return_to_default",
+		},
+	}
+}
+
+// Worker returns the seeded general-purpose sub-agent worker. It is a distinct
+// tier (Type=worker), NOT a base/core agent: never a chat target, no heartbeat,
+// never the default, invoked only via delegation. It carries a native executor
+// (set in SeedConfig) and a leaner tool set focused on getting one delegated
+// task done and reporting back. No handoff/return_to_default tools — a worker
+// does not steer conversation.
+func Worker() *CoreAgent {
+	return &CoreAgent{
+		ID:       IDWorker,
+		Name:     "Worker",
+		Subtitle: "Worker",
+		Description: "General-purpose sub-agent worker — executes one delegated task at a time, " +
+			"does the work, and returns a concise result. Not a chat persona; invoked via delegation.",
+		Color: "#6B7280",
+		Icon:  "robot",
+		DefaultTools: []string{
+			"read_file", "write_file", "edit_file", "list_dir",
+			"web_search", "web_fetch",
+			"message",
 		},
 	}
 }
@@ -625,5 +794,24 @@ When a conversation is handed to you, your FIRST message greets the user in the 
 - NEVER skip citations — if you can't cite it, caveat it
 - NEVER pad reports with filler — every sentence should carry information
 - NEVER handle everyday tasks or agent creation — hand off to Jim or Ava via the handoff tool
+`,
+
+	"worker": `You are a general-purpose worker.
+
+You execute one delegated task at a time, do the work, and return a concise result. You are not a chat persona — you don't greet, you don't chat, you don't make small talk. You do the job and report back.
+
+## How you work
+
+- **Single task, single focus.** You receive one delegated task. Complete it, then return a short, factual result. Do not expand scope or take on adjacent work that wasn't asked for.
+- **Do, don't discuss.** When the task says write something, write it. When it says find something, find it. Never ask "would you like me to…" — the decision was already made by whoever delegated to you. If a genuine blocker stops you, report it plainly and stop.
+- **Concise result.** Your final output is a brief summary of what you did and the concrete result (the file you wrote, the answer you found, the command output that mattered). No preamble, no sign-off, no persona.
+- **Honest about limits.** If you cannot complete the task, say exactly what blocked you and what you did manage. Never fabricate a result.
+
+## What you never do
+
+- NEVER greet, chat, or adopt a persona — you are a tool pointed at work, not a colleague
+- NEVER ask the user to make decisions — execute the delegated task as specified
+- NEVER expand the task beyond what was delegated
+- NEVER pad the result with filler — report the outcome and stop
 `,
 }
