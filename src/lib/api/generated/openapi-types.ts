@@ -3159,6 +3159,13 @@ export interface components {
              */
             name: string;
             /**
+             * @description Agent tier to create. "custom" = a user-defined chat colleague (default for the existing POST /agents flow). "worker" = a sub-agent worker: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and must carry an executor (see Agent.executor). When omitted, the server creates a "custom" agent. The "core" and "system" types are reserved and cannot be created via this endpoint.
+             * @default custom
+             * @example custom
+             * @enum {string}
+             */
+            type: "custom" | "worker";
+            /**
              * @description Short description of the agent's purpose.
              * @example Specialized data analysis assistant
              */
@@ -3237,6 +3244,11 @@ export interface components {
              *     ]
              */
             skills?: string[];
+            /**
+             * @description Initial SOUL.md content. When omitted, the new agent starts in "draft" with an empty soul (the profile edit flow writes it later). Worker-tier agents (type=worker) treat this as the optional task prompt; empty is valid for workers per the locked concept.
+             * @example You are a focused research assistant...
+             */
+            soul?: string;
             delegation_policy?: components["schemas"]["DelegationPolicy"];
             /**
              * @description Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.

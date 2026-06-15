@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within, waitFor } from '@testing-library/react'
+import { render, screen, within, waitFor, fireEvent } from '@testing-library/react'
+import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentListScreen } from './AgentListScreen'
+import { useUiStore } from '@/store/ui'
 import type { Agent } from '@/lib/api'
 
 // Wave 2 — the Agents roster splits into two sections: "Base agents"
@@ -111,5 +113,79 @@ describe('AgentListScreen — base/worker partition', () => {
     ])
     renderScreen()
     expect(await screen.findByText(/invoked by other agents, not chat targets/i)).toBeInTheDocument()
+  })
+})
+
+// Per-section "New…" buttons (v0.3 worker roster split). Each section
+// header carries its own affordance, and each opens the modal pre-set to
+// the matching tier (createAgentModalType='custom' | 'worker') so the
+// CreateAgentModal can render the right form shape.
+describe('AgentListScreen — per-section New buttons', () => {
+  beforeEach(() => {
+    // Reset the store so the test starts with a clean modal state.
+    act(() => { useUiStore.setState({ createAgentModalOpen: false, createAgentModalType: 'custom' }) })
+  })
+
+  it('shows a "New agent" button in the base section header', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    renderScreen()
+    const baseSection = await screen.findByTestId('base-agents-section')
+    const newBaseButton = within(baseSection).getByTestId('new-base-agent-button')
+    expect(newBaseButton).toBeInTheDocument()
+    expect(newBaseButton).toHaveTextContent(/new agent/i)
+  })
+
+  it('shows a "New worker" button in the worker section header', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([
+      makeAgent({ id: 'mia', type: 'core' }),
+      makeAgent({ id: 'w1', name: 'W1', type: 'worker', executor: { kind: 'native' } }),
+    ])
+    renderScreen()
+    const workerSection = await screen.findByTestId('worker-agents-section')
+    const newWorkerButton = within(workerSection).getByTestId('new-worker-button')
+    expect(newWorkerButton).toBeInTheDocument()
+    expect(newWorkerButton).toHaveTextContent(/new worker/i)
+  })
+
+  it('clicking the base New agent button sets modal type to custom and opens the modal', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    renderScreen()
+    const baseSection = await screen.findByTestId('base-agents-section')
+    fireEvent.click(within(baseSection).getByTestId('new-base-agent-button'))
+    const state = useUiStore.getState()
+    expect(state.createAgentModalOpen).toBe(true)
+    expect(state.createAgentModalType).toBe('custom')
+  })
+
+  it('clicking the worker New worker button sets modal type to worker and opens the modal', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([
+      makeAgent({ id: 'mia', type: 'core' }),
+      makeAgent({ id: 'w1', name: 'W1', type: 'worker', executor: { kind: 'native' } }),
+    ])
+    renderScreen()
+    const workerSection = await screen.findByTestId('worker-agents-section')
+    fireEvent.click(within(workerSection).getByTestId('new-worker-button'))
+    const state = useUiStore.getState()
+    expect(state.createAgentModalOpen).toBe(true)
+    expect(state.createAgentModalType).toBe('worker')
+  })
+
+  it('does not render a top-of-page generic New Agent button', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    renderScreen()
+    // Wait for the screen to settle — the (now-removed) header button was a
+    // top-level Button labeled "New Agent" with a "size=default" sm 14px icon
+    // and no section testid. The per-section buttons are the only "New…"
+    // affordances and live INSIDE the base/worker sections, identified by
+    // their data-testid. Asserting on the section-scoped testid count
+    // (exactly one New agent in the base section when only base agents
+    // exist) proves the per-section split.
+    await screen.findByTestId('base-agents-section')
+    const baseSection = screen.getByTestId('base-agents-section')
+    // Exactly one New agent button in the base section.
+    const newAgentButtons = within(baseSection).getAllByRole('button', { name: /new agent/i })
+    expect(newAgentButtons).toHaveLength(1)
+    // And no New worker button when there are no workers.
+    expect(within(baseSection).queryByRole('button', { name: /new worker/i })).not.toBeInTheDocument()
   })
 })

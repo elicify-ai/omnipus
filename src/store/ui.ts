@@ -17,7 +17,15 @@ interface UiStore {
 
   // Create agent modal
   createAgentModalOpen: boolean
-  openCreateAgentModal: () => void
+  /**
+   * Tier preset for the create-agent modal. Controls which form shape the
+   * modal renders and which `type` value the create request sends. Reset to
+   * 'custom' on every close so the next open defaults back to the base-agent
+   * shape unless an explicit opener (e.g. the per-section "New…" buttons on
+   * the Agents screen) sets it again.
+   */
+  createAgentModalType: 'custom' | 'worker'
+  openCreateAgentModal: (type?: 'custom' | 'worker') => void
   closeCreateAgentModal: () => void
 
   // Notification center panel (#264)
@@ -49,8 +57,11 @@ export const useUiStore = create<UiStore>((set, get) => ({
   closeSessionPanel: () => set({ sessionPanelOpen: false }),
 
   createAgentModalOpen: false,
-  openCreateAgentModal: () => set({ createAgentModalOpen: true }),
-  closeCreateAgentModal: () => set({ createAgentModalOpen: false }),
+  createAgentModalType: 'custom',
+  openCreateAgentModal: (type) =>
+    set({ createAgentModalOpen: true, createAgentModalType: type ?? 'custom' }),
+  closeCreateAgentModal: () =>
+    set({ createAgentModalOpen: false, createAgentModalType: 'custom' }),
 
   notificationPanelOpen: false,
   openNotificationPanel: () => set({ notificationPanelOpen: true }),

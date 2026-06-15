@@ -172,6 +172,7 @@ type ExecutorConfig = {
 type AgentCreateRequest = {
   type?: ("custom" | "worker") | undefined;
   name: string;
+  type?: ("custom" | "worker") | undefined;
   description?: string | undefined;
   model?: string | undefined;
   color?: string | undefined;
@@ -194,6 +195,7 @@ type AgentCreateRequest = {
       }>
     | undefined;
   skills?: Array<string> | undefined;
+  soul?: string | undefined;
   delegation_policy?: delegation_policy | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
@@ -1015,6 +1017,7 @@ export const delegation_policy: z.ZodType<delegation_policy> = z
 export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
   type: z.enum(["custom", "worker"]).optional(),
   name: z.string().min(1),
+  type: z.enum(["custom", "worker"]).optional().default("custom"),
   description: z.string().optional(),
   model: z.string().optional(),
   color: z.string().optional(),
@@ -1041,6 +1044,7 @@ export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
     .passthrough()
     .optional(),
   skills: z.array(z.string()).optional(),
+  soul: z.string().optional(),
   delegation_policy: delegation_policy.optional(),
   voice: z.string().nullish(),
   executor: ExecutorConfig.optional(),

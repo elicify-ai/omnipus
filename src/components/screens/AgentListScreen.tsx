@@ -53,9 +53,6 @@ export function AgentListScreen() {
           >
             <ShareNetwork size={14} weight="bold" /> Delegation Graph
           </Link>
-          <Button onClick={openCreateAgentModal} className="gap-2">
-            <Plus size={14} weight="bold" /> New Agent
-          </Button>
         </div>
       </div>
 
@@ -85,22 +82,33 @@ export function AgentListScreen() {
               Create your first agent to get started.
             </p>
           </div>
-          <Button onClick={openCreateAgentModal} className="gap-2">
-            <Plus size={14} weight="bold" /> Create Agent
+          <Button onClick={() => openCreateAgentModal('custom')} className="gap-2">
+            <Plus size={14} weight="bold" /> New agent
           </Button>
         </div>
       ) : (
         <div className="space-y-8">
           {/* Base agents — chat colleagues (type !== 'worker'). */}
           {baseAgents.length > 0 && (
-          <section>
-            <div className="mb-3">
-              <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
-                Base agents
-              </h2>
-              <p className="text-xs text-[var(--color-muted)] mt-0.5">
-                Chat colleagues — message them, set a default, and delegate work.
-              </p>
+          <section data-testid="base-agents-section">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
+                  Base agents
+                </h2>
+                <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                  Chat colleagues — message them, set a default, and delegate work.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => openCreateAgentModal('custom')}
+                className="gap-1.5 shrink-0"
+                data-testid="new-base-agent-button"
+              >
+                <Plus size={12} weight="bold" /> New agent
+              </Button>
             </div>
             <div
               className={`grid gap-4 ${
@@ -122,14 +130,25 @@ export function AgentListScreen() {
 
           {/* Sub-agent workers — delegation-only labour (type === 'worker'). */}
           {workerAgents.length > 0 && (
-            <section>
-              <div className="mb-3">
-                <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
-                  Sub-agent workers
-                </h2>
-                <p className="text-xs text-[var(--color-muted)] mt-0.5">
-                  Delegation-only labour agents — invoked by other agents, not chat targets.
-                </p>
+            <section data-testid="worker-agents-section">
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div>
+                  <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
+                    Sub-agent workers
+                  </h2>
+                  <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                    Delegation-only labour agents — invoked by other agents, not chat targets.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => openCreateAgentModal('worker')}
+                  className="gap-1.5 shrink-0"
+                  data-testid="new-worker-button"
+                >
+                  <Plus size={12} weight="bold" /> New worker
+                </Button>
               </div>
               <div
                 className={`grid gap-4 ${

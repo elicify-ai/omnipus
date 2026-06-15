@@ -28,6 +28,7 @@ import { ToolPolicyEditor } from '@/components/shared/ToolPolicyEditor'
 import type { ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { applyRolePreset } from '@/lib/toolPolicyPresets'
 import { ExecutorSelector } from './ExecutorSelector'
+import { getCreateAgentFormCopy } from './AgentFormFields'
 
 const ICON_OPTIONS = [
   { name: 'Robot', component: Robot },
@@ -103,11 +104,16 @@ interface CreateAgentModalProps {
 }
 
 export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreate: onCreateProp }: CreateAgentModalProps) {
-  const { createAgentModalOpen, closeCreateAgentModal } = useUiStore()
+  const { createAgentModalOpen, createAgentModalType, closeCreateAgentModal } = useUiStore()
   const queryClient = useQueryClient()
 
   const isOpen = openProp !== undefined ? openProp : createAgentModalOpen
   const handleClose = onCloseProp ?? closeCreateAgentModal
+  // Type-preset: 'custom' (default) or 'worker'. When invoked via a prop
+  // override the modal stays in 'custom' mode (tests pin the prop-only path).
+  const modalType = openProp !== undefined ? 'custom' : createAgentModalType
+  const isWorkerModal = modalType === 'worker'
+  const formCopy = getCreateAgentFormCopy(modalType)
 
   const { data: providersData, isError: providersError } = useQuery({
     queryKey: ['providers'],
@@ -141,6 +147,11 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   // Spec-4 FR-4.1: sub-agent executor; new agent defaults to native (undefined).
   const [executor, setExecutor] = useState<ExecutorConfig | undefined>(undefined)
+  // Worker-only: optional task prompt (SOUL.md for the worker runner).
+  const [soul, setSoul] = useState('')
+  // Worker-only: validation state for the required executor. Workers must
+  // carry an executor — they cannot be created without one.
+  const [executorError, setExecutorError] = useState('')
 
   // #334 (US-D1): new agent defaults to Balanced (not default_policy:'allow').
   const BALANCED_DEFAULT: ToolPolicyValue = applyRolePreset('balanced')
@@ -157,6 +168,8 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
     setNameError('')
     setSelectedSkills([])
     setExecutor(undefined)
+    setSoul('')
+    setExecutorError('')
     setToolsPolicyValue(applyRolePreset('balanced'))
   }
 
@@ -194,6 +207,15 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
       setNameError('Name is required')
       return
     }
+    // Worker-only validation: an executor is required (a worker without a
+    // runtime is not a worker — it's just a missing-config row).
+    if (isWorkerModal && !executor) {
+      setExecutorError('Worker requires an executor')
+      // Open the advanced section so the user can see the missing field.
+      setAdvancedOpen(true)
+      return
+    }
+    setExecutorError('')
     // Build the AgentToolsCfg wire shape from the ToolPolicyValue editor state.
     const toolsCfg: AgentToolsCfg = {
       builtin: {
@@ -202,6 +224,10 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
       },
     }
     doCreate({
+      // Tier preset — 'custom' for base-agent modal, 'worker' for the
+      // worker-section "New worker" button. The backend contract (AgentCreateRequest)
+      // accepts either; the tier drives the response shape.
+      type: modalType,
       name: name.trim(),
       description: description || undefined,
       model: model || undefined,
@@ -211,8 +237,17 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
       tools_cfg: toolsCfg,
       // US-E6: only include skills when at least one is selected (opt-in, default none).
       skills: selectedSkills.length > 0 ? selectedSkills : undefined,
-      // Spec-4 FR-4.1: only send executor when the user chose a non-native runtime.
-      executor: executor && executor.kind !== 'native' ? executor : undefined,
+      // Spec-4 FR-4.1: send the executor when present. For workers it is
+      // required (validated above) and is always sent (including native,
+      // since the worker concept needs a real runtime assignment).
+      // For base agents, omit native (preserves the existing payload shape).
+      executor: isWorkerModal
+        ? executor
+        : executor && executor.kind !== 'native' ? executor : undefined,
+      // Worker-only: SOUL.md content (the task prompt). Empty is valid for
+      // workers (per the locked concept) — omitted for base agents, which
+      // expect a later SOUL.md write via the profile edit flow.
+      soul: isWorkerModal ? (soul.trim() || undefined) : undefined,
     })
   }
 
@@ -221,11 +256,14 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <DialogPrimitive.Content className="fixed left-[50%] top-[50%] z-50 w-full sm:max-w-lg max-h-[calc(100vh-4rem)] translate-x-[-50%] translate-y-[-50%] border border-[var(--color-border)] bg-[var(--color-surface-1)] rounded-xl p-6 shadow-xl flex flex-col data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95">
-          <DialogPrimitive.Title className="font-headline text-lg font-bold text-[var(--color-secondary)] mb-1">
-            Create Agent
+          <DialogPrimitive.Title
+            data-testid={formCopy.testId}
+            className="font-headline text-lg font-bold text-[var(--color-secondary)] mb-1"
+          >
+            {formCopy.title}
           </DialogPrimitive.Title>
           <DialogPrimitive.Description className="text-sm text-[var(--color-muted)] mb-5">
-            Configure a new custom agent with a persona, model, and tools.
+            {formCopy.description}
           </DialogPrimitive.Description>
 
           <Tabs defaultValue="general" className="flex-1 min-h-0 flex flex-col">
@@ -345,6 +383,40 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                   />
                 </div>
 
+                {/* Worker-only: optional task prompt (SOUL.md).
+                    Lives at the top level for workers because the worker form
+                    shape is executor-first, no heartbeat, no schedules — the
+                    task prompt is the primary "personality" affordance.
+                    Mirrors the worker profile's "Task prompt (optional)" block
+                    in AgentFormFields. */}
+                {isWorkerModal && (
+                  <div>
+                    <label
+                      htmlFor="worker-task-prompt"
+                      className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block"
+                    >
+                      Task prompt <span className="text-[var(--color-muted)] font-normal">(optional)</span>
+                    </label>
+                    <p className="text-[11px] text-[var(--color-muted)] mb-1.5">
+                      Optional system prompt for the worker&apos;s runner. Composed with any
+                      caller-supplied task prompt at run time. Stored as{' '}
+                      <span className="font-mono text-[10px]">SOUL.md</span>. Leave empty to use
+                      the executor&apos;s default behaviour.
+                    </p>
+                    <Textarea
+                      id="worker-task-prompt"
+                      data-testid="create-worker-task-prompt"
+                      value={soul}
+                      onChange={(e) => setSoul(e.target.value)}
+                      placeholder="# Task prompt (optional)&#10;&#10;Define how this worker should approach its delegated task..."
+                      rows={5}
+                      className="text-xs font-mono resize-none"
+                      required={false}
+                      aria-required={false}
+                    />
+                  </div>
+                )}
+
                 {/* Advanced model params + skills */}
                 <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
                   <button
@@ -378,10 +450,30 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
                       </div>
 
                       {/* Spec-4 FR-4.1: Executor runtime selector. No agentId yet,
-                          so the connection test button is intentionally hidden. */}
+                          so the connection test button is intentionally hidden.
+                          Worker-tier: required — the worker cannot be created
+                          without a runtime. Base-tier: optional (default native). */}
                       <div className="space-y-1.5 pt-1 border-t border-[var(--color-border)]">
-                        <p className="text-xs font-medium text-[var(--color-secondary)] pt-1">Executor</p>
-                        <ExecutorSelector value={executor} onChange={setExecutor} />
+                        <p className="text-xs font-medium text-[var(--color-secondary)] pt-1">
+                          Executor {isWorkerModal && <span className="text-[var(--color-error)]">*</span>}
+                        </p>
+                        {isWorkerModal && (
+                          <p className="text-[11px] text-[var(--color-muted)]">
+                            Required for workers — pick the runtime that will execute delegated tasks.
+                          </p>
+                        )}
+                        <ExecutorSelector
+                          value={executor}
+                          onChange={(next) => {
+                            setExecutor(next)
+                            if (next) setExecutorError('')
+                          }}
+                        />
+                        {executorError && (
+                          <p className="text-xs text-[var(--color-error)]" data-testid="executor-error">
+                            {executorError}
+                          </p>
+                        )}
                       </div>
 
                       {/* US-E6: Skills picker — opt-in, default none */}
@@ -444,8 +536,12 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
             >
               Cancel
             </Button>
-            <Button onClick={handleCreate} disabled={isPending}>
-              {isPending ? 'Creating...' : 'Create Agent'}
+            <Button
+              onClick={handleCreate}
+              disabled={isPending}
+              data-testid="create-agent-submit"
+            >
+              {isPending ? 'Creating...' : formCopy.submitLabel}
             </Button>
           </div>
         </DialogPrimitive.Content>

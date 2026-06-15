@@ -307,7 +307,8 @@ describe('D1: Create-Agent defaults to Balanced preset (#334)', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /create agent/i })).toBeInTheDocument()
+      // Tier-preset test: prop-driven open pins the tier to 'custom'.
+      expect(screen.getByTestId('create-custom-modal-title')).toBeInTheDocument()
     })
 
     // The Tools & Permissions tab must exist in the tab list
@@ -324,7 +325,7 @@ describe('D1: Create-Agent defaults to Balanced preset (#334)', () => {
     )
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /create agent/i })).toBeInTheDocument()
+      expect(screen.getByTestId('create-custom-modal-title')).toBeInTheDocument()
     })
 
     // Fill name (required)
