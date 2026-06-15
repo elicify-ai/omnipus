@@ -21,6 +21,8 @@ type SearchResult struct {
 	Summary      string  `json:"summary"`
 	Version      string  `json:"version"`
 	RegistryName string  `json:"registry_name"`
+	// OwnerHandle is the publisher/owner handle on the registry, when available.
+	OwnerHandle string `json:"owner_handle,omitempty"`
 }
 
 // SkillMeta holds metadata about a skill from a registry.

@@ -1,5 +1,5 @@
 ---
-name: skill-authoring
+name: Skill Authoring
 description: Author, refine, and version reusable skills. Use when the user asks to create a new skill, improve an existing one, or capture a repeatable procedure as procedural memory.
 context: global
 ---

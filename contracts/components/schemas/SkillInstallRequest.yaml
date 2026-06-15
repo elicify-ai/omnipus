@@ -1,16 +1,23 @@
 title: SkillInstallRequest
 description: >
   Request body for POST /api/v1/skills/install. Installs a skill from the
-  ClawHub registry by name.
+  ClawHub registry by its slug (the identifier returned in a SkillSearchResult).
 type: object
 additionalProperties: false
 required:
-  - name
+  - slug
 properties:
-  name:
+  slug:
     type: string
     minLength: 1
     maxLength: 128
     pattern: '^[a-z0-9][a-z0-9._-]*$'
-    description: Skill name to install from the ClawHub registry.
+    description: Slug of the skill to install from the ClawHub registry.
     example: "web-search"
+  version:
+    type: string
+    maxLength: 64
+    description: >
+      Optional version to pin. When omitted the latest published version is
+      installed.
+    example: "1.4.0"

@@ -1426,6 +1426,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skills/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search the skill marketplace
+         * @description Searches configured skill registries (e.g. ClawHub) for skills matching the query. Returns an array of marketplace results (not installed skills). Install a result by its slug via POST /skills/install.
+         */
+        get: operations["searchSkills"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/skills/install": {
         parameters: {
             query?: never;
@@ -1437,7 +1457,7 @@ export interface paths {
         put?: never;
         /**
          * Install a skill from the ClawHub registry
-         * @description Installs a skill by name from the ClawHub registry. Currently returns 501 Not Implemented while the registry integration is in progress.
+         * @description Installs a skill by its slug from the ClawHub registry. The slug is the identifier returned in a SkillSearchResult. An optional version pins the installed version; when omitted the latest version is installed.
          */
         post: operations["installSkill"];
         delete?: never;
@@ -5555,14 +5575,61 @@ export interface components {
         };
         /**
          * SkillInstallRequest
-         * @description Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by name.
+         * @description Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by its slug (the identifier returned in a SkillSearchResult).
          */
         SkillInstallRequest: {
             /**
-             * @description Skill name to install from the ClawHub registry.
+             * @description Slug of the skill to install from the ClawHub registry.
              * @example web-search
              */
-            name: string;
+            slug: string;
+            /**
+             * @description Optional version to pin. When omitted the latest published version is installed.
+             * @example 1.4.0
+             */
+            version?: string;
+        };
+        /**
+         * SkillSearchResult
+         * @description A single skill returned by GET /api/v1/skills/search — a hit from a skill marketplace registry (e.g. ClawHub). Distinct from Skill, which models an already-installed local skill. A search result is installed by its slug via POST /api/v1/skills/install.
+         */
+        SkillSearchResult: {
+            /**
+             * @description Stable registry identifier for the skill. This is the value passed to POST /skills/install to install the skill.
+             * @example web-search
+             */
+            slug: string;
+            /**
+             * @description Human-readable skill name (e.g. "Web Search").
+             * @example Web Search
+             */
+            display_name?: string;
+            /**
+             * @description Short one-line description of what the skill does.
+             * @example Search the web and extract page content.
+             */
+            summary?: string;
+            /**
+             * @description Latest published version of the skill (free-form; may be empty).
+             * @example 1.4.0
+             */
+            version?: string;
+            /**
+             * Format: double
+             * @description Relevance score assigned by the registry for this query (higher is better).
+             * @example 0.92
+             */
+            score?: number;
+            /**
+             * @description Name of the registry that produced this result (e.g. "clawhub").
+             * @example clawhub
+             */
+            registry_name?: string;
+            /**
+             * @description Handle of the skill's publisher/owner on the registry, when available.
+             * @example octofleet
+             */
+            owner_handle?: string;
         };
         /**
          * SseChatRequest
@@ -6545,6 +6612,15 @@ export interface components {
         };
         /** @description Internal server error. */
         "500InternalServerError": {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description Bad gateway — an upstream dependency (e.g. a skill registry) is unreachable or returned an error. */
+        "502BadGateway": {
             headers: {
                 [name: string]: unknown;
             };
@@ -9583,6 +9659,40 @@ export interface operations {
             };
         };
     };
+    searchSkills: {
+        parameters: {
+            query: {
+                /**
+                 * @description Search query. Must be non-empty.
+                 * @example web search
+                 */
+                q: string;
+                /**
+                 * @description Maximum number of results to return (default 20, capped at 50).
+                 * @example 20
+                 */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Array of skill marketplace search results (may be empty). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillSearchResult"][];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            502: components["responses"]["502BadGateway"];
+        };
+    };
     installSkill: {
         parameters: {
             query?: never;
@@ -9607,15 +9717,8 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
-            /** @description Not yet implemented. */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            404: components["responses"]["404NotFound"];
+            502: components["responses"]["502BadGateway"];
         };
     };
     postChat: {
@@ -11165,6 +11268,7 @@ export type TaskUpdateRequest = components["schemas"]["TaskUpdateRequest"];
 export type ProviderUpdateRequest = components["schemas"]["ProviderUpdateRequest"];
 export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"];
 export type SkillInstallRequest = components["schemas"]["SkillInstallRequest"];
+export type SkillSearchResult = components["schemas"]["SkillSearchResult"];
 export type SseChatRequest = components["schemas"]["SseChatRequest"];
 export type ToolApprovalActionRequest = components["schemas"]["ToolApprovalActionRequest"];
 export type CredentialSetRequest = components["schemas"]["CredentialSetRequest"];

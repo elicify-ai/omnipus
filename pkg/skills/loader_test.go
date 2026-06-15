@@ -172,6 +172,59 @@ func TestListSkillsParsesAuthorAndVersion(t *testing.T) {
 	assert.Equal(t, "2.4.1", skills[0].Version)
 }
 
+// TestListSkillsSeparatesIDFromDisplayName verifies that a skill whose
+// frontmatter name is a proper English display name (with spaces/capitals) is
+// loaded successfully — its ID stays the directory slug while Name carries the
+// display name. The display name must NOT be slug-validated (spaces are legal),
+// but the slug ID still gates validation.
+func TestListSkillsSeparatesIDFromDisplayName(t *testing.T) {
+	tmp := t.TempDir()
+	builtin := filepath.Join(tmp, "builtin")
+	dir := filepath.Join(builtin, "daily-briefing")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	content := "---\n" +
+		"name: Daily Briefing\n" +
+		"description: Assemble a concise daily briefing.\n" +
+		"---\n\n# Daily Briefing\n\nProduce a short briefing.\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644))
+
+	sl := NewSkillsLoader(filepath.Join(tmp, "ws"), filepath.Join(tmp, "global"), builtin)
+	skills := sl.ListSkills()
+
+	require.Len(t, skills, 1, "a skill with a spaced display name must still load")
+	assert.Equal(t, "daily-briefing", skills[0].ID, "ID must be the directory slug")
+	assert.Equal(t, "Daily Briefing", skills[0].Name, "Name must be the frontmatter display name")
+	assert.Equal(t, "builtin", skills[0].Source)
+}
+
+// TestEmbeddedDefaultsHaveProperDisplayNames verifies the four embedded default
+// skills ship with proper English display names while keeping their slug IDs.
+func TestEmbeddedDefaultsHaveProperDisplayNames(t *testing.T) {
+	tmp := t.TempDir()
+	dest := filepath.Join(tmp, "skills")
+	_, err := SeedDefaults(dest)
+	require.NoError(t, err)
+
+	sl := NewSkillsLoader(filepath.Join(tmp, "ws"), dest, "")
+	bySlug := make(map[string]SkillInfo)
+	for _, s := range sl.ListSkills() {
+		bySlug[s.ID] = s
+	}
+
+	want := map[string]string{
+		"daily-briefing":  "Daily Briefing",
+		"plan":            "Plan",
+		"skill-authoring": "Skill Authoring",
+		"summarize":       "Summarize",
+	}
+	for slug, display := range want {
+		got, ok := bySlug[slug]
+		require.True(t, ok, "embedded default %q must be present", slug)
+		assert.Equal(t, slug, got.ID, "ID is the slug")
+		assert.Equal(t, display, got.Name, "display name for %q", slug)
+	}
+}
+
 // TestListSkillsAuthorVersionAbsent verifies absent author/version yields empty
 // strings (no error, back-compatible).
 func TestListSkillsAuthorVersionAbsent(t *testing.T) {

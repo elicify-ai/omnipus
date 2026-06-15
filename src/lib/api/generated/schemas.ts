@@ -1521,12 +1521,22 @@ export const Skill = z.object({
   status: z.enum(["active", "disabled", "inactive", "error"]),
   agent_assignment: z.string().optional(),
 });
+export const SkillSearchResult = z.object({
+  slug: z.string(),
+  display_name: z.string().optional(),
+  summary: z.string().optional(),
+  version: z.string().optional(),
+  score: z.number().optional(),
+  registry_name: z.string().optional(),
+  owner_handle: z.string().optional(),
+});
 export const SkillInstallRequest = z.object({
-  name: z
+  slug: z
     .string()
     .min(1)
     .max(128)
     .regex(/^[a-z0-9][a-z0-9._-]*$/),
+  version: z.string().max(64).optional(),
 });
 export const SseChatRequest = z.object({ message: z.string() });
 export const ActivityEvent: z.ZodType<ActivityEvent> = z
@@ -4867,20 +4877,14 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
     method: "post",
     path: "/skills/install",
     alias: "installSkill",
-    description: `Installs a skill by name from the ClawHub registry. Currently returns 501 Not Implemented while the registry integration is in progress.
+    description: `Installs a skill by its slug from the ClawHub registry. The slug is the identifier returned in a SkillSearchResult. An optional version pins the installed version; when omitted the latest version is installed.
 `,
     requestFormat: "json",
     parameters: [
       {
         name: "body",
         type: "Body",
-        schema: z.object({
-          name: z
-            .string()
-            .min(1)
-            .max(128)
-            .regex(/^[a-z0-9][a-z0-9._-]*$/),
-        }),
+        schema: SkillInstallRequest,
       },
     ],
     response: Skill,
@@ -4896,8 +4900,51 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         schema: ErrorResponse,
       },
       {
-        status: 501,
-        description: `Not yet implemented.`,
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Bad gateway — an upstream dependency (e.g. a skill registry) is unreachable or returned an error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/skills/search",
+    alias: "searchSkills",
+    description: `Searches configured skill registries (e.g. ClawHub) for skills matching the query. Returns an array of marketplace results (not installed skills). Install a result by its slug via POST /skills/install.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "q",
+        type: "Query",
+        schema: z.string().min(1).max(256),
+      },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().gte(1).lte(50).optional().default(20),
+      },
+    ],
+    response: z.array(SkillSearchResult),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Bad gateway — an upstream dependency (e.g. a skill registry) is unreachable or returned an error.`,
         schema: ErrorResponse,
       },
     ],

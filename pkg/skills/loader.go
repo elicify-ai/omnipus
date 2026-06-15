@@ -41,6 +41,14 @@ type SkillMetadata struct {
 }
 
 type SkillInfo struct {
+	// ID is the stable skill identifier: the skill's directory name (slug). It is
+	// the value used everywhere a skill must be addressed unambiguously — DELETE,
+	// activation allowlists, and built-in detection (DefaultSkillNames returns
+	// slugs). It is always present and always slug-shaped (validated).
+	ID string `json:"id"`
+	// Name is the human-readable display name, sourced from SKILL.md frontmatter
+	// `name:` (e.g. "Daily Briefing"). It falls back to the slug when no
+	// frontmatter name is present. Unlike ID it is free-form and NOT slug-validated.
 	Name        string `json:"name"`
 	Path        string `json:"path"`
 	Source      string `json:"source"`
@@ -49,15 +57,27 @@ type SkillInfo struct {
 	Version     string `json:"version"` // optional, from SKILL.md frontmatter
 }
 
+// validate enforces the loader's contract: the ID (slug) must be a valid skill
+// identifier (alphanumeric with hyphens, within the length cap) and a
+// description must be present. The display Name is intentionally NOT
+// slug-validated — it is free-form (e.g. "Daily Briefing") — but it must be
+// non-empty (the loader falls it back to the slug, so this only fails when both
+// are empty, which cannot happen for a real on-disk skill directory).
 func (info SkillInfo) validate() error {
 	var errs error
-	if info.Name == "" {
+	id := info.ID
+	if id == "" {
+		// Back-compat: callers that only populate Name (e.g. the authoring
+		// validator) validate the Name as the identifier.
+		id = info.Name
+	}
+	if id == "" {
 		errs = errors.Join(errs, errors.New("name is required"))
 	} else {
-		if len(info.Name) > MaxNameLength {
+		if len(id) > MaxNameLength {
 			errs = errors.Join(errs, fmt.Errorf("name exceeds %d characters", MaxNameLength))
 		}
-		if !namePattern.MatchString(info.Name) {
+		if !namePattern.MatchString(id) {
 			errs = errors.Join(errs, errors.New("name must be alphanumeric with hyphens"))
 		}
 	}
@@ -139,6 +159,9 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 				continue
 			}
 			info := SkillInfo{
+				// ID is the stable slug — the directory name — and never
+				// changes regardless of the display name in frontmatter.
+				ID:     d.Name(),
 				Name:   d.Name(),
 				Path:   skillFile,
 				Source: source,
@@ -146,7 +169,13 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 			metadata := sl.getSkillMetadata(skillFile)
 			if metadata != nil {
 				info.Description = metadata.Description
-				info.Name = metadata.Name
+				// Name is the human-readable display name from frontmatter
+				// (falls back to the slug). It is kept separate from ID so a
+				// proper English name like "Daily Briefing" does not change the
+				// addressable identifier "daily-briefing".
+				if metadata.Name != "" {
+					info.Name = metadata.Name
+				}
 				info.Author = metadata.Author
 				info.Version = metadata.Version
 			}
@@ -233,15 +262,24 @@ func (sl *SkillsLoader) BuildSkillsSummaryFunc(allow func(name string) bool) str
 	lines = append(lines, "<skills>")
 	emitted := 0
 	for _, s := range allSkills {
-		if allow != nil && !allow(s.Name) {
+		// The allowlist is keyed on the slug (ID), never the display name.
+		if allow != nil && !allow(s.ID) {
 			continue
 		}
-		escapedName := escapeXML(s.Name)
+		// The agent invokes a skill by the slug (ID) — that is the identifier
+		// ResolveSkillName/LoadSkill resolve against — so <name> carries the
+		// slug. The human-readable display name is surfaced separately so the
+		// model can refer to it naturally.
+		escapedName := escapeXML(s.ID)
+		escapedDisplay := escapeXML(s.Name)
 		escapedDesc := escapeXML(s.Description)
 		escapedPath := escapeXML(s.Path)
 
 		lines = append(lines, "  <skill>")
 		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapedName))
+		if s.Name != "" && s.Name != s.ID {
+			lines = append(lines, fmt.Sprintf("    <display_name>%s</display_name>", escapedDisplay))
+		}
 		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapedDesc))
 		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapedPath))
 		lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source))

@@ -6765,10 +6765,37 @@ type SkillSource string
 // SkillStatus "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
 type SkillStatus string
 
-// SkillInstallRequest Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by name.
+// SkillInstallRequest Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by its slug (the identifier returned in a SkillSearchResult).
 type SkillInstallRequest struct {
-	// Name Skill name to install from the ClawHub registry.
-	Name string `json:"name"`
+	// Slug Slug of the skill to install from the ClawHub registry.
+	Slug string `json:"slug"`
+
+	// Version Optional version to pin. When omitted the latest published version is installed.
+	Version *string `json:"version,omitempty"`
+}
+
+// SkillSearchResult A single skill returned by GET /api/v1/skills/search — a hit from a skill marketplace registry (e.g. ClawHub). Distinct from Skill, which models an already-installed local skill. A search result is installed by its slug via POST /api/v1/skills/install.
+type SkillSearchResult struct {
+	// DisplayName Human-readable skill name (e.g. "Web Search").
+	DisplayName *string `json:"display_name,omitempty"`
+
+	// OwnerHandle Handle of the skill's publisher/owner on the registry, when available.
+	OwnerHandle *string `json:"owner_handle,omitempty"`
+
+	// RegistryName Name of the registry that produced this result (e.g. "clawhub").
+	RegistryName *string `json:"registry_name,omitempty"`
+
+	// Score Relevance score assigned by the registry for this query (higher is better).
+	Score *float64 `json:"score,omitempty"`
+
+	// Slug Stable registry identifier for the skill. This is the value passed to POST /skills/install to install the skill.
+	Slug string `json:"slug"`
+
+	// Summary Short one-line description of what the skill does.
+	Summary *string `json:"summary,omitempty"`
+
+	// Version Latest published version of the skill (free-form; may be empty).
+	Version *string `json:"version,omitempty"`
 }
 
 // SkillTrustResponse Skill trust level returned by GET /api/v1/security/skill-trust.
@@ -7362,6 +7389,9 @@ type N429TooManyRequests = ErrorResponse
 // N500InternalServerError Standard error envelope returned by all non-2xx responses.
 type N500InternalServerError = ErrorResponse
 
+// N502BadGateway Standard error envelope returned by all non-2xx responses.
+type N502BadGateway = ErrorResponse
+
 // N503ServiceUnavailable Standard error envelope returned by all non-2xx responses.
 type N503ServiceUnavailable = ErrorResponse
 
@@ -7496,6 +7526,15 @@ type ListSessions200JSONResponseBody struct {
 
 // ClearAllSessions200JSONResponseBodyStatus defines parameters for ClearAllSessions.
 type ClearAllSessions200JSONResponseBodyStatus string
+
+// SearchSkillsParams defines parameters for SearchSkills.
+type SearchSkillsParams struct {
+	// Q Search query. Must be non-empty.
+	Q string `form:"q" json:"q"`
+
+	// Limit Maximum number of results to return (default 20, capped at 50).
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
 
 // GetTokenStatsParams defines parameters for GetTokenStats.
 type GetTokenStatsParams struct {

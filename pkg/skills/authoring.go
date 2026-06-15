@@ -105,14 +105,17 @@ func ValidateSkillMarkdown(expectedName, content string) error {
 
 	frontmatter, body := splitFrontmatter(content)
 
-	// Derive metadata the same way the loader does at read time.
-	title, bodyDescription := extractMarkdownMetadata(body)
+	// Derive metadata the same way the loader does at read time. The stable
+	// identity is the slug (the directory/skill name = expectedName), which is
+	// what info.validate() slug-checks via the ID field. The frontmatter `name`
+	// is the human-readable DISPLAY name and is intentionally NOT slug-validated
+	// nor required to equal the slug (e.g. slug "daily-briefing" → display name
+	// "Daily Briefing").
+	_, bodyDescription := extractMarkdownMetadata(body)
 	info := SkillInfo{
+		ID:          expectedName,
 		Name:        expectedName,
 		Description: bodyDescription,
-	}
-	if title != "" && namePattern.MatchString(title) && len(title) <= MaxNameLength {
-		info.Name = title
 	}
 
 	if frontmatter != "" {
@@ -128,14 +131,6 @@ func ValidateSkillMarkdown(expectedName, content string) error {
 
 	if err := info.validate(); err != nil {
 		return fmt.Errorf("invalid SKILL.md: %w", err)
-	}
-	// The frontmatter name (when present) must match the directory/skill name so
-	// a skill cannot masquerade under a different identity than its location.
-	if frontmatter != "" {
-		fm := (&SkillsLoader{}).parseSimpleYAML(frontmatter)
-		if n := strings.TrimSpace(fm["name"]); n != "" && expectedName != "" && !strings.EqualFold(n, expectedName) {
-			return fmt.Errorf("invalid SKILL.md: frontmatter name %q does not match skill name %q", n, expectedName)
-		}
 	}
 	return nil
 }

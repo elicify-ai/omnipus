@@ -1,5 +1,5 @@
 ---
-name: daily-briefing
+name: Daily Briefing
 description: Assemble a concise daily briefing — open tasks, recent activity, and what needs attention today. Use when the user asks for a daily summary, a standup, a catch-up, or "what's on my plate".
 context: global
 ---

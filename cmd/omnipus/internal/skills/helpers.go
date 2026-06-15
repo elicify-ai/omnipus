@@ -51,7 +51,13 @@ func skillsListCmd(loader *skills.SkillsLoader) {
 	fmt.Println("\nInstalled Skills:")
 	fmt.Println("------------------")
 	for _, skill := range allSkills {
-		fmt.Printf("  ✓ %s (%s)\n", skill.Name, skill.Source)
+		// Show the display name, plus the slug (ID) when it differs so operators
+		// know the addressable identifier for activation/removal.
+		if skill.Name != "" && skill.Name != skill.ID {
+			fmt.Printf("  ✓ %s [%s] (%s)\n", skill.Name, skill.ID, skill.Source)
+		} else {
+			fmt.Printf("  ✓ %s (%s)\n", skill.ID, skill.Source)
+		}
 		if skill.Description != "" {
 			fmt.Printf("    %s\n", skill.Description)
 		}

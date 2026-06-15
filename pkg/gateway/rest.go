@@ -26,6 +26,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -129,6 +130,13 @@ type restAPI struct {
 	// GET /api/v1/tools includes MCP entries from this registry.
 	// Nil in test setups that do not wire MCP.
 	mcpRegistry *tools.MCPRegistry
+
+	// skillRegistry is the ClawHub marketplace registry backing GET
+	// /api/v1/skills/search. Built at boot from cfg.Tools.Skills.Registries.ClawHub
+	// with the SSRF-safe HTTP client (SEC-24). Nil in test setups (and when no
+	// registry is configured); the search handler returns 502 when it is nil so
+	// the SPA can surface "registry unavailable" rather than a hard 500.
+	skillRegistry skills.SkillRegistry
 
 	// allowGodMode is set when the gateway was started with --allow-god-mode.
 	// When false, the agent update handler rejects sandbox_profile=off with 403.
@@ -2525,7 +2533,7 @@ func (a *restAPI) HandleSkills(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && sub == "":
 		a.listSkills(w)
-	case r.Method == http.MethodPost && sub == "search":
+	case r.Method == http.MethodGet && sub == "search":
 		a.searchSkills(w, r)
 	case r.Method == http.MethodPost && sub == "install":
 		a.installSkill(w, r)
@@ -2547,15 +2555,27 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 	}
 	result := make([]gen.Skill, 0, len(detailed))
 	for _, s := range detailed {
+		// The skill's stable identifier is its slug (ID = directory name). The
+		// display Name is the human-readable label (e.g. "Daily Briefing"). They
+		// are kept separate so renaming the display label never changes the ID
+		// used by DELETE, activation, or built-in detection.
+		id := s.ID
+		if id == "" {
+			id = s.Name // defensive: older loaders may not populate ID
+		}
 		name := s.Name
+		if name == "" {
+			name = id
+		}
 		// A skill is "built-in" (system) when it ships embedded in the binary —
-		// identified by NAME, not directory. The embedded defaults are seeded into
-		// the global skills dir on first boot, so the loader reports their source
-		// as "global"; we override that here so they surface as system skills.
-		isBuiltin := s.Source == "builtin" || isSystemSkill(name)
+		// identified by its slug (ID), not the display name. DefaultSkillNames()
+		// returns slugs. The embedded defaults are seeded into the global skills
+		// dir on first boot, so the loader reports their source as "global"; we
+		// override that here so they surface as system skills.
+		isBuiltin := s.Source == "builtin" || isSystemSkill(id)
 
 		skill := gen.Skill{
-			Id:       name,
+			Id:       id,
 			Name:     name,
 			Status:   gen.SkillStatusActive,
 			Verified: isBuiltin, // built-in skills are Omnipus-team-verified.
@@ -2617,16 +2637,23 @@ func skillSourceToWire(source string) (gen.SkillSource, bool) {
 }
 
 // skillSource returns the loader source ("builtin"/"global"/"workspace") for the
-// named installed skill, or "" when the skill is not found. Used to enforce the
-// built-in deletion guard (built-ins cannot be removed).
-func (a *restAPI) skillSource(name string) string {
+// skill addressed by id (the slug = directory name), or "" when the skill is not
+// found. Used to enforce the built-in deletion guard (built-ins cannot be
+// removed). The DELETE route param is the skill's Id (slug), so matching is keyed
+// on the slug — never the human-readable display name.
+func (a *restAPI) skillSource(id string) string {
 	// Embedded defaults are system skills regardless of which dir they were
-	// seeded into (the loader reports them as "global").
-	if isSystemSkill(name) {
+	// seeded into (the loader reports them as "global"). DefaultSkillNames()
+	// returns slugs, so this check is keyed on the slug.
+	if isSystemSkill(id) {
 		return "builtin"
 	}
 	for _, s := range a.agentLoop.ListSkillsDetailed() {
-		if s.Name == name {
+		skillID := s.ID
+		if skillID == "" {
+			skillID = s.Name
+		}
+		if skillID == id {
 			return s.Source
 		}
 	}
@@ -2695,21 +2722,164 @@ func (a *restAPI) validateSkillIDs(ids []string) string {
 	return ""
 }
 
-func (a *restAPI) searchSkills(w http.ResponseWriter, _ *http.Request) {
-	jsonErr(w, http.StatusNotImplemented, "ClawHub search not yet implemented")
+// searchSkillsDefaultLimit / searchSkillsMaxLimit bound the number of marketplace
+// results returned by GET /api/v1/skills/search.
+const (
+	searchSkillsDefaultLimit = 20
+	searchSkillsMaxLimit     = 50
+)
+
+// searchSkills handles GET /api/v1/skills/search?q=<query>&limit=<n>. It queries
+// the configured skill marketplace (ClawHub) and maps each registry hit onto the
+// SkillSearchResult wire type. An empty query is a 400; a registry/transport
+// failure is a 502 (not a 500) so the SPA can surface "registry unavailable".
+func (a *restAPI) searchSkills(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		jsonErr(w, http.StatusBadRequest, "query parameter 'q' is required")
+		return
+	}
+
+	limit := searchSkillsDefaultLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 {
+			jsonErr(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+	if limit > searchSkillsMaxLimit {
+		limit = searchSkillsMaxLimit
+	}
+
+	if a.skillRegistry == nil {
+		slog.Warn("rest: skill search requested but no registry configured")
+		jsonErr(w, http.StatusBadGateway, "skill registry unavailable")
+		return
+	}
+
+	results, err := a.skillRegistry.Search(r.Context(), q, limit)
+	if err != nil {
+		slog.Warn("rest: skill search failed", "query", q, "error", err)
+		jsonErr(w, http.StatusBadGateway, "skill registry unavailable")
+		return
+	}
+
+	out := make([]gen.SkillSearchResult, 0, len(results))
+	for _, res := range results {
+		item := gen.SkillSearchResult{Slug: res.Slug}
+		if res.DisplayName != "" {
+			dn := res.DisplayName
+			item.DisplayName = &dn
+		}
+		if res.Summary != "" {
+			sm := res.Summary
+			item.Summary = &sm
+		}
+		if res.Version != "" {
+			v := res.Version
+			item.Version = &v
+		}
+		if res.Score != 0 {
+			score := res.Score
+			item.Score = &score
+		}
+		if res.RegistryName != "" {
+			rn := res.RegistryName
+			item.RegistryName = &rn
+		}
+		if res.OwnerHandle != "" {
+			oh := res.OwnerHandle
+			item.OwnerHandle = &oh
+		}
+		out = append(out, item)
+	}
+	jsonOK(w, out)
 }
 
+// installSkill handles POST /api/v1/skills/install. It installs a skill from the
+// ClawHub marketplace by its slug, optionally pinning a version. The slug is
+// path-validated; the install is SSRF-safe (the registry's HTTP client honors
+// the SSRF policy). On success it returns the freshly installed skill as it now
+// appears in the local inventory.
 func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 	var req gen.SkillInstallRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	if !decodeAndValidate(w, r, "SkillInstallRequest", &req, validateEnabled) {
 		return
 	}
-	if req.Name == "" {
-		jsonErr(w, http.StatusBadRequest, "name is required")
+	slug := strings.TrimSpace(req.Slug)
+	if slug == "" {
+		jsonErr(w, http.StatusBadRequest, "slug is required")
 		return
 	}
-	jsonErr(w, http.StatusNotImplemented, "skill installation not yet available")
+	// Path-traversal / identity guard: the slug becomes a directory name.
+	if err := validateEntityID(slug); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid skill slug")
+		return
+	}
+
+	if a.skillRegistry == nil {
+		slog.Warn("rest: skill install requested but no registry configured", "slug", slug)
+		jsonErr(w, http.StatusBadGateway, "skill registry unavailable")
+		return
+	}
+
+	// Reject re-installing over an existing skill (built-in or user) so an install
+	// never silently clobbers a local skill.
+	if a.skillSource(slug) != "" {
+		jsonErr(w, http.StatusConflict, fmt.Sprintf("skill %q is already installed", slug))
+		return
+	}
+
+	version := ""
+	if req.Version != nil {
+		version = strings.TrimSpace(*req.Version)
+	}
+
+	targetDir := filepath.Join(a.homePath, "skills", slug)
+	result, err := a.skillRegistry.DownloadAndInstall(r.Context(), slug, version, targetDir)
+	if err != nil {
+		// Clean up any partial extraction so a failed install leaves no debris.
+		if rmErr := os.RemoveAll(targetDir); rmErr != nil {
+			slog.Warn("rest: cleanup after failed skill install", "slug", slug, "error", rmErr)
+		}
+		slog.Warn("rest: skill install failed", "slug", slug, "version", version, "error", err)
+		jsonErr(w, http.StatusBadGateway, fmt.Sprintf("could not install skill %q: %v", slug, err))
+		return
+	}
+
+	// Surface a moderation block as a hard failure: do not leave a malware-flagged
+	// skill installed.
+	if result != nil && result.IsMalwareBlocked {
+		if rmErr := os.RemoveAll(targetDir); rmErr != nil {
+			slog.Warn("rest: cleanup after blocked skill install", "slug", slug, "error", rmErr)
+		}
+		jsonErr(w, http.StatusForbidden, fmt.Sprintf("skill %q is blocked by registry moderation", slug))
+		return
+	}
+
+	installedVersion := "0.0.0"
+	if result != nil && result.Version != "" && result.Version != "latest" {
+		installedVersion = result.Version
+	}
+
+	skill := gen.Skill{
+		Id:       slug,
+		Name:     slug,
+		Version:  installedVersion,
+		Status:   gen.SkillStatusActive,
+		Verified: result != nil && result.Verified,
+	}
+	if result != nil && result.Summary != "" {
+		summary := result.Summary
+		skill.Description = &summary
+	}
+	if src, ok := skillSourceToWire("global"); ok {
+		skill.Source = &src
+	}
+	jsonOK(w, skill)
 }
 
 func (a *restAPI) deleteSkill(w http.ResponseWriter, name string) {

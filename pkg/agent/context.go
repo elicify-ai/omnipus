@@ -1018,10 +1018,12 @@ func (cb *ContextBuilder) ListSkillNames() []string {
 	names := make([]string, 0, len(allSkills))
 	for _, skill := range allSkills {
 		// Progressive disclosure: only list skills this agent may use (FR-9.4).
-		if !cb.skillAllowed(skill.Name) {
+		// The allowlist and the loadable identity are both keyed on the slug
+		// (ID = directory name), never the human-readable display name.
+		if !cb.skillAllowed(skill.ID) {
 			continue
 		}
-		names = append(names, skill.Name)
+		names = append(names, skill.ID)
 	}
 	return names
 }
@@ -1033,21 +1035,24 @@ func (cb *ContextBuilder) ResolveSkillName(name string) (string, bool) {
 	}
 
 	for _, skill := range cb.skillsLoader.ListSkills() {
-		if strings.EqualFold(skill.Name, name) {
+		// Accept either the stable slug (ID) or the human-readable display name
+		// as the input, but always resolve to the slug — that is the directory
+		// name LoadSkill() uses and the key the allowlist is built from.
+		if strings.EqualFold(skill.ID, name) || strings.EqualFold(skill.Name, name) {
 			// FR-9.4: tool-resolution default-DENY enforcement. A skill that
 			// exists on disk but is not in this agent's allowlist cannot be
 			// resolved — so it can be neither armed via /use nor loaded into
 			// context. This is the invocation gate, distinct from the prompt-time
 			// context filter (activeSkillNames).
-			if !cb.skillAllowed(skill.Name) {
+			if !cb.skillAllowed(skill.ID) {
 				logger.WarnCF("agent", "skill resolution denied by per-agent allowlist",
 					map[string]any{
 						"agent_id": cb.agentID,
-						"skill":    skill.Name,
+						"skill":    skill.ID,
 					})
 				return "", false
 			}
-			return skill.Name, true
+			return skill.ID, true
 		}
 	}
 
@@ -1059,7 +1064,9 @@ func (cb *ContextBuilder) GetSkillsInfo() map[string]any {
 	allSkills := cb.skillsLoader.ListSkills()
 	skillNames := make([]string, 0, len(allSkills))
 	for _, s := range allSkills {
-		skillNames = append(skillNames, s.Name)
+		// Report stable slugs (IDs) — these are the identifiers the config
+		// allowlist, DELETE route, and REST install-id validation compare against.
+		skillNames = append(skillNames, s.ID)
 	}
 	return map[string]any{
 		"total":     len(allSkills),

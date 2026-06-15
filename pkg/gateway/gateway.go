@@ -1468,6 +1468,28 @@ func setupAndStartServices(
 	}
 	runningServices.selfWriteReg = selfWriteReg
 
+	// ClawHub marketplace registry backing GET /api/v1/skills/search and
+	// install-by-slug. Built with the SSRF-safe HTTP client (SEC-24) so outbound
+	// registry traffic honors the SSRF policy. The client defaults BaseURL to
+	// https://clawhub.ai when unset. Auth token (optional) is resolved from the
+	// credential bundle.
+	skillSearchCfg := cfg.Tools.Skills.Registries.ClawHub
+	skillRegistryCfg := skills.ClawHubConfig{
+		Enabled:         skillSearchCfg.Enabled,
+		BaseURL:         skillSearchCfg.BaseURL,
+		AuthToken:       bundle.GetString(skillSearchCfg.AuthTokenRef),
+		SearchPath:      skillSearchCfg.SearchPath,
+		SkillsPath:      skillSearchCfg.SkillsPath,
+		DownloadPath:    skillSearchCfg.DownloadPath,
+		Timeout:         skillSearchCfg.Timeout,
+		MaxZipSize:      skillSearchCfg.MaxZipSize,
+		MaxResponseSize: skillSearchCfg.MaxResponseSize,
+	}
+	if restSSRF := agent.GetSSRFChecker(agentLoop); restSSRF != nil {
+		skillRegistryCfg.HTTPClient = restSSRF.SafeClient()
+	}
+	skillRegistry := skills.NewClawHubRegistry(skillRegistryCfg)
+
 	api := &restAPI{
 		agentLoop:       agentLoop,
 		allowedOrigin:   allowedOrigin,
@@ -1485,6 +1507,7 @@ func setupAndStartServices(
 		approvalReg:     approvalReg,                     // in-process tool-approval registry (FR-016)
 		builtinRegistry: builtinReg,                      // M16: central builtin registry (FR-001)
 		mcpRegistry:     mcpReg,                          // M16: central MCP registry (FR-001)
+		skillRegistry:   skillRegistry,                   // ClawHub marketplace (search + install-by-slug)
 		allowGodMode:    allowGodMode,                    // god-mode latch (2)
 		notifStore:      runningServices.notifStore,      // #264: notification center
 		auditor:         agentLoop.AuditLogger(),         // shared audit logger for REST mutations

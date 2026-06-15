@@ -184,12 +184,20 @@ func TestSkillWrite_Confinement_TraversalAndOversize_Rejected(t *testing.T) {
 	invalids := map[string]string{
 		"no-description": "---\nname: no-description\n---\n\n# no-description\n",
 		"empty":          "",
-		"name-mismatch":  "---\nname: somethingelse\ndescription: a description long enough to be valid for this test.\n---\n\n# x\n",
 	}
 	for skill, content := range invalids {
 		if _, err := w.CreateSkill(skill, content); err == nil {
 			t.Errorf("invalid SKILL.md %q must be rejected, but CreateSkill succeeded", skill)
 		}
+	}
+
+	// 4. The frontmatter `name` is the human-readable DISPLAY name and may legitimately
+	// differ from the slug (the directory/skill id) — e.g. slug "daily-briefing" with
+	// display name "Daily Briefing". Path identity is the slug, so a differing display
+	// name is NOT a confinement risk and must be ACCEPTED.
+	if _, err := w.CreateSkill("display-name-skill",
+		"---\nname: A Friendly Display Name\ndescription: a description long enough to be valid for this test.\n---\n\n# x\n"); err != nil {
+		t.Errorf("a display name differing from the slug must be accepted, got: %v", err)
 	}
 }
 

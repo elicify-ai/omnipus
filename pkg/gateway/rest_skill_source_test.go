@@ -154,6 +154,47 @@ func TestListSkillsVersionDefaultsWhenAbsent(t *testing.T) {
 	assert.Equal(t, gen.SkillSourceBuiltin, *skills[0].Source)
 }
 
+// TestListSkillsDisplayNameSeparateFromID verifies a builtin skill whose
+// frontmatter carries a proper English display name surfaces with Id=slug and
+// Name=display, is still detected as a system skill (keyed on the slug), and
+// DELETE is rejected with 403. This is the Part B id/name-separation contract.
+func TestListSkillsDisplayNameSeparateFromID(t *testing.T) {
+	builtinDir := t.TempDir()
+	// Directory slug is "daily-briefing"; frontmatter name is the display name.
+	seedSkill(t, builtinDir, "daily-briefing",
+		"name: Daily Briefing\ndescription: Summarize the day for the operator.\nversion: 1.2.3",
+		"# Daily Briefing\n\nProduce a concise daily briefing.")
+
+	api := newTestRestAPIWithSkillsDirs(t, builtinDir)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/skills", nil)
+	w := httptest.NewRecorder()
+	api.HandleSkills(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var listed []gen.Skill
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listed))
+	require.Len(t, listed, 1)
+
+	s := listed[0]
+	assert.Equal(t, "daily-briefing", s.Id, "Id must be the slug")
+	assert.Equal(t, "Daily Briefing", s.Name, "Name must be the display name")
+	assert.True(t, s.Verified, "embedded default must be verified")
+	require.NotNil(t, s.Source)
+	assert.Equal(t, gen.SkillSourceBuiltin, *s.Source, "must surface as builtin")
+
+	// System detection + delete guard are keyed on the slug (Id), not the
+	// display name — DefaultSkillNames returns slugs.
+	assert.Equal(t, "builtin", api.skillSource("daily-briefing"))
+
+	// DELETE by slug must be rejected with 403.
+	rd := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/daily-briefing", nil)
+	wd := httptest.NewRecorder()
+	api.HandleSkills(wd, rd)
+	assert.Equal(t, http.StatusForbidden, wd.Code, "body: %s", wd.Body.String())
+	assert.Contains(t, wd.Body.String(), "built-in skills cannot be removed")
+}
+
 // TestDeleteBuiltinSkillRejected verifies DELETE of a builtin skill returns 403.
 func TestDeleteBuiltinSkillRejected(t *testing.T) {
 	builtinDir := t.TempDir()

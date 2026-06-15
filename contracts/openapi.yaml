@@ -387,6 +387,8 @@ components:
       $ref: ./components/schemas/AppStatePatchRequest.yaml
     SkillInstallRequest:
       $ref: ./components/schemas/SkillInstallRequest.yaml
+    SkillSearchResult:
+      $ref: ./components/schemas/SkillSearchResult.yaml
     SseChatRequest:
       $ref: ./components/schemas/SseChatRequest.yaml
     ToolApprovalActionRequest:
@@ -538,6 +540,12 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     500InternalServerError:
       description: Internal server error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    502BadGateway:
+      description: "Bad gateway \u2014 an upstream dependency (e.g. a skill registry) is unreachable or returned an error."
       content:
         application/json:
           schema:
@@ -3390,13 +3398,61 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /skills/search:
+    get:
+      operationId: searchSkills
+      summary: Search the skill marketplace
+      description: >
+        Searches configured skill registries (e.g. ClawHub) for skills matching
+        the query. Returns an array of marketplace results (not installed skills).
+        Install a result by its slug via POST /skills/install.
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: q
+        in: query
+        required: true
+        description: Search query. Must be non-empty.
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+        example: "web search"
+      - name: limit
+        in: query
+        required: false
+        description: Maximum number of results to return (default 20, capped at 50).
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 20
+        example: 20
+      responses:
+        '200':
+          description: Array of skill marketplace search results (may be empty).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillSearchResult'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '502':
+          $ref: '#/components/responses/502BadGateway'
   /skills/install:
     post:
       operationId: installSkill
       summary: Install a skill from the ClawHub registry
       description: >
-        Installs a skill by name from the ClawHub registry. Currently returns
-        501 Not Implemented while the registry integration is in progress.
+        Installs a skill by its slug from the ClawHub registry. The slug is the
+        identifier returned in a SkillSearchResult. An optional version pins the
+        installed version; when omitted the latest version is installed.
       tags:
       - Skills
       security:
@@ -3418,12 +3474,10 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
-        '501':
-          description: Not yet implemented.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '502':
+          $ref: '#/components/responses/502BadGateway'
   /chat:
     post:
       operationId: postChat

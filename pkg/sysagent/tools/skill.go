@@ -238,6 +238,9 @@ func (t *SkillListTool) Execute(_ context.Context, _ map[string]any) *tools.Tool
 	skillMaps := make([]map[string]any, 0, len(infos))
 	for _, info := range infos {
 		skillMaps = append(skillMaps, map[string]any{
+			// id is the stable slug used to read/activate the skill; name is the
+			// human-readable display name (may differ, e.g. "Daily Briefing").
+			"id":          info.ID,
 			"name":        info.Name,
 			"path":        info.Path,
 			"source":      info.Source,

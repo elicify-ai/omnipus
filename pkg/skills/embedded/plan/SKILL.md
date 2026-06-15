@@ -1,5 +1,5 @@
 ---
-name: plan
+name: Plan
 description: Break a complex or multi-step goal into an ordered, trackable plan before acting. Use when a request has several steps, dependencies, or unknowns, or when the user asks you to plan, scope, or sequence work.
 context: global
 ---
