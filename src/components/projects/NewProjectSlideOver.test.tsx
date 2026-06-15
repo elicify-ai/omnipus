@@ -180,6 +180,39 @@ describe('NewProjectSlideOver — create flow', () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false)
   })
 
+  it('excludes workers from the core-team agent picker; lists base agents', async () => {
+    // BDD: Given the agents list contains a worker (type:'worker'),
+    // When the user opens the core-team "Add agent" picker,
+    // Then the worker is NOT offered as a selectable option,
+    // And base agents ARE offered.
+    // The concept treats workers as non-roster, delegation-only labour, so they
+    // must never seed a workspace core team (which seeds the assignee pickers).
+    vi.mocked(fetchAgents).mockResolvedValue([
+      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { id: 'jim', name: 'Jim', type: 'core', default: false },
+      { id: 'builder', name: 'Builder Worker', type: 'worker', default: false },
+    ] as never)
+    // jsdom lacks scrollIntoView; Radix Select calls it when opening the listbox.
+    Element.prototype.scrollIntoView = vi.fn()
+
+    renderSlideOver()
+
+    // Wait for the populated picker to render (placeholder appears once agents load).
+    const trigger = await screen.findByText('Add agent to core team')
+    fireEvent.click(trigger)
+
+    await waitFor(() => {
+      const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+        (el) => el.textContent ?? '',
+      )
+      expect(options.some((t) => t.includes('Mia'))).toBe(true)
+      expect(options.some((t) => t.includes('Jim'))).toBe(true)
+      expect(options.some((t) => t.includes('Builder Worker'))).toBe(false)
+    })
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
   it('Cancel button closes the slide-over', async () => {
     // BDD: Given the slide-over is open,
     // When the user clicks the Cancel button,

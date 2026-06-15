@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import {
   fetchAgents,
+  isWorker,
   fetchSubtasks,
   fetchMilestones,
   fetchWorkspaces,
@@ -337,7 +338,9 @@ function GTDTaskDetailPanel({ task, onClose }: { task: BoardTask | null; onClose
           triggerClassName="h-8 text-xs"
           items={[
             { value: '__none__', label: 'Unassigned', className: 'text-xs' },
-            ...agents.map((a) => ({ value: a.id, label: a.name, className: 'text-xs' })),
+            ...agents
+              .filter((a) => !isWorker(a))
+              .map((a) => ({ value: a.id, label: a.name, className: 'text-xs' })),
           ]}
         />
       </Field>
@@ -592,7 +595,9 @@ function WorkflowTaskDetailPanel({
                 triggerClassName="h-8 text-xs"
                 items={[
                   { value: '__none__', label: 'Unassigned', className: 'text-xs' },
-                  ...agents.map((a) => ({ value: a.id, label: a.name, className: 'text-xs' })),
+                  ...agents
+                    .filter((a) => !isWorker(a))
+                    .map((a) => ({ value: a.id, label: a.name, className: 'text-xs' })),
                 ]}
               />
             </Field>

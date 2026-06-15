@@ -22,6 +22,7 @@ import { SmartSelect } from '@/components/ui/smart-select'
 import {
   createBoardTask,
   fetchAgents,
+  isWorker,
   fetchMilestones,
   boardTasksQueryKeys,
   workspacesQueryKeys,
@@ -252,7 +253,9 @@ export function CreateTaskSlideOver({
               triggerClassName="h-9 text-sm"
               items={[
                 { value: '__none__', label: 'Unassigned', className: 'text-xs' },
-                ...agents.map((a) => ({ value: a.id, label: a.name, className: 'text-xs' })),
+                ...agents
+                  .filter((a) => !isWorker(a))
+                  .map((a) => ({ value: a.id, label: a.name, className: 'text-xs' })),
               ]}
             />
           </div>

@@ -265,6 +265,45 @@ describe('CreateTaskSlideOver — priority defaults', () => {
   })
 })
 
+// Workers (type:'worker') are delegation-only labour — never a DIRECT task
+// runner. Assigning one as a task's agent_id would make it run the task via
+// processTaskDirect, which is forbidden. The assignee picker must exclude them.
+describe('CreateTaskSlideOver — workers excluded from the agent assignee picker', () => {
+  const agentsWithWorker = [
+    { id: 'mia', name: 'Mia', type: 'core', default: false },
+    { id: 'jim', name: 'Jim', type: 'core', default: false },
+    { id: 'builder', name: 'Builder Worker', type: 'worker', default: false },
+  ]
+
+  it('does not offer a worker as an assignee option; lists base agents', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue(agentsWithWorker as never)
+    // jsdom lacks scrollIntoView; Radix Select calls it when opening the listbox.
+    Element.prototype.scrollIntoView = vi.fn()
+
+    renderSlideOver()
+
+    // Locate the Agent assignee picker specifically: the "Agent" <Label> and the
+    // SmartSelect (Radix Select) combobox are siblings inside the same field <div>.
+    // (Other comboboxes — Priority, Milestone — must not be targeted.)
+    const agentLabel = await screen.findByText('Agent')
+    const fieldRoot = agentLabel.parentElement as HTMLElement
+    const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
+    expect(agentTrigger).toBeTruthy()
+    fireEvent.click(agentTrigger)
+
+    await waitFor(() => {
+      const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+        (el) => el.textContent ?? '',
+      )
+      expect(options.some((t) => t.includes('Mia'))).toBe(true)
+      expect(options.some((t) => t.includes('Jim'))).toBe(true)
+      expect(options.some((t) => t.includes('Builder Worker'))).toBe(false)
+    })
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+})
+
 describe('CreateTaskSlideOver — Cancel closes the slide-over', () => {
   it('clicking Cancel calls onOpenChange(false) and makes no API call', async () => {
     // BDD: Given the slide-over is open,

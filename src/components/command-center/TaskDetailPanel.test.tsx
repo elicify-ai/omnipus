@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, act } from '@testing-library/react'
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TaskDetailPanel } from './TaskDetailPanel'
 import type { Task } from '@/lib/api'
@@ -259,6 +259,69 @@ describe('TaskDetailPanel — taskMode gtd: renders priority selector', () => {
     renderGtdPanel(p4Task)
     // P4 task should show P4 priority label
     expect(await screen.findByText(/P4/i)).toBeInTheDocument()
+  })
+})
+
+// Workers (type:'worker') are delegation-only labour — never a DIRECT task
+// runner. Assigning one as a task's agent_id routes it through processTaskDirect,
+// which is forbidden. Both the GTD and the workflow detail-panel assignee pickers
+// must exclude workers while still offering base agents.
+//
+// Helper: open the SmartSelect (Radix Select) inside the "Agent" Field and read
+// the listbox option labels. With 2 base agents + 1 worker + "Unassigned" the
+// SmartSelect stays under its searchable threshold, so it is a Radix Select whose
+// trigger has role="combobox" and whose items have role="option".
+async function assertAgentPickerExcludesWorker(): Promise<void> {
+  // The "Agent" field label is a <p>; the picker trigger is its sibling combobox.
+  const agentLabel = await screen.findByText('Agent')
+  const fieldRoot = agentLabel.parentElement as HTMLElement
+  const agentTrigger = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
+  expect(agentTrigger).toBeTruthy()
+  fireEvent.click(agentTrigger)
+
+  // The listbox opens immediately with the "Unassigned" sentinel; the async
+  // agents query then populates the base-agent options. Retry until the loaded
+  // base agents (Mia, Jim) appear — and assert the worker is never among them.
+  await waitFor(() => {
+    const options = Array.from(document.querySelectorAll('[role="option"]')).map(
+      (el) => el.textContent ?? '',
+    )
+    expect(options.some((t) => t.includes('Mia'))).toBe(true)
+    expect(options.some((t) => t.includes('Jim'))).toBe(true)
+    expect(options.some((t) => t.includes('Builder Worker'))).toBe(false)
+  })
+}
+
+const agentsWithWorker = [
+  { id: 'mia', name: 'Mia', type: 'core', default: false },
+  { id: 'jim', name: 'Jim', type: 'core', default: false },
+  { id: 'builder', name: 'Builder Worker', type: 'worker', default: false },
+]
+
+describe('TaskDetailPanel — workers excluded from the assignee picker', () => {
+  beforeEach(() => {
+    // jsdom lacks scrollIntoView; Radix Select calls it when opening the listbox.
+    Element.prototype.scrollIntoView = vi.fn()
+  })
+
+  it('GTD mode: does not offer a worker as an assignee; lists base agents', async () => {
+    const { fetchAgents } = await import('@/lib/api')
+    vi.mocked(fetchAgents).mockResolvedValue(agentsWithWorker as never)
+
+    renderGtdPanel(boardTaskWithPrompt)
+    await assertAgentPickerExcludesWorker()
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+  })
+
+  it('workflow mode: does not offer a worker as an assignee; lists base agents', async () => {
+    const { fetchAgents } = await import('@/lib/api')
+    vi.mocked(fetchAgents).mockResolvedValue(agentsWithWorker as never)
+
+    renderPanel(taskWithSession)
+    await assertAgentPickerExcludesWorker()
+
+    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
   })
 })
 

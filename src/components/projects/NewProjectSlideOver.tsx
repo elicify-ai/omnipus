@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { X } from '@phosphor-icons/react'
-import { createWorkspace, fetchAgents, isApiError, workspacesQueryKeys } from '@/lib/api'
+import { createWorkspace, fetchAgents, isWorker, isApiError, workspacesQueryKeys } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
 interface NewProjectSlideOverProps {
@@ -252,6 +252,7 @@ export function NewProjectSlideOver({ open, onOpenChange }: NewProjectSlideOverP
                 </SelectTrigger>
                 <SelectContent>
                   {agents
+                    .filter((a) => !isWorker(a))
                     .filter((a) => !form.core_team.includes(a.id))
                     .map((agent) => (
                       <SelectItem key={agent.id} value={agent.id}>
