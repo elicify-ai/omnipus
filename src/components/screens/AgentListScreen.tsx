@@ -88,8 +88,10 @@ export function AgentListScreen() {
         </div>
       ) : (
         <div className="space-y-8">
-          {/* Base agents — chat colleagues (type !== 'worker'). */}
-          {baseAgents.length > 0 && (
+          {/* Base agents — chat colleagues (type !== 'worker'). Header + New
+              button are always rendered so the affordance is reachable on a
+              fresh install (when no agents exist yet). Empty section renders
+              a brief empty-state message + the same New button. */}
           <section data-testid="base-agents-section">
             <div className="flex items-start justify-between gap-3 mb-3">
               <div>
@@ -110,46 +112,73 @@ export function AgentListScreen() {
                 <Plus size={12} weight="bold" /> New agent
               </Button>
             </div>
-            <div
-              className={`grid gap-4 ${
-                baseAgents.length < 4
-                  ? 'grid-cols-1'
-                  : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
-              }`}
-            >
-              {baseAgents.map((agent) => (
-                <AgentCard
-                  key={agent.id}
-                  agent={agent}
-                  onSetDefault={() => doSetDefault(agent.id)}
-                />
-              ))}
-            </div>
-          </section>
-          )}
-
-          {/* Sub-agent workers — delegation-only labour (type === 'worker'). */}
-          {workerAgents.length > 0 && (
-            <section data-testid="worker-agents-section">
-              <div className="flex items-start justify-between gap-3 mb-3">
-                <div>
-                  <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
-                    Sub-agent workers
-                  </h2>
-                  <p className="text-xs text-[var(--color-muted)] mt-0.5">
-                    Delegation-only labour agents — invoked by other agents, not chat targets.
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => openCreateAgentModal('worker')}
-                  className="gap-1.5 shrink-0"
-                  data-testid="new-worker-button"
-                >
-                  <Plus size={12} weight="bold" /> New worker
-                </Button>
+            {baseAgents.length === 0 ? (
+              <div
+                className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-5 text-center"
+                data-testid="base-agents-empty"
+              >
+                <p className="text-xs text-[var(--color-muted)]">
+                  No base agents yet.
+                </p>
+                <p className="text-[11px] text-[var(--color-muted)]/70 mt-1">
+                  Create your first chat colleague to get started.
+                </p>
               </div>
+            ) : (
+              <div
+                className={`grid gap-4 ${
+                  baseAgents.length < 4
+                    ? 'grid-cols-1'
+                    : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
+                }`}
+              >
+                {baseAgents.map((agent) => (
+                  <AgentCard
+                    key={agent.id}
+                    agent={agent}
+                    onSetDefault={() => doSetDefault(agent.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+
+          {/* Sub-agent workers — delegation-only labour (type === 'worker').
+              Same treatment: header + New button always rendered. Empty
+              section renders a brief empty-state message + the same button. */}
+          <section data-testid="worker-agents-section">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <h2 className="font-headline text-sm font-bold uppercase tracking-wide text-[var(--color-secondary)]">
+                  Sub-agent workers
+                </h2>
+                <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                  Delegation-only labour agents — invoked by other agents, not chat targets.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => openCreateAgentModal('worker')}
+                className="gap-1.5 shrink-0"
+                data-testid="new-worker-button"
+              >
+                <Plus size={12} weight="bold" /> New worker
+              </Button>
+            </div>
+            {workerAgents.length === 0 ? (
+              <div
+                className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-5 text-center"
+                data-testid="worker-agents-empty"
+              >
+                <p className="text-xs text-[var(--color-muted)]">
+                  No sub-agent workers yet.
+                </p>
+                <p className="text-[11px] text-[var(--color-muted)]/70 mt-1">
+                  Create a worker to delegate labour to a third-party runtime.
+                </p>
+              </div>
+            ) : (
               <div
                 className={`grid gap-4 ${
                   workerAgents.length < 4
@@ -161,8 +190,8 @@ export function AgentListScreen() {
                   <WorkerCard key={agent.id} agent={agent} />
                 ))}
               </div>
-            </section>
-          )}
+            )}
+          </section>
         </div>
       )}
 

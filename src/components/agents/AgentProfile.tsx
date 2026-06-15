@@ -15,8 +15,6 @@ import {
   X,
   CaretDown,
   CaretUp,
-  Scroll,
-  NotePencil,
   UploadSimple,
   Info,
   Plus,
@@ -38,6 +36,7 @@ import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { SandboxProfileSelector } from './SandboxProfileSelector'
 import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
 import { ExecutorSelector } from './ExecutorSelector'
+import { BehaviorFields } from './AgentFormFields'
 import { SchedulesList } from '@/components/command-center/SchedulesList'
 import { ScheduleFormSheet } from '@/components/command-center/ScheduleFormSheet'
 import {
@@ -806,107 +805,26 @@ export function AgentProfile({ agentId }: AgentProfileProps) {
             </AccordionTrigger>
             <AccordionContent>
               <div className="px-4 space-y-5">
-                {isWorkerAgent ? (
+                {/* Shared "Behavior" block: SOUL/task-prompt + Additional Instructions.
+                    Delegates to the same component used by the create modal so
+                    the two surfaces cannot drift. The profile renders an Upload
+                    button per field; the modal does not (it has no file-upload
+                    affordance for soul/instructions). */}
+                <BehaviorFields
+                  isWorker={isWorkerAgent}
+                  soul={soul}
+                  setSoul={(v) => { markDirty(); setSoul(v) }}
+                  instructions={instructions}
+                  setInstructions={(v) => { markDirty(); setInstructions(v) }}
+                  renderUploadButton={(_, onUpload) => <UploadButton onUpload={onUpload} />}
+                />
+
+                {/* #335 (US-D3): relabeled HEARTBEAT.md → "Background tasks / periodic instructions".
+                    Base-only. Workers never run on a schedule (delegation-only
+                    labour agents), so this whole sub-block is omitted. */}
+                {!isWorkerAgent && (
                   <>
-                    {/* Worker: relabeled, optional task prompt.
-                        No "personality" framing — workers are labour agents
-                        pointed at work, not colleagues. Empty is valid. */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Scroll size={13} className="text-[var(--color-accent)]" />
-                        <p className="text-xs font-medium text-[var(--color-secondary)]">
-                          Task prompt <span className="text-[var(--color-muted)] font-normal">(optional)</span>
-                        </p>
-                      </div>
-                      <p className="text-xs text-[var(--color-muted)]">
-                        Optional system prompt for the worker&apos;s runner. Composed
-                        with any caller-supplied task prompt at run time. Stored as{' '}
-                        <span className="font-mono text-[11px]">SOUL.md</span>. Leave
-                        empty to use the executor&apos;s default behaviour.
-                      </p>
-                      <Textarea
-                        data-testid="worker-task-prompt"
-                        value={soul}
-                        onChange={(e) => { markDirty(); setSoul(e.target.value) }}
-                        placeholder="# Task prompt (optional)&#10;&#10;Define how this worker should approach its delegated task..."
-                        rows={6}
-                        className="text-xs font-mono resize-none"
-                        // Workers: explicitly NOT required. Empty is valid.
-                        required={false}
-                        aria-required={false}
-                      />
-                      <UploadButton onUpload={setSoul} />
-                    </div>
-
                     <Separator />
-
-                    {/* Additional Instructions (worker) */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <NotePencil size={13} className="text-[var(--color-accent)]" />
-                        <p className="text-xs font-medium text-[var(--color-secondary)]">Additional Instructions</p>
-                      </div>
-                      <p className="text-xs text-[var(--color-muted)]">
-                        Extra instructions appended to the worker&apos;s context.
-                      </p>
-                      <Textarea
-                        value={instructions}
-                        onChange={(e) => { markDirty(); setInstructions(e.target.value) }}
-                        placeholder="Add specific instructions, constraints, or domain knowledge..."
-                        rows={4}
-                        className="text-xs font-mono resize-none"
-                      />
-                      <UploadButton onUpload={setInstructions} />
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    {/* #335 (US-D3): relabeled SOUL.md → "Personality & instructions" */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Scroll size={13} className="text-[var(--color-accent)]" />
-                        <p className="text-xs font-medium text-[var(--color-secondary)]">Personality &amp; instructions</p>
-                      </div>
-                      <p className="text-xs text-[var(--color-muted)]">
-                        Defines this agent's character, expertise, and behavioral guidelines.
-                        Stored as <span className="font-mono text-[11px]">SOUL.md</span> in the agent workspace.
-                      </p>
-                      <Textarea
-                        value={soul}
-                        onChange={(e) => { markDirty(); setSoul(e.target.value) }}
-                        placeholder={"# Soul\n\nDefine this agent's personality, expertise, and behavioral guidelines..."}
-                        rows={6}
-                        className="text-xs font-mono resize-none"
-                      />
-                      <UploadButton onUpload={setSoul} />
-                    </div>
-
-                    <Separator />
-
-                    {/* Additional Instructions */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <NotePencil size={13} className="text-[var(--color-accent)]" />
-                        <p className="text-xs font-medium text-[var(--color-secondary)]">Additional Instructions</p>
-                      </div>
-                      <p className="text-xs text-[var(--color-muted)]">
-                        Extra instructions appended to the agent's context.
-                      </p>
-                      <Textarea
-                        value={instructions}
-                        onChange={(e) => { markDirty(); setInstructions(e.target.value) }}
-                        placeholder="Add specific instructions, constraints, or domain knowledge..."
-                        rows={4}
-                        className="text-xs font-mono resize-none"
-                      />
-                      <UploadButton onUpload={setInstructions} />
-                    </div>
-
-                    <Separator />
-
-                    {/* #335 (US-D3): relabeled HEARTBEAT.md → "Background tasks / periodic instructions".
-                        Base-only. Workers never run on a schedule (delegation-only
-                        labour agents), so this whole sub-block is omitted. */}
                     <div className="space-y-2">
                       <p className="text-xs font-medium text-[var(--color-secondary)]">Background tasks / periodic instructions</p>
                       <p className="text-xs text-[var(--color-muted)]">

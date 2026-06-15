@@ -20,10 +20,17 @@ export interface BehaviorFieldsProps {
   isWorker: boolean
   /** The current SOUL.md content. For workers this is the task prompt. */
   soul: string
-  onSoulChange: (next: string) => void
+  /** Soul setter. Either `onSoulChange` or `setSoul` may be supplied. */
+  onSoulChange?: (next: string) => void
+  /** Soul setter alias — accepts the conventional `setSoul` name from
+   *  consumers that already use that name in their state hooks. */
+  setSoul?: (next: string) => void
   /** The current AGENT.md instructions content. Optional in both tiers. */
   instructions: string
-  onInstructionsChange: (next: string) => void
+  /** Instructions setter. Either `onInstructionsChange` or `setInstructions` may be supplied. */
+  onInstructionsChange?: (next: string) => void
+  /** Instructions setter alias — accepts the conventional `setInstructions` name. */
+  setInstructions?: (next: string) => void
   /**
    * Optional upload button — the profile renders one, the modal does not
    * (the modal has no file upload affordance for soul/instructions).
@@ -42,10 +49,14 @@ export function BehaviorFields({
   isWorker,
   soul,
   onSoulChange,
+  setSoul,
   instructions,
   onInstructionsChange,
+  setInstructions,
   renderUploadButton,
 }: BehaviorFieldsProps) {
+  const handleSoul = onSoulChange ?? setSoul
+  const handleInstructions = onInstructionsChange ?? setInstructions
   return (
     <div className="space-y-5">
       {/* SOUL.md / Task prompt — relabelled for workers, optional in both tiers.
@@ -83,7 +94,7 @@ export function BehaviorFields({
         <Textarea
           data-testid={isWorker ? 'worker-task-prompt' : 'agent-soul'}
           value={soul}
-          onChange={(e) => onSoulChange(e.target.value)}
+          onChange={(e) => handleSoul?.(e.target.value)}
           placeholder={
             isWorker
               ? "# Task prompt (optional)\n\nDefine how this worker should approach its delegated task..."
@@ -95,7 +106,7 @@ export function BehaviorFields({
           required={false}
           aria-required={false}
         />
-        {renderUploadButton?.('soul', onSoulChange)}
+        {renderUploadButton?.('soul', (v) => handleSoul?.(v))}
       </div>
 
       <Separator />
@@ -113,12 +124,12 @@ export function BehaviorFields({
         </p>
         <Textarea
           value={instructions}
-          onChange={(e) => onInstructionsChange(e.target.value)}
+          onChange={(e) => handleInstructions?.(e.target.value)}
           placeholder="Add specific instructions, constraints, or domain knowledge..."
           rows={4}
           className="text-xs font-mono resize-none"
         />
-        {renderUploadButton?.('instructions', onInstructionsChange)}
+        {renderUploadButton?.('instructions', (v) => handleInstructions?.(v))}
       </div>
     </div>
   )

@@ -104,7 +104,10 @@ describe('AgentListScreen — base/worker partition', () => {
     vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
     renderScreen()
     await screen.findByRole('heading', { name: /^base agents$/i })
-    expect(screen.queryByRole('heading', { name: /^sub-agent workers$/i })).not.toBeInTheDocument()
+    // Both section headers are now always rendered so the "New…" affordance
+    // is reachable on a fresh install. The worker section is still in the
+    // DOM (header + empty-state), not omitted.
+    expect(screen.queryByRole('heading', { name: /^sub-agent workers$/i })).toBeInTheDocument()
   })
 
   it('shows the workers section subtitle explaining delegation-only role', async () => {
@@ -187,5 +190,72 @@ describe('AgentListScreen — per-section New buttons', () => {
     expect(newAgentButtons).toHaveLength(1)
     // And no New worker button when there are no workers.
     expect(within(baseSection).queryByRole('button', { name: /new worker/i })).not.toBeInTheDocument()
+  })
+})
+
+// Per-section empty-state affordances (regression: a fresh install
+// historically hid the worker section entirely, so "New worker" was
+// unreachable). The fix renders both section headers (with their "+ New …"
+// buttons) on every render, even when the section body is empty.
+describe('AgentListScreen — empty-state per-section buttons', () => {
+  beforeEach(() => {
+    act(() => { useUiStore.setState({ createAgentModalOpen: false, createAgentModalType: 'custom' }) })
+  })
+
+  it('shows the worker section + New worker button even with no workers (fresh install)', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    renderScreen()
+    const workerSection = await screen.findByTestId('worker-agents-section')
+    // The New worker button lives in the worker section header, always
+    // rendered. This is the regression: previously the entire section was
+    // hidden when workerAgents.length === 0.
+    const newWorkerButton = within(workerSection).getByTestId('new-worker-button')
+    expect(newWorkerButton).toBeInTheDocument()
+    expect(newWorkerButton).toHaveTextContent(/new worker/i)
+  })
+
+  it('shows the base section + New agent button even with no base agents (fresh install)', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([
+      makeAgent({ id: 'w1', name: 'W1', type: 'worker', executor: { kind: 'native' } }),
+    ])
+    renderScreen()
+    const baseSection = await screen.findByTestId('base-agents-section')
+    const newBaseButton = within(baseSection).getByTestId('new-base-agent-button')
+    expect(newBaseButton).toBeInTheDocument()
+    expect(newBaseButton).toHaveTextContent(/new agent/i)
+  })
+
+  it('renders an empty-state message in each empty section', async () => {
+    // The two-tier "fresh install" realistic case: at least one base agent
+    // exists (so the page-level "No agents yet" CTA is bypassed), but
+    // workers are empty. The base section renders its cards, the worker
+    // section renders its empty-state message + New worker button.
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent({ id: 'mia', type: 'core' })])
+    renderScreen()
+    const baseSection = await screen.findByTestId('base-agents-section')
+    const workerSection = await screen.findByTestId('worker-agents-section')
+    // No worker cards → empty-state affordance.
+    expect(within(workerSection).getByTestId('worker-agents-empty')).toBeInTheDocument()
+    // Base section is NOT empty here (mia is present), so no empty-state.
+    expect(within(baseSection).queryByTestId('base-agents-empty')).not.toBeInTheDocument()
+    // Each section still has its New button, even with the worker section empty.
+    expect(within(baseSection).getByTestId('new-base-agent-button')).toBeInTheDocument()
+    expect(within(workerSection).getByTestId('new-worker-button')).toBeInTheDocument()
+  })
+
+  it('renders the base empty-state when only workers exist (inverse fresh install)', async () => {
+    // Inverse of the previous case: at least one worker exists, no base
+    // agents. The base section renders its empty-state message + New agent
+    // button — that button was previously unreachable in this scenario.
+    vi.mocked(fetchAgents).mockResolvedValue([
+      makeAgent({ id: 'w1', name: 'W1', type: 'worker', executor: { kind: 'native' } }),
+    ])
+    renderScreen()
+    const baseSection = await screen.findByTestId('base-agents-section')
+    const workerSection = await screen.findByTestId('worker-agents-section')
+    expect(within(baseSection).getByTestId('base-agents-empty')).toBeInTheDocument()
+    expect(within(workerSection).queryByTestId('worker-agents-empty')).not.toBeInTheDocument()
+    expect(within(baseSection).getByTestId('new-base-agent-button')).toBeInTheDocument()
+    expect(within(workerSection).getByTestId('new-worker-button')).toBeInTheDocument()
   })
 })

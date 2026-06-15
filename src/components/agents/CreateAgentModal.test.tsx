@@ -27,7 +27,7 @@ function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
 }
 
-function renderModal(props: { open?: boolean; onClose?: () => void; onCreate?: (data: any) => Promise<void> } = {}) {
+function renderModal(props: { open?: boolean; onClose?: () => void; onCreate?: (data: any) => Promise<void>; initialType?: 'custom' | 'worker' } = {}) {
   return render(
     <QueryClientProvider client={makeClient()}>
       <CreateAgentModal {...props} />
@@ -71,6 +71,36 @@ describe('CreateAgentModal — rendering (test #14)', () => {
     renderModal()
     expect(screen.getByTestId('create-worker-modal-title')).toBeInTheDocument()
     expect(screen.getByText(/configure a delegation-only labour agent/i)).toBeInTheDocument()
+  })
+
+  it('shows the worker form shape when the initialType prop is "worker" (prop-only path)', () => {
+    // Prop-only path (open + initialType) lets a parent render the modal in
+    // worker mode without touching the Zustand store. The modal must still
+    // resolve to the worker form shape — title, task-prompt field, and the
+    // "Create worker" submit label.
+    renderModal({ open: true, onClose: vi.fn(), initialType: 'worker' })
+    expect(screen.getByTestId('create-worker-modal-title')).toBeInTheDocument()
+    expect(screen.getByTestId('create-worker-task-prompt')).toBeInTheDocument()
+    expect(screen.getByTestId('create-agent-submit')).toHaveTextContent(/create worker/i)
+  })
+
+  it('initialType=custom is the prop-only default and renders the custom form', () => {
+    // When the prop path is taken without initialType (or with the explicit
+    // 'custom' value), the modal falls back to the custom form shape. The
+    // title testid differentiates the two tiers without an OR over strings.
+    renderModal({ open: true, onClose: vi.fn() })
+    expect(screen.getByTestId('create-custom-modal-title')).toBeInTheDocument()
+    // The worker-only task-prompt field must NOT be in the DOM for custom.
+    expect(screen.queryByTestId('create-worker-task-prompt')).toBeNull()
+  })
+
+  it('initialType=worker wins over the store value when the prop path is taken', () => {
+    // Defensive: even if the store accidentally says 'custom', the
+    // initialType prop must still drive the modal. The prop is the source
+    // of truth on the prop-only path.
+    act(() => { useUiStore.setState({ createAgentModalOpen: true, createAgentModalType: 'custom' }) })
+    renderModal({ open: true, onClose: vi.fn(), initialType: 'worker' })
+    expect(screen.getByTestId('create-worker-modal-title')).toBeInTheDocument()
   })
 
   it('does not render dialog content when closed', () => {

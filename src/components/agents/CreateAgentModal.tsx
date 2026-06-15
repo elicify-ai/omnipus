@@ -101,17 +101,24 @@ interface CreateAgentModalProps {
   onClose?: () => void
   /** Override create handler (optional — defaults to REST API) */
   onCreate?: (data: AgentCreateRequest) => Promise<void>
+  /**
+   * Initial tier preset for the modal. When `open` is supplied, this drives
+   * the modal type instead of the Zustand store. Defaults to 'custom' so the
+   * prop-only path stays simple for tests that don't care about tier.
+   */
+  initialType?: 'custom' | 'worker'
 }
 
-export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreate: onCreateProp }: CreateAgentModalProps) {
+export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreate: onCreateProp, initialType }: CreateAgentModalProps) {
   const { createAgentModalOpen, createAgentModalType, closeCreateAgentModal } = useUiStore()
   const queryClient = useQueryClient()
 
   const isOpen = openProp !== undefined ? openProp : createAgentModalOpen
   const handleClose = onCloseProp ?? closeCreateAgentModal
-  // Type-preset: 'custom' (default) or 'worker'. When invoked via a prop
-  // override the modal stays in 'custom' mode (tests pin the prop-only path).
-  const modalType = openProp !== undefined ? 'custom' : createAgentModalType
+  // Type-preset: 'custom' (default) or 'worker'. When the prop-only path is
+  // taken (open supplied), the tier comes from `initialType` (defaulting to
+  // 'custom'). Otherwise the Zustand store drives the tier.
+  const modalType = openProp !== undefined ? (initialType ?? 'custom') : createAgentModalType
   const isWorkerModal = modalType === 'worker'
   const formCopy = getCreateAgentFormCopy(modalType)
 
