@@ -1765,6 +1765,36 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
     vi.resetModules()
   })
 
+  describe('fetchSkills (tolerant installed-skills list)', () => {
+    it('keeps valid skills and drops a malformed one (one bad skill must not hide the whole list)', async () => {
+      const payload = [
+        { id: 'good', name: 'Good', version: '2.1.0', verified: false, status: 'active', source: 'global' },
+        // Structurally invalid: missing required version/verified/status.
+        { id: 'bad', name: 'Bad' },
+      ]
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
+
+      const { fetchSkills } = await import('./api')
+      const result = await fetchSkills()
+
+      // Must NOT throw; the valid skill survives, the bad one is dropped.
+      expect(result.map((s) => s.id)).toEqual(['good'])
+    })
+
+    it('accepts a non-semver version like "1.0" (ClawHub versions are arbitrary)', async () => {
+      const payload = [
+        { id: 'cw', name: 'ClawHub Skill', version: '1.0', verified: false, status: 'active', source: 'global' },
+      ]
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
+
+      const { fetchSkills } = await import('./api')
+      const result = await fetchSkills()
+
+      expect(result).toHaveLength(1)
+      expect(result[0].version).toBe('1.0')
+    })
+  })
+
   describe('searchSkills', () => {
     it('GET /api/v1/skills/search — URL-encodes q and sends limit', async () => {
       const payload = [
