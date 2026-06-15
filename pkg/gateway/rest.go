@@ -1420,6 +1420,18 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Worker property-model correction: a worker must declare an executor.
+	// Workers run via delegation, not native — dispatch needs a target runtime
+	// (native, external-cli, or remote-a2a). The pre-existing FE rule was not
+	// mirrored here, so a worker with no executor would persist as a draft that
+	// the delegation path could not actually run. Reject at the write gate with
+	// the same kind of 400 we use for other property-model mismatches, and let
+	// any kind through (kind validation is the executor block's job below).
+	if createType == config.AgentTypeWorker && req.Executor == nil {
+		jsonErr(w, http.StatusBadRequest,
+			"a worker must declare an executor (workers run via delegation, not native)")
+		return
+	}
 	// Native-only executor on a non-worker (worker property-model correction):
 	// a freshly-created non-worker (type=custom) must run native, so reject a
 	// non-native executor on a custom create. A worker is the only legitimate
@@ -1612,6 +1624,33 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
 		return
 	}
+	// Persist the create-time soul to SOUL.md. createAgent previously
+	// write-dropped req.Soul: the contract accepted it, the FE sent it, but
+	// nothing ever landed on disk — and a "draft" agent created without a
+	// soul stayed in the draft state forever on the soul-empty path. Write
+	// it here, mirroring the workspace-resolution + WriteFileAtomic pattern
+	// used by updateAgent. An empty (but non-nil) req.Soul is a legitimate
+	// "soul optional" create (workers may be created with no soul and edited
+	// later), so the field-nonzero check is intentional and matches the
+	// locked concept. Trimming is fine; this overwrites any prior SOUL.md
+	// (create is the only write gate at this point, so a re-run is
+	// idempotent against itself).
+	var createSoulContent string
+	if req.Soul != nil {
+		createSoulContent = strings.TrimSpace(*req.Soul)
+		workspace, wsErr := agentWorkspacePath(a.agentLoop.GetConfig(), ac.ID, ac.Workspace, a.homePath)
+		if wsErr != nil {
+			slog.Error("rest: agentWorkspacePath for create", "agent_id", ac.ID, "error", wsErr)
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not resolve workspace: %v", wsErr))
+			return
+		}
+		soulPath := filepath.Join(workspace, "SOUL.md")
+		if err := fileutil.WriteFileAtomic(soulPath, []byte(createSoulContent), 0o600); err != nil {
+			slog.Error("rest: write SOUL.md for new agent", "agent_id", ac.ID, "error", err)
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write SOUL.md: %v", err))
+			return
+		}
+	}
 	// Capture the default model name BEFORE triggering a reload to avoid a race
 	// between TriggerReload (which may swap the live config) and the read below.
 	defaultModelName := a.agentLoop.GetConfig().Agents.Defaults.ModelName
@@ -1650,7 +1689,12 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	ag.Type = gen.AgentType(ac.Type)
 	ag.Locked = ac.Locked
 	ag.Model = &model
-	ag.Status = gen.AgentStatusDraft
+	// Echo the just-persisted soul so the FE round-trip works (req.Soul was
+	// write-dropped before this fix; a created agent would come back with
+	// soul="" regardless of what the caller sent). Status is derived from
+	// the soul too: a non-empty soul moves the agent out of "draft".
+	ag.Soul = createSoulContent
+	ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, nil, createSoulContent, ac.Locked))
 	if len(ac.Skills) > 0 {
 		skills := make([]string, len(ac.Skills))
 		copy(skills, ac.Skills)

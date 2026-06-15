@@ -934,21 +934,26 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 
-	// Owner authz (W-6): the caller must be permitted to use the chosen owner.
-	if code, msg := a.authorizeScheduleOwner(user, req.OwnerAgentId); code != 0 {
-		jsonErr(w, code, msg)
-		return
-	}
-
 	// Write-time guard: a worker is not a chat target and never runs on a
 	// schedule cadence — workers execute one delegated task at a time. Reject
 	// creating a schedule whose owner is a worker at the write gate so the
 	// call never lands a runnable job that the fire path would only reject
 	// at execution time. Mirrors the in-flight guard in
-	// RunScheduled and the default/chat guards elsewhere.
+	// RunScheduled and the default/chat guards elsewhere. Fired BEFORE the
+	// owner-authz check so a non-admin who names a worker owner gets the
+	// actionable 400 (the owner-validity problem) rather than a 403 (a
+	// permissions problem) — the operator cannot schedule for this agent
+	// at all, regardless of who owns it, and surfacing that 400 first
+	// short-circuits the leak.
 	if owner := findAgentConfig(a.agentLoop.GetConfig(), req.OwnerAgentId); owner != nil && owner.IsWorker() {
 		jsonErr(w, http.StatusBadRequest,
 			"a worker cannot own a schedule (workers are not chat targets and run only via delegation)")
+		return
+	}
+
+	// Owner authz (W-6): the caller must be permitted to use the chosen owner.
+	if code, msg := a.authorizeScheduleOwner(user, req.OwnerAgentId); code != 0 {
+		jsonErr(w, code, msg)
 		return
 	}
 
@@ -1020,18 +1025,21 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, u
 
 	// Re-authorize when the owner changes (PUT re-authorizes owner if changed).
 	if req.OwnerAgentId != nil && *req.OwnerAgentId != job.AgentID {
-		if code, msg := a.authorizeScheduleOwner(user, *req.OwnerAgentId); code != 0 {
-			jsonErr(w, code, msg)
-			return
-		}
 		// Write-time guard: a worker is not a chat target and never runs on
 		// a schedule cadence — block ownership reassignment to a worker the
 		// same way the create gate does. The fire path also rejects worker
 		// owners at run time; failing here keeps the API consistent and
-		// surfaces the reason to the operator before any persistence.
+		// surfaces the reason to the operator before any persistence. Fired
+		// BEFORE the owner re-authz so a non-admin who targets a worker gets
+		// the actionable 400 (the owner-validity problem) rather than a 403
+		// (a permissions problem).
 		if newOwner := findAgentConfig(a.agentLoop.GetConfig(), *req.OwnerAgentId); newOwner != nil && newOwner.IsWorker() {
 			jsonErr(w, http.StatusBadRequest,
 				"a worker cannot own a schedule (workers are not chat targets and run only via delegation)")
+			return
+		}
+		if code, msg := a.authorizeScheduleOwner(user, *req.OwnerAgentId); code != 0 {
+			jsonErr(w, code, msg)
 			return
 		}
 		job.AgentID = *req.OwnerAgentId
