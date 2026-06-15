@@ -59,6 +59,7 @@
       <li>The seeded general-purpose worker + your custom workers</li>
       <li><b>No heartbeat · no own connection · ephemeral memory · depth-limited · leaner model · not chat targets</b> (test-run button excepted)</li>
       <li>Ephemeral, task-driven; no user-facing persona</li>
+      <li><b>Soul is optional</b> (may be left empty). At invocation the worker's effective prompt = <span class="mono">soul.md</span> (if any) <b>+ the task prompt submitted</b> by the caller — composed the <b>same way for every executor</b> (native · external-cli · future remote-a2a).</li>
       <li>Narrow recall: the current workspace's shared room (+ its own private room)</li>
     </ul></div>
     <div class="card"><h3>🔌 executor</h3><ul class="clean">
@@ -67,6 +68,7 @@
       <li><span class="mono">future: remote-a2a</span> — a remote agent over agent-to-agent</li>
     </ul></div>
   </div>
+  <div class="callout" style="margin-top:14px"><b style="color:var(--gold)">Deferred to v0.2.0 — observable sub-agent sessions.</b> A delegated worker run should be a first-class, inspectable entry in the <b>session history</b>, with delegation lineage (<span class="mono">parent_id · depth · owner</span>) so the call-tree renders — including external-CLI child runs as their own session rather than text merged into the caller's transcript. In <b>v0.1.0</b> a worker run is folded into its caller's session (only <span class="mono">task_create</span> yields a discrete session); first-class sub-agent session visibility + lineage lands in <b>v0.2.0</b>.</div>
 </div></section>
 
 <section><div class="wrap">
