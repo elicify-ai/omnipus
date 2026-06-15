@@ -1530,6 +1530,10 @@ export const SkillSearchResult = z.object({
   registry_name: z.string().optional(),
   owner_handle: z.string().optional(),
 });
+export const SkillMarketplaceStatus = z.object({
+  enabled: z.boolean(),
+  registries: z.array(z.object({ name: z.string(), enabled: z.boolean() })),
+});
 export const SkillInstallRequest = z.object({
   slug: z
     .string()
@@ -4905,8 +4909,29 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 502,
         description: `Bad gateway — an upstream dependency (e.g. a skill registry) is unreachable or returned an error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/skills/marketplace",
+    alias: "getSkillMarketplaceStatus",
+    description: `Reports whether any skill marketplace registry is enabled. The SPA gates its skill-browse UI on this: when enabled is false, search and install-by-slug are unavailable (those endpoints return 409) and the UI offers only &quot;install from file&quot;.
+`,
+    requestFormat: "json",
+    response: SkillMarketplaceStatus,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
     ],
@@ -4940,6 +4965,11 @@ Model lists are fetched live from each provider&#x27;s upstream /models endpoint
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists, or last-admin guard triggered.`,
         schema: ErrorResponse,
       },
       {

@@ -1446,6 +1446,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skills/marketplace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Report skill marketplace availability
+         * @description Reports whether any skill marketplace registry is enabled. The SPA gates its skill-browse UI on this: when enabled is false, search and install-by-slug are unavailable (those endpoints return 409) and the UI offers only "install from file".
+         */
+        get: operations["getSkillMarketplaceStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/skills/install": {
         parameters: {
             query?: never;
@@ -5632,6 +5652,30 @@ export interface components {
             owner_handle?: string;
         };
         /**
+         * SkillMarketplaceStatus
+         * @description Reports whether any skill marketplace registry is enabled, returned by GET /api/v1/skills/marketplace. The SPA gates its skill-browse UI on this: when enabled is false, search/install-by-slug are unavailable (the endpoints return 409) and the UI offers only "install from file". A registry is the ClawHub marketplace or a configured GitHub registry.
+         */
+        SkillMarketplaceStatus: {
+            /**
+             * @description True when at least one skill marketplace registry is enabled (search/install-by-slug available).
+             * @example true
+             */
+            enabled: boolean;
+            /** @description Per-registry enablement, one entry per known registry. */
+            registries: {
+                /**
+                 * @description Registry identifier (e.g. "clawhub", "github").
+                 * @example clawhub
+                 */
+                name: string;
+                /**
+                 * @description Whether this specific registry is enabled.
+                 * @example true
+                 */
+                enabled: boolean;
+            }[];
+        };
+        /**
          * SseChatRequest
          * @description Request body for POST /api/v1/chat (SSE streaming endpoint). Sends a user message to the agent and streams the response via Server-Sent Events.
          */
@@ -9690,7 +9734,29 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            409: components["responses"]["409Conflict"];
             502: components["responses"]["502BadGateway"];
+        };
+    };
+    getSkillMarketplaceStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Skill marketplace status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillMarketplaceStatus"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
         };
     };
     installSkill: {
@@ -9718,6 +9784,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
             502: components["responses"]["502BadGateway"];
         };
     };
@@ -11269,6 +11336,7 @@ export type ProviderUpdateRequest = components["schemas"]["ProviderUpdateRequest
 export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"];
 export type SkillInstallRequest = components["schemas"]["SkillInstallRequest"];
 export type SkillSearchResult = components["schemas"]["SkillSearchResult"];
+export type SkillMarketplaceStatus = components["schemas"]["SkillMarketplaceStatus"];
 export type SseChatRequest = components["schemas"]["SseChatRequest"];
 export type ToolApprovalActionRequest = components["schemas"]["ToolApprovalActionRequest"];
 export type CredentialSetRequest = components["schemas"]["CredentialSetRequest"];

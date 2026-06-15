@@ -2533,6 +2533,8 @@ func (a *restAPI) HandleSkills(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && sub == "":
 		a.listSkills(w)
+	case r.Method == http.MethodGet && sub == "marketplace":
+		a.skillMarketplaceStatus(w)
 	case r.Method == http.MethodGet && sub == "search":
 		a.searchSkills(w, r)
 	case r.Method == http.MethodPost && sub == "install":
@@ -2722,6 +2724,49 @@ func (a *restAPI) validateSkillIDs(ids []string) string {
 	return ""
 }
 
+// marketplaceEnabled reports whether at least one skill marketplace registry is
+// enabled, read live from the current config. When false the search and
+// slug-install endpoints refuse with 409 and the SPA hides its skill-browse UI.
+// A marketplace is available when ClawHub is enabled OR a GitHub registry token
+// is configured. ClawHub is enabled by default, so the default behavior is "on".
+func (a *restAPI) marketplaceEnabled() bool {
+	cfg := a.agentLoop.GetConfig()
+	if cfg == nil {
+		return false
+	}
+	return cfg.Tools.Skills.Registries.ClawHub.Enabled || cfg.Tools.Skills.Github.TokenRef != ""
+}
+
+// skillMarketplaceStatus handles GET /api/v1/skills/marketplace. It reports
+// whether any skill marketplace registry is enabled so the SPA can gate its
+// skill-browse UI (search / install-by-slug) on marketplace availability.
+func (a *restAPI) skillMarketplaceStatus(w http.ResponseWriter) {
+	cfg := a.agentLoop.GetConfig()
+
+	clawhubEnabled := false
+	githubEnabled := false
+	if cfg != nil {
+		clawhubEnabled = cfg.Tools.Skills.Registries.ClawHub.Enabled
+		githubEnabled = cfg.Tools.Skills.Github.TokenRef != ""
+	}
+
+	status := gen.SkillMarketplaceStatus{
+		Enabled: clawhubEnabled || githubEnabled,
+	}
+	status.Registries = append(status.Registries, struct {
+		Enabled bool   `json:"enabled"`
+		Name    string `json:"name"`
+	}{Enabled: clawhubEnabled, Name: "clawhub"})
+	if githubEnabled {
+		status.Registries = append(status.Registries, struct {
+			Enabled bool   `json:"enabled"`
+			Name    string `json:"name"`
+		}{Enabled: true, Name: "github"})
+	}
+
+	jsonOK(w, status)
+}
+
 // searchSkillsDefaultLimit / searchSkillsMaxLimit bound the number of marketplace
 // results returned by GET /api/v1/skills/search.
 const (
@@ -2751,6 +2796,11 @@ func (a *restAPI) searchSkills(w http.ResponseWriter, r *http.Request) {
 	}
 	if limit > searchSkillsMaxLimit {
 		limit = searchSkillsMaxLimit
+	}
+
+	if !a.marketplaceEnabled() {
+		jsonErr(w, http.StatusConflict, "no skill marketplace is enabled")
+		return
 	}
 
 	if a.skillRegistry == nil {
@@ -2817,6 +2867,11 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 	// Path-traversal / identity guard: the slug becomes a directory name.
 	if err := validateEntityID(slug); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid skill slug")
+		return
+	}
+
+	if !a.marketplaceEnabled() {
+		jsonErr(w, http.StatusConflict, "no skill marketplace is enabled")
 		return
 	}
 

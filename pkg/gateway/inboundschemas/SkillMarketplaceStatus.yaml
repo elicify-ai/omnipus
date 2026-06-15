@@ -1,0 +1,37 @@
+title: SkillMarketplaceStatus
+description: >
+  Reports whether any skill marketplace registry is enabled, returned by
+  GET /api/v1/skills/marketplace. The SPA gates its skill-browse UI on this:
+  when enabled is false, search/install-by-slug are unavailable (the endpoints
+  return 409) and the UI offers only "install from file". A registry is the
+  ClawHub marketplace or a configured GitHub registry.
+type: object
+additionalProperties: false
+required:
+  - enabled
+  - registries
+properties:
+  enabled:
+    type: boolean
+    description: >
+      True when at least one skill marketplace registry is enabled
+      (search/install-by-slug available).
+    example: true
+  registries:
+    type: array
+    description: Per-registry enablement, one entry per known registry.
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - enabled
+      properties:
+        name:
+          type: string
+          description: Registry identifier (e.g. "clawhub", "github").
+          example: "clawhub"
+        enabled:
+          type: boolean
+          description: Whether this specific registry is enabled.
+          example: true

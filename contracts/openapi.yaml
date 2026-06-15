@@ -389,6 +389,8 @@ components:
       $ref: ./components/schemas/SkillInstallRequest.yaml
     SkillSearchResult:
       $ref: ./components/schemas/SkillSearchResult.yaml
+    SkillMarketplaceStatus:
+      $ref: ./components/schemas/SkillMarketplaceStatus.yaml
     SseChatRequest:
       $ref: ./components/schemas/SseChatRequest.yaml
     ToolApprovalActionRequest:
@@ -3443,8 +3445,32 @@ paths:
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '409':
+          $ref: '#/components/responses/409Conflict'
         '502':
           $ref: '#/components/responses/502BadGateway'
+  /skills/marketplace:
+    get:
+      operationId: getSkillMarketplaceStatus
+      summary: Report skill marketplace availability
+      description: >
+        Reports whether any skill marketplace registry is enabled. The SPA gates
+        its skill-browse UI on this: when enabled is false, search and
+        install-by-slug are unavailable (those endpoints return 409) and the UI
+        offers only "install from file".
+      tags:
+      - Skills
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Skill marketplace status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillMarketplaceStatus'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
   /skills/install:
     post:
       operationId: installSkill
@@ -3476,6 +3502,8 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          $ref: '#/components/responses/409Conflict'
         '502':
           $ref: '#/components/responses/502BadGateway'
   /chat:

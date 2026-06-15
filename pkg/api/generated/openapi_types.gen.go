@@ -6774,6 +6774,21 @@ type SkillInstallRequest struct {
 	Version *string `json:"version,omitempty"`
 }
 
+// SkillMarketplaceStatus Reports whether any skill marketplace registry is enabled, returned by GET /api/v1/skills/marketplace. The SPA gates its skill-browse UI on this: when enabled is false, search/install-by-slug are unavailable (the endpoints return 409) and the UI offers only "install from file". A registry is the ClawHub marketplace or a configured GitHub registry.
+type SkillMarketplaceStatus struct {
+	// Enabled True when at least one skill marketplace registry is enabled (search/install-by-slug available).
+	Enabled bool `json:"enabled"`
+
+	// Registries Per-registry enablement, one entry per known registry.
+	Registries []struct {
+		// Enabled Whether this specific registry is enabled.
+		Enabled bool `json:"enabled"`
+
+		// Name Registry identifier (e.g. "clawhub", "github").
+		Name string `json:"name"`
+	} `json:"registries"`
+}
+
 // SkillSearchResult A single skill returned by GET /api/v1/skills/search — a hit from a skill marketplace registry (e.g. ClawHub). Distinct from Skill, which models an already-installed local skill. A search result is installed by its slug via POST /api/v1/skills/install.
 type SkillSearchResult struct {
 	// DisplayName Human-readable skill name (e.g. "Web Search").
