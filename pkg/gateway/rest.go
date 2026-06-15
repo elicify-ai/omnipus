@@ -5167,15 +5167,22 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 	// Validate the agent ID when non-empty.
 	if req.DefaultAgentId != nil && *req.DefaultAgentId != "" {
 		agentID := *req.DefaultAgentId
-		found := false
-		for _, ac := range cfg.Agents.List {
-			if ac.ID == agentID {
-				found = true
+		var found *config.AgentConfig
+		for i := range cfg.Agents.List {
+			if cfg.Agents.List[i].ID == agentID {
+				found = &cfg.Agents.List[i]
 				break
 			}
 		}
-		if !found {
+		if found == nil {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
+			return
+		}
+		// A worker is never a chat target (invoked only via delegation), so it
+		// cannot serve as a channel's default agent. Reject before any work,
+		// mirroring updateAgent's rejection of starring a worker as default (M1).
+		if found.IsWorker() {
+			jsonErr(w, http.StatusBadRequest, "workers are not chat targets and cannot be a channel's default agent")
 			return
 		}
 	}

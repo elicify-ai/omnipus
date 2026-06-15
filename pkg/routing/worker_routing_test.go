@@ -77,3 +77,89 @@ func TestResolveRoute_AllWorkersFallsBackToBuiltin(t *testing.T) {
 		t.Errorf("AgentID = %q, want built-in default %q", route.AgentID, DefaultAgentID)
 	}
 }
+
+// TestResolveRoute_ExplicitBindingToWorkerFallsBack verifies M1: an explicit
+// channel-wildcard binding that targets a worker must NOT make the worker a live
+// chat target. pickAgentID detects the worker and degrades to the base default.
+//
+// BDD: Given a base default agent and a worker, and a binding telegram → worker,
+//
+//	When ResolveRoute is called for telegram,
+//	Then the resolved agent is the base default ("mia"), never the worker.
+func TestResolveRoute_ExplicitBindingToWorkerFallsBack(t *testing.T) {
+	enabled := true
+	agents := []config.AgentConfig{
+		{ID: "mia", Default: true, Enabled: &enabled},
+		{ID: "worker", Type: config.AgentTypeWorker, Enabled: &enabled},
+	}
+	bindings := []config.AgentBinding{
+		{AgentID: "worker", Match: config.BindingMatch{Channel: "telegram", AccountID: "*"}},
+	}
+	cfg := testConfig(agents, bindings)
+	r := NewRouteResolver(cfg)
+
+	route := r.ResolveRoute(RouteInput{Channel: "telegram"})
+	if route.AgentID == "worker" {
+		t.Fatalf("explicit binding resolved to a worker (%q) — workers are not chat targets (M1)", route.AgentID)
+	}
+	if route.AgentID != "mia" {
+		t.Errorf("AgentID = %q, want %q (worker binding degrades to base default)", route.AgentID, "mia")
+	}
+}
+
+// TestResolveRoute_IdentityAgentWorkerFallsBack verifies M1 on the identity
+// override path (Priority 0): identity{kind:agent,id:worker} must not let the
+// worker answer as a persona; it degrades to the base default.
+//
+// BDD: Given a base default agent and a worker, and identity{agent, worker},
+//
+//	When ResolveRoute is called,
+//	Then the resolved agent is the base default ("mia"), never the worker.
+func TestResolveRoute_IdentityAgentWorkerFallsBack(t *testing.T) {
+	enabled := true
+	agents := []config.AgentConfig{
+		{ID: "mia", Default: true, Enabled: &enabled},
+		{ID: "worker", Type: config.AgentTypeWorker, Enabled: &enabled},
+	}
+	cfg := testConfig(agents, nil)
+	r := NewRouteResolver(cfg)
+
+	route := r.ResolveRoute(RouteInput{
+		Channel:  "telegram",
+		Identity: &config.ChannelIdentity{Kind: "agent", ID: "worker"},
+	})
+	if route.AgentID == "worker" {
+		t.Fatalf("identity override resolved to a worker (%q) — workers are not chat targets (M1)", route.AgentID)
+	}
+	if route.AgentID != "mia" {
+		t.Errorf("AgentID = %q, want %q (worker identity degrades to base default)", route.AgentID, "mia")
+	}
+}
+
+// TestResolveRoute_ExplicitBindingToBaseAgentResolves is the control for M1: an
+// explicit binding to a normal (non-worker) base agent still resolves to it.
+//
+// BDD: Given two base agents and a binding telegram → "support",
+//
+//	When ResolveRoute is called for telegram,
+//	Then the resolved agent is "support" (not the default), matched by binding.channel.
+func TestResolveRoute_ExplicitBindingToBaseAgentResolves(t *testing.T) {
+	enabled := true
+	agents := []config.AgentConfig{
+		{ID: "mia", Default: true, Enabled: &enabled},
+		{ID: "support", Enabled: &enabled},
+	}
+	bindings := []config.AgentBinding{
+		{AgentID: "support", Match: config.BindingMatch{Channel: "telegram", AccountID: "*"}},
+	}
+	cfg := testConfig(agents, bindings)
+	r := NewRouteResolver(cfg)
+
+	route := r.ResolveRoute(RouteInput{Channel: "telegram"})
+	if route.AgentID != "support" {
+		t.Errorf("AgentID = %q, want %q (binding to a base agent must resolve to it)", route.AgentID, "support")
+	}
+	if route.MatchedBy != "binding.channel" {
+		t.Errorf("MatchedBy = %q, want %q", route.MatchedBy, "binding.channel")
+	}
+}

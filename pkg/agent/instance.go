@@ -361,6 +361,14 @@ func (a *AgentInstance) SetAgentType(agentType string) {
 	a.AgentType = agentType
 }
 
+// IsWorker reports whether this instance is a sub-agent worker (the delegation-only
+// labour tier). A worker is never a chat target and must never be resolved as the
+// routing default. Single predicate so worker checks don't hand-roll the type-string
+// comparison (config.AgentTypeWorker) at each call site.
+func (a *AgentInstance) IsWorker() bool {
+	return a.AgentType == string(config.AgentTypeWorker)
+}
+
 // resolveAgentWorkspace determines the workspace directory for an agent.
 func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
 	if agentCfg != nil && strings.TrimSpace(agentCfg.Workspace) != "" {

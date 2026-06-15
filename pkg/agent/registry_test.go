@@ -188,6 +188,50 @@ func TestAgentRegistry_GetDefaultAgent_RoutingDefaultOverridesOverride(t *testin
 	}
 }
 
+// TestAgentRegistry_GetDefaultAgent_OverrideToWorkerSkipped verifies the
+// Priority-2 hardening: a legacy DefaultAgentID override pointing at a worker
+// (hand-edited config) is skipped — a worker is never a chat target — and
+// resolution falls through to a non-worker agent, never the worker.
+func TestAgentRegistry_GetDefaultAgent_OverrideToWorkerSkipped(t *testing.T) {
+	enabled := true
+	cfg := testCfg([]config.AgentConfig{
+		{ID: "base", Enabled: &enabled},
+		{ID: "worker", Type: config.AgentTypeWorker, Enabled: &enabled},
+	})
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+	// Hand-edited override pointing at the worker.
+	registry.SetDefaultAgentOverride("worker")
+
+	agent := registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected a default agent")
+	}
+	if agent.ID == "worker" || agent.IsWorker() {
+		t.Fatalf("GetDefaultAgent returned a worker (%q) via the Priority-2 override — workers are not chat targets", agent.ID)
+	}
+}
+
+// TestAgentRegistry_GetDefaultAgent_OnlyWorkerAndBaseSkipsWorker verifies that
+// with only a worker and a base agent registered (no Default flag, no override),
+// GetDefaultAgent returns the base agent, never the worker. This exercises the
+// Priority-4 first-non-worker fallback.
+func TestAgentRegistry_GetDefaultAgent_OnlyWorkerAndBaseSkipsWorker(t *testing.T) {
+	enabled := true
+	cfg := testCfg([]config.AgentConfig{
+		{ID: "abase", Enabled: &enabled},
+		{ID: "zworker", Type: config.AgentTypeWorker, Enabled: &enabled},
+	})
+	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
+
+	agent := registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected a default agent")
+	}
+	if agent.IsWorker() {
+		t.Fatalf("GetDefaultAgent returned a worker (%q) — workers must be skipped", agent.ID)
+	}
+}
+
 func TestAgentRegistry_CanSpawnSubagent(t *testing.T) {
 	cfg := testCfg([]config.AgentConfig{
 		{

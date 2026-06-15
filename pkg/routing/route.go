@@ -259,6 +259,17 @@ func (r *RouteResolver) pickAgentID(agentID string) string {
 	}
 	for _, a := range agents {
 		if NormalizeAgentID(a.ID) == normalized {
+			// A worker is never a chat target — it is invoked only via delegation.
+			// An explicit binding or identity override that resolves to a worker
+			// must degrade to the base default rather than letting the worker
+			// answer as a live persona (M1). Mirror the non-existent-agent
+			// fallback below: log a WARN and return the default.
+			if !a.IsChatTarget() {
+				defaultID := NormalizeAgentID(r.resolveDefaultAgentID())
+				logger.WarnCF("routing", "Binding/identity references a worker agent (not a chat target); falling back to default",
+					map[string]any{"requested_agent_id": normalized, "default_agent_id": defaultID})
+				return defaultID
+			}
 			return normalized
 		}
 	}

@@ -437,6 +437,70 @@ func TestChannelRouting_TwoChannelsAreIsolated(t *testing.T) {
 		"discord must have null default_agent_id — telegram's binding must not contaminate it")
 }
 
+// TestSetChannelRouting_RejectsWorkerTarget verifies M1: PUT
+// /api/v1/channels/{id}/routing targeting a worker agent is rejected with 400 —
+// a worker is not a chat target and cannot be a channel's default agent. A
+// control PUT targeting a base agent must still succeed (200).
+//
+// BDD: Given a base agent and a worker agent,
+//
+//	When PUT /api/v1/channels/telegram/routing with {"default_agent_id": "<worker>"},
+//	Then the request fails with 400 and the error mentions workers/chat targets;
+//	And a control PUT with the base agent returns 200.
+func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
+	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
+	tmpDir := t.TempDir()
+	cfgPath := tmpDir + "/config.json"
+
+	enabledTrue := true
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 20,
+			},
+			List: []config.AgentConfig{
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true, Enabled: &enabledTrue},
+				{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker, Enabled: &enabledTrue},
+			},
+		},
+	}
+	cfgJSON, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
+
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+
+	// Worker target → 400.
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/routing", strings.NewReader(`{"default_agent_id": "worker"}`))
+	api.HandleChannels(w, r)
+	require.Equal(t, http.StatusBadRequest, w.Code,
+		"a worker target for channel routing must be rejected with 400")
+	assert.Contains(t, strings.ToLower(w.Body.String()), "worker",
+		"the error must explain a worker cannot be a channel's default agent")
+
+	// Confirm no binding was persisted for telegram.
+	liveCfg := api.agentLoop.GetConfig()
+	assert.Less(t, channelWildcardIdx(liveCfg.Bindings, "telegram"), 0,
+		"rejected worker target must not persist a binding")
+
+	// Control: base agent target → 200.
+	w2 := httptest.NewRecorder()
+	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/routing", strings.NewReader(`{"default_agent_id": "mia"}`))
+	api.HandleChannels(w2, r2)
+	require.Equal(t, http.StatusOK, w2.Code, "a base agent target must succeed (control)")
+	var resp gen.ChannelRouting
+	require.NoError(t, json.NewDecoder(w2.Body).Decode(&resp))
+	require.NotNil(t, resp.DefaultAgentId)
+	assert.Equal(t, "mia", *resp.DefaultAgentId)
+}
+
 // TestUpdateAgent_SetDefaultAlreadyDefault verifies that setting default=true
 // on an agent that is already the default is idempotent: it stays default=true
 // and no other agent changes.

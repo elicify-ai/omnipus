@@ -222,9 +222,10 @@ func (r *AgentRegistry) Close() {
 //     multiple agents somehow carry Default==true (operator error — F11 repairs
 //     this at boot), the one with the lexicographically smallest ID wins.
 //  2. The configurable override from config.Agents.Defaults.DefaultAgentID,
-//     when the named agent exists in the registry.
-//  3. The built-in "main" sentinel agent.
-//  4. The lexicographically first registered agent (deterministic fallback, M10).
+//     when the named agent exists in the registry and is not a worker.
+//  3. The built-in "main" sentinel agent, when it is not a worker.
+//  4. The lexicographically first registered non-worker agent (deterministic
+//     fallback, M10). Workers are never chat targets, so every priority skips them.
 func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -244,14 +245,17 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	}
 
 	// Priority 2: explicit override from config.Agents.Defaults.DefaultAgentID.
+	// A worker is never a chat target, so a hand-edited override pointing at one
+	// is skipped (defense in depth; consistent with the Priority-4 hardening).
 	if r.defaultAgentOverride != "" {
-		if agent, ok := r.agents[r.defaultAgentOverride]; ok {
+		if agent, ok := r.agents[r.defaultAgentOverride]; ok && !agent.IsWorker() {
 			return agent
 		}
 	}
 
-	// Priority 3: the "main" built-in sentinel.
-	if agent, ok := r.agents[DefaultAgentID]; ok {
+	// Priority 3: the "main" built-in sentinel — unless it is somehow a worker
+	// (degenerate/tampered config), in which case fall through to Priority 4.
+	if agent, ok := r.agents[DefaultAgentID]; ok && !agent.IsWorker() {
 		return agent
 	}
 
@@ -270,7 +274,7 @@ func (r *AgentRegistry) GetDefaultAgent() *AgentInstance {
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		if ag := r.agents[id]; ag != nil && ag.AgentType != string(config.AgentTypeWorker) {
+		if ag := r.agents[id]; ag != nil && !ag.IsWorker() {
 			return ag
 		}
 	}
