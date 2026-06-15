@@ -119,7 +119,7 @@ func TestCreateAgent_TypeWorker_PersistsAndEchoes(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		strings.NewReader(`{"name":"My Worker","type":"worker"}`))
+		strings.NewReader(`{"name":"My Worker","type":"worker","executor":{"kind":"native"}}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -276,7 +276,7 @@ func TestUpdateAgent_DoesNotChangeTypeOnWorker(t *testing.T) {
 	// Create a worker.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		strings.NewReader(`{"name":"Sticky Worker","type":"worker"}`))
+		strings.NewReader(`{"name":"Sticky Worker","type":"worker","executor":{"kind":"native"}}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusCreated, w.Code, "create body: %s", w.Body.String())
@@ -307,7 +307,7 @@ func TestUpdateAgent_DoesNotChangeTypeOnWorker(t *testing.T) {
 func TestCreateAgent_Worker_RejectsNonEmptyToList(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"Worker With To","type":"worker","delegation_policy":{"to":[{"kind":"local","id":"some-target"}]}}`
+	body := `{"name":"Worker With To","type":"worker","executor":{"kind":"native"},"delegation_policy":{"to":[{"kind":"local","id":"some-target"}]}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -324,7 +324,7 @@ func TestCreateAgent_Worker_RejectsNonEmptyToList(t *testing.T) {
 func TestCreateAgent_Worker_AllowsEmptyToList(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
-	body := `{"name":"Worker No To","type":"worker","delegation_policy":{"to":[]}}`
+	body := `{"name":"Worker No To","type":"worker","executor":{"kind":"native"},"delegation_policy":{"to":[]}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
