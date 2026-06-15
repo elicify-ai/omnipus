@@ -1330,6 +1330,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 			ag.Skills = &skills
 		}
 		setAgentExecutorResponse(&ag, ac.Subagents)
+		setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
 		agents = append(agents, ag)
 	}
 
@@ -1382,6 +1383,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 				ag.Skills = &skills
 			}
 			setAgentExecutorResponse(&ag, ac.Subagents)
+			setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
 			jsonOK(w, ag)
 			return
 		}
@@ -1445,6 +1447,20 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		if execCfg != nil {
 			ac.Subagents = &config.SubagentsConfig{Executor: execCfg}
 		}
+	}
+	// Delegation policy (to/modes/depth enforced; accept_from/budget inert). Mapped
+	// into AgentConfig.DelegationPolicy so it is actually persisted (previously the
+	// contract field was write-dropped). Validate targets/modes/depth before any work
+	// so a bad request 400s rather than persisting an invalid policy. There is no
+	// existing stored policy on create, so inert fields come solely from the request.
+	if dpIn := delegationInputFromCreateRequest(&req); dpIn != nil {
+		cfg := a.agentLoop.GetConfig()
+		dp, errMsg := buildDelegationPolicy(dpIn, nil, rosterIDSet(cfg), delegationDepthCeiling(cfg))
+		if errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
+			return
+		}
+		ac.DelegationPolicy = dp
 	}
 	// Seed the privilege rail (FR-008/FR-022): custom agents always get
 	// system.*: deny unless the caller explicitly overrides it.
@@ -1544,6 +1560,9 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 				"executor": executorConfigToMap(ac.Subagents.Executor),
 			}
 		}
+		if ac.DelegationPolicy != nil {
+			newAgent["delegation_policy"] = delegationPolicyToMap(ac.DelegationPolicy)
+		}
 		agents["list"] = append(list, newAgent)
 		return nil
 	}); err != nil {
@@ -1590,6 +1609,7 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		ag.Skills = &skills
 	}
 	setAgentExecutorResponse(&ag, ac.Subagents)
+	setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
 	if createReloadWarning != "" {
 		ag.Warning = &createReloadWarning
 	}
@@ -1733,6 +1753,28 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 			return
 		}
 		updatedExecutor = execCfg
+	}
+	// Delegation policy (to/modes/depth enforced; accept_from/budget inert).
+	// MERGE semantics: when req.DelegationPolicy is non-nil, set to/modes/depth from
+	// the request but PRESERVE any existing AcceptFrom/Budget already on the stored
+	// policy (the editor does not send those inert fields). When req.DelegationPolicy
+	// is nil, leave the stored policy untouched (do not wipe seeded delegation).
+	// Validate before any persistence so a bad target/mode/depth 400s.
+	var updatedDelegationPolicy *config.DelegationPolicy
+	delegationPolicyTouched := false
+	if dpIn := delegationInputFromUpdateRequest(&req); dpIn != nil {
+		delegationPolicyTouched = true
+		dp, errMsg := buildDelegationPolicy(
+			dpIn,
+			foundAgent.DelegationPolicy, // existing stored policy (may be nil)
+			rosterIDSet(cfg),
+			delegationDepthCeiling(cfg),
+		)
+		if errMsg != "" {
+			jsonErr(w, http.StatusBadRequest, errMsg)
+			return
+		}
+		updatedDelegationPolicy = dp
 	}
 	// Persist to config.json BEFORE mutating the live config.
 	// Capture the new values to apply after persistence succeeds.
@@ -1922,6 +1964,17 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 						agentMap["skills"] = *req.Skills
 					} else {
 						delete(agentMap, "skills")
+					}
+				}
+				// Delegation policy: only write when the caller sent the field.
+				// When omitted (delegationPolicyTouched=false), the stored policy is
+				// left untouched so seeded delegation is not wiped. The merged value
+				// already preserves inert accept_from/budget from the stored policy.
+				if delegationPolicyTouched {
+					if updatedDelegationPolicy != nil {
+						agentMap["delegation_policy"] = delegationPolicyToMap(updatedDelegationPolicy)
+					} else {
+						delete(agentMap, "delegation_policy")
 					}
 				}
 				break
@@ -2114,6 +2167,7 @@ func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string)
 					ag.Skills = &skills
 				}
 				setAgentExecutorResponse(&ag, ac.Subagents)
+				setAgentDelegationPolicyResponse(&ag, ac.DelegationPolicy)
 				break
 			}
 		}
