@@ -2548,7 +2548,11 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 	result := make([]gen.Skill, 0, len(detailed))
 	for _, s := range detailed {
 		name := s.Name
-		isBuiltin := s.Source == "builtin"
+		// A skill is "built-in" (system) when it ships embedded in the binary —
+		// identified by NAME, not directory. The embedded defaults are seeded into
+		// the global skills dir on first boot, so the loader reports their source
+		// as "global"; we override that here so they surface as system skills.
+		isBuiltin := s.Source == "builtin" || isSystemSkill(name)
 
 		skill := gen.Skill{
 			Id:       name,
@@ -2581,9 +2585,13 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 			skill.Author = &author
 		}
 
-		// Source (optional): map the loader source onto the wire enum. Only the
-		// three known values are emitted; an unexpected value leaves source unset.
-		if src, ok := skillSourceToWire(s.Source); ok {
+		// Source (optional): map the loader source onto the wire enum. Embedded
+		// defaults report "builtin" regardless of the dir they were seeded into.
+		effectiveSource := s.Source
+		if isBuiltin {
+			effectiveSource = "builtin"
+		}
+		if src, ok := skillSourceToWire(effectiveSource); ok {
 			skill.Source = &src
 		}
 
@@ -2612,12 +2620,37 @@ func skillSourceToWire(source string) (gen.SkillSource, bool) {
 // named installed skill, or "" when the skill is not found. Used to enforce the
 // built-in deletion guard (built-ins cannot be removed).
 func (a *restAPI) skillSource(name string) string {
+	// Embedded defaults are system skills regardless of which dir they were
+	// seeded into (the loader reports them as "global").
+	if isSystemSkill(name) {
+		return "builtin"
+	}
 	for _, s := range a.agentLoop.ListSkillsDetailed() {
 		if s.Name == name {
 			return s.Source
 		}
 	}
 	return ""
+}
+
+// systemSkillNames is the set of embedded default skill names (the "built-in"
+// system skills shipped inside the binary). They are seeded into the global
+// skills dir on first boot, so they must be identified by NAME — not by the
+// loader's directory-derived source — to be surfaced as built-in and protected
+// from deletion.
+var systemSkillNames = func() map[string]struct{} {
+	names := skills.DefaultSkillNames()
+	m := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		m[n] = struct{}{}
+	}
+	return m
+}()
+
+// isSystemSkill reports whether name is one of the embedded default skills.
+func isSystemSkill(name string) bool {
+	_, ok := systemSkillNames[name]
+	return ok
 }
 
 // installedSkillIDs returns the set of skill IDs currently known to the agent

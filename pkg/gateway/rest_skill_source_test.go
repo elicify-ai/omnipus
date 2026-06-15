@@ -23,8 +23,30 @@ import (
 	"github.com/dapicom-ai/omnipus/pkg/bus"
 	"github.com/dapicom-ai/omnipus/pkg/config"
 	"github.com/dapicom-ai/omnipus/pkg/onboarding"
+	"github.com/dapicom-ai/omnipus/pkg/skills"
 	"github.com/dapicom-ai/omnipus/pkg/taskstore"
 )
+
+// TestSystemSkillsDetectedByName verifies the embedded default skills are
+// treated as built-in (system) by NAME, regardless of directory. They are
+// seeded into the GLOBAL skills dir on first boot (loader source "global"), so
+// name-based detection is what surfaces them as built-in and protects them from
+// deletion — the directory check alone would mis-classify them as Community.
+func TestSystemSkillsDetectedByName(t *testing.T) {
+	defaults := skills.DefaultSkillNames()
+	require.NotEmpty(t, defaults, "expected embedded default skills")
+	for _, n := range defaults {
+		assert.True(t, isSystemSkill(n), "embedded default %q must be a system skill", n)
+	}
+	assert.False(t, isSystemSkill("totally-not-a-default-skill"), "non-default must not be system")
+
+	// skillSource short-circuits to "builtin" for a default-named skill even
+	// when the loader would report it as global — this is what makes the DELETE
+	// guard (skillSource(name)=="builtin" → 403) protect seeded system skills.
+	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
+	assert.Equal(t, "builtin", api.skillSource(defaults[0]),
+		"a default-named skill must resolve to builtin source (delete-protected)")
+}
 
 // seedSkill writes a minimal valid SKILL.md (frontmatter + body) under
 // dir/<name>/SKILL.md so the loader recognizes it as an installed skill.
