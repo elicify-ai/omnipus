@@ -1402,16 +1402,32 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
 		return
 	}
+	// Resolve the requested agent type. The contract enum is {custom, worker};
+	// when omitted it defaults to "custom" (preserves pre-existing behaviour).
+	// "core" and "system" are seeded-only classifications — sending them (or
+	// any other value) is a 400: the only way to obtain a core/system agent
+	// is via SeedConfig, never via the REST create path.
+	createType := config.AgentTypeCustom
+	if req.Type != nil {
+		switch *req.Type {
+		case gen.AgentCreateRequestTypeCustom:
+			createType = config.AgentTypeCustom
+		case gen.AgentCreateRequestTypeWorker:
+			createType = config.AgentTypeWorker
+		default:
+			jsonErr(w, http.StatusBadRequest,
+				"type must be \"custom\" or \"worker\"; \"core\" and \"system\" are seeded-only")
+			return
+		}
+	}
 	// Native-only executor on a non-worker (worker property-model correction):
-	// the REST create path always creates a CUSTOM (base) agent — workers
-	// are not creatable via REST (only via SeedConfig). Therefore a non-native
-	// executor on a freshly-created agent is automatically a base-agent
-	// configuration, and we reject it here so the dispatch path can rely on
-	// "non-worker = native" being true at the write gate. The worker tier is
-	// the only legitimate user of an external executor in v0.1.0; this keeps
-	// the dispatch path coherent and surfaces the constraint at write time
-	// rather than on the first delegated run.
-	if req.Executor != nil {
+	// a freshly-created non-worker (type=custom) must run native, so reject a
+	// non-native executor on a custom create. A worker is the only legitimate
+	// user of an external executor in v0.1.0; this keeps the dispatch path
+	// coherent and surfaces the constraint at write time rather than on the
+	// first delegated run. The executor itself is then mapped into
+	// ac.Subagents in the executor block further down.
+	if createType != config.AgentTypeWorker && req.Executor != nil {
 		kind := string(req.Executor.Kind)
 		if kind == string(config.ExecutorKindExternalCLI) || kind == string(config.ExecutorKindRemoteA2A) {
 			jsonErr(w, http.StatusBadRequest,
@@ -1438,13 +1454,18 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if req.Icon != nil {
 		icon = *req.Icon
 	}
+	// ac is the in-memory config record. Locked is left at its zero value
+	// (false) for BOTH custom and worker creates — the API is the operator's
+	// surface for editing; only SeedConfig-seeded agents are locked. A newly
+	// created worker is therefore editable (unlike the seeded default
+	// general-purpose worker, which is locked by coreagent.SeedConfig).
 	ac := config.AgentConfig{
 		ID:          uuid.New().String(),
 		Name:        req.Name,
 		Description: description,
 		Color:       color,
 		Icon:        icon,
-		Type:        config.AgentTypeCustom,
+		Type:        createType,
 	}
 	if req.Model != nil && *req.Model != "" {
 		ac.Model = &config.AgentModelConfig{Primary: *req.Model}
@@ -1621,7 +1642,13 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if ac.Icon != "" {
 		ag.Icon = &ac.Icon
 	}
-	ag.Type = gen.AgentTypeCustom
+	// Type reflects the chosen classification (custom or worker). For
+	// "custom" this matches the pre-existing hardcoded behaviour. For
+	// "worker" it surfaces the create-time choice so the response — and
+	// subsequent GET / list reads via ac.ResolveType — round-trips the
+	// agent kind the caller actually created.
+	ag.Type = gen.AgentType(ac.Type)
+	ag.Locked = ac.Locked
 	ag.Model = &model
 	ag.Status = gen.AgentStatusDraft
 	if len(ac.Skills) > 0 {

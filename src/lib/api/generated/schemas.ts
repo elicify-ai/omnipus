@@ -170,6 +170,7 @@ type ExecutorConfig = {
   cli?: ("claude-code" | "codex" | "opencode") | undefined;
 };
 type AgentCreateRequest = {
+  type?: ("custom" | "worker") | undefined;
   name: string;
   description?: string | undefined;
   model?: string | undefined;
@@ -1012,6 +1013,7 @@ export const delegation_policy: z.ZodType<delegation_policy> = z
   })
   .partial();
 export const AgentCreateRequest: z.ZodType<AgentCreateRequest> = z.object({
+  type: z.enum(["custom", "worker"]).optional(),
   name: z.string().min(1),
   description: z.string().optional(),
   model: z.string().optional(),

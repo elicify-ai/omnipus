@@ -412,6 +412,24 @@ func (e AgentCreateRequestToolsCfgBuiltinPolicies) Valid() bool {
 	}
 }
 
+// Defines values for AgentCreateRequestType.
+const (
+	AgentCreateRequestTypeCustom AgentCreateRequestType = "custom"
+	AgentCreateRequestTypeWorker AgentCreateRequestType = "worker"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestType enum.
+func (e AgentCreateRequestType) Valid() bool {
+	switch e {
+	case AgentCreateRequestTypeCustom:
+		return true
+	case AgentCreateRequestTypeWorker:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentToolEntryConfiguredPolicy.
 const (
 	AgentToolEntryConfiguredPolicyAllow AgentToolEntryConfiguredPolicy = "allow"
@@ -3786,7 +3804,7 @@ type AgentToolsCfgBuiltinPolicies string
 // AgentType Agent classification. "core" = compiled-in identity locked agent. "custom" = user-defined agent. "system" = legacy operator-supplied entry (config.AgentTypeSystem survives in the API contract for backwards compatibility but SeedConfig does NOT create these — they only appear if config.json contains one). "worker" = sub-agent worker tier: a delegation-only labour agent that is NOT a chat target, has no heartbeat, is never the default, and carries an executor (see Agent.executor). The FE sections the roster by type==='worker'.
 type AgentType string
 
-// AgentCreateRequest Body for POST /agents. Creates a new custom agent. A UUID is assigned by the server. The agent starts in "draft" status (no SOUL.md written yet).
+// AgentCreateRequest Body for POST /agents. Creates a new agent. A UUID is assigned by the server. The agent starts in "draft" status (no SOUL.md written yet).
 type AgentCreateRequest struct {
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
@@ -3913,6 +3931,18 @@ type AgentCreateRequest struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
+	// Type Agent classification for the newly created agent. Optional: when omitted, defaults to "custom" (preserves pre-existing behaviour).
+	// - "custom" (default): a base / chat-target agent. Runs native, may be
+	//   the routing default, may have heartbeat and a per-agent voice.
+	// - "worker": a sub-agent worker. Invoked ONLY via delegation. NOT a chat
+	//   target, can never be the default, has no heartbeat, and may declare
+	//   an executor (native or external). Newly-created workers are unlocked
+	//   so the operator can edit them; a worker is still a delegation leaf
+	//   (its "to" list must be empty).
+	//
+	// "core" and "system" are seeded-only classifications and are NOT creatable from the API — sending any other value is rejected with 400.
+	Type *AgentCreateRequestType `json:"type,omitempty"`
+
 	// Voice Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS.
 	Voice *string `json:"voice,omitempty"`
 }
@@ -3937,6 +3967,18 @@ type AgentCreateRequestToolsCfgBuiltinDefaultPolicy string
 
 // AgentCreateRequestToolsCfgBuiltinPolicies defines model for AgentCreateRequest.ToolsCfg.Builtin.Policies.
 type AgentCreateRequestToolsCfgBuiltinPolicies string
+
+// AgentCreateRequestType Agent classification for the newly created agent. Optional: when omitted, defaults to "custom" (preserves pre-existing behaviour).
+//   - "custom" (default): a base / chat-target agent. Runs native, may be
+//     the routing default, may have heartbeat and a per-agent voice.
+//   - "worker": a sub-agent worker. Invoked ONLY via delegation. NOT a chat
+//     target, can never be the default, has no heartbeat, and may declare
+//     an executor (native or external). Newly-created workers are unlocked
+//     so the operator can edit them; a worker is still a delegation leaf
+//     (its "to" list must be empty).
+//
+// "core" and "system" are seeded-only classifications and are NOT creatable from the API — sending any other value is rejected with 400.
+type AgentCreateRequestType string
 
 // AgentModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
 type AgentModelParams struct {
