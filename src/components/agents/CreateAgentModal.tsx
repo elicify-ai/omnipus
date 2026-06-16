@@ -15,6 +15,7 @@ import {
   CaretUp,
 } from '@phosphor-icons/react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
+import { SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -260,17 +261,21 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
   return (
     <DialogPrimitive.Root open={isOpen} onOpenChange={(open) => !open && handleClose()}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-        <DialogPrimitive.Content className="fixed left-[50%] top-[50%] z-50 w-full sm:max-w-lg max-h-[calc(100vh-4rem)] translate-x-[-50%] translate-y-[-50%] border border-[var(--color-border)] bg-[var(--color-surface-1)] rounded-xl p-6 shadow-xl flex flex-col data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95">
-          <DialogPrimitive.Title
-            data-testid={formCopy.testId}
-            className="font-headline text-lg font-bold text-[var(--color-secondary)] mb-1"
-          >
-            {formCopy.title}
-          </DialogPrimitive.Title>
-          <DialogPrimitive.Description className="text-sm text-[var(--color-muted)] mb-5">
-            {formCopy.description}
-          </DialogPrimitive.Description>
+        <SheetContent
+          side="right"
+          className="w-full sm:max-w-lg flex flex-col gap-0 p-0"
+        >
+          <SheetHeader className="px-6 pt-6 pb-4 shrink-0">
+            <SheetTitle
+              data-testid={formCopy.testId}
+              className="font-headline text-lg font-bold text-[var(--color-secondary)]"
+            >
+              {formCopy.title}
+            </SheetTitle>
+            <SheetDescription className="text-sm text-[var(--color-muted)] mt-1">
+              {formCopy.description}
+            </SheetDescription>
+          </SheetHeader>
 
           <Tabs defaultValue="general" className="flex-1 min-h-0 flex flex-col">
             <TabsList className="shrink-0 mb-3">
@@ -523,8 +528,8 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
             </TabsContent>
           </Tabs>
 
-          {/* Actions */}
-          <div className="flex justify-end gap-2 mt-6">
+          {/* Sticky footer actions (slideout-friendly) */}
+          <div className="flex justify-end gap-2 px-6 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0">
             <Button
               variant="outline"
               onClick={() => { handleClose(); resetForm() }}
@@ -540,7 +545,7 @@ export function CreateAgentModal({ open: openProp, onClose: onCloseProp, onCreat
               {isPending ? 'Creating...' : formCopy.submitLabel}
             </Button>
           </div>
-        </DialogPrimitive.Content>
+        </SheetContent>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>
   )
